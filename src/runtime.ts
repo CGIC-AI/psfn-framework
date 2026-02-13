@@ -21,6 +21,7 @@ import { ShardManager } from './shards/manager.js';
 import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
+import { ApiServer } from './channels/api/server.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -36,6 +37,7 @@ export class SubstrateRuntime implements Lifecycle {
   private memoryStore!: MemoryStore;
   private salienceDecay!: SalienceDecay;
   private scheduler!: Scheduler;
+  private apiServer?: ApiServer;
 
   constructor(config: SubstrateConfig) {
     this.config = config;
@@ -170,6 +172,21 @@ export class SubstrateRuntime implements Lifecycle {
       log.info(`Discord heartbeat enabled (channel: ${heartbeatChannelId})`);
     }
 
+    // API server — OpenAI-compatible endpoints
+    const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;
+    if (apiPort) {
+      this.apiServer = new ApiServer({
+        port: apiPort,
+        agentLoop: this.agentLoop,
+        eventBus: this.eventBus,
+        sessionManager: this.sessionManager,
+        apiKey: process.env.API_KEY || undefined,
+        modelName: process.env.API_MODEL_NAME,
+      });
+      await this.apiServer.init();
+      log.info(`API server configured on port ${apiPort}`);
+    }
+
     await this.eventBus.emit('system.init', {});
     log.info('Initialized');
   }
@@ -178,6 +195,7 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('Starting...');
     this.scheduler.start();
     await this.discord.start();
+    if (this.apiServer) await this.apiServer.start();
     await this.eventBus.emit('system.ready', {});
     log.info('Ready');
   }
@@ -186,6 +204,7 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('Shutting down...');
     await this.eventBus.emit('system.shutdown', {});
     this.scheduler.stop();
+    if (this.apiServer) await this.apiServer.stop();
     await this.discord.stop();
     this.db.close();
     log.info('Stopped');

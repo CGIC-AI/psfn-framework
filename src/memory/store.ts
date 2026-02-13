@@ -206,6 +206,58 @@ export class MemoryStore {
     }));
   }
 
+  getById(id: string): PurrMemory | undefined {
+    const stmt = this.db.prepare('SELECT * FROM l2_memories WHERE id = ?');
+    const row = stmt.get(id) as {
+      id: string;
+      text: string;
+      type: MemoryType;
+      importance: number;
+      confidence: number;
+      emotional_valence: number;
+      salience: number;
+      source_ref: string;
+      extracted_at: number;
+      last_accessed: number;
+      access_count: number;
+      superseded_by: string | null;
+      tags: string;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      text: row.text,
+      type: row.type,
+      importance: row.importance,
+      confidence: row.confidence,
+      emotionalValence: row.emotional_valence,
+      salience: row.salience,
+      sourceRef: row.source_ref,
+      extractedAt: row.extracted_at,
+      lastAccessed: row.last_accessed,
+      accessCount: row.access_count,
+      supersededBy: row.superseded_by ?? undefined,
+      tags: JSON.parse(row.tags) as string[],
+    };
+  }
+
+  getStats(): { total: number; byType: Record<string, number>; avgSalience: number } {
+    const rows = this.db.prepare(`
+      SELECT type, COUNT(*) as count, AVG(salience) as avg_sal
+      FROM l2_memories WHERE superseded_by IS NULL GROUP BY type
+    `).all() as Array<{ type: string; count: number; avg_sal: number }>;
+
+    const byType: Record<string, number> = {};
+    let total = 0;
+    let salSum = 0;
+    for (const row of rows) {
+      byType[row.type] = row.count;
+      total += row.count;
+      salSum += row.avg_sal * row.count;
+    }
+    return { total, byType, avgSalience: total > 0 ? salSum / total : 0 };
+  }
+
   getMemoriesByChannel(channelId: string, limit: number): PurrMemory[] {
     const stmt = this.db.prepare(`
       SELECT * FROM l2_memories

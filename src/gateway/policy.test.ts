@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { evaluatePolicy, type PolicyConfig } from './server.js';
 
 const policyConfig: PolicyConfig = {
@@ -98,5 +101,95 @@ describe('evaluatePolicy', () => {
       { method: 'exec.shell', params: { cmd: 'rm -rf /' } },
       policyConfig,
     )).toBe('DENY');
+  });
+});
+
+// ── Symlink traversal tests (uses real filesystem) ──
+
+describe('evaluatePolicy symlink traversal', () => {
+  const testDir = join(tmpdir(), `psfn-policy-test-${process.pid}`);
+  const workspace = join(testDir, 'workspace');
+  const outsideDir = join(testDir, 'outside');
+  const outsideFile = join(outsideDir, 'secret.txt');
+  const symlinkToOutside = join(workspace, 'escape-link');
+  const symlinkDirToOutside = join(workspace, 'dir-link');
+  const brokenSymlink = join(workspace, 'broken-link');
+  const normalFile = join(workspace, 'normal.txt');
+
+  const realPolicyConfig: PolicyConfig = {
+    workspacePath: workspace,
+  };
+
+  beforeAll(() => {
+    // Create test directory structure
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(outsideFile, 'secret data');
+    writeFileSync(normalFile, 'normal data');
+
+    // Symlink inside workspace pointing to file outside
+    symlinkSync(outsideFile, symlinkToOutside);
+    // Symlink inside workspace pointing to directory outside
+    symlinkSync(outsideDir, symlinkDirToOutside);
+    // Broken symlink (target doesn't exist)
+    symlinkSync('/nonexistent/path/to/nowhere', brokenSymlink);
+  });
+
+  afterAll(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('denies fs.read on a symlink inside workspace pointing outside', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: symlinkToOutside } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.write on a symlink inside workspace pointing outside', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: symlinkToOutside } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.read via symlinked directory to outside workspace', () => {
+    const pathViaSymlink = join(symlinkDirToOutside, 'secret.txt');
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: pathViaSymlink } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows fs.read on a normal file inside workspace', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: normalFile } },
+      realPolicyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('allows fs.write on a normal file inside workspace', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: normalFile } },
+      realPolicyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('allows fs.write to a new file inside workspace (file does not exist yet)', () => {
+    const newFile = join(workspace, 'new-file.txt');
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: newFile } },
+      realPolicyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('handles broken symlinks inside workspace (target does not exist)', () => {
+    // Broken symlink: ENOENT from realpathSync → falls back to normalized path
+    // Normalized path is inside workspace, so ALLOW (the actual read will fail at I/O time)
+    const result = evaluatePolicy(
+      { method: 'fs.read', params: { path: brokenSymlink } },
+      realPolicyConfig,
+    );
+    expect(result).toBe('ALLOW');
   });
 });

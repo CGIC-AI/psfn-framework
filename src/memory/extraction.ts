@@ -47,12 +47,17 @@ If there are no new facts worth extracting, respond with an empty response block
 // Track last extraction per channel
 const lastExtractionCount = new Map<string, number>();
 
+export interface MemoryExtractorConfig {
+  extractionInterval?: number;
+}
+
 export class MemoryExtractor {
   private llmClient: LLMProvider;
   private sessionManager: SessionManager;
   private memoryStore: MemoryStore;
   private embeddingService: EmbeddingService;
   private eventBus: EventBus;
+  private extractionInterval: number;
 
   constructor(
     llmClient: LLMProvider,
@@ -60,19 +65,21 @@ export class MemoryExtractor {
     memoryStore: MemoryStore,
     embeddingService: EmbeddingService,
     eventBus: EventBus,
+    config?: MemoryExtractorConfig,
   ) {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
     this.eventBus = eventBus;
+    this.extractionInterval = config?.extractionInterval ?? MEMORY_CONFIG.extractionInterval;
   }
 
   async maybeExtract(channelId: string): Promise<void> {
     const currentCount = this.sessionManager.getMessageCount(channelId);
     const lastCount = lastExtractionCount.get(channelId) ?? 0;
 
-    if (currentCount - lastCount < MEMORY_CONFIG.extractionInterval) return;
+    if (currentCount - lastCount < this.extractionInterval) return;
 
     lastExtractionCount.set(channelId, currentCount);
     await this.extract(channelId);

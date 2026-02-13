@@ -9,6 +9,7 @@ import type { ChannelAdapter } from '../channels/types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketServer } from './transport.js';
 import { sanitizeWebContent } from './sanitize.js';
+import { evaluateUrlPolicy, checkResolvedIP } from './url-policy.js';
 import {
   GatewayErrors,
   type LLMChatParams,
@@ -25,7 +26,8 @@ import {
 } from './protocol.js';
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { resolve, normalize } from 'node:path';
+import { resolve, normalize, dirname } from 'node:path';
+import { realpathSync } from 'node:fs';
 import type { AuditStore } from './audit.js';
 import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('Gateway');
@@ -35,6 +37,48 @@ const log = createComponentLogger('Gateway');
 export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
+}
+
+/** Check whether a resolved path falls inside any of the allowed prefixes */
+function isInsideAllowedPaths(resolvedPath: string, allowedPrefixes: string[]): boolean {
+  for (const prefix of allowedPrefixes) {
+    if (resolvedPath.startsWith(prefix + '/') || resolvedPath === prefix) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolve the canonical (symlink-resolved) path for policy checking.
+ * Returns the normalized path unchanged if the file doesn't exist (ENOENT).
+ * For writes to new files, resolves the parent directory if it exists.
+ * Returns null only if a symlink explicitly resolves outside allowed paths.
+ */
+function resolveCanonicalPath(normalized: string, isWrite: boolean): string {
+  try {
+    return realpathSync(normalized);
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // ENOENT = path doesn't exist at all (not a symlink issue) — safe to use normalized
+    // ELOOP = too many symlinks (suspicious, but ENOENT for broken symlink targets too)
+    if (code === 'ENOENT') {
+      // For writes, try to resolve the parent directory to catch symlinked parents
+      if (isWrite) {
+        try {
+          const parentReal = realpathSync(dirname(normalized));
+          const basename = normalized.slice(normalized.lastIndexOf('/') + 1);
+          return resolve(parentReal, basename);
+        } catch {
+          // Parent doesn't exist either — use normalized path (will fail at write time)
+          return normalized;
+        }
+      }
+      return normalized;
+    }
+    // For any other error (EACCES, ELOOP, etc.), use normalized path
+    return normalized;
+  }
 }
 
 export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): PolicyDecision {
@@ -59,21 +103,29 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       const normalized = resolve(normalize(path));
       const workspace = resolve(normalize(policyConfig.workspacePath));
 
-      if (normalized.startsWith(workspace + '/') || normalized === workspace) {
-        return 'ALLOW';
-      }
-
-      // Check explicitly allowed read paths
+      // Build list of all allowed prefixes for this operation
+      const allowedPrefixes = [workspace];
       if (method === 'fs.read' && policyConfig.allowedReadPaths) {
         for (const allowed of policyConfig.allowedReadPaths) {
-          const normalizedAllowed = resolve(normalize(allowed));
-          if (normalized.startsWith(normalizedAllowed + '/') || normalized === normalizedAllowed) {
-            return 'ALLOW';
-          }
+          allowedPrefixes.push(resolve(normalize(allowed)));
         }
       }
 
-      return 'NEEDS_APPROVAL';
+      // Step 1: Check normalized path (string prefix match)
+      if (!isInsideAllowedPaths(normalized, allowedPrefixes)) {
+        return 'NEEDS_APPROVAL';
+      }
+
+      // Step 2: Resolve symlinks and check canonical path
+      const isWrite = method === 'fs.write';
+      const canonical = resolveCanonicalPath(normalized, isWrite);
+
+      // If canonical differs from normalized (symlink), re-check against allowed prefixes
+      if (canonical !== normalized && !isInsideAllowedPaths(canonical, allowedPrefixes)) {
+        return 'DENY';
+      }
+
+      return 'ALLOW';
     }
 
     default:
@@ -114,6 +166,7 @@ export class GatewayServer {
   private netServer: net.Server | null = null;
   private connections = new Set<NdjsonConnection>();
   private options: GatewayServerOptions;
+  private streamRequestCounter = 0;
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -188,11 +241,13 @@ export class GatewayServer {
 
     this.rpcServer.addMethod('llm.chat', this.audited('llm.chat',
       async (params: LLMChatParams) => {
+        // Generate a unique requestId for this stream, or use the client-provided one
+        const requestId = params.requestId ?? `gw-${++this.streamRequestCounter}`;
         const response = await llmProvider.stream(
           { systemPrompt: params.systemPrompt, messages: params.messages },
           params.stream ? {
             onText: (text) => {
-              this.notifyAll('llm.chunk', { requestId: 0, text } satisfies LLMChunkNotification);
+              this.notifyAll('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
             },
           } : undefined,
         );
@@ -203,6 +258,7 @@ export class GatewayServer {
           inputTokens: response.inputTokens,
           outputTokens: response.outputTokens,
           stopReason: response.stopReason,
+          requestId,
         };
       },
       (p) => ({ model: p.model, stream: p.stream }),
@@ -249,12 +305,81 @@ export class GatewayServer {
 
     // ── Web Fetch (gated) ──
 
+    // Build URL policy config from environment
+    const urlPolicyConfig = {
+      allowHttp: process.env.ALLOW_HTTP_FETCH === 'true',
+      domainAllowlist: process.env.FETCH_DOMAIN_ALLOWLIST
+        ? process.env.FETCH_DOMAIN_ALLOWLIST.split(',').map(d => d.trim()).filter(Boolean)
+        : undefined,
+    };
+
     this.rpcServer.addMethod('web.fetch', this.gated('web.fetch',
       async (params: WebFetchParams) => {
+        // SSRF defense: evaluate URL policy before fetching
+        const urlCheck = evaluateUrlPolicy(params.url, urlPolicyConfig);
+        if (!urlCheck.allowed) {
+          log.warn(`URL policy blocked fetch: ${urlCheck.reason} (${params.url})`);
+          throw new JSONRPCErrorException(
+            `URL blocked: ${urlCheck.reason}`,
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+
+        // Post-DNS-resolution check: catch DNS rebinding (e.g. evil.com → 127.0.0.1)
+        const parsed = new URL(params.url);
+        const dnsCheck = await checkResolvedIP(parsed.hostname);
+        if (!dnsCheck.allowed) {
+          log.warn(`DNS resolution blocked fetch: ${dnsCheck.reason} (${params.url})`);
+          throw new JSONRPCErrorException(
+            `URL blocked: ${dnsCheck.reason}`,
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+
+        // Use redirect: 'manual' to prevent open-redirect SSRF bypass
+        // (attacker 302s to http://169.254.169.254/)
         const response = await fetch(params.url, {
           headers: { 'User-Agent': 'PurrsePhone-Substrate/0.1' },
           signal: AbortSignal.timeout(15_000),
+          redirect: 'manual',
         });
+        // If server redirected, validate the redirect target before following
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location');
+          if (!location) {
+            throw new JSONRPCErrorException('Redirect with no Location header', GatewayErrors.PROVIDER_ERROR);
+          }
+          const redirectUrl = new URL(location, params.url).href;
+          const redirCheck = evaluateUrlPolicy(redirectUrl, urlPolicyConfig);
+          if (!redirCheck.allowed) {
+            log.warn(`Redirect URL blocked: ${redirCheck.reason} (${redirectUrl})`);
+            throw new JSONRPCErrorException(`Redirect blocked: ${redirCheck.reason}`, GatewayErrors.POLICY_DENIED);
+          }
+          const redirParsed = new URL(redirectUrl);
+          const redirDns = await checkResolvedIP(redirParsed.hostname);
+          if (!redirDns.allowed) {
+            log.warn(`Redirect DNS blocked: ${redirDns.reason} (${redirectUrl})`);
+            throw new JSONRPCErrorException(`Redirect blocked: ${redirDns.reason}`, GatewayErrors.POLICY_DENIED);
+          }
+          // Follow the validated redirect (single hop only — prevents redirect chains)
+          const redirectResponse = await fetch(redirectUrl, {
+            headers: { 'User-Agent': 'PurrsePhone-Substrate/0.1' },
+            signal: AbortSignal.timeout(15_000),
+            redirect: 'error', // no further redirects
+          });
+          if (!redirectResponse.ok) {
+            throw new JSONRPCErrorException(
+              `Fetch failed after redirect: ${redirectResponse.status} ${redirectResponse.statusText}`,
+              GatewayErrors.PROVIDER_ERROR,
+            );
+          }
+          const rawRedirContent = await redirectResponse.text();
+          const redirResult = sanitizeWebContent(rawRedirContent, redirectUrl);
+          if (redirResult.injectionPatternsFound > 0) {
+            log.warn(`Sanitized ${redirResult.injectionPatternsFound} injection patterns from ${redirectUrl}`);
+          }
+          return { content: redirResult.content, sanitized: redirResult.sanitized };
+        }
         if (!response.ok) {
           throw new JSONRPCErrorException(
             `Fetch failed: ${response.status} ${response.statusText}`,

@@ -12,6 +12,7 @@ import type { SubstrateConfig } from '../../types.js';
 
 export interface AdminServerConfig {
   port: number;
+  host?: string;
   token?: string;
   memoryStore: MemoryStore;
   sessionStore: SessionStore;

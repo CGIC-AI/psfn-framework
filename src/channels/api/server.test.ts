@@ -227,6 +227,27 @@ describe('ApiServer', () => {
     });
   });
 
+  describe('body size limit', () => {
+    it('returns 413 for body exceeding 1MB', async () => {
+      const oversizedBody = 'x'.repeat(1_048_576 + 1);
+      const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = http.request(
+          { hostname: '127.0.0.1', port, method: 'POST', path: '/v1/chat/completions', headers: { 'Content-Type': 'application/json' } },
+          (r) => {
+            let data = '';
+            r.on('data', (c: Buffer) => { data += c.toString(); });
+            r.on('end', () => resolve({ status: r.statusCode!, body: data }));
+          },
+        );
+        req.on('error', reject);
+        req.write(oversizedBody);
+        req.end();
+      });
+      expect(res.status).toBe(413);
+      expect(res.body).toBe('Payload Too Large');
+    });
+  });
+
   describe('CORS', () => {
     it('returns CORS headers on normal request', async () => {
       const res = await request(port, 'GET', '/v1/models');

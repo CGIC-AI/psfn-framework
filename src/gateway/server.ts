@@ -9,7 +9,7 @@ import type { ChannelAdapter } from '../channels/types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketServer } from './transport.js';
 import { sanitizeWebContent } from './sanitize.js';
-import { evaluateUrlPolicy, checkResolvedIP } from './url-policy.js';
+import { evaluateUrlPolicy, checkResolvedIP, type UrlPolicyConfig } from './url-policy.js';
 import {
   GatewayErrors,
   type LLMChatParams,
@@ -37,6 +37,7 @@ const log = createComponentLogger('Gateway');
 export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
+  urlPolicy?: UrlPolicyConfig;
 }
 
 /** Check whether a resolved path falls inside any of the allowed prefixes */
@@ -93,7 +94,14 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       return 'ALLOW';
 
     case 'web.fetch': {
-      // POST with body → needs approval (not implemented yet, all fetches are GET)
+      // Synchronous URL policy check so the audit log reflects the real decision
+      const url = (params as Record<string, unknown>).url as string | undefined;
+      if (url && policyConfig.urlPolicy) {
+        const urlCheck = evaluateUrlPolicy(url, policyConfig.urlPolicy);
+        if (!urlCheck.allowed) {
+          return 'DENY';
+        }
+      }
       return 'ALLOW';
     }
 
@@ -305,13 +313,15 @@ export class GatewayServer {
 
     // ── Web Fetch (gated) ──
 
-    // Build URL policy config from environment
+    // Build URL policy config from environment and store on policyConfig
+    // so evaluatePolicy() can use it for accurate audit logging
     const urlPolicyConfig = {
       allowHttp: process.env.ALLOW_HTTP_FETCH === 'true',
       domainAllowlist: process.env.FETCH_DOMAIN_ALLOWLIST
         ? process.env.FETCH_DOMAIN_ALLOWLIST.split(',').map(d => d.trim()).filter(Boolean)
         : undefined,
     };
+    this.options.policyConfig.urlPolicy = urlPolicyConfig;
 
     this.rpcServer.addMethod('web.fetch', this.gated('web.fetch',
       async (params: WebFetchParams) => {

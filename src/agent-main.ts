@@ -25,6 +25,7 @@ import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { ApiServer } from './channels/api/server.js';
+import { AdminServer } from './channels/admin/server.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -76,13 +77,18 @@ async function main(): Promise<void> {
   );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
-  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, gateway);
+  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, gateway, {
+    retrievalLimit: config.memoryRetrievalLimit,
+  });
   agentLoop.memoryExtractor = new MemoryExtractor(
     gateway,  // GatewayClient implements LLMProvider
     sessionManager,
     memoryStore,
     gateway,  // GatewayClient implements EmbeddingService
     eventBus,
+    {
+      extractionInterval: config.extractionInterval,
+    },
   );
 
   const salienceDecay = new SalienceDecay(memoryStore);
@@ -143,6 +149,29 @@ async function main(): Promise<void> {
     log.info(`API server listening on port ${apiPort}`);
   }
 
+  // ── Admin GUI (optional) ──
+
+  let adminServer: AdminServer | undefined;
+  const adminPort = process.env.ADMIN_PORT ? parseInt(process.env.ADMIN_PORT, 10) : undefined;
+  if (adminPort) {
+    adminServer = new AdminServer({
+      port: adminPort,
+      token: process.env.ADMIN_TOKEN || undefined,
+      memoryStore,
+      sessionStore,
+      sessionManager,
+      scheduler,
+      shardManager,
+      eventBus,
+      characterCard: card,
+      config,
+      embeddingService: gateway,
+    });
+    await adminServer.init();
+    await adminServer.start();
+    log.info(`Admin GUI listening on port ${adminPort}`);
+  }
+
   // ── Listen for Discord messages from gateway ──
 
   gateway.onDiscordMessage(async (message: SubstrateMessage) => {
@@ -177,6 +206,7 @@ async function main(): Promise<void> {
     await eventBus.emit('system.shutdown', {});
     scheduler.stop();
     if (apiServer) await apiServer.stop();
+    if (adminServer) await adminServer.stop();
     gateway.destroy();
     db.close();
     log.info('Stopped');

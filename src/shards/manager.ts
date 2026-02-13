@@ -25,10 +25,18 @@ export interface ShardManagerDeps {
   maxConcurrent?: number;
 }
 
+export interface ActiveShard {
+  id: string;
+  name: string;
+  task: string;
+  startedAt: number;
+}
+
 export class ShardManager {
   private deps: ShardManagerDeps;
   private activeCount = 0;
   private maxConcurrent: number;
+  private activeShards = new Map<string, ActiveShard>();
 
   constructor(deps: ShardManagerDeps) {
     this.deps = deps;
@@ -48,6 +56,12 @@ export class ShardManager {
     const maxTurns = shardConfig.maxTurns ?? DEFAULT_MAX_TURNS;
 
     this.activeCount++;
+    this.activeShards.set(shardId, {
+      id: shardId,
+      name: shardConfig.name,
+      task: shardConfig.task,
+      startedAt: startTime,
+    });
     try {
       // Each shard gets its own SessionManager wrapping the shared store
       const sessionManager = new SessionManager(this.deps.sessionStore, this.deps.config);
@@ -119,10 +133,15 @@ export class ShardManager {
       };
     } finally {
       this.activeCount--;
+      this.activeShards.delete(shardId);
     }
   }
 
   getActiveCount(): number {
     return this.activeCount;
+  }
+
+  getActiveShards(): ActiveShard[] {
+    return [...this.activeShards.values()];
   }
 }

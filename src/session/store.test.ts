@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SessionStore } from './store.js';
+import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
 
 describe('SessionStore', () => {
   let dir: string;
@@ -106,5 +106,159 @@ describe('SessionStore', () => {
     const store2 = new SessionStore(dir);
     const id3 = store2.append({ channelId: 'ch1', role: 'user', content: 'C', timestamp: 3000 });
     expect(id3).toBe(3);
+  });
+
+  it('handles channelId with colons (api:session-1)', () => {
+    store.append({ channelId: 'api:session-1', role: 'user', content: 'Hello', timestamp: 1000 });
+    const entries = store.getRecent('api:session-1', 10);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toBe('Hello');
+
+    // Reload from disk
+    const store2 = new SessionStore(dir);
+    const entries2 = store2.getRecent('api:session-1', 10);
+    expect(entries2).toHaveLength(1);
+  });
+
+  it('handles channelId with shard:uuid format', () => {
+    const channelId = 'shard:550e8400-e29b-41d4-a716-446655440000';
+    store.append({ channelId, role: 'user', content: 'Shard msg', timestamp: 1000 });
+    expect(store.count(channelId)).toBe(1);
+  });
+
+  it('handles channelId with slashes (discord/guild/channel)', () => {
+    const channelId = 'discord/guild/channel';
+    store.append({ channelId, role: 'user', content: 'Slashed', timestamp: 1000 });
+    expect(store.count(channelId)).toBe(1);
+
+    const store2 = new SessionStore(dir);
+    expect(store2.count(channelId)).toBe(1);
+  });
+
+  it('handles channelId with dangerous characters', () => {
+    const dangerous = 'ch\x00../../../etc/passwd';
+    store.append({ channelId: dangerous, role: 'user', content: 'Sneaky', timestamp: 1000 });
+    expect(store.count(dangerous)).toBe(1);
+
+    const store2 = new SessionStore(dir);
+    expect(store2.count(dangerous)).toBe(1);
+  });
+
+  it('handles channelId with backslash', () => {
+    const channelId = 'test\\path\\channel';
+    store.append({ channelId, role: 'user', content: 'Backslash', timestamp: 1000 });
+    expect(store.count(channelId)).toBe(1);
+  });
+
+  it('lists channels with special characters', () => {
+    store.append({ channelId: 'api:session-1', role: 'user', content: 'A', timestamp: 1000 });
+    store.append({ channelId: 'discord/guild/ch', role: 'user', content: 'B', timestamp: 1000 });
+
+    const channels = store.listChannels();
+    const ids = channels.map(c => c.channelId).sort();
+    expect(ids).toContain('api:session-1');
+    expect(ids).toContain('discord/guild/ch');
+  });
+
+  it('backward compat: appends to legacy file (no split-brain)', () => {
+    // Simulate old-format file
+    const oldFilename = 'api-session-1.jsonl';
+    const journalLine = JSON.stringify({
+      type: 'message', id: 1, channelId: 'api:session-1',
+      role: 'user', content: 'Old msg', timestamp: 1000,
+    });
+    writeFileSync(join(dir, oldFilename), journalLine + '\n');
+
+    // Load from legacy, then append
+    const store1 = new SessionStore(dir);
+    store1.append({ channelId: 'api:session-1', role: 'assistant', content: 'New msg', timestamp: 2000 });
+    expect(store1.count('api:session-1')).toBe(2);
+
+    // Reload — must get BOTH messages (not just the new one)
+    const store2 = new SessionStore(dir);
+    const entries = store2.getRecent('api:session-1', 10);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].content).toBe('Old msg');
+    expect(entries[1].content).toBe('New msg');
+  });
+
+  it('backward compat: listChannels reads old-format files', () => {
+    // Simulate an old-format file: colon was replaced with -, slash with _
+    const oldFilename = 'api-session-1.jsonl';
+    const journalLine = JSON.stringify({
+      type: 'message',
+      id: 1,
+      channelId: 'api:session-1',
+      role: 'user',
+      content: 'Old format',
+      timestamp: 1000,
+    });
+    writeFileSync(join(dir, oldFilename), journalLine + '\n');
+
+    const freshStore = new SessionStore(dir);
+    const channels = freshStore.listChannels();
+    const found = channels.find(c => c.channelId === 'api:session-1');
+    expect(found).toBeDefined();
+    expect(found!.messageCount).toBe(1);
+  });
+});
+
+describe('sanitizeChannelId / unsanitizeChannelId', () => {
+  it('keeps safe characters as-is', () => {
+    expect(sanitizeChannelId('hello-world_123.test')).toBe('hello-world_123.test');
+  });
+
+  it('encodes colons', () => {
+    expect(sanitizeChannelId('api:session-1')).toBe('api%3Asession-1');
+  });
+
+  it('encodes slashes', () => {
+    expect(sanitizeChannelId('discord/guild/ch')).toBe('discord%2Fguild%2Fch');
+  });
+
+  it('encodes null bytes', () => {
+    expect(sanitizeChannelId('ch\x00id')).toBe('ch%00id');
+  });
+
+  it('encodes backslashes', () => {
+    expect(sanitizeChannelId('a\\b')).toBe('a%5Cb');
+  });
+
+  it('encodes spaces', () => {
+    expect(sanitizeChannelId('hello world')).toBe('hello%20world');
+  });
+
+  it('round-trips: sanitize then unsanitize returns original', () => {
+    const cases = [
+      'api:session-1',
+      'shard:550e8400-e29b-41d4-a716-446655440000',
+      'discord/guild/channel',
+      'test\\path',
+      'ch\x00../../../etc/passwd',
+      'simple',
+      'hello world',
+      'with!special@chars#$',
+    ];
+    for (const original of cases) {
+      expect(unsanitizeChannelId(sanitizeChannelId(original))).toBe(original);
+    }
+  });
+
+  it('round-trips unicode characters (non-ASCII)', () => {
+    const cases = [
+      'channel-\u20AC',      // Euro sign (U+20AC, 4 hex digits)
+      'test-\u00E9',         // é (U+00E9, 2 hex digits)
+      'caf\u00E9-chat',      // café-chat
+    ];
+    for (const original of cases) {
+      const sanitized = sanitizeChannelId(original);
+      const restored = unsanitizeChannelId(sanitized);
+      expect(restored).toBe(original);
+    }
+  });
+
+  it('unsanitize decodes hex sequences', () => {
+    expect(unsanitizeChannelId('api%3Asession-1')).toBe('api:session-1');
+    expect(unsanitizeChannelId('discord%2Fguild%2Fch')).toBe('discord/guild/ch');
   });
 });

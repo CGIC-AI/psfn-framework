@@ -1,0 +1,23 @@
+services:
+  psfn-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+    container_name: psfn-agent
+    network_mode: "none"
+    restart: unless-stopped
+    volumes:
+      # Gateway socket (created by host gateway process)
+      - /run/psfn:/run/psfn
+      # Agent's SQLite database (RW)
+      - ../data:/app/data
+      # PSFN's playground — self-authored modules, notes (RW)
+      - ../workspace:/app/workspace
+      # Character card + identity (RO)
+      - ${CHARACTER_CARD_DIR:-/path/to/your/character-dir}:/app/identity:ro
+    environment:
+      GATEWAY_SOCKET: /run/psfn/gateway.sock
+      DATABASE_PATH: /app/data/psfn.db
+      DATA_DIR: /app/data
+      CHARACTER_CARD_PATH: /app/identity/character.json
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-1024}

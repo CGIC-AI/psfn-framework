@@ -1,0 +1,373 @@
+// ── Gateway Server ──
+// Host-side process that holds secrets and proxies all external interactions.
+
+import * as net from 'node:net';
+import * as readline from 'node:readline';
+import { JSONRPCServer, JSONRPCErrorException } from 'json-rpc-2.0';
+import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
+import type { ChannelAdapter } from '../channels/types.js';
+import type { NdjsonConnection } from './transport.js';
+import { createSocketServer } from './transport.js';
+import { sanitizeWebContent } from './sanitize.js';
+import {
+  GatewayErrors,
+  type LLMChatParams,
+  type LLMCompleteParams,
+  type LLMEmbedParams,
+  type DiscordSendParams,
+  type DiscordTypingParams,
+  type WebFetchParams,
+  type FsReadParams,
+  type FsWriteParams,
+  type PolicyContext,
+  type PolicyDecision,
+  type LLMChunkNotification,
+} from './protocol.js';
+
+import { readFile, writeFile } from 'node:fs/promises';
+import { resolve, normalize } from 'node:path';
+import type { AuditStore } from './audit.js';
+import { createComponentLogger } from '../logger.js';
+const log = createComponentLogger('Gateway');
+
+// ── Policy Engine ──
+
+export interface PolicyConfig {
+  workspacePath: string;
+  allowedReadPaths?: string[];
+}
+
+export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): PolicyDecision {
+  const { method, params } = ctx;
+
+  switch (method) {
+    case 'llm.chat':
+    case 'llm.complete':
+    case 'llm.embed':
+    case 'discord.send':
+    case 'discord.typing':
+      return 'ALLOW';
+
+    case 'web.fetch': {
+      // POST with body → needs approval (not implemented yet, all fetches are GET)
+      return 'ALLOW';
+    }
+
+    case 'fs.read':
+    case 'fs.write': {
+      const path = (params as Record<string, unknown>).path as string;
+      const normalized = resolve(normalize(path));
+      const workspace = resolve(normalize(policyConfig.workspacePath));
+
+      if (normalized.startsWith(workspace + '/') || normalized === workspace) {
+        return 'ALLOW';
+      }
+
+      // Check explicitly allowed read paths
+      if (method === 'fs.read' && policyConfig.allowedReadPaths) {
+        for (const allowed of policyConfig.allowedReadPaths) {
+          const normalizedAllowed = resolve(normalize(allowed));
+          if (normalized.startsWith(normalizedAllowed + '/') || normalized === normalizedAllowed) {
+            return 'ALLOW';
+          }
+        }
+      }
+
+      return 'NEEDS_APPROVAL';
+    }
+
+    default:
+      return 'DENY';
+  }
+}
+
+// ── Approval System ──
+
+async function requestApproval(action: string, scope: string, reason: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    process.stderr.write(
+      `\n[APPROVAL] PSFN wants to ${action} ${scope}\n` +
+      `  Reason: ${reason}\n` +
+      `  Approve? [y/N] `,
+    );
+    rl.once('line', (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase() === 'y');
+    });
+  });
+}
+
+// ── Gateway Server Class ──
+
+export interface GatewayServerOptions {
+  socketPath: string;
+  llmProvider: LLMProvider;
+  embeddingService: EmbeddingService;
+  discordAdapter: ChannelAdapter;
+  policyConfig: PolicyConfig;
+  auditStore?: AuditStore;
+}
+
+export class GatewayServer {
+  private rpcServer: JSONRPCServer;
+  private netServer: net.Server | null = null;
+  private connections = new Set<NdjsonConnection>();
+  private options: GatewayServerOptions;
+
+  constructor(options: GatewayServerOptions) {
+    this.options = options;
+    this.rpcServer = new JSONRPCServer();
+    this.registerMethods();
+  }
+
+  // Wrap a handler with audit timing — logs call, records duration/error on completion
+  private audited<P, R>(
+    method: string,
+    handler: (params: P) => Promise<R>,
+    paramsSummary?: (params: P) => Record<string, unknown>,
+  ): (params: P) => Promise<R> {
+    return async (params: P) => {
+      const summary = paramsSummary ? paramsSummary(params) : undefined;
+      const auditId = this.audit(method, 'ALLOW', summary);
+      const startTime = Date.now();
+      try {
+        const result = await handler(params);
+        this.auditComplete(auditId, startTime);
+        return result;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.auditComplete(auditId, startTime, msg);
+        throw err;
+      }
+    };
+  }
+
+  // Wrap a gated handler — evaluates policy, logs decision, handles approval flow
+  private gated<P, R>(
+    method: string,
+    handler: (params: P) => Promise<R>,
+    paramsSummary: (params: P) => Record<string, unknown>,
+    approvalAction: string,
+    approvalScope: (params: P) => string,
+  ): (params: P) => Promise<R> {
+    return async (params: P) => {
+      const decision = evaluatePolicy(
+        { method, params: params as unknown as Record<string, unknown> },
+        this.options.policyConfig,
+      );
+      const summary = paramsSummary(params);
+      const auditId = this.audit(method, decision, summary);
+      const startTime = Date.now();
+
+      try {
+        if (decision === 'DENY') {
+          throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
+        }
+        if (decision === 'NEEDS_APPROVAL') {
+          const approved = await requestApproval(approvalAction, approvalScope(params), 'Outside workspace');
+          if (!approved) {
+            throw new JSONRPCErrorException('Approval denied', GatewayErrors.APPROVAL_DENIED);
+          }
+        }
+        const result = await handler(params);
+        this.auditComplete(auditId, startTime);
+        return result;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.auditComplete(auditId, startTime, msg);
+        throw err;
+      }
+    };
+  }
+
+  private registerMethods(): void {
+    const { llmProvider, embeddingService, discordAdapter } = this.options;
+
+    // ── LLM Methods ──
+
+    this.rpcServer.addMethod('llm.chat', this.audited('llm.chat',
+      async (params: LLMChatParams) => {
+        const response = await llmProvider.stream(
+          { systemPrompt: params.systemPrompt, messages: params.messages },
+          params.stream ? {
+            onText: (text) => {
+              this.notifyAll('llm.chunk', { requestId: 0, text } satisfies LLMChunkNotification);
+            },
+          } : undefined,
+        );
+        return {
+          content: response.content,
+          toolCalls: response.toolCalls,
+          model: response.model,
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+          stopReason: response.stopReason,
+        };
+      },
+      (p) => ({ model: p.model, stream: p.stream }),
+    ));
+
+    this.rpcServer.addMethod('llm.complete', this.audited('llm.complete',
+      async (params: LLMCompleteParams) => {
+        const response = await llmProvider.complete(
+          { systemPrompt: params.systemPrompt, messages: params.messages },
+          params.purpose,
+        );
+        return {
+          content: response.content,
+          model: response.model,
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+          stopReason: response.stopReason,
+        };
+      },
+      (p) => ({ purpose: p.purpose }),
+    ));
+
+    this.rpcServer.addMethod('llm.embed', this.audited('llm.embed',
+      async (params: LLMEmbedParams) => {
+        const embeddings = await embeddingService.embedBatch(params.texts);
+        return { embeddings: embeddings.map(e => Array.from(e)) };
+      },
+      (p) => ({ textCount: p.texts.length }),
+    ));
+
+    // ── Discord Methods ──
+
+    this.rpcServer.addMethod('discord.send', this.audited('discord.send',
+      async (params: DiscordSendParams) => {
+        await discordAdapter.send(params.channelId, params.content);
+        return { success: true };
+      },
+      (p) => ({ channelId: p.channelId }),
+    ));
+
+    this.rpcServer.addMethod('discord.typing', this.audited('discord.typing',
+      async (_params: DiscordTypingParams) => ({ success: true }),
+    ));
+
+    // ── Web Fetch (gated) ──
+
+    this.rpcServer.addMethod('web.fetch', this.gated('web.fetch',
+      async (params: WebFetchParams) => {
+        const response = await fetch(params.url, {
+          headers: { 'User-Agent': 'PurrsePhone-Substrate/0.1' },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) {
+          throw new JSONRPCErrorException(
+            `Fetch failed: ${response.status} ${response.statusText}`,
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
+        const rawContent = await response.text();
+        const result = sanitizeWebContent(rawContent, params.url);
+        if (result.injectionPatternsFound > 0) {
+          log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${params.url}`);
+        }
+        return { content: result.content, sanitized: result.sanitized };
+      },
+      (p) => ({ url: p.url }),
+      'fetch', (p) => p.url,
+    ));
+
+    // ── Filesystem (gated) ──
+
+    this.rpcServer.addMethod('fs.read', this.gated('fs.read',
+      async (params: FsReadParams) => {
+        const content = await readFile(params.path, 'utf-8');
+        return { content };
+      },
+      (p) => ({ path: p.path }),
+      'read', (p) => p.path,
+    ));
+
+    this.rpcServer.addMethod('fs.write', this.gated('fs.write',
+      async (params: FsWriteParams) => {
+        await writeFile(params.path, params.content, 'utf-8');
+        return { success: true };
+      },
+      (p) => ({ path: p.path }),
+      'write', (p) => p.path,
+    ));
+  }
+
+  // ── Connection management ──
+
+  start(): void {
+    this.netServer = createSocketServer(this.options.socketPath, (conn) => {
+      log.info('Agent connected');
+      this.connections.add(conn);
+
+      conn.onMessage(async (message) => {
+        const response = await this.rpcServer.receive(message as any);
+        if (response) {
+          conn.send(response);
+        }
+      });
+
+      conn.on('close', () => {
+        log.info('Agent disconnected');
+        this.connections.delete(conn);
+      });
+
+      conn.on('error', (err) => {
+        log.error('Connection error', { error: err.message });
+        this.connections.delete(conn);
+      });
+    });
+  }
+
+  // Send notification to all connected agents
+  notifyAll(method: string, params: unknown): void {
+    const notification = {
+      jsonrpc: '2.0' as const,
+      method,
+      params,
+    };
+    for (const conn of this.connections) {
+      conn.send(notification);
+    }
+  }
+
+  // Send notification to a specific connection
+  notifyOne(conn: NdjsonConnection, method: string, params: unknown): void {
+    conn.send({
+      jsonrpc: '2.0' as const,
+      method,
+      params,
+    });
+  }
+
+  async stop(): Promise<void> {
+    for (const conn of this.connections) {
+      conn.destroy();
+    }
+    this.connections.clear();
+
+    if (this.netServer) {
+      await new Promise<void>((resolve) => {
+        this.netServer!.close(() => resolve());
+      });
+    }
+
+    log.info('Stopped');
+  }
+
+  private audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number {
+    if (decision !== 'ALLOW') {
+      log.info(`${method} → ${decision}`);
+    }
+    if (this.options.auditStore) {
+      return this.options.auditStore.log(method, decision, params);
+    }
+    return 0;
+  }
+
+  private auditComplete(id: number, startTime: number, error?: string): void {
+    if (this.options.auditStore && id > 0) {
+      this.options.auditStore.complete(id, Date.now() - startTime, error);
+    }
+  }
+}

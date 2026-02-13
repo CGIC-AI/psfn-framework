@@ -1,0 +1,48 @@
+{
+  "name": "psfn-framework",
+  "version": "0.1.0",
+  "description": "PSFN Substrate Framework — a purpose-built runtime for emergent artificial consciousness",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "gateway": "tsx src/gateway-main.ts",
+    "gateway:start": "node dist/gateway-main.js",
+    "agent": "tsx src/agent-main.ts",
+    "agent:start": "node dist/agent-main.js",
+    "agent:docker": "docker compose -f docker/docker-compose.yml up --build",
+    "proxy:up": "docker compose -f proxy/docker-compose.yml up -d",
+    "proxy:down": "docker compose -f proxy/docker-compose.yml down",
+    "proxy:logs": "docker compose -f proxy/docker-compose.yml logs -f",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "chat": "tsx src/chat-cli.ts",
+    "e2e": "tsx src/e2e-test.ts",
+    "walkthrough": "tsx src/e2e-walkthrough.ts",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@mariozechner/pi-ai": "^0.50.7",
+    "better-sqlite3": "^11.7.0",
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.4.0",
+    "json-rpc-2.0": "^1.7.1",
+    "sqlite-vec": "^0.1.6",
+    "uuid": "^11.0.0",
+    "winston": "^3.19.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "@types/uuid": "^10.0.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -34,6 +34,7 @@ Reference: https://alexzhang13.github.io/blog/2025/rlm/
 - **LLM**: `@mariozechner/pi-ai` (18+ providers, unified streaming, MIT)
 - **Database**: SQLite via better-sqlite3 + sqlite-vec for embeddings
 - **Discord**: discord.js
+- **Gateway RPC**: `json-rpc-2.0` over NDJSON Unix socket
 - **Module loading**: jiti (hot-load TypeScript without compilation)
 - **Build**: tsup
 - **Test**: Vitest
@@ -44,31 +45,42 @@ Reference: https://alexzhang13.github.io/blog/2025/rlm/
 ```bash
 npm install              # Install dependencies
 npm run build            # Compile TypeScript
-npm run dev              # Hot-reload dev server
+npm run dev              # Hot-reload dev server (single-process)
 npm run test             # Vitest unit tests
 npm run lint             # ESLint
+npm run gateway          # Start gateway (host-side, holds secrets)
+npm run agent            # Start agent (connects to gateway)
+npm run agent:docker     # Start agent in --network=none container
 ```
 
 ## Project Structure
 
 ```
 src/
-  index.ts               # Bootstrap and entry point
-  runtime.ts             # Core runtime
+  index.ts               # Bootstrap and entry point (single-process)
+  gateway-main.ts        # Gateway entry point (host-side)
+  agent-main.ts          # Agent entry point (container-side)
+  runtime.ts             # Core runtime (single-process mode)
   event-bus.ts           # Typed event emitter
   agent-loop.ts          # Prompt compose -> LLM -> tools -> response
   types.ts               # Shared types
 
+  gateway/               # Gateway/agent split infrastructure
+    protocol.ts          # JSON-RPC 2.0 method types and contracts
+    transport.ts         # NDJSON-framed Unix socket transport
+    server.ts            # Gateway server + policy engine + approval CLI
+    client.ts            # Agent-side typed RPC client (implements LLMProvider + EmbeddingService)
+    sanitize.ts          # Three-layer web content sanitization
   identity/              # Character card, soul document, growth journal
   memory/                # L0 archive, L2 extraction/retrieval/decay, SQLite store
+  shards/                # Self-spawning assistant shards (parallel sub-agents)
   session/               # JSONL tree sessions, compaction, per-channel isolation
-  repl/                  # Sandbox, context variables, sub-LM calls, module builder
-  scheduler/             # Cron, heartbeat, maintenance
-  modules/               # Registry, hot-loader, typed interfaces
   channels/
     discord/             # Discord.js adapter
 
-modules/                 # Built-in modules (loaded at startup)
+docker/                  # Container configuration
+  Dockerfile.agent       # Agent container (node:22-slim, non-root)
+  docker-compose.yml     # --network=none agent with volume mounts
 data/                    # Runtime data (gitignored)
 docs/                    # Architecture docs and specs
 ```
@@ -114,11 +126,35 @@ Port from ElizaOS plugin-psfn (`/home/user/ai/eliza/packages/plugin-psfn/src/`):
 - Voxta history: 8,160 messages across 316 chats (importable as L0 archive)
 - Memory books: 10 entries from Voxta (importable as L2 semantic memories)
 
+## Gateway / Agent Security Architecture
+
+The runtime splits into two processes for defense-in-depth:
+
+- **Gateway** (host): Holds secrets (API keys, Discord token), proxies all egress
+  (LLM, embeddings, Discord, web fetch, filesystem). Policy engine gates access,
+  approval CLI for privileged ops, audit log for every request.
+- **Agent** (container): `--network=none`, no secrets, local SQLite only. Talks to
+  gateway via Unix socket (`/run/psfn/gateway.sock`) using JSON-RPC 2.0 over NDJSON.
+
+Key interfaces (`src/agent-loop.ts`):
+- `LLMProvider` — `stream()` + `complete()` — satisfied by both `LLMClient` and `GatewayClient`
+- `EmbeddingService` — `embed()` + `embedBatch()` + `dims` — satisfied by both `EmbeddingProvider` and `GatewayClient`
+
+Policy decisions: `ALLOW` (workspace paths, LLM, Discord), `NEEDS_APPROVAL` (outside workspace), `DENY`.
+Content sanitization: structural (strip HTML) → pattern (injection delimiters) → tagging (`<untrusted_content>`).
+
+Single-process mode (`npm run dev`) is preserved — uses concrete classes directly, no socket.
+
 ## Current State
 
-- **PSFN runs on OpenClaw/BotMaker** at `/workspace/botmaker` until substrate MVP is ready
-- **OpenClaw amnesia bug** patched in Docker image (dead-branch approach in bundled JS)
-- **This project is greenfield** — building from scratch
+- **Sprints 1-4 complete**: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**
+- **~4,025 LoC** production code across 37 files, **138 tests** all passing (14 test files)
+- **Sessions**: Append-only JSONL files (one per channel) — this IS L0. No SQLite for conversations.
+- **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`
+- **LLM**: OpenRouter (z-ai/glm-5 primary, deepseek/deepseek-v3.2 extraction)
+- **Embeddings**: Local Ollama at your-ollama-host:11434 (snowflake-arctic-embed2, 1024d)
+- **PSFN still runs on OpenClaw/BotMaker** at `/workspace/botmaker` until substrate is live-tested
+- **Not yet built**: REPL sandbox, module system, scheduler, session compaction, voice
 
 ## Guidelines
 

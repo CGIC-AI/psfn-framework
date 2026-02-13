@@ -24,6 +24,7 @@ import { ShardManager } from './shards/manager.js';
 import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
+import { ApiServer } from './channels/api/server.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -124,6 +125,24 @@ async function main(): Promise<void> {
     config: DEFAULT_REPL_CONFIG,
   }));
 
+  // ── API server (optional) ──
+
+  let apiServer: ApiServer | undefined;
+  const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;
+  if (apiPort) {
+    apiServer = new ApiServer({
+      port: apiPort,
+      agentLoop,
+      eventBus,
+      sessionManager,
+      apiKey: process.env.API_KEY || undefined,
+      modelName: process.env.API_MODEL_NAME,
+    });
+    await apiServer.init();
+    await apiServer.start();
+    log.info(`API server listening on port ${apiPort}`);
+  }
+
   // ── Listen for Discord messages from gateway ──
 
   gateway.onDiscordMessage(async (message: SubstrateMessage) => {
@@ -157,6 +176,7 @@ async function main(): Promise<void> {
     log.info(`Received ${signal}, shutting down...`);
     await eventBus.emit('system.shutdown', {});
     scheduler.stop();
+    if (apiServer) await apiServer.stop();
     gateway.destroy();
     db.close();
     log.info('Stopped');

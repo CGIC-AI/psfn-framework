@@ -398,6 +398,15 @@ describe('AdminServer', () => {
     });
   });
 
+  describe('body size limit', () => {
+    it('returns 413 for body exceeding 64KB', async () => {
+      const oversizedBody = 'x'.repeat(65_536 + 1);
+      const res = await request(port, 'POST', '/api/memory/search', oversizedBody);
+      expect(res.status).toBe(413);
+      expect(res.body).toBe('Payload Too Large');
+    });
+  });
+
   describe('404', () => {
     it('returns 404 for unknown routes', async () => {
       const res = await request(port, 'GET', '/unknown');

@@ -15,12 +15,14 @@ const log = createComponentLogger('AdminServer');
 export class AdminServer implements Lifecycle {
   private server: Server;
   private port: number;
+  private host: string;
   private token?: string;
   private handlers: AdminHandlers;
   private staticFiles = new Map<string, { content: Buffer; contentType: string }>();
 
   constructor(config: AdminServerConfig) {
     this.port = config.port;
+    this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
     this.handlers = new AdminHandlers({
       memoryStore: config.memoryStore,
@@ -54,8 +56,11 @@ export class AdminServer implements Lifecycle {
 
   async start(): Promise<void> {
     return new Promise((resolve) => {
-      this.server.listen(this.port, () => {
-        log.info(`Listening on port ${this.port}`);
+      this.server.listen(this.port, this.host, () => {
+        log.info(`Listening on ${this.host}:${this.port}`);
+        if (!this.token) {
+          log.warn('Admin server started WITHOUT authentication — set ADMIN_TOKEN to secure');
+        }
         resolve();
       });
     });
@@ -140,7 +145,7 @@ export class AdminServer implements Lifecycle {
       return this.sendFragment(res, this.handlers.memoryListFragment());
     }
     if (method === 'POST' && path === '/api/memory/search') {
-      return this.readBody(req, (body) => {
+      return this.readBody(req, res, (body) => {
         const params = new URLSearchParams(body);
         const query = params.get('query') ?? '';
         this.handlers.memorySearch(query).then(
@@ -197,9 +202,24 @@ export class AdminServer implements Lifecycle {
     res.end(`Not found: ${path}`);
   }
 
-  private readBody(req: IncomingMessage, cb: (body: string) => void): void {
+  private readBody(req: IncomingMessage, res: ServerResponse, cb: (body: string) => void): void {
+    const MAX_BODY_SIZE = 65_536; // 64KB
     let body = '';
-    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-    req.on('end', () => cb(body));
+    let bodySize = 0;
+    req.on('data', (chunk: Buffer) => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY_SIZE) {
+        log.warn('Request body too large', { size: bodySize, limit: MAX_BODY_SIZE });
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('Payload Too Large');
+        req.destroy();
+        return;
+      }
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      if (bodySize > MAX_BODY_SIZE) return;
+      cb(body);
+    });
   }
 }

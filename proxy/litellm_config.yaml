@@ -1,0 +1,46 @@
+# LiteLLM Proxy Configuration
+# Purrsephone Substrate — credential isolation layer
+#
+# The agent process connects to localhost:4000 with a virtual key.
+# Real provider API keys are held here, never exposed to the agent.
+
+model_list:
+  # ── Primary: GLM-5 via OpenRouter ──
+  - model_name: z-ai/glm-5
+    litellm_params:
+      model: openrouter/z-ai/glm-5
+      api_key: os.environ/OPENROUTER_API_KEY
+      max_tokens: 16384
+
+  # ── DeepSeek V3.2 via OpenRouter ──
+  - model_name: deepseek/deepseek-v3.2
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v3.2
+      api_key: os.environ/OPENROUTER_API_KEY
+      max_tokens: 16384
+
+  # ── Kimi K2.5 via OpenRouter (reasoning model — needs headroom) ──
+  - model_name: moonshotai/kimi-k2.5
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      max_tokens: 16384
+
+  # ── Fallback: OpenRouter wildcard ──
+  # Any model not listed above routes through OpenRouter
+  - model_name: openrouter/*
+    litellm_params:
+      model: openrouter/*
+      api_key: os.environ/OPENROUTER_API_KEY
+
+litellm_settings:
+  # Drop any requests that include real API keys in message content
+  drop_params: true
+  # Request timeout
+  request_timeout: 120
+  # Enable streaming
+  stream: true
+
+general_settings:
+  # Virtual key authentication
+  master_key: os.environ/LITELLM_MASTER_KEY

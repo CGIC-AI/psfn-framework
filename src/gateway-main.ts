@@ -27,6 +27,9 @@ async function main(): Promise<void> {
 
   log.info('Initializing...');
 
+  // Ensure gateway socket directory exists
+  mkdirSync(dirname(socketPath), { recursive: true });
+
   // ── Create providers (these hold secrets / have network access) ──
 
   const llmClient = new LLMClient(config);

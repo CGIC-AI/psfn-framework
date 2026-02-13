@@ -15,6 +15,7 @@ const log = createComponentLogger('ApiServer');
 
 export interface ApiServerConfig {
   port: number;
+  host?: string;
   agentLoop: AgentLoop;
   eventBus: EventBus;
   sessionManager: SessionManager;
@@ -25,6 +26,7 @@ export interface ApiServerConfig {
 export class ApiServer implements Lifecycle {
   private server: Server;
   private port: number;
+  private host: string;
   private agentLoop: AgentLoop;
   private eventBus: EventBus;
   private sessionManager: SessionManager;
@@ -33,6 +35,7 @@ export class ApiServer implements Lifecycle {
 
   constructor(config: ApiServerConfig) {
     this.port = config.port;
+    this.host = config.host ?? '127.0.0.1';
     this.agentLoop = config.agentLoop;
     this.eventBus = config.eventBus;
     this.sessionManager = config.sessionManager;
@@ -45,8 +48,11 @@ export class ApiServer implements Lifecycle {
 
   async start(): Promise<void> {
     return new Promise((resolve) => {
-      this.server.listen(this.port, () => {
-        log.info(`Listening on port ${this.port}`);
+      this.server.listen(this.port, this.host, () => {
+        log.info(`Listening on ${this.host}:${this.port}`);
+        if (!this.apiKey) {
+          log.warn('API server started WITHOUT authentication — set API_KEY to secure');
+        }
         resolve();
       });
     });
@@ -113,9 +119,22 @@ export class ApiServer implements Lifecycle {
   }
 
   private handleChatCompletions(req: IncomingMessage, res: ServerResponse): void {
+    const MAX_BODY_SIZE = 1_048_576; // 1MB
     let body = '';
-    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    let bodySize = 0;
+    req.on('data', (chunk: Buffer) => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY_SIZE) {
+        log.warn('Request body too large', { size: bodySize, limit: MAX_BODY_SIZE });
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('Payload Too Large');
+        req.destroy();
+        return;
+      }
+      body += chunk.toString();
+    });
     req.on('end', () => {
+      if (bodySize > MAX_BODY_SIZE) return;
       let parsed: ChatCompletionRequest;
       try {
         parsed = JSON.parse(body) as ChatCompletionRequest;

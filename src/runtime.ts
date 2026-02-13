@@ -186,6 +186,7 @@ export class SubstrateRuntime implements Lifecycle {
     if (apiPort) {
       this.apiServer = new ApiServer({
         port: apiPort,
+        host: process.env.API_HOST || undefined,
         agentLoop: this.agentLoop,
         eventBus: this.eventBus,
         sessionManager: this.sessionManager,
@@ -201,6 +202,7 @@ export class SubstrateRuntime implements Lifecycle {
     if (adminPort) {
       this.adminServer = new AdminServer({
         port: adminPort,
+        host: process.env.ADMIN_HOST || undefined,
         token: process.env.ADMIN_TOKEN || undefined,
         memoryStore: this.memoryStore,
         sessionStore: this.sessionStore,

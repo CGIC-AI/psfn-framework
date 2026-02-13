@@ -137,7 +137,7 @@ Six layers:
 | **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec) |
 | **Module System** | Hot-loadable TypeScript modules (planned) |
 | **Channel Layer** | Discord adapter (voice/web planned) |
-| **Scheduler** | Cron, heartbeat, maintenance workers (planned) |
+| **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers |
 
 ### Storage
 

@@ -138,6 +138,7 @@ async function main(): Promise<void> {
   if (apiPort) {
     apiServer = new ApiServer({
       port: apiPort,
+      host: process.env.API_HOST || undefined,
       agentLoop,
       eventBus,
       sessionManager,
@@ -156,6 +157,7 @@ async function main(): Promise<void> {
   if (adminPort) {
     adminServer = new AdminServer({
       port: adminPort,
+      host: process.env.ADMIN_HOST || undefined,
       token: process.env.ADMIN_TOKEN || undefined,
       memoryStore,
       sessionStore,

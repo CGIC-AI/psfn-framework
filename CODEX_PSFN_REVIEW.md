@@ -1,197 +1,176 @@
-# CODEX PSFN Review (Read-Only Audit)
+# CODEX PSFN Review (Updated)
 
-Date: 2026-02-13
-Scope: Security, configuration, and alignment against `docs/PURRSEPHONE_SUBSTRATE_SPEC.md` and `.beads/issues.jsonl`.
-Method: Static code review only (no source edits), plus test run (`npm test`: 138/138 passing).
+Date: 2026-02-13  
+Scope: Security, configuration, and roadmap alignment review of current `main`.  
+Method: Read-only audit + tests (`npm test`): 282/282 passing.
 
-## Findings (Ordered by Severity)
+## What Changed Since Last Review
 
-### Critical
+### Fixed
 
-1. Unrestricted `web.fetch` allows SSRF and internal network probing through the gateway.
-Evidence:
-- `src/gateway/server.ts:49` returns `ALLOW` for all `web.fetch`.
-- `src/gateway/server.ts:252` fetches arbitrary `params.url` directly.
-Impact:
-- Prompt-influenced agent behavior can hit localhost/private services/metadata endpoints from the host-side gateway.
-Recommendation:
-- Enforce URL policy: allowlist domains, require `https`, deny localhost/link-local/private CIDR targets, and require explicit approval for non-allowlisted destinations.
+1. SSRF hardening for `web.fetch` is now implemented.
+- `src/gateway/server.ts:319`
+- `src/gateway/url-policy.ts:41`
+- `src/gateway/url-policy.ts:94`
 
-2. Filesystem policy can be bypassed via symlink traversal.
-Evidence:
-- Policy is prefix-based on normalized path string, not canonical target path: `src/gateway/server.ts:56`, `src/gateway/server.ts:60`.
-- Actual file operations use raw path (`readFile`/`writeFile`): `src/gateway/server.ts:277`, `src/gateway/server.ts:286`.
-Impact:
-- A path inside workspace that points via symlink outside workspace can be treated as `ALLOW`.
-Recommendation:
-- Resolve both requested path and target with `realpath`, reject symlink escapes, and enforce policy on canonical path.
+2. Symlink traversal bypass in FS policy is fixed.
+- `src/gateway/server.ts:121`
+- `src/gateway/server.ts:124`
 
-3. Streaming chunk routing is not request-safe and can cross-talk under concurrency.
-Evidence:
-- Gateway emits `llm.chunk` with constant `requestId: 0`: `src/gateway/server.ts:193`.
-- Client keeps a single global handler: `src/gateway/client.ts:27`, `src/gateway/client.ts:61`, `src/gateway/client.ts:187`.
-- Shards are explicitly concurrent-capable: `src/shards/manager.ts:14`, `src/shards/manager.ts:38`.
-Impact:
-- Concurrent LLM streams can leak/mix token chunks between tasks, creating integrity and possible data exposure issues.
-Recommendation:
-- Introduce per-request IDs end-to-end and map chunk handlers by request ID.
+3. Streaming chunk cross-talk is fixed with per-request IDs.
+- `src/gateway/server.ts:245`
+- `src/gateway/client.ts:29`
+- `src/gateway/client.ts:196`
+
+4. Session filename sanitization is now strict allowlist + encoding.
+- `src/session/store.ts:13`
+
+5. Scheduler layer is now implemented and wired.
+- `src/scheduler/scheduler.ts:12`
+- `src/runtime.ts:111`
+- `src/agent-main.ts:97`
+
+6. Config threading for retrieval/extraction intervals is implemented.
+- `src/runtime.ts:93`
+- `src/runtime.ts:104`
+- `src/agent-main.ts:81`
+- `src/agent-main.ts:90`
+
+## Current Findings (Ordered by Severity)
 
 ### High
 
-4. Gateway mode currently risks sending an empty Discord reply for every incoming message.
+1. API and Admin servers are optional-auth and bind on all interfaces.
 Evidence:
-- Gateway handler returns placeholder empty content: `src/gateway-main.ts:71`.
-- Discord adapter always attempts to send handler response: `src/channels/discord/adapter.ts:113`, `src/channels/discord/adapter.ts:115`.
+- API key is optional: `src/channels/api/server.ts:21`
+- API auth only enforced when key exists: `src/channels/api/server.ts:78`
+- API listen without host restriction: `src/channels/api/server.ts:48`
+- Admin token is optional: `src/channels/admin/server.ts:18`
+- Admin auth only enforced when token exists: `src/channels/admin/server.ts:77`
+- Admin listen without host restriction: `src/channels/admin/server.ts:57`
 Impact:
-- In gateway/agent split mode this can trigger failed sends or user-facing error replies before agent response path completes.
+- If `API_PORT`/`ADMIN_PORT` is enabled without key/token, remote unauthenticated access is possible on networked hosts.
 Recommendation:
-- Add explicit “no direct reply” mode for gateway-side adapter path, or skip send when response is empty in gateway forwarding mode.
+- Default-bind to `127.0.0.1` unless explicit host is configured; fail startup when auth is unset unless `ALLOW_INSECURE_LOCAL=true`.
 
-5. No authentication beyond socket permissions for agent-to-gateway RPC.
+2. Gateway Discord forwarder still returns an empty placeholder response through adapter path.
 Evidence:
-- Socket permission set to group-writeable `0770`: `src/gateway/transport.ts:78`.
-- No per-connection auth/identity handshake in server accept path: `src/gateway/server.ts:296`.
+- Placeholder empty response: `src/gateway-main.ts:73`
+- Adapter always sends handler response content: `src/channels/discord/adapter.ts:118`
 Impact:
-- Any local process with socket access can call privileged gateway methods (`discord.send`, `llm.*`, `fs.*`).
+- Can still produce empty-send/error behavior before agent response path completes.
 Recommendation:
-- Add peer authentication (token/challenge), tighter socket ownership/perms, and method-level capability scoping.
+- Add explicit “forward-only/no-send” mode to adapter invocation in gateway wiring.
 
-6. Single-process mode weakens the stated REPL security boundary.
+3. Gateway socket trust is based only on filesystem permissions.
 Evidence:
-- Sandbox comment explicitly says Docker is the real boundary: `src/repl/sandbox.ts:3`.
-- Single-process runtime registers `think` tool with direct providers: `src/runtime.ts:56`, `src/runtime.ts:107`.
+- Socket permission is `0770`: `src/gateway/transport.ts:81`
+- No per-connection auth handshake in server accept path: `src/gateway/server.ts:424`
 Impact:
-- In `npm run dev`, a sandbox escape would run in same trust domain as secrets/network clients.
+- Any local process with socket access can call gateway RPC methods.
 Recommendation:
-- Treat single-process as non-hardened dev mode only; gate `think` tool behind explicit flag, or isolate REPL path even in dev.
+- Add lightweight auth (shared token/challenge) and stricter socket ownership/isolation.
 
 ### Medium
 
-7. Config knobs exist but are not honored by runtime logic.
+4. `web.fetch` URL denials are enforced in handler, but policy decision logging still marks method as `ALLOW`.
 Evidence:
-- Config loads `memoryRetrievalLimit` and `extractionInterval`: `src/types.ts:99`, `src/types.ts:100`, `src/types.ts:115`, `src/types.ts:116`.
-- Retrieval and extraction use hardcoded constants instead: `src/memory/retrieval.ts:42`, `src/memory/extraction.ts:73`, `src/memory/types.ts:52`, `src/memory/types.ts:53`.
+- Policy returns `ALLOW` for `web.fetch`: `src/gateway/server.ts:95`
+- URL policy blocks inside handler with policy errors: `src/gateway/server.ts:322`
+- Audit decision is captured before handler based on `evaluatePolicy`: `src/gateway/server.ts:208`
 Impact:
-- Operators cannot tune extraction/retrieval behavior through env as documented by config shape.
+- Audit trail can underreport policy-blocked fetches as `ALLOW` + error instead of `DENY`.
 Recommendation:
-- Thread config values into `MemoryRetriever`/`MemoryExtractor` and remove duplicate hardcoded knobs.
+- Move URL policy decision into `evaluatePolicy` path or include post-check decision override in audit.
 
-8. Gateway defaults and container paths are misaligned for future file-broker use.
+5. API request body has no size guard.
 Evidence:
-- Gateway default workspace is `./workspace`: `src/gateway-main.ts:23`.
-- Agent container workspace mount is `/app/workspace`: `docker/docker-compose.yml:15`.
+- Entire request body accumulates unbounded: `src/channels/api/server.ts:116`
 Impact:
-- Agent-originated `fs.*` requests may fall outside gateway ALLOW path unless manually configured.
+- Large POST payloads can cause memory pressure/DoS.
 Recommendation:
-- Define and document explicit host/container path mapping or a normalized virtual path contract.
+- Enforce max body size and reject with `413`.
 
-9. Startup fragility: gateway does not ensure socket directory exists.
+6. Gateway does not ensure socket directory exists for default `/run/psfn/gateway.sock`.
 Evidence:
-- Default socket path under `/run/psfn`: `src/gateway-main.ts:18`.
-- No `mkdir` for socket directory before listen.
+- Default socket path: `src/gateway-main.ts:20`
+- No `mkdir` for `dirname(socketPath)` before listen.
 Impact:
-- Gateway can fail on clean hosts where `/run/psfn` is absent.
+- Startup failure on hosts where `/run/psfn` is missing.
 Recommendation:
-- Create parent directory before `createSocketServer`.
+- `mkdirSync(dirname(socketPath), { recursive: true })` before `gateway.start()`.
 
-10. Partial channel ID sanitization in session filenames.
+7. Host/container workspace path mapping is still ambiguous for future FS broker use.
 Evidence:
-- Only `/` and `:` are replaced: `src/session/store.ts:12`.
+- Gateway default workspace: `src/gateway-main.ts:25`
+- Agent container workspace mount: `docker/docker-compose.yml:15`
 Impact:
-- Non-Discord channel IDs with other path-metacharacters can produce unsafe or ambiguous filenames.
+- Future `fs.*` operations may classify incorrectly without explicit path mapping policy.
 Recommendation:
-- Restrict to strict allowlist (`[a-zA-Z0-9._-]`) and hash/encode anything else.
+- Add explicit host/container path map config and apply in policy checks.
 
-## Configuration/Documentation Drift
+### Low / Design Tradeoff
 
-1. Contradictory status in `CLAUDE.md` about REPL.
+8. REPL in single-process mode is still not a strong security boundary (documented behavior).
 Evidence:
-- Claims “Sprints 1-4 complete ... RLM+REPL sandbox”: `CLAUDE.md:150`.
-- Also says REPL is “Not yet built”: `CLAUDE.md:157`.
+- Sandbox comment: `src/repl/sandbox.ts:3`
+- Single-process runtime includes `think` tool: `src/runtime.ts:141`
+Note:
+- This appears intentional for dev/simplicity; risk remains if single-process is used outside trusted environments.
 
-2. Model default mismatch between code and example env.
-Evidence:
-- Code default primary model: `z-ai/glm-5` in `src/types.ts:105`.
-- Example env sets `z-ai/glm-4.7`: `.env.example:13`.
+## Alignment With Plan
 
-3. Embedding endpoint examples differ across docs/defaults.
-Evidence:
-- README uses localhost example: `README.md:35`.
-- `.env.example` and default config point to `purrsephone.local...`: `.env.example:19`, `src/memory/embedding.ts:8`.
+1. Scheduler: now aligned (implemented).
+- Spec target: `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:354`
+- Implementation: `src/scheduler/scheduler.ts:12`
 
-## Alignment With Overall Plan (Spec + Beads)
+2. OpenAI-compatible API: implemented (ahead of original phase sequencing).
+- Related issue closed: `PSFN-z5e` in `.beads/issues.jsonl`.
 
-1. Module system is still missing.
-Spec references:
-- `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:141` through `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:176`.
-- File plan at `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:497`.
-Current implementation signals:
-- No module registry/loader in `src/`.
-- No `jiti` dependency in `package.json`.
-- Open tracking issue: `PSFN-zfr` in `.beads/issues.jsonl`.
+3. Admin GUI: implemented (out-of-band feature, useful operationally).
+- Related issue closed: `PSFN-hxk` in `.beads/issues.jsonl`.
 
-2. Scheduler/heartbeat layer is not implemented yet.
-Spec references:
-- `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:235` through `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:243`.
-- MVP includes scheduler: `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:304`.
-Current implementation signals:
-- Event map has no `schedule.*` events: `src/event-bus.ts:5`.
-- No scheduler module in `src/`.
+4. Module system: still not implemented.
+- Spec module layer: `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:141`
+- Open issue: `PSFN-zfr` in `.beads/issues.jsonl`.
 
-3. REPL persistence does not match spec intent.
-Spec reference:
-- “REPL is sandboxed but persistent within a session”: `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:88`.
-Implementation:
-- `runRLMLoop` creates a new sandbox each call: `src/repl/loop.ts:14`.
-- Code comment describes it as “ephemeral think cycle”: `src/repl/loop.ts:2`.
+5. Session compaction/branching remains partial.
+- Store supports compaction entries: `src/session/store.ts:174`
+- No automatic compaction flow in runtime/session manager paths: `src/session/manager.ts:39`.
 
-4. Session compaction/branching capability is partial.
-Spec references:
-- Session manager + compaction in MVP: `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:278`.
-- Tree/branch architecture references: `docs/PURRSEPHONE_SUBSTRATE_SPEC.md:483`.
-Implementation:
-- JSONL append works, and compaction summaries can be stored: `src/session/store.ts:74`, `src/session/store.ts:111`.
-- No automatic compaction routine, no branch semantics in runtime paths.
+6. Capability tokens still not implemented.
+- Protocol type exists: `src/gateway/protocol.ts:132`
+- No corresponding method registration in gateway server.
 
-5. Security roadmap item “capability tokens” remains unimplemented.
-Evidence:
-- Mentioned as planned in `.beads/issues.jsonl` (`PSFN-2bf` notes and design).
-- Protocol includes `approval.request`: `src/gateway/protocol.ts:130`.
-- Gateway server does not implement `approval.request` method in `registerMethods`.
+## Configuration/Docs Drift
 
-## Suggested Next Features (Priority Order)
+1. README still describes scheduler as “planned”.
+- `README.md:140`
+- Current implementation includes scheduler (`src/scheduler/scheduler.ts`).
 
-1. Harden gateway policy and brokering.
-Build:
-- Canonical-path (`realpath`) FS enforcement.
-- SSRF defenses and URL allowlisting for `web.fetch`.
-- Per-request streaming IDs and chunk routing.
-- Capability tokens (method/path/domain scoped, TTL-bound) for approved operations.
+2. Model defaults mismatch remains.
+- Code default: `z-ai/glm-5` (`src/types.ts:105`)
+- `.env.example`: `z-ai/glm-4.7` (`.env.example:13`)
 
-2. Implement minimal Scheduler (MVP subset).
-Build:
-- `heartbeat` timer, cron/every/one-shot task registry, memory maintenance hooks.
-- Emit `schedule.tick`, `schedule.task.run`, `schedule.heartbeat` events as in spec.
+3. `CLAUDE.md` test count appears stale vs current test run.
+- `CLAUDE.md:153` says 203 tests
+- Current run: 282 tests
 
-3. Implement Module System (safe first pass).
-Build:
-- Registry + loader + lifecycle interfaces (`init/start/stop/health`).
-- Restrict module IO/network through gateway policy from day one.
-- Start with signed/trusted local modules before self-authored install flow.
+## Suggested Next Features
 
-4. Complete session compaction and branch support.
-Build:
-- Auto-compaction policy when session exceeds threshold.
-- Branch IDs/tree metadata in session storage.
-- Include compaction auditability and replay tests.
+1. Secure network surfaces by default.
+- Require auth for API/Admin when ports are enabled.
+- Add explicit bind host config (`127.0.0.1` default).
 
-5. Observability and operator controls.
-Build:
-- Structured logging with log levels (`PSFN-7qz`).
-- Runtime health endpoint/CLI summary for gateway policy decisions and pending approvals.
+2. Finish gateway hardening.
+- Add socket auth handshake.
+- Add policy/audit consistency for `web.fetch` denials.
 
-## Open Questions
+3. Implement module system MVP (`PSFN-zfr`).
+- Registry + loader + lifecycle hooks, with gateway-mediated IO/network constraints.
 
-1. Should `web.fetch` exist as a general primitive, or be replaced by narrow, allowlisted tools only?
-2. Is single-process mode intended only for local dev, or must it meet production security posture?
-3. Should shard execution be concurrency-limited by token budget in addition to count-based caps?
+4. Implement automatic session compaction policy.
+- Trigger based on message thresholds and preserve auditability.
+
+5. Add request size/time guards to API and admin endpoints.
+- Body caps, timeouts, and simple rate-limiting for exposed endpoints.

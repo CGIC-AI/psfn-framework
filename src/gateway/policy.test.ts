@@ -28,8 +28,67 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy({ method: 'discord.send', params: {} }, policyConfig)).toBe('ALLOW');
   });
 
-  it('allows web.fetch', () => {
+  it('allows web.fetch with valid HTTPS URL', () => {
     expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'https://example.com' } }, policyConfig)).toBe('ALLOW');
+  });
+
+  it('allows web.fetch when no urlPolicy is configured', () => {
+    expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'http://example.com' } }, policyConfig)).toBe('ALLOW');
+  });
+
+  it('denies web.fetch for HTTP URL when urlPolicy disallows HTTP', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: { allowHttp: false },
+    };
+    expect(evaluatePolicy(
+      { method: 'web.fetch', params: { url: 'http://example.com' } },
+      configWithUrlPolicy,
+    )).toBe('DENY');
+  });
+
+  it('denies web.fetch for private IP', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: {},
+    };
+    expect(evaluatePolicy(
+      { method: 'web.fetch', params: { url: 'https://127.0.0.1/admin' } },
+      configWithUrlPolicy,
+    )).toBe('DENY');
+  });
+
+  it('denies web.fetch for localhost', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: {},
+    };
+    expect(evaluatePolicy(
+      { method: 'web.fetch', params: { url: 'https://localhost/admin' } },
+      configWithUrlPolicy,
+    )).toBe('DENY');
+  });
+
+  it('denies web.fetch for domain not in allowlist', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: { domainAllowlist: ['trusted.com'] },
+    };
+    expect(evaluatePolicy(
+      { method: 'web.fetch', params: { url: 'https://evil.com/payload' } },
+      configWithUrlPolicy,
+    )).toBe('DENY');
+  });
+
+  it('allows web.fetch for domain in allowlist', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: { domainAllowlist: ['trusted.com'] },
+    };
+    expect(evaluatePolicy(
+      { method: 'web.fetch', params: { url: 'https://trusted.com/page' } },
+      configWithUrlPolicy,
+    )).toBe('ALLOW');
   });
 
   // ── Filesystem: workspace paths ──

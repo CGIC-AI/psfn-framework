@@ -26,7 +26,8 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   private conn: NdjsonConnection;
   private embeddingDims: number;
   private notificationHandlers = new Map<string, Array<(params: unknown) => void>>();
-  private pendingChunkHandler: ((text: string) => void) | null = null;
+  private chunkHandlers = new Map<string, (text: string) => void>();
+  private requestCounter = 0;
 
   constructor(conn: NdjsonConnection, embeddingDims: number) {
     this.conn = conn;
@@ -59,9 +60,12 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   // ── LLMProvider interface ──
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
-    // Set up chunk handler for streaming notifications
+    // Generate a unique per-request ID for routing streaming chunks
+    const requestId = `req-${++this.requestCounter}`;
+
+    // Register chunk handler before sending the RPC so no chunks are missed
     if (callbacks?.onText) {
-      this.pendingChunkHandler = callbacks.onText;
+      this.chunkHandlers.set(requestId, callbacks.onText);
     }
 
     try {
@@ -71,6 +75,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         stream: !!callbacks?.onText,
+        requestId,
       }) as LLMChatResult;
 
       const response: LLMResponse = {
@@ -89,7 +94,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       callbacks?.onError?.(err);
       throw err;
     } finally {
-      this.pendingChunkHandler = null;
+      this.chunkHandlers.delete(requestId);
     }
   }
 
@@ -185,10 +190,26 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   }
 
   private handleNotification(method: string, params: unknown): void {
-    // Special case: streaming chunks go to the pending handler
-    if (method === 'llm.chunk' && this.pendingChunkHandler) {
+    // Special case: streaming chunks are routed by requestId
+    if (method === 'llm.chunk') {
       const chunk = params as LLMChunkNotification;
-      this.pendingChunkHandler(chunk.text);
+      const handler = chunk.requestId
+        ? this.chunkHandlers.get(chunk.requestId)
+        : undefined;
+
+      if (handler) {
+        handler(chunk.text);
+        return;
+      }
+
+      // Backward compat: if requestId is missing or '0', fall back to any single handler
+      if (!chunk.requestId || chunk.requestId === '0') {
+        const fallback = this.chunkHandlers.values().next().value;
+        if (fallback) {
+          fallback(chunk.text);
+          return;
+        }
+      }
       return;
     }
 

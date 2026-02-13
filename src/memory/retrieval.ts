@@ -10,13 +10,22 @@ interface ScoredMemory {
   score: number;
 }
 
+export interface MemoryRetrieverConfig {
+  retrievalLimit?: number;
+  retrievalThreshold?: number;
+}
+
 export class MemoryRetriever implements MemoryProvider {
   private memoryStore: MemoryStore;
   private embeddingService: EmbeddingService;
+  private retrievalLimit: number;
+  private retrievalThreshold: number;
 
-  constructor(memoryStore: MemoryStore, embeddingService: EmbeddingService) {
+  constructor(memoryStore: MemoryStore, embeddingService: EmbeddingService, config?: MemoryRetrieverConfig) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
+    this.retrievalLimit = config?.retrievalLimit ?? MEMORY_CONFIG.maxRetrievalCount;
+    this.retrievalThreshold = config?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
   }
 
   async retrieve(contextText: string, channelId: string): Promise<string> {
@@ -27,7 +36,7 @@ export class MemoryRetriever implements MemoryProvider {
 
       const memories = this.memoryStore.searchByEmbedding(
         embedding,
-        MEMORY_CONFIG.retrievalThreshold,
+        this.retrievalThreshold,
         20,
       );
 
@@ -41,7 +50,7 @@ export class MemoryRetriever implements MemoryProvider {
         }))
         .filter(s => s.score > 0)
         .sort((a, b) => b.score - a.score)
-        .slice(0, MEMORY_CONFIG.maxRetrievalCount);
+        .slice(0, this.retrievalLimit);
 
       if (scored.length === 0) return '';
 

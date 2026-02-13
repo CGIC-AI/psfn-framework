@@ -22,6 +22,7 @@ import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { ApiServer } from './channels/api/server.js';
+import { AdminServer } from './channels/admin/server.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -37,7 +38,9 @@ export class SubstrateRuntime implements Lifecycle {
   private memoryStore!: MemoryStore;
   private salienceDecay!: SalienceDecay;
   private scheduler!: Scheduler;
+  private shardManager!: ShardManager;
   private apiServer?: ApiServer;
+  private adminServer?: AdminServer;
 
   constructor(config: SubstrateConfig) {
     this.config = config;
@@ -86,6 +89,9 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.memoryProvider = new MemoryRetriever(
       this.memoryStore,
       embeddingProvider,
+      {
+        retrievalLimit: this.config.memoryRetrievalLimit,
+      },
     );
 
     this.agentLoop.memoryExtractor = new MemoryExtractor(
@@ -94,6 +100,9 @@ export class SubstrateRuntime implements Lifecycle {
       this.memoryStore,
       embeddingProvider,
       this.eventBus,
+      {
+        extractionInterval: this.config.extractionInterval,
+      },
     );
 
     this.salienceDecay = new SalienceDecay(this.memoryStore);
@@ -117,7 +126,7 @@ export class SubstrateRuntime implements Lifecycle {
     log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via Ollama)`);
 
     // Shard manager — allows Purrsephone to spawn parallel sub-agents
-    const shardManager = new ShardManager({
+    this.shardManager = new ShardManager({
       eventBus: this.eventBus,
       llmProvider: this.llmClient,
       sessionStore: this.sessionStore,
@@ -126,7 +135,7 @@ export class SubstrateRuntime implements Lifecycle {
       config: this.config,
       parentSystemPrompt: systemPrompt,
     });
-    this.agentLoop.registerTool(createSpawnShardTool(shardManager));
+    this.agentLoop.registerTool(createSpawnShardTool(this.shardManager));
 
     // Think tool — RLM+REPL sandbox for deep reasoning
     this.agentLoop.registerTool(createThinkTool({
@@ -187,6 +196,26 @@ export class SubstrateRuntime implements Lifecycle {
       log.info(`API server configured on port ${apiPort}`);
     }
 
+    // Admin GUI — Purrsephone's Garden
+    const adminPort = process.env.ADMIN_PORT ? parseInt(process.env.ADMIN_PORT, 10) : undefined;
+    if (adminPort) {
+      this.adminServer = new AdminServer({
+        port: adminPort,
+        token: process.env.ADMIN_TOKEN || undefined,
+        memoryStore: this.memoryStore,
+        sessionStore: this.sessionStore,
+        sessionManager: this.sessionManager,
+        scheduler: this.scheduler,
+        shardManager: this.shardManager,
+        eventBus: this.eventBus,
+        characterCard: card,
+        config: this.config,
+        embeddingService: embeddingProvider,
+      });
+      await this.adminServer.init();
+      log.info(`Admin GUI configured on port ${adminPort}`);
+    }
+
     await this.eventBus.emit('system.init', {});
     log.info('Initialized');
   }
@@ -196,6 +225,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.scheduler.start();
     await this.discord.start();
     if (this.apiServer) await this.apiServer.start();
+    if (this.adminServer) await this.adminServer.start();
     await this.eventBus.emit('system.ready', {});
     log.info('Ready');
   }
@@ -205,6 +235,7 @@ export class SubstrateRuntime implements Lifecycle {
     await this.eventBus.emit('system.shutdown', {});
     this.scheduler.stop();
     if (this.apiServer) await this.apiServer.stop();
+    if (this.adminServer) await this.adminServer.stop();
     await this.discord.stop();
     this.db.close();
     log.info('Stopped');

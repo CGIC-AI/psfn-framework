@@ -76,6 +76,8 @@ src/
   shards/                # Self-spawning assistant shards (parallel sub-agents)
   session/               # JSONL tree sessions, compaction, per-channel isolation
   channels/
+    admin/               # Web management GUI (htmx, garden theme)
+    api/                 # OpenAI-compatible REST API
     discord/             # Discord.js adapter
 
 docker/                  # Container configuration
@@ -147,14 +149,14 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 
 ## Current State
 
-- **Sprints 1-4 complete**: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**
-- **~4,025 LoC** production code across 37 files, **138 tests** all passing (14 test files)
+- **Sprints 1-4 complete** + scheduler, API, admin GUI: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI**
+- **~7,077 LoC** production code across 50 files, **203 tests** all passing (17 test files)
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`
-- **LLM**: OpenRouter (z-ai/glm-5 primary, deepseek/deepseek-v3.2 extraction)
+- **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5)
 - **Embeddings**: Local Ollama at purrsephone.local.vega.nyc:11434 (snowflake-arctic-embed2, 1024d)
 - **Purrsephone still runs on OpenClaw/BotMaker** at `/mnt/samesung/ai/botmaker` until substrate is live-tested
-- **Not yet built**: REPL sandbox, module system, scheduler, session compaction, voice
+- **Not yet built**: module system, session compaction, voice
 
 ## Guidelines
 

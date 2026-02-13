@@ -1,0 +1,205 @@
+// ── Admin GUI Server ──
+// Serves the garden-themed management interface on ADMIN_PORT.
+// Uses htmx for interactivity — server returns HTML fragments.
+
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Lifecycle } from '../../types.js';
+import type { AdminServerConfig } from './types.js';
+import { AdminHandlers } from './handlers.js';
+import { createComponentLogger } from '../../logger.js';
+
+const log = createComponentLogger('AdminServer');
+
+export class AdminServer implements Lifecycle {
+  private server: Server;
+  private port: number;
+  private token?: string;
+  private handlers: AdminHandlers;
+  private staticFiles = new Map<string, { content: Buffer; contentType: string }>();
+
+  constructor(config: AdminServerConfig) {
+    this.port = config.port;
+    this.token = config.token;
+    this.handlers = new AdminHandlers({
+      memoryStore: config.memoryStore,
+      sessionStore: config.sessionStore,
+      sessionManager: config.sessionManager,
+      scheduler: config.scheduler,
+      shardManager: config.shardManager,
+      eventBus: config.eventBus,
+      embeddingService: config.embeddingService,
+      characterCard: config.characterCard,
+      config: config.config,
+    });
+    this.server = createServer((req, res) => this.handleRequest(req, res));
+  }
+
+  async init(): Promise<void> {
+    // Pre-load static files
+    const staticDir = join(import.meta.dirname, 'static');
+    for (const file of ['htmx.min.js', 'sse.js']) {
+      try {
+        const content = readFileSync(join(staticDir, file));
+        this.staticFiles.set(`/static/${file}`, {
+          content,
+          contentType: 'application/javascript',
+        });
+      } catch {
+        log.warn(`Static file not found: ${file}`);
+      }
+    }
+  }
+
+  async start(): Promise<void> {
+    return new Promise((resolve) => {
+      this.server.listen(this.port, () => {
+        log.info(`Listening on port ${this.port}`);
+        resolve();
+      });
+    });
+  }
+
+  async stop(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Force-close any open connections (SSE streams, etc.)
+      this.server.closeAllConnections();
+      this.server.close((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+
+  private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    // Auth check (skip for OPTIONS)
+    if (req.method !== 'OPTIONS' && this.token && !this.checkAuth(req, res)) return;
+
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    const path = url.pathname;
+
+    // Static files
+    const staticFile = this.staticFiles.get(path);
+    if (staticFile) {
+      res.writeHead(200, { 'Content-Type': staticFile.contentType, 'Cache-Control': 'public, max-age=86400' });
+      res.end(staticFile.content);
+      return;
+    }
+
+    try {
+      this.route(req.method ?? 'GET', path, req, res);
+    } catch (err) {
+      log.error('Request error', { path, error: String(err) });
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Internal Server Error');
+    }
+  }
+
+  private route(method: string, path: string, req: IncomingMessage, res: ServerResponse): void {
+    // ── Pages (return full HTML) ──
+
+    if (method === 'GET' && path === '/') {
+      return this.sendHtml(res, this.handlers.dashboard());
+    }
+    if (method === 'GET' && path === '/memory') {
+      return this.sendHtml(res, this.handlers.memoryList());
+    }
+    if (method === 'GET' && path.startsWith('/memory/') && !path.startsWith('/memory/search')) {
+      const id = decodeURIComponent(path.slice(8));
+      const html = this.handlers.memoryDetail(id);
+      if (!html) return this.send404(res, path);
+      return this.sendHtml(res, html);
+    }
+    if (method === 'GET' && path === '/sessions') {
+      return this.sendHtml(res, this.handlers.sessionList());
+    }
+    if (method === 'GET' && path.startsWith('/sessions/') && !path.includes('/api/')) {
+      const channelId = decodeURIComponent(path.slice(10));
+      return this.sendHtml(res, this.handlers.sessionMessages(channelId));
+    }
+    if (method === 'GET' && path === '/scheduler') {
+      return this.sendHtml(res, this.handlers.schedulerPage());
+    }
+    if (method === 'GET' && path === '/shards') {
+      return this.sendHtml(res, this.handlers.shardsPage());
+    }
+    if (method === 'GET' && path === '/identity') {
+      return this.sendHtml(res, this.handlers.identityPage());
+    }
+    if (method === 'GET' && path === '/settings') {
+      return this.sendHtml(res, this.handlers.settingsPage());
+    }
+    if (method === 'GET' && path === '/events') {
+      return this.sendHtml(res, this.handlers.eventsPageHtml());
+    }
+
+    // ── API fragments (return HTML fragments for htmx) ──
+
+    if (method === 'GET' && path === '/api/memory/list') {
+      return this.sendFragment(res, this.handlers.memoryListFragment());
+    }
+    if (method === 'POST' && path === '/api/memory/search') {
+      return this.readBody(req, (body) => {
+        const params = new URLSearchParams(body);
+        const query = params.get('query') ?? '';
+        this.handlers.memorySearch(query).then(
+          (html) => this.sendFragment(res, html),
+          (err) => {
+            log.error('Memory search error', { error: String(err) });
+            this.sendFragment(res, '<tr><td colspan="6" class="empty">Search error</td></tr>');
+          },
+        );
+      });
+    }
+    if (method === 'POST' && path.startsWith('/api/memory/') && path.endsWith('/supersede')) {
+      const id = decodeURIComponent(path.slice(12, -10));
+      return this.sendFragment(res, this.handlers.memorySupersede(id));
+    }
+    if (method === 'GET' && path.startsWith('/api/sessions/') && path.endsWith('/messages')) {
+      const channelId = decodeURIComponent(path.slice(14, -9));
+      return this.sendFragment(res, this.handlers.sessionMessagesFragment(channelId));
+    }
+
+    // ── SSE event stream ──
+
+    if (method === 'GET' && path === '/events/stream') {
+      const cleanup = this.handlers.setupSSE(res);
+      req.on('close', cleanup);
+      return;
+    }
+
+    this.send404(res, path);
+  }
+
+  private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.startsWith('Bearer ') || auth.slice(7) !== this.token) {
+      res.writeHead(401, { 'Content-Type': 'text/plain' });
+      res.end('Unauthorized');
+      return false;
+    }
+    return true;
+  }
+
+  private sendHtml(res: ServerResponse, html: string): void {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html);
+  }
+
+  private sendFragment(res: ServerResponse, html: string): void {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html);
+  }
+
+  private send404(res: ServerResponse, path: string): void {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end(`Not found: ${path}`);
+  }
+
+  private readBody(req: IncomingMessage, cb: (body: string) => void): void {
+    let body = '';
+    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    req.on('end', () => cb(body));
+  }
+}

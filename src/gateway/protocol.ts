@@ -11,6 +11,7 @@ export interface LLMChatParams {
   messages: ContextMessage[];
   systemPrompt: string;
   stream?: boolean;
+  requestId?: string;
   maxTokens?: number;
 }
 
@@ -65,6 +66,7 @@ export interface LLMChatResult {
   inputTokens: number;
   outputTokens: number;
   stopReason: string;
+  requestId?: string;
 }
 
 export interface LLMCompleteResult {
@@ -108,7 +110,7 @@ export interface ApprovalResult {
 // ── Notification types (gateway → agent, no response) ──
 
 export interface LLMChunkNotification {
-  requestId: string | number;
+  requestId: string;
   text: string;
 }
 

@@ -8,6 +8,7 @@ import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore } from './session/store.js';
 import { SessionManager } from './session/manager.js';
+import { UserContinuityStore } from './session/continuity.js';
 import { AgentLoop } from './agent-loop.js';
 import { DiscordAdapter } from './channels/discord/adapter.js';
 import { MemoryStore } from './memory/store.js';
@@ -25,6 +26,11 @@ import { ApiServer } from './channels/api/server.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
+import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
+import type { LifecycleNotifier } from './lifecycle/notifications.js';
+import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
+import { MemoryWriter } from './memory/writer.js';
+import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -43,10 +49,13 @@ export class SubstrateRuntime implements Lifecycle {
   private shardManager!: ShardManager;
   private apiServer?: ApiServer;
   private adminServer?: AdminServer;
+  private lifecycleNotifier?: LifecycleNotifier;
+  private startTime: number;
 
   constructor(config: SubstrateConfig) {
     this.config = config;
     this.eventBus = new EventBus();
+    this.startTime = Date.now();
   }
 
   async init(): Promise<void> {
@@ -73,6 +82,11 @@ export class SubstrateRuntime implements Lifecycle {
     this.llmClient = new LLMClient(this.config);
     this.sessionStore = new SessionStore(join(this.config.dataDir, 'sessions'));
     this.sessionManager = new SessionManager(this.sessionStore, this.config);
+
+    // User continuity store — cross-channel context carryover
+    const continuityStore = new UserContinuityStore(join(this.config.dataDir, 'sessions'));
+    this.sessionManager.continuityStore = continuityStore;
+    log.info('User continuity store enabled');
 
     // Embedding provider (Ollama local)
     const embeddingProvider = new EmbeddingProvider({
@@ -148,13 +162,41 @@ export class SubstrateRuntime implements Lifecycle {
       config: DEFAULT_REPL_CONFIG,
     }));
 
+    // Memory write/import tools — intentional memory creation
+    const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
+    this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
+    this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
+
     // Discord adapter
     this.discord = new DiscordAdapter(this.config, this.eventBus);
     this.discord.onMessage((msg) => this.agentLoop.handleMessage(msg));
     await this.discord.init();
 
-    // Discord heartbeat — hourly proof-of-life message
+    // Lifecycle notifier — pre-restart, ready, shutdown messages
     const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
+    this.lifecycleNotifier = new DiscordLifecycleNotifier({
+      sender: this.discord,
+      heartbeatChannelId,
+      dataDir: this.config.dataDir,
+      startTime: this.startTime,
+    });
+
+    // Track last-active channel on every incoming message
+    this.eventBus.on('message.received', ({ message }) => {
+      writeLastActiveChannel(this.config.dataDir, message.channelId);
+    });
+
+    // Lifecycle tools — self_restart and self_rebuild
+    this.agentLoop.registerTool(createRestartTool(
+      this.lifecycleNotifier,
+      () => this.stop(),
+    ));
+    this.agentLoop.registerTool(createRebuildTool(
+      this.lifecycleNotifier,
+      () => this.stop(),
+    ));
+
+    // Discord heartbeat — hourly proof-of-life message
     if (heartbeatChannelId) {
       this.scheduler.register({
         id: 'discord-heartbeat',
@@ -238,6 +280,12 @@ export class SubstrateRuntime implements Lifecycle {
     if (this.apiServer) await this.apiServer.start();
     if (this.adminServer) await this.adminServer.start();
     await this.eventBus.emit('system.ready', {});
+
+    // Send "I'm back" notification (fire-and-forget — don't block startup)
+    this.lifecycleNotifier?.notifyReady().catch((err) => {
+      log.error('Ready notification failed', { error: String(err) });
+    });
+
     log.info('Ready');
   }
 

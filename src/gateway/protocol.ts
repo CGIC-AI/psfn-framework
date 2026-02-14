@@ -1,7 +1,7 @@
 // ── JSON-RPC 2.0 method definitions ──
 // The contract between gateway (host) and agent (container).
 
-import type { ContextMessage, SubstrateMessage } from '../types.js';
+import type { ContextMessage, SubstrateMessage, ToolSchema } from '../types.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -13,6 +13,7 @@ export interface LLMChatParams {
   stream?: boolean;
   requestId?: string;
   maxTokens?: number;
+  tools?: ToolSchema[];
 }
 
 export interface LLMCompleteParams {

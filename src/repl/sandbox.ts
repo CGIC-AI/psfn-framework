@@ -6,6 +6,9 @@ import vm from 'node:vm';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
+import { MemoryWriter } from '../memory/writer.js';
+import type { MemoryType } from '../memory/types.js';
+import { VALID_MEMORY_TYPES } from '../memory/types.js';
 
 export class FinalAnswerSignal {
   readonly answer: string;
@@ -82,6 +85,66 @@ export class REPLSandbox {
       }));
     };
 
+    // Create MemoryWriter if both deps are available
+    const writer = (this.deps.embeddingService && this.deps.memoryStore)
+      ? new MemoryWriter(this.deps.memoryStore, this.deps.embeddingService)
+      : null;
+
+    const memory_write = async (
+      text: string,
+      type: string,
+      importance?: number,
+      emotionalValence?: number,
+      tags?: string,
+    ): Promise<{ action: string; id: string }> => {
+      if (!writer) return { action: 'error', id: 'no memory system' };
+      if (!VALID_MEMORY_TYPES.includes(type as MemoryType)) {
+        return { action: 'error', id: `invalid type: ${type}` };
+      }
+      const result = await writer.write({
+        text,
+        type: type as MemoryType,
+        importance,
+        emotionalValence,
+        tags: tags ? tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
+        sourceRef: 'repl:memory_write',
+      });
+      return { action: result.action, id: result.memory.id };
+    };
+
+    const memory_import_batch = async (
+      records: Array<{ text: string; type: string; importance?: number; emotional_valence?: number; tags?: string }>,
+    ): Promise<{ written: number; deduplicated: number; errors: number }> => {
+      if (!writer) return { written: 0, deduplicated: 0, errors: 0 };
+      const opts = records.map(r => ({
+        text: r.text,
+        type: r.type as MemoryType,
+        importance: r.importance,
+        emotionalValence: r.emotional_valence,
+        tags: r.tags ? r.tags.split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean) : undefined,
+        sourceRef: 'repl:memory_import',
+      }));
+      const result = await writer.importBatch(opts);
+      return { written: result.written, deduplicated: result.deduplicated, errors: result.errors };
+    };
+
+    const memory_get_by_id = (id: string): Record<string, unknown> | null => {
+      if (!this.deps.memoryStore) return null;
+      const mem = this.deps.memoryStore.getById(id);
+      if (!mem) return null;
+      return {
+        id: mem.id,
+        text: mem.text,
+        type: mem.type,
+        importance: mem.importance,
+        confidence: mem.confidence,
+        emotionalValence: mem.emotionalValence,
+        salience: mem.salience,
+        sourceRef: mem.sourceRef,
+        tags: mem.tags,
+      };
+    };
+
     this.context = vm.createContext({
       // Injected functions
       print,
@@ -90,6 +153,9 @@ export class REPLSandbox {
       llm_query,
       memory_search,
       memory_count,
+      memory_write,
+      memory_import_batch,
+      memory_get_by_id,
       session_messages,
 
       // Safe builtins
@@ -157,7 +223,8 @@ export class REPLSandbox {
   getLocals(): Record<string, unknown> {
     const builtinKeys = new Set([
       'print', 'console', 'FINAL', 'llm_query', 'memory_search',
-      'memory_count', 'session_messages', 'JSON', 'Math', 'Date',
+      'memory_count', 'memory_write', 'memory_import_batch', 'memory_get_by_id',
+      'session_messages', 'JSON', 'Math', 'Date',
       'Array', 'Object', 'String', 'Number', 'Boolean', 'Map', 'Set',
       'RegExp', 'Promise', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
       'undefined', 'null', 'true', 'false', 'Infinity', 'NaN', 'setTimeout',

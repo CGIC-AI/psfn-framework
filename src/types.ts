@@ -46,6 +46,13 @@ export interface ToolResult {
   isError?: boolean;
 }
 
+/** Serializable tool schema — no execute function, safe for wire protocol */
+export interface ToolSchema {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 // ── LLM types ──
 
 export type Role = 'user' | 'assistant';
@@ -58,7 +65,7 @@ export interface ContextMessage {
 export interface LLMContext {
   systemPrompt: string;
   messages: ContextMessage[];
-  tools?: SubstrateTool[];
+  tools?: ToolSchema[];
 }
 
 export interface StreamCallbacks {
@@ -83,6 +90,17 @@ export interface ToolCall {
   input: Record<string, unknown>;
 }
 
+// ── Model roster ──
+
+export interface ModelSlot {
+  model: string;
+  provider: string;
+  maxTokens: number;
+  contextWindow?: number;
+}
+
+export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext';
+
 // ── Configuration ──
 
 export interface SubstrateConfig {
@@ -90,6 +108,8 @@ export interface SubstrateConfig {
   primaryProvider: string;
   extractionModel: string;
   extractionProvider: string;
+  primaryMaxTokens: number;
+  extractionMaxTokens: number;
   discordToken: string;
   discordBotId: string;
   characterCardPath: string;
@@ -98,16 +118,30 @@ export interface SubstrateConfig {
   sessionMessageLimit: number;
   memoryRetrievalLimit: number;
   extractionInterval: number;
-  primaryMaxTokens: number;
-  extractionMaxTokens: number;
+  maintenanceIntervalMs: number;
+  defaultContextWindow: number;
+  memoryBudgetPct: number;
+  extractionThresholdPct: number;
+  compactionThresholdPct: number;
+  modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
 }
 
 export function loadConfig(): SubstrateConfig {
+  const primaryModel = process.env.PRIMARY_MODEL ?? 'z-ai/glm-5';
+  const primaryProvider = process.env.PRIMARY_PROVIDER ?? 'openrouter';
+  const primaryMaxTokens = parseInt(process.env.PRIMARY_MAX_TOKENS ?? '16384', 10);
+  const defaultContextWindow = parseInt(process.env.DEFAULT_CONTEXT_WINDOW ?? '128000', 10);
+  const extractionModel = process.env.EXTRACTION_MODEL ?? 'deepseek/deepseek-v3.2';
+  const extractionProvider = process.env.EXTRACTION_PROVIDER ?? 'openrouter';
+  const extractionMaxTokens = parseInt(process.env.EXTRACTION_MAX_TOKENS ?? '8192', 10);
+
   return {
-    primaryModel: process.env.PRIMARY_MODEL ?? 'z-ai/glm-5',
-    primaryProvider: process.env.PRIMARY_PROVIDER ?? 'openrouter',
-    extractionModel: process.env.EXTRACTION_MODEL ?? 'deepseek/deepseek-v3.2',
-    extractionProvider: process.env.EXTRACTION_PROVIDER ?? 'openrouter',
+    primaryModel,
+    primaryProvider,
+    extractionModel,
+    extractionProvider,
+    primaryMaxTokens,
+    extractionMaxTokens,
     discordToken: process.env.DISCORD_TOKEN ?? '',
     discordBotId: process.env.DISCORD_BOT_ID ?? '1050938702622375987',
     characterCardPath: process.env.CHARACTER_CARD_PATH ?? '/home/vega/.openclaw/agents/main/character.json',
@@ -116,8 +150,15 @@ export function loadConfig(): SubstrateConfig {
     sessionMessageLimit: parseInt(process.env.SESSION_MESSAGE_LIMIT ?? '30', 10),
     memoryRetrievalLimit: parseInt(process.env.MEMORY_RETRIEVAL_LIMIT ?? '15', 10),
     extractionInterval: parseInt(process.env.EXTRACTION_INTERVAL ?? '5', 10),
-    primaryMaxTokens: parseInt(process.env.PRIMARY_MAX_TOKENS ?? '16384', 10),
-    extractionMaxTokens: parseInt(process.env.EXTRACTION_MAX_TOKENS ?? '8192', 10),
+    maintenanceIntervalMs: parseInt(process.env.MAINTENANCE_INTERVAL_MS ?? '300000', 10),
+    defaultContextWindow,
+    memoryBudgetPct: parseInt(process.env.MEMORY_BUDGET_PCT ?? '20', 10),
+    extractionThresholdPct: parseInt(process.env.EXTRACTION_THRESHOLD_PCT ?? '30', 10),
+    compactionThresholdPct: parseInt(process.env.COMPACTION_THRESHOLD_PCT ?? '70', 10),
+    modelRoster: {
+      chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
+      background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
+    },
   };
 }
 

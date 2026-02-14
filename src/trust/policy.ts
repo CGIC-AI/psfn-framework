@@ -94,7 +94,13 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
 
 // ── Channel classification ──
 
-export function classifyChannel(channelId: string): ChannelVisibility {
+export function classifyChannel(
+  channelId: string,
+  meta?: { isDirectMessage?: boolean },
+): ChannelVisibility {
+  // Discord DMs explicitly flagged by adapter — private (honne)
+  if (meta?.isDirectMessage) return 'private';
+
   // Primary user interfaces — 1:1 private channels (honne)
   if (channelId.startsWith('api:')) return 'private';
   if (channelId.startsWith('sillytavern:')) return 'private';
@@ -108,9 +114,7 @@ export function classifyChannel(channelId: string): ChannelVisibility {
   if (channelId.startsWith('twitter:')) return 'broadcast';
   if (channelId.startsWith('social:')) return 'broadcast';
 
-  // Discord DMs are private (channelId is numeric, resolved via Discord API)
-  // Guild channels are semi_private (group setting)
-  // This is a default — Discord adapter should resolve DM vs guild explicitly
+  // Default: Discord guild channels and unknown channel types — semi_private
   return 'semi_private';
 }
 

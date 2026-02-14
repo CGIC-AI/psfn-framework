@@ -11,6 +11,8 @@ export interface SubstrateMessage {
   content: string;
   attachments?: Attachment[];
   timestamp: Date;
+  /** True for direct/private messages (e.g. Discord DMs). Adapters set this explicitly. */
+  isDirectMessage?: boolean;
 }
 
 export interface Attachment {

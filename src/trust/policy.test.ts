@@ -253,6 +253,23 @@ describe('classifyChannel', () => {
     expect(classifyChannel('1234567890')).toBe('semi_private');
     expect(classifyChannel('guild:general')).toBe('semi_private');
   });
+
+  it('classifies Discord DMs as private when isDirectMessage metadata is set', () => {
+    // Numeric Discord channel ID with DM metadata → private
+    expect(classifyChannel('1234567890', { isDirectMessage: true })).toBe('private');
+  });
+
+  it('classifies Discord guild channels as semi_private when isDirectMessage is false', () => {
+    // Numeric Discord channel ID with guild metadata → semi_private
+    expect(classifyChannel('1234567890', { isDirectMessage: false })).toBe('semi_private');
+  });
+
+  it('classifies Discord guild channels as semi_private when no metadata', () => {
+    // No metadata at all — backward compatible default
+    expect(classifyChannel('1234567890')).toBe('semi_private');
+    expect(classifyChannel('1234567890', undefined)).toBe('semi_private');
+    expect(classifyChannel('1234567890', {})).toBe('semi_private');
+  });
 });
 
 describe('channelsShareContinuity', () => {

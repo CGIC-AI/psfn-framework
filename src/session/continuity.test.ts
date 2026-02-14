@@ -350,6 +350,47 @@ describe('UserContinuityStore', () => {
       const entries = store.getRecent('user1', 10);
       expect(entries[0].channelVisibility).toBe('semi_private');
     });
+
+    it('DM-flagged current channel allows sharing from private-stamped Discord DM entries', () => {
+      store.append('user1', {
+        channelId: '1234567890',
+        role: 'user',
+        content: 'DM continuity',
+        timestamp: 1000,
+        originChannelId: '1234567890',
+        channelVisibility: 'private',
+      });
+
+      const entries = store.getRecent(
+        'user1',
+        10,
+        undefined,
+        '1234567890',
+        { isDirectMessage: true },
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0].content).toBe('DM continuity');
+    });
+
+    it('guild current channel does not share with private-stamped Discord DM entries', () => {
+      store.append('user1', {
+        channelId: '1234567890',
+        role: 'user',
+        content: 'DM continuity',
+        timestamp: 1000,
+        originChannelId: '1234567890',
+        channelVisibility: 'private',
+      });
+
+      const entries = store.getRecent(
+        'user1',
+        10,
+        undefined,
+        '1234567890',
+        { isDirectMessage: false },
+      );
+      expect(entries).toHaveLength(0);
+    });
   });
 });
 
@@ -513,6 +554,62 @@ describe('SessionManager with continuity', () => {
     const continuity = continuityStore.getRecent('user1', 10);
     expect(continuity).toHaveLength(1);
     expect(continuity[0].channelVisibility).toBe('private');
+  });
+
+  it('buildContext for Discord DM includes private continuity from API channels', async () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    mgr.recordUserMessage('api:ch1', 'Private API context', 'user1', 'Alice');
+
+    sessionStore.append({
+      channelId: '1234567890',
+      role: 'user',
+      content: 'Current DM message',
+      authorId: 'user1',
+      authorName: 'Alice',
+      timestamp: Date.now(),
+    });
+
+    const ctx = await mgr.buildContext(
+      '1234567890',
+      'System prompt',
+      '',
+      undefined,
+      'user1',
+      { isDirectMessage: true },
+    );
+
+    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('Private API context');
+  });
+
+  it('buildContext for Discord guild excludes private continuity from API channels', async () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    mgr.recordUserMessage('api:ch1', 'Private API context', 'user1', 'Alice');
+
+    sessionStore.append({
+      channelId: '1234567890',
+      role: 'user',
+      content: 'Current guild message',
+      authorId: 'user1',
+      authorName: 'Alice',
+      timestamp: Date.now(),
+    });
+
+    const ctx = await mgr.buildContext(
+      '1234567890',
+      'System prompt',
+      '',
+      undefined,
+      'user1',
+      { isDirectMessage: false },
+    );
+
+    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('Private API context');
   });
 
   it('includes channel origin labels in continuity block', async () => {

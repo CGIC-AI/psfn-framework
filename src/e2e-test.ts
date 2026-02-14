@@ -394,7 +394,7 @@ async function main(): Promise<void> {
         embeddingService: embeddingProvider,
         memoryStore,
         sessionManager,
-        config: { ...DEFAULT_REPL_CONFIG, maxIterations: 5 },
+        config: { ...DEFAULT_REPL_CONFIG, budget: { ...DEFAULT_REPL_CONFIG.budget, maxIterations: 5 } },
       },
     );
     console.log(' done');
@@ -432,7 +432,7 @@ async function main(): Promise<void> {
         embeddingService: embeddingProvider,
         memoryStore,
         sessionManager,
-        config: { ...DEFAULT_REPL_CONFIG, maxIterations: 5 },
+        config: { ...DEFAULT_REPL_CONFIG, budget: { ...DEFAULT_REPL_CONFIG.budget, maxIterations: 5 } },
       },
     );
     console.log(' done');

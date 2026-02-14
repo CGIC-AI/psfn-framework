@@ -8,6 +8,8 @@ import {
   type UserMessage,
   type AssistantMessage,
   type Model,
+  type Tool as PiTool,
+  type Context as PiContext,
 } from '@mariozechner/pi-ai';
 import type {
   ContextMessage,
@@ -16,6 +18,7 @@ import type {
   StreamCallbacks,
   SubstrateConfig,
   ToolCall,
+  ToolSchema,
 } from '../types.js';
 import { createModel } from './models.js';
 
@@ -52,12 +55,14 @@ export class LLMClient {
     );
 
     try {
+      const piContext: PiContext = {
+        systemPrompt: context.systemPrompt,
+        messages: toPiMessages(context.messages),
+        ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
+      };
       const eventStream = streamSimple(
         model,
-        {
-          systemPrompt: context.systemPrompt,
-          messages: toPiMessages(context.messages),
-        },
+        piContext,
         { apiKey, maxTokens: this.config.primaryMaxTokens },
       );
 
@@ -136,12 +141,14 @@ export class LLMClient {
 
     const { model, apiKey } = this.getModelAndKey(provider, modelId);
 
+    const piContext: PiContext = {
+      systemPrompt: context.systemPrompt,
+      messages: toPiMessages(context.messages),
+      ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
+    };
     const response = await completeSimple(
       model,
-      {
-        systemPrompt: context.systemPrompt,
-        messages: toPiMessages(context.messages),
-      },
+      piContext,
       { apiKey, maxTokens: this.config.extractionMaxTokens },
     );
 
@@ -203,6 +210,19 @@ export function normalizeContent(content: string): string {
     break;
   }
   return result;
+}
+
+// ── Tool conversion ──
+// Convert ToolSchema inputSchema (plain JSON Schema objects) to pi-ai Tool format.
+// The pi-ai Tool.parameters is typed as TSchema (TypeBox), but at runtime providers
+// just pass it through as JSON Schema — the cast is safe.
+
+export function toPiTools(tools: ToolSchema[]): PiTool[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.inputSchema as PiTool['parameters'],
+  }));
 }
 
 function toPiMessages(messages: ContextMessage[]): Message[] {

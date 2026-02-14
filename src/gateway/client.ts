@@ -76,6 +76,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
         systemPrompt: context.systemPrompt,
         stream: !!callbacks?.onText,
         requestId,
+        ...(context.tools?.length ? { tools: context.tools } : {}),
       }) as LLMChatResult;
 
       const response: LLMResponse = {

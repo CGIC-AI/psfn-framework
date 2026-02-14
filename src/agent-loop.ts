@@ -87,18 +87,20 @@ export class AgentLoop {
         ? await this.memoryProvider.retrieve(message.content, message.channelId)
         : '';
 
-      // Build context
-      const context = this.sessionManager.buildContext(
+      // Build context (with auto-compaction + cross-channel continuity)
+      const context = await this.sessionManager.buildContext(
         message.channelId,
         this.systemPrompt,
         memoriesBlock,
+        this.llmClient,
+        message.authorId,
       );
 
       // Stream LLM response with tool loop
       let response = await this.streamWithToolLoop(context, message.channelId);
 
       // Record assistant message (JSONL append = L0 archival)
-      this.sessionManager.recordAssistantMessage(message.channelId, response.content);
+      this.sessionManager.recordAssistantMessage(message.channelId, response.content, message.authorId);
 
       const agentResponse: AgentResponse = {
         content: response.content,
@@ -126,11 +128,25 @@ export class AgentLoop {
     }
   }
 
+  /** Get tool schemas for sending to LLM (no execute functions, wire-safe). */
+  private getToolSchemas(): import('./types.js').ToolSchema[] {
+    return Array.from(this.tools.values()).map(t => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    }));
+  }
+
   private async streamWithToolLoop(
-    context: { systemPrompt: string; messages: { role: 'user' | 'assistant'; content: string }[] },
+    context: LLMContext,
     channelId: string,
   ): Promise<LLMResponse> {
-    let currentContext = { ...context };
+    // Include tool schemas so the LLM knows what tools are available
+    const toolSchemas = this.getToolSchemas();
+    let currentContext: LLMContext = {
+      ...context,
+      ...(toolSchemas.length > 0 ? { tools: toolSchemas } : {}),
+    };
     let loops = 0;
 
     while (loops < MAX_TOOL_LOOPS) {

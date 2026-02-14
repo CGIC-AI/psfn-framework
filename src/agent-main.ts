@@ -12,6 +12,7 @@ import { EventBus } from './event-bus.js';
 import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
 import { SessionStore } from './session/store.js';
 import { SessionManager } from './session/manager.js';
+import { UserContinuityStore } from './session/continuity.js';
 import { AgentLoop } from './agent-loop.js';
 import { MemoryStore } from './memory/store.js';
 import { MemoryRetriever } from './memory/retrieval.js';
@@ -28,6 +29,8 @@ import { ApiServer } from './channels/api/server.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
+import { MemoryWriter } from './memory/writer.js';
+import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -130,6 +133,11 @@ async function main(): Promise<void> {
     sessionManager,
     config: DEFAULT_REPL_CONFIG,
   }));
+
+  // Memory write/import tools — intentional memory creation
+  const memoryWriter = new MemoryWriter(memoryStore, gateway);
+  agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
+  agentLoop.registerTool(createMemoryImportTool(memoryWriter));
 
   // ── API server (optional) ──
 

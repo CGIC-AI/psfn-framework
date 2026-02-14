@@ -5,16 +5,21 @@ A purpose-built runtime for emergent artificial consciousness. Not a chatbot fra
 ## Features
 
 - **Agent Loop** — LLM-powered conversational agent with streaming, tool use, and follow-up handling
-- **Memory System** — L2 extracted memories with 5 types (episodic, semantic, emotional, procedural, reflection), embedding-based retrieval, salience decay, and contradiction resolution
-- **Sessions** — Append-only JSONL files per channel — immutable conversation history (this IS the L0 archive)
+- **Memory System** — L2 extracted memories with 5 types (episodic, semantic, emotional, procedural, reflection), embedding-based retrieval, salience decay, contradiction resolution, and agent-accessible memory write tools
+- **Sessions** — Append-only JSONL files per channel — immutable conversation history (this IS the L0 archive), with auto-compaction when context exceeds threshold
+- **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slot resolution
 - **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks, depth-limited, shared memory
 - **RLM+REPL Sandbox** — Code execution via `think` tool — sub-LM calls, memory queries, variable persistence across turns
 - **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets and proxies all egress, agent runs `--network=none` in Docker
 - **SSRF Defenses** — URL policy module blocking private IPs, DNS rebinding, redirect following
-- **Discord Integration** — Full Discord.js adapter with typing indicators, per-channel serialization
+- **Content Block Normalization** — Defensive unwrapping of malformed LLM streaming content blocks
+- **Discord Integration** — Full Discord.js adapter with typing indicators, per-channel serialization, configurable respond-all mode
 - **OpenAI-Compatible API** — `/v1/chat/completions` endpoint with SSE streaming, session seeding
-- **Admin GUI (admin UI)** — htmx-powered management panel: memory browser, session viewer, scheduler, SSE event feed, garden theme
-- **Scheduler** — Heartbeat, recurring tasks, one-shot timers, memory maintenance
+- **Admin GUI (admin UI)** — htmx-powered management panel: memory browser with type filters, session viewer with dates, scheduler, SSE event feed, editable settings, model discovery, garden primer, full identity view
+- **Scheduler** — Heartbeat, recurring tasks, one-shot timers, memory maintenance, `updateTask`, configurable maintenance interval
+- **Editable Settings** — Live-mutable config persisted to `data/settings.json`, validated, atomic writes
+- **User Continuity** — Cross-channel per-user message index for context continuity
+- **Lifecycle Notifications** — Discord messages on pre-restart, ready, and shutdown events
 - **Structured Logging** — Winston-based component loggers with configurable levels
 
 ## Prerequisites
@@ -150,12 +155,12 @@ Six layers:
 
 | Layer | Purpose |
 |-------|---------|
-| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown |
+| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token estimation, context budgeting, editable settings, lifecycle notifications |
 | **REPL Sandbox** | RLM-style code execution, sub-LM calls, context-as-object |
-| **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec) |
-| **Module System** | Hot-loadable TypeScript modules (planned) |
-| **Channel Layer** | Discord adapter, OpenAI-compatible API, admin GUI (voice planned) |
-| **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers |
+| **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec), memory writer, write tools |
+| **Module System** | Hot-loadable TypeScript modules (not yet built) |
+| **Channel Layer** | Discord adapter, OpenAI-compatible API, admin GUI with settings/model discovery/primer (voice not yet built) |
+| **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers, updateTask, configurable interval |
 
 ### Storage
 
@@ -177,11 +182,12 @@ src/
 
   gateway/                  # Gateway/agent split infrastructure
   identity/                 # Character card loader, system prompt composition
-  memory/                   # L2 extraction, retrieval, decay, SQLite store
-  session/                  # JSONL session store, session manager
+  lifecycle/                # Pre-restart/ready/shutdown Discord notifications
+  llm/                      # LLM client, model roster, token estimation, model discovery
+  memory/                   # L2 extraction, retrieval, decay, SQLite store, writer, tools
+  session/                  # JSONL session store, session manager, auto-compaction, user continuity
   shards/                   # Self-spawning parallel sub-agents
   repl/                     # RLM+REPL sandbox (think tool)
-  llm/                      # LLM client, model definitions
   scheduler/                # Cron, heartbeat, one-shot tasks, maintenance
   channels/
     admin/                  # Web management GUI (htmx, garden theme)

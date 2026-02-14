@@ -75,6 +75,14 @@ const testConfig: SubstrateConfig = {
   extractionInterval: 5,
   primaryMaxTokens: 16384,
   extractionMaxTokens: 8192,
+  maintenanceIntervalMs: 300_000,
+  defaultContextWindow: 128_000,
+  memoryBudgetPct: 20,
+  extractionThresholdPct: 30,
+  compactionThresholdPct: 70,
+  modelRoster: {
+    chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+  },
 };
 
 const testCard: CharacterCardV2 = {

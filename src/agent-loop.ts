@@ -10,6 +10,8 @@ import type {
 } from './types.js';
 import type { EventBus } from './event-bus.js';
 import type { SessionManager } from './session/manager.js';
+import type { TrustLevel } from './trust/types.js';
+import type { ContactStore } from './contacts/store.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('AgentLoop');
@@ -29,7 +31,7 @@ export interface EmbeddingService {
 }
 
 export interface MemoryProvider {
-  retrieve(contextText: string, channelId: string): Promise<string>;
+  retrieve(contextText: string, channelId: string, trustLevel?: TrustLevel): Promise<string>;
 }
 
 export interface MemoryExtractor {
@@ -49,6 +51,9 @@ export class AgentLoop {
   // Pluggable memory — null until Sprint 2 wires it
   memoryProvider: MemoryProvider | null = null;
   memoryExtractor: MemoryExtractor | null = null;
+
+  // Trust resolution — null until contacts are wired
+  contactStore: ContactStore | null = null;
 
   constructor(
     eventBus: EventBus,
@@ -82,9 +87,12 @@ export class AgentLoop {
     );
 
     try {
+      // Resolve trust level for the message author
+      const trustLevel = this.resolveTrustLevel(message.authorId);
+
       // Retrieve relevant memories (empty string if no memory provider)
       const memoriesBlock = this.memoryProvider
-        ? await this.memoryProvider.retrieve(message.content, message.channelId)
+        ? await this.memoryProvider.retrieve(message.content, message.channelId, trustLevel)
         : '';
 
       // Build context (with auto-compaction + cross-channel continuity)
@@ -179,6 +187,12 @@ export class AgentLoop {
 
     // Exceeded tool loop limit — return last response
     return this.llmClient.stream(currentContext);
+  }
+
+  private resolveTrustLevel(authorId?: string): TrustLevel {
+    if (!authorId || !this.contactStore) return 'regular';
+    const contact = this.contactStore.resolveUserId(authorId);
+    return contact?.trustLevel ?? 'regular';
   }
 
   private async executeToolCalls(toolCalls: ToolCall[]): Promise<string> {

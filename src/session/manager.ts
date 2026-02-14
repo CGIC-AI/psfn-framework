@@ -5,6 +5,7 @@ import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
 import { estimateTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../logger.js';
+import { classifyChannel } from '../trust/policy.js';
 
 const log = createComponentLogger('SessionManager');
 
@@ -46,6 +47,7 @@ export class SessionManager {
         authorName,
         timestamp: Date.now(),
         originChannelId: channelId,
+        channelVisibility: classifyChannel(channelId),
       });
     }
   }
@@ -66,6 +68,7 @@ export class SessionManager {
         content,
         timestamp: Date.now(),
         originChannelId: channelId,
+        channelVisibility: classifyChannel(channelId),
       });
     }
   }
@@ -143,7 +146,7 @@ export class SessionManager {
     // Cross-channel continuity: include recent activity from other channels
     if (this.continuityStore && userId) {
       const continuityLimit = (this.config as any).continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT;
-      const crossChannel = this.continuityStore.getRecent(userId, continuityLimit, channelId);
+      const crossChannel = this.continuityStore.getRecent(userId, continuityLimit, channelId, channelId);
       if (crossChannel.length > 0) {
         const continuityBlock = crossChannel
           .map(e => {

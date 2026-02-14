@@ -26,12 +26,16 @@ import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { ApiServer } from './channels/api/server.js';
 import { AdminServer } from './channels/admin/server.js';
+import { ModelDiscovery } from './llm/discovery.js';
+import { loadSettings, applySettings } from './settings.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const savedSettings = loadSettings(config.dataDir);
+  applySettings(config, savedSettings);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const eventBus = new EventBus();
 
@@ -77,18 +81,14 @@ async function main(): Promise<void> {
   );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
-  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, gateway, {
-    retrievalLimit: config.memoryRetrievalLimit,
-  });
+  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, gateway, config);
   agentLoop.memoryExtractor = new MemoryExtractor(
     gateway,  // GatewayClient implements LLMProvider
     sessionManager,
     memoryStore,
     gateway,  // GatewayClient implements EmbeddingService
     eventBus,
-    {
-      extractionInterval: config.extractionInterval,
-    },
+    config,
   );
 
   const salienceDecay = new SalienceDecay(memoryStore);
@@ -150,6 +150,12 @@ async function main(): Promise<void> {
     log.info(`API server listening on port ${apiPort}`);
   }
 
+  // Model discovery (if LiteLLM is configured)
+  const litellmBaseUrl = process.env.LITELLM_BASE_URL;
+  const modelDiscovery = litellmBaseUrl
+    ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY)
+    : null;
+
   // ── Admin GUI (optional) ──
 
   let adminServer: AdminServer | undefined;
@@ -168,6 +174,7 @@ async function main(): Promise<void> {
       characterCard: card,
       config,
       embeddingService: gateway,
+      modelDiscovery,
     });
     await adminServer.init();
     await adminServer.start();

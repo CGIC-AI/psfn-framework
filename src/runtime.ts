@@ -23,6 +23,8 @@ import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { ApiServer } from './channels/api/server.js';
 import { AdminServer } from './channels/admin/server.js';
+import { ModelDiscovery } from './llm/discovery.js';
+import { loadSettings, applySettings } from './settings.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -49,6 +51,10 @@ export class SubstrateRuntime implements Lifecycle {
 
   async init(): Promise<void> {
     log.info('Initializing...');
+
+    // Load persisted settings and apply over env defaults
+    const savedSettings = loadSettings(this.config.dataDir);
+    applySettings(this.config, savedSettings);
 
     // Ensure data directory exists
     mkdirSync(dirname(this.config.databasePath), { recursive: true });
@@ -89,9 +95,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.memoryProvider = new MemoryRetriever(
       this.memoryStore,
       embeddingProvider,
-      {
-        retrievalLimit: this.config.memoryRetrievalLimit,
-      },
+      this.config,
     );
 
     this.agentLoop.memoryExtractor = new MemoryExtractor(
@@ -100,9 +104,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.memoryStore,
       embeddingProvider,
       this.eventBus,
-      {
-        extractionInterval: this.config.extractionInterval,
-      },
+      this.config,
     );
 
     this.salienceDecay = new SalienceDecay(this.memoryStore);
@@ -197,6 +199,12 @@ export class SubstrateRuntime implements Lifecycle {
       log.info(`API server configured on port ${apiPort}`);
     }
 
+    // Model discovery (if LiteLLM is configured)
+    const litellmBaseUrl = process.env.LITELLM_BASE_URL;
+    const modelDiscovery = litellmBaseUrl
+      ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY)
+      : null;
+
     // Admin GUI — Purrsephone's Garden
     const adminPort = process.env.ADMIN_PORT ? parseInt(process.env.ADMIN_PORT, 10) : undefined;
     if (adminPort) {
@@ -213,6 +221,7 @@ export class SubstrateRuntime implements Lifecycle {
         characterCard: card,
         config: this.config,
         embeddingService: embeddingProvider,
+        modelDiscovery,
       });
       await this.adminServer.init();
       log.info(`Admin GUI configured on port ${adminPort}`);

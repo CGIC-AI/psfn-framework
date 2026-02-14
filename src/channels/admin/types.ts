@@ -9,6 +9,7 @@ import type { EventBus } from '../../event-bus.js';
 import type { EmbeddingService } from '../../agent-loop.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
+import type { ModelDiscovery } from '../../llm/discovery.js';
 
 export interface AdminServerConfig {
   port: number;
@@ -23,6 +24,7 @@ export interface AdminServerConfig {
   characterCard: CharacterCardV2;
   config: SubstrateConfig;
   embeddingService: EmbeddingService | null;
+  modelDiscovery?: ModelDiscovery | null;
 }
 
 export interface DashboardStats {

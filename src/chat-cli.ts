@@ -26,11 +26,14 @@ import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { loadSettings, applySettings } from './settings.js';
 
 const CHANNEL_ID = 'cli:chat';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const savedSettings = loadSettings(config.dataDir);
+  applySettings(config, savedSettings);
   const eventBus = new EventBus();
 
   console.log('[CLI] Initializing Purrsephone...');
@@ -70,13 +73,14 @@ async function main(): Promise<void> {
   );
 
   // Memory
-  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, embeddingProvider);
+  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, embeddingProvider, config);
   agentLoop.memoryExtractor = new MemoryExtractor(
     llmClient,
     sessionManager,
     memoryStore,
     embeddingProvider,
     eventBus,
+    config,
   );
 
   const salienceDecay = new SalienceDecay(memoryStore);

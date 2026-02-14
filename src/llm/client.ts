@@ -58,7 +58,7 @@ export class LLMClient {
           systemPrompt: context.systemPrompt,
           messages: toPiMessages(context.messages),
         },
-        { apiKey, maxTokens: 16384 },
+        { apiKey, maxTokens: this.config.primaryMaxTokens },
       );
 
       let content = '';
@@ -134,7 +134,7 @@ export class LLMClient {
       ? this.config.extractionModel
       : this.config.primaryModel;
 
-    const { model, apiKey } = this.getModelAndKey(provider, modelId, 2048);
+    const { model, apiKey } = this.getModelAndKey(provider, modelId);
 
     const response = await completeSimple(
       model,
@@ -142,7 +142,7 @@ export class LLMClient {
         systemPrompt: context.systemPrompt,
         messages: toPiMessages(context.messages),
       },
-      { apiKey, maxTokens: 8192 },
+      { apiKey, maxTokens: this.config.extractionMaxTokens },
     );
 
     const content = response.content

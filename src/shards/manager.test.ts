@@ -49,6 +49,8 @@ const TEST_CONFIG: SubstrateConfig = {
   sessionMessageLimit: 30,
   memoryRetrievalLimit: 15,
   extractionInterval: 5,
+  primaryMaxTokens: 16384,
+  extractionMaxTokens: 8192,
 };
 
 describe('ShardManager', () => {

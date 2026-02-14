@@ -105,6 +105,7 @@ export class DiscordAdapter implements ChannelAdapter {
         id: msg.id,
         channelId,
         channelType: 'discord',
+        isDirectMessage: isDM,
         authorId: msg.author.id,
         authorName: msg.author.displayName ?? msg.author.username,
         content,

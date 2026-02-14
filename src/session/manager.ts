@@ -27,6 +27,7 @@ export class SessionManager {
     content: string,
     authorId: string,
     authorName: string,
+    isDirectMessage?: boolean,
   ): void {
     this.store.append({
       channelId,
@@ -39,6 +40,7 @@ export class SessionManager {
 
     // Also append to user continuity store (with origin metadata)
     if (this.continuityStore && authorId) {
+      const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
       this.continuityStore.append(authorId, {
         channelId,
         role: 'user',
@@ -47,12 +49,12 @@ export class SessionManager {
         authorName,
         timestamp: Date.now(),
         originChannelId: channelId,
-        channelVisibility: classifyChannel(channelId),
+        channelVisibility: classifyChannel(channelId, meta),
       });
     }
   }
 
-  recordAssistantMessage(channelId: string, content: string, forUserId?: string): void {
+  recordAssistantMessage(channelId: string, content: string, forUserId?: string, isDirectMessage?: boolean): void {
     this.store.append({
       channelId,
       role: 'assistant',
@@ -62,13 +64,14 @@ export class SessionManager {
 
     // Also append to user continuity store (with origin metadata)
     if (this.continuityStore && forUserId) {
+      const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
       this.continuityStore.append(forUserId, {
         channelId,
         role: 'assistant',
         content,
         timestamp: Date.now(),
         originChannelId: channelId,
-        channelVisibility: classifyChannel(channelId),
+        channelVisibility: classifyChannel(channelId, meta),
       });
     }
   }

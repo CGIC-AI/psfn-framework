@@ -305,6 +305,82 @@ describe('MemoryWriter', () => {
     });
   });
 
+  describe('upsert()', () => {
+    it('creates a new memory when no similar exists', async () => {
+      const result = await writer.upsert({
+        text: 'A brand new fact',
+        type: 'semantic',
+        importance: 0.7,
+      });
+
+      expect(result.action).toBe('created');
+      expect(result.memory.text).toBe('A brand new fact');
+      expect(result.memory.sourceRef).toBe('tool:memory_upsert');
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('supersedes similar memory and creates new one', async () => {
+      const existing = makeExistingMemory({ type: 'semantic', confidence: 0.7 });
+
+      // Upsert searches at the broader threshold (dedup - offset)
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+
+      const result = await writer.upsert({
+        text: 'Updated fact about V',
+        type: 'semantic',
+        importance: 0.8,
+        confidence: 0.9,
+      });
+
+      expect(result.action).toBe('superseded');
+      // Old memory should have been superseded
+      expect(store.updateMemory).toHaveBeenCalledWith('existing-001', expect.objectContaining({
+        supersededBy: expect.any(String),
+      }));
+      // New memory should have been inserted
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+      expect(result.memory.text).toBe('Updated fact about V');
+    });
+
+    it('supersedes regardless of confidence (unlike write)', async () => {
+      // In write(), low confidence wouldn't supersede. In upsert(), it always does.
+      const existing = makeExistingMemory({ type: 'semantic', confidence: 0.95 });
+
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+
+      const result = await writer.upsert({
+        text: 'Low confidence update',
+        type: 'semantic',
+        confidence: 0.3, // Lower than existing
+      });
+
+      expect(result.action).toBe('superseded');
+      expect(store.updateMemory).toHaveBeenCalled();
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('throws on invalid memory type', async () => {
+      await expect(
+        writer.upsert({ text: 'test', type: 'bogus' as any }),
+      ).rejects.toThrow('Invalid memory type: bogus');
+    });
+
+    it('skips similar memories of different type', async () => {
+      const emotional = makeExistingMemory({ type: 'emotional' });
+
+      store.searchByEmbedding.mockReturnValueOnce([emotional]);
+
+      const result = await writer.upsert({
+        text: 'Semantic fact',
+        type: 'semantic',
+      });
+
+      expect(result.action).toBe('created');
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('importBatch()', () => {
     it('processes multiple records sequentially', async () => {
       const records: MemoryWriteOptions[] = [

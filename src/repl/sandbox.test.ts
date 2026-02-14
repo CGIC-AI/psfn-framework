@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from '../memory/store.js';
+import type { SessionManager } from '../session/manager.js';
 import type { LLMResponse } from '../types.js';
 
 function mockLLM(content = 'llm response'): LLMProvider {
@@ -183,6 +184,80 @@ describe('REPLSandbox', () => {
       5000, 8192,
     );
     expect(result.output).toBe('{"a":1}');
+  });
+
+  it('memory_upsert returns error when no memory system', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    const result = await sandbox.execute(
+      'const r = await memory_upsert("fact", "semantic"); print(r.action);',
+      5000, 8192,
+    );
+    expect(result.output).toBe('error');
+  });
+
+  it('memory_upsert returns error for invalid type', async () => {
+    const embedding = new Float32Array([1, 0, 0]);
+    const embeddingService = {
+      embed: vi.fn(async () => embedding),
+      embedBatch: vi.fn(),
+      dims: 3,
+    } as unknown as EmbeddingService;
+
+    const memoryStore = {
+      searchByEmbedding: vi.fn(() => []),
+      insertMemory: vi.fn(),
+      getAllActiveMemories: vi.fn(() => []),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    const result = await sandbox.execute(
+      'const r = await memory_upsert("fact", "bogus"); print(r.action);',
+      5000, 8192,
+    );
+    expect(result.output).toBe('error');
+  });
+
+  it('session_append_note returns false when no session manager', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    const result = await sandbox.execute(
+      'const ok = session_append_note("ch1", "a note"); print(ok);',
+      5000, 8192,
+    );
+    expect(result.output).toBe('false');
+  });
+
+  it('session_append_note calls appendSystemNote on session manager', async () => {
+    const sessionManager = {
+      appendSystemNote: vi.fn(),
+      getRecentMessages: vi.fn(() => []),
+    } as unknown as SessionManager;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService: null,
+      memoryStore: null,
+      sessionManager,
+    });
+
+    const result = await sandbox.execute(
+      'const ok = session_append_note("test-channel", "important note"); print(ok);',
+      5000, 8192,
+    );
+    expect(result.output).toBe('true');
+    expect(sessionManager.appendSystemNote).toHaveBeenCalledWith('test-channel', 'important note');
+  });
+
+  it('getLocals excludes new builtins', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    const locals = sandbox.getLocals();
+    expect(locals.memory_upsert).toBeUndefined();
+    expect(locals.session_append_note).toBeUndefined();
   });
 });
 

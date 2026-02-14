@@ -113,6 +113,31 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBe(20);
   });
 
+  it('appendSystemNote adds a system entry to the session', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.appendSystemNote('ch1', 'Agent performed self-check');
+    mgr.recordAssistantMessage('ch1', 'All good');
+
+    // System notes should appear in context as user-role messages with [System note] prefix
+    const ctx = await mgr.buildContext('ch1', 'Sys', '');
+    const allContent = ctx.messages.map(m => m.content).join('\n');
+    expect(allContent).toContain('[System note] Agent performed self-check');
+  });
+
+  it('system notes are visible in getRecentMessages', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.appendSystemNote('ch1', 'A note');
+
+    const recent = mgr.getRecentMessages('ch1');
+    expect(recent).toHaveLength(2);
+    expect(recent[1].role).toBe('system');
+    expect(recent[1].content).toBe('A note');
+  });
+
   it('skips compaction when context is under threshold', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const mgr = new SessionManager(store, config);

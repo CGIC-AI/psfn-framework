@@ -139,6 +139,73 @@ export class MemoryWriter {
   }
 
   /**
+   * Upsert a memory: if a similar memory of the same type exists, supersede it
+   * and create a new one with updated content. Unlike write() which bumps salience
+   * on dedup, upsert always replaces the old memory.
+   */
+  async upsert(opts: MemoryWriteOptions): Promise<WriteResult> {
+    const {
+      text,
+      type,
+      importance = 0.5,
+      emotionalValence = 0,
+      confidence = 0.8,
+      tags = [],
+      sourceRef = 'tool:memory_upsert',
+      sensitivity = 'personal',
+      consentFlags,
+    } = opts;
+
+    if (!VALID_MEMORY_TYPES.includes(type)) {
+      throw new Error(`Invalid memory type: ${type}. Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`);
+    }
+
+    const embedding = await this.embeddingService.embed(text);
+
+    // Find similar memories of the same type at the dedup threshold
+    const similar = this.memoryStore.searchByEmbedding(
+      embedding,
+      DEDUP_THRESHOLD[type] - MEMORY_CONFIG.contradictionThresholdOffset,
+      5,
+    );
+
+    let didSupersede = false;
+    const sameType = similar.filter(s => s.type === type);
+    for (const old of sameType) {
+      this.memoryStore.updateMemory(old.id, { supersededBy: uuidv4() });
+      didSupersede = true;
+      log.debug('Upsert superseded memory', { oldId: old.id, text: text.slice(0, 60) });
+    }
+
+    // Always insert the new memory
+    const now = Date.now();
+    const memory: PurrMemory = {
+      id: uuidv4(),
+      text,
+      type,
+      importance,
+      confidence,
+      emotionalValence,
+      salience: importance,
+      sourceRef,
+      extractedAt: now,
+      lastAccessed: now,
+      accessCount: 1,
+      tags,
+      sensitivity,
+      consentFlags,
+    };
+
+    this.memoryStore.insertMemory(memory, embedding);
+    log.debug('Upsert created memory', { id: memory.id, type, superseded: didSupersede, text: text.slice(0, 60) });
+
+    return {
+      action: didSupersede ? 'superseded' : 'created',
+      memory,
+    };
+  }
+
+  /**
    * Import a batch of memories. Processes sequentially to allow dedup between items.
    * For large batches, this avoids overwhelming the embedding service.
    */

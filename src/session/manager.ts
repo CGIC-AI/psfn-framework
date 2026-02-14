@@ -5,7 +5,7 @@ import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
 import { estimateTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../logger.js';
-import { classifyChannel } from '../trust/policy.js';
+import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 
 const log = createComponentLogger('SessionManager');
 
@@ -82,6 +82,7 @@ export class SessionManager {
     memoriesBlock: string,
     llmProvider?: LLMProvider,
     userId?: string,
+    channelMeta?: ChannelMeta,
   ): Promise<LLMContext> {
     let recent = this.store.getRecent(channelId, this.config.sessionMessageLimit);
 
@@ -149,7 +150,13 @@ export class SessionManager {
     // Cross-channel continuity: include recent activity from other channels
     if (this.continuityStore && userId) {
       const continuityLimit = (this.config as any).continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT;
-      const crossChannel = this.continuityStore.getRecent(userId, continuityLimit, channelId, channelId);
+      const crossChannel = this.continuityStore.getRecent(
+        userId,
+        continuityLimit,
+        channelId,
+        channelId,
+        channelMeta,
+      );
       if (crossChannel.length > 0) {
         const continuityBlock = crossChannel
           .map(e => {

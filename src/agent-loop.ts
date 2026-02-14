@@ -12,6 +12,7 @@ import type { EventBus } from './event-bus.js';
 import type { SessionManager } from './session/manager.js';
 import type { TrustLevel } from './trust/types.js';
 import type { ContactStore } from './contacts/store.js';
+import type { ChannelMeta } from './trust/policy.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('AgentLoop');
@@ -31,7 +32,12 @@ export interface EmbeddingService {
 }
 
 export interface MemoryProvider {
-  retrieve(contextText: string, channelId: string, trustLevel?: TrustLevel): Promise<string>;
+  retrieve(
+    contextText: string,
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+  ): Promise<string>;
 }
 
 export interface MemoryExtractor {
@@ -93,7 +99,12 @@ export class AgentLoop {
 
       // Retrieve relevant memories (empty string if no memory provider)
       const memoriesBlock = this.memoryProvider
-        ? await this.memoryProvider.retrieve(message.content, message.channelId, trustLevel)
+        ? await this.memoryProvider.retrieve(
+          message.content,
+          message.channelId,
+          trustLevel,
+          { isDirectMessage: message.isDirectMessage },
+        )
         : '';
 
       // Persona adaptation based on trust level
@@ -109,6 +120,7 @@ export class AgentLoop {
         memoriesBlock,
         this.llmClient,
         message.authorId,
+        { isDirectMessage: message.isDirectMessage },
       );
 
       // Stream LLM response with tool loop

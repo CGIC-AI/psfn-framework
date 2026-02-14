@@ -17,6 +17,10 @@ import type {
 } from './types.js';
 import { TRUST_CEILING } from './types.js';
 
+export interface ChannelMeta {
+  isDirectMessage?: boolean;
+}
+
 // ── Policy evaluation ──
 
 export type PolicyDecision = 'allow' | 'deny' | 'sanitize';
@@ -96,7 +100,7 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
 
 export function classifyChannel(
   channelId: string,
-  meta?: { isDirectMessage?: boolean },
+  meta?: ChannelMeta,
 ): ChannelVisibility {
   // Discord DMs explicitly flagged by adapter — private (honne)
   if (meta?.isDirectMessage) return 'private';
@@ -123,8 +127,12 @@ export function classifyChannel(
 export function channelsShareContinuity(a: string, b: string): boolean {
   const visA = classifyChannel(a);
   const visB = classifyChannel(b);
+  return visibilitiesShareContinuity(visA, visB);
+}
+
+export function visibilitiesShareContinuity(a: ChannelVisibility, b: ChannelVisibility): boolean {
   // Only private channels share cross-channel continuity
-  return visA === 'private' && visB === 'private';
+  return a === 'private' && b === 'private';
 }
 
 // ── Allowed sensitivities for a context ──

@@ -8,7 +8,12 @@ import { join } from 'node:path';
 import { sanitizeChannelId } from './store.js';
 import type { SessionEntry, JournalEntry } from './types.js';
 import { createComponentLogger } from '../logger.js';
-import { classifyChannel, channelsShareContinuity } from '../trust/policy.js';
+import {
+  classifyChannel,
+  visibilitiesShareContinuity,
+  type ChannelMeta,
+} from '../trust/policy.js';
+import type { ChannelVisibility } from '../trust/types.js';
 
 const log = createComponentLogger('UserContinuity');
 
@@ -124,7 +129,13 @@ export class UserContinuityStore {
    * Optionally exclude entries from a specific channel to avoid duplicates
    * when merging with the current channel's local messages.
    */
-  getRecent(userId: string, limit: number, excludeChannelId?: string, currentChannelId?: string): SessionEntry[] {
+  getRecent(
+    userId: string,
+    limit: number,
+    excludeChannelId?: string,
+    currentChannelId?: string,
+    currentChannelMeta?: ChannelMeta,
+  ): SessionEntry[] {
     const cache = this.ensureUser(userId);
     let entries = cache.entries;
 
@@ -134,9 +145,11 @@ export class UserContinuityStore {
 
     // If currentChannelId is provided, filter by visibility compatibility
     if (currentChannelId) {
+      const currentVisibility = classifyChannel(currentChannelId, currentChannelMeta);
       entries = entries.filter(e => {
         const origin = e.originChannelId ?? e.channelId;
-        return channelsShareContinuity(origin, currentChannelId);
+        const originVisibility = parseChannelVisibility(e.channelVisibility) ?? classifyChannel(origin);
+        return visibilitiesShareContinuity(originVisibility, currentVisibility);
       });
     }
 
@@ -147,5 +160,17 @@ export class UserContinuityStore {
   /** Get total message count for a user's continuity thread. */
   count(userId: string): number {
     return this.ensureUser(userId).entries.length;
+  }
+}
+
+function parseChannelVisibility(value?: string): ChannelVisibility | undefined {
+  switch (value) {
+    case 'private':
+    case 'semi_private':
+    case 'public':
+    case 'broadcast':
+      return value;
+    default:
+      return undefined;
   }
 }

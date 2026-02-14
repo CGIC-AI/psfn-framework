@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { sanitizeChannelId } from './store.js';
 import type { SessionEntry, JournalEntry } from './types.js';
 import { createComponentLogger } from '../logger.js';
+import { classifyChannel, channelsShareContinuity } from '../trust/policy.js';
 
 const log = createComponentLogger('UserContinuity');
 
@@ -84,6 +85,9 @@ export class UserContinuityStore {
     const id = cache.nextId++;
 
     const full: SessionEntry = { ...entry, id };
+    if (!full.channelVisibility) {
+      full.channelVisibility = classifyChannel(entry.channelId);
+    }
     cache.entries.push(full);
 
     // Cap in-memory entries to maxEntries (JSONL file keeps all for audit)
@@ -120,12 +124,20 @@ export class UserContinuityStore {
    * Optionally exclude entries from a specific channel to avoid duplicates
    * when merging with the current channel's local messages.
    */
-  getRecent(userId: string, limit: number, excludeChannelId?: string): SessionEntry[] {
+  getRecent(userId: string, limit: number, excludeChannelId?: string, currentChannelId?: string): SessionEntry[] {
     const cache = this.ensureUser(userId);
     let entries = cache.entries;
 
     if (excludeChannelId) {
       entries = entries.filter(e => e.originChannelId !== excludeChannelId);
+    }
+
+    // If currentChannelId is provided, filter by visibility compatibility
+    if (currentChannelId) {
+      entries = entries.filter(e => {
+        const origin = e.originChannelId ?? e.channelId;
+        return channelsShareContinuity(origin, currentChannelId);
+      });
     }
 
     if (entries.length <= limit) return [...entries];

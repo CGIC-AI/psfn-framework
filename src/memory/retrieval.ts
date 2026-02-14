@@ -3,6 +3,8 @@ import type { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../types.js';
+import type { TrustLevel } from '../trust/types.js';
+import { classifyChannel, getAllowedSensitivities, evaluateMemoryPolicy } from '../trust/policy.js';
 import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('Retrieval');
 
@@ -38,7 +40,7 @@ export class MemoryRetriever implements MemoryProvider {
     }
   }
 
-  async retrieve(contextText: string, channelId: string): Promise<string> {
+  async retrieve(contextText: string, channelId: string, trustLevel?: TrustLevel): Promise<string> {
     if (!contextText.trim()) return '';
 
     // Read limit per-call from live config if available
@@ -67,8 +69,36 @@ export class MemoryRetriever implements MemoryProvider {
 
       if (scored.length === 0) return '';
 
+      // Trust-gated filtering: apply trust level + channel visibility restrictions
+      const effectiveTrust = trustLevel ?? 'regular';
+      const channelVisibility = classifyChannel(channelId);
+      const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
+
+      const filtered = scored.filter(s => {
+        // Quick check: is the sensitivity level allowed for this trust+visibility?
+        if (!allowed.includes(s.memory.sensitivity)) return false;
+
+        // Full policy evaluation (includes consent flags, operator approval, etc.)
+        const policy = evaluateMemoryPolicy({
+          trustLevel: effectiveTrust,
+          channelVisibility,
+          memorySensitivity: s.memory.sensitivity,
+          consentFlags: s.memory.consentFlags,
+        });
+        return policy.decision === 'allow';
+      });
+
+      log.debug('Trust filter applied', {
+        trustLevel: effectiveTrust,
+        channelVisibility,
+        before: scored.length,
+        after: filtered.length,
+      });
+
+      if (filtered.length === 0) return '';
+
       // Update access stats (fire-and-forget)
-      for (const s of scored) {
+      for (const s of filtered) {
         try {
           this.memoryStore.updateMemory(s.memory.id, {
             lastAccessed: Date.now(),
@@ -77,7 +107,7 @@ export class MemoryRetriever implements MemoryProvider {
         } catch { /* ignore */ }
       }
 
-      return formatForPrompt(scored);
+      return formatForPrompt(filtered);
     } catch (err) {
       log.error('Retrieval error', { error: String(err) });
       return '';

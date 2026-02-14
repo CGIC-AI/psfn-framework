@@ -238,6 +238,90 @@ describe('UserContinuityStore', () => {
     expect(entries).toHaveLength(0);
     expect(store.count('unknown-user')).toBe(0);
   });
+
+  describe('visibility filtering', () => {
+    it('private channels share continuity with other private channels', () => {
+      store.append('user1', {
+        channelId: 'api:session1',
+        role: 'user',
+        content: 'Private API message',
+        timestamp: 1000,
+        originChannelId: 'api:session1',
+      });
+      store.append('user1', {
+        channelId: 'sillytavern:chat',
+        role: 'user',
+        content: 'Private ST message',
+        timestamp: 2000,
+        originChannelId: 'sillytavern:chat',
+      });
+
+      // From another private channel (api:other), should see both
+      const entries = store.getRecent('user1', 10, undefined, 'api:other');
+      expect(entries).toHaveLength(2);
+    });
+
+    it('semi_private channels get no continuity from private channels', () => {
+      store.append('user1', {
+        channelId: 'api:session1',
+        role: 'user',
+        content: 'Secret DM stuff',
+        timestamp: 1000,
+        originChannelId: 'api:session1',
+      });
+
+      // From a guild channel (semi_private), should see nothing
+      const entries = store.getRecent('user1', 10, undefined, '1234567890');
+      expect(entries).toHaveLength(0);
+    });
+
+    it('broadcast channels get no continuity', () => {
+      store.append('user1', {
+        channelId: 'api:session1',
+        role: 'user',
+        content: 'Private message',
+        timestamp: 1000,
+        originChannelId: 'api:session1',
+      });
+
+      const entries = store.getRecent('user1', 10, undefined, 'twitter:timeline');
+      expect(entries).toHaveLength(0);
+    });
+
+    it('getRecent without currentChannelId returns all (backward compat)', () => {
+      store.append('user1', {
+        channelId: 'api:session1',
+        role: 'user',
+        content: 'Private msg',
+        timestamp: 1000,
+        originChannelId: 'api:session1',
+      });
+      store.append('user1', {
+        channelId: '1234567890',
+        role: 'user',
+        content: 'Guild msg',
+        timestamp: 2000,
+        originChannelId: '1234567890',
+      });
+
+      // No currentChannelId — returns all
+      const entries = store.getRecent('user1', 10);
+      expect(entries).toHaveLength(2);
+    });
+
+    it('auto-stamps channelVisibility on append', () => {
+      store.append('user1', {
+        channelId: 'api:session1',
+        role: 'user',
+        content: 'test',
+        timestamp: 1000,
+        originChannelId: 'api:session1',
+      });
+
+      const entries = store.getRecent('user1', 10);
+      expect(entries[0].channelVisibility).toBe('private');
+    });
+  });
 });
 
 describe('SessionManager with continuity', () => {
@@ -304,22 +388,22 @@ describe('SessionManager with continuity', () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
-    // Simulate activity in channel 1
-    mgr.recordUserMessage('ch1', 'I like cats', 'user1', 'Alice');
-    mgr.recordAssistantMessage('ch1', 'Me too!', 'user1');
+    // Simulate activity in channel 1 (private — api: prefix)
+    mgr.recordUserMessage('api:ch1', 'I like cats', 'user1', 'Alice');
+    mgr.recordAssistantMessage('api:ch1', 'Me too!', 'user1');
 
-    // Simulate activity in channel 2
-    mgr.recordUserMessage('ch2', 'What about dogs?', 'user1', 'Alice');
+    // Simulate activity in channel 2 (private — sillytavern: prefix)
+    mgr.recordUserMessage('sillytavern:ch2', 'What about dogs?', 'user1', 'Alice');
 
     // Build context for channel 2 — should include ch1 messages as cross-channel
-    const ctx = await mgr.buildContext('ch2', 'System prompt', '', undefined, 'user1');
+    const ctx = await mgr.buildContext('sillytavern:ch2', 'System prompt', '', undefined, 'user1');
 
     expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
     expect(ctx.systemPrompt).toContain('I like cats');
     expect(ctx.systemPrompt).toContain('Me too!');
     // Should NOT contain the ch2 message in the continuity block (it's already in local)
     // but the ch2 entry will be in the continuity store, excluded by channelId
-    expect(ctx.systemPrompt).not.toContain('[from ch2]');
+    expect(ctx.systemPrompt).not.toContain('[from sillytavern:ch2]');
   });
 
   it('buildContext works without continuity store (backward compat)', async () => {
@@ -358,12 +442,12 @@ describe('SessionManager with continuity', () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
-    // Record messages in ch1 only
-    mgr.recordUserMessage('ch1', 'Message in ch1', 'user1', 'Alice');
-    mgr.recordAssistantMessage('ch1', 'Reply in ch1', 'user1');
+    // Record messages in api:ch1 only (private channel)
+    mgr.recordUserMessage('api:ch1', 'Message in ch1', 'user1', 'Alice');
+    mgr.recordAssistantMessage('api:ch1', 'Reply in ch1', 'user1');
 
-    // Build context for ch1 — continuity should NOT include ch1 messages
-    const ctx = await mgr.buildContext('ch1', 'System prompt', '', undefined, 'user1');
+    // Build context for api:ch1 — continuity should NOT include api:ch1 messages
+    const ctx = await mgr.buildContext('api:ch1', 'System prompt', '', undefined, 'user1');
     expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
   });
 
@@ -371,21 +455,22 @@ describe('SessionManager with continuity', () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
-    mgr.recordUserMessage('dm-channel', 'Secret stuff', 'user1', 'Alice');
-    mgr.recordUserMessage('public-channel', 'Public talk', 'user1', 'Alice');
+    // Use private-pattern channels so visibility filtering allows sharing
+    mgr.recordUserMessage('api:dm-channel', 'Secret stuff', 'user1', 'Alice');
+    mgr.recordUserMessage('api:other-channel', 'Other talk', 'user1', 'Alice');
 
-    // Build context for a third channel
+    // Build context for a third private channel
     sessionStore.append({
-      channelId: 'ch3',
+      channelId: 'api:ch3',
       role: 'user',
       content: 'Hello in ch3',
       authorId: 'user1',
       authorName: 'Alice',
       timestamp: Date.now(),
     });
-    const ctx = await mgr.buildContext('ch3', 'System prompt', '', undefined, 'user1');
+    const ctx = await mgr.buildContext('api:ch3', 'System prompt', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('[from dm-channel]');
-    expect(ctx.systemPrompt).toContain('[from public-channel]');
+    expect(ctx.systemPrompt).toContain('[from api:dm-channel]');
+    expect(ctx.systemPrompt).toContain('[from api:other-channel]');
   });
 });

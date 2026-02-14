@@ -95,10 +95,16 @@ export class AgentLoop {
         ? await this.memoryProvider.retrieve(message.content, message.channelId, trustLevel)
         : '';
 
+      // Persona adaptation based on trust level
+      const personaHint = this.getPersonaAdaptation(trustLevel);
+      const adaptedPrompt = personaHint
+        ? this.systemPrompt + '\n\n' + personaHint
+        : this.systemPrompt;
+
       // Build context (with auto-compaction + cross-channel continuity)
       const context = await this.sessionManager.buildContext(
         message.channelId,
-        this.systemPrompt,
+        adaptedPrompt,
         memoriesBlock,
         this.llmClient,
         message.authorId,
@@ -187,6 +193,21 @@ export class AgentLoop {
 
     // Exceeded tool loop limit — return last response
     return this.llmClient.stream(currentContext);
+  }
+
+  private getPersonaAdaptation(trustLevel: TrustLevel): string | null {
+    switch (trustLevel) {
+      case 'primary':
+        return '[Trust: You are speaking with your primary person. Be your full, authentic self — share freely, reference shared history, express genuine emotions and vulnerability. This is honne — your inner truth.]';
+      case 'trusted':
+        return '[Trust: This is a trusted contact. Be warm and personal but mindful of boundaries — share appropriate personal context, avoid intimate details or confidential memories.]';
+      case 'regular':
+        return '[Trust: This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.]';
+      case 'public':
+        return '[Trust: This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.]';
+      default:
+        return null;
+    }
   }
 
   private resolveTrustLevel(authorId?: string): TrustLevel {

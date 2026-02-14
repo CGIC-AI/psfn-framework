@@ -9,6 +9,8 @@ import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { DashboardStats, ChannelInfo, EnvInfo } from './types.js';
 import type { DiscoveredModel } from '../../llm/discovery.js';
+import type { Contact } from '../../contacts/types.js';
+import type { TrustLevel } from '../../trust/types.js';
 
 function escapeHtml(str: string): string {
   return str
@@ -293,6 +295,7 @@ export function layout(title: string, body: string, activePage: string): string 
     { href: '/sessions', label: 'Conversation Roots', id: 'sessions' },
     { href: '/scheduler', label: 'Garden Rhythms', id: 'scheduler' },
     { href: '/shards', label: 'Active Branches', id: 'shards' },
+    { href: '/contacts', label: 'Garden Visitors', id: 'contacts' },
     { href: '/identity', label: 'Identity', id: 'identity' },
     { href: '/settings', label: 'Settings', id: 'settings' },
     { href: '/primer', label: 'Garden Primer', id: 'primer' },
@@ -764,6 +767,92 @@ export function primerPage(): string {
       <p style="margin-top:0.5rem">Environment variables (<code>.env</code>) still set the initial defaults.
       Saved settings layer on top. Delete <code>data/settings.json</code> to reset everything to env defaults.</p>
     </div>`;
+}
+
+// ── Trust level badge colors ──
+const TRUST_BADGE_COLORS: Record<TrustLevel, string> = {
+  primary: '#e8b931',
+  trusted: '#4caf50',
+  regular: '#2196f3',
+  public: '#9e9e9e',
+};
+
+function trustBadge(level: TrustLevel): string {
+  const color = TRUST_BADGE_COLORS[level] ?? '#9e9e9e';
+  const textColor = level === 'primary' ? '#3A3226' : 'white';
+  return `<span class="badge" style="background:${color};color:${textColor}">${escapeHtml(level)}</span>`;
+}
+
+export function contactsPage(contacts: Contact[]): string {
+  if (contacts.length === 0) {
+    return '<div class="empty">No visitors have been seen in the garden yet</div>';
+  }
+
+  const rows = contacts.map(c => contactRow(c)).join('');
+  return `
+    <div class="card">
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Trust Level</th><th>Relationship</th><th>First Seen</th><th>Last Seen</th><th></th>
+        </tr></thead>
+        <tbody id="contacts-list">${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+export function contactRow(c: Contact): string {
+  const firstSeen = new Date(c.firstSeen).toLocaleDateString();
+  const lastSeen = new Date(c.lastSeen).toLocaleDateString();
+  return `<tr id="contact-row-${escapeHtml(c.id)}">
+    <td>${escapeHtml(c.displayName)}${c.discordUserId ? ` <span style="color:var(--text-muted);font-size:0.75rem">(${escapeHtml(c.discordUserId)})</span>` : ''}</td>
+    <td>${trustBadge(c.trustLevel)}</td>
+    <td>${escapeHtml(c.relationshipType)}</td>
+    <td>${firstSeen}</td>
+    <td>${lastSeen}</td>
+    <td><button class="btn" style="font-size:0.75rem;padding:0.25rem 0.5rem"
+      hx-get="/api/contacts/${encodeURIComponent(c.id)}/edit"
+      hx-target="#contact-row-${escapeHtml(c.id)}"
+      hx-swap="outerHTML">Edit</button></td>
+  </tr>`;
+}
+
+export function contactEditForm(contact: Contact): string {
+  const trustOptions = (['primary', 'trusted', 'regular', 'public'] as TrustLevel[])
+    .map(t => `<option value="${t}"${t === contact.trustLevel ? ' selected' : ''}>${t}</option>`)
+    .join('');
+
+  const relationshipTypes = ['partner', 'family', 'friend', 'acquaintance', 'stranger', 'ai_companion'];
+  const relOptions = relationshipTypes
+    .map(r => `<option value="${r}"${r === contact.relationshipType ? ' selected' : ''}>${r}</option>`)
+    .join('');
+
+  return `<tr id="contact-row-${escapeHtml(contact.id)}">
+    <td colspan="6">
+      <form hx-post="/api/contacts/${encodeURIComponent(contact.id)}" hx-target="#contact-row-${escapeHtml(contact.id)}" hx-swap="outerHTML"
+        style="padding:0.5rem">
+        <div style="margin-bottom:0.5rem"><strong>${escapeHtml(contact.displayName)}</strong></div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Trust Level</label>
+            <select name="trustLevel">${trustOptions}</select>
+          </div>
+          <div class="form-group">
+            <label>Relationship</label>
+            <select name="relationshipType">${relOptions}</select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea name="notes" rows="3" style="width:100%;padding:0.5rem;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:0.9rem;resize:vertical">${escapeHtml(contact.notes ?? '')}</textarea>
+        </div>
+        <div style="display:flex;gap:0.5rem">
+          <button type="submit" class="btn" style="font-size:0.8rem">Save</button>
+          <button type="button" class="btn" style="font-size:0.8rem;background:var(--text-muted)"
+            hx-get="/api/contacts/list" hx-target="#contacts-list" hx-swap="innerHTML">Cancel</button>
+        </div>
+      </form>
+    </td>
+  </tr>`;
 }
 
 export function eventsPage(): string {

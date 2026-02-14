@@ -14,6 +14,11 @@ import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { DashboardStats, EnvInfo } from './types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
+import type { ContactStore } from '../../contacts/store.js';
+import type { TrustLevel } from '../../trust/types.js';
+import type { RelationshipType } from '../../contacts/types.js';
+import { TRUST_LEVELS } from '../../trust/types.js';
+import { VALID_RELATIONSHIP_TYPES } from '../../contacts/types.js';
 import { MEMORY_CONFIG } from '../../memory/types.js';
 import { loadSettings, saveSettings, applySettings, parseSettingsForm } from '../../settings.js';
 import * as tpl from './templates.js';
@@ -29,6 +34,7 @@ export class AdminHandlers {
   private characterCard: CharacterCardV2;
   private config: SubstrateConfig;
   private modelDiscovery: ModelDiscovery | null;
+  private contactStore: ContactStore | null;
 
   constructor(deps: {
     memoryStore: MemoryStore;
@@ -41,6 +47,7 @@ export class AdminHandlers {
     characterCard: CharacterCardV2;
     config: SubstrateConfig;
     modelDiscovery?: ModelDiscovery | null;
+    contactStore?: ContactStore | null;
   }) {
     this.memoryStore = deps.memoryStore;
     this.sessionStore = deps.sessionStore;
@@ -52,6 +59,7 @@ export class AdminHandlers {
     this.characterCard = deps.characterCard;
     this.config = deps.config;
     this.modelDiscovery = deps.modelDiscovery ?? null;
+    this.contactStore = deps.contactStore ?? null;
   }
 
   // ── Login ──
@@ -207,6 +215,83 @@ export class AdminHandlers {
     this.modelDiscovery.invalidateCache();
     const models = await this.modelDiscovery.getAvailableModels().catch(() => []);
     return JSON.stringify(models);
+  }
+
+  // ── Contacts ──
+
+  contactsPage(): string {
+    if (!this.contactStore) {
+      return tpl.layout('Garden Visitors', '<div class="empty">Contact store not available</div>', 'contacts');
+    }
+    const contacts = this.contactStore.listAll();
+    return tpl.layout('Garden Visitors', tpl.contactsPage(contacts), 'contacts');
+  }
+
+  contactsListFragment(): string {
+    if (!this.contactStore) return '<tr><td colspan="6" class="empty">Contact store not available</td></tr>';
+    const contacts = this.contactStore.listAll();
+    if (contacts.length === 0) return '<tr><td colspan="6" class="empty">No visitors found</td></tr>';
+    // Re-render the full table body by using the contactsPage internals
+    // We need individual rows, so return the page content minus wrapper
+    return tpl.contactsPage(contacts);
+  }
+
+  contactEditFormFragment(contactId: string): string {
+    if (!this.contactStore) return '';
+    const contact = this.contactStore.getById(contactId);
+    if (!contact) return '';
+    return tpl.contactEditForm(contact);
+  }
+
+  handleContactUpdate(contactId: string, body: string): string {
+    if (!this.contactStore) {
+      return tpl.settingsFormResult(false, 'Contact store not available');
+    }
+
+    const contact = this.contactStore.getById(contactId);
+    if (!contact) {
+      return tpl.settingsFormResult(false, 'Contact not found');
+    }
+
+    const params = new URLSearchParams(body);
+    const trustLevel = params.get('trustLevel') as TrustLevel | null;
+    const relationshipType = params.get('relationshipType') as RelationshipType | null;
+    const notes = params.get('notes');
+
+    // Validate trust level
+    if (trustLevel && !TRUST_LEVELS.includes(trustLevel)) {
+      return tpl.settingsFormResult(false, `Invalid trust level: ${trustLevel}`);
+    }
+
+    // Validate relationship type
+    if (relationshipType && !VALID_RELATIONSHIP_TYPES.includes(relationshipType)) {
+      return tpl.settingsFormResult(false, `Invalid relationship type: ${relationshipType}`);
+    }
+
+    // Apply updates — order matters: upsert first (may reset trust), then setTrustLevel
+    if (relationshipType && relationshipType !== contact.relationshipType && contact.discordUserId) {
+      // Update via upsert — requires discordUserId for existing record lookup
+      this.contactStore.upsert({
+        ...contact,
+        relationshipType,
+        trustLevel: trustLevel ?? contact.trustLevel,
+      });
+    }
+
+    if (trustLevel && trustLevel !== contact.trustLevel) {
+      this.contactStore.setTrustLevel(contactId, trustLevel);
+    }
+
+    if (notes !== null) {
+      this.contactStore.updateNotes(contactId, notes);
+    }
+
+    // Return the updated row
+    const updated = this.contactStore.getById(contactId);
+    if (!updated) return tpl.settingsFormResult(false, 'Update failed');
+
+    // Return a fresh table row so htmx replaces the edit form
+    return tpl.contactRow(updated);
   }
 
   // ── Events (SSE) ──

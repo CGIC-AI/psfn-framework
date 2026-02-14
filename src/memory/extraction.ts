@@ -14,12 +14,13 @@ const EXTRACTION_PROMPT = `You are analyzing a conversation to extract important
 
 For each fact, provide:
 - text: A single clear sentence stating the fact
-- type: One of: episodic, semantic, emotional, procedural, reflection
+- type: One of: episodic, semantic, emotional, procedural, reflection, relational
   - episodic: Specific events ("User went hiking last weekend")
   - semantic: Stable facts ("User is a software engineer", "User has a cat named Luna")
   - emotional: Feelings and reactions ("User felt stressed about the deadline")
   - procedural: Behavioral patterns ("User prefers code examples over explanations")
   - reflection: Meta-observations ("User has been sharing more personal details lately")
+  - relational: Facts about people and relationships (who someone is, their role, preferences, relationship dynamics). Examples: "V's sister is named Alex", "Bob likes jazz music", "V and Sam work together on the framework"
 - importance: 0-1 how significant this is for understanding the user (0.8+ for core identity facts, 0.3-0.5 for casual mentions)
 - emotional_valence: -1 to 1 (-1 very negative, 0 neutral, 1 very positive)
 - confidence: 0-1 how confident you are this fact is correct

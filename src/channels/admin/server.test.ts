@@ -12,6 +12,7 @@ import { SessionStore } from '../../session/store.js';
 import { SessionManager } from '../../session/manager.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
+import { ContactStore } from '../../contacts/store.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { LLMProvider } from '../../agent-loop.js';
@@ -327,6 +328,21 @@ describe('AdminServer', () => {
     });
   });
 
+  describe('Contacts (without contactStore)', () => {
+    it('returns contacts page with empty message', async () => {
+      const res = await request(port, 'GET', '/contacts');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Garden Visitors');
+      expect(res.body).toContain('Contact store not available');
+    });
+
+    it('navigation includes Garden Visitors', async () => {
+      const res = await request(port, 'GET', '/');
+      expect(res.body).toContain('href="/contacts"');
+      expect(res.body).toContain('Garden Visitors');
+    });
+  });
+
   describe('Identity', () => {
     it('returns identity page with character info', async () => {
       const res = await request(port, 'GET', '/identity');
@@ -536,5 +552,139 @@ describe('AdminServer with auth', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body).toContain('Dashboard');
+  });
+});
+
+describe('AdminServer with contacts', () => {
+  let tempDir: string;
+  let db: Database.Database;
+  let eventBus: EventBus;
+  let contactStore: ContactStore;
+  let server: AdminServer;
+  let port: number;
+
+  beforeEach(async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'admin-contacts-'));
+    const sessionsDir = join(tempDir, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+
+    db = new Database(':memory:');
+    sqliteVec.load(db);
+    eventBus = new EventBus();
+    contactStore = new ContactStore(db);
+
+    port = 30000 + Math.floor(Math.random() * 10000);
+    const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
+    server = new AdminServer({
+      port,
+      memoryStore: new MemoryStore(db, 3),
+      sessionStore: new SessionStore(sessionsDir),
+      sessionManager: new SessionManager(new SessionStore(sessionsDir), testConfig),
+      scheduler: new Scheduler(eventBus),
+      shardManager: new ShardManager({
+        eventBus,
+        llmProvider: mockLlmProvider,
+        sessionStore: new SessionStore(sessionsDir),
+        embeddingService: null,
+        memoryProvider: null,
+        config: testConfig,
+        parentSystemPrompt: '',
+      }),
+      eventBus,
+      characterCard: testCard,
+      config: { ...testConfig, dataDir: tempDir },
+      embeddingService: null,
+      contactStore,
+    });
+    await server.init();
+    await server.start();
+  });
+
+  afterEach(async () => {
+    await server.stop();
+    db.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('returns contacts page with Garden Visitors title', async () => {
+    const res = await request(port, 'GET', '/contacts');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.body).toContain('Garden Visitors');
+  });
+
+  it('shows empty message when no contacts exist', async () => {
+    const res = await request(port, 'GET', '/contacts');
+    expect(res.body).toContain('No visitors have been seen in the garden yet');
+  });
+
+  it('lists contacts when they exist', async () => {
+    contactStore.upsert({
+      displayName: 'Alice Wonderland',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+    });
+
+    const res = await request(port, 'GET', '/contacts');
+    expect(res.body).toContain('Alice Wonderland');
+    expect(res.body).toContain('trusted');
+    expect(res.body).toContain('friend');
+  });
+
+  it('returns contacts list fragment via API', async () => {
+    contactStore.upsert({
+      displayName: 'Bob Builder',
+      trustLevel: 'regular',
+      relationshipType: 'acquaintance',
+    });
+
+    const res = await request(port, 'GET', '/api/contacts/list');
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Bob Builder');
+    expect(res.body).toContain('regular');
+  });
+
+  it('returns edit form fragment', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Carol Danvers',
+      trustLevel: 'regular',
+      relationshipType: 'stranger',
+    });
+
+    const res = await request(port, 'GET', `/api/contacts/${contact.id}/edit`);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Carol Danvers');
+    expect(res.body).toContain('name="trustLevel"');
+    expect(res.body).toContain('name="relationshipType"');
+    expect(res.body).toContain('name="notes"');
+  });
+
+  it('updates contact trust level via POST', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Dave Grohl',
+      discordUserId: '999888777',
+      trustLevel: 'public',
+      relationshipType: 'stranger',
+    });
+
+    const body = 'trustLevel=trusted&relationshipType=friend&notes=A+good+friend';
+    const res = await request(port, 'POST', `/api/contacts/${contact.id}`, body, {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('trusted');
+    expect(res.body).toContain('Dave Grohl');
+
+    // Verify the store was updated
+    const updated = contactStore.getById(contact.id);
+    expect(updated?.trustLevel).toBe('trusted');
+    expect(updated?.relationshipType).toBe('friend');
+    expect(updated?.notes).toBe('A good friend');
+  });
+
+  it('returns empty for edit form of non-existent contact', async () => {
+    const res = await request(port, 'GET', '/api/contacts/nonexistent/edit');
+    expect(res.status).toBe(200);
+    expect(res.body).toBe('');
   });
 });

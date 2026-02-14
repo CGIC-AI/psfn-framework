@@ -98,6 +98,8 @@ export interface SubstrateConfig {
   sessionMessageLimit: number;
   memoryRetrievalLimit: number;
   extractionInterval: number;
+  primaryMaxTokens: number;
+  extractionMaxTokens: number;
 }
 
 export function loadConfig(): SubstrateConfig {
@@ -114,6 +116,8 @@ export function loadConfig(): SubstrateConfig {
     sessionMessageLimit: parseInt(process.env.SESSION_MESSAGE_LIMIT ?? '30', 10),
     memoryRetrievalLimit: parseInt(process.env.MEMORY_RETRIEVAL_LIMIT ?? '15', 10),
     extractionInterval: parseInt(process.env.EXTRACTION_INTERVAL ?? '5', 10),
+    primaryMaxTokens: parseInt(process.env.PRIMARY_MAX_TOKENS ?? '16384', 10),
+    extractionMaxTokens: parseInt(process.env.EXTRACTION_MAX_TOKENS ?? '8192', 10),
   };
 }
 

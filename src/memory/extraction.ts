@@ -5,6 +5,7 @@ import type { EventBus } from '../event-bus.js';
 import type { MemoryStore } from './store.js';
 import type { ExtractedFact, MemoryType, PurrMemory } from './types.js';
 import { VALID_MEMORY_TYPES, DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
+import type { SubstrateConfig } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('Extraction');
 
@@ -57,6 +58,7 @@ export class MemoryExtractor {
   private memoryStore: MemoryStore;
   private embeddingService: EmbeddingService;
   private eventBus: EventBus;
+  private runtimeConfig: SubstrateConfig | null;
   private extractionInterval: number;
 
   constructor(
@@ -65,21 +67,30 @@ export class MemoryExtractor {
     memoryStore: MemoryStore,
     embeddingService: EmbeddingService,
     eventBus: EventBus,
-    config?: MemoryExtractorConfig,
+    config?: MemoryExtractorConfig | SubstrateConfig,
   ) {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
     this.eventBus = eventBus;
-    this.extractionInterval = config?.extractionInterval ?? MEMORY_CONFIG.extractionInterval;
+    // If config has extractionInterval as a direct number property on SubstrateConfig, use per-call
+    if (config && 'primaryModel' in config) {
+      this.runtimeConfig = config;
+      this.extractionInterval = config.extractionInterval;
+    } else {
+      this.runtimeConfig = null;
+      this.extractionInterval = (config as MemoryExtractorConfig | undefined)?.extractionInterval ?? MEMORY_CONFIG.extractionInterval;
+    }
   }
 
   async maybeExtract(channelId: string): Promise<void> {
     const currentCount = this.sessionManager.getMessageCount(channelId);
     const lastCount = lastExtractionCount.get(channelId) ?? 0;
 
-    if (currentCount - lastCount < this.extractionInterval) return;
+    // Read interval per-call from live config if available
+    const interval = this.runtimeConfig?.extractionInterval ?? this.extractionInterval;
+    if (currentCount - lastCount < interval) return;
 
     lastExtractionCount.set(channelId, currentCount);
     await this.extract(channelId);

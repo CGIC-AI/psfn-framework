@@ -34,6 +34,7 @@ export class AdminServer implements Lifecycle {
       embeddingService: config.embeddingService,
       characterCard: config.characterCard,
       config: config.config,
+      modelDiscovery: config.modelDiscovery,
     });
     this.server = createServer((req, res) => this.handleRequest(req, res));
   }
@@ -78,11 +79,13 @@ export class AdminServer implements Lifecycle {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    // Auth check (skip for OPTIONS)
-    if (req.method !== 'OPTIONS' && this.token && !this.checkAuth(req, res)) return;
-
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
+
+    // Skip auth for OPTIONS, static files, and login page
+    const skipAuth = req.method === 'OPTIONS' || path.startsWith('/static/') || path === '/login';
+
+    if (!skipAuth && this.token && !this.checkAuth(req, res)) return;
 
     // Static files
     const staticFile = this.staticFiles.get(path);
@@ -102,6 +105,27 @@ export class AdminServer implements Lifecycle {
   }
 
   private route(method: string, path: string, req: IncomingMessage, res: ServerResponse): void {
+    // ── Login ──
+
+    if (method === 'GET' && path === '/login') {
+      return this.sendHtml(res, this.handlers.loginPage());
+    }
+    if (method === 'POST' && path === '/login') {
+      return this.readBody(req, res, (body) => {
+        const params = new URLSearchParams(body);
+        const token = params.get('token') ?? '';
+        if (token === this.token) {
+          res.writeHead(302, {
+            Location: '/',
+            'Set-Cookie': `psfn_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+          });
+          res.end();
+        } else {
+          this.sendHtml(res, this.handlers.loginPage('Invalid token'));
+        }
+      });
+    }
+
     // ── Pages (return full HTML) ──
 
     if (method === 'GET' && path === '/') {
@@ -133,10 +157,21 @@ export class AdminServer implements Lifecycle {
       return this.sendHtml(res, this.handlers.identityPage());
     }
     if (method === 'GET' && path === '/settings') {
-      return this.sendHtml(res, this.handlers.settingsPage());
+      this.handlers.settingsPage().then(
+        (html) => this.sendHtml(res, html),
+        (err) => {
+          log.error('Settings page error', { error: String(err) });
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
+        },
+      );
+      return;
     }
     if (method === 'GET' && path === '/events') {
       return this.sendHtml(res, this.handlers.eventsPageHtml());
+    }
+    if (method === 'GET' && path === '/primer') {
+      return this.sendHtml(res, this.handlers.primerPage());
     }
 
     // ── API fragments (return HTML fragments for htmx) ──
@@ -166,6 +201,43 @@ export class AdminServer implements Lifecycle {
       return this.sendFragment(res, this.handlers.sessionMessagesFragment(channelId));
     }
 
+    // ── Settings API ──
+
+    if (method === 'POST' && path === '/api/settings') {
+      return this.readBody(req, res, (body) => {
+        const html = this.handlers.updateSettings(body);
+        this.sendFragment(res, html);
+      });
+    }
+    if (method === 'GET' && path === '/api/models') {
+      this.handlers.modelListJson().then(
+        (json) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(json);
+        },
+        (err) => {
+          log.error('Model list error', { error: String(err) });
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end('[]');
+        },
+      );
+      return;
+    }
+    if (method === 'POST' && path === '/api/models/refresh') {
+      this.handlers.refreshModels().then(
+        (json) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(json);
+        },
+        (err) => {
+          log.error('Model refresh error', { error: String(err) });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end('[]');
+        },
+      );
+      return;
+    }
+
     // ── SSE event stream ──
 
     if (method === 'GET' && path === '/events/stream') {
@@ -178,13 +250,30 @@ export class AdminServer implements Lifecycle {
   }
 
   private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
+    // Check Bearer header first
     const auth = req.headers.authorization;
-    if (!auth || !auth.startsWith('Bearer ') || auth.slice(7) !== this.token) {
+    if (auth && auth.startsWith('Bearer ') && auth.slice(7) === this.token) {
+      return true;
+    }
+
+    // Check cookie
+    const cookies = req.headers.cookie ?? '';
+    const match = cookies.match(/(?:^|;\s*)psfn_token=([^;]+)/);
+    if (match && match[1] === this.token) {
+      return true;
+    }
+
+    // Redirect browser requests to login page, return 401 for API/htmx
+    const isHtmx = req.headers['hx-request'] === 'true';
+    const accept = req.headers.accept ?? '';
+    if (!isHtmx && accept.includes('text/html')) {
+      res.writeHead(302, { Location: '/login' });
+      res.end();
+    } else {
       res.writeHead(401, { 'Content-Type': 'text/plain' });
       res.end('Unauthorized');
-      return false;
     }
-    return true;
+    return false;
   }
 
   private sendHtml(res: ServerResponse, html: string): void {

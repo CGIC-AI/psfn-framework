@@ -2,6 +2,7 @@ import type { MemoryProvider, EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
+import type { SubstrateConfig } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('Retrieval');
 
@@ -18,18 +19,30 @@ export interface MemoryRetrieverConfig {
 export class MemoryRetriever implements MemoryProvider {
   private memoryStore: MemoryStore;
   private embeddingService: EmbeddingService;
+  private runtimeConfig: SubstrateConfig | null;
   private retrievalLimit: number;
   private retrievalThreshold: number;
 
-  constructor(memoryStore: MemoryStore, embeddingService: EmbeddingService, config?: MemoryRetrieverConfig) {
+  constructor(memoryStore: MemoryStore, embeddingService: EmbeddingService, config?: MemoryRetrieverConfig | SubstrateConfig) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
-    this.retrievalLimit = config?.retrievalLimit ?? MEMORY_CONFIG.maxRetrievalCount;
-    this.retrievalThreshold = config?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
+    // If config has memoryRetrievalLimit, it's a SubstrateConfig — read per-call
+    if (config && 'memoryRetrievalLimit' in config) {
+      this.runtimeConfig = config;
+      this.retrievalLimit = config.memoryRetrievalLimit;
+      this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
+    } else {
+      this.runtimeConfig = null;
+      this.retrievalLimit = (config as MemoryRetrieverConfig | undefined)?.retrievalLimit ?? MEMORY_CONFIG.maxRetrievalCount;
+      this.retrievalThreshold = (config as MemoryRetrieverConfig | undefined)?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
+    }
   }
 
   async retrieve(contextText: string, channelId: string): Promise<string> {
     if (!contextText.trim()) return '';
+
+    // Read limit per-call from live config if available
+    const limit = this.runtimeConfig?.memoryRetrievalLimit ?? this.retrievalLimit;
 
     try {
       const embedding = await this.embeddingService.embed(contextText);
@@ -50,7 +63,7 @@ export class MemoryRetriever implements MemoryProvider {
         }))
         .filter(s => s.score > 0)
         .sort((a, b) => b.score - a.score)
-        .slice(0, this.retrievalLimit);
+        .slice(0, limit);
 
       if (scored.length === 0) return '';
 

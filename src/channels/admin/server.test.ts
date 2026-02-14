@@ -73,6 +73,8 @@ const testConfig: SubstrateConfig = {
   sessionMessageLimit: 30,
   memoryRetrievalLimit: 15,
   extractionInterval: 5,
+  primaryMaxTokens: 16384,
+  extractionMaxTokens: 8192,
 };
 
 const testCard: CharacterCardV2 = {
@@ -108,6 +110,7 @@ describe('AdminServer', () => {
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-test-'));
+    testConfig.dataDir = tempDir;
     const sessionsDir = join(tempDir, 'sessions');
     mkdirSync(sessionsDir, { recursive: true });
 
@@ -337,15 +340,17 @@ describe('AdminServer', () => {
       expect(res.status).toBe(200);
       expect(res.body).toContain('Settings');
       expect(res.body).toContain('Models');
+      expect(res.body).toContain('Token Limits');
       expect(res.body).toContain('Memory');
       expect(res.body).toContain('Sessions');
       expect(res.body).toContain('Secrets');
     });
 
-    it('shows model configuration', async () => {
+    it('shows model configuration in form', async () => {
       const res = await request(port, 'GET', '/settings');
       expect(res.body).toContain('test-model');
       expect(res.body).toContain('test-extract');
+      expect(res.body).toContain('name="primaryModel"');
     });
 
     it('shows memory settings', async () => {
@@ -365,6 +370,48 @@ describe('AdminServer', () => {
       const res = await request(port, 'GET', '/');
       expect(res.body).toContain('href="/settings"');
       expect(res.body).toContain('Settings');
+    });
+
+    it('saves settings via POST', async () => {
+      const body = 'primaryMaxTokens=4096&sessionMessageLimit=50';
+      const res = await request(port, 'POST', '/api/settings', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Settings saved');
+
+      // Verify config was mutated
+      expect(testConfig.primaryMaxTokens).toBe(4096);
+      expect(testConfig.sessionMessageLimit).toBe(50);
+
+      // Reset for other tests
+      testConfig.primaryMaxTokens = 16384;
+      testConfig.sessionMessageLimit = 30;
+    });
+
+    it('rejects invalid settings values', async () => {
+      const body = 'primaryMaxTokens=100';  // min 256
+      const res = await request(port, 'POST', '/api/settings', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('primaryMaxTokens');
+    });
+  });
+
+  describe('Primer', () => {
+    it('returns primer page', async () => {
+      const res = await request(port, 'GET', '/primer');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Garden Primer');
+      expect(res.body).toContain('Primary Model');
+      expect(res.body).toContain('Token Limits');
+    });
+
+    it('appears in navigation', async () => {
+      const res = await request(port, 'GET', '/');
+      expect(res.body).toContain('href="/primer"');
+      expect(res.body).toContain('Garden Primer');
     });
   });
 

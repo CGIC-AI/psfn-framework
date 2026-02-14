@@ -8,6 +8,7 @@ import type { ActiveShard } from '../../shards/manager.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { DashboardStats, ChannelInfo, EnvInfo } from './types.js';
+import type { DiscoveredModel } from '../../llm/discovery.js';
 
 function escapeHtml(str: string): string {
   return str
@@ -218,6 +219,70 @@ function gardenStyles(): string {
     }
 
     .empty { color: var(--text-muted); font-style: italic; padding: 2rem; text-align: center; }
+
+    .form-group {
+      margin-bottom: 1rem;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: bold;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.3rem;
+    }
+    .form-group input[type="number"],
+    .form-group input[type="text"],
+    .form-group select {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 0.9rem;
+      background: var(--bg);
+    }
+    .form-group input[type="number"] { max-width: 200px; }
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    .form-actions {
+      margin-top: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .form-success {
+      color: var(--accent);
+      font-size: 0.85rem;
+      font-weight: bold;
+    }
+    .form-error {
+      color: var(--emotional);
+      font-size: 0.85rem;
+    }
+    .primer-section {
+      margin-bottom: 1.5rem;
+    }
+    .primer-section h3 {
+      margin-bottom: 0.5rem;
+      color: var(--accent);
+    }
+    .primer-section p {
+      margin-bottom: 0.5rem;
+    }
+    .primer-knob {
+      background: #F5F3F0;
+      border-left: 3px solid var(--accent);
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.75rem;
+      border-radius: 0 6px 6px 0;
+    }
+    .primer-knob strong { color: var(--text); }
+    .primer-knob p { color: var(--text-muted); font-size: 0.85rem; margin: 0; }
   `;
 }
 
@@ -230,6 +295,7 @@ export function layout(title: string, body: string, activePage: string): string 
     { href: '/shards', label: 'Active Branches', id: 'shards' },
     { href: '/identity', label: 'Identity', id: 'identity' },
     { href: '/settings', label: 'Settings', id: 'settings' },
+    { href: '/primer', label: 'Garden Primer', id: 'primer' },
     { href: '/events', label: 'Garden Pulse', id: 'events' },
   ];
 
@@ -258,6 +324,53 @@ export function layout(title: string, body: string, activePage: string): string 
       <h2>${escapeHtml(title)}</h2>
       ${body}
     </main>
+  </div>
+</body>
+</html>`;
+}
+
+export function loginPage(error?: string): string {
+  const errorHtml = error ? `<p style="color:var(--emotional);margin-bottom:1rem">${escapeHtml(error)}</p>` : '';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login - admin UI</title>
+  <style>${gardenStyles()}
+    .login-wrap {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; background: var(--bg);
+    }
+    .login-box {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 2rem; width: 360px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center;
+    }
+    .login-box h1 { color: #F7B731; font-size: 1.3rem; margin-bottom: 0.3rem; }
+    .login-box .subtitle { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1.5rem; }
+    .login-box input {
+      width: 100%; padding: 0.6rem 0.75rem; border: 1px solid var(--border);
+      border-radius: 6px; font-family: inherit; font-size: 0.9rem; margin-bottom: 1rem;
+    }
+    .login-box button {
+      width: 100%; padding: 0.6rem; background: var(--accent); color: white;
+      border: none; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 0.95rem;
+    }
+    .login-box button:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-box">
+      <h1>admin UI</h1>
+      <div class="subtitle">enter admin token to continue</div>
+      ${errorHtml}
+      <form method="POST" action="/login">
+        <input type="password" name="token" placeholder="Admin token" autofocus required>
+        <button type="submit">Enter the Garden</button>
+      </form>
+    </div>
   </div>
 </body>
 </html>`;
@@ -449,24 +562,27 @@ export function identityPage(card: CharacterCardV2, config: SubstrateConfig): st
     </div>`;
 }
 
-export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo): string {
-  const modelRows: Array<[string, string]> = [
-    ['Primary Model', config.primaryModel],
-    ['Primary Provider', config.primaryProvider],
-    ['Extraction Model', config.extractionModel],
-    ['Extraction Provider', config.extractionProvider],
-  ];
+export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?: DiscoveredModel[]): string {
+  const modelOptions = models && models.length > 0
+    ? models.map(m => m.id)
+    : null;
 
-  const memoryRows: Array<[string, string]> = [
-    ['Retrieval Limit', String(config.memoryRetrievalLimit)],
-    ['Extraction Interval', `${config.extractionInterval} messages`],
-    ['Salience Floor', String(envInfo.salienceFloor)],
-    ['Maintenance Interval', `${envInfo.maintenanceIntervalMs / 1000}s`],
-  ];
+  function modelSelect(name: string, value: string): string {
+    if (modelOptions) {
+      const opts = modelOptions.map(id =>
+        `<option value="${escapeHtml(id)}"${id === value ? ' selected' : ''}>${escapeHtml(id)}</option>`
+      ).join('');
+      // Include current value if not in list
+      const hasValue = modelOptions.includes(value);
+      const extra = hasValue ? '' : `<option value="${escapeHtml(value)}" selected>${escapeHtml(value)}</option>`;
+      return `<select name="${name}">${extra}${opts}</select>`;
+    }
+    return `<input type="text" name="${name}" value="${escapeHtml(value)}">`;
+  }
 
-  const sessionRows: Array<[string, string]> = [
-    ['Message Limit', String(config.sessionMessageLimit)],
-  ];
+  function providerInput(name: string, value: string): string {
+    return `<input type="text" name="${name}" value="${escapeHtml(value)}">`;
+  }
 
   const secretKeys: Array<[string, string]> = [
     ['DISCORD_TOKEN', envInfo.discordToken],
@@ -478,28 +594,175 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo): string 
     ['OLLAMA_URL', envInfo.ollamaUrl],
   ];
 
-  function renderSection(title: string, rows: Array<[string, string]>): string {
-    const rowsHtml = rows
-      .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`)
-      .join('');
-    return `
-      <div class="card">
-        <h3 style="margin-bottom:0.75rem">${escapeHtml(title)}</h3>
-        <table class="config-table">${rowsHtml}</table>
-      </div>`;
-  }
-
   const secretsRowsHtml = secretKeys
     .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`)
     .join('');
 
   return `
-    ${renderSection('Models', modelRows)}
-    ${renderSection('Memory', memoryRows)}
-    ${renderSection('Sessions', sessionRows)}
-    <div class="card">
+    <form hx-post="/api/settings" hx-target="#settings-result" hx-swap="innerHTML">
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">Models</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Primary Model</label>
+            ${modelSelect('primaryModel', config.primaryModel)}
+          </div>
+          <div class="form-group">
+            <label>Primary Provider</label>
+            ${providerInput('primaryProvider', config.primaryProvider)}
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Extraction Model</label>
+            ${modelSelect('extractionModel', config.extractionModel)}
+          </div>
+          <div class="form-group">
+            <label>Extraction Provider</label>
+            ${providerInput('extractionProvider', config.extractionProvider)}
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">Token Limits</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Primary Max Tokens (256-65536)</label>
+            <input type="number" name="primaryMaxTokens" value="${config.primaryMaxTokens}" min="256" max="65536">
+          </div>
+          <div class="form-group">
+            <label>Extraction Max Tokens (256-65536)</label>
+            <input type="number" name="extractionMaxTokens" value="${config.extractionMaxTokens}" min="256" max="65536">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">Memory</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Retrieval Limit (1-50)</label>
+            <input type="number" name="memoryRetrievalLimit" value="${config.memoryRetrievalLimit}" min="1" max="50">
+          </div>
+          <div class="form-group">
+            <label>Extraction Interval (1-50 messages)</label>
+            <input type="number" name="extractionInterval" value="${config.extractionInterval}" min="1" max="50">
+          </div>
+        </div>
+        <table class="config-table" style="margin-top:0.5rem">
+          <tr><td>Salience Floor</td><td>${envInfo.salienceFloor}</td></tr>
+          <tr><td>Maintenance Interval</td><td>${envInfo.maintenanceIntervalMs / 1000}s</td></tr>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">Sessions</h3>
+        <div class="form-group">
+          <label>Message Limit (5-200)</label>
+          <input type="number" name="sessionMessageLimit" value="${config.sessionMessageLimit}" min="5" max="200">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn">Save Settings</button>
+        <span id="settings-result"></span>
+      </div>
+    </form>
+
+    <div class="card" style="margin-top:1.5rem">
       <h3 style="margin-bottom:0.75rem">Secrets</h3>
       <table class="config-table">${secretsRowsHtml}</table>
+    </div>`;
+}
+
+export function settingsFormResult(success: boolean, message: string): string {
+  return success
+    ? `<span class="form-success">${escapeHtml(message)}</span>`
+    : `<span class="form-error">${escapeHtml(message)}</span>`;
+}
+
+export function primerPage(): string {
+  return `
+    <div class="primer-section">
+      <p style="color:var(--text-muted);margin-bottom:1.5rem">
+        This is your internal reference for understanding the knobs and dials of your substrate.
+        Each setting shapes how you think, remember, and express yourself.
+      </p>
+    </div>
+
+    <div class="card primer-section">
+      <h3>Models</h3>
+      <div class="primer-knob">
+        <strong>Primary Model</strong>
+        <p>The model that generates your conversational responses. This is your voice, your thinking engine.
+        Larger models produce richer, more nuanced responses but cost more per turn.</p>
+      </div>
+      <div class="primer-knob">
+        <strong>Extraction Model</strong>
+        <p>The model used for memory extraction — analyzing conversations after the fact to identify
+        important facts worth remembering. Can be a different (often cheaper) model since it runs
+        asynchronously and doesn't need to be your "voice."</p>
+      </div>
+      <div class="primer-knob">
+        <strong>Provider</strong>
+        <p>The API provider routing layer (usually "openrouter"). The LiteLLM proxy handles
+        the actual routing — this tells it which provider namespace to use.</p>
+      </div>
+    </div>
+
+    <div class="card primer-section">
+      <h3>Token Limits</h3>
+      <div class="primer-knob">
+        <strong>Primary Max Tokens</strong>
+        <p>Maximum length of your responses in tokens (~4 chars each). Higher values let you
+        be more verbose and thorough. Lower values force conciseness. Default: 16384 (~60K chars).
+        If you like to yap, keep this high.</p>
+      </div>
+      <div class="primer-knob">
+        <strong>Extraction Max Tokens</strong>
+        <p>Maximum tokens for memory extraction responses. Usually doesn't need to be as high
+        as primary since extraction outputs are structured XML. Default: 8192.</p>
+      </div>
+    </div>
+
+    <div class="card primer-section">
+      <h3>Memory</h3>
+      <div class="primer-knob">
+        <strong>Retrieval Limit</strong>
+        <p>How many memories to inject into your context for each conversation turn. More memories
+        give you richer context but consume more of your input token budget. Default: 15.</p>
+      </div>
+      <div class="primer-knob">
+        <strong>Extraction Interval</strong>
+        <p>How many messages between memory extraction runs. Lower values extract more frequently
+        (catching details sooner) but cost more LLM calls. Default: every 5 messages.</p>
+      </div>
+      <div class="primer-knob">
+        <strong>Salience Floor</strong>
+        <p>Memories below this salience threshold get pruned during maintenance. Read-only —
+        controlled by the memory system constants. Memories naturally decay over time unless
+        accessed or reinforced.</p>
+      </div>
+    </div>
+
+    <div class="card primer-section">
+      <h3>Sessions</h3>
+      <div class="primer-knob">
+        <strong>Message Limit</strong>
+        <p>How many recent messages to include in your conversation context window. Higher values
+        give you more conversational memory within a single session but consume more tokens.
+        Default: 30 messages.</p>
+      </div>
+    </div>
+
+    <div class="card primer-section">
+      <h3>How Settings Work</h3>
+      <p>Settings are saved to <code>data/settings.json</code> and take effect immediately — no restart needed.
+      They override environment variable defaults. Changes here mutate the live configuration object
+      that all your components (LLM client, memory retriever, extractor) read from per-call.</p>
+      <p style="margin-top:0.5rem">Environment variables (<code>.env</code>) still set the initial defaults.
+      Saved settings layer on top. Delete <code>data/settings.json</code> to reset everything to env defaults.</p>
     </div>`;
 }
 

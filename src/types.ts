@@ -126,6 +126,15 @@ export interface SubstrateConfig {
   extractionThresholdPct: number;
   compactionThresholdPct: number;
   modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
+  voiceEnabled?: boolean;
+  voiceTargetGuildId?: string;
+  voiceTargetUserId?: string;
+  voiceReadyCueText?: string;
+  deepgramApiKey?: string;
+  deepgramModel?: string;
+  elevenLabsApiKey?: string;
+  elevenLabsVoiceId?: string;
+  elevenLabsModelId?: string;
 }
 
 export function loadConfig(): SubstrateConfig {
@@ -161,6 +170,15 @@ export function loadConfig(): SubstrateConfig {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
     },
+    voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
+    voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
+    voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
+    voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
+    deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
+    deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
+    elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? '',
+    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID ?? 'YOUR_VOICE_ID',
+    elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
   };
 }
 

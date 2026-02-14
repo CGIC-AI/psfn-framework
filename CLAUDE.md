@@ -172,7 +172,7 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5)
 - **Embeddings**: Local Ollama at your-ollama-host:11434 (snowflake-arctic-embed2, 1024d)
 - **PSFN still runs on OpenClaw/BotMaker** at `/workspace/botmaker` until substrate is live-tested
-- **Not yet built**: module system, voice, capability tokens
+- **Not yet built**: module system, capability tokens
 
 ## Guidelines
 

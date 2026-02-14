@@ -9,6 +9,7 @@ import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
 import type { MessageHandler, ChannelAdapter } from '../types.js';
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
+import { DiscordVoiceRuntime } from './voice.js';
 
 const log = createComponentLogger('Discord');
 
@@ -23,6 +24,7 @@ export class DiscordAdapter implements ChannelAdapter {
   private eventBus: EventBus;
   private handler: MessageHandler | null = null;
   private processing = new Set<string>();
+  private voice: DiscordVoiceRuntime;
 
   constructor(config: SubstrateConfig, eventBus: EventBus) {
     this.config = config;
@@ -33,7 +35,15 @@ export class DiscordAdapter implements ChannelAdapter {
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildVoiceStates,
       ],
+    });
+
+    this.voice = new DiscordVoiceRuntime({
+      client: this.client,
+      config,
+      eventBus,
+      getHandler: () => this.handler,
     });
   }
 
@@ -51,6 +61,8 @@ export class DiscordAdapter implements ChannelAdapter {
     this.client.once(Events.ClientReady, (c) => {
       log.info(`Logged in as ${c.user.tag}`);
     });
+
+    this.voice.init();
   }
 
   async start(): Promise<void> {
@@ -61,6 +73,7 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
+    await this.voice.stop();
     this.client.destroy();
   }
 

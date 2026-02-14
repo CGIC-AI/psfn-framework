@@ -13,7 +13,9 @@ import type { EmbeddingService } from '../../agent-loop.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { DashboardStats, EnvInfo } from './types.js';
+import type { ModelDiscovery } from '../../llm/discovery.js';
 import { MEMORY_CONFIG } from '../../memory/types.js';
+import { loadSettings, saveSettings, applySettings, parseSettingsForm } from '../../settings.js';
 import * as tpl from './templates.js';
 
 export class AdminHandlers {
@@ -26,6 +28,7 @@ export class AdminHandlers {
   private embeddingService: EmbeddingService | null;
   private characterCard: CharacterCardV2;
   private config: SubstrateConfig;
+  private modelDiscovery: ModelDiscovery | null;
 
   constructor(deps: {
     memoryStore: MemoryStore;
@@ -37,6 +40,7 @@ export class AdminHandlers {
     embeddingService: EmbeddingService | null;
     characterCard: CharacterCardV2;
     config: SubstrateConfig;
+    modelDiscovery?: ModelDiscovery | null;
   }) {
     this.memoryStore = deps.memoryStore;
     this.sessionStore = deps.sessionStore;
@@ -47,6 +51,13 @@ export class AdminHandlers {
     this.embeddingService = deps.embeddingService;
     this.characterCard = deps.characterCard;
     this.config = deps.config;
+    this.modelDiscovery = deps.modelDiscovery ?? null;
+  }
+
+  // ── Login ──
+
+  loginPage(error?: string): string {
+    return tpl.loginPage(error);
   }
 
   // ── Dashboard ──
@@ -142,8 +153,8 @@ export class AdminHandlers {
 
   // ── Settings ──
 
-  settingsPage(): string {
-    const envInfo: EnvInfo = {
+  private getEnvInfo(): EnvInfo {
+    return {
       salienceFloor: MEMORY_CONFIG.salienceFloor,
       maintenanceIntervalMs: MEMORY_CONFIG.maintenanceIntervalMs,
       discordToken: process.env.DISCORD_TOKEN ? 'configured' : 'not set',
@@ -154,7 +165,48 @@ export class AdminHandlers {
       litellmApiKey: process.env.LITELLM_API_KEY ? 'configured' : 'not set',
       ollamaUrl: process.env.OLLAMA_URL ? 'configured' : 'not set',
     };
-    return tpl.layout('Settings', tpl.settingsPage(this.config, envInfo), 'settings');
+  }
+
+  async settingsPage(): Promise<string> {
+    const envInfo = this.getEnvInfo();
+    const models = this.modelDiscovery
+      ? await this.modelDiscovery.getAvailableModels().catch(() => undefined)
+      : undefined;
+    return tpl.layout('Settings', tpl.settingsPage(this.config, envInfo, models), 'settings');
+  }
+
+  updateSettings(body: string): string {
+    const params = new URLSearchParams(body);
+    const [settings, errors] = parseSettingsForm(params);
+
+    if (errors.length > 0) {
+      return tpl.settingsFormResult(false, errors.join('; '));
+    }
+
+    // Load existing saved settings, merge, save, and apply to live config
+    const existing = loadSettings(this.config.dataDir);
+    const merged = { ...existing, ...settings };
+    saveSettings(this.config.dataDir, merged);
+    applySettings(this.config, merged);
+
+    return tpl.settingsFormResult(true, 'Settings saved');
+  }
+
+  primerPage(): string {
+    return tpl.layout('Garden Primer', tpl.primerPage(), 'primer');
+  }
+
+  async modelListJson(): Promise<string> {
+    if (!this.modelDiscovery) return '[]';
+    const models = await this.modelDiscovery.getAvailableModels().catch(() => []);
+    return JSON.stringify(models);
+  }
+
+  async refreshModels(): Promise<string> {
+    if (!this.modelDiscovery) return '[]';
+    this.modelDiscovery.invalidateCache();
+    const models = await this.modelDiscovery.getAvailableModels().catch(() => []);
+    return JSON.stringify(models);
   }
 
   // ── Events (SSE) ──

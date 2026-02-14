@@ -31,8 +31,7 @@ import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
-import { ContactStore } from './contacts/store.js';
-import { createContactSetTrustTool, createContactNoteTool, createContactLookupTool, createContactListTool } from './contacts/tools.js';
+import { wireContactRuntime } from './contacts/runtime-wiring.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -108,9 +107,12 @@ export class SubstrateRuntime implements Lifecycle {
       this.config,
     );
 
-    // Contact store — trust-gated privacy system
-    const contactStore = new ContactStore(this.db, process.env.PRIMARY_USER_ID);
-    this.agentLoop.contactStore = contactStore;
+    // Contact store + tools — trust-gated privacy system
+    const contactStore = wireContactRuntime(
+      this.agentLoop,
+      this.db,
+      process.env.PRIMARY_USER_ID,
+    );
 
     this.agentLoop.memoryProvider = new MemoryRetriever(
       this.memoryStore,
@@ -172,12 +174,6 @@ export class SubstrateRuntime implements Lifecycle {
     const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
     this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
-
-    // Contact tools — trust level management, notes, lookup
-    this.agentLoop.registerTool(createContactSetTrustTool(contactStore));
-    this.agentLoop.registerTool(createContactNoteTool(contactStore));
-    this.agentLoop.registerTool(createContactLookupTool(contactStore));
-    this.agentLoop.registerTool(createContactListTool(contactStore));
 
     // Discord adapter
     this.discord = new DiscordAdapter(this.config, this.eventBus);

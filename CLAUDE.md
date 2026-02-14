@@ -10,7 +10,7 @@ Platform research: `docs/PLATFORM_COMPARISON_ANALYSIS.md`
 
 ## Architecture
 
-Six layers, ~7000 LoC MVP target:
+Six layers, ~8000 LoC MVP target:
 
 1. **Runtime Core** (~2000 LoC) — bootstrap, agent loop, event bus, shutdown
 2. **REPL Sandbox** (~800 LoC) — RLM-style code execution, sub-LM calls, context-as-object
@@ -71,10 +71,12 @@ src/
     server.ts            # Gateway server + policy engine + approval CLI
     client.ts            # Agent-side typed RPC client (implements LLMProvider + EmbeddingService)
     sanitize.ts          # Three-layer web content sanitization
+    url-policy.ts        # SSRF defense (private IP blocking, DNS rebinding, redirects)
   identity/              # Character card, soul document, growth journal
   memory/                # L0 archive, L2 extraction/retrieval/decay, SQLite store
   shards/                # Self-spawning assistant shards (parallel sub-agents)
   session/               # JSONL tree sessions, compaction, per-channel isolation
+  scheduler/             # Cron, heartbeat, one-shot tasks, maintenance workers
   channels/
     admin/               # Web management GUI (htmx, garden theme)
     api/                 # OpenAI-compatible REST API
@@ -145,18 +147,26 @@ Key interfaces (`src/agent-loop.ts`):
 Policy decisions: `ALLOW` (workspace paths, LLM, Discord), `NEEDS_APPROVAL` (outside workspace), `DENY`.
 Content sanitization: structural (strip HTML) → pattern (injection delimiters) → tagging (`<untrusted_content>`).
 
+Additional hardening:
+- **SSRF defenses**: `url-policy.ts` blocks private/reserved IPs, link-local, DNS rebinding via post-resolution checks, and limits redirect following
+- **Symlink traversal prevention**: `realpathSync` validation on all filesystem operations to prevent escaping workspace
+- **Per-request streaming IDs**: Each LLM stream gets a unique request ID to prevent chunk cross-talk between concurrent requests
+- **Channel ID sanitization**: `%XX` encoding of path-unsafe characters prevents directory traversal via crafted channel names
+- **Body size limits**: Request body parsing enforces size limits on API/admin endpoints
+- **Default localhost binding**: API and admin servers bind to `127.0.0.1` by default (not `0.0.0.0`)
+
 Single-process mode (`npm run dev`) is preserved — uses concrete classes directly, no socket.
 
 ## Current State
 
-- **Sprints 1-4 complete** + scheduler, API, admin GUI: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI**
-- **~7,600 LoC** production code across 51 files, **289 tests** all passing (19 test files)
+- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**
+- **~7,900 LoC** production code across 54 files, **290 tests** all passing (19 test files)
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5)
 - **Embeddings**: Local Ollama at your-ollama-host:11434 (snowflake-arctic-embed2, 1024d)
 - **Purrsephone still runs on OpenClaw/BotMaker** at `/mnt/samesung/ai/botmaker` until substrate is live-tested
-- **Not yet built**: module system, session compaction, voice
+- **Not yet built**: module system, session compaction, voice, capability tokens
 
 ## Guidelines
 

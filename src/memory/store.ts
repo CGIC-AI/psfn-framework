@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type { PurrMemory, MemoryType } from './types.js';
+import type { PurrMemory, MemoryType, SensitivityLevel, ConsentFlags } from './types.js';
 
 export class MemoryStore {
   private db: Database.Database;
@@ -11,6 +11,7 @@ export class MemoryStore {
     this.embeddingDims = embeddingDims;
     this.loadExtensions();
     this.createTables();
+    this.migrateSchema();
   }
 
   private loadExtensions(): void {
@@ -44,13 +45,26 @@ export class MemoryStore {
     `);
   }
 
+  private migrateSchema(): void {
+    // Add sensitivity column (default 'personal' — safe default for existing data)
+    try {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'personal'`);
+    } catch { /* column already exists */ }
+
+    // Add consent_flags column (default '{}' — no restrictions)
+    try {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN consent_flags TEXT NOT NULL DEFAULT '{}'`);
+    } catch { /* column already exists */ }
+  }
+
   // ── L2 Memories ──
 
   insertMemory(memory: PurrMemory, embedding: Float32Array): void {
     const insertMem = this.db.prepare(`
       INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence,
-        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
+        sensitivity, consent_flags)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = this.db.prepare(`
@@ -73,6 +87,8 @@ export class MemoryStore {
         memory.accessCount,
         memory.supersededBy ?? null,
         JSON.stringify(memory.tags),
+        memory.sensitivity ?? 'personal',
+        JSON.stringify(memory.consentFlags ?? {}),
       );
       insertVec.run(memory.id, Buffer.from(embedding.buffer));
     });
@@ -111,6 +127,8 @@ export class MemoryStore {
       access_count: number;
       superseded_by: string | null;
       tags: string;
+      sensitivity: string | null;
+      consent_flags: string | null;
       distance: number;
     }>;
 
@@ -132,6 +150,8 @@ export class MemoryStore {
           accessCount: row.access_count,
           supersededBy: row.superseded_by ?? undefined,
           tags: JSON.parse(row.tags) as string[],
+          sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
+          consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
           similarity,
         };
       })
@@ -139,7 +159,7 @@ export class MemoryStore {
       .slice(0, limit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy'>>): void {
+  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -158,6 +178,10 @@ export class MemoryStore {
     if (updates.supersededBy !== undefined) {
       setClauses.push('superseded_by = ?');
       values.push(updates.supersededBy);
+    }
+    if (updates.sensitivity !== undefined) {
+      setClauses.push('sensitivity = ?');
+      values.push(updates.sensitivity);
     }
 
     if (setClauses.length === 0) return;
@@ -187,6 +211,8 @@ export class MemoryStore {
       access_count: number;
       superseded_by: string | null;
       tags: string;
+      sensitivity: string | null;
+      consent_flags: string | null;
     }>;
 
     return rows.map(row => ({
@@ -203,6 +229,8 @@ export class MemoryStore {
       accessCount: row.access_count,
       supersededBy: row.superseded_by ?? undefined,
       tags: JSON.parse(row.tags) as string[],
+      sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
+      consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
     }));
   }
 
@@ -222,6 +250,8 @@ export class MemoryStore {
       access_count: number;
       superseded_by: string | null;
       tags: string;
+      sensitivity: string | null;
+      consent_flags: string | null;
     } | undefined;
     if (!row) return undefined;
     return {
@@ -238,6 +268,8 @@ export class MemoryStore {
       accessCount: row.access_count,
       supersededBy: row.superseded_by ?? undefined,
       tags: JSON.parse(row.tags) as string[],
+      sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
+      consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
     };
   }
 
@@ -279,6 +311,8 @@ export class MemoryStore {
       access_count: number;
       superseded_by: string | null;
       tags: string;
+      sensitivity: string | null;
+      consent_flags: string | null;
     }>;
 
     return rows.map(row => ({
@@ -295,6 +329,8 @@ export class MemoryStore {
       accessCount: row.access_count,
       supersededBy: row.superseded_by ?? undefined,
       tags: JSON.parse(row.tags) as string[],
+      sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
+      consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
     }));
   }
 }

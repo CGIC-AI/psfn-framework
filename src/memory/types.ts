@@ -1,3 +1,8 @@
+import type { SensitivityLevel, ConsentFlags } from '../trust/types.js';
+// Re-export for convenience
+export type { SensitivityLevel, ConsentFlags };
+export { VALID_SENSITIVITY_LEVELS } from '../trust/types.js';
+
 export type MemoryType = 'episodic' | 'semantic' | 'emotional' | 'procedural' | 'reflection';
 
 export const VALID_MEMORY_TYPES: MemoryType[] = [
@@ -19,6 +24,8 @@ export interface PurrMemory {
   accessCount: number;
   supersededBy?: string;
   tags: string[];
+  sensitivity: SensitivityLevel;    // default 'personal'
+  consentFlags?: ConsentFlags;      // default {}
 }
 
 export interface ExtractedFact {
@@ -28,6 +35,8 @@ export interface ExtractedFact {
   emotionalValence: number;
   confidence: number;
   tags: string[];
+  sensitivity?: SensitivityLevel;
+  consentFlags?: ConsentFlags;
 }
 
 // Decay half-lives in milliseconds
@@ -40,12 +49,14 @@ export const DECAY_HALFLIFE: Record<MemoryType, number> = {
 };
 
 // Embedding similarity thresholds for dedup per type
-export const DEDUP_THRESHOLD: Record<MemoryType, number> = {
+// Note: 'relational' threshold included for future-proofing (PSFN-hdy)
+export const DEDUP_THRESHOLD: Record<MemoryType | 'relational', number> = {
   episodic:   0.92,
   semantic:   0.90,
   emotional:  0.88,
   procedural: 0.97,
   reflection: 0.85,
+  relational: 0.90,
 };
 
 export const MEMORY_CONFIG = {

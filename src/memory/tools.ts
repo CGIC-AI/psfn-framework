@@ -3,8 +3,8 @@
 
 import type { SubstrateTool } from '../types.js';
 import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
-import type { MemoryType } from './types.js';
-import { VALID_MEMORY_TYPES } from './types.js';
+import type { MemoryType, SensitivityLevel } from './types.js';
+import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
 
 function clamp(val: number, min: number, max: number): number {
   if (isNaN(val)) return (min + max) / 2;
@@ -45,6 +45,11 @@ export function createMemoryWriteTool(writer: MemoryWriter): SubstrateTool {
           type: 'string',
           description: 'Comma-separated tags (e.g. "identity, preference")',
         },
+        sensitivity: {
+          type: 'string',
+          enum: VALID_SENSITIVITY_LEVELS,
+          description: 'Privacy level: public (share anywhere), personal (trusted only), intimate (primary only), confidential (1:1 only). Default: personal.',
+        },
       },
       required: ['text', 'type'],
     },
@@ -69,6 +74,8 @@ export function createMemoryWriteTool(writer: MemoryWriter): SubstrateTool {
           ? tagsStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
           : undefined;
 
+        const sensitivity = input.sensitivity as SensitivityLevel | undefined;
+
         const result = await writer.write({
           text: text.trim(),
           type,
@@ -77,6 +84,7 @@ export function createMemoryWriteTool(writer: MemoryWriter): SubstrateTool {
           confidence,
           tags,
           sourceRef: 'tool:memory_write',
+          sensitivity,
         });
 
         switch (result.action) {
@@ -116,6 +124,7 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateTool {
               emotional_valence: { type: 'number' },
               confidence: { type: 'number' },
               tags: { type: 'string' },
+              sensitivity: { type: 'string', enum: VALID_SENSITIVITY_LEVELS },
             },
             required: ['text', 'type'],
           },
@@ -151,6 +160,7 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateTool {
           }
 
           const tagsStr = r.tags as string | undefined;
+          const sensitivity = r.sensitivity as SensitivityLevel | undefined;
           records.push({
             text: text.trim(),
             type,
@@ -159,6 +169,7 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateTool {
             confidence: r.confidence !== undefined ? clamp(Number(r.confidence), 0, 1) : undefined,
             tags: tagsStr ? tagsStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
             sourceRef: `tool:memory_import:${source}`,
+            sensitivity,
           });
         }
 

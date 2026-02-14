@@ -34,6 +34,7 @@ function makeMemory(id: string, text: string, overrides: Partial<PurrMemory> = {
     lastAccessed: Date.now(),
     accessCount: 1,
     tags: ['test'],
+    sensitivity: 'personal',
     ...overrides,
   };
 }
@@ -97,6 +98,115 @@ describe('MemoryStore', () => {
 
       const results = store.searchByEmbedding(emb, 0.5, 10);
       expect(results).toHaveLength(0);
+    });
+
+    it('stores and retrieves sensitivity field', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Intimate fact', { sensitivity: 'intimate' }),
+        emb,
+      );
+
+      const mem = store.getById('m1');
+      expect(mem).toBeDefined();
+      expect(mem!.sensitivity).toBe('intimate');
+    });
+
+    it('stores and retrieves consentFlags', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Consent test', {
+          consentFlags: { allowRecall: false, deleteOnRequest: true },
+        }),
+        emb,
+      );
+
+      const mem = store.getById('m1');
+      expect(mem).toBeDefined();
+      expect(mem!.consentFlags).toEqual({ allowRecall: false, deleteOnRequest: true });
+    });
+
+    it('defaults sensitivity to personal for records without it', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(makeMemory('m1', 'Default sensitivity'), emb);
+
+      const mem = store.getById('m1');
+      expect(mem).toBeDefined();
+      expect(mem!.sensitivity).toBe('personal');
+    });
+
+    it('defaults consentFlags to empty object for records without it', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(makeMemory('m1', 'Default consent'), emb);
+
+      const mem = store.getById('m1');
+      expect(mem).toBeDefined();
+      expect(mem!.consentFlags).toEqual({});
+    });
+
+    it('searchByEmbedding returns sensitivity in results', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Confidential fact', { sensitivity: 'confidential' }),
+        emb,
+      );
+
+      const results = store.searchByEmbedding(emb, 0.5, 10);
+      expect(results).toHaveLength(1);
+      expect(results[0].sensitivity).toBe('confidential');
+    });
+
+    it('getAllActiveMemories returns sensitivity', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Public fact', { sensitivity: 'public' }),
+        emb,
+      );
+
+      const active = store.getAllActiveMemories();
+      expect(active).toHaveLength(1);
+      expect(active[0].sensitivity).toBe('public');
+    });
+
+    it('getMemoriesByChannel returns sensitivity', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Channel fact', {
+          sourceRef: 'chan1:1000',
+          sensitivity: 'intimate',
+        }),
+        emb,
+      );
+
+      const results = store.getMemoriesByChannel('chan1', 10);
+      expect(results).toHaveLength(1);
+      expect(results[0].sensitivity).toBe('intimate');
+    });
+
+    it('updateMemory can update sensitivity', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Changeable sensitivity', { sensitivity: 'personal' }),
+        emb,
+      );
+
+      store.updateMemory('m1', { sensitivity: 'confidential' });
+
+      const mem = store.getById('m1');
+      expect(mem!.sensitivity).toBe('confidential');
+    });
+
+    it('migration is idempotent (runs twice without error)', () => {
+      // The constructor already ran migrateSchema once. Running it again
+      // via a second MemoryStore on the same db should not throw.
+      const store2 = new MemoryStore(db);
+      const emb = makeEmbedding(1);
+      store2.insertMemory(
+        makeMemory('m2', 'After double migration', { sensitivity: 'public' }),
+        emb,
+      );
+      const mem = store2.getById('m2');
+      expect(mem!.sensitivity).toBe('public');
     });
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMemoryWriteTool, createMemoryImportTool } from './tools.js';
 import type { MemoryWriter, WriteResult, BatchImportResult } from './writer.js';
 import type { PurrMemory } from './types.js';
-import { VALID_MEMORY_TYPES } from './types.js';
+import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
 
 // ── Mock MemoryWriter ──
 
@@ -20,6 +20,7 @@ function makeMemory(overrides: Partial<PurrMemory> = {}): PurrMemory {
     lastAccessed: Date.now(),
     accessCount: 1,
     tags: [],
+    sensitivity: 'personal',
     ...overrides,
   };
 }
@@ -272,6 +273,36 @@ describe('createMemoryWriteTool', () => {
     expect(callArgs.confidence).toBeUndefined();
     expect(callArgs.tags).toBeUndefined();
   });
+
+  it('includes sensitivity in schema with valid enum values', () => {
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
+    const props = tool.inputSchema.properties as Record<string, any>;
+    expect(props.sensitivity).toBeDefined();
+    expect(props.sensitivity.enum).toEqual(VALID_SENSITIVITY_LEVELS);
+  });
+
+  it('passes sensitivity through to writer.write()', async () => {
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
+
+    await tool.execute({
+      text: 'Confidential detail',
+      type: 'semantic',
+      sensitivity: 'confidential',
+    });
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      sensitivity: 'confidential',
+    }));
+  });
+
+  it('omits sensitivity when not provided', async () => {
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
+
+    await tool.execute({ text: 'No sensitivity', type: 'semantic' });
+
+    const callArgs = writer.write.mock.calls[0][0];
+    expect(callArgs.sensitivity).toBeUndefined();
+  });
 });
 
 describe('createMemoryImportTool', () => {
@@ -461,5 +492,41 @@ describe('createMemoryImportTool', () => {
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
     expect(importedRecords[0].text).toBe('spaces around');
+  });
+
+  it('includes sensitivity in record schema', () => {
+    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
+    const props = tool.inputSchema.properties as Record<string, any>;
+    const recordProps = props.records.items.properties;
+    expect(recordProps.sensitivity).toBeDefined();
+    expect(recordProps.sensitivity.enum).toEqual(VALID_SENSITIVITY_LEVELS);
+  });
+
+  it('passes sensitivity through for imported records', async () => {
+    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    await tool.execute({
+      records: [
+        { text: 'Public fact', type: 'semantic', sensitivity: 'public' },
+        { text: 'Intimate fact', type: 'emotional', sensitivity: 'intimate' },
+      ],
+    });
+
+    const importedRecords = writer.importBatch.mock.calls[0][0];
+    expect(importedRecords[0].sensitivity).toBe('public');
+    expect(importedRecords[1].sensitivity).toBe('intimate');
+  });
+
+  it('omits sensitivity when not provided in imported records', async () => {
+    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    await tool.execute({
+      records: [
+        { text: 'No sensitivity', type: 'semantic' },
+      ],
+    });
+
+    const importedRecords = writer.importBatch.mock.calls[0][0];
+    expect(importedRecords[0].sensitivity).toBeUndefined();
   });
 });

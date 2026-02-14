@@ -59,6 +59,7 @@ function makeExistingMemory(overrides: Partial<PurrMemory & { similarity: number
     lastAccessed: Date.now() - 50_000,
     accessCount: 3,
     tags: ['old'],
+    sensitivity: 'personal',
     similarity: 0.95,
     ...overrides,
   };
@@ -263,6 +264,44 @@ describe('MemoryWriter', () => {
       expect(result.memory.extractedAt).toBeGreaterThanOrEqual(before);
       expect(result.memory.extractedAt).toBeLessThanOrEqual(after);
       expect(result.memory.lastAccessed).toBe(result.memory.extractedAt);
+    });
+
+    it('passes through sensitivity when specified', async () => {
+      const result = await writer.write({
+        text: 'Intimate secret',
+        type: 'emotional',
+        sensitivity: 'intimate',
+      });
+
+      expect(result.memory.sensitivity).toBe('intimate');
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.sensitivity).toBe('intimate');
+    });
+
+    it('defaults sensitivity to personal when not specified', async () => {
+      const result = await writer.write({ text: 'Default test', type: 'semantic' });
+
+      expect(result.memory.sensitivity).toBe('personal');
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.sensitivity).toBe('personal');
+    });
+
+    it('passes through consentFlags when specified', async () => {
+      const result = await writer.write({
+        text: 'Consent test',
+        type: 'semantic',
+        consentFlags: { allowRecall: false, deleteOnRequest: true },
+      });
+
+      expect(result.memory.consentFlags).toEqual({ allowRecall: false, deleteOnRequest: true });
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.consentFlags).toEqual({ allowRecall: false, deleteOnRequest: true });
+    });
+
+    it('leaves consentFlags undefined when not specified', async () => {
+      const result = await writer.write({ text: 'No consent', type: 'semantic' });
+
+      expect(result.memory.consentFlags).toBeUndefined();
     });
   });
 

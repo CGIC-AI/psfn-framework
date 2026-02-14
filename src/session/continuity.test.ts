@@ -321,6 +321,35 @@ describe('UserContinuityStore', () => {
       const entries = store.getRecent('user1', 10);
       expect(entries[0].channelVisibility).toBe('private');
     });
+
+    it('Discord DM messages get private visibility when pre-stamped by SessionManager', () => {
+      // Simulates what SessionManager does: classifyChannel('1234567890', { isDirectMessage: true }) → 'private'
+      store.append('user1', {
+        channelId: '1234567890',
+        role: 'user',
+        content: 'DM message',
+        timestamp: 1000,
+        originChannelId: '1234567890',
+        channelVisibility: 'private',  // Pre-stamped by SessionManager using classifyChannel with DM metadata
+      });
+
+      const entries = store.getRecent('user1', 10);
+      expect(entries[0].channelVisibility).toBe('private');
+    });
+
+    it('Discord guild messages get semi_private visibility (no DM flag)', () => {
+      // Without pre-stamped visibility, fallback classifyChannel('1234567890') → 'semi_private'
+      store.append('user1', {
+        channelId: '1234567890',
+        role: 'user',
+        content: 'Guild message',
+        timestamp: 1000,
+        originChannelId: '1234567890',
+      });
+
+      const entries = store.getRecent('user1', 10);
+      expect(entries[0].channelVisibility).toBe('semi_private');
+    });
   });
 });
 
@@ -449,6 +478,41 @@ describe('SessionManager with continuity', () => {
     // Build context for api:ch1 — continuity should NOT include api:ch1 messages
     const ctx = await mgr.buildContext('api:ch1', 'System prompt', '', undefined, 'user1');
     expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+  });
+
+  it('records Discord DM messages as private visibility via isDirectMessage flag', () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    // Simulate Discord DM: numeric channelId + isDirectMessage=true
+    mgr.recordUserMessage('1234567890', 'Hello from DM', 'user1', 'Alice', true);
+
+    const continuity = continuityStore.getRecent('user1', 10);
+    expect(continuity).toHaveLength(1);
+    expect(continuity[0].channelVisibility).toBe('private');
+  });
+
+  it('records Discord guild messages as semi_private visibility', () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    // Simulate Discord guild: numeric channelId + isDirectMessage=false
+    mgr.recordUserMessage('1234567890', 'Hello from guild', 'user1', 'Alice', false);
+
+    const continuity = continuityStore.getRecent('user1', 10);
+    expect(continuity).toHaveLength(1);
+    expect(continuity[0].channelVisibility).toBe('semi_private');
+  });
+
+  it('records assistant DM response as private visibility', () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    mgr.recordAssistantMessage('1234567890', 'DM reply', 'user1', true);
+
+    const continuity = continuityStore.getRecent('user1', 10);
+    expect(continuity).toHaveLength(1);
+    expect(continuity[0].channelVisibility).toBe('private');
   });
 
   it('includes channel origin labels in continuity block', async () => {

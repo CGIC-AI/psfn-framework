@@ -31,6 +31,8 @@ import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
 import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
+import { ContactStore } from './contacts/store.js';
+import { createContactSetTrustTool, createContactNoteTool, createContactLookupTool, createContactListTool } from './contacts/tools.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -91,6 +93,10 @@ async function main(): Promise<void> {
     config,
   );
 
+  // Contact store — trust-gated privacy system
+  const contactStore = new ContactStore(db, process.env.PRIMARY_USER_ID);
+  agentLoop.contactStore = contactStore;
+
   // Wire memory system (uses gateway for embeddings + LLM extraction)
   agentLoop.memoryProvider = new MemoryRetriever(memoryStore, gateway, config);
   agentLoop.memoryExtractor = new MemoryExtractor(
@@ -147,6 +153,12 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
   agentLoop.registerTool(createMemoryImportTool(memoryWriter));
 
+  // Contact tools — trust level management, notes, lookup
+  agentLoop.registerTool(createContactSetTrustTool(contactStore));
+  agentLoop.registerTool(createContactNoteTool(contactStore));
+  agentLoop.registerTool(createContactLookupTool(contactStore));
+  agentLoop.registerTool(createContactListTool(contactStore));
+
   // ── API server (optional) ──
 
   let apiServer: ApiServer | undefined;
@@ -191,6 +203,7 @@ async function main(): Promise<void> {
       config,
       embeddingService: gateway,
       modelDiscovery,
+      contactStore,
     });
     await adminServer.init();
     await adminServer.start();

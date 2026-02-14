@@ -84,6 +84,7 @@ export class AgentLoop {
       message.content,
       message.authorId,
       message.authorName,
+      message.isDirectMessage,
     );
 
     try {
@@ -114,7 +115,7 @@ export class AgentLoop {
       let response = await this.streamWithToolLoop(context, message.channelId);
 
       // Record assistant message (JSONL append = L0 archival)
-      this.sessionManager.recordAssistantMessage(message.channelId, response.content, message.authorId);
+      this.sessionManager.recordAssistantMessage(message.channelId, response.content, message.authorId, message.isDirectMessage);
 
       const agentResponse: AgentResponse = {
         content: response.content,

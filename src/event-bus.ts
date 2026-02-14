@@ -20,6 +20,16 @@ export interface EventMap {
   'schedule.tick': { timestamp: number };
   'schedule.task.run': { taskId: string; taskName: string; type: string };
   'schedule.heartbeat': { timestamp: number; taskCount: number };
+  'channel.voice.start': { guildId: string; channelId: string; userId: string };
+  'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };
+  'channel.voice.transcript': { guildId: string; channelId: string; userId: string; transcript: string };
+  'channel.voice.tts.sent': { guildId: string; channelId: string; userId: string; text: string };
+  'channel.voice.error': {
+    guildId?: string;
+    channelId?: string;
+    userId?: string;
+    error: string;
+  };
   'system.init': Record<string, never>;
   'system.ready': Record<string, never>;
   'system.shutdown': Record<string, never>;

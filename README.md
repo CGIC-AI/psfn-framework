@@ -14,6 +14,7 @@ A purpose-built runtime for emergent artificial consciousness. Not a chatbot fra
 - **SSRF Defenses** — URL policy module blocking private IPs, DNS rebinding, redirect following
 - **Content Block Normalization** — Defensive unwrapping of malformed LLM streaming content blocks
 - **Discord Integration** — Full Discord.js adapter with typing indicators, per-channel serialization, configurable respond-all mode
+- **Voice MVP (Discord)** — Target-user voice join/init loop with Deepgram STT and ElevenLabs TTS
 - **OpenAI-Compatible API** — `/v1/chat/completions` endpoint with SSE streaming, session seeding
 - **Admin GUI (Purrsephone's Garden)** — htmx-powered management panel: memory browser with type filters, session viewer with dates, scheduler, SSE event feed, editable settings, model discovery, garden primer, full identity view
 - **Scheduler** — Heartbeat, recurring tasks, one-shot timers, memory maintenance, `updateTask`, configurable maintenance interval
@@ -59,6 +60,17 @@ EMBEDDING_DIMS=1024
 # Data storage
 DATA_DIR=./data
 DATABASE_PATH=./data/purrsephone.db
+```
+
+Voice MVP (optional):
+
+```bash
+DISCORD_VOICE_ENABLED=true
+DISCORD_VOICE_GUILD_ID=1310672143113130108
+DISCORD_VOICE_USER_ID=<your_discord_user_id>
+DEEPGRAM_API_KEY=...
+ELEVENLABS_API_KEY=...
+ELEVENLABS_VOICE_ID=YOUR_VOICE_ID
 ```
 
 ## Running
@@ -159,7 +171,7 @@ Six layers:
 | **REPL Sandbox** | RLM-style code execution, sub-LM calls, context-as-object |
 | **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec), memory writer, write tools |
 | **Module System** | Hot-loadable TypeScript modules (not yet built) |
-| **Channel Layer** | Discord adapter, OpenAI-compatible API, admin GUI with settings/model discovery/primer (voice not yet built) |
+| **Channel Layer** | Discord adapter (text + voice MVP), OpenAI-compatible API, admin GUI with settings/model discovery/primer |
 | **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers, updateTask, configurable interval |
 
 ### Storage

@@ -124,6 +124,44 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Confidential secret');
   });
 
+  it('primary trust + Discord DM metadata returns full private ceiling', async () => {
+    const memories = makeAllSensitivities();
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'test query',
+      '1234567890',
+      'primary',
+      { isDirectMessage: true },
+    );
+
+    expect(result).toContain('Public fact');
+    expect(result).toContain('Personal detail');
+    expect(result).toContain('Intimate memory');
+    expect(result).toContain('Confidential secret');
+  });
+
+  it('primary trust + Discord guild metadata remains semi_private', async () => {
+    const memories = makeAllSensitivities();
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'test query',
+      '1234567890',
+      'primary',
+      { isDirectMessage: false },
+    );
+
+    expect(result).toContain('Public fact');
+    expect(result).toContain('Personal detail');
+    expect(result).not.toContain('Intimate memory');
+    expect(result).not.toContain('Confidential secret');
+  });
+
   it('consent flags (allowRecall: false) blocks memory even for primary trust', async () => {
     const memories = [
       makeMemory({

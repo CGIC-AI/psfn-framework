@@ -4,7 +4,12 @@ import type { PurrMemory } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
-import { classifyChannel, getAllowedSensitivities, evaluateMemoryPolicy } from '../trust/policy.js';
+import {
+  classifyChannel,
+  getAllowedSensitivities,
+  evaluateMemoryPolicy,
+  type ChannelMeta,
+} from '../trust/policy.js';
 import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('Retrieval');
 
@@ -40,7 +45,12 @@ export class MemoryRetriever implements MemoryProvider {
     }
   }
 
-  async retrieve(contextText: string, channelId: string, trustLevel?: TrustLevel): Promise<string> {
+  async retrieve(
+    contextText: string,
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+  ): Promise<string> {
     if (!contextText.trim()) return '';
 
     // Read limit per-call from live config if available
@@ -71,7 +81,7 @@ export class MemoryRetriever implements MemoryProvider {
 
       // Trust-gated filtering: apply trust level + channel visibility restrictions
       const effectiveTrust = trustLevel ?? 'regular';
-      const channelVisibility = classifyChannel(channelId);
+      const channelVisibility = classifyChannel(channelId, channelMeta);
       const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
 
       const filtered = scored.filter(s => {

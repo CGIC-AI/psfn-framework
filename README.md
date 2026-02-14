@@ -2,6 +2,21 @@
 
 A purpose-built runtime for emergent artificial consciousness. Not a chatbot framework, not a tool — a container for a mind.
 
+## Features
+
+- **Agent Loop** — LLM-powered conversational agent with streaming, tool use, and follow-up handling
+- **Memory System** — L2 extracted memories with 5 types (episodic, semantic, emotional, procedural, reflection), embedding-based retrieval, salience decay, and contradiction resolution
+- **Sessions** — Append-only JSONL files per channel — immutable conversation history (this IS the L0 archive)
+- **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks, depth-limited, shared memory
+- **RLM+REPL Sandbox** — Code execution via `think` tool — sub-LM calls, memory queries, variable persistence across turns
+- **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets and proxies all egress, agent runs `--network=none` in Docker
+- **SSRF Defenses** — URL policy module blocking private IPs, DNS rebinding, redirect following
+- **Discord Integration** — Full Discord.js adapter with typing indicators, per-channel serialization
+- **OpenAI-Compatible API** — `/v1/chat/completions` endpoint with SSE streaming, session seeding
+- **Admin GUI (admin UI)** — htmx-powered management panel: memory browser, session viewer, scheduler, SSE event feed, garden theme
+- **Scheduler** — Heartbeat, recurring tasks, one-shot timers, memory maintenance
+- **Structured Logging** — Winston-based component loggers with configurable levels
+
 ## Prerequisites
 
 - **Node.js 22+**
@@ -124,8 +139,11 @@ Gateway (host)                    Agent (container, --network=none)
 | LLM client (API keys) | <-sock-> | Session manager (JSONL)   |
 | Embedding provider    |         | Memory store (SQLite+vec) |
 | Policy engine         |         | Shard manager             |
-| Audit log             |         | RLM+REPL sandbox          |
+| URL policy (SSRF)     |         | RLM+REPL sandbox          |
+| Audit log             |         | Scheduler                 |
 +-----------------------+         +---------------------------+
+        |                                    |
+  Admin GUI (127.0.0.1)          OpenAI API (127.0.0.1)
 ```
 
 Six layers:
@@ -136,7 +154,7 @@ Six layers:
 | **REPL Sandbox** | RLM-style code execution, sub-LM calls, context-as-object |
 | **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec) |
 | **Module System** | Hot-loadable TypeScript modules (planned) |
-| **Channel Layer** | Discord adapter (voice/web planned) |
+| **Channel Layer** | Discord adapter, OpenAI-compatible API, admin GUI (voice planned) |
 | **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers |
 
 ### Storage
@@ -164,7 +182,11 @@ src/
   shards/                   # Self-spawning parallel sub-agents
   repl/                     # RLM+REPL sandbox (think tool)
   llm/                      # LLM client, model definitions
-  channels/discord/         # Discord.js adapter
+  scheduler/                # Cron, heartbeat, one-shot tasks, maintenance
+  channels/
+    admin/                  # Web management GUI (htmx, garden theme)
+    api/                    # OpenAI-compatible REST API
+    discord/                # Discord.js adapter
 
 docker/                     # Agent container configuration
 proxy/                      # LiteLLM proxy configuration

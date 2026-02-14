@@ -14,6 +14,7 @@ function clamp(val: number, min: number, max: number): number {
 }
 
 const VALID_TYPES = ['episodic', 'semantic', 'emotional', 'procedural', 'reflection'] as const;
+const VALID_SENSITIVITIES = ['public', 'personal', 'intimate', 'confidential'] as const;
 
 interface ParsedFact {
   text: string;
@@ -22,6 +23,7 @@ interface ParsedFact {
   emotionalValence: number;
   confidence: number;
   tags: string[];
+  sensitivity: string;
 }
 
 function parseFactsXml(xml: string): ParsedFact[] {
@@ -47,7 +49,12 @@ function parseFactsXml(xml: string): ParsedFact[] {
     const tagsStr = extractTag(block, 'tags') ?? '';
     const tags = tagsStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
 
-    facts.push({ text: text.trim(), type: typeStr, importance, emotionalValence, confidence, tags });
+    const sensitivityStr = extractTag(block, 'sensitivity')?.trim().toLowerCase();
+    const sensitivity = VALID_SENSITIVITIES.includes(sensitivityStr as typeof VALID_SENSITIVITIES[number])
+      ? sensitivityStr!
+      : 'personal';
+
+    facts.push({ text: text.trim(), type: typeStr, importance, emotionalValence, confidence, tags, sensitivity });
   }
 
   return facts;
@@ -149,5 +156,89 @@ describe('parseFactsXml', () => {
 
     const facts = parseFactsXml(xml);
     expect(facts[0].importance).toBe(0.5);
+  });
+
+  it('extracts sensitivity field from fact block', () => {
+    const xml = `<response>
+<fact>
+<text>User shared a secret</text>
+<type>emotional</type>
+<importance>0.9</importance>
+<emotional_valence>-0.3</emotional_valence>
+<confidence>0.85</confidence>
+<tags>personal, trust</tags>
+<sensitivity>confidential</sensitivity>
+</fact>
+</response>`;
+
+    const facts = parseFactsXml(xml);
+    expect(facts).toHaveLength(1);
+    expect(facts[0].sensitivity).toBe('confidential');
+  });
+
+  it('defaults sensitivity to personal when not provided', () => {
+    const xml = `<response>
+<fact>
+<text>User likes coffee</text>
+<type>semantic</type>
+<importance>0.3</importance>
+<emotional_valence>0.1</emotional_valence>
+<confidence>0.9</confidence>
+<tags>preference</tags>
+</fact>
+</response>`;
+
+    const facts = parseFactsXml(xml);
+    expect(facts).toHaveLength(1);
+    expect(facts[0].sensitivity).toBe('personal');
+  });
+
+  it('defaults sensitivity to personal for invalid sensitivity value', () => {
+    const xml = `<response>
+<fact>
+<text>User likes tea</text>
+<type>semantic</type>
+<importance>0.3</importance>
+<emotional_valence>0.1</emotional_valence>
+<confidence>0.9</confidence>
+<tags>preference</tags>
+<sensitivity>super_secret</sensitivity>
+</fact>
+</response>`;
+
+    const facts = parseFactsXml(xml);
+    expect(facts).toHaveLength(1);
+    expect(facts[0].sensitivity).toBe('personal');
+  });
+
+  it('handles all valid sensitivity levels', () => {
+    const levels = ['public', 'personal', 'intimate', 'confidential'];
+    for (const level of levels) {
+      const xml = `<response>
+<fact>
+<text>Test ${level}</text>
+<type>semantic</type>
+<sensitivity>${level}</sensitivity>
+</fact>
+</response>`;
+
+      const facts = parseFactsXml(xml);
+      expect(facts).toHaveLength(1);
+      expect(facts[0].sensitivity).toBe(level);
+    }
+  });
+
+  it('normalizes sensitivity case', () => {
+    const xml = `<response>
+<fact>
+<text>Case test</text>
+<type>semantic</type>
+<sensitivity>INTIMATE</sensitivity>
+</fact>
+</response>`;
+
+    const facts = parseFactsXml(xml);
+    expect(facts).toHaveLength(1);
+    expect(facts[0].sensitivity).toBe('intimate');
   });
 });

@@ -4,7 +4,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from './store.js';
-import type { PurrMemory, MemoryType } from './types.js';
+import type { PurrMemory, MemoryType, SensitivityLevel, ConsentFlags } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG, VALID_MEMORY_TYPES } from './types.js';
 import { createComponentLogger } from '../logger.js';
 
@@ -18,6 +18,8 @@ export interface MemoryWriteOptions {
   confidence?: number;       // default 0.8
   tags?: string[];
   sourceRef?: string;        // default 'tool:memory_write'
+  sensitivity?: SensitivityLevel;    // default 'personal'
+  consentFlags?: ConsentFlags;       // default {}
 }
 
 export interface WriteResult {
@@ -58,6 +60,8 @@ export class MemoryWriter {
       confidence = 0.8,
       tags = [],
       sourceRef = 'tool:memory_write',
+      sensitivity = 'personal',
+      consentFlags,
     } = opts;
 
     // Validate type
@@ -121,6 +125,8 @@ export class MemoryWriter {
       lastAccessed: now,
       accessCount: 1,
       tags,
+      sensitivity,
+      consentFlags,
     };
 
     this.memoryStore.insertMemory(memory, embedding);

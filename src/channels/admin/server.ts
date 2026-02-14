@@ -238,6 +238,14 @@ export class AdminServer implements Lifecycle {
       return;
     }
 
+    // ── Health endpoint (for watchdog / monitoring) ──
+
+    if (method === 'GET' && path === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+      return;
+    }
+
     // ── SSE event stream ──
 
     if (method === 'GET' && path === '/events/stream') {

@@ -9,6 +9,7 @@ import type { SessionManager } from '../session/manager.js';
 import { MemoryWriter } from '../memory/writer.js';
 import type { MemoryType } from '../memory/types.js';
 import { VALID_MEMORY_TYPES } from '../memory/types.js';
+import * as helpers from './helpers.js';
 
 export class FinalAnswerSignal {
   readonly answer: string;
@@ -188,6 +189,20 @@ export class REPLSandbox {
       session_messages,
       session_append_note,
 
+      // Text analysis helpers
+      search: helpers.search,
+      grep: helpers.grep,
+      grep_v: helpers.grep_v,
+      between: helpers.between,
+      head: helpers.head,
+      tail: helpers.tail,
+      word_frequency: helpers.word_frequency,
+      diff: helpers.diff,
+      text_similarity: helpers.text_similarity,
+      dedupe: helpers.dedupe,
+      group_by: helpers.group_by,
+      partition: helpers.partition,
+
       // Safe builtins
       JSON,
       Math,
@@ -255,6 +270,8 @@ export class REPLSandbox {
       'print', 'console', 'FINAL', 'llm_query', 'memory_search',
       'memory_count', 'memory_write', 'memory_upsert', 'memory_import_batch',
       'memory_get_by_id', 'session_messages', 'session_append_note',
+      'search', 'grep', 'grep_v', 'between', 'head', 'tail',
+      'word_frequency', 'diff', 'text_similarity', 'dedupe', 'group_by', 'partition',
       'JSON', 'Math', 'Date',
       'Array', 'Object', 'String', 'Number', 'Boolean', 'Map', 'Set',
       'RegExp', 'Promise', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',

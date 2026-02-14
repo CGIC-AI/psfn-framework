@@ -31,6 +31,9 @@ import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
 import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
+import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
+import type { MessageSender } from './lifecycle/notifications.js';
+import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -71,6 +74,11 @@ async function main(): Promise<void> {
 
   const sessionStore = new SessionStore(join(config.dataDir, 'sessions'));
   const sessionManager = new SessionManager(sessionStore, config);
+
+  // User continuity store — cross-channel context carryover
+  const continuityStore = new UserContinuityStore(join(config.dataDir, 'sessions'));
+  sessionManager.continuityStore = continuityStore;
+
   const memoryStore = new MemoryStore(db, gateway.dims);
 
   // ── Agent loop (uses gateway as LLM provider) ──
@@ -189,6 +197,32 @@ async function main(): Promise<void> {
     log.info(`Admin GUI listening on port ${adminPort}`);
   }
 
+  // ── Lifecycle notifier + tools ──
+
+  const startTime = Date.now();
+  const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
+  const gatewaySender: MessageSender = {
+    send: (channelId, content) => gateway.discordSend(channelId, content),
+  };
+  const lifecycleNotifier = new DiscordLifecycleNotifier({
+    sender: gatewaySender,
+    heartbeatChannelId,
+    dataDir: config.dataDir,
+    startTime,
+  });
+
+  const stopFn = async () => {
+    await eventBus.emit('system.shutdown', {});
+    scheduler.stop();
+    if (apiServer) await apiServer.stop();
+    if (adminServer) await adminServer.stop();
+    gateway.destroy();
+    db.close();
+  };
+
+  agentLoop.registerTool(createRestartTool(lifecycleNotifier, stopFn));
+  agentLoop.registerTool(createRebuildTool(lifecycleNotifier, stopFn));
+
   // ── Listen for Discord messages from gateway ──
 
   gateway.onDiscordMessage(async (message: SubstrateMessage) => {
@@ -196,6 +230,9 @@ async function main(): Promise<void> {
     if (typeof message.timestamp === 'string') {
       message.timestamp = new Date(message.timestamp);
     }
+
+    // Track last-active channel for lifecycle notifications
+    writeLastActiveChannel(config.dataDir, message.channelId);
 
     log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
 
@@ -214,6 +251,12 @@ async function main(): Promise<void> {
 
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});
+
+  // Send "I'm back" notification (fire-and-forget)
+  lifecycleNotifier.notifyReady().catch((err) => {
+    log.error('Ready notification failed', { error: String(err) });
+  });
+
   log.info('Ready — waiting for messages');
 
   // ── Graceful shutdown ──

@@ -1,11 +1,12 @@
-import { v4 as uuidv4 } from 'uuid';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { SessionManager } from '../session/manager.js';
 import type { EventBus } from '../event-bus.js';
 import type { MemoryStore } from './store.js';
-import type { ExtractedFact, MemoryType, PurrMemory } from './types.js';
-import { VALID_MEMORY_TYPES, DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
+import type { ExtractedFact, MemoryType } from './types.js';
+import { VALID_MEMORY_TYPES, MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../types.js';
+import { estimateTokens } from '../llm/tokens.js';
+import { MemoryWriter } from './writer.js';
 import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('Extraction');
 
@@ -56,7 +57,7 @@ export class MemoryExtractor {
   private llmClient: LLMProvider;
   private sessionManager: SessionManager;
   private memoryStore: MemoryStore;
-  private embeddingService: EmbeddingService;
+  private writer: MemoryWriter;
   private eventBus: EventBus;
   private runtimeConfig: SubstrateConfig | null;
   private extractionInterval: number;
@@ -72,7 +73,7 @@ export class MemoryExtractor {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.memoryStore = memoryStore;
-    this.embeddingService = embeddingService;
+    this.writer = new MemoryWriter(memoryStore, embeddingService);
     this.eventBus = eventBus;
     // If config has extractionInterval as a direct number property on SubstrateConfig, use per-call
     if (config && 'primaryModel' in config) {
@@ -90,7 +91,22 @@ export class MemoryExtractor {
 
     // Read interval per-call from live config if available
     const interval = this.runtimeConfig?.extractionInterval ?? this.extractionInterval;
-    if (currentCount - lastCount < interval) return;
+    const intervalMet = currentCount - lastCount >= interval;
+
+    // Also trigger extraction when session content exceeds % of context window
+    let thresholdMet = false;
+    if (this.runtimeConfig && !intervalMet) {
+      const chatSlot = this.runtimeConfig.modelRoster.chat;
+      const contextWindow = chatSlot?.contextWindow ?? this.runtimeConfig.defaultContextWindow;
+      const thresholdPct = this.runtimeConfig.extractionThresholdPct ?? 30;
+      const tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
+
+      const recent = this.sessionManager.getRecentMessages(channelId);
+      const totalTokens = recent.reduce((sum, e) => sum + estimateTokens(e.content), 0);
+      thresholdMet = totalTokens > tokenBudget;
+    }
+
+    if (!intervalMet && !thresholdMet) return;
 
     lastExtractionCount.set(channelId, currentCount);
     await this.extract(channelId);
@@ -147,62 +163,15 @@ export class MemoryExtractor {
   }
 
   private async processFact(fact: ExtractedFact, channelId: string): Promise<void> {
-    const embedding = await this.embeddingService.embed(fact.text);
-    const sourceRef = `${channelId}:${Date.now()}`;
-
-    // 1. Check for exact duplicates (high threshold)
-    const duplicates = this.memoryStore.searchByEmbedding(
-      embedding,
-      DEDUP_THRESHOLD[fact.type],
-      3,
-    );
-
-    const sameTypeDups = duplicates.filter(d => d.type === fact.type);
-    if (sameTypeDups.length > 0) {
-      // Duplicate found — bump access count and salience
-      const existing = sameTypeDups[0];
-      this.memoryStore.updateMemory(existing.id, {
-        lastAccessed: Date.now(),
-        accessCount: existing.accessCount + 1,
-        salience: Math.min(1, existing.salience + MEMORY_CONFIG.salienceBumpOnAccess),
-      });
-      return;
-    }
-
-    // 2. Check for contradictions (lower threshold)
-    const broader = this.memoryStore.searchByEmbedding(
-      embedding,
-      DEDUP_THRESHOLD[fact.type] - MEMORY_CONFIG.contradictionThresholdOffset,
-      5,
-    );
-
-    const sameTypeBroader = broader.filter(b => b.type === fact.type);
-    for (const old of sameTypeBroader) {
-      if (fact.confidence > old.confidence) {
-        this.memoryStore.updateMemory(old.id, {
-          supersededBy: uuidv4(),
-        });
-      }
-    }
-
-    // 3. Insert new memory
-    const now = Date.now();
-    const memory: PurrMemory = {
-      id: uuidv4(),
+    await this.writer.write({
       text: fact.text,
       type: fact.type,
       importance: fact.importance,
-      confidence: fact.confidence,
       emotionalValence: fact.emotionalValence,
-      salience: fact.importance, // Initial salience = importance
-      sourceRef,
-      extractedAt: now,
-      lastAccessed: now,
-      accessCount: 1,
+      confidence: fact.confidence,
       tags: fact.tags,
-    };
-
-    this.memoryStore.insertMemory(memory, embedding);
+      sourceRef: `${channelId}:${Date.now()}`,
+    });
   }
 }
 

@@ -7,6 +7,8 @@ export interface SessionEntry {
   authorName?: string;
   timestamp: number;
   metadata?: string;
+  originChannelId?: string;
+  channelVisibility?: string;
 }
 
 export interface CompactionSummary {

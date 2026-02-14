@@ -252,7 +252,11 @@ export class GatewayServer {
         // Generate a unique requestId for this stream, or use the client-provided one
         const requestId = params.requestId ?? `gw-${++this.streamRequestCounter}`;
         const response = await llmProvider.stream(
-          { systemPrompt: params.systemPrompt, messages: params.messages },
+          {
+            systemPrompt: params.systemPrompt,
+            messages: params.messages,
+            ...(params.tools?.length ? { tools: params.tools } : {}),
+          },
           params.stream ? {
             onText: (text) => {
               this.notifyAll('llm.chunk', { requestId, text } satisfies LLMChunkNotification);

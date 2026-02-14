@@ -10,14 +10,14 @@ Platform research: `docs/PLATFORM_COMPARISON_ANALYSIS.md`
 
 ## Architecture
 
-Six layers, ~8000 LoC MVP target:
+Six layers, ~9,100 LoC:
 
-1. **Runtime Core** (~2000 LoC) — bootstrap, agent loop, event bus, shutdown
+1. **Runtime Core** (~2200 LoC) — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications
 2. **REPL Sandbox** (~800 LoC) — RLM-style code execution, sub-LM calls, context-as-object
-3. **Memory System** (~1500 LoC) — L0 archive, L2 extraction/retrieval/decay (SQLite+sqlite-vec)
-4. **Module System** (~500 LoC) — hot-loadable TypeScript modules, self-installable via REPL
-5. **Channel Layer** (~600 LoC) — Discord adapter (MVP), voice/web later
-6. **Scheduler** (~400 LoC) — cron, heartbeat, one-shot, maintenance workers
+3. **Memory System** (~1500 LoC) — L0 archive, L2 extraction/retrieval/decay (SQLite+sqlite-vec), memory writer (shared dedup/contradiction logic), agent-accessible memory write tools
+4. **Module System** — hot-loadable TypeScript modules, self-installable via REPL (not yet built)
+5. **Channel Layer** (~1200 LoC) — Discord adapter, OpenAI-compatible API, admin GUI (Purrsephone's Garden: editable settings, model discovery, garden primer, memory type filters, session dates, full identity view)
+6. **Scheduler** (~400 LoC) — cron, heartbeat, one-shot, `updateTask`, configurable maintenance interval
 
 ### Key Design Principle: RLM+REPL
 
@@ -73,9 +73,11 @@ src/
     sanitize.ts          # Three-layer web content sanitization
     url-policy.ts        # SSRF defense (private IP blocking, DNS rebinding, redirects)
   identity/              # Character card, soul document, growth journal
-  memory/                # L0 archive, L2 extraction/retrieval/decay, SQLite store
+  llm/                   # LLM client, model roster, token estimation, model discovery
+  lifecycle/             # Pre-restart/ready/shutdown Discord notifications
+  memory/                # L0 archive, L2 extraction/retrieval/decay, SQLite store, writer, tools
   shards/                # Self-spawning assistant shards (parallel sub-agents)
-  session/               # JSONL tree sessions, compaction, per-channel isolation
+  session/               # JSONL tree sessions, auto-compaction, per-channel isolation, user continuity
   scheduler/             # Cron, heartbeat, one-shot tasks, maintenance workers
   channels/
     admin/               # Web management GUI (htmx, garden theme)
@@ -154,23 +156,24 @@ Additional hardening:
 - **Channel ID sanitization**: `%XX` encoding of path-unsafe characters prevents directory traversal via crafted channel names
 - **Body size limits**: Request body parsing enforces size limits on API/admin endpoints
 - **Default localhost binding**: API and admin servers bind to `127.0.0.1` by default (not `0.0.0.0`)
+- **Content block normalization**: `normalizeContent()` in LLM/gateway clients unwraps stringified `[{'type': 'text', 'text': '...'}]` content blocks that LiteLLM streaming can produce
 
 Single-process mode (`npm run dev`) is preserved — uses concrete classes directly, no socket.
 
 ## Current State
 
-- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**
-- **~7,900 LoC** production code across 54 files, **290 tests** all passing (19 test files)
-- **Sessions**: Append-only JSONL files (one per channel) — this IS L0. No SQLite for conversations.
+- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**
+- **~9,300 LoC** production code across 59 files, **362 tests** all passing (26 test files)
+- **Sessions**: Append-only JSONL files (one per channel) — this IS L0. Auto-compaction in `SessionManager.buildContext()` when context exceeds `compactionThresholdPct`. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5)
 - **Embeddings**: Local Ollama at your-ollama-host:11434 (snowflake-arctic-embed2, 1024d)
 - **Purrsephone still runs on OpenClaw/BotMaker** at `/mnt/samesung/ai/botmaker` until substrate is live-tested
-- **Not yet built**: module system, session compaction, voice, capability tokens
+- **Not yet built**: module system, voice, capability tokens
 
 ## Guidelines
 
-- Keep total codebase under 8000 LoC for MVP. If a file exceeds 500 lines, split it.
+- If a file exceeds 500 lines, split it.
 - Every module must have typed interfaces with lifecycle hooks.
 - Events are the integration surface — modules compose by subscribing to events.
 - The REPL sandbox is a security boundary — code runs isolated.

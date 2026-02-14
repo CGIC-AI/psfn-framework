@@ -19,6 +19,9 @@ export interface EditableSettings {
   sessionMessageLimit?: number;
   memoryRetrievalLimit?: number;
   extractionInterval?: number;
+  thinkMaxTokens?: number;
+  thinkMaxWallTimeMs?: number;
+  thinkMaxSubQueries?: number;
 }
 
 const SETTINGS_FILE = 'settings.json';
@@ -63,6 +66,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (settings.sessionMessageLimit !== undefined) config.sessionMessageLimit = settings.sessionMessageLimit;
   if (settings.memoryRetrievalLimit !== undefined) config.memoryRetrievalLimit = settings.memoryRetrievalLimit;
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
+  if (settings.thinkMaxTokens !== undefined) config.thinkMaxTokens = settings.thinkMaxTokens;
+  if (settings.thinkMaxWallTimeMs !== undefined) config.thinkMaxWallTimeMs = settings.thinkMaxWallTimeMs;
+  if (settings.thinkMaxSubQueries !== undefined) config.thinkMaxSubQueries = settings.thinkMaxSubQueries;
 }
 
 /** Validation ranges for settings values. */
@@ -72,6 +78,9 @@ export const SETTINGS_VALIDATION = {
   sessionMessageLimit: { min: 5, max: 200 },
   memoryRetrievalLimit: { min: 1, max: 50 },
   extractionInterval: { min: 1, max: 50 },
+  thinkMaxTokens: { min: 1000, max: 1000000 },
+  thinkMaxWallTimeMs: { min: 5000, max: 600000 },
+  thinkMaxSubQueries: { min: 1, max: 100 },
 } as const;
 
 /** Validate and parse form data into EditableSettings. Returns [settings, errors]. */

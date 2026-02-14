@@ -19,18 +19,42 @@ export function createThinkTool(deps: REPLDeps): SubstrateTool {
           type: 'string',
           description: 'The analytical task or question to reason through',
         },
+        maxIterations: {
+          type: 'number',
+          description: 'Override max iterations (default 15)',
+        },
+        maxTokens: {
+          type: 'number',
+          description: 'Override max tokens (default 100000)',
+        },
       },
       required: ['task'],
     },
     execute: async (input) => {
       try {
-        const result = await runRLMLoop(input.task as string, deps);
+        // Merge budget overrides from tool input
+        const effectiveDeps: REPLDeps = { ...deps };
+        if (input.maxIterations !== undefined || input.maxTokens !== undefined) {
+          effectiveDeps.config = {
+            ...deps.config,
+            budget: {
+              ...deps.config.budget,
+              ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations as number } : {}),
+              ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens as number } : {}),
+            },
+          };
+        }
 
+        const result = await runRLMLoop(input.task as string, effectiveDeps);
+
+        const totalTokens = result.totalInputTokens + result.totalOutputTokens;
+        const tokenBudget = effectiveDeps.config.budget.maxTokens ?? 100_000;
         const header =
           `[Think: ${result.iterations} iter${result.iterations !== 1 ? 's' : ''}, ` +
-          `${result.totalInputTokens + result.totalOutputTokens} tokens, ` +
+          `${totalTokens}/${tokenBudget} tokens, ` +
           `${result.durationMs}ms` +
-          `${result.truncated ? ', truncated' : ''}]`;
+          `${result.truncated ? ', truncated' : ''}` +
+          `${result.budgetStatus.exceeded ? `, stopped: ${result.budgetStatus.exceeded}` : ''}]`;
 
         return { content: `${header}\n\n${result.answer}` };
       } catch (error) {

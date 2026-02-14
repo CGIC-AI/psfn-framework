@@ -10,14 +10,15 @@ Platform research: `docs/PLATFORM_COMPARISON_ANALYSIS.md`
 
 ## Architecture
 
-Six layers, ~9,100 LoC:
+Seven layers, ~11,400 LoC:
 
 1. **Runtime Core** (~2200 LoC) — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications
 2. **REPL Sandbox** (~800 LoC) — RLM-style code execution, sub-LM calls, context-as-object
-3. **Memory System** (~1500 LoC) — L0 archive, L2 extraction/retrieval/decay (SQLite+sqlite-vec), memory writer (shared dedup/contradiction logic), agent-accessible memory write tools
-4. **Module System** — hot-loadable TypeScript modules, self-installable via REPL (not yet built)
-5. **Channel Layer** (~1200 LoC) — Discord adapter, OpenAI-compatible API, admin GUI (admin UI: editable settings, model discovery, garden primer, memory type filters, session dates, full identity view)
-6. **Scheduler** (~400 LoC) — cron, heartbeat, one-shot, `updateTask`, configurable maintenance interval
+3. **Memory System** (~1800 LoC) — L0 archive, L2 extraction/retrieval/decay (SQLite+sqlite-vec), 6 memory types (episodic, semantic, emotional, procedural, reflection, relational), memory writer (shared dedup/contradiction logic), agent-accessible memory/contact write tools, sensitivity tagging
+4. **Trust & Privacy** (~500 LoC) — Honne/tatemae model: 4-tier trust (primary/trusted/regular/public), 4-tier sensitivity (public/personal/intimate/confidential), 5-layer policy precedence (operator→consent→trust→visibility→default), contact store (SQLite), channel visibility classification, persona adaptation, trust-gated retrieval, consent flags
+5. **Module System** — hot-loadable TypeScript modules, self-installable via REPL (not yet built)
+6. **Channel Layer** (~1400 LoC) — Discord adapter, OpenAI-compatible API, admin GUI (admin UI: editable settings, model discovery, garden primer, memory type filters, session dates, full identity view, contacts/trust management)
+7. **Scheduler** (~400 LoC) — cron, heartbeat, one-shot, `updateTask`, configurable maintenance interval
 
 ### Key Design Principle: RLM+REPL
 
@@ -76,6 +77,8 @@ src/
   llm/                   # LLM client, model roster, token estimation, model discovery
   lifecycle/             # Pre-restart/ready/shutdown Discord notifications
   memory/                # L0 archive, L2 extraction/retrieval/decay, SQLite store, writer, tools
+  trust/                 # Trust types, policy engine, channel visibility classification
+  contacts/              # Contact store (SQLite), contact management tools
   shards/                # Self-spawning assistant shards (parallel sub-agents)
   session/               # JSONL tree sessions, auto-compaction, per-channel isolation, user continuity
   scheduler/             # Cron, heartbeat, one-shot tasks, maintenance workers
@@ -117,7 +120,7 @@ docs/                    # Architecture docs and specs
 Port from ElizaOS plugin-psfn (`/home/user/ai/eliza/packages/plugin-psfn/src/`):
 
 - **L0**: Append-only JSONL archive (every message, forever)
-- **L2**: 5 typed memory classes — episodic, semantic, emotional, procedural, reflection
+- **L2**: 6 typed memory classes — episodic, semantic, emotional, procedural, reflection, relational
 - **Extraction**: LLM-powered post-conversation, XML parsing
 - **Dedup**: Embedding similarity per type (thresholds 0.85-0.97)
 - **Contradiction**: Higher-confidence new facts supersede old
@@ -162,8 +165,8 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 
 ## Current State
 
-- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (admin UI)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**
-- **~9,300 LoC** production code across 59 files, **362 tests** all passing (26 test files)
+- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (admin UI)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**
+- **~11,400 LoC** production code across 65 files, **541 tests** all passing (32 test files)
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. Auto-compaction in `SessionManager.buildContext()` when context exceeds `compactionThresholdPct`. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5)

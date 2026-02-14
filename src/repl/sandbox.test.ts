@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
+import type { SandboxBudgetRef } from './sandbox.js';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
@@ -42,13 +43,16 @@ describe('REPLSandbox', () => {
     expect(result.output).toBe('hello 42');
     expect(result.error).toBeNull();
     expect(result.finalAnswer).toBeNull();
+    expect(result.variablesChanged).toEqual([]);
   });
 
   it('persists variables across execute calls', async () => {
     const sandbox = new REPLSandbox(nullDeps());
-    await sandbox.execute('var counter = 10;', 5000, 8192);
+    const first = await sandbox.execute('var counter = 10;', 5000, 8192);
+    expect(first.variablesChanged).toEqual(['counter']);
     const result = await sandbox.execute('print(counter + 5);', 5000, 8192);
     expect(result.output).toBe('15');
+    expect(result.variablesChanged).toEqual([]);
   });
 
   it('captures FINAL signal', async () => {
@@ -258,6 +262,51 @@ describe('REPLSandbox', () => {
     const locals = sandbox.getLocals();
     expect(locals.memory_upsert).toBeUndefined();
     expect(locals.session_append_note).toBeUndefined();
+  });
+
+  it('tracks new variable creation in variablesChanged', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    const result = await sandbox.execute('var x = 1;\nvar y = 2;', 5000, 8192);
+    expect(result.variablesChanged).toContain('x');
+    expect(result.variablesChanged).toContain('y');
+    expect(result.variablesChanged).toHaveLength(2);
+  });
+
+  it('tracks variable mutation in variablesChanged', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    await sandbox.execute('var counter = 0;', 5000, 8192);
+    const result = await sandbox.execute('counter = 5;', 5000, 8192);
+    // counter is reassigned (globalThis.counter changes value), so it's "changed"
+    // Note: simple assignment without var/let/const isn't transformed, but counter
+    // already exists on globalThis from the first execute. Direct assignment to
+    // an existing globalThis property works in the vm context.
+    expect(result.variablesChanged).toContain('counter');
+  });
+
+  it('llm_query respects budget ref limit', async () => {
+    const llm = mockLLM('response');
+    const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 2 };
+    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+
+    // First two should succeed
+    await sandbox.execute('var r1 = await llm_query("q1");', 5000, 8192);
+    await sandbox.execute('var r2 = await llm_query("q2");', 5000, 8192);
+    expect(budgetRef.subQueries).toBe(2);
+
+    // Third should return budget exceeded message
+    const result = await sandbox.execute('var r3 = await llm_query("q3"); print(r3);', 5000, 8192);
+    expect(result.output).toContain('Budget exceeded');
+    expect(budgetRef.subQueries).toBe(2); // not incremented
+  });
+
+  it('llm_query works without budget ref', async () => {
+    const llm = mockLLM('no-budget-response');
+    const sandbox = new REPLSandbox(nullDeps(llm)); // no budgetRef
+    const result = await sandbox.execute(
+      'var r = await llm_query("test"); print(r);',
+      5000, 8192,
+    );
+    expect(result.output).toBe('no-budget-response');
   });
 });
 

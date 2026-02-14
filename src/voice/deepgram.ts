@@ -1,0 +1,51 @@
+export interface DeepgramSttConfig {
+  apiKey: string;
+  model?: string;
+  endpoint?: string;
+}
+
+interface DeepgramListenResponse {
+  results?: {
+    channels?: Array<{
+      alternatives?: Array<{
+        transcript?: string;
+      }>;
+    }>;
+  };
+}
+
+export class DeepgramSttClient {
+  private readonly apiKey: string;
+  private readonly model: string;
+  private readonly endpoint: string;
+
+  constructor(config: DeepgramSttConfig) {
+    this.apiKey = config.apiKey;
+    this.model = config.model ?? 'nova-3';
+    this.endpoint = config.endpoint ?? 'https://api.deepgram.com/v1/listen';
+  }
+
+  async transcribeWav(audioWav: Buffer): Promise<string> {
+    const url = new URL(this.endpoint);
+    url.searchParams.set('model', this.model);
+    url.searchParams.set('punctuate', 'true');
+    url.searchParams.set('smart_format', 'true');
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${this.apiKey}`,
+        'Content-Type': 'audio/wav',
+      },
+      body: audioWav,
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`Deepgram STT failed: ${response.status} ${response.statusText} ${body.slice(0, 300)}`);
+    }
+
+    const payload = await response.json() as DeepgramListenResponse;
+    return payload.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? '';
+  }
+}

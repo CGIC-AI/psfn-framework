@@ -3,10 +3,10 @@ import type { SensitivityLevel, ConsentFlags } from '../trust/types.js';
 export type { SensitivityLevel, ConsentFlags };
 export { VALID_SENSITIVITY_LEVELS } from '../trust/types.js';
 
-export type MemoryType = 'episodic' | 'semantic' | 'emotional' | 'procedural' | 'reflection';
+export type MemoryType = 'episodic' | 'semantic' | 'emotional' | 'procedural' | 'reflection' | 'relational';
 
 export const VALID_MEMORY_TYPES: MemoryType[] = [
-  'episodic', 'semantic', 'emotional', 'procedural', 'reflection',
+  'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational',
 ];
 
 export interface PurrMemory {
@@ -26,6 +26,7 @@ export interface PurrMemory {
   tags: string[];
   sensitivity: SensitivityLevel;    // default 'personal'
   consentFlags?: ConsentFlags;      // default {}
+  contactId?: string;               // FK to contacts table (for relational memories)
 }
 
 export interface ExtractedFact {
@@ -46,11 +47,11 @@ export const DECAY_HALFLIFE: Record<MemoryType, number> = {
   emotional:  14 * 24 * 60 * 60 * 1000,
   procedural: 90 * 24 * 60 * 60 * 1000,
   reflection: 60 * 24 * 60 * 60 * 1000,
+  relational: 60 * 24 * 60 * 60 * 1000,
 };
 
 // Embedding similarity thresholds for dedup per type
-// Note: 'relational' threshold included for future-proofing (PSFN-hdy)
-export const DEDUP_THRESHOLD: Record<MemoryType | 'relational', number> = {
+export const DEDUP_THRESHOLD: Record<MemoryType, number> = {
   episodic:   0.92,
   semantic:   0.90,
   emotional:  0.88,

@@ -178,6 +178,18 @@ export class SessionManager {
     };
   }
 
+  /** Append a system note to a session. Visible in subsequent context builds. */
+  appendSystemNote(channelId: string, note: string): void {
+    this.store.append({
+      channelId,
+      role: 'system',
+      content: note,
+      authorId: 'system',
+      authorName: 'System',
+      timestamp: Date.now(),
+    });
+  }
+
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {
     return this.store.getRecent(channelId, limit ?? this.config.sessionMessageLimit);
   }
@@ -190,16 +202,16 @@ export class SessionManager {
     const messages: ContextMessage[] = [];
 
     for (const entry of entries) {
-      if (entry.role === 'system') continue;
-
-      const role = entry.role as 'user' | 'assistant';
+      // System notes are included as user-role messages with a marker
+      const role: 'user' | 'assistant' = entry.role === 'system' ? 'user' : entry.role as 'user' | 'assistant';
+      const content = entry.role === 'system' ? `[System note] ${entry.content}` : entry.content;
 
       // Merge consecutive same-role messages
       const last = messages[messages.length - 1];
       if (last && last.role === role) {
-        last.content += '\n' + entry.content;
+        last.content += '\n' + content;
       } else {
-        messages.push({ role, content: entry.content });
+        messages.push({ role, content });
       }
     }
 

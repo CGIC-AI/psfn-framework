@@ -128,6 +128,34 @@ export class REPLSandbox {
       return { written: result.written, deduplicated: result.deduplicated, errors: result.errors };
     };
 
+    const memory_upsert = async (
+      text: string,
+      type: string,
+      importance?: number,
+      emotionalValence?: number,
+      tags?: string,
+    ): Promise<{ action: string; id: string; superseded: boolean }> => {
+      if (!writer) return { action: 'error', id: 'no memory system', superseded: false };
+      if (!VALID_MEMORY_TYPES.includes(type as MemoryType)) {
+        return { action: 'error', id: `invalid type: ${type}`, superseded: false };
+      }
+      const result = await writer.upsert({
+        text,
+        type: type as MemoryType,
+        importance,
+        emotionalValence,
+        tags: tags ? tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
+        sourceRef: 'repl:memory_upsert',
+      });
+      return { action: result.action, id: result.memory.id, superseded: result.action === 'superseded' };
+    };
+
+    const session_append_note = (channelId: string, note: string): boolean => {
+      if (!this.deps.sessionManager) return false;
+      this.deps.sessionManager.appendSystemNote(channelId, note);
+      return true;
+    };
+
     const memory_get_by_id = (id: string): Record<string, unknown> | null => {
       if (!this.deps.memoryStore) return null;
       const mem = this.deps.memoryStore.getById(id);
@@ -154,9 +182,11 @@ export class REPLSandbox {
       memory_search,
       memory_count,
       memory_write,
+      memory_upsert,
       memory_import_batch,
       memory_get_by_id,
       session_messages,
+      session_append_note,
 
       // Safe builtins
       JSON,
@@ -223,8 +253,9 @@ export class REPLSandbox {
   getLocals(): Record<string, unknown> {
     const builtinKeys = new Set([
       'print', 'console', 'FINAL', 'llm_query', 'memory_search',
-      'memory_count', 'memory_write', 'memory_import_batch', 'memory_get_by_id',
-      'session_messages', 'JSON', 'Math', 'Date',
+      'memory_count', 'memory_write', 'memory_upsert', 'memory_import_batch',
+      'memory_get_by_id', 'session_messages', 'session_append_note',
+      'JSON', 'Math', 'Date',
       'Array', 'Object', 'String', 'Number', 'Boolean', 'Map', 'Set',
       'RegExp', 'Promise', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
       'undefined', 'null', 'true', 'false', 'Infinity', 'NaN', 'setTimeout',

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runRLMLoop } from './loop.js';
 import type { LLMProvider } from '../agent-loop.js';
-import type { REPLDeps } from './types.js';
+import type { REPLDeps, REPLConfig } from './types.js';
+import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../types.js';
 
 function mockResponse(content: string, inputTokens = 10, outputTokens = 20): LLMResponse {
@@ -34,12 +35,15 @@ function makeDeps(llm: LLMProvider, overrides?: Partial<REPLDeps>): REPLDeps {
     embeddingService: null,
     memoryStore: null,
     sessionManager: null,
-    config: {
-      maxIterations: 15,
-      outputTruncation: 8192,
-      executionTimeoutMs: 5000,
-    },
+    config: DEFAULT_REPL_CONFIG,
     ...overrides,
+  };
+}
+
+function makeConfig(overrides: Partial<REPLConfig['budget']> = {}): REPLConfig {
+  return {
+    ...DEFAULT_REPL_CONFIG,
+    budget: { ...DEFAULT_REPL_CONFIG.budget, ...overrides },
   };
 }
 
@@ -53,6 +57,9 @@ describe('runRLMLoop', () => {
     expect(result.truncated).toBe(false);
     expect(result.totalInputTokens).toBe(10);
     expect(result.totalOutputTokens).toBe(20);
+    expect(result.budgetStatus).toBeDefined();
+    expect(result.budgetStatus.exceeded).toBeNull();
+    expect(result.budgetStatus.iterations).toBe(1);
   });
 
   it('handles multi-iteration with code execution', async () => {
@@ -123,12 +130,13 @@ describe('runRLMLoop', () => {
       Array(5).fill('```repl\nprint("still going");\n```'),
     );
     const deps = makeDeps(llm, {
-      config: { maxIterations: 3, outputTruncation: 8192, executionTimeoutMs: 5000 },
+      config: makeConfig({ maxIterations: 3 }),
     });
     const result = await runRLMLoop('Loop forever', deps);
 
     expect(result.truncated).toBe(true);
     expect(result.iterations).toBe(3);
+    expect(result.budgetStatus.exceeded).toBe('max iterations');
   });
 
   it('accumulates tokens across iterations', async () => {
@@ -189,5 +197,54 @@ describe('runRLMLoop', () => {
     const llm = sequentialLLM(['FINAL("quick")']);
     const result = await runRLMLoop('Quick task', makeDeps(llm));
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('stops when token budget exceeded', async () => {
+    // Each response uses 30 tokens (10 input + 20 output)
+    // Set budget to 50 tokens — should stop after 2 iterations
+    const llm = sequentialLLM([
+      '```repl\nprint("step 1");\n```',
+      '```repl\nprint("step 2");\n```',
+      '```repl\nprint("step 3");\n```',
+      'FINAL("done")',
+    ]);
+    const deps = makeDeps(llm, {
+      config: makeConfig({ maxTokens: 50 }),
+    });
+    const result = await runRLMLoop('Token test', deps);
+
+    expect(result.truncated).toBe(true);
+    expect(result.budgetStatus.exceeded).toBe('token budget');
+    expect(result.budgetStatus.totalTokens).toBeGreaterThanOrEqual(50);
+    // Should have stopped after 2 iterations (2 * 30 = 60 >= 50)
+    expect(result.iterations).toBe(2);
+  });
+
+  it('budgetStatus tracks sub-queries from sandbox', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar r = await llm_query("q1"); print(r);\n```',
+      'FINAL("done")',
+    ]);
+    const deps = makeDeps(llm);
+    const result = await runRLMLoop('Sub-query test', deps);
+
+    expect(result.budgetStatus.subQueries).toBe(1);
+    expect(result.budgetStatus.exceeded).toBeNull();
+  });
+
+  it('includes variable tracking in feedback', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar myVar = 42;\n```',
+      'FINAL("done")',
+    ]);
+    const deps = makeDeps(llm);
+    const result = await runRLMLoop('Var tracking test', deps);
+
+    // Verify the feedback to LLM includes variable info
+    const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
+    const secondCallMessages = calls[1][0].messages;
+    const feedback = secondCallMessages[2].content;
+    expect(feedback).toContain('Variables changed: myVar');
+    expect(result.answer).toBe('done');
   });
 });

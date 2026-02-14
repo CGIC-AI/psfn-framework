@@ -1,6 +1,13 @@
 // ── RLM System Prompt ──
 
-export const RLM_SYSTEM_PROMPT = `You are an analytical reasoning engine. You solve tasks by writing and executing code.
+export interface ThinkContextMetadata {
+  memoryCount: number;
+  memoryBreakdown: string;  // "42 semantic, 18 episodic, ..."
+  channelCount: number;
+  currentChannelMessages: number;
+}
+
+const RLM_BASE_PROMPT = `You are an analytical reasoning engine. You solve tasks by writing and executing code.
 
 ## How to use
 
@@ -44,3 +51,22 @@ const summary = await llm_query(
 FINAL(summary);
 \`\`\`
 `;
+
+export function buildRLMSystemPrompt(metadata?: ThinkContextMetadata): string {
+  if (!metadata || metadata.memoryCount === 0) {
+    return RLM_BASE_PROMPT;
+  }
+
+  const lines = [RLM_BASE_PROMPT.trimEnd(), '', 'AVAILABLE DATA:'];
+  lines.push(`- Memories: ${metadata.memoryCount} total (${metadata.memoryBreakdown})`);
+  if (metadata.currentChannelMessages > 0) {
+    lines.push(`- Current channel: ${metadata.currentChannelMessages} messages`);
+  }
+  lines.push('');
+  lines.push('Use memory_search(query) to find relevant memories. Use session_messages(channelId) to read conversations.');
+
+  return lines.join('\n');
+}
+
+/** @deprecated Use buildRLMSystemPrompt() instead. Kept for backward compatibility. */
+export const RLM_SYSTEM_PROMPT = RLM_BASE_PROMPT;

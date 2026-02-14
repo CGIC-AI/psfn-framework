@@ -135,6 +135,9 @@ export interface SubstrateConfig {
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
   elevenLabsModelId?: string;
+  thinkMaxTokens?: number;
+  thinkMaxWallTimeMs?: number;
+  thinkMaxSubQueries?: number;
 }
 
 export function loadConfig(): SubstrateConfig {

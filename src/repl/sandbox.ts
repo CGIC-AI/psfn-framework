@@ -24,19 +24,28 @@ export interface SandboxDeps {
   sessionManager: SessionManager | null;
 }
 
+export interface SandboxBudgetRef {
+  subQueries: number;
+  maxSubQueries: number;
+}
+
 export interface ExecuteResult {
   output: string;
   error: string | null;
   finalAnswer: string | null;
+  variablesChanged: string[];
 }
 
 export class REPLSandbox {
   private context: vm.Context;
   private outputBuffer: string[] = [];
   private deps: SandboxDeps;
+  private budgetRef: SandboxBudgetRef | undefined;
+  private builtinKeysSet: Set<string>;
 
-  constructor(deps: SandboxDeps) {
+  constructor(deps: SandboxDeps, budgetRef?: SandboxBudgetRef) {
     this.deps = deps;
+    this.budgetRef = budgetRef;
 
     const print = (...args: unknown[]) => {
       this.outputBuffer.push(args.map(a => {
@@ -51,6 +60,10 @@ export class REPLSandbox {
     };
 
     const llm_query = async (prompt: string): Promise<string> => {
+      if (this.budgetRef && this.budgetRef.subQueries >= this.budgetRef.maxSubQueries) {
+        return '[Budget exceeded: max sub-queries reached]';
+      }
+      if (this.budgetRef) this.budgetRef.subQueries++;
       const response = await this.deps.llmProvider.complete(
         { systemPrompt: 'You are a helpful assistant. Answer concisely.', messages: [{ role: 'user', content: prompt }] },
         'extraction',
@@ -218,10 +231,33 @@ export class REPLSandbox {
 
     // Make globalThis point to the context itself so var assignments persist
     this.context.globalThis = this.context;
+
+    // Initialize builtin keys set for variable tracking and getLocals
+    this.builtinKeysSet = new Set([
+      'print', 'console', 'FINAL', 'llm_query', 'memory_search',
+      'memory_count', 'memory_write', 'memory_upsert', 'memory_import_batch',
+      'memory_get_by_id', 'session_messages', 'session_append_note',
+      'JSON', 'Math', 'Date',
+      'Array', 'Object', 'String', 'Number', 'Boolean', 'Map', 'Set',
+      'RegExp', 'Promise', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+      'undefined', 'null', 'true', 'false', 'Infinity', 'NaN', 'setTimeout',
+      'globalThis',
+    ]);
+  }
+
+  private snapshotUserVars(): Map<string, unknown> {
+    const snap = new Map<string, unknown>();
+    for (const key of Object.getOwnPropertyNames(this.context)) {
+      if (!this.builtinKeysSet.has(key)) {
+        snap.set(key, this.context[key]);
+      }
+    }
+    return snap;
   }
 
   async execute(code: string, timeoutMs: number, truncationLimit: number): Promise<ExecuteResult> {
     this.outputBuffer = [];
+    const before = this.snapshotUserVars();
 
     // Transform top-level var/let/const to globalThis assignments so they persist
     // across execute() calls (async IIFE creates a new scope otherwise)
@@ -237,34 +273,38 @@ export class REPLSandbox {
       await promise;
 
       const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);
-      return { output, error: null, finalAnswer: null };
+      const variablesChanged = this.diffVars(before);
+      return { output, error: null, finalAnswer: null, variablesChanged };
     } catch (err) {
       if (err instanceof FinalAnswerSignal) {
         const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);
-        return { output, error: null, finalAnswer: err.answer };
+        const variablesChanged = this.diffVars(before);
+        return { output, error: null, finalAnswer: err.answer, variablesChanged };
       }
 
       const errorMsg = err instanceof Error ? err.message : String(err);
       const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);
-      return { output, error: errorMsg, finalAnswer: null };
+      const variablesChanged = this.diffVars(before);
+      return { output, error: errorMsg, finalAnswer: null, variablesChanged };
     }
   }
 
-  getLocals(): Record<string, unknown> {
-    const builtinKeys = new Set([
-      'print', 'console', 'FINAL', 'llm_query', 'memory_search',
-      'memory_count', 'memory_write', 'memory_upsert', 'memory_import_batch',
-      'memory_get_by_id', 'session_messages', 'session_append_note',
-      'JSON', 'Math', 'Date',
-      'Array', 'Object', 'String', 'Number', 'Boolean', 'Map', 'Set',
-      'RegExp', 'Promise', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
-      'undefined', 'null', 'true', 'false', 'Infinity', 'NaN', 'setTimeout',
-      'globalThis',
-    ]);
+  private diffVars(before: Map<string, unknown>): string[] {
+    const changed: string[] = [];
+    const after = this.snapshotUserVars();
+    // Check for new or modified vars
+    for (const [key, val] of after) {
+      if (!before.has(key) || before.get(key) !== val) {
+        changed.push(key);
+      }
+    }
+    return changed;
+  }
 
+  getLocals(): Record<string, unknown> {
     const locals: Record<string, unknown> = {};
     for (const key of Object.getOwnPropertyNames(this.context)) {
-      if (!builtinKeys.has(key)) {
+      if (!this.builtinKeysSet.has(key)) {
         locals[key] = this.context[key];
       }
     }

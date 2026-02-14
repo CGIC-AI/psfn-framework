@@ -2,8 +2,8 @@ import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { SessionManager } from '../session/manager.js';
 import type { EventBus } from '../event-bus.js';
 import type { MemoryStore } from './store.js';
-import type { ExtractedFact, MemoryType } from './types.js';
-import { VALID_MEMORY_TYPES, MEMORY_CONFIG } from './types.js';
+import type { ExtractedFact, MemoryType, SensitivityLevel } from './types.js';
+import { VALID_MEMORY_TYPES, MEMORY_CONFIG, VALID_SENSITIVITY_LEVELS } from './types.js';
 import type { SubstrateConfig } from '../types.js';
 import { estimateTokens } from '../llm/tokens.js';
 import { MemoryWriter } from './writer.js';
@@ -24,6 +24,11 @@ For each fact, provide:
 - emotional_valence: -1 to 1 (-1 very negative, 0 neutral, 1 very positive)
 - confidence: 0-1 how confident you are this fact is correct
 - tags: comma-separated relevant tags
+- sensitivity: public|personal|intimate|confidential (default personal)
+  - public: Safe to share anywhere ("User likes hiking")
+  - personal: Only share with trusted contacts ("User has a dog named Rex")
+  - intimate: Only share with primary user ("User feels anxious about job")
+  - confidential: Never share outside primary 1:1 context ("User shared trauma details")
 
 Already known facts (avoid duplicates, note contradictions):
 {existing_facts}
@@ -40,6 +45,7 @@ Respond with facts inside a <response> block. Each fact as a <fact> block:
 <emotional_valence>0.0</emotional_valence>
 <confidence>0.9</confidence>
 <tags>identity, profession</tags>
+<sensitivity>personal</sensitivity>
 </fact>
 </response>
 
@@ -171,6 +177,7 @@ export class MemoryExtractor {
       confidence: fact.confidence,
       tags: fact.tags,
       sourceRef: `${channelId}:${Date.now()}`,
+      sensitivity: fact.sensitivity,
     });
   }
 }
@@ -211,7 +218,12 @@ function parseFactBlock(block: string): ExtractedFact | null {
     .map(t => t.trim().toLowerCase())
     .filter(Boolean);
 
-  return { text: text.trim(), type: typeStr, importance, emotionalValence, confidence, tags };
+  const sensitivityStr = extractTag(block, 'sensitivity')?.trim().toLowerCase();
+  const sensitivity: SensitivityLevel = VALID_SENSITIVITY_LEVELS.includes(sensitivityStr as SensitivityLevel)
+    ? (sensitivityStr as SensitivityLevel)
+    : 'personal';  // safe default
+
+  return { text: text.trim(), type: typeStr, importance, emotionalValence, confidence, tags, sensitivity };
 }
 
 function extractTag(block: string, tag: string): string | null {

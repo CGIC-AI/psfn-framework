@@ -162,12 +162,17 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.registerTool(createSpawnShardTool(this.shardManager));
 
     // Think tool — RLM+REPL sandbox for deep reasoning
+    // Thread budget overrides from editable settings into REPL config
+    const replConfig = { ...DEFAULT_REPL_CONFIG, budget: { ...DEFAULT_REPL_CONFIG.budget } };
+    if (this.config.thinkMaxTokens !== undefined) replConfig.budget.maxTokens = this.config.thinkMaxTokens;
+    if (this.config.thinkMaxWallTimeMs !== undefined) replConfig.budget.maxWallTimeMs = this.config.thinkMaxWallTimeMs;
+    if (this.config.thinkMaxSubQueries !== undefined) replConfig.budget.maxSubQueries = this.config.thinkMaxSubQueries;
     this.agentLoop.registerTool(createThinkTool({
       llmProvider: this.llmClient,
       embeddingService: embeddingProvider,
       memoryStore: this.memoryStore,
       sessionManager: this.sessionManager,
-      config: DEFAULT_REPL_CONFIG,
+      config: replConfig,
     }));
 
     // Memory write/import tools — intentional memory creation

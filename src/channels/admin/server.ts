@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Lifecycle } from '../../types.js';
 import type { AdminServerConfig } from './types.js';
+import type { ContactStore } from '../../contacts/store.js';
 import { AdminHandlers } from './handlers.js';
 import { createComponentLogger } from '../../logger.js';
 
@@ -20,7 +21,7 @@ export class AdminServer implements Lifecycle {
   private handlers: AdminHandlers;
   private staticFiles = new Map<string, { content: Buffer; contentType: string }>();
 
-  constructor(config: AdminServerConfig) {
+  constructor(config: AdminServerConfig & { contactStore?: ContactStore | null }) {
     this.port = config.port;
     this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
@@ -35,6 +36,7 @@ export class AdminServer implements Lifecycle {
       characterCard: config.characterCard,
       config: config.config,
       modelDiscovery: config.modelDiscovery,
+      contactStore: config.contactStore,
     });
     this.server = createServer((req, res) => this.handleRequest(req, res));
   }
@@ -153,6 +155,9 @@ export class AdminServer implements Lifecycle {
     if (method === 'GET' && path === '/shards') {
       return this.sendHtml(res, this.handlers.shardsPage());
     }
+    if (method === 'GET' && path === '/contacts') {
+      return this.sendHtml(res, this.handlers.contactsPage());
+    }
     if (method === 'GET' && path === '/identity') {
       return this.sendHtml(res, this.handlers.identityPage());
     }
@@ -199,6 +204,22 @@ export class AdminServer implements Lifecycle {
     if (method === 'GET' && path.startsWith('/api/sessions/') && path.endsWith('/messages')) {
       const channelId = decodeURIComponent(path.slice(14, -9));
       return this.sendFragment(res, this.handlers.sessionMessagesFragment(channelId));
+    }
+
+    // ── Contacts API ──
+
+    if (method === 'GET' && path === '/api/contacts/list') {
+      return this.sendFragment(res, this.handlers.contactsListFragment());
+    }
+    if (method === 'GET' && path.startsWith('/api/contacts/') && path.endsWith('/edit')) {
+      const contactId = decodeURIComponent(path.slice(14, -5)); // strip /api/contacts/ and /edit
+      return this.sendFragment(res, this.handlers.contactEditFormFragment(contactId));
+    }
+    if (method === 'POST' && path.startsWith('/api/contacts/') && !path.endsWith('/edit')) {
+      const contactId = decodeURIComponent(path.slice(14)); // strip /api/contacts/
+      return this.readBody(req, res, (body) => {
+        this.sendFragment(res, this.handlers.handleContactUpdate(contactId, body));
+      });
     }
 
     // ── Settings API ──

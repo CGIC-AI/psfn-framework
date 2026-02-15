@@ -123,6 +123,66 @@ export class SubstrateAgent {
     this.agent.setTools(this.tools);
   }
 
+  // ── Steering + follow-up + lifecycle ──
+
+  /** Whether the agent is currently processing a prompt */
+  get isStreaming(): boolean {
+    return this.agent.state.isStreaming;
+  }
+
+  /**
+   * Inject a steering message mid-run. Delivered after current tool execution,
+   * remaining tool calls are skipped, and the message is added to context
+   * before the next LLM call. No-op if agent isn't streaming.
+   */
+  steer(message: SubstrateMessage): void {
+    if (!this.agent.state.isStreaming) return;
+    // Record the steered message in session
+    this.sessionManager.recordUserMessage(
+      message.channelId,
+      message.content,
+      message.authorId,
+      message.authorName,
+      message.isDirectMessage,
+    );
+    this.agent.steer({
+      role: 'user',
+      content: message.content,
+      timestamp: Date.now(),
+    } satisfies UserMessage);
+    log.debug('Steered message', { channelId: message.channelId, content: message.content.slice(0, 80) });
+  }
+
+  /**
+   * Queue a follow-up message processed after the agent finishes current work.
+   * Non-interrupting — waits for idle before delivery.
+   */
+  followUp(message: SubstrateMessage): void {
+    this.sessionManager.recordUserMessage(
+      message.channelId,
+      message.content,
+      message.authorId,
+      message.authorName,
+      message.isDirectMessage,
+    );
+    this.agent.followUp({
+      role: 'user',
+      content: message.content,
+      timestamp: Date.now(),
+    } satisfies UserMessage);
+    log.debug('Queued follow-up', { channelId: message.channelId });
+  }
+
+  /** Wait for the agent to finish all pending work (prompt + steering + follow-ups) */
+  waitForIdle(): Promise<void> {
+    return this.agent.waitForIdle();
+  }
+
+  /** Abort the current prompt, cancelling streaming and tool execution */
+  abort(): void {
+    this.agent.abort();
+  }
+
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
     const startTime = Date.now();
 

@@ -180,9 +180,9 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
 
-    // Discord adapter
+    // Discord adapter — setAgent enables steering (mid-stream message injection)
     this.discord = new DiscordAdapter(this.config, this.eventBus);
-    this.discord.onMessage((msg) => this.agentLoop.handleMessage(msg));
+    this.discord.setAgent(this.agentLoop);
     await this.discord.init();
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages

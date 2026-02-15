@@ -10,15 +10,17 @@ Platform research: `docs/PLATFORM_COMPARISON_ANALYSIS.md`
 
 ## Architecture
 
-Seven layers, ~11,400 LoC:
+Seven layers, ~12,800 LoC:
 
-1. **Runtime Core** (~2200 LoC) — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications
+1. **Runtime Core** (~2200 LoC) — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications, bidirectional gateway RPC (voice reverse RPC)
 2. **REPL Sandbox** (~800 LoC) — RLM-style code execution, sub-LM calls, context-as-object
 3. **Memory System** (~1800 LoC) — L0 archive, L2 extraction/retrieval/decay (SQLite+sqlite-vec), 6 memory types (episodic, semantic, emotional, procedural, reflection, relational), memory writer (shared dedup/contradiction logic), agent-accessible memory/contact write tools, sensitivity tagging
 4. **Trust & Privacy** (~500 LoC) — Honne/tatemae model: 4-tier trust (primary/trusted/regular/public), 4-tier sensitivity (public/personal/intimate/confidential), 5-layer policy precedence (operator→consent→trust→visibility→default), contact store (SQLite), channel visibility classification, persona adaptation, trust-gated retrieval, consent flags
-5. **Module System** — hot-loadable TypeScript modules, self-installable via REPL (not yet built)
-6. **Channel Layer** (~1400 LoC) — Discord adapter, OpenAI-compatible API, admin GUI (Purrsephone's Garden: editable settings, model discovery, garden primer, memory type filters, session dates, full identity view, contacts/trust management)
-7. **Scheduler** (~400 LoC) — cron, heartbeat, one-shot, `updateTask`, configurable maintenance interval
+5. **Identity & Prompts** (~600 LoC) — Character card loader, layered prompt stack (base→operator→runtime→channel→task), versioned layers with JSONL history, context-aware composition, admin UI "Prompt Soil" page, agent tools for self-editing
+6. **Git Self-Modification** (~500 LoC) — `GitOps` service (status, diff, branch, patch, commit, PR), 6 agent tools with path allowlist + protected branch blocking + audit logging
+7. **Module System** — hot-loadable TypeScript modules, self-installable via REPL (not yet built)
+8. **Channel Layer** (~1400 LoC) — Discord adapter (voice reverse RPC for gateway split), OpenAI-compatible API, admin GUI (Purrsephone's Garden: editable settings, model discovery, garden primer, memory type filters, session dates, full identity view, contacts/trust management, prompt soil)
+9. **Scheduler** (~400 LoC) — cron, heartbeat, one-shot, `updateTask`, configurable maintenance interval
 
 ### Key Design Principle: RLM+REPL
 
@@ -73,7 +75,8 @@ src/
     client.ts            # Agent-side typed RPC client (implements LLMProvider + EmbeddingService)
     sanitize.ts          # Three-layer web content sanitization
     url-policy.ts        # SSRF defense (private IP blocking, DNS rebinding, redirects)
-  identity/              # Character card, soul document, growth journal
+  git/                   # Git self-modification tools (ops, tools, wiring)
+  identity/              # Character card, prompt stack (layers, composer, tools)
   llm/                   # LLM client, model roster, token estimation, model discovery
   lifecycle/             # Pre-restart/ready/shutdown Discord notifications
   memory/                # L0 archive, L2 extraction/retrieval/decay, SQLite store, writer, tools
@@ -160,13 +163,15 @@ Additional hardening:
 - **Body size limits**: Request body parsing enforces size limits on API/admin endpoints
 - **Default localhost binding**: API and admin servers bind to `127.0.0.1` by default (not `0.0.0.0`)
 - **Content block normalization**: `normalizeContent()` in LLM/gateway clients unwraps stringified `[{'type': 'text', 'text': '...'}]` content blocks that LiteLLM streaming can produce
+- **Bidirectional gateway RPC**: `JSONRPCServerAndClient` per connection enables voice turns to await agent responses via reverse RPC (`discord.handleMessage`), while text messages remain fire-and-forget notifications
+- **Git path allowlisting**: `GitOps.validatePath()` restricts self-modification to `src/`, `docs/`, `purrsephone/` with protected branch blocking on `main`/`master`
 
 Single-process mode (`npm run dev`) is preserved — uses concrete classes directly, no socket.
 
 ## Current State
 
-- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**
-- **~11,400 LoC** production code across 65 files, **541 tests** all passing (32 test files)
+- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **git self-modification tools**, **layered prompt stack**
+- **~12,800 LoC** production code across 72 files, **797 tests** all passing (46 test files)
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. Auto-compaction in `SessionManager.buildContext()` when context exceeds `compactionThresholdPct`. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5)

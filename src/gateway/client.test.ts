@@ -214,3 +214,110 @@ describe('GatewayClient streaming', () => {
     expect(chunks).toEqual(['before-error']);
   });
 });
+
+describe('GatewayClient reverse RPC (onHandleMessage)', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('receives and processes discord.handleMessage requests from gateway', async () => {
+    const handler = vi.fn().mockResolvedValue({
+      content: 'voice response',
+      channelId: 'discord-voice:123',
+      metadata: { model: 'test-model', inputTokens: 10, outputTokens: 5, durationMs: 500 },
+    });
+
+    client.onHandleMessage(handler);
+
+    // Simulate gateway sending an RPC request (has 'id' AND 'method')
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 42,
+      method: 'discord.handleMessage',
+      params: {
+        message: {
+          id: 'voice-1',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'TestUser',
+          content: 'hello voice',
+          timestamp: '2025-01-01T00:00:00.000Z',
+        },
+      },
+    });
+
+    // Wait for async handling
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const handledMsg = handler.mock.calls[0][0];
+    expect(handledMsg.content).toBe('hello voice');
+    // Timestamp should be deserialized to Date
+    expect(handledMsg.timestamp).toBeInstanceOf(Date);
+
+    // The response should have been sent back
+    const response = conn.sent.find(
+      (msg: any) => msg.id === 42 && 'result' in msg,
+    ) as any;
+    expect(response).toBeDefined();
+    expect(response.result.content).toBe('voice response');
+    expect(response.result.model).toBe('test-model');
+    expect(response.result.durationMs).toBe(500);
+  });
+
+  it('chunk routing still works after refactor', async () => {
+    const chunks: string[] = [];
+
+    const streamPromise = client.stream(
+      { systemPrompt: 'test', messages: [{ role: 'user', content: 'hi' }] },
+      { onText: (text) => chunks.push(text) },
+    );
+
+    const req = conn.sent[0] as { id: number; params: { requestId: string } };
+    const requestId = req.params.requestId;
+
+    // Chunk should still be routed correctly via handleChunkNotification
+    conn._emit({ method: 'llm.chunk', params: { requestId, text: 'chunk-1' } });
+
+    conn._emit({
+      id: req.id,
+      jsonrpc: '2.0',
+      result: {
+        content: 'chunk-1',
+        toolCalls: [],
+        model: 'test',
+        inputTokens: 10,
+        outputTokens: 5,
+        stopReason: 'end',
+      },
+    });
+
+    const result = await streamPromise;
+    expect(chunks).toEqual(['chunk-1']);
+    expect(result.content).toBe('chunk-1');
+  });
+
+  it('discord.message notifications still work after refactor', () => {
+    const messages: unknown[] = [];
+    client.onDiscordMessage((msg) => messages.push(msg));
+
+    conn._emit({
+      method: 'discord.message',
+      params: {
+        message: {
+          id: 'msg-1',
+          channelId: 'ch-1',
+          content: 'test notification',
+        },
+      },
+    });
+
+    expect(messages).toHaveLength(1);
+    expect((messages[0] as any).content).toBe('test notification');
+  });
+});

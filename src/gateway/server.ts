@@ -3,7 +3,7 @@
 
 import * as net from 'node:net';
 import * as readline from 'node:readline';
-import { JSONRPCServer, JSONRPCErrorException } from 'json-rpc-2.0';
+import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { ChannelAdapter } from '../channels/types.js';
 import type { NdjsonConnection } from './transport.js';
@@ -170,16 +170,14 @@ export interface GatewayServerOptions {
 }
 
 export class GatewayServer {
-  private rpcServer: JSONRPCServer;
   private netServer: net.Server | null = null;
   private connections = new Set<NdjsonConnection>();
+  private rpcClients = new Map<NdjsonConnection, JSONRPCServerAndClient>();
   private options: GatewayServerOptions;
   private streamRequestCounter = 0;
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
-    this.rpcServer = new JSONRPCServer();
-    this.registerMethods();
   }
 
   // Wrap a handler with audit timing — logs call, records duration/error on completion
@@ -242,12 +240,12 @@ export class GatewayServer {
     };
   }
 
-  private registerMethods(): void {
+  private registerMethods(target: JSONRPCServerAndClient): void {
     const { llmProvider, embeddingService, discordAdapter } = this.options;
 
     // ── LLM Methods ──
 
-    this.rpcServer.addMethod('llm.chat', this.audited('llm.chat',
+    target.addMethod('llm.chat', this.audited('llm.chat',
       async (params: LLMChatParams) => {
         // Generate a unique requestId for this stream, or use the client-provided one
         const requestId = params.requestId ?? `gw-${++this.streamRequestCounter}`;
@@ -276,7 +274,7 @@ export class GatewayServer {
       (p) => ({ model: p.model, stream: p.stream }),
     ));
 
-    this.rpcServer.addMethod('llm.complete', this.audited('llm.complete',
+    target.addMethod('llm.complete', this.audited('llm.complete',
       async (params: LLMCompleteParams) => {
         const response = await llmProvider.complete(
           { systemPrompt: params.systemPrompt, messages: params.messages },
@@ -293,7 +291,7 @@ export class GatewayServer {
       (p) => ({ purpose: p.purpose }),
     ));
 
-    this.rpcServer.addMethod('llm.embed', this.audited('llm.embed',
+    target.addMethod('llm.embed', this.audited('llm.embed',
       async (params: LLMEmbedParams) => {
         const embeddings = await embeddingService.embedBatch(params.texts);
         return { embeddings: embeddings.map(e => Array.from(e)) };
@@ -303,7 +301,7 @@ export class GatewayServer {
 
     // ── Discord Methods ──
 
-    this.rpcServer.addMethod('discord.send', this.audited('discord.send',
+    target.addMethod('discord.send', this.audited('discord.send',
       async (params: DiscordSendParams) => {
         await discordAdapter.send(params.channelId, params.content);
         return { success: true };
@@ -311,7 +309,7 @@ export class GatewayServer {
       (p) => ({ channelId: p.channelId }),
     ));
 
-    this.rpcServer.addMethod('discord.typing', this.audited('discord.typing',
+    target.addMethod('discord.typing', this.audited('discord.typing',
       async (_params: DiscordTypingParams) => ({ success: true }),
     ));
 
@@ -327,7 +325,7 @@ export class GatewayServer {
     };
     this.options.policyConfig.urlPolicy = urlPolicyConfig;
 
-    this.rpcServer.addMethod('web.fetch', this.gated('web.fetch',
+    target.addMethod('web.fetch', this.gated('web.fetch',
       async (params: WebFetchParams) => {
         // SSRF defense: evaluate URL policy before fetching
         const urlCheck = evaluateUrlPolicy(params.url, urlPolicyConfig);
@@ -413,7 +411,7 @@ export class GatewayServer {
 
     // ── Filesystem (gated) ──
 
-    this.rpcServer.addMethod('fs.read', this.gated('fs.read',
+    target.addMethod('fs.read', this.gated('fs.read',
       async (params: FsReadParams) => {
         const content = await readFile(params.path, 'utf-8');
         return { content };
@@ -422,7 +420,7 @@ export class GatewayServer {
       'read', (p) => p.path,
     ));
 
-    this.rpcServer.addMethod('fs.write', this.gated('fs.write',
+    target.addMethod('fs.write', this.gated('fs.write',
       async (params: FsWriteParams) => {
         await writeFile(params.path, params.content, 'utf-8');
         return { success: true };
@@ -439,21 +437,27 @@ export class GatewayServer {
       log.info('Agent connected');
       this.connections.add(conn);
 
+      const serverAndClient = new JSONRPCServerAndClient(
+        new JSONRPCServer(),
+        new JSONRPCClient((request) => { conn.send(request); }),
+      );
+      this.registerMethods(serverAndClient);
+      this.rpcClients.set(conn, serverAndClient);
+
       conn.onMessage(async (message) => {
-        const response = await this.rpcServer.receive(message as any);
-        if (response) {
-          conn.send(response);
-        }
+        await serverAndClient.receiveAndSend(message as any);
       });
 
       conn.on('close', () => {
         log.info('Agent disconnected');
         this.connections.delete(conn);
+        this.rpcClients.delete(conn);
       });
 
       conn.on('error', (err) => {
         log.error('Connection error', { error: err.message });
         this.connections.delete(conn);
+        this.rpcClients.delete(conn);
       });
     });
   }
@@ -479,11 +483,26 @@ export class GatewayServer {
     });
   }
 
+  /** Send an RPC request to the first connected agent and await its response */
+  async requestAgent<T = unknown>(method: string, params: unknown, timeoutMs = 60_000): Promise<T> {
+    const first = this.rpcClients.values().next().value;
+    if (!first) throw new Error('No agent connected');
+
+    const result = await Promise.race([
+      first.request(method, params),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Agent request timed out')), timeoutMs),
+      ),
+    ]);
+    return result as T;
+  }
+
   async stop(): Promise<void> {
     for (const conn of this.connections) {
       conn.destroy();
     }
     this.connections.clear();
+    this.rpcClients.clear();
 
     if (this.netServer) {
       await new Promise<void>((resolve) => {

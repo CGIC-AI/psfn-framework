@@ -149,6 +149,25 @@ export interface PolicyContext {
 
 // ── Error codes (JSON-RPC custom range: -32000 to -32099) ──
 
+// ── Reverse RPC types (gateway → agent requests) ──
+
+export interface DiscordHandleMessageParams {
+  message: SubstrateMessage;
+}
+
+export interface DiscordHandleMessageResult {
+  content: string;
+  channelId: string;
+  model: string;
+  durationMs: number;
+}
+
+export interface AgentMethods {
+  'discord.handleMessage': [DiscordHandleMessageParams, DiscordHandleMessageResult];
+}
+
+// ── Error codes (JSON-RPC custom range: -32000 to -32099) ──
+
 export const GatewayErrors = {
   NEEDS_APPROVAL: -32000,
   APPROVAL_DENIED: -32001,

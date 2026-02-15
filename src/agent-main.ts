@@ -44,6 +44,7 @@ import {
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
+import { wireHeartbeatRuntime } from './bootstrap/parity.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -263,6 +264,17 @@ async function main(): Promise<void> {
 
   agentLoop.registerTool(createRestartTool(lifecycleNotifier, stopFn));
   agentLoop.registerTool(createRebuildTool(lifecycleNotifier, stopFn));
+
+  // ── Heartbeat / reflection system ──
+
+  wireHeartbeatRuntime(
+    agentLoop,
+    scheduler,
+    agentLoop,
+    gatewaySender,
+    config.dataDir,
+    heartbeatChannelId,
+  );
 
   // ── Register reverse RPC handler for voice messages from gateway ──
 

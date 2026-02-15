@@ -3,7 +3,7 @@
 // Heartbeat is a special 'every' task — her self-check rhythm.
 
 import type { EventBus } from '../event-bus.js';
-import type { ScheduledTask, SchedulerConfig } from './types.js';
+import type { ScheduledTask, SchedulerConfig, TaskState } from './types.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../logger.js';
 
@@ -20,11 +20,21 @@ export class Scheduler {
     this.config = { ...DEFAULT_SCHEDULER_CONFIG, ...config };
   }
 
-  register(task: ScheduledTask): void {
+  register(task: ScheduledTask, opts?: { skipFirstRun?: boolean }): void {
     if (this.tasks.has(task.id)) {
       throw new Error(`Task "${task.id}" is already registered`);
     }
-    this.tasks.set(task.id, { ...task, lastRun: 0 });
+    const lastRun = opts?.skipFirstRun ? Date.now() : 0;
+    this.tasks.set(task.id, { ...task, lastRun });
+  }
+
+  updateTask(id: string, updates: { intervalMs?: number; state?: TaskState; name?: string }): boolean {
+    const entry = this.tasks.get(id);
+    if (!entry) return false;
+    if (updates.intervalMs !== undefined) entry.intervalMs = updates.intervalMs;
+    if (updates.state !== undefined) entry.state = updates.state;
+    if (updates.name !== undefined) entry.name = updates.name;
+    return true;
   }
 
   unregister(id: string): boolean {

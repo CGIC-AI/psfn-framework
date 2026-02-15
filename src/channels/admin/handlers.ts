@@ -311,6 +311,8 @@ export class AdminHandlers {
 
     const sseEvents: EventName[] = [
       'agent.turn.end',
+      'agent.tool.start',
+      'agent.tool.end',
       'agent.error',
       'memory.extraction.end',
       'memory.retrieval',

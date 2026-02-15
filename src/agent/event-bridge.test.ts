@@ -1,0 +1,197 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Agent } from '@mariozechner/pi-agent-core';
+import { EventBus } from '../event-bus.js';
+import { createEventBridge } from './event-bridge.js';
+
+// Capture the subscriber callback by intercepting Agent.prototype.subscribe
+let lastSubscriber: ((event: any) => void) | null = null;
+vi.spyOn(Agent.prototype, 'subscribe').mockImplementation(function (fn: any) {
+  lastSubscriber = fn;
+  return () => { lastSubscriber = null; };
+});
+
+function emitAgentEvent(event: any) {
+  lastSubscriber?.(event);
+}
+
+describe('createEventBridge', () => {
+  let agent: Agent;
+  let eventBus: EventBus;
+
+  beforeEach(() => {
+    lastSubscriber = null;
+    agent = new Agent({ streamFn: vi.fn() as any, convertToLlm: (m) => m as any });
+    eventBus = new EventBus();
+  });
+
+  it('subscribes to agent events on creation', () => {
+    createEventBridge(agent, eventBus);
+    expect(lastSubscriber).toBeTruthy();
+  });
+
+  it('does not emit events when no channel is set', async () => {
+    createEventBridge(agent, eventBus);
+    const handler = vi.fn();
+    eventBus.on('agent.stream.delta', handler);
+
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'hello' },
+    });
+
+    // Give async emit time to fire (it won't since channel is null)
+    await new Promise(r => setTimeout(r, 10));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('emits agent.stream.delta for text_delta events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'Hello' },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: ' world' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas).toEqual(['Hello', ' world']);
+  });
+
+  it('emits agent.tool.start for tool_execution_start events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const events: any[] = [];
+    eventBus.on('agent.tool.start', (data) => { events.push(data); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'tool_execution_start',
+      toolCallId: 'call-1',
+      toolName: 'think',
+      args: { task: 'reason about cats' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      channelId: 'test-channel',
+      toolCallId: 'call-1',
+      toolName: 'think',
+    });
+  });
+
+  it('emits agent.tool.end for tool_execution_end events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const events: any[] = [];
+    eventBus.on('agent.tool.end', (data) => { events.push(data); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'think',
+      result: { content: [{ type: 'text', text: 'done' }] },
+      isError: false,
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      channelId: 'test-channel',
+      toolCallId: 'call-1',
+      toolName: 'think',
+      isError: false,
+    });
+  });
+
+  it('stops emitting after clearChannel', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'before' },
+    });
+
+    bridge.clearChannel();
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'after' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas).toEqual(['before']);
+  });
+
+  it('destroy stops all event emission', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('test-channel');
+    bridge.destroy();
+
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'after destroy' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas).toEqual([]);
+  });
+
+  it('ignores non-text_delta message_update events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const handler = vi.fn();
+    eventBus.on('agent.stream.delta', handler);
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'tool_use', toolCallId: 'x', toolName: 'y' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('includes correct channelId in all events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const channelIds: string[] = [];
+    eventBus.on('agent.stream.delta', ({ channelId }) => { channelIds.push(channelId); });
+    eventBus.on('agent.tool.start', ({ channelId }) => { channelIds.push(channelId); });
+    eventBus.on('agent.tool.end', ({ channelId }) => { channelIds.push(channelId); });
+
+    bridge.setChannel('my-channel');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'hi' },
+    });
+    emitAgentEvent({
+      type: 'tool_execution_start',
+      toolCallId: 'c1', toolName: 't1', args: {},
+    });
+    emitAgentEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'c1', toolName: 't1', result: {}, isError: false,
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(channelIds).toEqual(['my-channel', 'my-channel', 'my-channel']);
+  });
+});

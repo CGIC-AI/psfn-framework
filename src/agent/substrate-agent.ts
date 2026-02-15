@@ -8,7 +8,7 @@
 // can import them unchanged via the agent-loop.ts re-export shim.
 
 import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentTool, AgentEvent, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
+import type { AgentTool, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
@@ -26,6 +26,7 @@ import type { TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import { convertToLlm } from './messages.js';
+import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -68,6 +69,7 @@ export class SubstrateAgent {
   private config: SubstrateConfig;
   private tools: AgentTool<any>[] = [];
   private modelResolved = false;
+  private bridge: EventBridge;
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -94,6 +96,9 @@ export class SubstrateAgent {
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config),
       convertToLlm,
     });
+
+    // Persistent event bridge: pi-agent-core events → EventBus
+    this.bridge = createEventBridge(this.agent, eventBus);
 
     // Eagerly try to resolve the model, but don't throw if it fails
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
@@ -174,20 +179,8 @@ export class SubstrateAgent {
       const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
       this.agent.replaceMessages(historyMessages);
 
-      // Subscribe to events for streaming deltas BEFORE calling prompt
-      const unsub = this.agent.subscribe((event: AgentEvent) => {
-        if (event.type === 'message_update') {
-          const delta = event.assistantMessageEvent;
-          // Emit text deltas for downstream consumers (Discord typing, API SSE, etc.)
-          if (delta.type === 'text_delta') {
-            this.eventBus.emit('agent.stream.delta', {
-              channelId: message.channelId,
-              text: delta.delta,
-            }).catch(() => {});
-          }
-        }
-      });
-
+      // Activate event bridge for this channel (streams deltas + tool events to EventBus)
+      this.bridge.setChannel(message.channelId);
       try {
         // Run the agent — pi-agent-core handles tool loop internally
         await this.agent.prompt({
@@ -196,7 +189,7 @@ export class SubstrateAgent {
           timestamp: Date.now(),
         } satisfies UserMessage);
       } finally {
-        unsub();
+        this.bridge.clearChannel();
       }
 
       // Extract response from agent state (last assistant message)

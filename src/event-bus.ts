@@ -11,6 +11,8 @@ export interface EventMap {
   'agent.turn.start': { message: SubstrateMessage };
   'agent.turn.end': { message: SubstrateMessage; response: AgentResponse };
   'agent.stream.delta': { channelId: string; text: string };
+  'agent.tool.start': { channelId: string; toolCallId: string; toolName: string };
+  'agent.tool.end': { channelId: string; toolCallId: string; toolName: string; isError: boolean };
   'agent.error': { message: SubstrateMessage; error: Error };
   'memory.extraction.start': { channelId: string };
   'memory.extraction.end': { channelId: string; count: number };

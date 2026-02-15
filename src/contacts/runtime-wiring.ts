@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { SubstrateTool } from '../types.js';
+import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { ContactStore } from './store.js';
 import {
   createContactListTool,
@@ -10,7 +10,7 @@ import {
 
 export interface ContactRuntimeTarget {
   contactStore: ContactStore | null;
-  registerTool(tool: SubstrateTool): void;
+  registerTool(tool: AgentTool<any>): void;
 }
 
 export function wireContactRuntime(

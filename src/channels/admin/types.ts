@@ -10,6 +10,7 @@ import type { EmbeddingService } from '../../agent-loop.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
+import type { PromptLayerStore } from '../../identity/prompt-store.js';
 
 export interface AdminServerConfig {
   port: number;
@@ -25,6 +26,7 @@ export interface AdminServerConfig {
   config: SubstrateConfig;
   embeddingService: EmbeddingService | null;
   modelDiscovery?: ModelDiscovery | null;
+  promptStore?: PromptLayerStore | null;
 }
 
 export interface DashboardStats {

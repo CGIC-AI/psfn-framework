@@ -24,6 +24,7 @@ import type {
 import type { ContactStore } from '../contacts/store.js';
 import type { TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
+import type { PromptComposer } from '../identity/prompt-composer.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
@@ -77,6 +78,9 @@ export class SubstrateAgent {
 
   // Trust resolution — null until contacts are wired
   contactStore: ContactStore | null = null;
+
+  // Prompt composition — null falls back to static systemPrompt
+  promptComposer: PromptComposer | null = null;
 
   constructor(
     eventBus: EventBus,
@@ -211,11 +215,17 @@ export class SubstrateAgent {
         )
         : '';
 
-      // Persona adaptation based on trust level
+      // Compose system prompt: layered stack if available, else static
+      const channelType = this.resolveChannelType(message);
+      const basePrompt = this.promptComposer
+        ? this.promptComposer.compose({ channelType }).text
+        : this.systemPrompt;
+
+      // Persona adaptation based on trust level (appended post-compose)
       const personaHint = this.getPersonaAdaptation(trustLevel);
       const adaptedPrompt = personaHint
-        ? this.systemPrompt + '\n\n' + personaHint
-        : this.systemPrompt;
+        ? basePrompt + '\n\n' + personaHint
+        : basePrompt;
 
       // Build context (with auto-compaction + cross-channel continuity)
       const context = await this.sessionManager.buildContext(
@@ -335,6 +345,15 @@ export class SubstrateAgent {
       }
     }
     return '';
+  }
+
+  /** Map message channel info to a channelType string for prompt composition */
+  private resolveChannelType(message: SubstrateMessage): string | undefined {
+    if (message.channelId.startsWith('discord-voice:')) return 'discord_voice';
+    if (message.channelId.startsWith('api:')) return 'api';
+    if (message.channelId.startsWith('internal:')) return 'internal';
+    if (message.channelType === 'discord') return 'discord_text';
+    return undefined;
   }
 
   private getPersonaAdaptation(trustLevel: TrustLevel): string | null {

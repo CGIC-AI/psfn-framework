@@ -32,6 +32,15 @@ import { loadSettings, applySettings } from './settings.js';
 import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
+import { wireGitRuntime } from './git/runtime-wiring.js';
+import { PromptLayerStore } from './identity/prompt-store.js';
+import { PromptComposer } from './identity/prompt-composer.js';
+import {
+  createPromptLayerListTool,
+  createPromptLayerGetTool,
+  createPromptLayerUpdateTool,
+  createPromptLayerToggleTool,
+} from './identity/prompt-tools.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -91,6 +100,21 @@ async function main(): Promise<void> {
     systemPrompt,
     config,
   );
+
+  // Prompt stack — layered, editable system prompt
+  const promptStore = new PromptLayerStore(
+    join(config.dataDir, 'prompt-layers.json'),
+    join(config.dataDir, 'prompt-history.jsonl'),
+  );
+  promptStore.seedFromCharacterCard(systemPrompt);
+  const promptComposer = new PromptComposer(promptStore);
+  agentLoop.promptComposer = promptComposer;
+
+  agentLoop.registerTool(createPromptLayerListTool(promptStore));
+  agentLoop.registerTool(createPromptLayerGetTool(promptStore));
+  agentLoop.registerTool(createPromptLayerUpdateTool(promptStore));
+  agentLoop.registerTool(createPromptLayerToggleTool(promptStore));
+  log.info(`Prompt stack enabled (${promptStore.count} layers)`);
 
   // Contact store + tools — trust-gated privacy system
   const contactStore = wireContactRuntime(
@@ -155,6 +179,13 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
   agentLoop.registerTool(createMemoryImportTool(memoryWriter));
 
+  // Git tools — self-modification via git
+  wireGitRuntime(agentLoop, {
+    repoRoot: process.cwd(),
+    allowedPaths: ['src/', 'docs/', 'psfn/'],
+  });
+  log.info('Git self-modification tools enabled');
+
   // ── API server (optional) ──
 
   let apiServer: ApiServer | undefined;
@@ -200,6 +231,7 @@ async function main(): Promise<void> {
       embeddingService: gateway,
       modelDiscovery,
       contactStore,
+      promptStore,
     });
     await adminServer.init();
     await adminServer.start();
@@ -231,6 +263,15 @@ async function main(): Promise<void> {
 
   agentLoop.registerTool(createRestartTool(lifecycleNotifier, stopFn));
   agentLoop.registerTool(createRebuildTool(lifecycleNotifier, stopFn));
+
+  // ── Register reverse RPC handler for voice messages from gateway ──
+
+  gateway.onHandleMessage(async (message: SubstrateMessage) => {
+    writeLastActiveChannel(config.dataDir, message.channelId);
+    log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
+    return agentLoop.handleMessage(message);
+    // Note: no discord.send() — gateway voice runtime handles TTS directly
+  });
 
   // ── Listen for Discord messages from gateway ──
 

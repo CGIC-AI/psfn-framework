@@ -24,6 +24,7 @@ export class DiscordAdapter implements ChannelAdapter {
   private config: SubstrateConfig;
   private eventBus: EventBus;
   private handler: MessageHandler | null = null;
+  private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
   private voice: DiscordVoiceRuntime;
@@ -45,12 +46,17 @@ export class DiscordAdapter implements ChannelAdapter {
       client: this.client,
       config,
       eventBus,
-      getHandler: () => this.handler,
+      getHandler: () => this.voiceHandler ?? this.handler,
     });
   }
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
+  }
+
+  /** Set a separate handler for voice messages (e.g. reverse RPC to agent in gateway mode) */
+  setVoiceHandler(handler: MessageHandler): void {
+    this.voiceHandler = handler;
   }
 
   /** Set direct agent reference for steering support */

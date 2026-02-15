@@ -11,6 +11,8 @@ import type { DashboardStats, ChannelInfo, EnvInfo } from './types.js';
 import type { DiscoveredModel } from '../../llm/discovery.js';
 import type { Contact } from '../../contacts/types.js';
 import type { TrustLevel } from '../../trust/types.js';
+import type { PromptLayer, PromptHistoryEntry } from '../../identity/prompt-types.js';
+import { LAYER_TYPE_ORDER } from '../../identity/prompt-types.js';
 
 function escapeHtml(str: string): string {
   return str
@@ -298,6 +300,7 @@ export function layout(title: string, body: string, activePage: string): string 
     { href: '/contacts', label: 'Garden Visitors', id: 'contacts' },
     { href: '/identity', label: 'Identity', id: 'identity' },
     { href: '/settings', label: 'Settings', id: 'settings' },
+    { href: '/prompts', label: 'Prompt Soil', id: 'prompts' },
     { href: '/primer', label: 'Garden Primer', id: 'primer' },
     { href: '/events', label: 'Garden Pulse', id: 'events' },
   ];
@@ -871,4 +874,143 @@ export function eventItem(type: string, timestamp: number, payload: Record<strin
     .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
     .join(' ');
   return `<div class="event-item"><span class="event-time">${time}</span> <span class="event-type">${escapeHtml(type)}</span> ${escapeHtml(details)}</div>`;
+}
+
+// ── Prompt Stack Templates ──
+
+const LAYER_TYPE_COLORS: Record<string, string> = {
+  base: '#C4A035',
+  operator: '#8B4513',
+  runtime: '#4A7C59',
+  channel: '#4A5C8B',
+  task: '#8B6914',
+};
+
+export function promptsPage(layers: PromptLayer[]): string {
+  return `
+    <p class="description" style="color:var(--text-muted);margin-bottom:1rem">The layered foundation that shapes PSFN's voice. Base &rarr; Operator &rarr; Runtime &rarr; Channel &rarr; Task.</p>
+    <div id="prompt-layers">
+      ${promptLayersFragment(layers)}
+    </div>`;
+}
+
+export function promptLayersFragment(layers: PromptLayer[]): string {
+  if (layers.length === 0) return '<p class="empty">No prompt layers configured.</p>';
+
+  // Sort by type order then priority
+  const sorted = [...layers].sort((a, b) => {
+    const typeOrder = (LAYER_TYPE_ORDER[a.type] ?? 99) - (LAYER_TYPE_ORDER[b.type] ?? 99);
+    if (typeOrder !== 0) return typeOrder;
+    return a.priority - b.priority;
+  });
+
+  const rows = sorted.map(layer => {
+    const color = LAYER_TYPE_COLORS[layer.type] ?? '#666';
+    const statusClass = layer.enabled ? 'form-success' : 'form-error';
+    const status = layer.enabled ? 'ON' : 'OFF';
+    return `
+      <tr>
+        <td><span class="badge" style="background:${color};color:white">${escapeHtml(layer.type)}</span></td>
+        <td><a href="/prompts/${encodeURIComponent(layer.id)}">${escapeHtml(layer.name)}</a></td>
+        <td><span class="${statusClass}">${status}</span></td>
+        <td>${layer.priority}</td>
+        <td>v${layer.version}</td>
+        <td>${escapeHtml(layer.updatedBy)}</td>
+        <td>${new Date(layer.updatedAt).toLocaleDateString()}</td>
+        <td>
+          <form hx-post="/api/prompts/toggle" hx-target="#prompt-layers" hx-swap="innerHTML" style="display:inline">
+            <input type="hidden" name="layerId" value="${layer.id}">
+            <button type="submit" class="btn" style="font-size:0.75rem;padding:0.25rem 0.5rem">${layer.enabled ? 'Disable' : 'Enable'}</button>
+          </form>
+        </td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Priority</th>
+            <th>Version</th>
+            <th>Updated By</th>
+            <th>Date</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry[]): string {
+  const color = LAYER_TYPE_COLORS[layer.type] ?? '#666';
+
+  const historyRows = [...history].reverse().slice(0, 20).map(h => `
+    <tr>
+      <td>v${h.version}</td>
+      <td>${escapeHtml(h.updatedBy)}</td>
+      <td>${new Date(h.timestamp).toLocaleString()}</td>
+      <td>${escapeHtml(h.previousChecksum)}</td>
+      <td>
+        <form hx-post="/api/prompts/rollback" hx-target="#prompt-result" hx-swap="innerHTML" style="display:inline">
+          <input type="hidden" name="layerId" value="${layer.id}">
+          <input type="hidden" name="version" value="${h.version}">
+          <button type="submit" class="btn" style="font-size:0.75rem;padding:0.25rem 0.5rem">Restore</button>
+        </form>
+      </td>
+    </tr>
+  `).join('');
+
+  return `
+    <p style="margin-bottom:1rem">
+      <span class="badge" style="background:${color};color:white">${escapeHtml(layer.type)}</span>
+      <span style="margin-left:0.5rem;font-size:0.85rem;color:var(--text-muted)">
+        Version ${layer.version} &middot;
+        Priority ${layer.priority} &middot;
+        ${layer.enabled ? 'Enabled' : 'Disabled'} &middot;
+        Checksum ${layer.checksum}
+      </span>
+    </p>
+    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem">
+      Updated ${new Date(layer.updatedAt).toLocaleString()} by ${escapeHtml(layer.updatedBy)}
+      ${layer.channelType ? ` &middot; Channel: ${escapeHtml(layer.channelType)}` : ''}
+      ${layer.taskKind ? ` &middot; Task: ${escapeHtml(layer.taskKind)}` : ''}
+    </p>
+
+    <div id="prompt-result"></div>
+
+    <div class="card">
+      <h3 style="margin-bottom:0.75rem">Content</h3>
+      <form hx-post="/api/prompts/update" hx-target="#prompt-result" hx-swap="innerHTML">
+        <input type="hidden" name="layerId" value="${layer.id}">
+        <textarea name="content" rows="20" style="width:100%;font-family:monospace;font-size:0.9rem;padding:0.5rem;border:1px solid var(--border);border-radius:4px;resize:vertical">${escapeHtml(layer.content)}</textarea>
+        <div class="form-actions">
+          <button type="submit" class="btn">Save Changes</button>
+        </div>
+      </form>
+    </div>
+
+    ${history.length > 0 ? `
+      <div class="card" style="margin-top:1rem">
+        <h3 style="margin-bottom:0.75rem">Version History</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Changed By</th>
+              <th>Timestamp</th>
+              <th>Previous Checksum</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>${historyRows}</tbody>
+        </table>
+      </div>
+    ` : ''}
+
+    <p style="margin-top:1rem"><a href="/prompts">&larr; Back to Prompt Soil</a></p>`;
 }

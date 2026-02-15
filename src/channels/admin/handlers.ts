@@ -15,6 +15,7 @@ import type { SubstrateConfig } from '../../types.js';
 import type { DashboardStats, EnvInfo } from './types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { ContactStore } from '../../contacts/store.js';
+import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { TrustLevel } from '../../trust/types.js';
 import type { RelationshipType } from '../../contacts/types.js';
 import { TRUST_LEVELS } from '../../trust/types.js';
@@ -35,6 +36,7 @@ export class AdminHandlers {
   private config: SubstrateConfig;
   private modelDiscovery: ModelDiscovery | null;
   private contactStore: ContactStore | null;
+  private promptStore: PromptLayerStore | null;
 
   constructor(deps: {
     memoryStore: MemoryStore;
@@ -48,6 +50,7 @@ export class AdminHandlers {
     config: SubstrateConfig;
     modelDiscovery?: ModelDiscovery | null;
     contactStore?: ContactStore | null;
+    promptStore?: PromptLayerStore | null;
   }) {
     this.memoryStore = deps.memoryStore;
     this.sessionStore = deps.sessionStore;
@@ -60,6 +63,7 @@ export class AdminHandlers {
     this.config = deps.config;
     this.modelDiscovery = deps.modelDiscovery ?? null;
     this.contactStore = deps.contactStore ?? null;
+    this.promptStore = deps.promptStore ?? null;
   }
 
   // ── Login ──
@@ -292,6 +296,65 @@ export class AdminHandlers {
 
     // Return a fresh table row so htmx replaces the edit form
     return tpl.contactRow(updated);
+  }
+
+  // ── Prompt Stack ──
+
+  promptsPage(): string {
+    const layers = this.promptStore?.getAll() ?? [];
+    return tpl.layout('Prompt Soil', tpl.promptsPage(layers), 'prompts');
+  }
+
+  promptDetail(layerId: string): string | null {
+    if (!this.promptStore) return null;
+    const layer = this.promptStore.getById(layerId);
+    if (!layer) return null;
+    const history = this.promptStore.getLayerHistory(layerId);
+    return tpl.layout(
+      `${layer.name} -- Prompt Soil`,
+      tpl.promptDetailPage(layer, history),
+      'prompts',
+    );
+  }
+
+  updatePromptLayer(body: string): string {
+    if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
+    const params = new URLSearchParams(body);
+    const layerId = params.get('layerId') ?? '';
+    const content = params.get('content') ?? '';
+    try {
+      const layer = this.promptStore.update(layerId, content, 'admin');
+      return tpl.settingsFormResult(true, `Updated "${layer.name}" to v${layer.version}`);
+    } catch (err) {
+      return tpl.settingsFormResult(false, String(err));
+    }
+  }
+
+  togglePromptLayer(body: string): string {
+    if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
+    const params = new URLSearchParams(body);
+    const layerId = params.get('layerId') ?? '';
+    try {
+      this.promptStore.toggle(layerId);
+      // Return the full updated list for htmx swap
+      const layers = this.promptStore.getAll();
+      return tpl.promptLayersFragment(layers);
+    } catch (err) {
+      return tpl.settingsFormResult(false, String(err));
+    }
+  }
+
+  rollbackPromptLayer(body: string): string {
+    if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
+    const params = new URLSearchParams(body);
+    const layerId = params.get('layerId') ?? '';
+    const version = parseInt(params.get('version') ?? '0', 10);
+    try {
+      const layer = this.promptStore.rollback(layerId, version);
+      return tpl.settingsFormResult(true, `Rolled back "${layer.name}" to content from v${version}`);
+    } catch (err) {
+      return tpl.settingsFormResult(false, String(err));
+    }
   }
 
   // ── Events (SSE) ──

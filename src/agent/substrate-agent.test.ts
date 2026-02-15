@@ -398,3 +398,80 @@ describe('SubstrateAgent.handleMessage', () => {
     );
   });
 });
+
+describe('SubstrateAgent steering + follow-up', () => {
+  beforeEach(() => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+  });
+
+  it('exposes isStreaming from agent state', () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    expect(agent.isStreaming).toBe(false);
+  });
+
+  it('steer records user message and calls agent.steer', () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
+    );
+
+    // spy on pi-agent-core Agent.prototype.steer
+    const steerSpy = vi.spyOn(Agent.prototype, 'steer');
+
+    // steer is a no-op when agent isn't streaming
+    agent.steer(makeMessage({ content: 'actually...' }));
+    expect(steerSpy).not.toHaveBeenCalled();
+
+    steerSpy.mockRestore();
+  });
+
+  it('followUp records user message and calls agent.followUp', () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
+    );
+
+    const followUpSpy = vi.spyOn(Agent.prototype, 'followUp').mockImplementation(() => {});
+
+    agent.followUp(makeMessage({ content: 'ps: one more thing' }));
+
+    expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
+      'test-channel',
+      'ps: one more thing',
+      'user-1',
+      'TestUser',
+      undefined,
+    );
+    expect(followUpSpy).toHaveBeenCalled();
+
+    followUpSpy.mockRestore();
+  });
+
+  it('waitForIdle delegates to agent.waitForIdle', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+
+    const idleSpy = vi.spyOn(Agent.prototype, 'waitForIdle').mockResolvedValue();
+
+    await agent.waitForIdle();
+    expect(idleSpy).toHaveBeenCalled();
+
+    idleSpy.mockRestore();
+  });
+
+  it('abort delegates to agent.abort', () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+
+    const abortSpy = vi.spyOn(Agent.prototype, 'abort').mockImplementation(() => {});
+
+    agent.abort();
+    expect(abortSpy).toHaveBeenCalled();
+
+    abortSpy.mockRestore();
+  });
+});

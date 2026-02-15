@@ -7,6 +7,7 @@ import {
 } from 'discord.js';
 import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
 import type { MessageHandler, ChannelAdapter } from '../types.js';
+import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
@@ -23,6 +24,7 @@ export class DiscordAdapter implements ChannelAdapter {
   private config: SubstrateConfig;
   private eventBus: EventBus;
   private handler: MessageHandler | null = null;
+  private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
   private voice: DiscordVoiceRuntime;
 
@@ -49,6 +51,12 @@ export class DiscordAdapter implements ChannelAdapter {
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
+  }
+
+  /** Set direct agent reference for steering support */
+  setAgent(agent: SubstrateAgent): void {
+    this.agent = agent;
+    this.handler = (msg) => agent.handleMessage(msg);
   }
 
   async init(): Promise<void> {
@@ -98,33 +106,39 @@ export class DiscordAdapter implements ChannelAdapter {
     const isMentioned = msg.mentions.has(this.config.discordBotId);
     if (!isDM && !isMentioned) return;
 
-    // Per-channel serialization — skip if already processing this channel
     const channelId = msg.channelId;
-    if (this.processing.has(channelId)) return;
+
+    // Strip bot mention from content
+    let content = msg.content
+      .replace(new RegExp(`<@!?${this.config.discordBotId}>`, 'g'), '')
+      .trim();
+    if (!content) content = '(empty message)';
+
+    const substrateMsg: SubstrateMessage = {
+      id: msg.id,
+      channelId,
+      channelType: 'discord',
+      isDirectMessage: isDM,
+      authorId: msg.author.id,
+      authorName: msg.author.displayName ?? msg.author.username,
+      content,
+      timestamp: msg.createdAt,
+    };
+
+    // If already processing this channel, steer (interrupt) instead of dropping
+    if (this.processing.has(channelId)) {
+      if (this.agent) {
+        log.debug('Steering message into active stream', { channelId });
+        this.agent.steer(substrateMsg);
+      }
+      return;
+    }
     this.processing.add(channelId);
 
     // Start typing indicator
     const typingInterval = this.startTyping(msg);
 
     try {
-      // Strip bot mention from content
-      let content = msg.content
-        .replace(new RegExp(`<@!?${this.config.discordBotId}>`, 'g'), '')
-        .trim();
-
-      if (!content) content = '(empty message)';
-
-      const substrateMsg: SubstrateMessage = {
-        id: msg.id,
-        channelId,
-        channelType: 'discord',
-        isDirectMessage: isDM,
-        authorId: msg.author.id,
-        authorName: msg.author.displayName ?? msg.author.username,
-        content,
-        timestamp: msg.createdAt,
-      };
-
       await this.eventBus.emit('message.received', { message: substrateMsg });
 
       const response = await this.handler(substrateMsg);

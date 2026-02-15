@@ -44,6 +44,23 @@ export interface REPLDeps {
   config: REPLConfig;
 }
 
+export interface ThinkEvidence {
+  source: 'memory_search' | 'session_messages' | 'llm_query' | 'code';
+  query?: string;         // search query or llm prompt (truncated)
+  snippet: string;        // what was found (truncated to ~200 chars)
+  resultCount?: number;   // how many results returned
+  timestamp: number;
+}
+
+export interface ThinkStep {
+  iteration: number;
+  code: string;            // code the LLM wrote (truncated to 2000 chars)
+  output: string;          // execution output (truncated to 1000 chars)
+  error: string | null;
+  evidenceCollected: ThinkEvidence[];
+  tokensUsed: number;      // this iteration's token count (input + output)
+}
+
 export interface ThinkResult {
   answer: string;
   iterations: number;
@@ -52,4 +69,6 @@ export interface ThinkResult {
   durationMs: number;
   truncated: boolean;
   budgetStatus: BudgetStatus;
+  steps: ThinkStep[];
+  evidence: ThinkEvidence[];
 }

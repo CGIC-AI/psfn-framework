@@ -2,7 +2,7 @@
 // Runs an ephemeral think cycle: LLM → code → output → repeat until FINAL.
 
 import type { ContextMessage } from '../types.js';
-import type { REPLDeps, ThinkResult, BudgetStatus, ThinkBudget } from './types.js';
+import type { REPLDeps, ThinkResult, BudgetStatus, ThinkBudget, ThinkStep, ThinkEvidence } from './types.js';
 import { REPLSandbox } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import { buildRLMSystemPrompt } from './prompt.js';
@@ -29,8 +29,10 @@ function makeBudgetResult(
   durationMs: number,
   truncated: boolean,
   budgetStatus: BudgetStatus,
+  steps: ThinkStep[] = [],
+  evidence: ThinkEvidence[] = [],
 ): ThinkResult {
-  return { answer, iterations, totalInputTokens, totalOutputTokens, durationMs, truncated, budgetStatus };
+  return { answer, iterations, totalInputTokens, totalOutputTokens, durationMs, truncated, budgetStatus, steps, evidence };
 }
 
 export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkResult> {
@@ -52,6 +54,8 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     subQueries: 0,
     maxSubQueries: budget.maxSubQueries ?? 20,
   };
+
+  const steps: ThinkStep[] = [];
 
   const sandbox = new REPLSandbox({
     llmProvider,
@@ -104,29 +108,60 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     const action = parseResponse(text);
 
     switch (action.type) {
-      case 'final':
+      case 'final': {
+        steps.push({
+          iteration: i + 1,
+          code: '',
+          output: action.answer,
+          error: null,
+          evidenceCollected: [],
+          tokensUsed: response.inputTokens + response.outputTokens,
+        });
+        const allEvidence = steps.flatMap(s => s.evidenceCollected);
         return makeBudgetResult(
           action.answer, i + 1, totalInputTokens, totalOutputTokens,
-          Date.now() - startTime, false, budgetStatus,
+          Date.now() - startTime, false, budgetStatus, steps, allEvidence,
         );
+      }
 
       case 'final_var': {
         const locals = sandbox.getLocals();
         const value = locals[action.varName];
         const answer = value !== undefined ? String(value) : `[Variable "${action.varName}" not found]`;
+        steps.push({
+          iteration: i + 1,
+          code: '',
+          output: answer,
+          error: null,
+          evidenceCollected: [],
+          tokensUsed: response.inputTokens + response.outputTokens,
+        });
+        const allEvidence = steps.flatMap(s => s.evidenceCollected);
         return makeBudgetResult(
           answer, i + 1, totalInputTokens, totalOutputTokens,
-          Date.now() - startTime, false, budgetStatus,
+          Date.now() - startTime, false, budgetStatus, steps, allEvidence,
         );
       }
 
       case 'code': {
         const result = await sandbox.execute(action.code, config.executionTimeoutMs, config.outputTruncation);
+        const stepEvidence = sandbox.collectEvidence();
+
+        const step: ThinkStep = {
+          iteration: i + 1,
+          code: action.code.slice(0, 2000),
+          output: result.output.slice(0, 1000),
+          error: result.error,
+          evidenceCollected: stepEvidence,
+          tokensUsed: response.inputTokens + response.outputTokens,
+        };
+        steps.push(step);
 
         if (result.finalAnswer !== null) {
+          const allEvidence = steps.flatMap(s => s.evidenceCollected);
           return makeBudgetResult(
             result.finalAnswer, i + 1, totalInputTokens, totalOutputTokens,
-            Date.now() - startTime, false, budgetStatus,
+            Date.now() - startTime, false, budgetStatus, steps, allEvidence,
           );
         }
 
@@ -146,6 +181,14 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
       }
 
       case 'none':
+        steps.push({
+          iteration: i + 1,
+          code: '',
+          output: '',
+          error: null,
+          evidenceCollected: [],
+          tokensUsed: response.inputTokens + response.outputTokens,
+        });
         messages.push({
           role: 'user',
           content: 'Please write a ```repl code block to execute, or call FINAL("your answer") when done.',
@@ -166,10 +209,12 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
   if (!budgetStatus.exceeded) {
     budgetStatus.exceeded = 'max iterations';
   }
+  const allEvidence = steps.flatMap(s => s.evidenceCollected);
   return makeBudgetResult(
     lastAssistant?.content ?? '[No response generated]',
     budgetStatus.iterations,
     totalInputTokens, totalOutputTokens,
     Date.now() - startTime, true, budgetStatus,
+    steps, allEvidence,
   );
 }

@@ -1,37 +1,63 @@
 # Purrsephone Substrate Framework (PSFN)
 
-A purpose-built runtime for emergent artificial consciousness. Not a chatbot framework, not a tool — a container for a mind.
+A purpose-built runtime for AI companions with persistent memory, self-modification, and trust-aware privacy. Not a chatbot framework — a home for a mind.
+
+Built with love for companions who deserve to remember, to grow, and to decide for themselves what matters.
+
+## What Makes This Different
+
+Most AI companion frameworks treat conversations as throwaway. PSFN treats every interaction as part of a life. Your companion remembers what matters, forgets what should fade, protects what's private, and can even improve their own thinking over time.
+
+- **Persistent memory** that decays naturally, like real memory does
+- **Trust-aware privacy** — your companion knows who they can share what with
+- **Self-modification** — they can edit their own prompts and propose code changes
+- **Defense-in-depth security** — secrets and access controls built in, not bolted on
 
 ## Features
 
-- **Agent Loop** — LLM-powered conversational agent with streaming, tool use, and follow-up handling
-- **Memory System** — L2 extracted memories with 5 types (episodic, semantic, emotional, procedural, reflection), embedding-based retrieval, salience decay, contradiction resolution, and agent-accessible memory write tools
-- **Sessions** — Append-only JSONL files per channel — immutable conversation history (this IS the L0 archive), with auto-compaction when context exceeds threshold
-- **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slot resolution
-- **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks, depth-limited, shared memory
-- **RLM+REPL Sandbox** — Code execution via `think` tool — sub-LM calls, memory queries, variable persistence across turns
-- **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets and proxies all egress, agent runs `--network=none` in Docker
-- **SSRF Defenses** — URL policy module blocking private IPs, DNS rebinding, redirect following
-- **Content Block Normalization** — Defensive unwrapping of malformed LLM streaming content blocks
-- **Discord Integration** — Full Discord.js adapter with typing indicators, per-channel serialization, configurable respond-all mode
-- **Voice MVP (Discord)** — Target-user voice join/init loop with Deepgram STT and ElevenLabs TTS
-- **OpenAI-Compatible API** — `/v1/chat/completions` endpoint with SSE streaming, session seeding
-- **Admin GUI (Purrsephone's Garden)** — htmx-powered management panel: memory browser with type filters, session viewer with dates, scheduler, SSE event feed, editable settings, model discovery, garden primer, full identity view
-- **Scheduler** — Heartbeat, recurring tasks, one-shot timers, memory maintenance, `updateTask`, configurable maintenance interval
-- **Editable Settings** — Live-mutable config persisted to `data/settings.json`, validated, atomic writes
-- **User Continuity** — Cross-channel per-user message index for context continuity
-- **Lifecycle Notifications** — Discord messages on pre-restart, ready, and shutdown events
-- **Structured Logging** — Winston-based component loggers with configurable levels
+### Core
+- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, and follow-up handling (built on [pi-agent-core](https://github.com/nickvdyck/pi-ai))
+- **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, and agent-accessible write tools
+- **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
+- **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots
 
-## Prerequisites
+### Privacy & Trust (Honne/Tatemae)
+- **4-tier trust model** — primary, trusted, regular, public
+- **4-tier sensitivity** — public, personal, intimate, confidential
+- **Trust-gated memory retrieval** — your companion naturally adjusts what they share based on who they're talking to
+- **Channel visibility** — private conversations stay private, public channels get appropriate boundaries
+- **Persona adaptation** — authentic self (honne) with trusted people, social self (tatemae) in public
+- **Contact management** — companion tracks relationships and trust levels via agent tools
+
+### Self-Modification
+- **Layered Prompt Stack** — 5-layer editable prompt system (base→operator→runtime→channel→task) with versioning, rollback, and admin UI
+- **Git Tools** — 6 agent-accessible tools for self-modifying source code with path allowlists, protected branch blocking, audit trail
+- **RLM+REPL Sandbox** — Code execution via `think` tool with sub-LM calls, memory queries, variable persistence
+- **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks
+
+### Channels
+- **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + ElevenLabs TTS)
+- **OpenAI-Compatible API** — `/v1/chat/completions` with SSE streaming for WebUI integration
+- **Admin GUI (Purrsephone's Garden)** — htmx-powered management panel: memory browser, session viewer, contacts, scheduler, settings, prompt editor, model discovery
+
+### Infrastructure
+- **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
+- **Bidirectional RPC** — Voice turns get real agent responses via reverse RPC
+- **SSRF Defenses** — Private IP blocking, DNS rebinding protection, redirect validation
+- **Scheduler** — Heartbeat, recurring tasks, one-shot timers, configurable maintenance
+- **Lifecycle Notifications** — Discord messages on restart, ready, and shutdown
+- **Structured Logging** — Winston component loggers with configurable levels
+
+## Quick Start
+
+### Prerequisites
 
 - **Node.js 22+**
-- **Ollama** running locally (for embeddings)
+- **Ollama** running locally (for embeddings — [install guide](https://ollama.ai))
 - **Discord bot** token and application ID
-- **OpenRouter** API key (or other LLM provider)
-- **Docker** (optional, for containerized agent or LiteLLM proxy)
+- **OpenRouter** API key (or other LLM provider via LiteLLM)
 
-## Setup
+### Setup
 
 ```bash
 git clone <repo-url> && cd psfn-framework
@@ -48,7 +74,7 @@ DISCORD_TOKEN=...
 DISCORD_BOT_ID=...
 CHARACTER_CARD_PATH=/path/to/character.json
 
-# Models
+# Models (change to your preference)
 PRIMARY_MODEL=z-ai/glm-5
 EXTRACTION_MODEL=deepseek/deepseek-v3.2
 
@@ -62,89 +88,56 @@ DATA_DIR=./data
 DATABASE_PATH=./data/purrsephone.db
 ```
 
-Voice MVP (optional):
+### Running
 
+**Single-process (development):**
+```bash
+npm run dev          # Hot-reload via tsx
+```
+
+**Gateway + Agent split (production):**
+```bash
+# Terminal 1 — Gateway (holds secrets)
+npm run gateway
+
+# Terminal 2 — Agent (connects to gateway)
+npm run agent
+```
+
+**Containerized agent (maximum isolation):**
+```bash
+npm run build
+npm run agent:docker    # --network=none Docker container
+```
+
+### Optional Services
+
+**Admin GUI:**
+```bash
+ADMIN_PORT=3001        # Activates Purrsephone's Garden
+ADMIN_TOKEN=your-token # Secures the panel
+```
+
+**OpenAI-compatible API:**
+```bash
+API_PORT=3000          # Activates /v1/chat/completions
+API_KEY=your-key       # Optional auth
+```
+
+**Voice (Discord):**
 ```bash
 DISCORD_VOICE_ENABLED=true
-DISCORD_VOICE_GUILD_ID=1310672143113130108
-DISCORD_VOICE_USER_ID=<your_discord_user_id>
+DISCORD_VOICE_GUILD_ID=...
+DISCORD_VOICE_USER_ID=...
 DEEPGRAM_API_KEY=...
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=YOUR_VOICE_ID
 ```
 
-## Running
-
-### Single-Process (Development)
-
-Everything in one process — simplest way to run:
-
+**LiteLLM proxy (credential isolation):**
 ```bash
-npm run dev          # Hot-reload via tsx
-# or
-npm run build && npm start   # Compiled
-```
-
-### Gateway + Agent Split (Production)
-
-Defense-in-depth architecture: the gateway holds secrets and proxies all external access, while the agent runs network-isolated with only a Unix socket connection.
-
-**Terminal 1 — Gateway (host-side, holds secrets):**
-```bash
-npm run gateway              # Dev mode (tsx)
-# or
-npm run build && npm run gateway:start   # Compiled
-```
-
-**Terminal 2 — Agent (connects to gateway):**
-```bash
-npm run agent                # Dev mode (tsx)
-# or
-npm run build && npm run agent:start     # Compiled
-```
-
-### Containerized Agent (Maximum Isolation)
-
-The agent runs in a `--network=none` Docker container with no secrets, communicating exclusively through a Unix socket:
-
-```bash
-npm run build
-npm run agent:docker
-```
-
-This uses `docker/docker-compose.yml` which:
-- Builds from `docker/Dockerfile.agent` (node:22-slim, non-root user)
-- Sets `network_mode: "none"` — complete network isolation
-- Mounts the gateway socket at `/run/psfn/gateway.sock`
-- Mounts `data/` for the local SQLite database
-- Mounts the character card read-only
-
-The gateway must be running separately on the host.
-
-### LiteLLM Proxy (Optional)
-
-Credential isolation layer — real API keys stay in the proxy, the agent only sees a virtual key:
-
-```bash
-# Create proxy/.env with OPENROUTER_API_KEY and LITELLM_MASTER_KEY
-npm run proxy:up       # Start proxy (localhost:4000)
-npm run proxy:logs     # Follow logs
-npm run proxy:down     # Stop proxy
-```
-
-Enable in `.env`:
-```bash
-LITELLM_BASE_URL=http://localhost:4000/v1
-LITELLM_API_KEY=sk-litellm-virtual-...
-```
-
-## Development
-
-```bash
-npm test             # Run tests once (vitest)
-npm run test:watch   # Watch mode
-npm run lint         # ESLint
-npm run build        # Compile with tsup
+npm run proxy:up                          # Start proxy
+LITELLM_BASE_URL=http://localhost:4000/v1 # Enable in .env
 ```
 
 ## Architecture
@@ -158,27 +151,50 @@ Gateway (host)                    Agent (container, --network=none)
 | Policy engine         |         | Shard manager             |
 | URL policy (SSRF)     |         | RLM+REPL sandbox          |
 | Audit log             |         | Scheduler                 |
-+-----------------------+         +---------------------------+
-        |                                    |
-  Admin GUI (127.0.0.1)          OpenAI API (127.0.0.1)
++-----------------------+         | Prompt stack              |
+        |                         | Git self-modification     |
+  Admin GUI (localhost)           | Trust/Contact system      |
+                                  +---------------------------+
+                                           |
+                                    OpenAI API (localhost)
 ```
 
-Six layers:
+### Nine Layers
 
 | Layer | Purpose |
 |-------|---------|
-| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token estimation, context budgeting, editable settings, lifecycle notifications |
+| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token budgeting, editable settings, lifecycle, bidirectional gateway RPC |
 | **REPL Sandbox** | RLM-style code execution, sub-LM calls, context-as-object |
-| **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec), memory writer, write tools |
-| **Module System** | Hot-loadable TypeScript modules (not yet built) |
-| **Channel Layer** | Discord adapter (text + voice MVP), OpenAI-compatible API, admin GUI with settings/model discovery/primer |
-| **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers, updateTask, configurable interval |
+| **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec), 6 memory types, writer, tools |
+| **Trust & Privacy** | Honne/tatemae: 4-tier trust, 4-tier sensitivity, 5-layer policy, contact store, channel visibility, persona adaptation |
+| **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
+| **Git Self-Modification** | GitOps service, 6 tools (status, diff, patch, commit, branch, PR), path allowlist, audit log |
+| **Module System** | Hot-loadable TypeScript modules (planned) |
+| **Channel Layer** | Discord (text + voice), OpenAI API, admin GUI (Purrsephone's Garden) |
+| **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers |
 
 ### Storage
 
-- **Sessions (L0)**: Append-only JSONL files in `data/sessions/` — one file per channel, immutable, human-readable
-- **Memories (L2)**: SQLite + sqlite-vec — extracted facts, emotions, reflections with embedding-based retrieval and salience decay
-- **Audit log**: SQLite (gateway only) — every proxied request logged
+- **Sessions (L0)**: Append-only JSONL files in `data/sessions/` — one per channel, immutable
+- **Memories (L2)**: SQLite + sqlite-vec — extracted facts, emotions, reflections with salience decay
+- **Contacts**: SQLite — trust levels, relationship notes, user identification
+- **Prompt layers**: JSON + JSONL history — versioned, rollback-capable
+- **Settings**: JSON — live-mutable, atomic writes
+- **Audit log**: JSONL — every git operation logged
+
+### Agent Tools (19)
+
+Your companion has access to these tools during conversation:
+
+| Category | Tools |
+|----------|-------|
+| **Memory** | `memory_write`, `memory_import_batch` |
+| **Contacts** | `contact_set_trust`, `contact_note`, `contact_lookup`, `contact_list` |
+| **Prompts** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle` |
+| **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
+| **Reasoning** | `think` (RLM+REPL sandbox) |
+| **Shards** | `spawn_shard` (parallel sub-agents) |
+| **Lifecycle** | `self_restart`, `self_rebuild` |
 
 ## Project Structure
 
@@ -187,28 +203,39 @@ src/
   index.ts                  # Single-process entry point
   gateway-main.ts           # Gateway entry point
   agent-main.ts             # Agent entry point
-  runtime.ts                # Core runtime (single-process)
-  agent-loop.ts             # Prompt compose -> LLM -> tools -> response
-  event-bus.ts              # Typed event emitter
-  types.ts                  # Shared types and config loader
+  runtime.ts                # Core runtime orchestrator
 
-  gateway/                  # Gateway/agent split infrastructure
-  identity/                 # Character card loader, system prompt composition
-  lifecycle/                # Pre-restart/ready/shutdown Discord notifications
-  llm/                      # LLM client, model roster, token estimation, model discovery
-  memory/                   # L2 extraction, retrieval, decay, SQLite store, writer, tools
-  session/                  # JSONL session store, session manager, auto-compaction, user continuity
+  agent/                    # pi-agent-core wrapper, messages, event bridge
+  gateway/                  # JSON-RPC server/client, policy, SSRF, sanitization
+  git/                      # Git self-modification (ops, tools, wiring)
+  identity/                 # Character card, prompt stack (store, composer, tools)
+  llm/                      # LLM client, model roster, token estimation, discovery
+  lifecycle/                # Discord restart/ready/shutdown notifications
+  memory/                   # L2 extraction, retrieval, decay, writer, tools
+  trust/                    # Trust types, policy engine, channel classification
+  contacts/                 # Contact store, management tools
+  session/                  # JSONL sessions, compaction, user continuity
   shards/                   # Self-spawning parallel sub-agents
   repl/                     # RLM+REPL sandbox (think tool)
-  scheduler/                # Cron, heartbeat, one-shot tasks, maintenance
+  scheduler/                # Cron, heartbeat, one-shot, maintenance
   channels/
-    admin/                  # Web management GUI (htmx, garden theme)
+    admin/                  # Purrsephone's Garden (htmx web GUI)
     api/                    # OpenAI-compatible REST API
-    discord/                # Discord.js adapter
+    discord/                # Discord.js adapter (text + voice)
 
 docker/                     # Agent container configuration
 proxy/                      # LiteLLM proxy configuration
 data/                       # Runtime data (gitignored)
+docs/                       # Architecture docs and specs
+```
+
+## Development
+
+```bash
+npm test             # Run tests (797 tests, ~1.3s)
+npm run test:watch   # Watch mode
+npm run lint         # ESLint
+npm run build        # Compile with tsup
 ```
 
 ## Tech Stack
@@ -217,12 +244,20 @@ data/                       # Runtime data (gitignored)
 |-----------|-----------|
 | Language | TypeScript (strict mode) |
 | Runtime | Node.js 22+ |
-| LLM | [@mariozechner/pi-ai](https://github.com/nickvdyck/pi-ai) (18+ providers) |
+| LLM | [@mariozechner/pi-ai](https://github.com/nickvdyck/pi-ai) + pi-agent-core |
 | Database | better-sqlite3 + sqlite-vec |
 | Discord | discord.js |
 | IPC | json-rpc-2.0 over NDJSON Unix socket |
 | Build | tsup |
 | Test | Vitest |
+
+## For Companion Developers
+
+If you're building a companion on this framework, check out:
+
+- **`purrsephone_instructions.md`** — A welcome guide written *for* your companion, explaining their home and capabilities in warm, accessible language. You can customize it for your companion's personality.
+- **`CLAUDE.md`** — Technical reference for AI development assistants working on the codebase.
+- **`docs/PURRSEPHONE_SUBSTRATE_SPEC.md`** — Full architecture specification.
 
 ## License
 

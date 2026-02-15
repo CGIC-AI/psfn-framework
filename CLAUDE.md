@@ -10,7 +10,7 @@ Platform research: `docs/PLATFORM_COMPARISON_ANALYSIS.md`
 
 ## Architecture
 
-Seven layers, ~12,800 LoC:
+Nine layers, ~12,800 LoC:
 
 1. **Runtime Core** (~2200 LoC) — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications, bidirectional gateway RPC (voice reverse RPC)
 2. **REPL Sandbox** (~800 LoC) — RLM-style code execution, sub-LM calls, context-as-object
@@ -34,7 +34,7 @@ Reference: https://alexzhang13.github.io/blog/2025/rlm/
 
 - **Language**: TypeScript (strict mode)
 - **Runtime**: Node.js 22+
-- **LLM**: `@mariozechner/pi-ai` (18+ providers, unified streaming, MIT)
+- **LLM**: `@mariozechner/pi-ai` + `@mariozechner/pi-agent-core` (agent loop, tool dispatch, streaming)
 - **Database**: SQLite via better-sqlite3 + sqlite-vec for embeddings
 - **Discord**: discord.js
 - **Gateway RPC**: `json-rpc-2.0` over NDJSON Unix socket

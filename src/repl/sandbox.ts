@@ -196,6 +196,13 @@ export class REPLSandbox {
       if (!this.deps.memoryStore) return null;
       const mem = this.deps.memoryStore.getById(id);
       if (!mem) return null;
+      this.currentEvidence.push({
+        source: 'memory_get_by_id',
+        query: id,
+        snippet: mem.text.slice(0, 200),
+        resultCount: 1,
+        timestamp: Date.now(),
+      });
       return {
         id: mem.id,
         text: mem.text,

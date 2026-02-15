@@ -15,6 +15,7 @@ import { EventBus } from './event-bus.js';
 import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
 import type { SubstrateMessage } from './types.js';
+import type { DiscordHandleMessageResult } from './gateway/protocol.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -81,6 +82,26 @@ async function main(): Promise<void> {
   await discord.init();
   gateway.start();
   await discord.start();
+
+  // Wire voice handler to use reverse RPC to agent
+  discord.setVoiceHandler(async (message) => {
+    const serialized = serializeMessage(message);
+    const result = await gateway.requestAgent<DiscordHandleMessageResult>(
+      'discord.handleMessage',
+      { message: serialized },
+      60_000,
+    );
+    return {
+      content: result.content,
+      channelId: result.channelId,
+      metadata: {
+        model: result.model,
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: result.durationMs,
+      },
+    };
+  });
 
   log.info(`Ready — listening on ${socketPath}`);
   log.info(`Workspace: ${workspacePath}`);

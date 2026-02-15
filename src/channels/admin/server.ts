@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { Lifecycle } from '../../types.js';
 import type { AdminServerConfig } from './types.js';
 import type { ContactStore } from '../../contacts/store.js';
+import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import { AdminHandlers } from './handlers.js';
 import { createComponentLogger } from '../../logger.js';
 
@@ -21,7 +22,7 @@ export class AdminServer implements Lifecycle {
   private handlers: AdminHandlers;
   private staticFiles = new Map<string, { content: Buffer; contentType: string }>();
 
-  constructor(config: AdminServerConfig & { contactStore?: ContactStore | null }) {
+  constructor(config: AdminServerConfig & { contactStore?: ContactStore | null; promptStore?: PromptLayerStore | null }) {
     this.port = config.port;
     this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
@@ -37,6 +38,7 @@ export class AdminServer implements Lifecycle {
       config: config.config,
       modelDiscovery: config.modelDiscovery,
       contactStore: config.contactStore,
+      promptStore: config.promptStore,
     });
     this.server = createServer((req, res) => this.handleRequest(req, res));
   }
@@ -257,6 +259,36 @@ export class AdminServer implements Lifecycle {
         },
       );
       return;
+    }
+
+    // ── Prompt Stack pages ──
+
+    if (method === 'GET' && path === '/prompts') {
+      return this.sendHtml(res, this.handlers.promptsPage());
+    }
+    if (method === 'GET' && path.startsWith('/prompts/') && !path.includes('/api/')) {
+      const layerId = decodeURIComponent(path.slice(9));
+      const html = this.handlers.promptDetail(layerId);
+      if (!html) return this.send404(res, path);
+      return this.sendHtml(res, html);
+    }
+
+    // ── Prompt Stack API ──
+
+    if (method === 'POST' && path === '/api/prompts/update') {
+      return this.readBody(req, res, (body) => {
+        this.sendFragment(res, this.handlers.updatePromptLayer(body));
+      });
+    }
+    if (method === 'POST' && path === '/api/prompts/toggle') {
+      return this.readBody(req, res, (body) => {
+        this.sendFragment(res, this.handlers.togglePromptLayer(body));
+      });
+    }
+    if (method === 'POST' && path === '/api/prompts/rollback') {
+      return this.readBody(req, res, (body) => {
+        this.sendFragment(res, this.handlers.rollbackPromptLayer(body));
+      });
     }
 
     // ── Health endpoint (for watchdog / monitoring) ──

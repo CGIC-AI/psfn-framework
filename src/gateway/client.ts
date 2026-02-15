@@ -2,9 +2,9 @@
 // Agent-side typed RPC wrapper. Implements LLMProvider and EmbeddingService
 // so it can be used as a drop-in replacement for direct clients.
 
-import { JSONRPCClient } from 'json-rpc-2.0';
+import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
-import type { LLMContext, LLMResponse, StreamCallbacks, SubstrateMessage } from '../types.js';
+import type { AgentResponse, LLMContext, LLMResponse, StreamCallbacks, SubstrateMessage } from '../types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketClient } from './transport.js';
 import { createComponentLogger } from '../logger.js';
@@ -19,10 +19,12 @@ import type {
   FsWriteResult,
   DiscordMessageNotification,
   LLMChunkNotification,
+  DiscordHandleMessageParams,
+  DiscordHandleMessageResult,
 } from './protocol.js';
 
 export class GatewayClient implements LLMProvider, EmbeddingService {
-  private rpcClient: JSONRPCClient;
+  private rpcInstance: JSONRPCServerAndClient;
   private conn: NdjsonConnection;
   private embeddingDims: number;
   private notificationHandlers = new Map<string, Array<(params: unknown) => void>>();
@@ -33,22 +35,31 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     this.conn = conn;
     this.embeddingDims = embeddingDims;
 
-    // Create RPC client that sends over the NDJSON connection
-    this.rpcClient = new JSONRPCClient((request) => {
-      this.conn.send(request);
-    });
+    // Create bidirectional RPC instance (client sends requests to gateway,
+    // server handles incoming requests from gateway like discord.handleMessage)
+    this.rpcInstance = new JSONRPCServerAndClient(
+      new JSONRPCServer(),
+      new JSONRPCClient((request) => { this.conn.send(request); }),
+    );
 
-    // Route incoming messages: responses go to RPC client, notifications to handlers
+    // Route incoming messages
     this.conn.onMessage((message: unknown) => {
       const msg = message as Record<string, unknown>;
 
+      // Intercept llm.chunk notifications — these use our custom routing
       if ('method' in msg && !('id' in msg)) {
-        // JSON-RPC notification (no id)
-        this.handleNotification(msg.method as string, msg.params);
-      } else if ('id' in msg) {
-        // JSON-RPC response
-        this.rpcClient.receive(msg as any);
+        const method = msg.method as string;
+        if (method === 'llm.chunk') {
+          this.handleChunkNotification(msg.params);
+          return;
+        }
+        // Other notifications (discord.message) use our handler system
+        this.handleNotification(method, msg.params);
+        return;
       }
+
+      // Everything else: responses to our requests + incoming RPC requests from gateway
+      this.rpcInstance.receiveAndSend(msg as any);
     });
   }
 
@@ -69,7 +80,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     }
 
     try {
-      const result = await this.rpcClient.request('llm.chat', {
+      const result = await this.rpcInstance.request('llm.chat', {
         model: '',  // gateway uses its own config
         provider: '',
         messages: context.messages,
@@ -100,7 +111,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   }
 
   async complete(context: LLMContext, purpose: 'extraction' | 'summary'): Promise<LLMResponse> {
-    const result = await this.rpcClient.request('llm.complete', {
+    const result = await this.rpcInstance.request('llm.complete', {
       model: '',
       provider: '',
       messages: context.messages,
@@ -130,7 +141,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   }
 
   async embedBatch(texts: string[]): Promise<Float32Array[]> {
-    const result = await this.rpcClient.request('llm.embed', {
+    const result = await this.rpcInstance.request('llm.embed', {
       texts,
     }) as LLMEmbedResult;
 
@@ -140,20 +151,20 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   // ── Discord methods ──
 
   async discordSend(channelId: string, content: string): Promise<void> {
-    await this.rpcClient.request('discord.send', {
+    await this.rpcInstance.request('discord.send', {
       channelId,
       content,
     }) as DiscordSendResult;
   }
 
   async discordTyping(channelId: string): Promise<void> {
-    await this.rpcClient.request('discord.typing', { channelId });
+    await this.rpcInstance.request('discord.typing', { channelId });
   }
 
   // ── Web fetch ──
 
   async webFetch(url: string, prompt?: string): Promise<string> {
-    const result = await this.rpcClient.request('web.fetch', {
+    const result = await this.rpcInstance.request('web.fetch', {
       url,
       prompt,
     }) as WebFetchResult;
@@ -163,12 +174,12 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   // ── Filesystem ──
 
   async fsRead(path: string): Promise<string> {
-    const result = await this.rpcClient.request('fs.read', { path }) as FsReadResult;
+    const result = await this.rpcInstance.request('fs.read', { path }) as FsReadResult;
     return result.content;
   }
 
   async fsWrite(path: string, content: string): Promise<void> {
-    await this.rpcClient.request('fs.write', { path, content }) as FsWriteResult;
+    await this.rpcInstance.request('fs.write', { path, content }) as FsWriteResult;
   }
 
   // ── Notification handlers ──
@@ -190,30 +201,49 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     };
   }
 
-  private handleNotification(method: string, params: unknown): void {
-    // Special case: streaming chunks are routed by requestId
-    if (method === 'llm.chunk') {
-      const chunk = params as LLMChunkNotification;
-      const handler = chunk.requestId
-        ? this.chunkHandlers.get(chunk.requestId)
-        : undefined;
-
-      if (handler) {
-        handler(chunk.text);
-        return;
-      }
-
-      // Backward compat: if requestId is missing or '0', fall back to any single handler
-      if (!chunk.requestId || chunk.requestId === '0') {
-        const fallback = this.chunkHandlers.values().next().value;
-        if (fallback) {
-          fallback(chunk.text);
-          return;
+  /** Register a handler for reverse RPC calls from gateway (e.g. voice messages) */
+  onHandleMessage(handler: (message: SubstrateMessage) => Promise<AgentResponse>): void {
+    this.rpcInstance.addMethod(
+      'discord.handleMessage',
+      async (params: DiscordHandleMessageParams) => {
+        const msg = params.message;
+        // Deserialize Date from JSON transport
+        if (typeof msg.timestamp === 'string') {
+          msg.timestamp = new Date(msg.timestamp);
         }
-      }
+        const response = await handler(msg);
+        return {
+          content: response.content,
+          channelId: response.channelId,
+          model: response.metadata.model,
+          durationMs: response.metadata.durationMs,
+        } satisfies DiscordHandleMessageResult;
+      },
+    );
+  }
+
+  private handleChunkNotification(params: unknown): void {
+    const chunk = params as LLMChunkNotification;
+    const handler = chunk.requestId
+      ? this.chunkHandlers.get(chunk.requestId)
+      : undefined;
+
+    if (handler) {
+      handler(chunk.text);
       return;
     }
 
+    // Backward compat: if requestId is missing or '0', fall back to any single handler
+    if (!chunk.requestId || chunk.requestId === '0') {
+      const fallback = this.chunkHandlers.values().next().value;
+      if (fallback) {
+        fallback(chunk.text);
+        return;
+      }
+    }
+  }
+
+  private handleNotification(method: string, params: unknown): void {
     const handlers = this.notificationHandlers.get(method);
     if (handlers) {
       for (const handler of handlers) {

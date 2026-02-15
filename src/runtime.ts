@@ -32,6 +32,15 @@ import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
+import { wireGitRuntime } from './git/runtime-wiring.js';
+import { PromptLayerStore } from './identity/prompt-store.js';
+import { PromptComposer } from './identity/prompt-composer.js';
+import {
+  createPromptLayerListTool,
+  createPromptLayerGetTool,
+  createPromptLayerUpdateTool,
+  createPromptLayerToggleTool,
+} from './identity/prompt-tools.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -107,6 +116,21 @@ export class SubstrateRuntime implements Lifecycle {
       this.config,
     );
 
+    // Prompt stack — layered, editable system prompt
+    const promptStore = new PromptLayerStore(
+      join(this.config.dataDir, 'prompt-layers.json'),
+      join(this.config.dataDir, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard(systemPrompt);
+    const promptComposer = new PromptComposer(promptStore);
+    this.agentLoop.promptComposer = promptComposer;
+
+    this.agentLoop.registerTool(createPromptLayerListTool(promptStore));
+    this.agentLoop.registerTool(createPromptLayerGetTool(promptStore));
+    this.agentLoop.registerTool(createPromptLayerUpdateTool(promptStore));
+    this.agentLoop.registerTool(createPromptLayerToggleTool(promptStore));
+    log.info(`Prompt stack enabled (${promptStore.count} layers)`);
+
     // Contact store + tools — trust-gated privacy system
     const contactStore = wireContactRuntime(
       this.agentLoop,
@@ -179,6 +203,13 @@ export class SubstrateRuntime implements Lifecycle {
     const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
     this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
+
+    // Git tools — self-modification via git
+    wireGitRuntime(this.agentLoop, {
+      repoRoot: process.cwd(),
+      allowedPaths: ['src/', 'docs/', 'purrsephone/'],
+    });
+    log.info('Git self-modification tools enabled');
 
     // Discord adapter — setAgent enables steering (mid-stream message injection)
     this.discord = new DiscordAdapter(this.config, this.eventBus);
@@ -278,6 +309,7 @@ export class SubstrateRuntime implements Lifecycle {
         embeddingService: embeddingProvider,
         modelDiscovery,
         contactStore,
+        promptStore,
       });
       await this.adminServer.init();
       log.info(`Admin GUI configured on port ${adminPort}`);

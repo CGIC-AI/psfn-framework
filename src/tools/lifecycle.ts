@@ -1,7 +1,9 @@
 // ── Lifecycle tools ──
 // self_restart and self_rebuild tools for Purrsephone to trigger her own restarts.
 
-import type { SubstrateTool } from '../types.js';
+import { Type } from '@sinclair/typebox';
+import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { TextContent } from '@mariozechner/pi-ai';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
 import { createComponentLogger } from '../logger.js';
 
@@ -17,25 +19,25 @@ const log = createComponentLogger('LifecycleTools');
 export function createRestartTool(
   notifier: LifecycleNotifier,
   stopFn: () => Promise<void>,
-): SubstrateTool {
+): AgentTool<any> {
   return {
     name: 'self_restart',
     description:
       'Restart yourself. Sends a "brb" message to Discord, cleanly shuts down, ' +
       'and exits. Your process supervisor will restart you automatically. ' +
       'Use when you need a fresh start or after configuration changes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        reason: {
-          type: 'string',
-          description: 'Optional reason for restarting (shown in Discord notification)',
-        },
-      },
-      required: [],
-    },
-    execute: async (input) => {
-      const reason = (input.reason as string | undefined) ?? undefined;
+    label: 'self_restart',
+    parameters: Type.Object({
+      reason: Type.Optional(
+        Type.String({ description: 'Optional reason for restarting (shown in Discord notification)' }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: { reason?: string },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const reason = params.reason ?? undefined;
 
       log.info('Self-restart requested', { reason });
 
@@ -53,7 +55,10 @@ export function createRestartTool(
         process.exit(0);
       });
 
-      return { content: 'Restart initiated. Sending notification and shutting down...' };
+      return {
+        content: [{ type: 'text', text: 'Restart initiated. Sending notification and shutting down...' }] satisfies TextContent[],
+        details: {},
+      };
     },
   };
 }
@@ -65,24 +70,24 @@ export function createRestartTool(
 export function createRebuildTool(
   notifier: LifecycleNotifier,
   stopFn: () => Promise<void>,
-): SubstrateTool {
+): AgentTool<any> {
   return {
     name: 'self_rebuild',
     description:
       'Rebuild and restart yourself. Runs `npm run build` first, then restarts. ' +
       'Use after code changes that need recompilation.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        reason: {
-          type: 'string',
-          description: 'Optional reason for rebuilding (shown in Discord notification)',
-        },
-      },
-      required: [],
-    },
-    execute: async (input) => {
-      const reason = (input.reason as string | undefined) ?? undefined;
+    label: 'self_rebuild',
+    parameters: Type.Object({
+      reason: Type.Optional(
+        Type.String({ description: 'Optional reason for rebuilding (shown in Discord notification)' }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: { reason?: string },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const reason = params.reason ?? undefined;
       const fullReason = reason ? `rebuild: ${reason}` : 'rebuild';
 
       log.info('Self-rebuild requested', { reason });
@@ -114,7 +119,10 @@ export function createRebuildTool(
         process.exit(0);
       });
 
-      return { content: 'Rebuild initiated. Building, then restarting...' };
+      return {
+        content: [{ type: 'text', text: 'Rebuild initiated. Building, then restarting...' }] satisfies TextContent[],
+        details: {},
+      };
     },
   };
 }

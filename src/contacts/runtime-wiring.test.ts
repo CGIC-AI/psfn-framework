@@ -2,14 +2,14 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import type { SubstrateTool } from '../types.js';
+import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { wireContactRuntime, type ContactRuntimeTarget } from './runtime-wiring.js';
 
 class FakeTarget implements ContactRuntimeTarget {
   contactStore = null;
-  tools: SubstrateTool[] = [];
+  tools: AgentTool<any>[] = [];
 
-  registerTool(tool: SubstrateTool): void {
+  registerTool(tool: AgentTool<any>): void {
     this.tools.push(tool);
   }
 }

@@ -4,6 +4,11 @@ import type { MemoryWriter, WriteResult, BatchImportResult } from './writer.js';
 import type { PurrMemory } from './types.js';
 import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
 
+/** Extract text from AgentToolResult content array */
+function resultText(result: { content: Array<{ type: string; text: string }> }): string {
+  return result.content.map(c => c.text).join('');
+}
+
 // ── Mock MemoryWriter ──
 
 function makeMemory(overrides: Partial<PurrMemory> = {}): PurrMemory {
@@ -51,25 +56,14 @@ describe('createMemoryWriteTool', () => {
     writer = mockWriter();
   });
 
-  it('returns a valid SubstrateTool with correct name and schema', () => {
+  it('returns a valid AgentTool with correct name and schema', () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
     expect(tool.name).toBe('memory_write');
     expect(tool.description).toBeTruthy();
-    expect(tool.inputSchema).toBeDefined();
-    expect(tool.inputSchema.type).toBe('object');
-    expect(tool.inputSchema.required).toEqual(['text', 'type']);
+    expect(tool.label).toBe('memory_write');
+    expect(tool.parameters).toBeDefined();
     expect(typeof tool.execute).toBe('function');
-
-    // Verify schema includes expected properties
-    const props = tool.inputSchema.properties as Record<string, any>;
-    expect(props.text).toBeDefined();
-    expect(props.type).toBeDefined();
-    expect(props.type.enum).toEqual(VALID_MEMORY_TYPES);
-    expect(props.importance).toBeDefined();
-    expect(props.emotional_valence).toBeDefined();
-    expect(props.confidence).toBeDefined();
-    expect(props.tags).toBeDefined();
   });
 
   it('writes a memory and returns success content', async () => {
@@ -80,16 +74,16 @@ describe('createMemoryWriteTool', () => {
     } satisfies WriteResult);
 
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute({
+    const result = await tool.execute('call-1', {
       text: 'V enjoys programming',
       type: 'episodic',
       importance: 0.7,
     });
 
-    expect(result.content).toContain('Memory created');
-    expect(result.content).toContain('mem-abc');
-    expect(result.content).toContain('episodic');
-    expect(result.isError).toBeUndefined();
+    expect(resultText(result)).toContain('Memory created');
+    expect(resultText(result)).toContain('mem-abc');
+    expect(resultText(result)).toContain('episodic');
+    expect(result.details?.isError).toBeUndefined();
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       text: 'V enjoys programming',
@@ -107,14 +101,14 @@ describe('createMemoryWriteTool', () => {
     } satisfies WriteResult);
 
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute({
+    const result = await tool.execute('call-2', {
       text: 'Duplicate text',
       type: 'semantic',
     });
 
-    expect(result.content).toContain('Duplicate detected');
-    expect(result.content).toContain('existing-456');
-    expect(result.isError).toBeUndefined();
+    expect(resultText(result)).toContain('Duplicate detected');
+    expect(resultText(result)).toContain('existing-456');
+    expect(result.details?.isError).toBeUndefined();
   });
 
   it('returns superseded message when contradiction resolved', async () => {
@@ -124,52 +118,52 @@ describe('createMemoryWriteTool', () => {
     } satisfies WriteResult);
 
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute({
+    const result = await tool.execute('call-3', {
       text: 'Corrected fact',
       type: 'semantic',
       confidence: 0.95,
     });
 
-    expect(result.content).toContain('superseding older conflicting memory');
-    expect(result.content).toContain('mem-new');
-    expect(result.isError).toBeUndefined();
+    expect(resultText(result)).toContain('superseding older conflicting memory');
+    expect(resultText(result)).toContain('mem-new');
+    expect(result.details?.isError).toBeUndefined();
   });
 
-  it('handles errors gracefully and returns isError: true', async () => {
+  it('handles errors gracefully and returns isError in details', async () => {
     writer.write.mockRejectedValueOnce(new Error('Database locked'));
 
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute({
+    const result = await tool.execute('call-4', {
       text: 'Will fail',
       type: 'semantic',
     });
 
-    expect(result.content).toContain('Error writing memory');
-    expect(result.content).toContain('Database locked');
-    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Error writing memory');
+    expect(resultText(result)).toContain('Database locked');
+    expect(result.details?.isError).toBe(true);
   });
 
   it('returns error for empty text', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute({
+    const result = await tool.execute('call-5', {
       text: '',
       type: 'semantic',
     });
 
-    expect(result.content).toContain('Error: text is required');
-    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Error: text is required');
+    expect(result.details?.isError).toBe(true);
     expect(writer.write).not.toHaveBeenCalled();
   });
 
   it('returns error for invalid type', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute({
+    const result = await tool.execute('call-6', {
       text: 'Some text',
       type: 'invalid_type',
     });
 
-    expect(result.content).toContain('Error: invalid type');
-    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Error: invalid type');
+    expect(result.details?.isError).toBe(true);
     expect(writer.write).not.toHaveBeenCalled();
   });
 
@@ -177,7 +171,7 @@ describe('createMemoryWriteTool', () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
     // Test above max
-    await tool.execute({ text: 'High importance', type: 'semantic', importance: 1.5 });
+    await tool.execute('call-7', { text: 'High importance', type: 'semantic', importance: 1.5 });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       importance: 1.0,
     }));
@@ -185,7 +179,7 @@ describe('createMemoryWriteTool', () => {
     writer.write.mockClear();
 
     // Test below min
-    await tool.execute({ text: 'Negative importance', type: 'semantic', importance: -0.3 });
+    await tool.execute('call-8', { text: 'Negative importance', type: 'semantic', importance: -0.3 });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       importance: 0,
     }));
@@ -194,14 +188,14 @@ describe('createMemoryWriteTool', () => {
   it('clamps emotional_valence to -1 to 1 range', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({ text: 'Extreme positive', type: 'emotional', emotional_valence: 5 });
+    await tool.execute('call-9', { text: 'Extreme positive', type: 'emotional', emotional_valence: 5 });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       emotionalValence: 1.0,
     }));
 
     writer.write.mockClear();
 
-    await tool.execute({ text: 'Extreme negative', type: 'emotional', emotional_valence: -5 });
+    await tool.execute('call-10', { text: 'Extreme negative', type: 'emotional', emotional_valence: -5 });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       emotionalValence: -1.0,
     }));
@@ -210,7 +204,7 @@ describe('createMemoryWriteTool', () => {
   it('clamps confidence to 0-1 range', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({ text: 'Over confident', type: 'semantic', confidence: 2 });
+    await tool.execute('call-11', { text: 'Over confident', type: 'semantic', confidence: 2 });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       confidence: 1.0,
     }));
@@ -219,7 +213,7 @@ describe('createMemoryWriteTool', () => {
   it('uses NaN midpoint for non-numeric importance', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({ text: 'NaN test', type: 'semantic', importance: 'not_a_number' });
+    await tool.execute('call-12', { text: 'NaN test', type: 'semantic', importance: 'not_a_number' });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       importance: 0.5, // midpoint of (0, 1)
     }));
@@ -228,7 +222,7 @@ describe('createMemoryWriteTool', () => {
   it('adds tool:memory_write source tag', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({ text: 'Source tag test', type: 'semantic' });
+    await tool.execute('call-13', { text: 'Source tag test', type: 'semantic' });
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       sourceRef: 'tool:memory_write',
@@ -238,7 +232,7 @@ describe('createMemoryWriteTool', () => {
   it('parses comma-separated tags', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-14', {
       text: 'Tagged memory',
       type: 'semantic',
       tags: ' Identity , Preference, HOBBY ',
@@ -252,7 +246,7 @@ describe('createMemoryWriteTool', () => {
   it('trims text before writing', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-15', {
       text: '  padded text  ',
       type: 'semantic',
     });
@@ -265,7 +259,7 @@ describe('createMemoryWriteTool', () => {
   it('omits optional fields when not provided', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({ text: 'Minimal memory', type: 'semantic' });
+    await tool.execute('call-16', { text: 'Minimal memory', type: 'semantic' });
 
     const callArgs = writer.write.mock.calls[0][0];
     expect(callArgs.importance).toBeUndefined();
@@ -274,17 +268,10 @@ describe('createMemoryWriteTool', () => {
     expect(callArgs.tags).toBeUndefined();
   });
 
-  it('includes sensitivity in schema with valid enum values', () => {
-    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
-    const props = tool.inputSchema.properties as Record<string, any>;
-    expect(props.sensitivity).toBeDefined();
-    expect(props.sensitivity.enum).toEqual(VALID_SENSITIVITY_LEVELS);
-  });
-
   it('passes sensitivity through to writer.write()', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-17', {
       text: 'Confidential detail',
       type: 'semantic',
       sensitivity: 'confidential',
@@ -298,7 +285,7 @@ describe('createMemoryWriteTool', () => {
   it('omits sensitivity when not provided', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({ text: 'No sensitivity', type: 'semantic' });
+    await tool.execute('call-18', { text: 'No sensitivity', type: 'semantic' });
 
     const callArgs = writer.write.mock.calls[0][0];
     expect(callArgs.sensitivity).toBeUndefined();
@@ -312,20 +299,14 @@ describe('createMemoryImportTool', () => {
     writer = mockWriter();
   });
 
-  it('returns a valid SubstrateTool with correct name and schema', () => {
+  it('returns a valid AgentTool with correct name and schema', () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
     expect(tool.name).toBe('memory_import_batch');
     expect(tool.description).toBeTruthy();
-    expect(tool.inputSchema).toBeDefined();
-    expect(tool.inputSchema.type).toBe('object');
-    expect(tool.inputSchema.required).toEqual(['records']);
+    expect(tool.label).toBe('memory_import_batch');
+    expect(tool.parameters).toBeDefined();
     expect(typeof tool.execute).toBe('function');
-
-    // Verify schema has records and source
-    const props = tool.inputSchema.properties as Record<string, any>;
-    expect(props.records).toBeDefined();
-    expect(props.source).toBeDefined();
   });
 
   it('processes batch and returns summary content', async () => {
@@ -338,7 +319,7 @@ describe('createMemoryImportTool', () => {
     } satisfies BatchImportResult);
 
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute({
+    const result = await tool.execute('call-1', {
       records: [
         { text: 'Fact one', type: 'semantic' },
         { text: 'Fact two', type: 'semantic' },
@@ -347,19 +328,19 @@ describe('createMemoryImportTool', () => {
       ],
     });
 
-    expect(result.content).toContain('Import complete');
-    expect(result.content).toContain('3 written');
-    expect(result.content).toContain('1 deduplicated');
-    expect(result.content).toContain('0 superseded');
-    expect(result.content).toContain('0 errors');
-    expect(result.content).toContain('4 total');
-    expect(result.isError).toBeUndefined();
+    expect(resultText(result)).toContain('Import complete');
+    expect(resultText(result)).toContain('3 written');
+    expect(resultText(result)).toContain('1 deduplicated');
+    expect(resultText(result)).toContain('0 superseded');
+    expect(resultText(result)).toContain('0 errors');
+    expect(resultText(result)).toContain('4 total');
+    expect(result.details?.isError).toBeUndefined();
   });
 
   it('adds tool:memory_import:<source> provenance tag', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-2', {
       records: [
         { text: 'Voxta memory', type: 'semantic' },
       ],
@@ -373,7 +354,7 @@ describe('createMemoryImportTool', () => {
   it('uses "import" as default source when not specified', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-3', {
       records: [
         { text: 'Default source', type: 'semantic' },
       ],
@@ -386,56 +367,56 @@ describe('createMemoryImportTool', () => {
   it('returns error for empty records array', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    const result = await tool.execute({ records: [] });
+    const result = await tool.execute('call-4', { records: [] });
 
-    expect(result.content).toContain('Error: records must be a non-empty array');
-    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Error: records must be a non-empty array');
+    expect(result.details?.isError).toBe(true);
     expect(writer.importBatch).not.toHaveBeenCalled();
   });
 
   it('returns error for missing records', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    const result = await tool.execute({});
+    const result = await tool.execute('call-5', {} as any);
 
-    expect(result.content).toContain('Error: records must be a non-empty array');
-    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Error: records must be a non-empty array');
+    expect(result.details?.isError).toBe(true);
   });
 
   it('validates individual records have text', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    const result = await tool.execute({
+    const result = await tool.execute('call-6', {
       records: [
         { text: 'Good record', type: 'semantic' },
         { text: '', type: 'semantic' }, // Empty text
       ],
     });
 
-    expect(result.content).toContain('Error: record[1] has empty text');
-    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Error: record[1] has empty text');
+    expect(result.details?.isError).toBe(true);
     expect(writer.importBatch).not.toHaveBeenCalled();
   });
 
   it('validates individual records have valid type', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    const result = await tool.execute({
+    const result = await tool.execute('call-7', {
       records: [
         { text: 'Valid', type: 'semantic' },
         { text: 'Invalid type', type: 'bogus' },
       ],
-    });
+    } as any);
 
-    expect(result.content).toContain('Error: record[1] has invalid type "bogus"');
-    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Error: record[1] has invalid type "bogus"');
+    expect(result.details?.isError).toBe(true);
     expect(writer.importBatch).not.toHaveBeenCalled();
   });
 
   it('clamps values in imported records', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-8', {
       records: [
         {
           text: 'Clamped record',
@@ -456,7 +437,7 @@ describe('createMemoryImportTool', () => {
   it('parses tags in imported records', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-9', {
       records: [
         { text: 'Tagged import', type: 'semantic', tags: 'Identity, PREFERENCE' },
       ],
@@ -466,25 +447,25 @@ describe('createMemoryImportTool', () => {
     expect(importedRecords[0].tags).toEqual(['identity', 'preference']);
   });
 
-  it('handles errors gracefully and returns isError: true', async () => {
+  it('handles errors gracefully and returns isError in details', async () => {
     writer.importBatch.mockRejectedValueOnce(new Error('Storage full'));
 
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
-    const result = await tool.execute({
+    const result = await tool.execute('call-10', {
       records: [
         { text: 'Will fail', type: 'semantic' },
       ],
     });
 
-    expect(result.content).toContain('Error importing memories');
-    expect(result.content).toContain('Storage full');
-    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Error importing memories');
+    expect(resultText(result)).toContain('Storage full');
+    expect(result.details?.isError).toBe(true);
   });
 
   it('trims text in imported records', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-11', {
       records: [
         { text: '  spaces around  ', type: 'semantic' },
       ],
@@ -494,18 +475,10 @@ describe('createMemoryImportTool', () => {
     expect(importedRecords[0].text).toBe('spaces around');
   });
 
-  it('includes sensitivity in record schema', () => {
-    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
-    const props = tool.inputSchema.properties as Record<string, any>;
-    const recordProps = props.records.items.properties;
-    expect(recordProps.sensitivity).toBeDefined();
-    expect(recordProps.sensitivity.enum).toEqual(VALID_SENSITIVITY_LEVELS);
-  });
-
   it('passes sensitivity through for imported records', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-12', {
       records: [
         { text: 'Public fact', type: 'semantic', sensitivity: 'public' },
         { text: 'Intimate fact', type: 'emotional', sensitivity: 'intimate' },
@@ -520,7 +493,7 @@ describe('createMemoryImportTool', () => {
   it('omits sensitivity when not provided in imported records', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 
-    await tool.execute({
+    await tool.execute('call-13', {
       records: [
         { text: 'No sensitivity', type: 'semantic' },
       ],

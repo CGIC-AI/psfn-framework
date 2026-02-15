@@ -310,6 +310,113 @@ describe('REPLSandbox', () => {
   });
 });
 
+describe('evidence collection', () => {
+  it('collectEvidence drains accumulated evidence', async () => {
+    const embedding = new Float32Array([1, 0, 0]);
+    const embeddingService = {
+      embed: vi.fn(async () => embedding),
+      embedBatch: vi.fn(),
+      dims: 3,
+    } as unknown as EmbeddingService;
+    const memoryStore = {
+      searchByEmbedding: vi.fn(() => [
+        { text: 'found memory', type: 'semantic', importance: 0.8, similarity: 0.9 },
+      ]),
+      getAllActiveMemories: vi.fn(() => []),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    await sandbox.execute('await memory_search("test query");', 5000, 8192);
+    const evidence = sandbox.collectEvidence();
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].source).toBe('memory_search');
+    expect(evidence[0].query).toBe('test query');
+    expect(evidence[0].resultCount).toBe(1);
+    expect(evidence[0].snippet).toBe('found memory');
+
+    // Second call should return empty (drained)
+    const evidence2 = sandbox.collectEvidence();
+    expect(evidence2).toHaveLength(0);
+  });
+
+  it('records llm_query evidence', async () => {
+    const llm = mockLLM('llm response text');
+    const sandbox = new REPLSandbox(nullDeps(llm));
+    await sandbox.execute('await llm_query("test prompt");', 5000, 8192);
+    const evidence = sandbox.collectEvidence();
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].source).toBe('llm_query');
+    expect(evidence[0].query).toBe('test prompt');
+    expect(evidence[0].snippet).toBe('llm response text');
+  });
+
+  it('records session_messages evidence', async () => {
+    const sessionManager = {
+      getRecentMessages: vi.fn(() => [
+        { role: 'user', content: 'hello there', timestamp: Date.now() },
+        { role: 'assistant', content: 'hi!', timestamp: Date.now() },
+      ]),
+      appendSystemNote: vi.fn(),
+    } as unknown as SessionManager;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService: null,
+      memoryStore: null,
+      sessionManager,
+    });
+
+    await sandbox.execute('session_messages("chan1", 10);', 5000, 8192);
+    const evidence = sandbox.collectEvidence();
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].source).toBe('session_messages');
+    expect(evidence[0].query).toBe('chan1');
+    expect(evidence[0].resultCount).toBe(2);
+  });
+
+  it('collects no evidence for operations without hooks', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    await sandbox.execute('print("hello");', 5000, 8192);
+    expect(sandbox.collectEvidence()).toHaveLength(0);
+  });
+
+  it('truncates long snippets in evidence', async () => {
+    const llm = mockLLM('x'.repeat(500));
+    const sandbox = new REPLSandbox(nullDeps(llm));
+    await sandbox.execute('await llm_query("prompt");', 5000, 8192);
+    const evidence = sandbox.collectEvidence();
+    expect(evidence[0].snippet.length).toBeLessThanOrEqual(200);
+  });
+
+  it('accumulates evidence across multiple execute calls', async () => {
+    const llm = mockLLM('response');
+    const sandbox = new REPLSandbox(nullDeps(llm));
+    await sandbox.execute('await llm_query("q1");', 5000, 8192);
+    await sandbox.execute('await llm_query("q2");', 5000, 8192);
+    const evidence = sandbox.collectEvidence();
+    expect(evidence).toHaveLength(2);
+    expect(evidence[0].query).toBe('q1');
+    expect(evidence[1].query).toBe('q2');
+  });
+
+  it('evidence has timestamp', async () => {
+    const llm = mockLLM('resp');
+    const sandbox = new REPLSandbox(nullDeps(llm));
+    const before = Date.now();
+    await sandbox.execute('await llm_query("q");', 5000, 8192);
+    const after = Date.now();
+    const evidence = sandbox.collectEvidence();
+    expect(evidence[0].timestamp).toBeGreaterThanOrEqual(before);
+    expect(evidence[0].timestamp).toBeLessThanOrEqual(after);
+  });
+});
+
 describe('FinalAnswerSignal', () => {
   it('stores the answer', () => {
     const signal = new FinalAnswerSignal('test answer');

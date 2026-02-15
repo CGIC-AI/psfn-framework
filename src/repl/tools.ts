@@ -43,10 +43,12 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
 
         const totalTokens = result.totalInputTokens + result.totalOutputTokens;
         const tokenBudget = effectiveDeps.config.budget.maxTokens ?? 100_000;
+        const evidenceCount = result.evidence.length;
         const header =
           `[Think: ${result.iterations} iter${result.iterations !== 1 ? 's' : ''}, ` +
           `${totalTokens}/${tokenBudget} tokens, ` +
           `${result.durationMs}ms` +
+          `${evidenceCount > 0 ? `, ${evidenceCount} evidence` : ''}` +
           `${result.truncated ? ', truncated' : ''}` +
           `${result.budgetStatus.exceeded ? `, stopped: ${result.budgetStatus.exceeded}` : ''}]`;
 

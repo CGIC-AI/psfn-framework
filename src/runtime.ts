@@ -41,6 +41,7 @@ import {
   createPromptLayerUpdateTool,
   createPromptLayerToggleTool,
 } from './identity/prompt-tools.js';
+import { wireHeartbeatRuntime } from './bootstrap/parity.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -240,34 +241,15 @@ export class SubstrateRuntime implements Lifecycle {
       () => this.stop(),
     ));
 
-    // Discord heartbeat — hourly proof-of-life message
-    if (heartbeatChannelId) {
-      this.scheduler.register({
-        id: 'discord-heartbeat',
-        name: 'Discord Heartbeat',
-        type: 'every',
-        intervalMs: 60 * 60_000, // 1 hour
-        handler: async () => {
-          try {
-            const response = await this.agentLoop.handleMessage({
-              id: `heartbeat-${Date.now()}`,
-              channelId: `internal:heartbeat`,
-              channelType: 'terminal',
-              authorId: 'scheduler',
-              authorName: 'Heartbeat',
-              content: 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.',
-              timestamp: new Date(),
-            });
-            await this.discord.send(heartbeatChannelId, response.content);
-            log.info(`Heartbeat sent: ${response.content.slice(0, 80)}...`);
-          } catch (err) {
-            log.error('Discord heartbeat error', { error: String(err) });
-          }
-        },
-        state: 'idle',
-      });
-      log.info(`Discord heartbeat enabled (channel: ${heartbeatChannelId})`);
-    }
+    // Heartbeat / reflection system — multi-template, policy-driven
+    wireHeartbeatRuntime(
+      this.agentLoop,
+      this.scheduler,
+      this.agentLoop,
+      this.discord,
+      this.config.dataDir,
+      heartbeatChannelId,
+    );
 
     // API server — OpenAI-compatible endpoints
     const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;

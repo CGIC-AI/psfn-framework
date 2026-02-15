@@ -337,7 +337,7 @@ describe('createSpawnShardTool', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns a valid SubstrateTool', () => {
+  it('returns a valid AgentTool', () => {
     const manager = new ShardManager({
       eventBus,
       llmProvider: mockLLM(),
@@ -352,7 +352,8 @@ describe('createSpawnShardTool', () => {
 
     expect(tool.name).toBe('spawn_shard');
     expect(tool.description).toBeTruthy();
-    expect(tool.inputSchema).toBeDefined();
+    expect(tool.label).toBe('spawn_shard');
+    expect(tool.parameters).toBeDefined();
     expect(typeof tool.execute).toBe('function');
   });
 
@@ -368,12 +369,13 @@ describe('createSpawnShardTool', () => {
     });
 
     const tool = createSpawnShardTool(manager);
-    const result = await tool.execute({ name: 'test-tool', task: 'do something' });
+    const result = await tool.execute('call-1', { name: 'test-tool', task: 'do something' });
 
-    expect(result.content).toContain('Shard "test-tool" completed');
-    expect(result.content).toContain('1 turn(s)');
-    expect(result.content).toContain('30 tokens');
-    expect(result.content).toContain('tool output');
+    const text = result.content.map((c: any) => c.text).join('');
+    expect(text).toContain('Shard "test-tool" completed');
+    expect(text).toContain('1 turn(s)');
+    expect(text).toContain('30 tokens');
+    expect(text).toContain('tool output');
   });
 
   it('returns error content on failure', async () => {
@@ -393,9 +395,10 @@ describe('createSpawnShardTool', () => {
     });
 
     const tool = createSpawnShardTool(manager);
-    const result = await tool.execute({ name: 'fail', task: 'test' });
+    const result = await tool.execute('call-2', { name: 'fail', task: 'test' });
 
-    expect(result.content).toContain('Shard error');
-    expect(result.isError).toBe(true);
+    const text = result.content.map((c: any) => c.text).join('');
+    expect(text).toContain('Shard error');
+    expect(result.details?.isError).toBe(true);
   });
 });

@@ -1,51 +1,45 @@
 // ── think tool ──
 // Registered on the parent AgentLoop. Runs an ephemeral RLM loop for deep reasoning.
 
-import type { SubstrateTool } from '../types.js';
+import { Type } from '@sinclair/typebox';
+import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { TextContent } from '@mariozechner/pi-ai';
 import type { REPLDeps } from './types.js';
 import { runRLMLoop } from './loop.js';
 
-export function createThinkTool(deps: REPLDeps): SubstrateTool {
+export function createThinkTool(deps: REPLDeps): AgentTool<any> {
   return {
     name: 'think',
     description:
       'Deep analytical thinking via code execution. Use for memory exploration, ' +
       'pattern recognition, data analysis, and complex reasoning tasks. ' +
       'Runs an iterative code sandbox that can query memories and sub-LMs.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: {
-          type: 'string',
-          description: 'The analytical task or question to reason through',
-        },
-        maxIterations: {
-          type: 'number',
-          description: 'Override max iterations (default 15)',
-        },
-        maxTokens: {
-          type: 'number',
-          description: 'Override max tokens (default 100000)',
-        },
-      },
-      required: ['task'],
-    },
-    execute: async (input) => {
+    label: 'think',
+    parameters: Type.Object({
+      task: Type.String({ description: 'The analytical task or question to reason through' }),
+      maxIterations: Type.Optional(Type.Number({ description: 'Override max iterations (default 15)' })),
+      maxTokens: Type.Optional(Type.Number({ description: 'Override max tokens (default 100000)' })),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: { task: string; maxIterations?: number; maxTokens?: number },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
         // Merge budget overrides from tool input
         const effectiveDeps: REPLDeps = { ...deps };
-        if (input.maxIterations !== undefined || input.maxTokens !== undefined) {
+        if (params.maxIterations !== undefined || params.maxTokens !== undefined) {
           effectiveDeps.config = {
             ...deps.config,
             budget: {
               ...deps.config.budget,
-              ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations as number } : {}),
-              ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens as number } : {}),
+              ...(params.maxIterations !== undefined ? { maxIterations: params.maxIterations } : {}),
+              ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
             },
           };
         }
 
-        const result = await runRLMLoop(input.task as string, effectiveDeps);
+        const result = await runRLMLoop(params.task, effectiveDeps);
 
         const totalTokens = result.totalInputTokens + result.totalOutputTokens;
         const tokenBudget = effectiveDeps.config.budget.maxTokens ?? 100_000;
@@ -56,10 +50,16 @@ export function createThinkTool(deps: REPLDeps): SubstrateTool {
           `${result.truncated ? ', truncated' : ''}` +
           `${result.budgetStatus.exceeded ? `, stopped: ${result.budgetStatus.exceeded}` : ''}]`;
 
-        return { content: `${header}\n\n${result.answer}` };
+        return {
+          content: [{ type: 'text', text: `${header}\n\n${result.answer}` }] satisfies TextContent[],
+          details: {},
+        };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: `[Think error: ${msg}]`, isError: true };
+        return {
+          content: [{ type: 'text', text: `[Think error: ${msg}]` }] satisfies TextContent[],
+          details: { isError: true },
+        };
       }
     },
   };

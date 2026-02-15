@@ -45,7 +45,7 @@ export interface REPLDeps {
 }
 
 export interface ThinkEvidence {
-  source: 'memory_search' | 'session_messages' | 'llm_query' | 'code';
+  source: 'memory_search' | 'memory_get_by_id' | 'session_messages' | 'llm_query' | 'code';
   query?: string;         // search query or llm prompt (truncated)
   snippet: string;        // what was found (truncated to ~200 chars)
   resultCount?: number;   // how many results returned

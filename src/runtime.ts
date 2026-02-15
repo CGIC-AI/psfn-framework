@@ -21,7 +21,6 @@ import { MEMORY_CONFIG } from './memory/types.js';
 import { ShardManager } from './shards/manager.js';
 import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
-import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { ApiServer } from './channels/api/server.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
@@ -33,15 +32,11 @@ import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
-import { PromptLayerStore } from './identity/prompt-store.js';
-import { PromptComposer } from './identity/prompt-composer.js';
 import {
-  createPromptLayerListTool,
-  createPromptLayerGetTool,
-  createPromptLayerUpdateTool,
-  createPromptLayerToggleTool,
-} from './identity/prompt-tools.js';
-import { wireHeartbeatRuntime } from './bootstrap/parity.js';
+  wirePromptRuntime,
+  buildReplConfig,
+  wireHeartbeatRuntime,
+} from './bootstrap/parity.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -118,19 +113,11 @@ export class SubstrateRuntime implements Lifecycle {
     );
 
     // Prompt stack — layered, editable system prompt
-    const promptStore = new PromptLayerStore(
-      join(this.config.dataDir, 'prompt-layers.json'),
-      join(this.config.dataDir, 'prompt-history.jsonl'),
+    const promptStore = wirePromptRuntime(
+      this.agentLoop,
+      this.config.dataDir,
+      systemPrompt,
     );
-    promptStore.seedFromCharacterCard(systemPrompt);
-    const promptComposer = new PromptComposer(promptStore);
-    this.agentLoop.promptComposer = promptComposer;
-
-    this.agentLoop.registerTool(createPromptLayerListTool(promptStore));
-    this.agentLoop.registerTool(createPromptLayerGetTool(promptStore));
-    this.agentLoop.registerTool(createPromptLayerUpdateTool(promptStore));
-    this.agentLoop.registerTool(createPromptLayerToggleTool(promptStore));
-    log.info(`Prompt stack enabled (${promptStore.count} layers)`);
 
     // Contact store + tools — trust-gated privacy system
     const contactStore = wireContactRuntime(
@@ -187,11 +174,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.registerTool(createSpawnShardTool(this.shardManager));
 
     // Think tool — RLM+REPL sandbox for deep reasoning
-    // Thread budget overrides from editable settings into REPL config
-    const replConfig = { ...DEFAULT_REPL_CONFIG, budget: { ...DEFAULT_REPL_CONFIG.budget } };
-    if (this.config.thinkMaxTokens !== undefined) replConfig.budget.maxTokens = this.config.thinkMaxTokens;
-    if (this.config.thinkMaxWallTimeMs !== undefined) replConfig.budget.maxWallTimeMs = this.config.thinkMaxWallTimeMs;
-    if (this.config.thinkMaxSubQueries !== undefined) replConfig.budget.maxSubQueries = this.config.thinkMaxSubQueries;
+    const replConfig = buildReplConfig(this.config);
     this.agentLoop.registerTool(createThinkTool({
       llmProvider: this.llmClient,
       embeddingService: embeddingProvider,
@@ -241,7 +224,7 @@ export class SubstrateRuntime implements Lifecycle {
       () => this.stop(),
     ));
 
-    // Heartbeat / reflection system — multi-template, policy-driven
+    // Heartbeat reflections — policy-driven multi-template reflection system
     wireHeartbeatRuntime(
       this.agentLoop,
       this.scheduler,

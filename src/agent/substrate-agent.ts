@@ -8,7 +8,7 @@
 // can import them unchanged via the agent-loop.ts re-export shim.
 
 import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentTool, AgentEvent, AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentTool, AgentEvent, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
@@ -82,6 +82,7 @@ export class SubstrateAgent {
     sessionManager: SessionManager,
     systemPrompt: string,
     config: SubstrateConfig,
+    options?: { streamFn?: StreamFn },
   ) {
     this.eventBus = eventBus;
     this.llmClient = llmClient;
@@ -90,7 +91,7 @@ export class SubstrateAgent {
     this.config = config;
 
     this.agent = new Agent({
-      streamFn: createSubstrateStreamFn(config),
+      streamFn: options?.streamFn ?? createSubstrateStreamFn(config),
       convertToLlm,
     });
 
@@ -166,9 +167,12 @@ export class SubstrateAgent {
       this.agent.setSystemPrompt(context.systemPrompt);
       this.agent.setTools(this.tools);
 
-      // Convert ContextMessage[] to AgentMessage[] for the Agent
+      // Convert ContextMessage[] to AgentMessage[] for the Agent.
+      // Exclude the last message (the user message we just recorded) —
+      // agent.prompt() will re-add it, avoiding duplication.
       const agentMessages = this.contextToAgentMessages(context.messages);
-      this.agent.replaceMessages(agentMessages);
+      const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
+      this.agent.replaceMessages(historyMessages);
 
       // Subscribe to events for streaming deltas BEFORE calling prompt
       const unsub = this.agent.subscribe((event: AgentEvent) => {

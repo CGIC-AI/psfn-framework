@@ -228,6 +228,93 @@ describe('Scheduler', () => {
     });
   });
 
+  describe('updateTask', () => {
+    it('modifies intervalMs', () => {
+      scheduler.register({
+        id: 'upd-interval',
+        name: 'Updatable',
+        type: 'every',
+        intervalMs: 1000,
+        handler: () => {},
+        state: 'idle',
+      });
+
+      const result = scheduler.updateTask('upd-interval', { intervalMs: 5000 });
+      expect(result).toBe(true);
+      expect(scheduler.getTask('upd-interval')!.intervalMs).toBe(5000);
+    });
+
+    it('modifies state', () => {
+      scheduler.register({
+        id: 'upd-state',
+        name: 'Updatable',
+        type: 'every',
+        intervalMs: 1000,
+        handler: () => {},
+        state: 'idle',
+      });
+
+      const result = scheduler.updateTask('upd-state', { state: 'paused' });
+      expect(result).toBe(true);
+      expect(scheduler.getTask('upd-state')!.state).toBe('paused');
+    });
+
+    it('modifies name', () => {
+      scheduler.register({
+        id: 'upd-name',
+        name: 'Old Name',
+        type: 'every',
+        intervalMs: 1000,
+        handler: () => {},
+        state: 'idle',
+      });
+
+      const result = scheduler.updateTask('upd-name', { name: 'New Name' });
+      expect(result).toBe(true);
+      expect(scheduler.getTask('upd-name')!.name).toBe('New Name');
+    });
+
+    it('returns false for nonexistent task', () => {
+      const result = scheduler.updateTask('does-not-exist', { intervalMs: 5000 });
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('skipFirstRun option', () => {
+    it('skips first-tick execution when skipFirstRun is true', async () => {
+      const fn = vi.fn();
+      scheduler.register(
+        {
+          id: 'skip-first',
+          name: 'Skip First',
+          type: 'every',
+          intervalMs: 999_999,
+          handler: fn,
+          state: 'idle',
+        },
+        { skipFirstRun: true },
+      );
+
+      await scheduler.tick();
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    it('runs on first tick without skipFirstRun', async () => {
+      const fn = vi.fn();
+      scheduler.register({
+        id: 'no-skip',
+        name: 'No Skip',
+        type: 'every',
+        intervalMs: 999_999,
+        handler: fn,
+        state: 'idle',
+      });
+
+      await scheduler.tick();
+      expect(fn).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('heartbeat', () => {
     it('registers heartbeat as a special every task', () => {
       scheduler.registerHeartbeat(() => {});

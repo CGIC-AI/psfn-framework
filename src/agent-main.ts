@@ -24,7 +24,6 @@ import { GatewayClient } from './gateway/client.js';
 import { ShardManager } from './shards/manager.js';
 import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
-import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { ApiServer } from './channels/api/server.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
@@ -32,19 +31,16 @@ import { loadSettings, applySettings } from './settings.js';
 import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
-import { wireGitRuntime } from './git/runtime-wiring.js';
-import { PromptLayerStore } from './identity/prompt-store.js';
-import { PromptComposer } from './identity/prompt-composer.js';
-import {
-  createPromptLayerListTool,
-  createPromptLayerGetTool,
-  createPromptLayerUpdateTool,
-  createPromptLayerToggleTool,
-} from './identity/prompt-tools.js';
+import { registerGitTools } from './git/runtime-wiring.js';
+import { GatewayGitOps } from './git/gateway-ops.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
-import { wireHeartbeatRuntime } from './bootstrap/parity.js';
+import {
+  wirePromptRuntime,
+  buildReplConfig,
+  wireHeartbeatRuntime,
+} from './bootstrap/parity.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -103,19 +99,7 @@ async function main(): Promise<void> {
   );
 
   // Prompt stack — layered, editable system prompt
-  const promptStore = new PromptLayerStore(
-    join(config.dataDir, 'prompt-layers.json'),
-    join(config.dataDir, 'prompt-history.jsonl'),
-  );
-  promptStore.seedFromCharacterCard(systemPrompt);
-  const promptComposer = new PromptComposer(promptStore);
-  agentLoop.promptComposer = promptComposer;
-
-  agentLoop.registerTool(createPromptLayerListTool(promptStore));
-  agentLoop.registerTool(createPromptLayerGetTool(promptStore));
-  agentLoop.registerTool(createPromptLayerUpdateTool(promptStore));
-  agentLoop.registerTool(createPromptLayerToggleTool(promptStore));
-  log.info(`Prompt stack enabled (${promptStore.count} layers)`);
+  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, systemPrompt);
 
   // Contact store + tools — trust-gated privacy system
   const contactStore = wireContactRuntime(
@@ -167,12 +151,13 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createSpawnShardTool(shardManager));
 
   // Think tool — RLM+REPL sandbox for deep reasoning
+  const replConfig = buildReplConfig(config);
   agentLoop.registerTool(createThinkTool({
     llmProvider: gateway,
     embeddingService: gateway,
     memoryStore,
     sessionManager,
-    config: DEFAULT_REPL_CONFIG,
+    config: replConfig,
   }));
 
   // Memory write/import tools — intentional memory creation
@@ -180,11 +165,8 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
   agentLoop.registerTool(createMemoryImportTool(memoryWriter));
 
-  // Git tools — self-modification via git
-  wireGitRuntime(agentLoop, {
-    repoRoot: process.cwd(),
-    allowedPaths: ['src/', 'docs/', 'purrsephone/'],
-  });
+  // Git tools — self-modification via gateway-hosted git ops
+  registerGitTools(agentLoop, new GatewayGitOps(gateway));
   log.info('Git self-modification tools enabled');
 
   // ── API server (optional) ──
@@ -265,8 +247,7 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createRestartTool(lifecycleNotifier, stopFn));
   agentLoop.registerTool(createRebuildTool(lifecycleNotifier, stopFn));
 
-  // ── Heartbeat / reflection system ──
-
+  // Heartbeat reflections — policy-driven multi-template reflection system
   wireHeartbeatRuntime(
     agentLoop,
     scheduler,

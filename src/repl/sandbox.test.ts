@@ -380,6 +380,57 @@ describe('evidence collection', () => {
     expect(evidence[0].resultCount).toBe(2);
   });
 
+  it('records memory_get_by_id evidence', async () => {
+    const memoryStore = {
+      getById: vi.fn(() => ({
+        id: 'mem-123',
+        text: 'remembered fact about cats',
+        type: 'semantic',
+        importance: 0.7,
+        confidence: 0.9,
+        emotionalValence: 0.3,
+        salience: 0.8,
+        sourceRef: 'test',
+        tags: ['cats'],
+      })),
+      searchByEmbedding: vi.fn(() => []),
+      getAllActiveMemories: vi.fn(() => []),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService: null,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    await sandbox.execute('const m = memory_get_by_id("mem-123"); print(m.text);', 5000, 8192);
+    const evidence = sandbox.collectEvidence();
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].source).toBe('memory_get_by_id');
+    expect(evidence[0].query).toBe('mem-123');
+    expect(evidence[0].snippet).toBe('remembered fact about cats');
+    expect(evidence[0].resultCount).toBe(1);
+  });
+
+  it('memory_get_by_id records no evidence when memory not found', async () => {
+    const memoryStore = {
+      getById: vi.fn(() => null),
+      searchByEmbedding: vi.fn(() => []),
+      getAllActiveMemories: vi.fn(() => []),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService: null,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    await sandbox.execute('const m = memory_get_by_id("nonexistent"); print(m);', 5000, 8192);
+    expect(sandbox.collectEvidence()).toHaveLength(0);
+  });
+
   it('collects no evidence for operations without hooks', async () => {
     const sandbox = new REPLSandbox(nullDeps());
     await sandbox.execute('print("hello");', 5000, 8192);

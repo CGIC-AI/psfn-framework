@@ -36,18 +36,6 @@ export interface ResponseMetadata {
 
 // ── Tool system ──
 
-export interface SubstrateTool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  execute: (input: Record<string, unknown>) => Promise<ToolResult>;
-}
-
-export interface ToolResult {
-  content: string;
-  isError?: boolean;
-}
-
 /** Serializable tool schema — no execute function, safe for wire protocol */
 export interface ToolSchema {
   name: string;

@@ -247,4 +247,97 @@ describe('runRLMLoop', () => {
     expect(feedback).toContain('Variables changed: myVar');
     expect(result.answer).toBe('done');
   });
+
+  it('includes steps in ThinkResult', async () => {
+    const llm = sequentialLLM([
+      '```repl\nprint("step output");\n```',
+      'FINAL("done")',
+    ]);
+    const result = await runRLMLoop('Test steps', makeDeps(llm));
+
+    expect(result.steps).toBeDefined();
+    expect(result.steps.length).toBeGreaterThanOrEqual(1);
+    expect(result.steps[0].iteration).toBe(1);
+    expect(result.steps[0].code).toContain('print("step output")');
+    expect(result.steps[0].output).toContain('step output');
+    expect(result.steps[0].error).toBeNull();
+    expect(result.steps[0].tokensUsed).toBe(30); // 10 input + 20 output
+  });
+
+  it('flattens evidence from all steps', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar r = await llm_query("q1"); print(r);\n```',
+      'FINAL("done")',
+    ]);
+    const result = await runRLMLoop('Evidence test', makeDeps(llm));
+
+    expect(result.evidence).toBeDefined();
+    expect(Array.isArray(result.evidence)).toBe(true);
+    // The llm_query in the sandbox should have produced evidence
+    expect(result.evidence.length).toBeGreaterThanOrEqual(1);
+    expect(result.evidence[0].source).toBe('llm_query');
+  });
+
+  it('includes evidence in truncated results', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar r = await llm_query("q1"); print(r);\n```',
+      '```repl\nvar r2 = await llm_query("q2"); print(r2);\n```',
+      '```repl\nprint("still going");\n```',
+    ]);
+    const deps = makeDeps(llm, {
+      config: makeConfig({ maxIterations: 2 }),
+    });
+    const result = await runRLMLoop('Truncated evidence', deps);
+
+    expect(result.truncated).toBe(true);
+    expect(result.steps).toHaveLength(2);
+    expect(result.evidence.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('ThinkResult has empty steps/evidence for direct FINAL', async () => {
+    const llm = sequentialLLM(['FINAL("immediate")']);
+    const result = await runRLMLoop('Direct answer', makeDeps(llm));
+
+    expect(result.steps).toBeDefined();
+    expect(result.steps).toHaveLength(1); // The FINAL step itself
+    expect(result.evidence).toHaveLength(0);
+  });
+
+  it('steps include none-type iterations', async () => {
+    const llm = sequentialLLM([
+      'Let me think about this...',
+      'FINAL("thought about it")',
+    ]);
+    const result = await runRLMLoop('None step test', makeDeps(llm));
+
+    expect(result.steps).toHaveLength(2); // none step + final step
+    expect(result.steps[0].code).toBe('');
+    expect(result.steps[0].output).toBe('');
+    expect(result.steps[0].iteration).toBe(1);
+    expect(result.steps[1].iteration).toBe(2);
+  });
+
+  it('steps include code errors', async () => {
+    const llm = sequentialLLM([
+      '```repl\nthrow new Error("oops");\n```',
+      'FINAL("recovered")',
+    ]);
+    const result = await runRLMLoop('Error step test', makeDeps(llm));
+
+    expect(result.steps).toHaveLength(2);
+    expect(result.steps[0].error).toContain('oops');
+    expect(result.steps[0].code).toContain('throw new Error');
+  });
+
+  it('code step truncates long code and output', async () => {
+    const longCode = 'print("' + 'x'.repeat(3000) + '");';
+    const llm = sequentialLLM([
+      '```repl\n' + longCode + '\n```',
+      'FINAL("done")',
+    ]);
+    const result = await runRLMLoop('Truncation test', makeDeps(llm));
+
+    expect(result.steps[0].code.length).toBeLessThanOrEqual(2000);
+    expect(result.steps[0].output.length).toBeLessThanOrEqual(1000);
+  });
 });

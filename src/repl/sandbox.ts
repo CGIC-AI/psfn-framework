@@ -9,6 +9,7 @@ import type { SessionManager } from '../session/manager.js';
 import { MemoryWriter } from '../memory/writer.js';
 import type { MemoryType } from '../memory/types.js';
 import { VALID_MEMORY_TYPES } from '../memory/types.js';
+import type { ThinkEvidence } from './types.js';
 import * as helpers from './helpers.js';
 
 export class FinalAnswerSignal {
@@ -43,6 +44,7 @@ export class REPLSandbox {
   private deps: SandboxDeps;
   private budgetRef: SandboxBudgetRef | undefined;
   private builtinKeysSet: Set<string>;
+  private currentEvidence: ThinkEvidence[] = [];
 
   constructor(deps: SandboxDeps, budgetRef?: SandboxBudgetRef) {
     this.deps = deps;
@@ -69,6 +71,12 @@ export class REPLSandbox {
         { systemPrompt: 'You are a helpful assistant. Answer concisely.', messages: [{ role: 'user', content: prompt }] },
         'extraction',
       );
+      this.currentEvidence.push({
+        source: 'llm_query',
+        query: prompt.slice(0, 100),
+        snippet: response.content.slice(0, 200),
+        timestamp: Date.now(),
+      });
       return response.content;
     };
 
@@ -76,6 +84,13 @@ export class REPLSandbox {
       if (!this.deps.embeddingService || !this.deps.memoryStore) return [];
       const embedding = await this.deps.embeddingService.embed(query);
       const results = this.deps.memoryStore.searchByEmbedding(embedding, 0.3, limit);
+      this.currentEvidence.push({
+        source: 'memory_search',
+        query,
+        snippet: results[0]?.text.slice(0, 200) ?? '',
+        resultCount: results.length,
+        timestamp: Date.now(),
+      });
       return results.map(m => ({
         text: m.text,
         type: m.type,
@@ -92,6 +107,13 @@ export class REPLSandbox {
     const session_messages = (channelId: string, limit = 20): Array<{ role: string; content: string; timestamp: number }> => {
       if (!this.deps.sessionManager) return [];
       const entries = this.deps.sessionManager.getRecentMessages(channelId, limit);
+      this.currentEvidence.push({
+        source: 'session_messages',
+        query: channelId,
+        snippet: entries.length > 0 ? entries[0].content.slice(0, 200) : '',
+        resultCount: entries.length,
+        timestamp: Date.now(),
+      });
       return entries.map(e => ({
         role: e.role,
         content: e.content,
@@ -260,6 +282,13 @@ export class REPLSandbox {
       'undefined', 'null', 'true', 'false', 'Infinity', 'NaN', 'setTimeout',
       'globalThis',
     ]);
+  }
+
+  /** Drain collected evidence since last call */
+  collectEvidence(): ThinkEvidence[] {
+    const evidence = this.currentEvidence;
+    this.currentEvidence = [];
+    return evidence;
   }
 
   private snapshotUserVars(): Map<string, unknown> {

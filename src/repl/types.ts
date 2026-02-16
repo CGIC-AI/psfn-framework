@@ -3,6 +3,8 @@
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
+import type { Scheduler } from '../scheduler/scheduler.js';
+import type { EventBus } from '../event-bus.js';
 
 export interface ThinkBudget {
   maxIterations: number;      // default 15
@@ -41,6 +43,8 @@ export interface REPLDeps {
   embeddingService: EmbeddingService | null;
   memoryStore: MemoryStore | null;
   sessionManager: SessionManager | null;
+  scheduler?: Scheduler | null;
+  eventBus?: EventBus | null;
   config: REPLConfig;
 }
 
@@ -49,6 +53,7 @@ export interface ThinkEvidence {
   query?: string;         // search query or llm prompt (truncated)
   snippet: string;        // what was found (truncated to ~200 chars)
   resultCount?: number;   // how many results returned
+  attempt?: number;       // retry/sub-query attempt index when applicable
   timestamp: number;
 }
 

@@ -77,6 +77,7 @@ export class SessionStore {
             authorId: j.authorId,
             authorName: j.authorName,
             timestamp: j.timestamp,
+            discordMessageId: j.discordMessageId,
             metadata: j.metadata,
           });
         } else if (j.type === 'compaction') {
@@ -113,6 +114,7 @@ export class SessionStore {
       authorId: entry.authorId,
       authorName: entry.authorName,
       timestamp: entry.timestamp,
+      discordMessageId: entry.discordMessageId,
       metadata: entry.metadata,
     };
     appendFileSync(cache.resolvedPath, JSON.stringify(journal) + '\n');
@@ -124,6 +126,19 @@ export class SessionStore {
     const cache = this.ensureChannel(channelId);
     if (cache.entries.length <= limit) return [...cache.entries];
     return cache.entries.slice(-limit);
+  }
+
+  getLastEntry(channelId: string): SessionEntry | undefined {
+    const cache = this.ensureChannel(channelId);
+    return cache.entries[cache.entries.length - 1];
+  }
+
+  getRecentDiscordMessageIds(channelId: string, limit: number): Set<string> {
+    const entries = this.getRecent(channelId, limit);
+    const ids = entries
+      .map((entry) => entry.discordMessageId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    return new Set(ids);
   }
 
   count(channelId: string): number {

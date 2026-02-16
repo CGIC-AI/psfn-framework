@@ -62,6 +62,8 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     embeddingService: deps.embeddingService,
     memoryStore: deps.memoryStore,
     sessionManager: deps.sessionManager,
+    scheduler: deps.scheduler,
+    eventBus: deps.eventBus,
   }, budgetRef);
 
   // Gather context metadata for system prompt

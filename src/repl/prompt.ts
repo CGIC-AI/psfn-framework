@@ -22,6 +22,8 @@ Variables persist across iterations. When you have the answer, call FINAL().
 
 ### LLM
 - \`await llm_query(prompt)\` — Ask a sub-LM question, returns string
+- \`await llm_query_strict(prompt, validatePattern?, maxRetries?)\` — Ask sub-LM with optional regex validation + retries
+- \`await llm_query_json(prompt, maxRetries?)\` — Ask sub-LM for JSON and parse it (returns object/array or null)
 
 ### Memory
 - \`await memory_search(query, limit?)\` — Search memories by semantic similarity, returns array of {text, type, importance, similarity}
@@ -34,6 +36,15 @@ Variables persist across iterations. When you have the answer, call FINAL().
 ### Session
 - \`session_messages(channelId, limit?)\` — Get recent messages from a channel, returns array of {role, content, timestamp}
 - \`session_append_note(channelId, note)\` — Inject a system note into a session
+
+### Scheduler
+- \`schedule_list()\` — List all registered tasks
+- \`schedule_add_every(name, intervalMs, handler)\` — Register a recurring task
+- \`schedule_add_once(name, at, handler)\` — Register a one-shot task (at = timestamp, ISO string, or Date)
+- \`schedule_update(id, updates)\` — Update a task's interval/state/name/runAt
+
+### Events
+- \`await event_emit(eventName, data)\` — Emit an allowlisted event (\`schedule.tick\`, \`schedule.task.run\`, \`schedule.heartbeat\`)
 
 ### Text analysis
 - \`search(text, pattern, contextLines?)\` — Regex search with context lines, returns match blocks

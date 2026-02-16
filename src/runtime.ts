@@ -180,6 +180,8 @@ export class SubstrateRuntime implements Lifecycle {
       embeddingService: embeddingProvider,
       memoryStore: this.memoryStore,
       sessionManager: this.sessionManager,
+      scheduler: this.scheduler,
+      eventBus: this.eventBus,
       config: replConfig,
     }));
 
@@ -196,7 +198,9 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('Git self-modification tools enabled');
 
     // Discord adapter — setAgent enables steering (mid-stream message injection)
-    this.discord = new DiscordAdapter(this.config, this.eventBus);
+    this.discord = new DiscordAdapter(this.config, this.eventBus, {
+      sessionStore: this.sessionStore,
+    });
     this.discord.setAgent(this.agentLoop);
     await this.discord.init();
 

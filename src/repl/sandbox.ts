@@ -6,11 +6,61 @@ import vm from 'node:vm';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
+import type { Scheduler } from '../scheduler/scheduler.js';
+import type { TaskState, TaskType } from '../scheduler/types.js';
+import type { EventBus, EventName } from '../event-bus.js';
 import { MemoryWriter } from '../memory/writer.js';
 import type { MemoryType } from '../memory/types.js';
 import { VALID_MEMORY_TYPES } from '../memory/types.js';
 import type { ThinkEvidence } from './types.js';
 import * as helpers from './helpers.js';
+
+interface ScheduleView {
+  id: string;
+  name: string;
+  type: TaskType;
+  intervalMs: number;
+  runAt?: number;
+  state: TaskState;
+}
+
+interface ScheduleMutationResult {
+  ok: boolean;
+  id?: string;
+  error?: string;
+}
+
+const REPL_EVENT_ALLOWLIST: ReadonlySet<EventName> = new Set([
+  'schedule.tick',
+  'schedule.task.run',
+  'schedule.heartbeat',
+]);
+
+const VALID_TASK_STATES: ReadonlySet<TaskState> = new Set([
+  'idle',
+  'active',
+  'paused',
+  'complete',
+]);
+
+function nextReplTaskId(): string {
+  return `repl:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function parseRunAt(value: number | string | Date): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (value instanceof Date) {
+    const ts = value.getTime();
+    return Number.isNaN(ts) ? null : ts;
+  }
+  return null;
+}
 
 export class FinalAnswerSignal {
   readonly answer: string;
@@ -24,6 +74,8 @@ export interface SandboxDeps {
   embeddingService: EmbeddingService | null;
   memoryStore: MemoryStore | null;
   sessionManager: SessionManager | null;
+  scheduler?: Scheduler | null;
+  eventBus?: EventBus | null;
 }
 
 export interface SandboxBudgetRef {
@@ -62,9 +114,11 @@ export class REPLSandbox {
       throw new FinalAnswerSignal(String(answer));
     };
 
-    const llm_query = async (prompt: string): Promise<string> => {
+    const BUDGET_EXCEEDED_MESSAGE = '[Budget exceeded: max sub-queries reached]';
+
+    const runSubQuery = async (prompt: string, evidenceQuery: string, attempt?: number): Promise<string> => {
       if (this.budgetRef && this.budgetRef.subQueries >= this.budgetRef.maxSubQueries) {
-        return '[Budget exceeded: max sub-queries reached]';
+        return BUDGET_EXCEEDED_MESSAGE;
       }
       if (this.budgetRef) this.budgetRef.subQueries++;
       const response = await this.deps.llmProvider.complete(
@@ -73,11 +127,62 @@ export class REPLSandbox {
       );
       this.currentEvidence.push({
         source: 'llm_query',
-        query: prompt.slice(0, 100),
+        query: evidenceQuery.slice(0, 100),
         snippet: response.content.slice(0, 200),
+        attempt,
         timestamp: Date.now(),
       });
       return response.content;
+    };
+
+    const llm_query = async (prompt: string): Promise<string> => {
+      return runSubQuery(prompt, prompt);
+    };
+
+    const llm_query_strict = async (
+      prompt: string,
+      validatePattern?: string,
+      maxRetries?: number,
+    ): Promise<string> => {
+      const retries = typeof maxRetries === 'number' && Number.isFinite(maxRetries)
+        ? Math.max(1, Math.floor(maxRetries))
+        : 3;
+      let lastResult = '';
+
+      for (let attempt = 0; attempt < retries; attempt++) {
+        const effectivePrompt = attempt === 0
+          ? prompt
+          : `${prompt}\n\nYour previous response was invalid (attempt ${attempt}/${retries}). ` +
+            `Output must match pattern: ${validatePattern}\n` +
+            `Previous output: ${lastResult.slice(0, 200)}`;
+
+        const result = await runSubQuery(effectivePrompt, prompt, attempt + 1);
+        if (result === BUDGET_EXCEEDED_MESSAGE) return result;
+        lastResult = result;
+
+        if (!validatePattern) return lastResult;
+
+        try {
+          if (new RegExp(validatePattern).test(lastResult)) return lastResult;
+        } catch {
+          return lastResult;
+        }
+      }
+
+      return lastResult;
+    };
+
+    const llm_query_json = async (prompt: string, maxRetries?: number): Promise<unknown> => {
+      const result = await llm_query_strict(
+        `${prompt}\n\nRespond with valid JSON only, no markdown.`,
+        '^\\s*[\\{\\[]',
+        maxRetries,
+      );
+      try {
+        return JSON.parse(result);
+      } catch {
+        return null;
+      }
     };
 
     const memory_search = async (query: string, limit = 10): Promise<Array<{ text: string; type: string; importance: number; similarity: number }>> => {
@@ -216,12 +321,148 @@ export class REPLSandbox {
       };
     };
 
+    const schedule_list = (): ScheduleView[] => {
+      if (!this.deps.scheduler) return [];
+      return this.deps.scheduler.listTasks().map(task => ({
+        id: task.id,
+        name: task.name,
+        type: task.type,
+        intervalMs: task.intervalMs,
+        runAt: task.runAt,
+        state: task.state,
+      }));
+    };
+
+    const schedule_add_every = (
+      name: string,
+      intervalMs: number,
+      handler: unknown,
+    ): ScheduleMutationResult => {
+      if (!this.deps.scheduler) return { ok: false, error: 'no scheduler' };
+      const taskName = typeof name === 'string' ? name.trim() : '';
+      if (!taskName) return { ok: false, error: 'name is required' };
+      if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+        return { ok: false, error: 'intervalMs must be > 0' };
+      }
+      if (typeof handler !== 'function') {
+        return { ok: false, error: 'handler must be a function' };
+      }
+
+      const id = nextReplTaskId();
+      this.deps.scheduler.register({
+        id,
+        name: taskName,
+        type: 'every',
+        intervalMs,
+        handler: async () => {
+          await Promise.resolve((handler as () => unknown).call(this.context));
+        },
+        state: 'idle',
+      });
+      return { ok: true, id };
+    };
+
+    const schedule_add_once = (
+      name: string,
+      at: number | string | Date,
+      handler: unknown,
+    ): ScheduleMutationResult => {
+      if (!this.deps.scheduler) return { ok: false, error: 'no scheduler' };
+      const taskName = typeof name === 'string' ? name.trim() : '';
+      if (!taskName) return { ok: false, error: 'name is required' };
+      if (typeof handler !== 'function') {
+        return { ok: false, error: 'handler must be a function' };
+      }
+      const runAt = parseRunAt(at);
+      if (runAt === null) return { ok: false, error: 'invalid runAt time' };
+
+      const id = nextReplTaskId();
+      this.deps.scheduler.register({
+        id,
+        name: taskName,
+        type: 'one-shot',
+        intervalMs: 0,
+        runAt,
+        handler: async () => {
+          await Promise.resolve((handler as () => unknown).call(this.context));
+        },
+        state: 'idle',
+      });
+      return { ok: true, id };
+    };
+
+    const schedule_update = (
+      id: string,
+      updates: {
+        intervalMs?: number;
+        state?: string;
+        name?: string;
+        runAt?: number | string | Date;
+      },
+    ): ScheduleMutationResult => {
+      if (!this.deps.scheduler) return { ok: false, error: 'no scheduler' };
+      const taskId = typeof id === 'string' ? id.trim() : '';
+      if (!taskId) return { ok: false, error: 'task id is required' };
+      if (!updates || typeof updates !== 'object') {
+        return { ok: false, error: 'updates object is required' };
+      }
+
+      const next: { intervalMs?: number; state?: TaskState; name?: string; runAt?: number } = {};
+
+      if (updates.intervalMs !== undefined) {
+        if (!Number.isFinite(updates.intervalMs) || updates.intervalMs <= 0) {
+          return { ok: false, error: 'intervalMs must be > 0' };
+        }
+        next.intervalMs = updates.intervalMs;
+      }
+
+      if (updates.state !== undefined) {
+        if (typeof updates.state !== 'string' || !VALID_TASK_STATES.has(updates.state as TaskState)) {
+          return { ok: false, error: `invalid state: ${updates.state}` };
+        }
+        next.state = updates.state as TaskState;
+      }
+
+      if (updates.name !== undefined) {
+        if (typeof updates.name !== 'string') return { ok: false, error: 'name must be a string' };
+        const taskName = updates.name.trim();
+        if (!taskName) return { ok: false, error: 'name must be non-empty' };
+        next.name = taskName;
+      }
+
+      if (updates.runAt !== undefined) {
+        const runAt = parseRunAt(updates.runAt);
+        if (runAt === null) return { ok: false, error: 'invalid runAt time' };
+        next.runAt = runAt;
+      }
+
+      if (Object.keys(next).length === 0) {
+        return { ok: false, error: 'no updates provided' };
+      }
+
+      const updated = this.deps.scheduler.updateTask(taskId, next);
+      return updated ? { ok: true } : { ok: false, error: `task "${taskId}" not found` };
+    };
+
+    const event_emit = async (eventName: string, data: unknown): Promise<ScheduleMutationResult> => {
+      if (!this.deps.eventBus) return { ok: false, error: 'no event bus' };
+      const normalized = typeof eventName === 'string' ? eventName.trim() : '';
+      if (!normalized) return { ok: false, error: 'eventName is required' };
+      if (!REPL_EVENT_ALLOWLIST.has(normalized as EventName)) {
+        return { ok: false, error: `event "${normalized}" is not allowlisted` };
+      }
+      await this.deps.eventBus.emit(normalized as EventName, data as never);
+      return { ok: true };
+    };
+
     this.context = vm.createContext({
       // Injected functions
       print,
       console: { log: print, warn: print, error: print },
       FINAL,
       llm_query,
+      llm_query_strict,
+      llm_query_json,
       memory_search,
       memory_count,
       memory_write,
@@ -230,6 +471,11 @@ export class REPLSandbox {
       memory_get_by_id,
       session_messages,
       session_append_note,
+      schedule_list,
+      schedule_add_every,
+      schedule_add_once,
+      schedule_update,
+      event_emit,
 
       // Text analysis helpers
       search: helpers.search,
@@ -278,9 +524,10 @@ export class REPLSandbox {
 
     // Initialize builtin keys set for variable tracking and getLocals
     this.builtinKeysSet = new Set([
-      'print', 'console', 'FINAL', 'llm_query', 'memory_search',
+      'print', 'console', 'FINAL', 'llm_query', 'llm_query_strict', 'llm_query_json', 'memory_search',
       'memory_count', 'memory_write', 'memory_upsert', 'memory_import_batch',
       'memory_get_by_id', 'session_messages', 'session_append_note',
+      'schedule_list', 'schedule_add_every', 'schedule_add_once', 'schedule_update', 'event_emit',
       'search', 'grep', 'grep_v', 'between', 'head', 'tail',
       'word_frequency', 'diff', 'text_similarity', 'dedupe', 'group_by', 'partition',
       'JSON', 'Math', 'Date',

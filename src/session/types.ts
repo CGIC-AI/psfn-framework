@@ -6,6 +6,7 @@ export interface SessionEntry {
   authorId?: string;
   authorName?: string;
   timestamp: number;
+  discordMessageId?: string;
   metadata?: string;
   originChannelId?: string;
   channelVisibility?: string;
@@ -30,6 +31,7 @@ export interface JournalEntry {
   authorId?: string;
   authorName?: string;
   timestamp: number;
+  discordMessageId?: string;
   metadata?: string;
   // compaction fields
   summary?: string;

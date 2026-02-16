@@ -9,6 +9,7 @@ import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
 import type { MessageHandler, ChannelAdapter } from '../types.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../event-bus.js';
+import type { SessionStore } from '../../session/store.js';
 import { createComponentLogger } from '../../logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
 
@@ -16,6 +17,13 @@ const log = createComponentLogger('Discord');
 
 const TYPING_INTERVAL_MS = 9_000;
 const MAX_DISCORD_LENGTH = 2000;
+const STARTUP_BACKFILL_LIMIT = 100;
+const BACKFILL_DEDUP_WINDOW = 500;
+const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+
+interface DiscordAdapterOptions {
+  sessionStore?: SessionStore;
+}
 
 export class DiscordAdapter implements ChannelAdapter {
   readonly name = 'discord';
@@ -23,15 +31,17 @@ export class DiscordAdapter implements ChannelAdapter {
   private client: Client;
   private config: SubstrateConfig;
   private eventBus: EventBus;
+  private sessionStore: SessionStore | null;
   private handler: MessageHandler | null = null;
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
   private voice: DiscordVoiceRuntime;
 
-  constructor(config: SubstrateConfig, eventBus: EventBus) {
+  constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.config = config;
     this.eventBus = eventBus;
+    this.sessionStore = options.sessionStore ?? null;
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -84,6 +94,9 @@ export class DiscordAdapter implements ChannelAdapter {
       throw new Error('DISCORD_TOKEN is required');
     }
     await this.client.login(this.config.discordToken);
+    if (this.config.discordBackfillOnStartup !== false) {
+      await this.backfillOnStartup();
+    }
   }
 
   async stop(): Promise<void> {
@@ -173,6 +186,75 @@ export class DiscordAdapter implements ChannelAdapter {
         (channel as TextChannel).sendTyping().catch(() => {});
       }
     }, TYPING_INTERVAL_MS);
+  }
+
+  private async backfillOnStartup(): Promise<void> {
+    if (!this.sessionStore) return;
+
+    const sessionChannelIds = this.sessionStore.listChannels()
+      .filter(channel => channel.messageCount > 0)
+      .map(channel => channel.channelId)
+      .filter(channelId => this.toDiscordChannelId(channelId) !== null);
+
+    for (const sessionChannelId of sessionChannelIds) {
+      const discordChannelId = this.toDiscordChannelId(sessionChannelId);
+      if (!discordChannelId) continue;
+
+      try {
+        const channel = await this.client.channels.fetch(discordChannelId);
+        if (!channel?.isTextBased()) continue;
+
+        const cursor = this.findBackfillCursor(sessionChannelId);
+        const options: { limit: number; after?: string } = { limit: STARTUP_BACKFILL_LIMIT };
+        if (cursor) options.after = cursor;
+
+        const messages = await (channel as TextChannel).messages.fetch(options);
+        if (messages.size === 0) continue;
+
+        const dedupIds = this.sessionStore.getRecentDiscordMessageIds(sessionChannelId, BACKFILL_DEDUP_WINDOW);
+        const sorted = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+        for (const msg of sorted) {
+          if (msg.author.bot) continue;
+          if (dedupIds.has(msg.id)) continue;
+
+          this.sessionStore.append({
+            channelId: sessionChannelId,
+            role: 'user',
+            content: msg.content.trim() || '(empty message)',
+            authorId: msg.author.id,
+            authorName: msg.author.displayName ?? msg.author.username,
+            timestamp: msg.createdTimestamp,
+            discordMessageId: msg.id,
+          });
+          dedupIds.add(msg.id);
+        }
+      } catch (err) {
+        log.warn('Discord startup backfill failed for channel', {
+          channelId: sessionChannelId,
+          error: String(err),
+        });
+      }
+    }
+  }
+
+  private findBackfillCursor(sessionChannelId: string): string | undefined {
+    const last = this.sessionStore?.getLastEntry(sessionChannelId);
+    if (last?.discordMessageId) return last.discordMessageId;
+
+    const recent = this.sessionStore?.getRecent(sessionChannelId, BACKFILL_DEDUP_WINDOW) ?? [];
+    for (let i = recent.length - 1; i >= 0; i--) {
+      if (recent[i].discordMessageId) return recent[i].discordMessageId;
+    }
+    return undefined;
+  }
+
+  private toDiscordChannelId(sessionChannelId: string): string | null {
+    if (sessionChannelId.startsWith('discord:')) {
+      const value = sessionChannelId.slice('discord:'.length);
+      return DISCORD_CHANNEL_ID_PATTERN.test(value) ? value : null;
+    }
+    return DISCORD_CHANNEL_ID_PATTERN.test(sessionChannelId) ? sessionChannelId : null;
   }
 }
 

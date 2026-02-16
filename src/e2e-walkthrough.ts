@@ -116,6 +116,8 @@ async function main(): Promise<void> {
     embeddingService: embeddingProvider,
     memoryStore,
     sessionManager,
+    scheduler: null,
+    eventBus,
     config: DEFAULT_REPL_CONFIG,
   }));
 

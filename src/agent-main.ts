@@ -157,6 +157,8 @@ async function main(): Promise<void> {
     embeddingService: gateway,
     memoryStore,
     sessionManager,
+    scheduler,
+    eventBus,
     config: replConfig,
   }));
 

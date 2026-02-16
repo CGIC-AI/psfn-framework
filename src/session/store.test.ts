@@ -95,6 +95,44 @@ describe('SessionStore', () => {
     expect(summaries[0].summary).toBe('Summary from before');
   });
 
+  it('persists discord message IDs for dedup helpers', () => {
+    store.append({
+      channelId: '123456789012345678',
+      role: 'user',
+      content: 'Hello from Discord',
+      authorId: 'user-1',
+      authorName: 'Alice',
+      timestamp: 1000,
+      discordMessageId: 'msg-1',
+    });
+    store.append({
+      channelId: '123456789012345678',
+      role: 'assistant',
+      content: 'Reply',
+      timestamp: 2000,
+    });
+    store.append({
+      channelId: '123456789012345678',
+      role: 'user',
+      content: 'Follow-up',
+      authorId: 'user-1',
+      authorName: 'Alice',
+      timestamp: 3000,
+      discordMessageId: 'msg-2',
+    });
+
+    const ids = store.getRecentDiscordMessageIds('123456789012345678', 10);
+    expect(ids.has('msg-1')).toBe(true);
+    expect(ids.has('msg-2')).toBe(true);
+    expect(store.getLastEntry('123456789012345678')?.discordMessageId).toBe('msg-2');
+
+    const reloaded = new SessionStore(dir);
+    const reloadedIds = reloaded.getRecentDiscordMessageIds('123456789012345678', 10);
+    expect(reloadedIds.has('msg-1')).toBe(true);
+    expect(reloadedIds.has('msg-2')).toBe(true);
+    expect(reloaded.getLastEntry('123456789012345678')?.discordMessageId).toBe('msg-2');
+  });
+
   it('assigns monotonic IDs', () => {
     const id1 = store.append({ channelId: 'ch1', role: 'user', content: 'A', timestamp: 1000 });
     const id2 = store.append({ channelId: 'ch1', role: 'user', content: 'B', timestamp: 2000 });

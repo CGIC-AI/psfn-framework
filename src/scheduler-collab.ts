@@ -96,7 +96,7 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createSpawnShardTool(shardManager));
   agentLoop.registerTool(createThinkTool({
     llmProvider: llmClient, embeddingService: embeddingProvider,
-    memoryStore, sessionManager, config: DEFAULT_REPL_CONFIG,
+    memoryStore, sessionManager, scheduler: null, eventBus, config: DEFAULT_REPL_CONFIG,
   }));
 
   eventBus.on('memory.extraction.end', ({ channelId, count }) => {

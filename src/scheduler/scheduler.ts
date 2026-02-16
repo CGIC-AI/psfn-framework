@@ -28,12 +28,13 @@ export class Scheduler {
     this.tasks.set(task.id, { ...task, lastRun });
   }
 
-  updateTask(id: string, updates: { intervalMs?: number; state?: TaskState; name?: string }): boolean {
+  updateTask(id: string, updates: { intervalMs?: number; state?: TaskState; name?: string; runAt?: number }): boolean {
     const entry = this.tasks.get(id);
     if (!entry) return false;
     if (updates.intervalMs !== undefined) entry.intervalMs = updates.intervalMs;
     if (updates.state !== undefined) entry.state = updates.state;
     if (updates.name !== undefined) entry.name = updates.name;
+    if (updates.runAt !== undefined) entry.runAt = updates.runAt;
     return true;
   }
 

@@ -274,6 +274,24 @@ describe('Scheduler', () => {
       expect(scheduler.getTask('upd-name')!.name).toBe('New Name');
     });
 
+    it('modifies runAt for one-shot tasks', () => {
+      const runAt = Date.now() + 60_000;
+      scheduler.register({
+        id: 'upd-runAt',
+        name: 'One Shot',
+        type: 'one-shot',
+        intervalMs: 0,
+        runAt,
+        handler: () => {},
+        state: 'idle',
+      });
+
+      const nextRunAt = runAt + 60_000;
+      const result = scheduler.updateTask('upd-runAt', { runAt: nextRunAt });
+      expect(result).toBe(true);
+      expect(scheduler.getTask('upd-runAt')!.runAt).toBe(nextRunAt);
+    });
+
     it('returns false for nonexistent task', () => {
       const result = scheduler.updateTask('does-not-exist', { intervalMs: 5000 });
       expect(result).toBe(false);

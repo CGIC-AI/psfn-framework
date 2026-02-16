@@ -5,6 +5,8 @@ import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { LLMResponse } from '../types.js';
+import { EventBus } from '../event-bus.js';
+import { Scheduler } from '../scheduler/scheduler.js';
 
 function mockLLM(content = 'llm response'): LLMProvider {
   return {
@@ -27,12 +29,40 @@ function mockLLM(content = 'llm response'): LLMProvider {
   };
 }
 
+function mockSequentialLLM(contents: string[]): LLMProvider {
+  let callIdx = 0;
+  return {
+    stream: vi.fn(async () => ({
+      content: contents[callIdx] ?? contents[contents.length - 1] ?? '',
+      toolCalls: [],
+      model: 'mock',
+      inputTokens: 10,
+      outputTokens: 20,
+      stopReason: 'stop',
+    } satisfies LLMResponse)),
+    complete: vi.fn(async () => {
+      const content = contents[callIdx] ?? contents[contents.length - 1] ?? '';
+      callIdx++;
+      return {
+        content,
+        toolCalls: [],
+        model: 'mock',
+        inputTokens: 10,
+        outputTokens: 20,
+        stopReason: 'stop',
+      } satisfies LLMResponse;
+    }),
+  };
+}
+
 function nullDeps(llm?: LLMProvider) {
   return {
     llmProvider: llm ?? mockLLM(),
     embeddingService: null,
     memoryStore: null,
     sessionManager: null,
+    scheduler: null,
+    eventBus: null,
   };
 }
 
@@ -98,6 +128,79 @@ describe('REPLSandbox', () => {
     );
     expect(result.output).toBe('sub-answer');
     expect(llm.complete).toHaveBeenCalled();
+  });
+
+  it('llm_query_strict retries until regex matches', async () => {
+    const llm = mockSequentialLLM(['invalid', 'ID-42']);
+    const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 5 };
+    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const result = await sandbox.execute(
+      'const answer = await llm_query_strict("Give me an ID", "^ID-\\\\d+$", 3); print(answer);',
+      5000, 8192,
+    );
+
+    expect(result.output).toBe('ID-42');
+    expect(llm.complete).toHaveBeenCalledTimes(2);
+    expect(budgetRef.subQueries).toBe(2);
+
+    const evidence = sandbox.collectEvidence();
+    expect(evidence).toHaveLength(2);
+    expect(evidence[0].attempt).toBe(1);
+    expect(evidence[1].attempt).toBe(2);
+  });
+
+  it('llm_query_strict returns last attempt when retries are exhausted', async () => {
+    const llm = mockSequentialLLM(['bad-1', 'bad-2', 'bad-3']);
+    const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 5 };
+    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const result = await sandbox.execute(
+      'const answer = await llm_query_strict("Give me ok", "^ok$", 3); print(answer);',
+      5000, 8192,
+    );
+
+    expect(result.output).toBe('bad-3');
+    expect(llm.complete).toHaveBeenCalledTimes(3);
+    expect(budgetRef.subQueries).toBe(3);
+  });
+
+  it('llm_query_strict handles invalid regex without crashing', async () => {
+    const llm = mockSequentialLLM(['first-response', 'second-response']);
+    const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 5 };
+    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const result = await sandbox.execute(
+      'const answer = await llm_query_strict("test", "[a-", 5); print(answer);',
+      5000, 8192,
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.output).toBe('first-response');
+    expect(llm.complete).toHaveBeenCalledTimes(1);
+    expect(budgetRef.subQueries).toBe(1);
+  });
+
+  it('llm_query_json retries and parses JSON responses', async () => {
+    const llm = mockSequentialLLM(['not json', '{"ok":true,"count":2}']);
+    const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 5 };
+    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const result = await sandbox.execute(
+      'const obj = await llm_query_json("Return JSON", 2); print(obj.ok, obj.count);',
+      5000, 8192,
+    );
+
+    expect(result.output).toBe('true 2');
+    expect(llm.complete).toHaveBeenCalledTimes(2);
+    expect(budgetRef.subQueries).toBe(2);
+  });
+
+  it('llm_query_json returns null when JSON parsing fails', async () => {
+    const llm = mockSequentialLLM(['{bad json}']);
+    const sandbox = new REPLSandbox(nullDeps(llm));
+    const result = await sandbox.execute(
+      'const obj = await llm_query_json("Return JSON", 1); print(obj === null);',
+      5000, 8192,
+    );
+
+    expect(result.output).toBe('true');
   });
 
   it('memory_search returns empty when no memory store', async () => {
@@ -262,6 +365,13 @@ describe('REPLSandbox', () => {
     const locals = sandbox.getLocals();
     expect(locals.memory_upsert).toBeUndefined();
     expect(locals.session_append_note).toBeUndefined();
+    expect(locals.schedule_list).toBeUndefined();
+    expect(locals.schedule_add_every).toBeUndefined();
+    expect(locals.schedule_add_once).toBeUndefined();
+    expect(locals.schedule_update).toBeUndefined();
+    expect(locals.event_emit).toBeUndefined();
+    expect(locals.llm_query_strict).toBeUndefined();
+    expect(locals.llm_query_json).toBeUndefined();
   });
 
   it('tracks new variable creation in variablesChanged', async () => {
@@ -307,6 +417,176 @@ describe('REPLSandbox', () => {
       5000, 8192,
     );
     expect(result.output).toBe('no-budget-response');
+  });
+
+  it('schedule_list returns tasks without handlers', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 1000, heartbeatIntervalMs: 1000 });
+    scheduler.register({
+      id: 'existing-task',
+      name: 'Existing Task',
+      type: 'every',
+      intervalMs: 60_000,
+      handler: () => {},
+      state: 'idle',
+    });
+
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      scheduler,
+      eventBus,
+    });
+
+    const result = await sandbox.execute(
+      'const tasks = schedule_list(); print(tasks.length); print(Boolean(tasks[0].handler));',
+      5000, 8192,
+    );
+    expect(result.output).toBe('1\nfalse');
+  });
+
+  it('schedule_add_every registers task and validates inputs', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 1000, heartbeatIntervalMs: 1000 });
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      scheduler,
+      eventBus,
+    });
+
+    const created = await sandbox.execute(
+      [
+        'const ok = schedule_add_every("Pulse", 50, () => { globalThis.hitCount = (globalThis.hitCount || 0) + 1; });',
+        'print(ok.ok);',
+        'print(ok.id.startsWith("repl:"));',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+    expect(created.output).toBe('true\ntrue');
+    expect(scheduler.listTasks()).toHaveLength(1);
+
+    await scheduler.tick();
+    expect(sandbox.getLocals().hitCount).toBe(1);
+
+    const guardrail = await sandbox.execute(
+      'const bad = schedule_add_every("Pulse", 10, "not-fn"); print(bad.ok); print(bad.error);',
+      5000,
+      8192,
+    );
+    expect(guardrail.output).toBe('false\nhandler must be a function');
+    expect(scheduler.listTasks()).toHaveLength(1);
+  });
+
+  it('schedule_add_once and schedule_update handle happy path + guardrails', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 1000, heartbeatIntervalMs: 1000 });
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      scheduler,
+      eventBus,
+    });
+
+    const addResult = await sandbox.execute(
+      [
+        'const created = schedule_add_once("One Shot", Date.now() + 1_000, () => { globalThis.onceHits = (globalThis.onceHits || 0) + 1; });',
+        'globalThis.taskId = created.id;',
+        'print(created.ok);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+    expect(addResult.output).toBe('true');
+
+    const updateResult = await sandbox.execute(
+      [
+        'const updated = schedule_update(taskId, {',
+        '  name: "One Shot Renamed",',
+        '  runAt: Date.now() - 100,',
+        '  state: "idle",',
+        '});',
+        'print(updated.ok);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+    expect(updateResult.output).toBe('true');
+
+    await scheduler.tick();
+    expect(sandbox.getLocals().onceHits).toBe(1);
+    const updatedTask = scheduler.getTask(String(sandbox.getLocals().taskId));
+    expect(updatedTask?.name).toBe('One Shot Renamed');
+    expect(updatedTask?.state).toBe('complete');
+
+    const badState = await sandbox.execute(
+      'const bad = schedule_update(taskId, { state: "invalid" }); print(bad.ok); print(bad.error);',
+      5000,
+      8192,
+    );
+    expect(badState.output).toBe('false\ninvalid state: invalid');
+  });
+
+  it('schedule functions fail cleanly when scheduler is unavailable', async () => {
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      scheduler: null,
+      eventBus: new EventBus(),
+    });
+
+    const result = await sandbox.execute(
+      [
+        'const list = schedule_list();',
+        'const add = schedule_add_every("Nope", 1000, () => {});',
+        'const upd = schedule_update("missing", { state: "paused" });',
+        'print(list.length);',
+        'print(add.ok);',
+        'print(upd.ok);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+    expect(result.output).toBe('0\nfalse\nfalse');
+  });
+
+  it('event_emit enforces allowlist', async () => {
+    const eventBus = new EventBus();
+    const seen: Array<{ timestamp: number; taskCount: number }> = [];
+    eventBus.on('schedule.heartbeat', payload => { seen.push(payload); });
+
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      scheduler: null,
+      eventBus,
+    });
+
+    const allowed = await sandbox.execute(
+      'const ok = await event_emit("schedule.heartbeat", { timestamp: 1, taskCount: 2 }); print(ok.ok);',
+      5000,
+      8192,
+    );
+    expect(allowed.output).toBe('true');
+    expect(seen).toEqual([{ timestamp: 1, taskCount: 2 }]);
+
+    const denied = await sandbox.execute(
+      'const bad = await event_emit("system.shutdown", {}); print(bad.ok); print(bad.error);',
+      5000,
+      8192,
+    );
+    expect(denied.output).toContain('false');
+    expect(denied.output).toContain('not allowlisted');
+  });
+
+  it('event_emit returns an error when no event bus is wired', async () => {
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      scheduler: null,
+      eventBus: null,
+    });
+    const result = await sandbox.execute(
+      'const emitted = await event_emit("schedule.heartbeat", { timestamp: 1, taskCount: 1 }); print(emitted.ok); print(emitted.error);',
+      5000,
+      8192,
+    );
+    expect(result.output).toBe('false\nno event bus');
   });
 });
 

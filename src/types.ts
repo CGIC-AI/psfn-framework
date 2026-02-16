@@ -115,6 +115,7 @@ export interface SubstrateConfig {
   compactionThresholdPct: number;
   modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
   voiceEnabled?: boolean;
+  discordBackfillOnStartup?: boolean;
   voiceTargetGuildId?: string;
   voiceTargetUserId?: string;
   voiceReadyCueText?: string;
@@ -162,6 +163,7 @@ export function loadConfig(): SubstrateConfig {
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
     },
     voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
+    discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
     voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
     voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',

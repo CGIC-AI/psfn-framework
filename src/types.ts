@@ -132,6 +132,7 @@ export interface SubstrateConfig {
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
+  memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
   profileSynthesisEnabled?: boolean;
@@ -182,6 +183,11 @@ export function loadConfig(): SubstrateConfig {
     process.env.MEMORY_EXTRACTION_MIN_NOVELTY,
     0.35,
   );
+  const memoryExtractionMaxWrites = parseIntegerEnv(
+    process.env.MEMORY_EXTRACTION_MAX_WRITES,
+    2,
+    0,
+  );
   const memoryExtractionTelemetryEnabled = process.env.MEMORY_EXTRACTION_TELEMETRY_ENABLED !== 'false';
   const memoryRetrievalTelemetryEnabled = process.env.MEMORY_RETRIEVAL_TELEMETRY_ENABLED !== 'false';
   const profileSynthesisEnabled = process.env.PROFILE_SYNTHESIS_ENABLED !== 'false';
@@ -225,6 +231,7 @@ export function loadConfig(): SubstrateConfig {
     memoryExtractionMinImportance,
     memoryExtractionMinConfidence,
     memoryExtractionMinNovelty,
+    memoryExtractionMaxWrites,
     memoryExtractionTelemetryEnabled,
     memoryRetrievalTelemetryEnabled,
     profileSynthesisEnabled,
@@ -258,6 +265,12 @@ export function loadConfig(): SubstrateConfig {
 function parseNumberEnv(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseIntegerEnv(value: string | undefined, fallback: number, min: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, parsed);
 }
 
 // ── Lifecycle ──

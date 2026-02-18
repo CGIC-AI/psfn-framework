@@ -160,6 +160,42 @@ describe('extraction acceptance gates', () => {
     expect(decision.novelty).toBe(0);
   });
 
+  it('rejects low-signal filler and conversation meta facts', () => {
+    const decision = extractionTestUtils.evaluateFactAcceptance(
+      {
+        text: 'User greeted assistant and exchanged pleasantries in a quick chat',
+        type: 'episodic',
+        importance: 0.85,
+        emotionalValence: 0,
+        confidence: 0.95,
+        tags: [],
+      },
+      [],
+      { minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.reason).toBe('low_signal');
+  });
+
+  it('keeps meaningful relationship facts even with greeting language', () => {
+    const decision = extractionTestUtils.evaluateFactAcceptance(
+      {
+        text: "User's sister greeted them at the airport after deployment",
+        type: 'relational',
+        importance: 0.85,
+        emotionalValence: 0.4,
+        confidence: 0.9,
+        tags: ['family'],
+      },
+      [],
+      { minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
+
+    expect(decision.accepted).toBe(true);
+    expect(decision.reason).toBeUndefined();
+  });
+
   it('accepts high-value, novel facts', () => {
     const decision = extractionTestUtils.evaluateFactAcceptance(
       {
@@ -235,6 +271,120 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(endCall?.[1]?.count).toBe(0);
     expect(endCall?.[1]?.parsedCount).toBe(0);
     expect(endCall?.[1]?.acceptedCount).toBe(0);
+  });
+
+  it('caps writes by ranked value and reports write_cap rejections', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User likes rainy weather</text>
+<type>semantic</type>
+<importance>0.75</importance>
+<emotional_valence>0.1</emotional_valence>
+<confidence>0.8</confidence>
+</fact>
+<fact>
+<text>User is interviewing for senior engineering roles</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<emotional_valence>0.0</emotional_valence>
+<confidence>0.9</confidence>
+</fact>
+<fact>
+<text>User's partner is named Taylor</text>
+<type>relational</type>
+<importance>0.95</importance>
+<emotional_valence>0.0</emotional_valence>
+<confidence>0.92</confidence>
+</fact>
+</response>`,
+      }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'Conversation content', authorName: 'user' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        primaryModel: 'test-model',
+        primaryProvider: 'test-provider',
+        extractionModel: 'test-model',
+        extractionProvider: 'test-provider',
+        primaryMaxTokens: 4096,
+        extractionMaxTokens: 4096,
+        discordToken: '',
+        discordBotId: '',
+        characterCardPath: '',
+        dataDir: '',
+        databasePath: '',
+        sessionMessageLimit: 30,
+        memoryRetrievalLimit: 15,
+        extractionInterval: 5,
+        maintenanceIntervalMs: 60_000,
+        defaultContextWindow: 16_000,
+        memoryBudgetPct: 20,
+        extractionThresholdPct: 30,
+        compactionThresholdPct: 70,
+        memoryExtractionMinImportance: 0.45,
+        memoryExtractionMinConfidence: 0.6,
+        memoryExtractionMinNovelty: 0.35,
+        memoryExtractionMaxWrites: 2,
+        memoryExtractionTelemetryEnabled: true,
+        modelRoster: {
+          chat: {
+            model: 'test-model',
+            provider: 'test-provider',
+            maxTokens: 4096,
+            contextWindow: 16_000,
+          },
+        },
+      } as any,
+    );
+
+    const processFact = vi.fn(async (fact: { text: string }) => ({
+      action: 'created',
+      memory: { id: `memory:${fact.text}` },
+    }));
+    (extractor as any).processFact = processFact;
+
+    await extractor.extract('api:cap-test');
+
+    expect(processFact).toHaveBeenCalledTimes(2);
+    const writtenTexts = processFact.mock.calls.map(call => call[0].text);
+    expect(writtenTexts).toContain("User's partner is named Taylor");
+    expect(writtenTexts).toContain('User is interviewing for senior engineering roles');
+    expect(writtenTexts).not.toContain('User likes rainy weather');
+
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const endCall = calls.find(([name]) => name === 'memory.extraction.end');
+    expect(endCall).toBeTruthy();
+    expect(endCall?.[1]?.parsedCount).toBe(3);
+    expect(endCall?.[1]?.acceptedCount).toBe(2);
+    expect(endCall?.[1]?.writeCount).toBe(2);
+    expect(endCall?.[1]?.rejectionBreakdown?.write_cap).toBe(1);
   });
 });
 

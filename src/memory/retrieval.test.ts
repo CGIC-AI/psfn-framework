@@ -37,6 +37,7 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
   return {
     searchByEmbedding: vi.fn().mockReturnValue(memories),
     updateMemory: vi.fn(),
+    getContactProfile: vi.fn().mockReturnValue(undefined),
   } as unknown as MemoryStore;
 }
 
@@ -351,6 +352,63 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).toContain('[semantic]');
     expect(result).toContain('[emotional]');
     expect(result).toContain('What you remember about this person:');
+  });
+
+  it('injects canonical profile before episodic memory snippets', async () => {
+    const memories = [
+      makeMemory({ text: 'A semantic fact', type: 'semantic', sensitivity: 'public', similarity: 0.9 }),
+    ];
+    const store = makeMockStore(memories);
+    (store.getContactProfile as ReturnType<typeof vi.fn>).mockReturnValue({
+      contactId: 'contact-1',
+      summary: 'Operator is the primary partner and values direct technical communication.',
+      sourceMemoryIds: ['mem-1'],
+      confidenceScore: 0.91,
+      noveltyScore: 0.42,
+      updatedAt: Date.now(),
+    });
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'test query',
+      'api:test',
+      'primary',
+      undefined,
+      'contact-1',
+    );
+
+    const profileIndex = result.indexOf('Core profile for this person:');
+    const memoriesIndex = result.indexOf('What you remember about this person:');
+    expect(profileIndex).toBeGreaterThanOrEqual(0);
+    expect(memoriesIndex).toBeGreaterThan(profileIndex);
+    expect(result).toContain('Operator is the primary partner');
+  });
+
+  it('returns profile block when memory candidates are empty', async () => {
+    const store = makeMockStore([]);
+    (store.getContactProfile as ReturnType<typeof vi.fn>).mockReturnValue({
+      contactId: 'contact-1',
+      summary: 'Operator prefers concise responses and high signal summaries.',
+      sourceMemoryIds: ['mem-1'],
+      confidenceScore: 0.88,
+      noveltyScore: 0.4,
+      updatedAt: Date.now(),
+    });
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'test query',
+      'api:test',
+      'primary',
+      undefined,
+      'contact-1',
+    );
+
+    expect(result).toContain('Core profile for this person:');
+    expect(result).toContain('Operator prefers concise responses');
+    expect(result).not.toContain('What you remember about this person:');
   });
 
   it('emits structured retrieval telemetry event when event bus is provided', async () => {

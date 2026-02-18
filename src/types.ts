@@ -134,6 +134,15 @@ export interface SubstrateConfig {
   memoryExtractionMinNovelty?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  profileSynthesisEnabled?: boolean;
+  profileSynthesisRefreshIntervalMs?: number;
+  profileSynthesisCooldownMs?: number;
+  profileSynthesisMinWrites?: number;
+  profileSynthesisMinImportance?: number;
+  profileSynthesisMinConfidence?: number;
+  profileSynthesisMinNovelty?: number;
+  profileSynthesisSourceMemoryLimit?: number;
+  profileSynthesisMinSourceMemories?: number;
   modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
   runtimeHooks?: RuntimeConfigHooks;
   voiceEnabled?: boolean;
@@ -175,6 +184,21 @@ export function loadConfig(): SubstrateConfig {
   );
   const memoryExtractionTelemetryEnabled = process.env.MEMORY_EXTRACTION_TELEMETRY_ENABLED !== 'false';
   const memoryRetrievalTelemetryEnabled = process.env.MEMORY_RETRIEVAL_TELEMETRY_ENABLED !== 'false';
+  const profileSynthesisEnabled = process.env.PROFILE_SYNTHESIS_ENABLED !== 'false';
+  const profileSynthesisRefreshIntervalMs = parseInt(
+    process.env.PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS ?? String(6 * 60 * 60 * 1000),
+    10,
+  );
+  const profileSynthesisCooldownMs = parseInt(
+    process.env.PROFILE_SYNTHESIS_COOLDOWN_MS ?? String(5 * 60 * 1000),
+    10,
+  );
+  const profileSynthesisMinWrites = parseInt(process.env.PROFILE_SYNTHESIS_MIN_WRITES ?? '1', 10);
+  const profileSynthesisMinImportance = parseNumberEnv(process.env.PROFILE_SYNTHESIS_MIN_IMPORTANCE, 0.65);
+  const profileSynthesisMinConfidence = parseNumberEnv(process.env.PROFILE_SYNTHESIS_MIN_CONFIDENCE, 0.7);
+  const profileSynthesisMinNovelty = parseNumberEnv(process.env.PROFILE_SYNTHESIS_MIN_NOVELTY, 0.12);
+  const profileSynthesisSourceMemoryLimit = parseInt(process.env.PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT ?? '16', 10);
+  const profileSynthesisMinSourceMemories = parseInt(process.env.PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES ?? '2', 10);
   const retryMaxAttempts = parseInt(process.env.RETRY_MAX_ATTEMPTS ?? '3', 10);
   const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
 
@@ -203,6 +227,15 @@ export function loadConfig(): SubstrateConfig {
     memoryExtractionMinNovelty,
     memoryExtractionTelemetryEnabled,
     memoryRetrievalTelemetryEnabled,
+    profileSynthesisEnabled,
+    profileSynthesisRefreshIntervalMs,
+    profileSynthesisCooldownMs,
+    profileSynthesisMinWrites,
+    profileSynthesisMinImportance,
+    profileSynthesisMinConfidence,
+    profileSynthesisMinNovelty,
+    profileSynthesisSourceMemoryLimit,
+    profileSynthesisMinSourceMemories,
     modelRoster: {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },

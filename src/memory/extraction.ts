@@ -9,7 +9,11 @@ import { estimateTokens } from '../llm/tokens.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
 import { createComponentLogger } from '../logger.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
-import { EXTRACTION_PROMPT_KEY, getDefaultPromptText } from '../identity/prompt-registry.js';
+import {
+  EXTRACTION_PROMPT_KEY,
+  PROFILE_SYNTHESIS_PROMPT_KEY,
+  getDefaultPromptText,
+} from '../identity/prompt-registry.js';
 const log = createComponentLogger('Extraction');
 
 // Track last extraction per channel
@@ -29,6 +33,7 @@ export interface MemoryExtractorDrainOptions {
 
 type ExtractionTriggerReason = 'manual' | 'interval' | 'context_threshold' | 'interval_and_threshold';
 type ExtractionRejectionReason = 'low_importance' | 'low_confidence' | 'low_novelty';
+type ProfileRefreshReason = 'memory_update' | 'interval' | 'memory_update_and_interval';
 
 interface ExtractionGateConfig {
   minImportance: number;
@@ -55,9 +60,35 @@ interface ExtractionEndTelemetry {
   rejectionBreakdown: Record<ExtractionRejectionReason, number>;
 }
 
+interface ProfileSynthesisConfig {
+  enabled: boolean;
+  refreshIntervalMs: number;
+  cooldownMs: number;
+  minWrites: number;
+  minImportance: number;
+  minConfidence: number;
+  minNovelty: number;
+  sourceMemoryLimit: number;
+  minSourceMemories: number;
+}
+
+interface AcceptedFactWrite {
+  memoryId: string;
+  importance: number;
+  confidence: number;
+}
+
 const DEFAULT_MIN_IMPORTANCE = 0.45;
 const DEFAULT_MIN_CONFIDENCE = 0.6;
 const DEFAULT_MIN_NOVELTY = 0.35;
+const DEFAULT_PROFILE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_PROFILE_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+const DEFAULT_PROFILE_MIN_WRITES = 1;
+const DEFAULT_PROFILE_MIN_IMPORTANCE = 0.65;
+const DEFAULT_PROFILE_MIN_CONFIDENCE = 0.7;
+const DEFAULT_PROFILE_MIN_NOVELTY = 0.12;
+const DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT = 16;
+const DEFAULT_PROFILE_MIN_SOURCE_MEMORIES = 2;
 
 export class MemoryExtractor {
   private llmClient: LLMProvider;
@@ -75,6 +106,8 @@ export class MemoryExtractor {
   private acceptingExtractions = true;
   private inFlightExtractions = new Set<Promise<void>>();
   private inFlightByChannel = new Map<string, Promise<void>>();
+  private inFlightProfileRefreshes = new Set<Promise<void>>();
+  private inFlightProfileByContact = new Map<string, Promise<void>>();
 
   constructor(
     llmClient: LLMProvider,
@@ -110,7 +143,7 @@ export class MemoryExtractor {
     this.promptRegistry = promptRegistry ?? null;
   }
 
-  async maybeExtract(channelId: string): Promise<void> {
+  async maybeExtract(channelId: string, canonicalContactId?: string): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
       return;
@@ -161,16 +194,16 @@ export class MemoryExtractor {
     }
 
     lastExtractionCount.set(channelId, currentCount);
-    await this.trackExtraction(channelId, triggerReason);
+    await this.trackExtraction(channelId, triggerReason, canonicalContactId);
   }
 
-  async extract(channelId: string): Promise<void> {
+  async extract(channelId: string, canonicalContactId?: string): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction request while extractor is draining', { channelId });
       return;
     }
 
-    await this.trackExtraction(channelId, 'manual');
+    await this.trackExtraction(channelId, 'manual', canonicalContactId);
   }
 
   async stop(options?: MemoryExtractorDrainOptions): Promise<boolean> {
@@ -180,12 +213,15 @@ export class MemoryExtractor {
 
   async drain(options?: MemoryExtractorDrainOptions): Promise<boolean> {
     const timeoutMs = options?.timeoutMs ?? 10_000;
-    const activeCount = this.inFlightExtractions.size;
+    const activeCount = this.inFlightExtractions.size + this.inFlightProfileRefreshes.size;
     if (activeCount === 0) return true;
 
     log.info('Waiting for extraction drain', { inFlight: activeCount, timeoutMs });
 
-    const pending = Promise.allSettled([...this.inFlightExtractions]).then(() => true);
+    const pending = Promise.allSettled([
+      ...this.inFlightExtractions,
+      ...this.inFlightProfileRefreshes,
+    ]).then(() => true);
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<boolean>((resolve) => {
       if (timeoutMs <= 0) return;
@@ -201,7 +237,8 @@ export class MemoryExtractor {
     if (!drained) {
       log.warn('Timed out waiting for extraction drain', {
         timeoutMs,
-        inFlight: this.inFlightExtractions.size,
+        inFlightExtractions: this.inFlightExtractions.size,
+        inFlightProfileRefreshes: this.inFlightProfileRefreshes.size,
       });
       return false;
     }
@@ -210,14 +247,18 @@ export class MemoryExtractor {
     return true;
   }
 
-  private trackExtraction(channelId: string, triggerReason: ExtractionTriggerReason): Promise<void> {
+  private trackExtraction(
+    channelId: string,
+    triggerReason: ExtractionTriggerReason,
+    canonicalContactId?: string,
+  ): Promise<void> {
     const existing = this.inFlightByChannel.get(channelId);
     if (existing) {
       log.debug('Reusing in-flight extraction', { channelId, triggerReason });
       return existing;
     }
 
-    const promise = this.runExtraction(channelId, triggerReason);
+    const promise = this.runExtraction(channelId, triggerReason, canonicalContactId);
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(channelId, promise);
     promise.finally(() => {
@@ -229,7 +270,11 @@ export class MemoryExtractor {
     return promise;
   }
 
-  private async runExtraction(channelId: string, triggerReason: ExtractionTriggerReason): Promise<void> {
+  private async runExtraction(
+    channelId: string,
+    triggerReason: ExtractionTriggerReason,
+    canonicalContactId?: string,
+  ): Promise<void> {
     await this.emitExtractionStart(channelId, triggerReason);
 
     try {
@@ -301,6 +346,7 @@ export class MemoryExtractor {
       let writeCount = 0;
       let deduplicatedCount = 0;
       let supersededCount = 0;
+      const acceptedWrites: AcceptedFactWrite[] = [];
 
       for (const fact of facts) {
         const decision = evaluateFactAcceptance(fact, noveltyCorpus, gateConfig);
@@ -323,17 +369,27 @@ export class MemoryExtractor {
         }
 
         try {
-          const result = await this.processFact(fact, channelId);
+          const result = await this.processFact(fact, channelId, canonicalContactId);
           noveltyCorpus.push(fact.text);
           acceptedCount++;
 
           switch (result.action) {
             case 'created':
               writeCount++;
+              acceptedWrites.push({
+                memoryId: result.memory.id,
+                importance: fact.importance,
+                confidence: fact.confidence,
+              });
               break;
             case 'superseded':
               writeCount++;
               supersededCount++;
+              acceptedWrites.push({
+                memoryId: result.memory.id,
+                importance: fact.importance,
+                confidence: fact.confidence,
+              });
               break;
             case 'deduplicated':
               deduplicatedCount++;
@@ -362,12 +418,22 @@ export class MemoryExtractor {
         log.info('Extraction completed', telemetry);
       }
       await this.emitExtractionEnd(telemetry);
+      this.maybeRefreshContactProfile(
+        channelId,
+        triggerReason,
+        canonicalContactId,
+        acceptedWrites,
+      );
     } catch (err) {
       log.error('Extraction error', { error: String(err), triggerReason });
     }
   }
 
-  private async processFact(fact: ExtractedFact, channelId: string): Promise<WriteResult> {
+  private async processFact(
+    fact: ExtractedFact,
+    channelId: string,
+    canonicalContactId?: string,
+  ): Promise<WriteResult> {
     return this.writer.write({
       text: fact.text,
       type: fact.type,
@@ -377,7 +443,250 @@ export class MemoryExtractor {
       tags: fact.tags,
       sourceRef: `${channelId}:${Date.now()}`,
       sensitivity: fact.sensitivity,
+      contactId: canonicalContactId,
     });
+  }
+
+  private maybeRefreshContactProfile(
+    channelId: string,
+    triggerReason: ExtractionTriggerReason,
+    canonicalContactId: string | undefined,
+    acceptedWrites: AcceptedFactWrite[],
+  ): void {
+    if (!canonicalContactId) return;
+    if (!this.acceptingExtractions) return;
+
+    const profileConfig = this.resolveProfileConfig();
+    if (!profileConfig.enabled) return;
+
+    const existing = this.inFlightProfileByContact.get(canonicalContactId);
+    if (existing) {
+      if (this.isTelemetryEnabled()) {
+        log.debug('Profile refresh already in flight; skipping trigger', {
+          channelId,
+          canonicalContactId,
+          triggerReason,
+        });
+      }
+      return;
+    }
+
+    const promise = this.refreshContactProfile(
+      channelId,
+      triggerReason,
+      canonicalContactId,
+      acceptedWrites,
+      profileConfig,
+    );
+    this.inFlightProfileRefreshes.add(promise);
+    this.inFlightProfileByContact.set(canonicalContactId, promise);
+    promise.finally(() => {
+      this.inFlightProfileRefreshes.delete(promise);
+      if (this.inFlightProfileByContact.get(canonicalContactId) === promise) {
+        this.inFlightProfileByContact.delete(canonicalContactId);
+      }
+    });
+  }
+
+  private async refreshContactProfile(
+    channelId: string,
+    triggerReason: ExtractionTriggerReason,
+    canonicalContactId: string,
+    acceptedWrites: AcceptedFactWrite[],
+    config: ProfileSynthesisConfig,
+  ): Promise<void> {
+    const profileStore = this.memoryStore as unknown as {
+      getContactProfile?: (contactId: string) => {
+        summary: string;
+        updatedAt: number;
+      } | undefined;
+      getMemoriesByContact?: (contactId: string, limit: number) => Array<{
+        id: string;
+        type: MemoryType;
+        text: string;
+        importance: number;
+        confidence: number;
+        salience: number;
+      }>;
+      upsertContactProfile?: (profile: {
+        contactId: string;
+        summary: string;
+        sourceMemoryIds: string[];
+        confidenceScore: number;
+        noveltyScore: number;
+        updatedAt: number;
+      }) => void;
+    };
+
+    if (
+      typeof profileStore.getContactProfile !== 'function'
+      || typeof profileStore.getMemoriesByContact !== 'function'
+      || typeof profileStore.upsertContactProfile !== 'function'
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    const existingProfile = profileStore.getContactProfile(canonicalContactId);
+    const intervalElapsed = !existingProfile
+      || (now - existingProfile.updatedAt) >= config.refreshIntervalMs;
+    const withinCooldown = !!existingProfile
+      && (now - existingProfile.updatedAt) < config.cooldownMs;
+
+    const writeCount = acceptedWrites.length;
+    const avgWriteImportance = writeCount > 0
+      ? acceptedWrites.reduce((sum, write) => sum + write.importance, 0) / writeCount
+      : 0;
+    const avgWriteConfidence = writeCount > 0
+      ? acceptedWrites.reduce((sum, write) => sum + write.confidence, 0) / writeCount
+      : 0;
+
+    const meaningfulUpdate = writeCount >= config.minWrites
+      && avgWriteImportance >= config.minImportance
+      && avgWriteConfidence >= config.minConfidence;
+
+    if (!meaningfulUpdate && !intervalElapsed) {
+      if (this.isTelemetryEnabled()) {
+        log.debug('Skipped profile refresh trigger', {
+          channelId,
+          canonicalContactId,
+          triggerReason,
+          reason: 'no_meaningful_update',
+          writeCount,
+          avgWriteImportance,
+          avgWriteConfidence,
+        });
+      }
+      return;
+    }
+
+    if (withinCooldown && !intervalElapsed) {
+      if (this.isTelemetryEnabled()) {
+        log.debug('Skipped profile refresh due to cooldown', {
+          channelId,
+          canonicalContactId,
+          triggerReason,
+          cooldownMs: config.cooldownMs,
+        });
+      }
+      return;
+    }
+
+    const sourceMemories = profileStore.getMemoriesByContact(canonicalContactId, config.sourceMemoryLimit);
+    if (sourceMemories.length < config.minSourceMemories) {
+      if (this.isTelemetryEnabled()) {
+        log.debug('Skipped profile refresh due to insufficient source memories', {
+          channelId,
+          canonicalContactId,
+          sourceMemoryCount: sourceMemories.length,
+          minSourceMemories: config.minSourceMemories,
+        });
+      }
+      return;
+    }
+
+    const averageSourceConfidence = sourceMemories.reduce((sum, memory) => sum + memory.confidence, 0)
+      / sourceMemories.length;
+    if (averageSourceConfidence < config.minConfidence) {
+      if (this.isTelemetryEnabled()) {
+        log.debug('Skipped profile refresh due to low source confidence', {
+          channelId,
+          canonicalContactId,
+          averageSourceConfidence,
+          minConfidence: config.minConfidence,
+        });
+      }
+      return;
+    }
+
+    const memoryFacts = sourceMemories
+      .map(memory => (
+        `- [${memory.id}] [${memory.type}] ${memory.text} `
+        + `(importance=${memory.importance.toFixed(2)}, confidence=${memory.confidence.toFixed(2)}, salience=${memory.salience.toFixed(2)})`
+      ))
+      .join('\n');
+
+    const profilePrompt = this.promptRegistry?.getPrompt(PROFILE_SYNTHESIS_PROMPT_KEY)
+      ?? getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY);
+    const prompt = profilePrompt
+      .replace('{contact_id}', canonicalContactId)
+      .replace('{existing_profile}', existingProfile?.summary ?? '(none yet)')
+      .replace('{memory_facts}', memoryFacts);
+
+    const response = await this.llmClient.complete(
+      {
+        systemPrompt: prompt,
+        messages: [{ role: 'user', content: 'Synthesize the stable contact profile now.' }],
+      },
+      'summary',
+    );
+
+    const summary = normalizeProfileSummary(parseProfileSummary(response.content));
+    if (!summary) {
+      if (this.isTelemetryEnabled()) {
+        log.debug('Skipped profile refresh due to empty summary output', {
+          channelId,
+          canonicalContactId,
+        });
+      }
+      return;
+    }
+
+    const noveltyScore = existingProfile
+      ? computeProfileNovelty(summary, existingProfile.summary)
+      : 1;
+    if (existingProfile && noveltyScore < config.minNovelty) {
+      if (this.isTelemetryEnabled()) {
+        log.debug('Skipped profile refresh due to low novelty', {
+          channelId,
+          canonicalContactId,
+          noveltyScore,
+          minNovelty: config.minNovelty,
+        });
+      }
+      return;
+    }
+
+    const refreshReason: ProfileRefreshReason = meaningfulUpdate && intervalElapsed
+      ? 'memory_update_and_interval'
+      : meaningfulUpdate
+        ? 'memory_update'
+        : 'interval';
+
+    profileStore.upsertContactProfile({
+      contactId: canonicalContactId,
+      summary,
+      sourceMemoryIds: sourceMemories.map(memory => memory.id),
+      confidenceScore: averageSourceConfidence,
+      noveltyScore,
+      updatedAt: Date.now(),
+    });
+
+    if (this.isTelemetryEnabled()) {
+      log.info('Contact profile refreshed', {
+        channelId,
+        canonicalContactId,
+        triggerReason,
+        refreshReason,
+        sourceMemoryCount: sourceMemories.length,
+        averageSourceConfidence,
+        noveltyScore,
+      });
+    }
+  }
+
+  private resolveProfileConfig(): ProfileSynthesisConfig {
+    return {
+      enabled: this.runtimeConfig?.profileSynthesisEnabled ?? true,
+      refreshIntervalMs: this.runtimeConfig?.profileSynthesisRefreshIntervalMs ?? DEFAULT_PROFILE_REFRESH_INTERVAL_MS,
+      cooldownMs: this.runtimeConfig?.profileSynthesisCooldownMs ?? DEFAULT_PROFILE_REFRESH_COOLDOWN_MS,
+      minWrites: this.runtimeConfig?.profileSynthesisMinWrites ?? DEFAULT_PROFILE_MIN_WRITES,
+      minImportance: this.runtimeConfig?.profileSynthesisMinImportance ?? DEFAULT_PROFILE_MIN_IMPORTANCE,
+      minConfidence: this.runtimeConfig?.profileSynthesisMinConfidence ?? DEFAULT_PROFILE_MIN_CONFIDENCE,
+      minNovelty: this.runtimeConfig?.profileSynthesisMinNovelty ?? DEFAULT_PROFILE_MIN_NOVELTY,
+      sourceMemoryLimit: this.runtimeConfig?.profileSynthesisSourceMemoryLimit ?? DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT,
+      minSourceMemories: this.runtimeConfig?.profileSynthesisMinSourceMemories ?? DEFAULT_PROFILE_MIN_SOURCE_MEMORIES,
+    };
   }
 
   private resolveGateConfig(): ExtractionGateConfig {
@@ -485,6 +794,44 @@ function computeNoveltyScore(text: string, existingTexts: string[]): number {
   return clamp(1 - maxSimilarity, 0, 1);
 }
 
+function parseProfileSummary(response: string): string {
+  const summaryTag = response.match(/<summary>([\s\S]*?)<\/summary>/i);
+  if (summaryTag && summaryTag[1].trim().length > 0) {
+    return summaryTag[1].trim();
+  }
+
+  const profileTag = response.match(/<profile>([\s\S]*?)<\/profile>/i);
+  if (profileTag && profileTag[1].trim().length > 0) {
+    return profileTag[1]
+      .replace(/<\/?[^>]+>/g, ' ')
+      .trim();
+  }
+
+  return response.replace(/<\/?[^>]+>/g, ' ').trim();
+}
+
+function normalizeProfileSummary(summary: string): string {
+  const normalized = summary
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!normalized) return '';
+
+  const paragraphs = normalized
+    .split(/\n\s*\n/g)
+    .map(paragraph => paragraph.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (paragraphs.length === 0) return '';
+
+  return paragraphs.slice(0, 2).join('\n\n');
+}
+
+function computeProfileNovelty(summary: string, existingSummary: string): number {
+  if (!existingSummary.trim()) return 1;
+  return computeNoveltyScore(summary, [existingSummary]);
+}
+
 function normalizeForSimilarity(text: string): string {
   return text
     .toLowerCase()
@@ -527,6 +874,7 @@ function jaccardSimilarity(left: string[], right: string[]): number {
 export const __test = {
   evaluateFactAcceptance,
   computeNoveltyScore,
+  computeProfileNovelty,
 };
 
 function parseFactBlock(block: string): ExtractedFact | null {

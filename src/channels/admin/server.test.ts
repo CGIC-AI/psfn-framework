@@ -907,6 +907,7 @@ describe('AdminServer with contacts', () => {
   let db: Database.Database;
   let eventBus: EventBus;
   let contactStore: ContactStore;
+  let memoryStore: MemoryStore;
   let server: AdminServer;
   let port: number;
 
@@ -919,13 +920,14 @@ describe('AdminServer with contacts', () => {
     sqliteVec.load(db);
     eventBus = new EventBus();
     contactStore = new ContactStore(db);
+    memoryStore = new MemoryStore(db, 3);
 
     port = await allocatePort();
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
     server = new AdminServer({
       port,
       allowInsecureWithoutToken: true,
-      memoryStore: new MemoryStore(db, 3),
+      memoryStore,
       sessionStore: new SessionStore(sessionsDir),
       sessionManager: new SessionManager(new SessionStore(sessionsDir), testConfig, eventBus),
       scheduler: new Scheduler(eventBus),
@@ -990,6 +992,29 @@ describe('AdminServer with contacts', () => {
     expect(res.status).toBe(200);
     expect(res.body).toContain('Bob Builder');
     expect(res.body).toContain('regular');
+  });
+
+  it('renders canonical profile summary with timestamp and source IDs', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Eve Example',
+      trustLevel: 'primary',
+      relationshipType: 'partner',
+    });
+    memoryStore.upsertContactProfile({
+      contactId: contact.id,
+      summary: 'Eve is primary and prefers concise, direct responses.',
+      sourceMemoryIds: ['m1', 'm2'],
+      confidenceScore: 0.93,
+      noveltyScore: 0.48,
+      updatedAt: Date.now(),
+    });
+
+    const res = await request(port, 'GET', '/contacts');
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Eve is primary and prefers concise, direct responses.');
+    expect(res.body).toContain('Source IDs');
+    expect(res.body).toContain('m1');
+    expect(res.body).toContain('m2');
   });
 
   it('returns edit form fragment', async () => {

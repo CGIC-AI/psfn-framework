@@ -448,6 +448,36 @@ td {
   word-break: break-word;
 }
 
+.crm-profile-card {
+  margin-top: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #F7F3ED;
+}
+
+.crm-profile-summary {
+  font-size: 0.82rem;
+  color: var(--text);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.crm-profile-meta {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.crm-profile-empty {
+  margin-top: 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
 .crm-activity {
   color: var(--text-muted);
   font-size: 0.8rem;

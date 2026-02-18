@@ -183,6 +183,85 @@ describe('MemoryStore', () => {
       expect(results[0].sensitivity).toBe('intimate');
     });
 
+    it('stores and retrieves contactId', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Canonical contact memory', {
+          contactId: 'contact-canonical-1',
+        }),
+        emb,
+      );
+
+      const mem = store.getById('m1');
+      expect(mem).toBeDefined();
+      expect(mem?.contactId).toBe('contact-canonical-1');
+    });
+
+    it('getMemoriesByContact returns active memories for canonical contact', () => {
+      const embA = makeEmbedding(1);
+      const embB = makeEmbedding(2);
+      const embC = makeEmbedding(3);
+
+      store.insertMemory(
+        makeMemory('m1', 'Contact A memory', { contactId: 'contact-a', salience: 0.8 }),
+        embA,
+      );
+      store.insertMemory(
+        makeMemory('m2', 'Contact B memory', { contactId: 'contact-b', salience: 0.9 }),
+        embB,
+      );
+      store.insertMemory(
+        makeMemory('m3', 'Contact A older memory', { contactId: 'contact-a', salience: 0.4 }),
+        embC,
+      );
+      store.updateMemory('m3', { supersededBy: 'm4' });
+
+      const contactA = store.getMemoriesByContact('contact-a', 10);
+      expect(contactA).toHaveLength(1);
+      expect(contactA[0].id).toBe('m1');
+    });
+
+    it('persists and retrieves contact profile artifacts', () => {
+      store.upsertContactProfile({
+        contactId: 'contact-canonical-1',
+        summary: 'Operator is the primary partner and values direct communication.',
+        sourceMemoryIds: ['m1', 'm2'],
+        confidenceScore: 0.92,
+        noveltyScore: 0.44,
+        updatedAt: Date.now(),
+      });
+
+      const profile = store.getContactProfile('contact-canonical-1');
+      expect(profile).toBeDefined();
+      expect(profile?.summary).toContain('primary partner');
+      expect(profile?.sourceMemoryIds).toEqual(['m1', 'm2']);
+      expect(profile?.confidenceScore).toBeCloseTo(0.92, 5);
+    });
+
+    it('upsertContactProfile updates existing profile row', () => {
+      store.upsertContactProfile({
+        contactId: 'contact-canonical-1',
+        summary: 'Initial profile summary.',
+        sourceMemoryIds: ['m1'],
+        confidenceScore: 0.8,
+        noveltyScore: 1,
+        updatedAt: 1,
+      });
+      store.upsertContactProfile({
+        contactId: 'contact-canonical-1',
+        summary: 'Updated profile summary.',
+        sourceMemoryIds: ['m2', 'm3'],
+        confidenceScore: 0.91,
+        noveltyScore: 0.31,
+        updatedAt: 2,
+      });
+
+      const profile = store.getContactProfile('contact-canonical-1');
+      expect(profile?.summary).toBe('Updated profile summary.');
+      expect(profile?.sourceMemoryIds).toEqual(['m2', 'm3']);
+      expect(profile?.updatedAt).toBe(2);
+    });
+
     it('updateMemory can update sensitivity', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(

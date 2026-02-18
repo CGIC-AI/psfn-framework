@@ -1,5 +1,5 @@
 import type { MemoryProvider, EmbeddingService } from '../agent-loop.js';
-import type { MemoryStore } from './store.js';
+import type { ContactProfileArtifact, MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../types.js';
@@ -30,6 +30,7 @@ interface RetrievalTelemetry {
   returnedCount: number;
   retrievalLimit: number;
   retrievalThreshold: number;
+  profileIncluded?: boolean;
 }
 
 export interface MemoryRetrieverConfig {
@@ -76,6 +77,7 @@ export class MemoryRetriever implements MemoryProvider {
     channelId: string,
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
   ): Promise<string> {
     // Read limit per-call from live config if available
     const limit = this.runtimeConfig?.memoryRetrievalLimit ?? this.retrievalLimit;
@@ -92,12 +94,17 @@ export class MemoryRetriever implements MemoryProvider {
       returnedCount: 0,
       retrievalLimit: limit,
       retrievalThreshold: this.retrievalThreshold,
+      profileIncluded: false,
     };
+    const profile = canonicalContactId
+      ? this.memoryStore.getContactProfile(canonicalContactId)
+      : undefined;
+    telemetry.profileIncluded = !!profile;
 
     if (!contextText.trim()) {
       telemetry.reason = 'empty_input';
       await this.emitRetrievalTelemetry(telemetry);
-      return '';
+      return renderPromptBlock(profile);
     }
 
     try {
@@ -113,7 +120,7 @@ export class MemoryRetriever implements MemoryProvider {
       if (memories.length === 0) {
         telemetry.reason = 'no_candidates';
         await this.emitRetrievalTelemetry(telemetry);
-        return '';
+        return renderPromptBlock(profile);
       }
 
       // Score, rank, take top N
@@ -130,7 +137,7 @@ export class MemoryRetriever implements MemoryProvider {
       if (scored.length === 0) {
         telemetry.reason = 'score_filtered';
         await this.emitRetrievalTelemetry(telemetry);
-        return '';
+        return renderPromptBlock(profile);
       }
 
       // Trust-gated filtering: apply trust level + channel visibility restrictions
@@ -162,7 +169,7 @@ export class MemoryRetriever implements MemoryProvider {
       if (filtered.length === 0) {
         telemetry.reason = 'trust_filtered';
         await this.emitRetrievalTelemetry(telemetry);
-        return '';
+        return renderPromptBlock(profile);
       }
 
       // Update access stats (fire-and-forget)
@@ -179,12 +186,12 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.returnedCount = filtered.length;
       telemetry.reason = 'ok';
       await this.emitRetrievalTelemetry(telemetry);
-      return formatForPrompt(filtered);
+      return renderPromptBlock(profile, filtered);
     } catch (err) {
       log.error('Retrieval error', { error: String(err) });
       telemetry.reason = 'error';
       await this.emitRetrievalTelemetry(telemetry);
-      return '';
+      return renderPromptBlock(profile);
     }
   }
 
@@ -235,7 +242,21 @@ function computeRetrievalScore(memory: PurrMemory & { similarity: number }): num
   );
 }
 
-function formatForPrompt(scored: ScoredMemory[]): string {
+function renderPromptBlock(
+  profile: ContactProfileArtifact | undefined,
+  scored: ScoredMemory[] = [],
+): string {
+  const sections: string[] = [];
+  if (profile && profile.summary.trim().length > 0) {
+    sections.push(`Core profile for this person:\n${profile.summary.trim()}`);
+  }
+  if (scored.length > 0) {
+    sections.push(formatMemoriesForPrompt(scored));
+  }
+  return sections.join('\n\n');
+}
+
+function formatMemoriesForPrompt(scored: ScoredMemory[]): string {
   const lines = scored.map(s => {
     const m = s.memory;
     const valence =

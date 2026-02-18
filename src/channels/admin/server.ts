@@ -110,6 +110,7 @@ export class AdminServer implements Lifecycle {
     const staticAssets = [
       { file: 'htmx.min.js', contentType: 'application/javascript' },
       { file: 'sse.js', contentType: 'application/javascript' },
+      { file: 'chat.js', contentType: 'application/javascript' },
       { file: 'admin.css', contentType: 'text/css; charset=utf-8' },
     ];
     for (const { file, contentType } of staticAssets) {

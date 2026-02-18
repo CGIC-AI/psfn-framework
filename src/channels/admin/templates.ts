@@ -11,6 +11,7 @@ export { identityPage } from './templates/identity.js';
 export { settingsPage, settingsFormResult } from './templates/settings.js';
 export { primerPage } from './templates/primer.js';
 export { contactsPage, contactRow, contactEditForm } from './templates/contacts.js';
+export { chatPage } from './templates/chat.js';
 export { eventsPage, eventItem } from './templates/events.js';
 export {
   promptsPage,

@@ -23,6 +23,7 @@
     "chat": "tsx src/chat-cli.ts",
     "e2e": "tsx src/e2e-test.ts",
     "e2e:voice": "tsx src/e2e-voice-roundtrip.ts",
+    "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
     "walkthrough": "tsx src/e2e-walkthrough.ts",
     "lint": "eslint \"src/**/*.ts\""
   },

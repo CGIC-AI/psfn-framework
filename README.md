@@ -167,6 +167,36 @@ AUDIT_DB_PATH=./data/gateway-audit.db
 LOG_LEVEL=info
 ```
 
+## Chat Cockpit Smoke Test
+
+Use the smoke harness to validate admin bootstrap + text completions (and optional voice websocket handshake) against running services.
+
+Prerequisites:
+- Admin server is running and reachable (for `/api/chat/bootstrap`)
+- API server is running and reachable (for `/v1/chat/completions`)
+- If admin auth is enabled, pass `ADMIN_TOKEN`
+- If API auth is enabled, ensure `API_KEY` is configured so bootstrap can expose `api.apiKey`
+- For optional voice check, voice websocket runtime must be enabled
+
+Command:
+```bash
+npm run smoke:chat -- \
+  --admin-url http://127.0.0.1:3001 \
+  --api-base-url http://127.0.0.1:3000 \
+  --admin-token "$ADMIN_TOKEN"
+
+# Optional voice handshake check
+npm run smoke:chat -- --voice --api-base-url http://127.0.0.1:3000
+```
+
+Expected output:
+- `PASS Bootstrap returned required chat cockpit fields`
+- `PASS Chat completion returned assistant content: ...`
+- Optional: `PASS Voice websocket accepted session.start and returned ack`
+- Final: `PASS Chat cockpit smoke harness completed`
+
+Any failed step exits non-zero.
+
 ## Architecture
 
 ```

@@ -20,6 +20,7 @@ export interface AdminChatSelectedIdentity extends AdminChatLinkedChannelOption 
 export interface AdminChatBootstrapApiConfig {
   chatCompletionsUrl: string;
   voiceWebSocketUrl: string;
+  apiKey?: string;
 }
 
 export interface AdminChatPrivacyMetadata {

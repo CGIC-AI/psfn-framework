@@ -42,9 +42,38 @@ export function chatPage(): string {
         </div>
         <div class="card chat-surface-card">
           <div class="chat-surface" id="admin-chat-surface"></div>
+          <section class="chat-debug-panel" data-chat-debug>
+            <div class="chat-debug-controls">
+              <label class="chat-debug-enable">
+                <input type="checkbox" data-chat-debug-enable checked>
+                Enable debug stream
+              </label>
+              <div class="chat-debug-channel">
+                <label for="chat-debug-channel-filter">Channel filter</label>
+                <input
+                  id="chat-debug-channel-filter"
+                  type="text"
+                  data-chat-debug-channel
+                  placeholder="optional channelId"
+                  autocomplete="off"
+                >
+              </div>
+              <button type="button" class="btn chat-debug-clear" data-chat-debug-clear>Clear</button>
+            </div>
+            <div class="chat-debug-toggles" role="group" aria-label="Debug categories">
+              <label><input type="checkbox" value="thinking" data-chat-debug-category checked>Thinking</label>
+              <label><input type="checkbox" value="text" data-chat-debug-category checked>Text</label>
+              <label><input type="checkbox" value="tools" data-chat-debug-category checked>Tools</label>
+              <label><input type="checkbox" value="memory" data-chat-debug-category checked>Memory</label>
+              <label><input type="checkbox" value="errors" data-chat-debug-category checked>Errors</label>
+            </div>
+            <div class="chat-debug-status" data-chat-debug-status>Connecting...</div>
+            <div class="chat-debug-timeline" data-chat-debug-timeline></div>
+          </section>
         </div>
       </div>
     </section>
     <script type="module" src="/static/chat.js"></script>
+    <script type="module" src="/static/chat-debug.js"></script>
   `;
 }

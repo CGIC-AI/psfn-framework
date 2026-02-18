@@ -24,7 +24,7 @@
     "e2e": "tsx src/e2e-test.ts",
     "e2e:voice": "tsx src/e2e-voice-roundtrip.ts",
     "walkthrough": "tsx src/e2e-walkthrough.ts",
-    "lint": "eslint src/"
+    "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.0",
@@ -46,6 +46,9 @@
     "@types/node": "^22.0.0",
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
+    "eslint": "^10.0.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

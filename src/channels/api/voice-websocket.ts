@@ -74,6 +74,10 @@ function sendUpgradeRejection(socket: Duplex, status: UpgradeRejectStatus): void
   socket.destroy();
 }
 
+function parseRequestUrl(req: IncomingMessage): URL {
+  return new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+}
+
 function createVoiceConnection(connectionId: string, socket: WebSocket): WebSocketVoiceConnection {
   const messageHandlers = new Set<(data: string) => void>();
   const closeHandlers = new Set<() => void>();
@@ -237,7 +241,19 @@ export class ApiVoiceWebSocketAdapter {
     if (!this.apiKey) return true;
 
     const auth = req.headers.authorization;
-    return !!auth && auth.startsWith('Bearer ') && auth.slice(7) === this.apiKey;
+    if (auth && auth.startsWith('Bearer ') && auth.slice(7) === this.apiKey) {
+      return true;
+    }
+
+    let token: string | null = null;
+    try {
+      const url = parseRequestUrl(req);
+      token = url.searchParams.get('api_key') ?? url.searchParams.get('token');
+    } catch {
+      token = null;
+    }
+    if (!token) return false;
+    return token.trim() === this.apiKey;
   }
 
   private attachSocket(ws: WebSocket, req: IncomingMessage): void {

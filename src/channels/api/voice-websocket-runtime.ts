@@ -59,12 +59,50 @@ function clampHeader(value: string | undefined, maxLength: number): string | und
   return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
 }
 
-function deriveActor(request: IncomingMessage): VoiceActor {
-  const rawUserId = singleHeader(request.headers['x-user-id']);
-  const rawUserName = singleHeader(request.headers['x-user-name']);
+function parseRequestUrl(request: IncomingMessage): URL | null {
+  try {
+    return new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+  } catch {
+    return null;
+  }
+}
 
-  const authorId = clampHeader(rawUserId, 128) ?? 'api-voice-user';
-  const authorName = clampHeader(rawUserName, 80) ?? 'Voice User';
+function readQueryParam(request: IncomingMessage, names: string[]): string | undefined {
+  const url = parseRequestUrl(request);
+  if (!url) return undefined;
+
+  for (const name of names) {
+    const value = clampHeader(url.searchParams.get(name) ?? undefined, 1024);
+    if (value) return value;
+  }
+
+  return undefined;
+}
+
+function readHeaderOrQuery(
+  request: IncomingMessage,
+  headerName: string,
+  queryNames: string[],
+  maxLength: number,
+): string | undefined {
+  const headerValue = clampHeader(singleHeader(request.headers[headerName]), maxLength);
+  if (headerValue) return headerValue;
+  return clampHeader(readQueryParam(request, queryNames), maxLength);
+}
+
+function deriveActor(request: IncomingMessage): VoiceActor {
+  const authorId = readHeaderOrQuery(
+    request,
+    'x-user-id',
+    ['user_id', 'x_user_id', 'x-user-id'],
+    128,
+  ) ?? 'api-voice-user';
+  const authorName = readHeaderOrQuery(
+    request,
+    'x-user-name',
+    ['user_name', 'x_user_name', 'x-user-name'],
+    80,
+  ) ?? 'Voice User';
   return { authorId, authorName };
 }
 
@@ -73,7 +111,12 @@ function deriveChannelId(
   connectionId: string,
   channelPrefix: string,
 ): string {
-  const sessionId = clampHeader(singleHeader(request.headers['x-session-id']), 128);
+  const sessionId = readHeaderOrQuery(
+    request,
+    'x-session-id',
+    ['session_id', 'x_session_id', 'x-session-id'],
+    128,
+  );
   if (sessionId) {
     return `api:${sessionId}`;
   }

@@ -158,6 +158,9 @@ describe('admin templates', () => {
     expect(html).toContain('name="displayName" value="Bob Example" required');
     expect(html).toContain('name="nickname"');
     expect(html).toContain('name="nickname" value="Bobby"');
+    expect(html).toContain('name="newChannel"');
+    expect(html).toContain('name="newChannelUserId"');
+    expect(html).toContain('name="newChannelPrivacy"');
   });
 
   it('wires contact update form fields to identity profile and existing trust/privacy handlers', () => {
@@ -203,6 +206,7 @@ describe('admin templates', () => {
         contact.notes = notes;
         return true;
       }),
+      linkChannelIdentity: vi.fn(() => 'linked'),
       setChannelPrivacy: vi.fn(() => true),
       upsert: vi.fn(() => contact),
       updateIdentityProfile,
@@ -237,6 +241,9 @@ describe('admin templates', () => {
       channel_0: 'discord',
       channelUserId_0: 'carol-discord',
       channelPrivacy_0: 'public',
+      newChannel: 'telegram',
+      newChannelUserId: 'vega-telegram-id',
+      newChannelPrivacy: 'private',
     }).toString();
 
     const html = handlers.handleContactUpdate(contact.id, body);
@@ -250,6 +257,12 @@ describe('admin templates', () => {
       'discord',
       'carol-discord',
       'public',
+    );
+    expect(mockContactStore.linkChannelIdentity).toHaveBeenCalledWith(
+      contact.id,
+      'telegram',
+      'vega-telegram-id',
+      { privacyLevel: 'private' },
     );
     expect(html).toContain('Carol Danvers');
     expect(html).toContain('aka: Captain');

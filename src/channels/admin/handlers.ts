@@ -491,6 +491,10 @@ export class AdminHandlers {
     const relationshipType = params.get('relationshipType') as RelationshipType | null;
     const notes = params.get('notes');
     const channelCount = Number.parseInt(params.get('channelCount') ?? '0', 10);
+    const newChannel = (params.get('newChannel') ?? '').trim();
+    const newChannelUserId = (params.get('newChannelUserId') ?? '').trim();
+    const newChannelPrivacyRaw = (params.get('newChannelPrivacy') ?? '').trim();
+    const newChannelPrivacy = newChannelPrivacyRaw as ChannelPrivacyLevel;
     const currentNickname = this.getContactNickname(contact);
 
     if (!displayName) {
@@ -530,6 +534,17 @@ export class AdminHandlers {
       return tpl.settingsFormResult(false, `Invalid relationship type: ${relationshipType}`);
     }
 
+    if (
+      (newChannel || newChannelUserId || newChannelPrivacyRaw)
+      && (!newChannel || !newChannelUserId)
+    ) {
+      return tpl.settingsFormResult(false, 'To link a new channel, both channel and channel user ID are required');
+    }
+
+    if (newChannel && !CHANNEL_PRIVACY_LEVELS.includes(newChannelPrivacy)) {
+      return tpl.settingsFormResult(false, `Invalid new channel privacy level: ${newChannelPrivacyRaw}`);
+    }
+
     if (displayName !== contact.displayName || nickname !== currentNickname) {
       const updatedIdentity = this.updateIdentityProfile(contact, displayName, nickname);
       if (!updatedIdentity) {
@@ -567,6 +582,18 @@ export class AdminHandlers {
           false,
           `Unable to update channel privacy for ${update.channel}:${update.channelUserId}`,
         );
+      }
+    }
+
+    if (newChannel && newChannelUserId) {
+      const linkResult = this.contactStore.linkChannelIdentity(contactId, newChannel, newChannelUserId, {
+        privacyLevel: newChannelPrivacy || 'semi_private',
+      });
+      if (linkResult === 'identity_conflict') {
+        return tpl.settingsFormResult(false, `Identity ${newChannel}:${newChannelUserId} is already linked to another contact`);
+      }
+      if (linkResult === 'contact_not_found') {
+        return tpl.settingsFormResult(false, 'Contact not found while linking new channel');
       }
     }
 

@@ -254,4 +254,57 @@ describe('admin templates', () => {
     expect(html).toContain('Carol Danvers');
     expect(html).toContain('aka: Captain');
   });
+
+  it('prefers persisted contact conversation channels in contacts list rendering', () => {
+    const contact = {
+      id: 'contact-4',
+      displayName: 'Dana',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      firstSeen: '2024-01-01T00:00:00.000Z',
+      lastSeen: '2024-01-02T00:00:00.000Z',
+      channels: [{
+        channel: 'discord',
+        userId: 'dana-discord-user',
+        privacyLevel: 'semi_private',
+        firstSeen: '2024-01-01T00:00:00.000Z',
+        lastSeen: '2024-01-02T00:00:00.000Z',
+      }],
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: '1310672143113130108',
+        firstSeen: '2024-01-01T00:00:00.000Z',
+        lastSeen: '2024-01-03T00:00:00.000Z',
+      }],
+    } as Contact;
+
+    const handlers = new AdminHandlers({
+      memoryStore: {
+        listContactProfiles: vi.fn(() => []),
+        getContactProfile: vi.fn(() => undefined),
+      } as unknown as MemoryStore,
+      sessionStore: {
+        listChannels: vi.fn(() => [{
+          channelId: 'discord:some-other-channel:dana-discord-user',
+          messageCount: 2,
+          firstTimestamp: Date.now(),
+          lastTimestamp: Date.now(),
+        }]),
+        getLastEntry: vi.fn(() => undefined),
+      } as unknown as SessionStore,
+      sessionManager: {} as SessionManager,
+      scheduler: { taskCount: 0 } as Scheduler,
+      shardManager: {} as ShardManager,
+      eventBus: new EventBus(),
+      embeddingService: null,
+      characterCard: {} as CharacterCardV2,
+      config: { dataDir: '/tmp' } as SubstrateConfig,
+      contactStore: {
+        listAll: vi.fn(() => [contact]),
+      } as unknown as ContactStore,
+    });
+
+    const html = handlers.contactsListFragment();
+    expect(html).toContain('discord:1310672143113130108');
+  });
 });

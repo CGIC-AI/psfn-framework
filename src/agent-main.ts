@@ -120,7 +120,7 @@ async function main(): Promise<void> {
   const contactStore = wireContactRuntime(
     agentLoop,
     db,
-    process.env.PRIMARY_USER_ID,
+    process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID,
   );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)

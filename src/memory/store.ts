@@ -109,7 +109,6 @@ export class MemoryStore {
       );
       CREATE INDEX IF NOT EXISTS idx_l2_type ON l2_memories(type);
       CREATE INDEX IF NOT EXISTS idx_l2_salience ON l2_memories(salience);
-      CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id);
 
       CREATE TABLE IF NOT EXISTS contact_profiles (
         contact_id TEXT PRIMARY KEY,
@@ -128,6 +127,12 @@ export class MemoryStore {
     `);
   }
 
+  private hasColumn(tableName: string, columnName: string): boolean {
+    const rows = this.db.prepare(`PRAGMA table_info(${tableName})`)
+      .all() as Array<{ name: string }>;
+    return rows.some(row => row.name === columnName);
+  }
+
   private migrateSchema(): void {
     // Add sensitivity column (default 'personal' — safe default for existing data)
     try {
@@ -140,11 +145,13 @@ export class MemoryStore {
     } catch { /* column already exists */ }
 
     // Add contact_id column for canonical contact linking
-    try {
+    if (!this.hasColumn('l2_memories', 'contact_id')) {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN contact_id TEXT`);
-    } catch { /* column already exists */ }
+    }
 
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id)`);
+    if (this.hasColumn('l2_memories', 'contact_id')) {
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id)`);
+    }
   }
 
   // ── L2 Memories ──

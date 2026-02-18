@@ -20,6 +20,19 @@ if [ -f ".env" ]; then
   set +a
 fi
 
+# Local-dev defaults so split mode is one-command.
+if [ -z "${ADMIN_PORT:-}" ]; then
+  export ADMIN_PORT=3001
+fi
+
+if [ -z "${ADMIN_HOST:-}" ]; then
+  export ADMIN_HOST=127.0.0.1
+fi
+
+if [ -z "${ADMIN_TOKEN:-}" ] && [ -z "${ADMIN_ALLOW_INSECURE:-}" ]; then
+  export ADMIN_ALLOW_INSECURE=true
+fi
+
 if [ "${DEBUG_MODE}" -eq 1 ]; then
   export LOG_LEVEL="${LOG_LEVEL:-debug}"
   export PSFN_DEBUG_MODE=true
@@ -83,5 +96,6 @@ echo "[split] starting agent..."
 npm run agent &
 AGENT_PID=$!
 
+echo "[split] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
 echo "[split] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID})"
 wait -n "${GATEWAY_PID}" "${AGENT_PID}"

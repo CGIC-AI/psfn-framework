@@ -18,12 +18,24 @@ import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { TrustLevel } from '../../trust/types.js';
-import type { RelationshipType, ChannelPrivacyLevel } from '../../contacts/types.js';
+import type { Contact, RelationshipType, ChannelPrivacyLevel } from '../../contacts/types.js';
 import { TRUST_LEVELS } from '../../trust/types.js';
 import { VALID_RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '../../contacts/types.js';
 import { MEMORY_CONFIG } from '../../memory/types.js';
 import { loadSettings, saveSettings, applySettings, parseSettingsForm } from '../../settings.js';
 import * as tpl from './templates.js';
+
+interface ContactIdentityLinkView {
+  channel: string;
+  userId: string;
+  lastSeen?: string;
+}
+
+interface ContactConversationChannelView {
+  channel: string;
+  channelId: string;
+  lastSeen?: string;
+}
 
 export class AdminHandlers {
   private memoryStore: MemoryStore;
@@ -294,6 +306,121 @@ export class AdminHandlers {
 
   // ── Contacts ──
 
+  private getContactNickname(contact: Contact): string | undefined {
+    const nickname = (contact as Contact & { nickname?: string }).nickname;
+    if (typeof nickname !== 'string') return undefined;
+    const trimmed = nickname.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private getContactIdentityLinks(contact: Contact): ContactIdentityLinkView[] {
+    if (Array.isArray(contact.channels) && contact.channels.length > 0) {
+      return contact.channels.map(channel => ({
+        channel: channel.channel,
+        userId: channel.userId,
+        lastSeen: channel.lastSeen,
+      }));
+    }
+
+    if (!Array.isArray(contact.channelIdentities)) return [];
+    return contact.channelIdentities.map(identity => ({
+      channel: identity.channel,
+      userId: identity.userId,
+      lastSeen: contact.lastSeen,
+    }));
+  }
+
+  private splitSessionChannelId(channelId: string): { channel: string; channelId: string } {
+    const separatorIndex = channelId.indexOf(':');
+    if (separatorIndex <= 0 || separatorIndex >= channelId.length - 1) {
+      return { channel: 'session', channelId };
+    }
+
+    return {
+      channel: channelId.slice(0, separatorIndex),
+      channelId: channelId.slice(separatorIndex + 1),
+    };
+  }
+
+  private sessionMatchesIdentity(sessionChannelId: string, identity: ContactIdentityLinkView): boolean {
+    const normalizedSession = sessionChannelId.trim().toLowerCase();
+    const normalizedChannel = identity.channel.trim().toLowerCase();
+    const normalizedUserId = identity.userId.trim().toLowerCase();
+    if (!normalizedUserId) return false;
+
+    if (normalizedSession === normalizedUserId) return true;
+    if (normalizedSession === `${normalizedChannel}:${normalizedUserId}`) return true;
+    return normalizedSession.startsWith(`${normalizedChannel}:`) && normalizedSession.endsWith(`:${normalizedUserId}`);
+  }
+
+  private buildRelatedConversationChannelMap(contacts: Contact[]): Map<string, ContactConversationChannelView[]> {
+    const sessions = this.sessionStore.listChannels();
+    const map = new Map<string, ContactConversationChannelView[]>();
+
+    for (const contact of contacts) {
+      const identities = this.getContactIdentityLinks(contact);
+      const relatedChannels: ContactConversationChannelView[] = [];
+      const seen = new Set<string>();
+
+      for (const session of sessions) {
+        if (!identities.some(identity => this.sessionMatchesIdentity(session.channelId, identity))) continue;
+
+        const parsed = this.splitSessionChannelId(session.channelId);
+        const key = `${parsed.channel}:${parsed.channelId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const lastEntry = this.sessionStore.getLastEntry(session.channelId);
+        relatedChannels.push({
+          channel: parsed.channel,
+          channelId: parsed.channelId,
+          lastSeen: lastEntry ? new Date(lastEntry.timestamp).toISOString() : undefined,
+        });
+      }
+
+      if (relatedChannels.length === 0) {
+        for (const identity of identities) {
+          const key = `${identity.channel}:${identity.userId}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          relatedChannels.push({
+            channel: identity.channel,
+            channelId: identity.userId,
+            lastSeen: identity.lastSeen ?? contact.lastSeen,
+          });
+        }
+      }
+
+      map.set(contact.id, relatedChannels);
+    }
+
+    return map;
+  }
+
+  private updateIdentityProfile(contact: Contact, displayName: string, nickname: string | undefined): boolean {
+    if (!this.contactStore) return false;
+    const storeWithIdentityProfile = this.contactStore as ContactStore & {
+      updateIdentityProfile?: (contactId: string, displayName: string, nickname?: string) => boolean;
+    };
+
+    if (typeof storeWithIdentityProfile.updateIdentityProfile === 'function') {
+      return storeWithIdentityProfile.updateIdentityProfile(contact.id, displayName, nickname);
+    }
+
+    const updated = this.contactStore.upsert({
+      id: contact.id,
+      displayName,
+      trustLevel: contact.trustLevel,
+      relationshipType: contact.relationshipType,
+      notes: contact.notes,
+      discordUserId: contact.discordUserId,
+      channels: contact.channels,
+      channelIdentities: contact.channelIdentities,
+      firstSeen: contact.firstSeen,
+    });
+    return updated.id === contact.id;
+  }
+
   contactsPage(): string {
     if (!this.contactStore) {
       return tpl.layout('Garden Visitors', '<div class="empty">Contact store not available</div>', 'contacts');
@@ -302,7 +429,8 @@ export class AdminHandlers {
     const profileMap = new Map(
       this.memoryStore.listContactProfiles().map(profile => [profile.contactId, profile] as const),
     );
-    return tpl.layout('Garden Visitors', tpl.contactsPage(contacts, profileMap), 'contacts');
+    const relatedChannelMap = this.buildRelatedConversationChannelMap(contacts);
+    return tpl.layout('Garden Visitors', tpl.contactsPage(contacts, profileMap, relatedChannelMap), 'contacts');
   }
 
   contactsListFragment(): string {
@@ -312,7 +440,12 @@ export class AdminHandlers {
     const profileMap = new Map(
       this.memoryStore.listContactProfiles().map(profile => [profile.contactId, profile] as const),
     );
-    return contacts.map(contact => tpl.contactRow(contact, profileMap.get(contact.id))).join('');
+    const relatedChannelMap = this.buildRelatedConversationChannelMap(contacts);
+    return contacts.map(contact => tpl.contactRow(
+      contact,
+      profileMap.get(contact.id),
+      relatedChannelMap.get(contact.id) ?? [],
+    )).join('');
   }
 
   contactEditFormFragment(contactId: string): string {
@@ -333,10 +466,18 @@ export class AdminHandlers {
     }
 
     const params = new URLSearchParams(body);
+    const displayName = (params.get('displayName') ?? '').trim();
+    const nicknameField = params.get('nickname');
+    const nickname = nicknameField === null ? undefined : (nicknameField.trim() || undefined);
     const trustLevel = params.get('trustLevel') as TrustLevel | null;
     const relationshipType = params.get('relationshipType') as RelationshipType | null;
     const notes = params.get('notes');
     const channelCount = Number.parseInt(params.get('channelCount') ?? '0', 10);
+    const currentNickname = this.getContactNickname(contact);
+
+    if (!displayName) {
+      return tpl.settingsFormResult(false, 'Display name is required');
+    }
 
     const channelPrivacyUpdates: Array<{
       channel: string;
@@ -369,6 +510,13 @@ export class AdminHandlers {
     // Validate relationship type
     if (relationshipType && !VALID_RELATIONSHIP_TYPES.includes(relationshipType)) {
       return tpl.settingsFormResult(false, `Invalid relationship type: ${relationshipType}`);
+    }
+
+    if (displayName !== contact.displayName || nickname !== currentNickname) {
+      const updatedIdentity = this.updateIdentityProfile(contact, displayName, nickname);
+      if (!updatedIdentity) {
+        return tpl.settingsFormResult(false, 'Unable to update contact identity profile');
+      }
     }
 
     if (trustLevel && trustLevel !== contact.trustLevel) {
@@ -409,7 +557,8 @@ export class AdminHandlers {
     if (!updated) return tpl.settingsFormResult(false, 'Update failed');
 
     // Return a fresh table row so htmx replaces the edit form
-    return tpl.contactRow(updated, this.memoryStore.getContactProfile(updated.id));
+    const relatedChannels = this.buildRelatedConversationChannelMap([updated]).get(updated.id) ?? [];
+    return tpl.contactRow(updated, this.memoryStore.getContactProfile(updated.id), relatedChannels);
   }
 
   // ── Prompt Stack ──

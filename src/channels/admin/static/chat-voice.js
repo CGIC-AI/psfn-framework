@@ -35,7 +35,7 @@ function safeReadStorage(key) {
   }
 }
 
-function resolveApiToken() {
+function resolveLocalApiToken() {
   const pageUrl = new URL(window.location.href);
   const fromQuery = normalizeText(
     pageUrl.searchParams.get('api_key')
@@ -54,6 +54,16 @@ function resolveApiToken() {
   }
 
   return '';
+}
+
+function readBootstrapApiToken(bootstrap) {
+  const token = normalizeText(bootstrap?.api?.apiKey);
+  if (!token || PLACEHOLDER_TOKENS.has(token)) return '';
+  return token;
+}
+
+function resolveApiToken(bootstrap) {
+  return readBootstrapApiToken(bootstrap) || resolveLocalApiToken();
 }
 
 function bytesToBase64(bytes) {
@@ -270,7 +280,7 @@ function buildSocketConnection(root, getBootstrap) {
   const bootstrap = readBootstrap(getBootstrap);
   const endpoint = normalizeText(bootstrap?.api?.voiceWebSocketUrl) || '/v1/voice/ws';
   const identity = computeIdentity(root, bootstrap);
-  const token = resolveApiToken();
+  const token = resolveApiToken(bootstrap);
   const wsUrl = toWsUrl(endpoint);
 
   if (token) {

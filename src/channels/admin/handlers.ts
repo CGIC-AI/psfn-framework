@@ -301,12 +301,7 @@ export class AdminHandlers {
   // ── Chat ──
 
   chatPage(): string {
-    const body = `
-      <div class="card">
-        <p>Admin chat cockpit bootstrap is available at <code>/api/chat/bootstrap</code>.</p>
-      </div>
-    `;
-    return tpl.layout('Chat Cockpit', body, 'chat');
+    return tpl.layout('Chat Cockpit', tpl.chatPage(), 'chat');
   }
 
   chatBootstrap(): AdminChatBootstrapResponse {

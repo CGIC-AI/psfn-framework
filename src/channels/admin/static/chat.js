@@ -1,3 +1,5 @@
+import { initializeChatVoiceCockpit } from './chat-voice.js';
+
 const PI_VERSION = '0.52.12';
 const BOOTSTRAP_URL = '/api/chat/bootstrap';
 const DEFAULT_MODEL_ID = 'psfn-admin-chat';
@@ -412,6 +414,14 @@ async function initializeCockpit() {
     renderControls(dom, bootstrap);
     syncAgentWithBootstrap(context.agent, bootstrap);
     bindControlPersistence(context);
+    try {
+      initializeChatVoiceCockpit({
+        root,
+        getBootstrap: () => context.bootstrap,
+      });
+    } catch (voiceError) {
+      console.error('[admin/chat/voice]', voiceError);
+    }
     setStatus(dom, 'Chat cockpit is ready.');
   } catch (error) {
     setStatus(dom, `Failed to initialize chat cockpit: ${formatError(error)}`, true);

@@ -257,6 +257,7 @@ export class AdminServer implements Lifecycle {
       { method: 'GET', match: exactPath('/scheduler'), handle: (_req, res) => this.sendHtml(res, this.handlers.schedulerPage()) },
       { method: 'GET', match: exactPath('/shards'), handle: (_req, res) => this.sendHtml(res, this.handlers.shardsPage()) },
       { method: 'GET', match: exactPath('/contacts'), handle: (_req, res) => this.sendHtml(res, this.handlers.contactsPage()) },
+      { method: 'GET', match: exactPath('/chat'), handle: (_req, res) => this.sendHtml(res, this.handlers.chatPage()) },
       { method: 'GET', match: exactPath('/identity'), handle: (_req, res) => this.sendHtml(res, this.handlers.identityPage()) },
       {
         method: 'GET',
@@ -301,6 +302,27 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: wrappedParamPath('/api/sessions/', '/messages', 'channelId'),
         handle: (_req, res, { channelId }) => this.sendFragment(res, this.handlers.sessionMessagesFragment(channelId)),
+      },
+      {
+        method: 'GET',
+        match: exactPath('/api/chat/bootstrap'),
+        handle: (_req, res) => sendJson(res, 200, this.handlers.chatBootstrap()),
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/chat/bootstrap'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            try {
+              const payload = this.handlers.updateChatBootstrap(body, req.headers['content-type']);
+              sendJson(res, 200, payload);
+            } catch (error) {
+              sendJson(res, 400, {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          });
+        },
       },
       {
         method: 'GET',

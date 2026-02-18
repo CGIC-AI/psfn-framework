@@ -15,6 +15,13 @@ export interface ContactChannelLink extends ContactChannelIdentity {
   lastSeen?: string;
 }
 
+export interface ContactConversationChannel {
+  channel: ContactChannel;
+  channelId: string;
+  firstSeen: string;
+  lastSeen: string;
+}
+
 export interface ContactIdentityLinkOptions {
   privacyLevel?: ChannelPrivacyLevel;
 }
@@ -39,8 +46,10 @@ export const VALID_RELATIONSHIP_TYPES: RelationshipType[] = [
 export interface Contact {
   id: string;
   discordUserId?: string;
+  nickname?: string;
   channelIdentities?: ContactChannelIdentity[];
   channels?: ContactChannelLink[];
+  conversationChannels?: ContactConversationChannel[];
   displayName: string;
   trustLevel: TrustLevel;
   relationshipType: RelationshipType;

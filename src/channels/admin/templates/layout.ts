@@ -7,6 +7,7 @@ const navItems = [
   { href: '/scheduler', label: 'Garden Rhythms', id: 'scheduler' },
   { href: '/shards', label: 'Active Branches', id: 'shards' },
   { href: '/contacts', label: 'Garden Visitors', id: 'contacts' },
+  { href: '/chat', label: 'Chat Cockpit', id: 'chat' },
   { href: '/identity', label: 'Identity', id: 'identity' },
   { href: '/settings', label: 'Settings', id: 'settings' },
   { href: '/prompts', label: 'Prompt Soil', id: 'prompts' },

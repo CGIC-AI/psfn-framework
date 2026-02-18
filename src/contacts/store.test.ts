@@ -374,6 +374,24 @@ describe('ContactStore', () => {
 
       expect(store.getById(target.id)?.trustLevel).toBe('trusted');
     });
+
+    it('prefers human-readable display name when target uses opaque identifier text', () => {
+      const target = store.upsert({
+        displayName: '388908766306893854',
+        discordUserId: '388908766306893854',
+      });
+      const source = store.upsert({
+        displayName: 'Vega',
+        channelIdentities: [{ channel: 'discord', userId: 'vega' }],
+      });
+
+      const merged = store.mergeContacts(source.id, target.id);
+      expect(merged).toBe(true);
+
+      const updated = store.getById(target.id);
+      expect(updated?.displayName).toBe('Vega');
+      expect(updated?.discordUserId).toBe('388908766306893854');
+    });
   });
 
   describe('updateNotes', () => {

@@ -537,6 +537,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'test-channel',
       'regular',
       { isDirectMessage: undefined },
+      undefined,
     );
   });
 
@@ -563,6 +564,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'internal:heartbeat',
       'primary',
       { isDirectMessage: undefined },
+      'scheduler',
     );
   });
 
@@ -580,7 +582,7 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage());
 
     // Fire-and-forget, but should have been called
-    expect(mockExtractor.maybeExtract).toHaveBeenCalledWith('test-channel');
+    expect(mockExtractor.maybeExtract).toHaveBeenCalledWith('test-channel', undefined);
   });
 
   it('returns AgentResponse with content and metadata', async () => {

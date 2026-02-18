@@ -18,6 +18,25 @@ interface MemoryRow {
   tags: string;
   sensitivity: string | null;
   consent_flags: string | null;
+  contact_id: string | null;
+}
+
+interface ContactProfileRow {
+  contact_id: string;
+  summary_text: string;
+  source_memory_ids: string;
+  confidence_score: number;
+  novelty_score: number;
+  updated_at: number;
+}
+
+export interface ContactProfileArtifact {
+  contactId: string;
+  summary: string;
+  sourceMemoryIds: string[];
+  confidenceScore: number;
+  noveltyScore: number;
+  updatedAt: number;
 }
 
 function mapMemoryRow(row: MemoryRow): PurrMemory {
@@ -50,6 +69,7 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
     tags,
     sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
     consentFlags,
+    contactId: row.contact_id ?? undefined,
   };
 }
 
@@ -84,10 +104,22 @@ export class MemoryStore {
         last_accessed INTEGER NOT NULL,
         access_count INTEGER NOT NULL DEFAULT 1,
         superseded_by TEXT,
-        tags TEXT NOT NULL DEFAULT '[]'
+        tags TEXT NOT NULL DEFAULT '[]',
+        contact_id TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_l2_type ON l2_memories(type);
       CREATE INDEX IF NOT EXISTS idx_l2_salience ON l2_memories(salience);
+      CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id);
+
+      CREATE TABLE IF NOT EXISTS contact_profiles (
+        contact_id TEXT PRIMARY KEY,
+        summary_text TEXT NOT NULL,
+        source_memory_ids TEXT NOT NULL DEFAULT '[]',
+        confidence_score REAL NOT NULL DEFAULT 0,
+        novelty_score REAL NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_profiles_updated_at ON contact_profiles(updated_at);
 
       CREATE VIRTUAL TABLE IF NOT EXISTS l2_memory_embeddings USING vec0(
         memory_id TEXT PRIMARY KEY,
@@ -106,6 +138,13 @@ export class MemoryStore {
     try {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN consent_flags TEXT NOT NULL DEFAULT '{}'`);
     } catch { /* column already exists */ }
+
+    // Add contact_id column for canonical contact linking
+    try {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN contact_id TEXT`);
+    } catch { /* column already exists */ }
+
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id)`);
   }
 
   // ── L2 Memories ──
@@ -114,8 +153,8 @@ export class MemoryStore {
     const insertMem = this.db.prepare(`
       INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence,
         salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
-        sensitivity, consent_flags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sensitivity, consent_flags, contact_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = this.db.prepare(`
@@ -140,6 +179,7 @@ export class MemoryStore {
         JSON.stringify(memory.tags),
         memory.sensitivity ?? 'personal',
         JSON.stringify(memory.consentFlags ?? {}),
+        memory.contactId ?? null,
       );
       insertVec.run(memory.id, Buffer.from(embedding.buffer));
     });
@@ -178,7 +218,7 @@ export class MemoryStore {
       .slice(0, limit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'tags'>>): void {
+  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'tags' | 'contactId'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -205,6 +245,10 @@ export class MemoryStore {
     if (updates.tags !== undefined) {
       setClauses.push('tags = ?');
       values.push(JSON.stringify(updates.tags));
+    }
+    if (updates.contactId !== undefined) {
+      setClauses.push('contact_id = ?');
+      values.push(updates.contactId);
     }
 
     if (setClauses.length === 0) return;
@@ -256,5 +300,95 @@ export class MemoryStore {
     `);
     const rows = stmt.all(`${channelId}:%`, limit) as MemoryRow[];
     return rows.map(mapMemoryRow);
+  }
+
+  getMemoriesByContact(contactId: string, limit: number): PurrMemory[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM l2_memories
+      WHERE contact_id = ? AND superseded_by IS NULL
+      ORDER BY salience DESC, extracted_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(contactId, limit) as MemoryRow[];
+    return rows.map(mapMemoryRow);
+  }
+
+  upsertContactProfile(profile: ContactProfileArtifact): void {
+    this.db.prepare(`
+      INSERT INTO contact_profiles (
+        contact_id,
+        summary_text,
+        source_memory_ids,
+        confidence_score,
+        novelty_score,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(contact_id) DO UPDATE SET
+        summary_text = excluded.summary_text,
+        source_memory_ids = excluded.source_memory_ids,
+        confidence_score = excluded.confidence_score,
+        novelty_score = excluded.novelty_score,
+        updated_at = excluded.updated_at
+    `).run(
+      profile.contactId,
+      profile.summary,
+      JSON.stringify(profile.sourceMemoryIds),
+      profile.confidenceScore,
+      profile.noveltyScore,
+      profile.updatedAt,
+    );
+  }
+
+  getContactProfile(contactId: string): ContactProfileArtifact | undefined {
+    const row = this.db.prepare(`
+      SELECT contact_id, summary_text, source_memory_ids, confidence_score, novelty_score, updated_at
+      FROM contact_profiles
+      WHERE contact_id = ?
+      LIMIT 1
+    `).get(contactId) as ContactProfileRow | undefined;
+    if (!row) return undefined;
+
+    let sourceMemoryIds: string[] = [];
+    try {
+      sourceMemoryIds = JSON.parse(row.source_memory_ids) as string[];
+    } catch {
+      sourceMemoryIds = [];
+    }
+
+    return {
+      contactId: row.contact_id,
+      summary: row.summary_text,
+      sourceMemoryIds,
+      confidenceScore: row.confidence_score,
+      noveltyScore: row.novelty_score,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listContactProfiles(): ContactProfileArtifact[] {
+    const rows = this.db.prepare(`
+      SELECT contact_id, summary_text, source_memory_ids, confidence_score, novelty_score, updated_at
+      FROM contact_profiles
+      ORDER BY updated_at DESC
+    `).all() as ContactProfileRow[];
+
+    return rows.map(row => {
+      let sourceMemoryIds: string[] = [];
+      try {
+        sourceMemoryIds = JSON.parse(row.source_memory_ids) as string[];
+      } catch {
+        sourceMemoryIds = [];
+      }
+
+      return {
+        contactId: row.contact_id,
+        summary: row.summary_text,
+        sourceMemoryIds,
+        confidenceScore: row.confidence_score,
+        noveltyScore: row.novelty_score,
+        updatedAt: row.updated_at,
+      };
+    });
   }
 }

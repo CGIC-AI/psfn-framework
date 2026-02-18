@@ -28,9 +28,10 @@ export interface MemoryProvider {
     channelId: string,
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
   ): Promise<string>;
 }
 
 export interface MemoryExtractor {
-  maybeExtract(channelId: string): Promise<void>;
+  maybeExtract(channelId: string, canonicalContactId?: string): Promise<void>;
 }

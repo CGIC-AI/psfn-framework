@@ -291,6 +291,7 @@ export class SubstrateAgent {
           message.channelId,
           trustLevel,
           { isDirectMessage: message.isDirectMessage },
+          authorContext.canonicalContactKey,
         )
         : '';
       this.emitTurnStage(message, startTime, 'memory', {
@@ -421,7 +422,10 @@ export class SubstrateAgent {
       });
 
       // Trigger memory extraction (fire-and-forget)
-      this.memoryExtractor?.maybeExtract(message.channelId).catch(err => {
+      this.memoryExtractor?.maybeExtract(
+        message.channelId,
+        authorContext.canonicalContactKey,
+      ).catch(err => {
         log.error('Memory extraction error', { error: String(err) });
       });
 

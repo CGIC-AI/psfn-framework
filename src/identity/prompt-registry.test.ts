@@ -6,6 +6,7 @@ import {
   PromptRegistryStore,
   EXTRACTION_PROMPT_KEY,
   COMPACTION_SUMMARY_PROMPT_KEY,
+  PROFILE_SYNTHESIS_PROMPT_KEY,
 } from './prompt-registry.js';
 
 describe('PromptRegistryStore', () => {
@@ -30,10 +31,12 @@ describe('PromptRegistryStore', () => {
     const entries = store.list();
     expect(entries.map(e => e.key)).toEqual([
       EXTRACTION_PROMPT_KEY,
+      PROFILE_SYNTHESIS_PROMPT_KEY,
       COMPACTION_SUMMARY_PROMPT_KEY,
     ]);
     expect(store.getPrompt(EXTRACTION_PROMPT_KEY)).toContain('{existing_facts}');
     expect(store.getPrompt(EXTRACTION_PROMPT_KEY)).toContain('{recent_messages}');
+    expect(store.getPrompt(PROFILE_SYNTHESIS_PROMPT_KEY)).toContain('{memory_facts}');
   });
 
   it('updates prompt text and writes history entry', () => {

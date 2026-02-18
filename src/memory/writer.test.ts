@@ -193,6 +193,27 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).not.toHaveBeenCalled();
     });
 
+    it('does not deduplicate across different canonical contacts', async () => {
+      const existing = makeExistingMemory({
+        type: 'semantic',
+        contactId: 'contact-a',
+      });
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+      store.searchByEmbedding.mockReturnValueOnce([]);
+
+      const result = await writer.write({
+        text: 'An existing memory (rephrased)',
+        type: 'semantic',
+        contactId: 'contact-b',
+      });
+
+      expect(result.action).toBe('created');
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+      const [inserted] = store.insertMemory.mock.calls[0];
+      expect(inserted.contactId).toBe('contact-b');
+    });
+
     it('upgrades duplicate memory tags when durable write deduplicates', async () => {
       const existing = makeExistingMemory({
         type: 'relational',

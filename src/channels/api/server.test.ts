@@ -857,6 +857,21 @@ describe('ApiServer with auth', () => {
     expect(status).toBe(401);
   });
 
+  it('accepts websocket upgrades with api_key query token', async () => {
+    const ws = await openWebSocket(port, '/v1/voice/ws?api_key=test-secret-key');
+    ws.close();
+  });
+
+  it('accepts websocket upgrades with token query token', async () => {
+    const ws = await openWebSocket(port, '/v1/voice/ws?token=test-secret-key');
+    ws.close();
+  });
+
+  it('rejects websocket upgrades with wrong query token', async () => {
+    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?api_key=wrong-key');
+    expect(status).toBe(401);
+  });
+
   it('accepts websocket upgrades with correct key', async () => {
     const ws = await openWebSocket(port, '/v1/voice/ws', {
       Authorization: 'Bearer test-secret-key',

@@ -19,6 +19,7 @@ import { PromptRegistryStore, EXTRACTION_PROMPT_KEY } from '../../identity/promp
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { LLMProvider } from '../../agent-loop.js';
+import type { AdminChatBootstrapResponse } from './chat/index.js';
 
 // ── Helpers ──
 
@@ -466,6 +467,60 @@ describe('AdminServer', () => {
     });
   });
 
+  describe('Chat (without contactStore)', () => {
+    it('returns chat page placeholder', async () => {
+      const res = await request(port, 'GET', '/chat');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Chat Cockpit');
+      expect(res.body).toContain('/api/chat/bootstrap');
+    });
+
+    it('returns synthetic bootstrap defaults', async () => {
+      const res = await request(port, 'GET', '/api/chat/bootstrap');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('application/json');
+
+      const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+      expect(payload.canonicalContactId).toBe('admin.synthetic.default');
+      expect(payload.displayName).toBe('Primary Contact');
+      expect(payload.contactOptions).toHaveLength(1);
+      expect(payload.selectedIdentity).toEqual({
+        canonicalContactId: 'admin.synthetic.default',
+        channel: 'api',
+        userId: 'admin-user',
+        privacyLevel: 'private',
+      });
+      expect(payload.api.chatCompletionsUrl).toBe('/v1/chat/completions');
+      expect(payload.api.voiceWebSocketUrl).toBe('/v1/voice/ws');
+      expect(payload.defaultSessionId).toBe('api:admin-user');
+      expect(payload.defaultAuthorName).toBe('Primary Contact');
+      expect(payload.defaultAuthorId).toBe('admin-user');
+    });
+
+    it('updates selected identity and author defaults via bootstrap POST', async () => {
+      const res = await request(
+        port,
+        'POST',
+        '/api/chat/bootstrap',
+        JSON.stringify({
+          channel: 'discord',
+          userId: '42',
+          defaultAuthorName: 'Operator',
+          defaultAuthorId: 'operator-42',
+        }),
+        { 'Content-Type': 'application/json' },
+      );
+
+      expect(res.status).toBe(200);
+      const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+      expect(payload.selectedIdentity.channel).toBe('discord');
+      expect(payload.selectedIdentity.userId).toBe('42');
+      expect(payload.defaultSessionId).toBe('discord:42');
+      expect(payload.defaultAuthorName).toBe('Operator');
+      expect(payload.defaultAuthorId).toBe('operator-42');
+    });
+  });
+
   describe('Identity', () => {
     it('returns identity page with character info', async () => {
       const res = await request(port, 'GET', '/identity');
@@ -789,6 +844,14 @@ describe('AdminServer with auth', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects chat routes without auth', async () => {
+    const chatPage = await request(port, 'GET', '/chat');
+    expect(chatPage.status).toBe(401);
+
+    const chatBootstrap = await request(port, 'GET', '/api/chat/bootstrap');
+    expect(chatBootstrap.status).toBe(401);
+  });
+
   it('rejects requests with wrong token', async () => {
     const res = await request(port, 'GET', '/', undefined, {
       Authorization: 'Bearer wrong-token',
@@ -802,6 +865,15 @@ describe('AdminServer with auth', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body).toContain('Dashboard');
+  });
+
+  it('accepts chat bootstrap with correct token', async () => {
+    const res = await request(port, 'GET', '/api/chat/bootstrap', undefined, {
+      Authorization: 'Bearer test-admin-secret',
+    });
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+    expect(payload.api.chatCompletionsUrl).toBe('/v1/chat/completions');
   });
 
   it('allows login page without auth token', async () => {
@@ -994,6 +1066,95 @@ describe('AdminServer with contacts', () => {
     expect(res.body).toContain('regular');
   });
 
+  it('defaults chat bootstrap selection to primary or partner contact', async () => {
+    contactStore.upsert({
+      displayName: 'Ari Regular',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      channels: [{
+        channel: 'discord',
+        userId: 'ari-1',
+        privacyLevel: 'semi_private',
+      }],
+    });
+    const primary = contactStore.upsert({
+      displayName: 'Pia Primary',
+      trustLevel: 'primary',
+      relationshipType: 'partner',
+      channels: [{
+        channel: 'terminal',
+        userId: 'pia-main',
+        privacyLevel: 'private',
+      }],
+    });
+
+    const res = await request(port, 'GET', '/api/chat/bootstrap');
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+
+    expect(payload.canonicalContactId).toBe(primary.id);
+    expect(payload.displayName).toBe('Pia Primary');
+    expect(payload.selectedIdentity).toEqual({
+      canonicalContactId: primary.id,
+      channel: 'terminal',
+      userId: 'pia-main',
+      privacyLevel: 'private',
+    });
+    expect(payload.contactOptions.some(option => option.canonicalContactId === primary.id)).toBe(true);
+    expect(payload.defaultSessionId).toBe('terminal:pia-main');
+    expect(payload.defaultAuthorName).toBe('Pia Primary');
+    expect(payload.defaultAuthorId).toBe('pia-main');
+  });
+
+  it('updates and persists contact-channel mapping via bootstrap POST', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Map Target',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      channels: [{
+        channel: 'discord',
+        userId: 'map-target',
+        privacyLevel: 'semi_private',
+      }],
+    });
+
+    const res = await request(
+      port,
+      'POST',
+      '/api/chat/bootstrap',
+      JSON.stringify({
+        canonicalContactId: contact.id,
+        channel: 'api',
+        userId: 'operator-7',
+        privacyLevel: 'private',
+        defaultAuthorName: 'Console Operator',
+        defaultAuthorId: 'op-7',
+      }),
+      { 'Content-Type': 'application/json' },
+    );
+
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+    expect(payload.canonicalContactId).toBe(contact.id);
+    expect(payload.selectedIdentity).toEqual({
+      canonicalContactId: contact.id,
+      channel: 'api',
+      userId: 'operator-7',
+      privacyLevel: 'private',
+    });
+    expect(payload.linkedChannels.some(identity => (
+      identity.channel === 'api'
+      && identity.userId === 'operator-7'
+      && identity.privacyLevel === 'private'
+    ))).toBe(true);
+    expect(payload.defaultSessionId).toBe('api:operator-7');
+    expect(payload.defaultAuthorName).toBe('Console Operator');
+    expect(payload.defaultAuthorId).toBe('op-7');
+
+    const mapped = contactStore.getByChannelIdentity('api', 'operator-7');
+    expect(mapped?.id).toBe(contact.id);
+  });
+
   it('renders canonical profile summary with timestamp and source IDs', async () => {
     const contact = contactStore.upsert({
       displayName: 'Eve Example',
@@ -1040,7 +1201,7 @@ describe('AdminServer with contacts', () => {
       relationshipType: 'stranger',
     });
 
-    const body = 'trustLevel=trusted&relationshipType=friend&notes=A+good+friend';
+    const body = 'displayName=Dave+Grohl&trustLevel=trusted&relationshipType=friend&notes=A+good+friend';
     const res = await request(port, 'POST', `/api/contacts/${contact.id}`, body, {
       'Content-Type': 'application/x-www-form-urlencoded',
     });

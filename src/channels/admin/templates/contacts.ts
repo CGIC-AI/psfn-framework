@@ -3,6 +3,16 @@ import type { ContactProfileArtifact } from '../../../memory/store.js';
 import type { TrustLevel } from '../../../trust/types.js';
 import { escapeHtml } from './shared.js';
 
+interface ContactWithNickname extends Contact {
+  nickname?: string;
+}
+
+export interface RelatedConversationChannel {
+  channel: string;
+  channelId: string;
+  lastSeen?: string;
+}
+
 // ── Trust level badge colors ──
 const TRUST_BADGE_COLORS: Record<TrustLevel, string> = {
   primary: '#e8b931',
@@ -37,12 +47,19 @@ function resolveContactChannels(contact: Contact): ContactChannelLink[] {
   }));
 }
 
+function getContactNickname(contact: Contact): string | undefined {
+  const nickname = (contact as ContactWithNickname).nickname;
+  if (typeof nickname !== 'string') return undefined;
+  const trimmed = nickname.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function channelPrivacyBadge(level: ChannelPrivacyLevel): string {
   const color = CHANNEL_PRIVACY_COLORS[level] ?? '#8A7E72';
   return `<span class="channel-privacy" style="background:${color}">${escapeHtml(level)}</span>`;
 }
 
-function channelRow(channel: ContactChannelLink): string {
+function linkedIdentityRow(channel: ContactChannelLink): string {
   const descriptor = `${channel.channel}:${channel.userId}`;
   return `<div class="channel-row">
     <span class="channel-chip">${escapeHtml(descriptor)}</span>
@@ -50,11 +67,33 @@ function channelRow(channel: ContactChannelLink): string {
   </div>`;
 }
 
-function channelList(channels: ContactChannelLink[]): string {
+function linkedIdentityList(channels: ContactChannelLink[]): string {
   if (channels.length === 0) {
     return '<span class="crm-notes">No linked channels</span>';
   }
-  return `<div class="channel-list">${channels.map(channelRow).join('')}</div>`;
+  return `<div class="channel-list">${channels.map(linkedIdentityRow).join('')}</div>`;
+}
+
+function formatLastSeen(lastSeen?: string): string {
+  if (!lastSeen) return 'unknown';
+  const parsed = Date.parse(lastSeen);
+  if (Number.isNaN(parsed)) return lastSeen;
+  return new Date(parsed).toLocaleString();
+}
+
+function relatedConversationRow(channel: RelatedConversationChannel): string {
+  const descriptor = `${channel.channel}:${channel.channelId}`;
+  return `<div class="channel-row">
+    <span class="channel-chip">${escapeHtml(descriptor)}</span>
+    <span class="crm-notes" style="margin-top:0">Last seen: ${escapeHtml(formatLastSeen(channel.lastSeen))}</span>
+  </div>`;
+}
+
+function relatedConversationList(channels: RelatedConversationChannel[]): string {
+  if (channels.length === 0) {
+    return '<span class="crm-notes">No related conversation channels</span>';
+  }
+  return `<div class="channel-list">${channels.map(relatedConversationRow).join('')}</div>`;
 }
 
 function profileCard(profile?: ContactProfileArtifact): string {
@@ -79,35 +118,57 @@ function profileCard(profile?: ContactProfileArtifact): string {
 export function contactsPage(
   contacts: Contact[],
   profilesByContactId: ReadonlyMap<string, ContactProfileArtifact> = new Map(),
+  relatedChannelsByContactId: ReadonlyMap<string, RelatedConversationChannel[]> = new Map(),
 ): string {
   if (contacts.length === 0) {
     return '<div class="empty">No visitors have been seen in the garden yet</div>';
   }
 
-  const rows = contacts.map(c => contactRow(c, profilesByContactId.get(c.id))).join('');
+  const rows = contacts.map(c => contactRow(
+    c,
+    profilesByContactId.get(c.id),
+    relatedChannelsByContactId.get(c.id) ?? [],
+  )).join('');
   return `
     <div class="card">
       <table>
         <thead><tr>
-          <th>Person</th><th>Linked Channels</th><th>Relationship + Profile</th><th>Activity</th><th></th>
+          <th>Person</th><th>Linked Identities + Channels</th><th>Relationship + Profile</th><th>Activity</th><th></th>
         </tr></thead>
         <tbody id="contacts-list">${rows}</tbody>
       </table>
     </div>`;
 }
 
-export function contactRow(c: Contact, profile?: ContactProfileArtifact): string {
+export function contactRow(
+  c: Contact,
+  profile?: ContactProfileArtifact,
+  relatedChannels: RelatedConversationChannel[] = [],
+): string {
   const channels = resolveContactChannels(c);
+  const nickname = getContactNickname(c);
+  const fallbackChannels = channels.map(channel => ({
+    channel: channel.channel,
+    channelId: channel.userId,
+    lastSeen: channel.lastSeen,
+  }));
+  const renderedRelatedChannels = relatedChannels.length > 0 ? relatedChannels : fallbackChannels;
   const firstSeen = new Date(c.firstSeen).toLocaleDateString();
   const lastSeen = new Date(c.lastSeen).toLocaleDateString();
   return `<tr id="contact-row-${escapeHtml(c.id)}">
     <td>
       <div class="crm-person">
         <div><strong>${escapeHtml(c.displayName)}</strong> ${trustBadge(c.trustLevel)}</div>
+        ${nickname ? `<div class="crm-notes">aka: ${escapeHtml(nickname)}</div>` : ''}
         <div class="crm-person-id">contact:${escapeHtml(c.id)}</div>
       </div>
     </td>
-    <td>${channelList(channels)}</td>
+    <td>
+      <div><strong>Linked identities</strong></div>
+      ${linkedIdentityList(channels)}
+      <div style="margin-top:0.55rem"><strong>Related channels</strong></div>
+      ${relatedConversationList(renderedRelatedChannels)}
+    </td>
     <td>
       <div><strong>${escapeHtml(c.relationshipType)}</strong></div>
       <div class="crm-notes">${c.notes ? escapeHtml(c.notes) : '<em>No notes</em>'}</div>
@@ -126,6 +187,7 @@ export function contactRow(c: Contact, profile?: ContactProfileArtifact): string
 
 export function contactEditForm(contact: Contact): string {
   const channels = resolveContactChannels(contact);
+  const nickname = getContactNickname(contact);
   const trustOptions = (['primary', 'trusted', 'regular', 'public'] as TrustLevel[])
     .map(t => `<option value="${t}"${t === contact.trustLevel ? ' selected' : ''}>${t}</option>`)
     .join('');
@@ -163,8 +225,17 @@ export function contactEditForm(contact: Contact): string {
     <td colspan="5">
       <form hx-post="/api/contacts/${encodeURIComponent(contact.id)}" hx-target="#contact-row-${escapeHtml(contact.id)}" hx-swap="outerHTML"
         style="padding:0.5rem">
-        <div style="margin-bottom:0.5rem"><strong>${escapeHtml(contact.displayName)}</strong></div>
         <input type="hidden" name="channelCount" value="${channels.length}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Name</label>
+            <input type="text" name="displayName" value="${escapeHtml(contact.displayName)}" required>
+          </div>
+          <div class="form-group">
+            <label>Nickname / aka</label>
+            <input type="text" name="nickname" value="${escapeHtml(nickname ?? '')}" placeholder="Optional">
+          </div>
+        </div>
         <div class="form-row">
           <div class="form-group">
             <label>Trust Level</label>

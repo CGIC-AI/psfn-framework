@@ -23,6 +23,11 @@ import { TRUST_LEVELS } from '../../trust/types.js';
 import { VALID_RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '../../contacts/types.js';
 import { MEMORY_CONFIG } from '../../memory/types.js';
 import { loadSettings, saveSettings, applySettings, parseSettingsForm } from '../../settings.js';
+import {
+  AdminChatBootstrapService,
+  type AdminChatBootstrapResponse,
+  type AdminChatBootstrapUpdateInput,
+} from './chat/index.js';
 import * as tpl from './templates.js';
 
 interface ContactIdentityLinkView {
@@ -51,6 +56,7 @@ export class AdminHandlers {
   private contactStore: ContactStore | null;
   private promptStore: PromptLayerStore | null;
   private promptRegistry: PromptRegistryStore | null;
+  private chatBootstrapService: AdminChatBootstrapService;
   private usageTotals = {
     turns: 0,
     inputTokens: 0,
@@ -91,6 +97,7 @@ export class AdminHandlers {
     this.contactStore = deps.contactStore ?? null;
     this.promptStore = deps.promptStore ?? null;
     this.promptRegistry = deps.promptRegistry ?? null;
+    this.chatBootstrapService = new AdminChatBootstrapService(this.contactStore);
 
     this.eventBus.on('agent.turn.usage', ({ usage }) => {
       this.usageTotals.turns += 1;
@@ -289,6 +296,90 @@ export class AdminHandlers {
 
   primerPage(): string {
     return tpl.layout('Garden Primer', tpl.primerPage(), 'primer');
+  }
+
+  // ── Chat ──
+
+  chatPage(): string {
+    const body = `
+      <div class="card">
+        <p>Admin chat cockpit bootstrap is available at <code>/api/chat/bootstrap</code>.</p>
+      </div>
+    `;
+    return tpl.layout('Chat Cockpit', body, 'chat');
+  }
+
+  chatBootstrap(): AdminChatBootstrapResponse {
+    return this.chatBootstrapService.buildBootstrap();
+  }
+
+  updateChatBootstrap(
+    body: string,
+    contentTypeHeader: string | string[] | undefined,
+  ): AdminChatBootstrapResponse {
+    const update = this.parseChatBootstrapUpdate(body, contentTypeHeader);
+    return this.chatBootstrapService.updateSelection(update);
+  }
+
+  private parseChatBootstrapUpdate(
+    body: string,
+    contentTypeHeader: string | string[] | undefined,
+  ): AdminChatBootstrapUpdateInput {
+    const contentType = Array.isArray(contentTypeHeader)
+      ? (contentTypeHeader[0] ?? '')
+      : (contentTypeHeader ?? '');
+    const normalizedContentType = contentType.toLowerCase();
+    const trimmedBody = body.trim();
+    if (!trimmedBody) return {};
+
+    if (normalizedContentType.includes('application/json') || trimmedBody.startsWith('{')) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmedBody);
+      } catch {
+        throw new Error('Invalid JSON payload');
+      }
+      return this.parseChatBootstrapUpdateObject(parsed);
+    }
+
+    const params = new URLSearchParams(body);
+    const privacyLevel = params.get('privacyLevel');
+
+    return {
+      canonicalContactId: params.get('canonicalContactId') ?? undefined,
+      channel: params.get('channel') ?? undefined,
+      userId: params.get('userId') ?? undefined,
+      privacyLevel: privacyLevel ? privacyLevel as ChannelPrivacyLevel : undefined,
+      defaultAuthorName: params.get('defaultAuthorName') ?? undefined,
+      defaultAuthorId: params.get('defaultAuthorId') ?? undefined,
+    };
+  }
+
+  private parseChatBootstrapUpdateObject(parsed: unknown): AdminChatBootstrapUpdateInput {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('JSON payload must be an object');
+    }
+
+    const payload = parsed as Record<string, unknown>;
+    const privacyLevel = this.readOptionalStringField(payload, 'privacyLevel');
+
+    return {
+      canonicalContactId: this.readOptionalStringField(payload, 'canonicalContactId'),
+      channel: this.readOptionalStringField(payload, 'channel'),
+      userId: this.readOptionalStringField(payload, 'userId'),
+      privacyLevel: privacyLevel ? privacyLevel as ChannelPrivacyLevel : undefined,
+      defaultAuthorName: this.readOptionalStringField(payload, 'defaultAuthorName'),
+      defaultAuthorId: this.readOptionalStringField(payload, 'defaultAuthorId'),
+    };
+  }
+
+  private readOptionalStringField(payload: Record<string, unknown>, key: string): string | undefined {
+    const value = payload[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'string') {
+      throw new Error(`Field "${key}" must be a string`);
+    }
+    return value;
   }
 
   async modelListJson(): Promise<string> {

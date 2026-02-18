@@ -5,6 +5,7 @@ import type {
   ContactChannel,
   ContactChannelLink,
   ContactChannelIdentity,
+  ContactConversationChannel,
   ContactIdentityLinkOptions,
   ContactIdentityLinkResult,
   ChannelPrivacyLevel,
@@ -21,6 +22,7 @@ interface ContactRow {
   id: string;
   discord_user_id: string | null;
   display_name: string;
+  nickname: string | null;
   trust_level: string;
   relationship_type: string;
   emotional_baseline: string;
@@ -34,6 +36,14 @@ interface ContactIdentityRow {
   channel: string;
   channel_user_id: string;
   privacy_level: string | null;
+  first_seen: string;
+  last_seen: string;
+}
+
+interface ContactChannelActivityRow {
+  contact_id: string;
+  channel: string;
+  channel_id: string;
   first_seen: string;
   last_seen: string;
 }
@@ -54,6 +64,7 @@ export class ContactStore {
         id TEXT PRIMARY KEY,
         discord_user_id TEXT UNIQUE,
         display_name TEXT NOT NULL,
+        nickname TEXT,
         trust_level TEXT NOT NULL DEFAULT 'regular',
         relationship_type TEXT NOT NULL DEFAULT 'stranger',
         emotional_baseline TEXT DEFAULT '{}',
@@ -73,14 +84,39 @@ export class ContactStore {
         FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS contact_channel_activity (
+        contact_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        PRIMARY KEY (contact_id, channel, channel_id),
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);
       CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);
       CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);
       CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_channel ON contact_channel_ids(channel);
+      CREATE INDEX IF NOT EXISTS idx_contact_channel_activity_contact
+        ON contact_channel_activity(contact_id, last_seen);
+      CREATE INDEX IF NOT EXISTS idx_contact_channel_activity_channel
+        ON contact_channel_activity(channel, channel_id);
     `);
 
+    this.ensureNicknameColumn();
     this.ensureChannelPrivacyColumn();
     this.migrateLegacyDiscordIdentities();
+  }
+
+  private hasTable(tableName: string): boolean {
+    const row = this.db.prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table' AND name = ?
+      LIMIT 1
+    `).get(tableName) as { name: string } | undefined;
+    return row?.name === tableName;
   }
 
   private hasColumn(tableName: string, columnName: string): boolean {
@@ -92,6 +128,12 @@ export class ContactStore {
   private ensureChannelPrivacyColumn(): void {
     if (!this.hasColumn('contact_channel_ids', 'privacy_level')) {
       this.db.exec("ALTER TABLE contact_channel_ids ADD COLUMN privacy_level TEXT NOT NULL DEFAULT 'semi_private'");
+    }
+  }
+
+  private ensureNicknameColumn(): void {
+    if (!this.hasColumn('contacts', 'nickname')) {
+      this.db.exec('ALTER TABLE contacts ADD COLUMN nickname TEXT');
     }
   }
 
@@ -210,6 +252,7 @@ export class ContactStore {
       id: row.id,
       discordUserId: row.discord_user_id ?? undefined,
       displayName: row.display_name,
+      nickname: row.nickname ?? undefined,
       trustLevel: row.trust_level as TrustLevel,
       relationshipType: row.relationship_type as RelationshipType,
       emotionalBaseline,
@@ -256,15 +299,35 @@ export class ContactStore {
     return identities;
   }
 
+  private getConversationChannels(contactId: string): ContactConversationChannel[] {
+    const rows = this.db.prepare(`
+      SELECT contact_id, channel, channel_id, first_seen, last_seen
+      FROM contact_channel_activity
+      WHERE contact_id = ?
+      ORDER BY last_seen DESC, channel ASC, channel_id ASC
+    `).all(contactId) as ContactChannelActivityRow[];
+
+    return rows.map((row): ContactConversationChannel => ({
+      channel: row.channel,
+      channelId: row.channel_id,
+      firstSeen: row.first_seen,
+      lastSeen: row.last_seen,
+    }));
+  }
+
   private hydrateContact(row: ContactRow): Contact {
     const contact = this.rowToContact(row);
     const identities = this.getChannelLinks(contact.id, contact.discordUserId);
+    const conversationChannels = this.getConversationChannels(contact.id);
     if (identities.length > 0) {
       contact.channelIdentities = identities.map(identity => ({
         channel: identity.channel,
         userId: identity.userId,
       }));
       contact.channels = identities;
+    }
+    if (conversationChannels.length > 0) {
+      contact.conversationChannels = conversationChannels;
     }
     return contact;
   }
@@ -389,6 +452,222 @@ export class ContactStore {
     return identities.some(identity => this.isPrimaryIdentity(identity));
   }
 
+  private normalizeNicknameValue(nickname: string | undefined): string | null | undefined {
+    if (nickname === undefined) return undefined;
+    const trimmed = nickname.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private normalizeTrustLevel(value: string): TrustLevel {
+    switch (value) {
+      case 'primary':
+      case 'trusted':
+      case 'regular':
+      case 'public':
+        return value;
+      default:
+        return 'regular';
+    }
+  }
+
+  private trustRank(level: TrustLevel): number {
+    switch (level) {
+      case 'primary':
+        return 3;
+      case 'trusted':
+        return 2;
+      case 'regular':
+        return 1;
+      case 'public':
+      default:
+        return 0;
+    }
+  }
+
+  private pickMostTrustedLevel(first: string, second: string): TrustLevel {
+    const firstTrust = this.normalizeTrustLevel(first);
+    const secondTrust = this.normalizeTrustLevel(second);
+    return this.trustRank(firstTrust) >= this.trustRank(secondTrust) ? firstTrust : secondTrust;
+  }
+
+  private compareIsoTimestamps(left: string, right: string): number {
+    if (!left && !right) return 0;
+    if (!left) return -1;
+    if (!right) return 1;
+
+    const leftEpoch = Date.parse(left);
+    const rightEpoch = Date.parse(right);
+    if (!Number.isNaN(leftEpoch) && !Number.isNaN(rightEpoch)) {
+      if (leftEpoch === rightEpoch) return 0;
+      return leftEpoch > rightEpoch ? 1 : -1;
+    }
+
+    return left.localeCompare(right);
+  }
+
+  private earliestTimestamp(left: string, right: string): string {
+    if (!left) return right;
+    if (!right) return left;
+    return this.compareIsoTimestamps(left, right) <= 0 ? left : right;
+  }
+
+  private latestTimestamp(left: string, right: string): string {
+    if (!left) return right;
+    if (!right) return left;
+    return this.compareIsoTimestamps(left, right) >= 0 ? left : right;
+  }
+
+  private mergeChannelIdentityRows(sourceContactId: string, targetContactId: string): void {
+    const sourceRows = this.db.prepare(`
+      SELECT contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+      FROM contact_channel_ids
+      WHERE contact_id = ?
+      ORDER BY channel ASC, channel_user_id ASC
+    `).all(sourceContactId) as ContactIdentityRow[];
+    if (sourceRows.length === 0) return;
+
+    const getTargetRow = this.db.prepare(`
+      SELECT contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+      FROM contact_channel_ids
+      WHERE contact_id = ? AND channel = ? AND channel_user_id = ?
+      LIMIT 1
+    `);
+    const updateTargetRow = this.db.prepare(`
+      UPDATE contact_channel_ids
+      SET privacy_level = ?, first_seen = ?, last_seen = ?
+      WHERE contact_id = ? AND channel = ? AND channel_user_id = ?
+    `);
+    const moveIdentity = this.db.prepare(`
+      UPDATE contact_channel_ids
+      SET contact_id = ?
+      WHERE contact_id = ? AND channel = ? AND channel_user_id = ?
+    `);
+    const deleteSourceIdentity = this.db.prepare(`
+      DELETE FROM contact_channel_ids
+      WHERE contact_id = ? AND channel = ? AND channel_user_id = ?
+    `);
+
+    for (const sourceRow of sourceRows) {
+      const targetRow = getTargetRow.get(
+        targetContactId,
+        sourceRow.channel,
+        sourceRow.channel_user_id,
+      ) as ContactIdentityRow | undefined;
+
+      if (!targetRow) {
+        moveIdentity.run(
+          targetContactId,
+          sourceContactId,
+          sourceRow.channel,
+          sourceRow.channel_user_id,
+        );
+        continue;
+      }
+
+      const sourceIsNewer = this.compareIsoTimestamps(sourceRow.last_seen, targetRow.last_seen) > 0;
+      const winner = sourceIsNewer ? sourceRow : targetRow;
+      const mergedPrivacy = this.normalizePrivacyLevel(
+        winner.privacy_level as ChannelPrivacyLevel | undefined,
+        winner.channel,
+      );
+      const mergedFirstSeen = this.earliestTimestamp(sourceRow.first_seen, targetRow.first_seen);
+      const mergedLastSeen = sourceIsNewer ? sourceRow.last_seen : targetRow.last_seen;
+
+      updateTargetRow.run(
+        mergedPrivacy,
+        mergedFirstSeen,
+        mergedLastSeen,
+        targetContactId,
+        sourceRow.channel,
+        sourceRow.channel_user_id,
+      );
+
+      deleteSourceIdentity.run(sourceContactId, sourceRow.channel, sourceRow.channel_user_id);
+    }
+  }
+
+  private mergeChannelActivityRows(sourceContactId: string, targetContactId: string): void {
+    const sourceRows = this.db.prepare(`
+      SELECT contact_id, channel, channel_id, first_seen, last_seen
+      FROM contact_channel_activity
+      WHERE contact_id = ?
+      ORDER BY channel ASC, channel_id ASC
+    `).all(sourceContactId) as ContactChannelActivityRow[];
+    if (sourceRows.length === 0) return;
+
+    const getTargetRow = this.db.prepare(`
+      SELECT contact_id, channel, channel_id, first_seen, last_seen
+      FROM contact_channel_activity
+      WHERE contact_id = ? AND channel = ? AND channel_id = ?
+      LIMIT 1
+    `);
+    const updateTargetRow = this.db.prepare(`
+      UPDATE contact_channel_activity
+      SET first_seen = ?, last_seen = ?
+      WHERE contact_id = ? AND channel = ? AND channel_id = ?
+    `);
+    const moveActivity = this.db.prepare(`
+      UPDATE contact_channel_activity
+      SET contact_id = ?
+      WHERE contact_id = ? AND channel = ? AND channel_id = ?
+    `);
+    const deleteSourceActivity = this.db.prepare(`
+      DELETE FROM contact_channel_activity
+      WHERE contact_id = ? AND channel = ? AND channel_id = ?
+    `);
+
+    for (const sourceRow of sourceRows) {
+      const targetRow = getTargetRow.get(
+        targetContactId,
+        sourceRow.channel,
+        sourceRow.channel_id,
+      ) as ContactChannelActivityRow | undefined;
+
+      if (!targetRow) {
+        moveActivity.run(
+          targetContactId,
+          sourceContactId,
+          sourceRow.channel,
+          sourceRow.channel_id,
+        );
+        continue;
+      }
+
+      updateTargetRow.run(
+        this.earliestTimestamp(sourceRow.first_seen, targetRow.first_seen),
+        this.latestTimestamp(sourceRow.last_seen, targetRow.last_seen),
+        targetContactId,
+        sourceRow.channel,
+        sourceRow.channel_id,
+      );
+      deleteSourceActivity.run(sourceContactId, sourceRow.channel, sourceRow.channel_id);
+    }
+  }
+
+  private promoteContactToPrimary(contactId: string): void {
+    this.db.prepare(`
+      UPDATE contacts
+      SET trust_level = 'primary',
+          relationship_type = 'partner'
+      WHERE id = ?
+    `).run(contactId);
+  }
+
+  private reconcilePrimaryContactDuplicates(canonicalContactId: string): string {
+    const duplicates = this.db.prepare(`
+      SELECT id
+      FROM contacts
+      WHERE id <> ? AND trust_level = 'primary'
+      ORDER BY first_seen ASC
+    `).all(canonicalContactId) as Array<{ id: string }>;
+
+    for (const duplicate of duplicates) {
+      this.mergeContacts(duplicate.id, canonicalContactId);
+    }
+
+    return canonicalContactId;
+  }
+
   /**
    * Insert or update a contact.
    * Backward compatible: discordUserId still works and is mirrored into channel identity mappings.
@@ -412,11 +691,16 @@ export class ContactStore {
         partial.discordUserId,
         identities,
       );
+      const requestedNickname = this.normalizeNicknameValue(partial.nickname);
+      const nickname = requestedNickname === undefined
+        ? (existing.nickname ?? null)
+        : requestedNickname;
 
       this.db.prepare(`
         UPDATE contacts SET
           discord_user_id = COALESCE(discord_user_id, ?),
           display_name = ?,
+          nickname = ?,
           trust_level = ?,
           relationship_type = ?,
           emotional_baseline = ?,
@@ -426,6 +710,7 @@ export class ContactStore {
       `).run(
         legacyDiscordUserId ?? null,
         partial.displayName,
+        nickname,
         trustLevel,
         relationshipType,
         JSON.stringify(emotionalBaseline),
@@ -451,6 +736,7 @@ export class ContactStore {
       id: partial.id ?? uuidv4(),
       discordUserId: legacyDiscordUserId,
       displayName: partial.displayName,
+      nickname: this.normalizeNicknameValue(partial.nickname) ?? undefined,
       trustLevel: shouldForcePrimary ? 'primary' : (partial.trustLevel ?? 'regular'),
       relationshipType: shouldForcePrimary ? 'partner' : (partial.relationshipType ?? 'stranger'),
       emotionalBaseline: partial.emotionalBaseline ?? {},
@@ -461,14 +747,15 @@ export class ContactStore {
 
     this.db.prepare(`
       INSERT INTO contacts (id, discord_user_id, display_name, trust_level, relationship_type,
-        emotional_baseline, first_seen, last_seen, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        nickname, emotional_baseline, first_seen, last_seen, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       contact.id,
       contact.discordUserId ?? null,
       contact.displayName,
       contact.trustLevel,
       contact.relationshipType,
+      contact.nickname ?? null,
       JSON.stringify(contact.emotionalBaseline ?? {}),
       contact.firstSeen,
       contact.lastSeen,
@@ -555,6 +842,127 @@ export class ContactStore {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE contacts SET last_seen = ? WHERE id = ?').run(now, id);
     this.db.prepare('UPDATE contact_channel_ids SET last_seen = ? WHERE contact_id = ?').run(now, id);
+    this.db.prepare('UPDATE contact_channel_activity SET last_seen = ? WHERE contact_id = ?').run(now, id);
+  }
+
+  /** Update contact display identity fields. */
+  updateIdentityProfile(contactId: string, displayName: string, nickname?: string): boolean {
+    const contact = this.getById(contactId);
+    if (!contact) return false;
+
+    const requestedNickname = this.normalizeNicknameValue(nickname);
+    const normalizedNickname = requestedNickname === undefined
+      ? (contact.nickname ?? null)
+      : requestedNickname;
+
+    const result = this.db.prepare(`
+      UPDATE contacts
+      SET display_name = ?, nickname = ?
+      WHERE id = ?
+    `).run(displayName.trim() || contact.displayName, normalizedNickname, contactId);
+
+    return result.changes > 0;
+  }
+
+  /** Record that a contact was active in a conversation channel. */
+  recordChannelActivity(contactId: string, channel: ContactChannel, channelId: string): void {
+    const trimmedChannelId = channelId.trim();
+    if (!trimmedChannelId) return;
+
+    const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO contact_channel_activity (
+        contact_id,
+        channel,
+        channel_id,
+        first_seen,
+        last_seen
+      )
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(contact_id, channel, channel_id)
+      DO UPDATE SET last_seen = excluded.last_seen
+    `).run(contactId, normalizedChannel, trimmedChannelId, now, now);
+  }
+
+  mergeContacts(sourceContactId: string, targetContactId: string): boolean {
+    if (sourceContactId === targetContactId) return true;
+
+    const mergeTx = this.db.transaction((sourceId: string, targetId: string): boolean => {
+      const sourceRow = this.db.prepare('SELECT * FROM contacts WHERE id = ?')
+        .get(sourceId) as ContactRow | undefined;
+      const targetRow = this.db.prepare('SELECT * FROM contacts WHERE id = ?')
+        .get(targetId) as ContactRow | undefined;
+      if (!sourceRow || !targetRow) return false;
+
+      this.mergeChannelIdentityRows(sourceId, targetId);
+      this.mergeChannelActivityRows(sourceId, targetId);
+
+      if (this.hasTable('l2_memories') && this.hasColumn('l2_memories', 'contact_id')) {
+        this.db.prepare('UPDATE l2_memories SET contact_id = ? WHERE contact_id = ?')
+          .run(targetId, sourceId);
+      }
+
+      if (this.hasTable('contact_profiles') && this.hasColumn('contact_profiles', 'contact_id')) {
+        const targetProfileExists = this.db.prepare(`
+          SELECT 1 AS exists_flag
+          FROM contact_profiles
+          WHERE contact_id = ?
+          LIMIT 1
+        `).get(targetId) as { exists_flag: number } | undefined;
+
+        if (targetProfileExists) {
+          this.db.prepare('DELETE FROM contact_profiles WHERE contact_id = ?').run(sourceId);
+        } else {
+          this.db.prepare('UPDATE contact_profiles SET contact_id = ? WHERE contact_id = ?')
+            .run(targetId, sourceId);
+        }
+      }
+
+      const mergedTrustLevel = this.pickMostTrustedLevel(sourceRow.trust_level, targetRow.trust_level);
+      const mergedRelationshipType = mergedTrustLevel === 'primary'
+        ? 'partner'
+        : (targetRow.relationship_type as RelationshipType);
+      const mergedDisplayName = targetRow.display_name || sourceRow.display_name;
+      const mergedNickname = targetRow.nickname ?? sourceRow.nickname;
+      const mergedDiscordUserId = targetRow.discord_user_id ?? sourceRow.discord_user_id;
+      const mergedBaseline = (targetRow.emotional_baseline && targetRow.emotional_baseline !== '{}')
+        ? targetRow.emotional_baseline
+        : sourceRow.emotional_baseline;
+      const mergedFirstSeen = this.earliestTimestamp(sourceRow.first_seen, targetRow.first_seen);
+      const mergedLastSeen = this.latestTimestamp(sourceRow.last_seen, targetRow.last_seen);
+      const mergedNotes = targetRow.notes ?? sourceRow.notes;
+
+      this.db.prepare('DELETE FROM contacts WHERE id = ?').run(sourceId);
+      this.db.prepare(`
+        UPDATE contacts
+        SET discord_user_id = ?,
+            display_name = ?,
+            nickname = ?,
+            trust_level = ?,
+            relationship_type = ?,
+            emotional_baseline = ?,
+            first_seen = ?,
+            last_seen = ?,
+            notes = ?
+        WHERE id = ?
+      `).run(
+        mergedDiscordUserId,
+        mergedDisplayName,
+        mergedNickname,
+        mergedTrustLevel,
+        mergedRelationshipType,
+        mergedBaseline || '{}',
+        mergedFirstSeen,
+        mergedLastSeen,
+        mergedNotes,
+        targetId,
+      );
+
+      return true;
+    });
+
+    return mergeTx(sourceContactId, targetContactId);
   }
 
   /** Update a contact's notes. Returns false if not found. */
@@ -622,6 +1030,11 @@ export class ContactStore {
       this.ensureLegacyDiscordUserId(contactId, identity.userId);
     }
 
+    if (result !== 'identity_conflict' && this.isPrimaryIdentity(identity)) {
+      this.promoteContactToPrimary(contactId);
+      this.reconcilePrimaryContactDuplicates(contactId);
+    }
+
     return result;
   }
 
@@ -644,9 +1057,20 @@ export class ContactStore {
     const existing = this.getByChannelIdentity(identity.channel, identity.userId);
 
     if (existing) {
+      const now = new Date().toISOString();
       this.updateLastSeen(existing.id);
-      this.upsertIdentityLink(existing.id, identity, existing.firstSeen, new Date().toISOString());
-      return this.getById(existing.id)!;
+      this.upsertIdentityLink(existing.id, identity, existing.firstSeen, now);
+      if (identity.channel === LEGACY_DISCORD_CHANNEL) {
+        this.ensureLegacyDiscordUserId(existing.id, identity.userId);
+      }
+
+      let canonicalContactId = existing.id;
+      if (this.isPrimaryIdentity(identity)) {
+        this.promoteContactToPrimary(canonicalContactId);
+        canonicalContactId = this.reconcilePrimaryContactDuplicates(canonicalContactId);
+      }
+
+      return this.getById(canonicalContactId)!;
     }
 
     const isPrimary = this.isPrimaryIdentity(identity);

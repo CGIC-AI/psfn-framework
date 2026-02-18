@@ -4,6 +4,9 @@
 
 import type { Agent, AgentEvent } from '@mariozechner/pi-agent-core';
 import type { EventBus } from '../event-bus.js';
+import { createComponentLogger } from '../logger.js';
+
+const log = createComponentLogger('EventBridge');
 
 export interface EventBridge {
   /** Set the active channel before calling agent.prompt() */
@@ -19,6 +22,7 @@ export interface EventBridge {
  *
  * Maps:
  * - message_update (text_delta) → agent.stream.delta
+ * - message_update (thinking_delta) → agent.stream.thinking
  * - tool_execution_start → agent.tool.start
  * - tool_execution_end → agent.tool.end
  *
@@ -38,7 +42,12 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
           eventBus.emit('agent.stream.delta', {
             channelId,
             text: delta.delta,
-          }).catch(() => {});
+          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
+        } else if (delta.type === 'thinking_delta') {
+          eventBus.emit('agent.stream.thinking', {
+            channelId,
+            text: delta.delta,
+          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.thinking', error: String(err) }));
         }
         break;
       }
@@ -47,7 +56,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
           channelId,
           toolCallId: event.toolCallId,
           toolName: event.toolName,
-        }).catch(() => {});
+        }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.start', error: String(err) }));
         break;
       case 'tool_execution_end':
         eventBus.emit('agent.tool.end', {
@@ -55,7 +64,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           isError: event.isError,
-        }).catch(() => {});
+        }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.end', error: String(err) }));
         break;
     }
   });

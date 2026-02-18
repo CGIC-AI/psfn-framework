@@ -64,7 +64,11 @@ export class ShardManager {
     });
     try {
       // Each shard gets its own SessionManager wrapping the shared store
-      const sessionManager = new SessionManager(this.deps.sessionStore, this.deps.config);
+      const sessionManager = new SessionManager(
+        this.deps.sessionStore,
+        this.deps.config,
+        this.deps.eventBus,
+      );
 
       const systemPrompt = shardConfig.systemPrompt ?? this.deps.parentSystemPrompt;
 

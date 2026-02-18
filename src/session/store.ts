@@ -1,6 +1,24 @@
-import { mkdirSync, readFileSync, appendFileSync, existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  writeFileSync,
+  renameSync,
+} from 'node:fs';
+import { basename, join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from './types.js';
+import { createComponentLogger } from '../logger.js';
+import {
+  appendJournalEntry,
+  buildCompactionJournalEntry,
+  buildMessageJournalEntry,
+  journalToCompactionSummary,
+  journalToSessionEntry,
+  readJournalFile,
+} from './journal-utils.js';
+
+const log = createComponentLogger('SessionStore');
 
 interface ChannelCache {
   entries: SessionEntry[];
@@ -8,6 +26,25 @@ interface ChannelCache {
   nextId: number;
   resolvedPath: string; // actual file path used (may be legacy format)
 }
+
+interface ChannelIndexEntry {
+  filename: string;
+}
+
+interface ChannelIndexFile {
+  version: number;
+  channels: Record<string, ChannelIndexEntry>;
+}
+
+interface SessionFileSeed {
+  timestamp: number;
+  authorId?: string;
+  authorName?: string;
+}
+
+const CHANNEL_INDEX_FILENAME = '_channel_index.json';
+const CHANNEL_INDEX_VERSION = 1;
+const READABLE_SESSION_FILENAME = /^\d{8}_[a-z0-9-]+_[a-z0-9-]+_\d{6}\.jsonl$/;
 
 /** Sanitize a channelId into a safe filename component using strict allowlist. */
 export function sanitizeChannelId(channelId: string): string {
@@ -23,16 +60,41 @@ export function unsanitizeChannelId(filename: string): string {
   return decodeURIComponent(filename);
 }
 
+function toSlug(value: string, maxLength: number): string {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+
+  if (!normalized) return 'unknown';
+  const sliced = normalized.slice(0, maxLength).replace(/-+$/, '');
+  return sliced || 'unknown';
+}
+
+function formatDateUTC(timestamp: number): string {
+  const date = new Date(timestamp);
+  const year = date.getUTCFullYear().toString().padStart(4, '0');
+  const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+  const day = date.getUTCDate().toString().padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
 export class SessionStore {
   private sessionsDir: string;
   private channels: Map<string, ChannelCache> = new Map();
+  private channelIndex: Map<string, ChannelIndexEntry> = new Map();
+  private channelIndexPath: string;
 
   constructor(sessionsDir: string) {
     this.sessionsDir = sessionsDir;
+    this.channelIndexPath = join(sessionsDir, CHANNEL_INDEX_FILENAME);
     mkdirSync(sessionsDir, { recursive: true });
+    this.loadChannelIndex();
+    this.migrateLegacyFilenames();
   }
 
-  private filePath(channelId: string): string {
+  private encodedFilePath(channelId: string): string {
     return join(this.sessionsDir, sanitizeChannelId(channelId) + '.jsonl');
   }
 
@@ -42,94 +104,241 @@ export class SessionStore {
     return join(this.sessionsDir, legacy + '.jsonl');
   }
 
-  private ensureChannel(channelId: string): ChannelCache {
-    let cache = this.channels.get(channelId);
-    if (cache) return cache;
+  private loadChannelIndex(): void {
+    if (!existsSync(this.channelIndexPath)) return;
 
-    const defaultFp = this.filePath(channelId);
-    cache = { entries: [], compactions: [], nextId: 1, resolvedPath: defaultFp };
-    let fp = defaultFp;
+    try {
+      const raw = readFileSync(this.channelIndexPath, 'utf-8');
+      const parsed = JSON.parse(raw) as ChannelIndexFile;
+      if (!parsed || parsed.version !== CHANNEL_INDEX_VERSION || typeof parsed.channels !== 'object') {
+        const version = typeof parsed === 'object' && parsed !== null && 'version' in parsed
+          ? (parsed as { version?: unknown }).version
+          : undefined;
+        log.warn('Ignoring invalid channel index payload', {
+          path: this.channelIndexPath,
+          version,
+        });
+        return;
+      }
+      for (const [channelId, entry] of Object.entries(parsed.channels)) {
+        if (!entry || typeof entry.filename !== 'string' || entry.filename.length === 0) continue;
+        this.channelIndex.set(channelId, { filename: entry.filename });
+      }
+    } catch (err) {
+      log.warn('Failed to parse channel index file; falling back to disk scan', {
+        path: this.channelIndexPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
-    // Fall back to legacy filename if new-format file doesn't exist
-    if (!existsSync(fp)) {
-      const legacyFp = this.legacyFilePath(channelId);
-      if (existsSync(legacyFp)) {
-        fp = legacyFp;
-        cache.resolvedPath = legacyFp; // write to same file we loaded from
+  private saveChannelIndex(): void {
+    const payload: ChannelIndexFile = {
+      version: CHANNEL_INDEX_VERSION,
+      channels: Object.fromEntries(this.channelIndex.entries()),
+    };
+    const tmp = this.channelIndexPath + '.tmp';
+    writeFileSync(tmp, JSON.stringify(payload, null, 2) + '\n', 'utf-8');
+    renameSync(tmp, this.channelIndexPath);
+  }
+
+  private upsertChannelIndex(channelId: string, filename: string): void {
+    const existing = this.channelIndex.get(channelId);
+    if (existing?.filename === filename) return;
+    this.channelIndex.set(channelId, { filename });
+    this.saveChannelIndex();
+  }
+
+  private loadChannelFromPath(_channelId: string, filePath: string): ChannelCache {
+    const cache: ChannelCache = {
+      entries: [],
+      compactions: [],
+      nextId: 1,
+      resolvedPath: filePath,
+    };
+
+    if (!existsSync(filePath)) return cache;
+
+    const { entries, maxId } = readJournalFile(filePath);
+    for (const entry of entries) {
+      const message = journalToSessionEntry(entry);
+      if (message) {
+        cache.entries.push(message);
+        continue;
+      }
+
+      const compaction = journalToCompactionSummary(entry);
+      if (compaction) {
+        cache.compactions.push(compaction);
       }
     }
 
-    if (existsSync(fp)) {
-      const raw = readFileSync(fp, 'utf-8');
-      const lines = raw.split('\n').filter(l => l.length > 0);
-      let maxId = 0;
-
-      for (const line of lines) {
-        const j: JournalEntry = JSON.parse(line);
-        if (j.id > maxId) maxId = j.id;
-
-        if (j.type === 'message') {
-          cache.entries.push({
-            id: j.id,
-            channelId: j.channelId,
-            role: j.role!,
-            content: j.content!,
-            authorId: j.authorId,
-            authorName: j.authorName,
-            timestamp: j.timestamp,
-            discordMessageId: j.discordMessageId,
-            metadata: j.metadata,
-          });
-        } else if (j.type === 'compaction') {
-          cache.compactions.push({
-            id: j.id,
-            channelId: j.channelId,
-            summary: j.summary!,
-            coveredUpTo: j.coveredUpTo!,
-            createdAt: j.timestamp,
-          });
-        }
-      }
-
-      cache.nextId = maxId + 1;
-    }
-
-    this.channels.set(channelId, cache);
+    cache.nextId = maxId + 1;
     return cache;
   }
 
+  private readChannelIdFromFile(filePath: string): string | null {
+    const entry = this.readFirstJournalEntry(filePath);
+    if (!entry) return null;
+    return entry.channelId;
+  }
+
+  private readFirstJournalEntry(filePath: string): JournalEntry | null {
+    try {
+      const raw = readFileSync(filePath, 'utf-8');
+      const firstLine = raw.split('\n').find(l => l.length > 0);
+      if (!firstLine) return null;
+      const entry = JSON.parse(firstLine) as JournalEntry;
+      if (!entry.channelId || typeof entry.channelId !== 'string') return null;
+      return entry;
+    } catch (err) {
+      log.debug('Failed to read first journal entry', {
+        path: filePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  private resolveExistingPath(channelId: string): string | null {
+    const indexed = this.channelIndex.get(channelId);
+    if (indexed) {
+      const indexedPath = join(this.sessionsDir, indexed.filename);
+      if (existsSync(indexedPath)) return indexedPath;
+    }
+
+    const encodedPath = this.encodedFilePath(channelId);
+    if (existsSync(encodedPath)) return encodedPath;
+
+    const legacyPath = this.legacyFilePath(channelId);
+    if (existsSync(legacyPath)) return legacyPath;
+
+    return null;
+  }
+
+  private getOrLoadChannel(channelId: string): ChannelCache | null {
+    const cached = this.channels.get(channelId);
+    if (cached) return cached;
+
+    const resolvedPath = this.resolveExistingPath(channelId);
+    if (!resolvedPath) return null;
+
+    const loaded = this.loadChannelFromPath(channelId, resolvedPath);
+    this.channels.set(channelId, loaded);
+    this.upsertChannelIndex(channelId, basename(resolvedPath));
+    return loaded;
+  }
+
+  private makeReadableFilePath(channelId: string, seed: SessionFileSeed): string {
+    const datePart = formatDateUTC(seed.timestamp);
+    const channelPart = toSlug(channelId, 40);
+    const userSource = seed.authorId ?? seed.authorName ?? 'unknown';
+    const userPart = toSlug(userSource, 24);
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const suffix = Math.floor(Math.random() * 1_000_000).toString().padStart(6, '0');
+      const filename = `${datePart}_${channelPart}_${userPart}_${suffix}.jsonl`;
+      const fp = join(this.sessionsDir, filename);
+      if (!existsSync(fp)) return fp;
+    }
+
+    // Last-resort deterministic fallback (extremely unlikely to be needed).
+    return this.encodedFilePath(channelId);
+  }
+
+  private migrateLegacyFilenames(): void {
+    const files = readdirSync(this.sessionsDir)
+      .filter(f => f.endsWith('.jsonl'))
+      .filter(f => !f.startsWith('user_'));
+
+    for (const filename of files) {
+      if (READABLE_SESSION_FILENAME.test(filename)) continue;
+
+      const oldPath = join(this.sessionsDir, filename);
+      const firstEntry = this.readFirstJournalEntry(oldPath);
+      if (!firstEntry || !firstEntry.channelId) continue;
+
+      const channelId = firstEntry.channelId;
+      const timestamp = firstEntry.timestamp ?? Date.now();
+      const authorId = firstEntry.authorId;
+      const authorName = firstEntry.authorName;
+
+      const newPath = this.makeReadableFilePath(channelId, {
+        timestamp,
+        authorId,
+        authorName,
+      });
+      if (newPath === oldPath) {
+        this.upsertChannelIndex(channelId, basename(oldPath));
+        continue;
+      }
+
+      renameSync(oldPath, newPath);
+      this.upsertChannelIndex(channelId, basename(newPath));
+    }
+  }
+
+  private ensureChannelForWrite(channelId: string, seed: SessionFileSeed): ChannelCache {
+    const loaded = this.getOrLoadChannel(channelId);
+    if (loaded) return loaded;
+
+    const newPath = this.makeReadableFilePath(channelId, seed);
+    const cache: ChannelCache = {
+      entries: [],
+      compactions: [],
+      nextId: 1,
+      resolvedPath: newPath,
+    };
+    this.channels.set(channelId, cache);
+    this.upsertChannelIndex(channelId, basename(newPath));
+    return cache;
+  }
+
+  private primeChannelsFromDisk(): void {
+    const files = readdirSync(this.sessionsDir)
+      .filter(f => f.endsWith('.jsonl'))
+      .filter(f => !f.startsWith('user_'));
+
+    for (const filename of files) {
+      const filePath = join(this.sessionsDir, filename);
+      const channelId = this.readChannelIdFromFile(filePath);
+      if (!channelId) continue;
+
+      if (!this.channels.has(channelId)) {
+        const cache = this.loadChannelFromPath(channelId, filePath);
+        this.channels.set(channelId, cache);
+      }
+      this.upsertChannelIndex(channelId, filename);
+    }
+  }
+
   append(entry: Omit<SessionEntry, 'id'>): number {
-    const cache = this.ensureChannel(entry.channelId);
+    const cache = this.ensureChannelForWrite(entry.channelId, {
+      timestamp: entry.timestamp,
+      authorId: entry.authorId,
+      authorName: entry.authorName,
+    });
     const id = cache.nextId++;
 
     const full: SessionEntry = { ...entry, id };
     cache.entries.push(full);
 
-    const journal: JournalEntry = {
-      type: 'message',
-      id,
-      channelId: entry.channelId,
-      role: entry.role,
-      content: entry.content,
-      authorId: entry.authorId,
-      authorName: entry.authorName,
-      timestamp: entry.timestamp,
-      discordMessageId: entry.discordMessageId,
-      metadata: entry.metadata,
-    };
-    appendFileSync(cache.resolvedPath, JSON.stringify(journal) + '\n');
+    const journal = buildMessageJournalEntry(id, entry);
+    appendJournalEntry(cache.resolvedPath, journal);
 
     return id;
   }
 
   getRecent(channelId: string, limit: number): SessionEntry[] {
-    const cache = this.ensureChannel(channelId);
+    const cache = this.getOrLoadChannel(channelId);
+    if (!cache) return [];
     if (cache.entries.length <= limit) return [...cache.entries];
     return cache.entries.slice(-limit);
   }
 
   getLastEntry(channelId: string): SessionEntry | undefined {
-    const cache = this.ensureChannel(channelId);
+    const cache = this.getOrLoadChannel(channelId);
+    if (!cache) return undefined;
     return cache.entries[cache.entries.length - 1];
   }
 
@@ -142,44 +351,23 @@ export class SessionStore {
   }
 
   count(channelId: string): number {
-    return this.ensureChannel(channelId).entries.length;
+    return this.getOrLoadChannel(channelId)?.entries.length ?? 0;
   }
 
   getCompactionSummaries(channelId: string): CompactionSummary[] {
-    return [...this.ensureChannel(channelId).compactions];
+    const cache = this.getOrLoadChannel(channelId);
+    return cache ? [...cache.compactions] : [];
   }
 
   listChannels(): Array<{ channelId: string; messageCount: number }> {
-    const files = readdirSync(this.sessionsDir).filter(f => f.endsWith('.jsonl'));
-    for (const f of files) {
-      const stem = f.slice(0, -6); // strip .jsonl
-
-      // New-format files contain %XX sequences for special chars.
-      // Files without % could be new-format (simple channelId) or old-format
-      // (legacy : → -, / → _ sanitization). For unambiguous new-format files
-      // (those with %), decode directly. For files without %, fall back to
-      // reading the first JSONL line to get the real channelId.
-      if (stem.includes('%')) {
-        const decoded = unsanitizeChannelId(stem);
-        if (!this.channels.has(decoded)) {
-          this.ensureChannel(decoded);
-        }
-      } else {
-        // Could be a simple channelId or old-format — check if already cached
-        if (this.channels.has(stem)) continue;
-
-        // Read first line to get the real channelId from journal data
-        const fp = join(this.sessionsDir, f);
-        const raw = readFileSync(fp, 'utf-8');
-        const firstLine = raw.split('\n').find(l => l.length > 0);
-        if (firstLine) {
-          const entry = JSON.parse(firstLine) as { channelId: string };
-          if (!this.channels.has(entry.channelId)) {
-            this.ensureChannel(entry.channelId);
-          }
-        }
-      }
+    // Load indexed channels first.
+    for (const channelId of this.channelIndex.keys()) {
+      this.getOrLoadChannel(channelId);
     }
+
+    // Discover channels from on-disk JSONL files (covers legacy + unknown filenames).
+    this.primeChannelsFromDisk();
+
     return [...this.channels.entries()].map(([channelId, cache]) => ({
       channelId,
       messageCount: cache.entries.length,
@@ -187,20 +375,17 @@ export class SessionStore {
   }
 
   insertCompaction(channelId: string, summary: string, coveredUpTo: number): void {
-    const cache = this.ensureChannel(channelId);
-    const id = cache.nextId++;
     const now = Date.now();
+    const cache = this.ensureChannelForWrite(channelId, {
+      timestamp: now,
+      authorId: 'system',
+      authorName: 'system',
+    });
+    const id = cache.nextId++;
 
     cache.compactions.push({ id, channelId, summary, coveredUpTo, createdAt: now });
 
-    const journal: JournalEntry = {
-      type: 'compaction',
-      id,
-      channelId,
-      summary,
-      coveredUpTo,
-      timestamp: now,
-    };
-    appendFileSync(cache.resolvedPath, JSON.stringify(journal) + '\n');
+    const journal = buildCompactionJournalEntry(id, channelId, summary, coveredUpTo, now);
+    appendJournalEntry(cache.resolvedPath, journal);
   }
 }

@@ -8,6 +8,11 @@ import type { Model } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type { SubstrateConfig, ModelPurpose } from '../types.js';
 import { createModel } from '../llm/models.js';
+import { withRetry } from '../llm/retry.js';
+import { llmRetryConfig } from '../llm/retry-config.js';
+import { createComponentLogger } from '../logger.js';
+
+const log = createComponentLogger('StreamAdapter');
 
 /**
  * Create a StreamFn for pi-agent-core's Agent.
@@ -28,10 +33,24 @@ export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
       ?? getEnvApiKey(config.primaryProvider)
       ?? undefined;
 
-    return streamSimple(model, context, {
-      ...options,
-      apiKey,
-    });
+    return withRetry(
+      async () => streamSimple(model, context, {
+        ...options,
+        apiKey,
+      }),
+      llmRetryConfig(config),
+      {
+        onRetry: ({ attempt, maxRetries, delayMs, error }) => {
+          log.warn('LLM stream failed, retrying', {
+            model: String(model.id),
+            attempt,
+            maxRetries,
+            delayMs,
+            error: error.message,
+          });
+        },
+      },
+    );
   };
 }
 

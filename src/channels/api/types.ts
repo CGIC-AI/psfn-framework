@@ -62,3 +62,19 @@ export interface ChatCompletionChunk {
   model: string;
   choices: ChatCompletionChunkChoice[];
 }
+
+export interface TelemetryIngestRequest {
+  source: string;
+  eventType: string;
+  timestamp: string;
+  nonce: string;
+  payload: Record<string, unknown>;
+  channelId?: string;
+  scope?: string;
+}
+
+export interface TelemetryIngestResponse {
+  ok: true;
+  id: string;
+  acceptedEventType: string;
+}

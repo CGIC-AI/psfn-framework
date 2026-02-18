@@ -46,6 +46,22 @@ Variables persist across iterations. When you have the answer, call FINAL().
 ### Events
 - \`await event_emit(eventName, data)\` — Emit an allowlisted event (\`schedule.tick\`, \`schedule.task.run\`, \`schedule.heartbeat\`)
 
+### Modules
+- \`await module_list()\` — List installed modules (metadata + enabled state)
+- \`await module_install(name, source, enable?)\` — Install or update a module source blob in the registry
+- \`await module_enable(idOrName)\` / \`await module_disable(idOrName)\` — Toggle module state
+- \`await module_health(idOrName?)\` — View module health snapshots
+
+### Repository
+- \`await repo_status()\` — Show git status (branch, staged/modified/untracked)
+- \`await repo_diff(staged?)\` — Show staged or unstaged diffs
+- \`await repo_apply_patch(filePath, content)\` — Apply constrained patch content to allowlisted paths
+- \`await repo_commit(message, intent?, scope?)\` — Create structured self-modification commit
+
+### Research
+- \`await crawler_fetch(url, prompt?)\` — Guarded web fetch via gateway SSRF defenses
+- \`await web_research(query, maxUrls?)\` — Discover and fetch a small URL set for a research question
+
 ### Text analysis
 - \`search(text, pattern, contextLines?)\` — Regex search with context lines, returns match blocks
 - \`grep(text, pattern)\` — Filter matching lines

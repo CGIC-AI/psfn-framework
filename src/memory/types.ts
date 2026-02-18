@@ -4,6 +4,28 @@ export type { SensitivityLevel, ConsentFlags };
 export { VALID_SENSITIVITY_LEVELS } from '../trust/types.js';
 
 export type MemoryType = 'episodic' | 'semantic' | 'emotional' | 'procedural' | 'reflection' | 'relational';
+export type MemoryRetentionClass = 'standard' | 'durable';
+
+export const DURABLE_RETENTION_TAG = 'durable';
+export const CORE_DURABLE_MEMORY_TAGS = [
+  'core_profile',
+  'core_relationship',
+  'relationship_core',
+] as const;
+const AUTO_DURABLE_RELATIONAL_TAG_HINTS = [
+  'identity',
+  'profile',
+  'relationship',
+  'partner',
+  'spouse',
+  'anniversary',
+  'family',
+] as const;
+const DURABLE_RETENTION_TAG_SET = new Set<string>([
+  DURABLE_RETENTION_TAG,
+  ...CORE_DURABLE_MEMORY_TAGS,
+]);
+const AUTO_DURABLE_RELATIONAL_TAG_HINT_SET = new Set<string>(AUTO_DURABLE_RELATIONAL_TAG_HINTS);
 
 export const VALID_MEMORY_TYPES: MemoryType[] = [
   'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational',
@@ -24,6 +46,7 @@ export interface PurrMemory {
   accessCount: number;
   supersededBy?: string;
   tags: string[];
+  retentionClass?: MemoryRetentionClass;
   sensitivity: SensitivityLevel;    // default 'personal'
   consentFlags?: ConsentFlags;      // default {}
   contactId?: string;               // FK to contacts table (for relational memories)
@@ -36,8 +59,15 @@ export interface ExtractedFact {
   emotionalValence: number;
   confidence: number;
   tags: string[];
+  retentionClass?: MemoryRetentionClass;
   sensitivity?: SensitivityLevel;
   consentFlags?: ConsentFlags;
+}
+
+export interface MemoryDecayProfile {
+  retentionClass: MemoryRetentionClass;
+  salienceFloor: number;
+  halflifeMultiplier: number;
 }
 
 // Decay half-lives in milliseconds
@@ -66,6 +96,70 @@ export const MEMORY_CONFIG = {
   retrievalThreshold: 0.3,
   maintenanceIntervalMs: 60_000,
   salienceFloor: 0.05,
+  durableSalienceFloor: 0.25,
+  durableHalflifeMultiplier: 8,
+  durableAutoImportanceThreshold: 0.75,
   contradictionThresholdOffset: 0.15,
   salienceBumpOnAccess: 0.05,
 } as const;
+
+export function normalizeMemoryTags(tags: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const raw of tags) {
+    const tag = raw.trim().toLowerCase();
+    if (tag.length > 0) out.add(tag);
+  }
+  return Array.from(out);
+}
+
+export function isDurableMemory(memory: Pick<PurrMemory, 'tags' | 'retentionClass'>): boolean {
+  if (memory.retentionClass === 'durable') return true;
+  const normalizedTags = normalizeMemoryTags(memory.tags);
+  return normalizedTags.some(tag => DURABLE_RETENTION_TAG_SET.has(tag));
+}
+
+export function inferMemoryRetentionClass(input: {
+  type: MemoryType;
+  tags?: readonly string[];
+  importance?: number;
+  retentionClass?: MemoryRetentionClass;
+}): MemoryRetentionClass {
+  if (input.retentionClass === 'durable') return 'durable';
+
+  const normalizedTags = normalizeMemoryTags(input.tags ?? []);
+  if (normalizedTags.some(tag => DURABLE_RETENTION_TAG_SET.has(tag))) {
+    return 'durable';
+  }
+
+  if (
+    input.type === 'relational'
+    && (input.importance ?? 0) >= MEMORY_CONFIG.durableAutoImportanceThreshold
+    && normalizedTags.some(tag => AUTO_DURABLE_RELATIONAL_TAG_HINT_SET.has(tag))
+  ) {
+    return 'durable';
+  }
+
+  return 'standard';
+}
+
+export function getMemoryDecayProfile(memory: Pick<PurrMemory, 'type' | 'tags' | 'retentionClass'>): MemoryDecayProfile {
+  const retentionClass = inferMemoryRetentionClass({
+    type: memory.type,
+    tags: memory.tags,
+    retentionClass: memory.retentionClass,
+  });
+
+  if (retentionClass === 'durable') {
+    return {
+      retentionClass,
+      salienceFloor: MEMORY_CONFIG.durableSalienceFloor,
+      halflifeMultiplier: MEMORY_CONFIG.durableHalflifeMultiplier,
+    };
+  }
+
+  return {
+    retentionClass,
+    salienceFloor: MEMORY_CONFIG.salienceFloor,
+    halflifeMultiplier: 1,
+  };
+}

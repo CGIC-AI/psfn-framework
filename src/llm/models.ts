@@ -15,6 +15,8 @@ export interface LiteLLMModelConfig {
   maxTokens?: number;
   /** Supports reasoning/thinking blocks */
   reasoning?: boolean;
+  /** Format for reasoning parameter — required when reasoning: true */
+  thinkingFormat?: 'openai' | 'zai' | 'qwen';
 }
 
 /**
@@ -36,15 +38,16 @@ export function createLiteLLMModel(config: LiteLLMModelConfig): Model<'openai-co
     compat: {
       supportsStore: false,
       maxTokensField: 'max_tokens',
+      ...(config.reasoning && config.thinkingFormat ? { thinkingFormat: config.thinkingFormat } : {}),
     },
   };
 }
 
 /** Known model defaults for Purrsephone's preferred models */
 const MODEL_DEFAULTS: Record<string, Partial<LiteLLMModelConfig>> = {
-  'z-ai/glm-5': { contextWindow: 128_000, maxTokens: 16384, reasoning: true },
+  'z-ai/glm-5': { contextWindow: 128_000, maxTokens: 16384, reasoning: true, thinkingFormat: 'zai' },
   'deepseek/deepseek-v3.2': { contextWindow: 128_000, maxTokens: 16384 },
-  'moonshotai/kimi-k2.5': { contextWindow: 128_000, maxTokens: 16384, reasoning: true },
+  'moonshotai/kimi-k2.5': { contextWindow: 128_000, maxTokens: 16384, reasoning: true, thinkingFormat: 'qwen' },
 };
 
 /**
@@ -59,5 +62,6 @@ export function createModel(baseUrl: string, modelId: string, maxTokens?: number
     contextWindow: defaults.contextWindow,
     maxTokens: maxTokens ?? defaults.maxTokens,
     reasoning: defaults.reasoning,
+    thinkingFormat: defaults.thinkingFormat,
   });
 }

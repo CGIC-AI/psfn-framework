@@ -4,13 +4,14 @@
 import { join } from 'node:path';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { SubstrateConfig } from '../types.js';
-import type { AgentLoop } from '../agent-loop.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
+import { createSettingsGetTool } from '../settings-tools.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
+import { PromptRegistryStore } from '../identity/prompt-registry.js';
 import {
   createPromptLayerListTool,
   createPromptLayerGetTool,
@@ -26,9 +27,21 @@ import {
 
 const log = createComponentLogger('SharedWiring');
 
+interface HeartbeatAgent {
+  handleMessage(message: {
+    id: string;
+    channelId: string;
+    channelType: 'terminal';
+    authorId: string;
+    authorName: string;
+    content: string;
+    timestamp: Date;
+  }): Promise<{ content: string }>;
+}
+
 export interface PromptRuntimeTarget {
   promptComposer: PromptComposer | null;
-  registerTool(tool: AgentTool<any>): void;
+  registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void;
 }
 
 /**
@@ -47,13 +60,26 @@ export function wirePromptRuntime(
   promptStore.seedFromCharacterCard(baseSystemPrompt);
 
   target.promptComposer = new PromptComposer(promptStore);
-  target.registerTool(createPromptLayerListTool(promptStore));
-  target.registerTool(createPromptLayerGetTool(promptStore));
-  target.registerTool(createPromptLayerUpdateTool(promptStore));
-  target.registerTool(createPromptLayerToggleTool(promptStore));
+  target.registerTool(createPromptLayerListTool(promptStore), 'extended');
+  target.registerTool(createPromptLayerGetTool(promptStore), 'extended');
+  target.registerTool(createPromptLayerUpdateTool(promptStore), 'extended');
+  target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
 
   log.info(`Prompt stack enabled (${promptStore.count} layers)`);
   return promptStore;
+}
+
+/**
+ * Wire static prompt registry used by runtime LLM call-sites
+ * (extraction, compaction summary, and other keyed prompts).
+ */
+export function wireStaticPromptRegistry(dataDir: string): PromptRegistryStore {
+  const promptRegistry = new PromptRegistryStore(
+    join(dataDir, 'prompt-registry.json'),
+    join(dataDir, 'prompt-registry-history.jsonl'),
+  );
+  log.info(`Static prompt registry enabled (${promptRegistry.list().length} prompts)`);
+  return promptRegistry;
 }
 
 /**
@@ -72,55 +98,24 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
 }
 
 /**
- * @deprecated Use wireHeartbeatRuntime instead.
- * Register the hourly Discord heartbeat self-reflection task.
- * No-op when heartbeat channel is not configured.
+ * Wire runtime settings introspection tool (read-only).
+ * Shared across runtime.ts and agent-main.ts.
  */
-export function registerDiscordHeartbeatTask(
-  scheduler: Scheduler,
-  agentLoop: AgentLoop,
-  sender: MessageSender,
-  heartbeatChannelId?: string,
+export function wireSettingsRuntime(
+  target: { registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void },
+  config: SubstrateConfig,
 ): void {
-  if (!heartbeatChannelId) return;
-
-  scheduler.register({
-    id: 'discord-heartbeat',
-    name: 'Discord Heartbeat',
-    type: 'every',
-    intervalMs: 60 * 60_000, // 1 hour
-    handler: async () => {
-      try {
-        const response = await agentLoop.handleMessage({
-          id: `heartbeat-${Date.now()}`,
-          channelId: 'internal:heartbeat',
-          channelType: 'terminal',
-          authorId: 'scheduler',
-          authorName: 'Heartbeat',
-          content: 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.',
-          timestamp: new Date(),
-        });
-        await sender.send(heartbeatChannelId, response.content);
-        log.info(`Heartbeat sent: ${response.content.slice(0, 80)}...`);
-      } catch (err) {
-        log.error('Discord heartbeat error', { error: String(err) });
-      }
-    },
-    state: 'idle',
-  });
-
-  log.info(`Discord heartbeat enabled (channel: ${heartbeatChannelId})`);
+  target.registerTool(createSettingsGetTool(config), 'extended');
 }
 
 /**
  * Wire the multi-template heartbeat/reflection system.
  * Registers policy-driven reflection tasks and agent tools for managing them.
- * Replaces the single-template registerDiscordHeartbeatTask.
  */
 export function wireHeartbeatRuntime(
-  target: { registerTool(tool: AgentTool<any>): void },
+  target: { registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void },
   scheduler: Scheduler,
-  agentLoop: AgentLoop,
+  agentLoop: HeartbeatAgent,
   sender: MessageSender,
   dataDir: string,
   heartbeatChannelId?: string,
@@ -179,9 +174,9 @@ export function wireHeartbeatRuntime(
   syncReflectionTasks();
 
   // Register tools
-  target.registerTool(createHeartbeatGetPolicyTool(store));
-  target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks));
-  target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId));
+  target.registerTool(createHeartbeatGetPolicyTool(store), 'extended');
+  target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
+  target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
 
   const activeCount = policy.templates.filter(t => t.enabled).length;
   log.info(`Heartbeat runtime wired (${policy.templates.length} templates, ${activeCount} active)`);

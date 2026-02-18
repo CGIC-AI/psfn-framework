@@ -3,6 +3,7 @@ import type { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../types.js';
+import type { EventBus } from '../event-bus.js';
 import type { TrustLevel } from '../trust/types.js';
 import {
   classifyChannel,
@@ -18,9 +19,23 @@ interface ScoredMemory {
   score: number;
 }
 
+interface RetrievalTelemetry {
+  channelId: string;
+  count: number;
+  reason: 'ok' | 'empty_input' | 'no_candidates' | 'score_filtered' | 'trust_filtered' | 'error';
+  trustLevel: TrustLevel;
+  channelVisibility: string;
+  candidateCount: number;
+  rankedCount: number;
+  returnedCount: number;
+  retrievalLimit: number;
+  retrievalThreshold: number;
+}
+
 export interface MemoryRetrieverConfig {
   retrievalLimit?: number;
   retrievalThreshold?: number;
+  telemetryEnabled?: boolean;
 }
 
 export class MemoryRetriever implements MemoryProvider {
@@ -29,19 +44,30 @@ export class MemoryRetriever implements MemoryProvider {
   private runtimeConfig: SubstrateConfig | null;
   private retrievalLimit: number;
   private retrievalThreshold: number;
+  private eventBus?: EventBus;
+  private telemetryEnabled: boolean;
 
-  constructor(memoryStore: MemoryStore, embeddingService: EmbeddingService, config?: MemoryRetrieverConfig | SubstrateConfig) {
+  constructor(
+    memoryStore: MemoryStore,
+    embeddingService: EmbeddingService,
+    config?: MemoryRetrieverConfig | SubstrateConfig,
+    eventBus?: EventBus,
+  ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
+    this.eventBus = eventBus;
     // If config has memoryRetrievalLimit, it's a SubstrateConfig — read per-call
     if (config && 'memoryRetrievalLimit' in config) {
       this.runtimeConfig = config;
       this.retrievalLimit = config.memoryRetrievalLimit;
       this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
+      this.telemetryEnabled = config.memoryRetrievalTelemetryEnabled ?? true;
     } else {
+      const retrieverConfig = config as MemoryRetrieverConfig | undefined;
       this.runtimeConfig = null;
-      this.retrievalLimit = (config as MemoryRetrieverConfig | undefined)?.retrievalLimit ?? MEMORY_CONFIG.maxRetrievalCount;
-      this.retrievalThreshold = (config as MemoryRetrieverConfig | undefined)?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
+      this.retrievalLimit = retrieverConfig?.retrievalLimit ?? MEMORY_CONFIG.maxRetrievalCount;
+      this.retrievalThreshold = retrieverConfig?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
+      this.telemetryEnabled = retrieverConfig?.telemetryEnabled ?? true;
     }
   }
 
@@ -51,10 +77,28 @@ export class MemoryRetriever implements MemoryProvider {
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
   ): Promise<string> {
-    if (!contextText.trim()) return '';
-
     // Read limit per-call from live config if available
     const limit = this.runtimeConfig?.memoryRetrievalLimit ?? this.retrievalLimit;
+    const effectiveTrust = trustLevel ?? 'regular';
+    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const telemetry: RetrievalTelemetry = {
+      channelId,
+      count: 0,
+      reason: 'ok',
+      trustLevel: effectiveTrust,
+      channelVisibility,
+      candidateCount: 0,
+      rankedCount: 0,
+      returnedCount: 0,
+      retrievalLimit: limit,
+      retrievalThreshold: this.retrievalThreshold,
+    };
+
+    if (!contextText.trim()) {
+      telemetry.reason = 'empty_input';
+      await this.emitRetrievalTelemetry(telemetry);
+      return '';
+    }
 
     try {
       const embedding = await this.embeddingService.embed(contextText);
@@ -64,8 +108,13 @@ export class MemoryRetriever implements MemoryProvider {
         this.retrievalThreshold,
         20,
       );
+      telemetry.candidateCount = memories.length;
 
-      if (memories.length === 0) return '';
+      if (memories.length === 0) {
+        telemetry.reason = 'no_candidates';
+        await this.emitRetrievalTelemetry(telemetry);
+        return '';
+      }
 
       // Score, rank, take top N
       const scored: ScoredMemory[] = memories
@@ -76,12 +125,15 @@ export class MemoryRetriever implements MemoryProvider {
         .filter(s => s.score > 0)
         .sort((a, b) => b.score - a.score)
         .slice(0, limit);
+      telemetry.rankedCount = scored.length;
 
-      if (scored.length === 0) return '';
+      if (scored.length === 0) {
+        telemetry.reason = 'score_filtered';
+        await this.emitRetrievalTelemetry(telemetry);
+        return '';
+      }
 
       // Trust-gated filtering: apply trust level + channel visibility restrictions
-      const effectiveTrust = trustLevel ?? 'regular';
-      const channelVisibility = classifyChannel(channelId, channelMeta);
       const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
 
       const filtered = scored.filter(s => {
@@ -98,6 +150,8 @@ export class MemoryRetriever implements MemoryProvider {
         return policy.decision === 'allow';
       });
 
+      telemetry.returnedCount = filtered.length;
+
       log.debug('Trust filter applied', {
         trustLevel: effectiveTrust,
         channelVisibility,
@@ -105,7 +159,11 @@ export class MemoryRetriever implements MemoryProvider {
         after: filtered.length,
       });
 
-      if (filtered.length === 0) return '';
+      if (filtered.length === 0) {
+        telemetry.reason = 'trust_filtered';
+        await this.emitRetrievalTelemetry(telemetry);
+        return '';
+      }
 
       // Update access stats (fire-and-forget)
       for (const s of filtered) {
@@ -117,10 +175,48 @@ export class MemoryRetriever implements MemoryProvider {
         } catch { /* ignore */ }
       }
 
+      telemetry.count = filtered.length;
+      telemetry.returnedCount = filtered.length;
+      telemetry.reason = 'ok';
+      await this.emitRetrievalTelemetry(telemetry);
       return formatForPrompt(filtered);
     } catch (err) {
       log.error('Retrieval error', { error: String(err) });
+      telemetry.reason = 'error';
+      await this.emitRetrievalTelemetry(telemetry);
       return '';
+    }
+  }
+
+  private isTelemetryEnabled(): boolean {
+    return this.runtimeConfig?.memoryRetrievalTelemetryEnabled ?? this.telemetryEnabled;
+  }
+
+  private async emitRetrievalTelemetry(telemetry: RetrievalTelemetry): Promise<void> {
+    if (this.isTelemetryEnabled()) {
+      log.debug('Retrieval stats', telemetry);
+    }
+
+    if (!this.eventBus) return;
+
+    try {
+      if (!this.isTelemetryEnabled()) {
+        await this.eventBus.emit('memory.retrieval', {
+          channelId: telemetry.channelId,
+          count: telemetry.count,
+        });
+        return;
+      }
+
+      await this.eventBus.emit(
+        'memory.retrieval',
+        telemetry as { channelId: string; count: number },
+      );
+    } catch (err) {
+      log.error('Failed to emit retrieval telemetry', {
+        channelId: telemetry.channelId,
+        error: String(err),
+      });
     }
   }
 }

@@ -5,28 +5,25 @@
 
 import 'dotenv/config';
 import { createInterface } from 'node:readline';
-import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
-import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
-import { SessionStore } from './session/store.js';
-import { SessionManager } from './session/manager.js';
-import { AgentLoop } from './agent-loop.js';
 import { MemoryStore } from './memory/store.js';
-import { EmbeddingProvider } from './memory/embedding.js';
-import { MemoryRetriever } from './memory/retrieval.js';
-import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
-import { ShardManager } from './shards/manager.js';
-import { createSpawnShardTool } from './shards/tools.js';
-import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadSettings, applySettings } from './settings.js';
+import {
+  composeIdentity,
+  composeSessionRuntime,
+  createEmbeddingProviderFromEnv,
+  composeAgentLoop,
+  wireMemoryRuntime,
+  wireShardAndThinkRuntime,
+} from './bootstrap/composition.js';
 
 const CHANNEL_ID = 'cli:chat';
 
@@ -45,69 +42,55 @@ async function main(): Promise<void> {
   db.pragma('foreign_keys = ON');
 
   // Identity
-  const card = loadCharacterCard(config.characterCardPath);
-  const systemPrompt = composeSystemPrompt(card);
+  const { card, systemPrompt } = composeIdentity(config);
   console.log(`[CLI] Loaded character: ${card.data.name}`);
 
   // Core components
   const llmClient = new LLMClient(config);
-  const sessionStore = new SessionStore(join(config.dataDir, 'sessions'));
-  const sessionManager = new SessionManager(sessionStore, config);
+  const sessionComposition = composeSessionRuntime({ config });
+  const { sessionStore, sessionManager } = sessionComposition;
 
   // Embeddings
-  const embeddingProvider = new EmbeddingProvider({
-    ollamaUrl: process.env.OLLAMA_URL,
-    model: process.env.EMBEDDING_MODEL,
-    dims: process.env.EMBEDDING_DIMS ? parseInt(process.env.EMBEDDING_DIMS, 10) : undefined,
-  });
+  const embeddingProvider = createEmbeddingProviderFromEnv();
 
   const memoryStore = new MemoryStore(db, embeddingProvider.dims);
 
   // Agent loop
-  const agentLoop = new AgentLoop(
+  const agentLoop = composeAgentLoop({
     eventBus,
-    llmClient,
+    llmProvider: llmClient,
     sessionManager,
     systemPrompt,
     config,
-  );
+  });
 
   // Memory
-  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, embeddingProvider, config);
-  agentLoop.memoryExtractor = new MemoryExtractor(
-    llmClient,
+  agentLoop.memoryExtractor = wireMemoryRuntime({
+    agentLoop,
+    llmProvider: llmClient,
     sessionManager,
     memoryStore,
-    embeddingProvider,
+    embeddingService: embeddingProvider,
     eventBus,
     config,
-  );
+  });
 
   const salienceDecay = new SalienceDecay(memoryStore);
   salienceDecay.start();
 
-  // Shards
-  const shardManager = new ShardManager({
+  // Shards and think tool (RLM+REPL)
+  wireShardAndThinkRuntime({
+    agentLoop,
     eventBus,
     llmProvider: llmClient,
     sessionStore,
     embeddingService: embeddingProvider,
-    memoryProvider: agentLoop.memoryProvider,
-    config,
-    parentSystemPrompt: systemPrompt,
-  });
-  agentLoop.registerTool(createSpawnShardTool(shardManager));
-
-  // Think tool (RLM+REPL)
-  agentLoop.registerTool(createThinkTool({
-    llmProvider: llmClient,
-    embeddingService: embeddingProvider,
     memoryStore,
     sessionManager,
-    scheduler: null,
-    eventBus,
-    config: DEFAULT_REPL_CONFIG,
-  }));
+    config,
+    parentSystemPrompt: systemPrompt,
+    replConfig: DEFAULT_REPL_CONFIG,
+  });
 
   // Event logging for debugging
   eventBus.on('agent.stream.delta', ({ text }) => {

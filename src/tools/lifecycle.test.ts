@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRestartTool, createRebuildTool } from './lifecycle.js';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
+import { execSync } from 'node:child_process';
+
+vi.mock('node:child_process', () => ({
+  execSync: vi.fn(),
+}));
+
+const mockedExecSync = vi.mocked(execSync);
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -12,6 +19,7 @@ describe('createRestartTool', () => {
   let mockStopFn: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    mockedExecSync.mockReset();
     mockNotifier = {
       notifyPreRestart: vi.fn(async () => {}),
       notifyReady: vi.fn(async () => {}),
@@ -107,6 +115,30 @@ describe('createRebuildTool', () => {
     await tool.execute('call-4', { reason: 'new module' });
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: new module');
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('notifies shutdown and aborts restart when build fails', async () => {
+    mockedExecSync.mockImplementation(() => {
+      throw new Error('build blew up');
+    });
+
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
+      fn();
+      return 0 as any;
+    }) as typeof setImmediate;
+
+    const tool = createRebuildTool(mockNotifier, mockStopFn);
+    await tool.execute('call-5', {});
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(mockNotifier.notifyShutdown).toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();

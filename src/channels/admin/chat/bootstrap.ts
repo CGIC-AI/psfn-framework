@@ -34,6 +34,10 @@ interface SelectionState {
   defaultAuthorId?: string;
 }
 
+interface AdminChatBootstrapServiceOptions {
+  apiKey?: string;
+}
+
 function normalizeTrimmed(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
@@ -54,10 +58,12 @@ function isSameIdentity(
 
 export class AdminChatBootstrapService {
   private readonly contactStore: ContactStore | null;
+  private readonly configuredApiKey?: string;
   private selection: SelectionState = {};
 
-  constructor(contactStore?: ContactStore | null) {
+  constructor(contactStore?: ContactStore | null, options: AdminChatBootstrapServiceOptions = {}) {
     this.contactStore = contactStore ?? null;
+    this.configuredApiKey = normalizeTrimmed(options.apiKey);
   }
 
   buildBootstrap(): AdminChatBootstrapResponse {
@@ -196,11 +202,16 @@ export class AdminChatBootstrapService {
       api: {
         chatCompletionsUrl: DEFAULT_CHAT_COMPLETIONS_URL,
         voiceWebSocketUrl: DEFAULT_VOICE_WEBSOCKET_URL,
+        apiKey: this.resolveApiKey(),
       },
       defaultSessionId: `${selectedIdentity.channel}:${selectedIdentity.userId}`,
       defaultAuthorName,
       defaultAuthorId,
     };
+  }
+
+  private resolveApiKey(): string | undefined {
+    return this.configuredApiKey ?? normalizeTrimmed(process.env.API_KEY);
   }
 
   private withSelectedIdentity(

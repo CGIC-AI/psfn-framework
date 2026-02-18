@@ -552,6 +552,42 @@ describe('AdminServer', () => {
       expect(payload.defaultAuthorId).toBe('admin-user');
     });
 
+    it('omits api key from bootstrap when API_KEY is unset', async () => {
+      const previousApiKey = process.env.API_KEY;
+      delete process.env.API_KEY;
+
+      try {
+        const res = await request(port, 'GET', '/api/chat/bootstrap');
+        expect(res.status).toBe(200);
+        const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+        expect(payload.api.apiKey).toBeUndefined();
+      } finally {
+        if (previousApiKey === undefined) {
+          delete process.env.API_KEY;
+        } else {
+          process.env.API_KEY = previousApiKey;
+        }
+      }
+    });
+
+    it('includes api key in bootstrap when API_KEY is configured', async () => {
+      const previousApiKey = process.env.API_KEY;
+      process.env.API_KEY = 'bootstrap-test-secret';
+
+      try {
+        const res = await request(port, 'GET', '/api/chat/bootstrap');
+        expect(res.status).toBe(200);
+        const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+        expect(payload.api.apiKey).toBe('bootstrap-test-secret');
+      } finally {
+        if (previousApiKey === undefined) {
+          delete process.env.API_KEY;
+        } else {
+          process.env.API_KEY = previousApiKey;
+        }
+      }
+    });
+
     it('updates selected identity and author defaults via bootstrap POST', async () => {
       const res = await request(
         port,
@@ -879,6 +915,16 @@ describe('AdminServer', () => {
       expect(res.body).toContain('/api/chat/bootstrap');
       expect(res.body).toContain('openai-completions');
       expect(res.body).toContain('X-Session-ID');
+      expect(res.body).toContain('./chat-voice.js');
+      expect(res.body).toContain('bootstrap?.api?.apiKey');
+    });
+
+    it('serves chat-voice.js', async () => {
+      const res = await request(port, 'GET', '/static/chat-voice.js');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toBe('application/javascript');
+      expect(res.body).toContain('/v1/voice/ws');
+      expect(res.body).toContain('bootstrap?.api?.apiKey');
     });
 
     it('serves chat-debug.js', async () => {
@@ -1031,6 +1077,10 @@ describe('AdminServer with auth', () => {
     const chat = await request(port, 'GET', '/static/chat.js');
     expect(chat.status).toBe(200);
     expect(chat.headers['content-type']).toBe('application/javascript');
+
+    const chatVoice = await request(port, 'GET', '/static/chat-voice.js');
+    expect(chatVoice.status).toBe(200);
+    expect(chatVoice.headers['content-type']).toBe('application/javascript');
 
     const chatDebug = await request(port, 'GET', '/static/chat-debug.js');
     expect(chatDebug.status).toBe(200);

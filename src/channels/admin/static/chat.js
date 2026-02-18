@@ -94,6 +94,14 @@ function buildTransportHeaders(bootstrap) {
   };
 }
 
+function readBootstrapApiKey(bootstrap) {
+  return normalizeText(bootstrap?.api?.apiKey);
+}
+
+function resolveClientApiKey(bootstrap) {
+  return readBootstrapApiKey(bootstrap) || PROVIDER_KEY_PLACEHOLDER;
+}
+
 function createOpenAICompletionsModel(bootstrap) {
   const endpointUrl = new URL(bootstrap.api.chatCompletionsUrl, window.location.origin);
   const suffix = '/chat/completions';
@@ -250,7 +258,7 @@ function formatError(error) {
   return String(error);
 }
 
-function createAppStorageStub() {
+function createAppStorageStub(getBootstrapState) {
   return {
     settings: {
       async get() {
@@ -260,7 +268,7 @@ function createAppStorageStub() {
     },
     providerKeys: {
       async get() {
-        return PROVIDER_KEY_PLACEHOLDER;
+        return resolveClientApiKey(getBootstrapState());
       },
       async set() {},
     },
@@ -270,7 +278,7 @@ function createAppStorageStub() {
   };
 }
 
-async function loadPiModules() {
+async function loadPiModules(getBootstrapState) {
   const [agentCore, webUi, piAi] = await Promise.all([
     import(PI_AGENT_CORE_MODULE),
     import(PI_WEB_UI_MODULE),
@@ -281,7 +289,7 @@ async function loadPiModules() {
     throw new Error('pi-web-ui setAppStorage export not found');
   }
 
-  webUi.setAppStorage(createAppStorageStub());
+  webUi.setAppStorage(createAppStorageStub(getBootstrapState));
   return { agentCore, webUi, piAi };
 }
 
@@ -290,7 +298,7 @@ function createStreamFunction(piAi, getBootstrapState) {
     const bootstrap = getBootstrapState();
     return piAi.streamSimple(model, context, {
       ...options,
-      apiKey: PROVIDER_KEY_PLACEHOLDER,
+      apiKey: resolveClientApiKey(bootstrap),
       sessionId: bootstrap.defaultSessionId,
       headers: {
         ...(options.headers ?? {}),
@@ -320,7 +328,7 @@ function createAgent(modules, getBootstrapState) {
     },
     convertToLlm,
     streamFn,
-    getApiKey: () => PROVIDER_KEY_PLACEHOLDER,
+    getApiKey: () => resolveClientApiKey(getBootstrapState()),
     sessionId: bootstrap.defaultSessionId,
   });
 }
@@ -395,10 +403,11 @@ async function initializeCockpit() {
   setStatus(dom, 'Loading cockpit state...');
 
   try {
-    const [bootstrap, modules] = await Promise.all([
-      fetchBootstrapState(),
-      loadPiModules(),
-    ]);
+    let bootstrapState = null;
+    const modulesPromise = loadPiModules(() => bootstrapState);
+    const bootstrap = await fetchBootstrapState();
+    bootstrapState = bootstrap;
+    const modules = await modulesPromise;
 
     const context = {
       bootstrap,

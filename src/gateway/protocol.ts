@@ -151,8 +151,12 @@ export interface PolicyContext {
 
 // ── Reverse RPC types (gateway → agent requests) ──
 
+export type RpcSubstrateMessage = Omit<SubstrateMessage, 'timestamp'> & {
+  timestamp: string | Date;
+};
+
 export interface DiscordHandleMessageParams {
-  message: SubstrateMessage;
+  message: RpcSubstrateMessage;
 }
 
 export interface DiscordHandleMessageResult {
@@ -162,8 +166,61 @@ export interface DiscordHandleMessageResult {
   durationMs: number;
 }
 
+export interface VoiceStreamMetadata {
+  format?: string;
+  language?: string;
+  sampleRateHz?: number;
+  [key: string]: unknown;
+}
+
+export interface VoiceStreamFrameBase {
+  correlationId: string;
+  streamId: string;
+  sequence: number;
+  metadata?: VoiceStreamMetadata;
+}
+
+export interface DiscordVoiceStreamStartParams extends VoiceStreamFrameBase {
+  message: RpcSubstrateMessage;
+}
+
+export interface DiscordVoiceStreamChunkParams extends VoiceStreamFrameBase {
+  text: string;
+}
+
+export interface DiscordVoiceStreamEndParams extends VoiceStreamFrameBase {}
+
+export interface DiscordVoiceStreamCancelParams extends VoiceStreamFrameBase {
+  reason?: string;
+}
+
+export interface DiscordVoiceStreamAckResult {
+  correlationId: string;
+  streamId: string;
+  sequence: number;
+  accepted: boolean;
+  queueDepth: number;
+  droppedChunks?: number;
+}
+
+export interface DiscordVoiceStreamCancelResult {
+  correlationId: string;
+  streamId: string;
+  cancelled: boolean;
+}
+
+export interface DiscordVoiceStreamEndResult extends DiscordHandleMessageResult {
+  correlationId: string;
+  streamId: string;
+  droppedChunks: number;
+}
+
 export interface AgentMethods {
   'discord.handleMessage': [DiscordHandleMessageParams, DiscordHandleMessageResult];
+  'discord.voice.start': [DiscordVoiceStreamStartParams, DiscordVoiceStreamAckResult];
+  'discord.voice.chunk': [DiscordVoiceStreamChunkParams, DiscordVoiceStreamAckResult];
+  'discord.voice.end': [DiscordVoiceStreamEndParams, DiscordVoiceStreamEndResult];
+  'discord.voice.cancel': [DiscordVoiceStreamCancelParams, DiscordVoiceStreamCancelResult];
 }
 
 // ── Error codes (JSON-RPC custom range: -32000 to -32099) ──
@@ -174,4 +231,8 @@ export const GatewayErrors = {
   POLICY_DENIED: -32002,
   PROVIDER_ERROR: -32003,
   SANITIZATION_FAILED: -32004,
+  VOICE_STREAM_NOT_FOUND: -32005,
+  VOICE_STREAM_CANCELLED: -32006,
+  VOICE_STREAM_OVERFLOW: -32007,
+  VOICE_STREAM_SEQUENCE: -32008,
 } as const;

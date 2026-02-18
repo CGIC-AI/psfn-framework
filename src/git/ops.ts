@@ -6,6 +6,7 @@ import { execSync } from 'node:child_process';
 import { writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { resolve, relative, normalize, dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
+import { REPO_ALLOWED_PATHS } from '../security/policy-constants.js';
 
 const log = createComponentLogger('GitOps');
 
@@ -19,7 +20,7 @@ export interface GitOpsConfig {
 
 const DEFAULT_CONFIG: GitOpsConfig = {
   repoRoot: process.cwd(),
-  allowedPaths: ['src/', 'docs/', 'psfn/'],
+  allowedPaths: [...REPO_ALLOWED_PATHS],
   protectedBranches: ['main', 'master'],
   auditLogPath: 'data/repo-audit.jsonl',
   execTimeoutMs: 30_000,
@@ -45,6 +46,15 @@ export interface GitCommitResult {
   filesChanged: number;
 }
 
+export interface GitOperations {
+  status(): GitStatusResult | Promise<GitStatusResult>;
+  diff(opts?: { staged?: boolean }): GitDiffResult | Promise<GitDiffResult>;
+  createBranch(name: string, startPoint?: string): string | Promise<string>;
+  applyPatch(filePath: string, content: string): void | Promise<void>;
+  commit(message: string, intent: string, scope?: string): GitCommitResult | Promise<GitCommitResult>;
+  openPR(title: string, body: string, base?: string): string | Promise<string>;
+}
+
 interface AuditEntry {
   timestamp: string;
   operation: string;
@@ -53,7 +63,7 @@ interface AuditEntry {
   error?: string;
 }
 
-export class GitOps {
+export class GitOps implements GitOperations {
   private config: GitOpsConfig;
 
   constructor(config?: Partial<GitOpsConfig>) {

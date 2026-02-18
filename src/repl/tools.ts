@@ -41,6 +41,33 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
 
         const result = await runRLMLoop(params.task, effectiveDeps);
 
+        if (effectiveDeps.eventBus) {
+          await effectiveDeps.eventBus.emit('agent.think.trace', {
+            timestamp: Date.now(),
+            task: params.task,
+            result: {
+              iterations: result.iterations,
+              totalInputTokens: result.totalInputTokens,
+              totalOutputTokens: result.totalOutputTokens,
+              durationMs: result.durationMs,
+              truncated: result.truncated,
+              budgetStop: result.budgetStatus.exceeded,
+              steps: result.steps.map(step => ({
+                iteration: step.iteration,
+                timestamp: step.timestamp,
+                code: step.code,
+                output: step.output,
+                error: step.error,
+                inputTokens: step.inputTokens,
+                outputTokens: step.outputTokens,
+                cumulativeTokens: step.cumulativeTokens,
+                durationMs: step.durationMs,
+                variablesChanged: step.variablesChanged,
+              })),
+            },
+          });
+        }
+
         const totalTokens = result.totalInputTokens + result.totalOutputTokens;
         const tokenBudget = effectiveDeps.config.budget.maxTokens ?? 100_000;
         const evidenceCount = result.evidence.length;

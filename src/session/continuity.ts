@@ -3,10 +3,10 @@
 // Each user gets a single JSONL file: user_<userId>.jsonl
 // This is a secondary index — the primary audit trail stays in per-channel JSONL files.
 
-import { mkdirSync, readFileSync, appendFileSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeChannelId } from './store.js';
-import type { SessionEntry, JournalEntry } from './types.js';
+import type { SessionEntry } from './types.js';
 import { createComponentLogger } from '../logger.js';
 import {
   classifyChannel,
@@ -14,6 +14,12 @@ import {
   type ChannelMeta,
 } from '../trust/policy.js';
 import type { ChannelVisibility } from '../trust/types.js';
+import {
+  appendJournalEntry,
+  buildMessageJournalEntry,
+  journalToSessionEntry,
+  readJournalFile,
+} from './journal-utils.js';
 
 const log = createComponentLogger('UserContinuity');
 
@@ -49,30 +55,13 @@ export class UserContinuityStore {
     cache = { entries: [], nextId: 1, filePath: fp };
 
     if (existsSync(fp)) {
-      const raw = readFileSync(fp, 'utf-8');
-      const lines = raw.split('\n').filter(l => l.length > 0);
-      let maxId = 0;
-
-      for (const line of lines) {
-        const j: JournalEntry = JSON.parse(line);
-        if (j.id > maxId) maxId = j.id;
-
-        if (j.type === 'message') {
-          cache.entries.push({
-            id: j.id,
-            channelId: j.channelId,
-            role: j.role!,
-            content: j.content!,
-            authorId: j.authorId,
-            authorName: j.authorName,
-            timestamp: j.timestamp,
-            metadata: j.metadata,
-            originChannelId: (j as any).originChannelId,
-            channelVisibility: (j as any).channelVisibility,
-          });
+      const { entries, maxId } = readJournalFile(fp);
+      for (const entry of entries) {
+        const message = journalToSessionEntry(entry);
+        if (message) {
+          cache.entries.push(message);
         }
       }
-
       cache.nextId = maxId + 1;
     }
 
@@ -100,27 +89,8 @@ export class UserContinuityStore {
       cache.entries = cache.entries.slice(-this.maxEntries);
     }
 
-    const journal: JournalEntry & { originChannelId?: string; channelVisibility?: string } = {
-      type: 'message',
-      id,
-      channelId: entry.channelId,
-      role: entry.role,
-      content: entry.content,
-      authorId: entry.authorId,
-      authorName: entry.authorName,
-      timestamp: entry.timestamp,
-      metadata: entry.metadata,
-    };
-
-    // Include origin metadata if present
-    if (entry.originChannelId) {
-      journal.originChannelId = entry.originChannelId;
-    }
-    if (entry.channelVisibility) {
-      journal.channelVisibility = entry.channelVisibility;
-    }
-
-    appendFileSync(cache.filePath, JSON.stringify(journal) + '\n');
+    const journal = buildMessageJournalEntry(id, entry);
+    appendJournalEntry(cache.filePath, journal);
     return id;
   }
 

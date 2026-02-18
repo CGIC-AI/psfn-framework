@@ -93,4 +93,26 @@ describe('EventBus', () => {
 
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it('supports voice partial transcript events', async () => {
+    const bus = new EventBus();
+    const handler = vi.fn();
+
+    bus.on('channel.voice.transcript.partial', handler);
+    await bus.emit('channel.voice.transcript.partial', {
+      guildId: 'g-1',
+      channelId: 'c-1',
+      userId: 'u-1',
+      transcript: 'hel',
+      confidence: 0.8,
+      startMs: 10,
+      endMs: 40,
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      transcript: 'hel',
+      confidence: 0.8,
+    }));
+  });
 });

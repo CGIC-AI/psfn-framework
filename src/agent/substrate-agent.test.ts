@@ -11,7 +11,7 @@ import type { ContactStore } from '../contacts/store.js';
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
 // It appends a fake assistant response to state.messages so extractResponseText works.
 
-vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
+const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
   // Simulate adding an assistant response to the agent's messages
   this.appendMessage({
     role: 'assistant',
@@ -148,6 +148,39 @@ describe('SubstrateAgent construction', () => {
     expect(agent.memoryExtractor).toBe(mockExtractor);
     expect(agent.contactStore).toBe(mockContactStore);
   });
+
+  it('registers runtime model refresh hook on shared config', () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const llmClient = makeMockLLMProvider();
+    const sessionManager = makeMockSessionManager();
+
+    const setModelSpy = vi.spyOn(Agent.prototype, 'setModel');
+    const agent = new SubstrateAgent(
+      eventBus, llmClient, sessionManager, 'System prompt', config,
+    );
+
+    expect(agent).toBeDefined();
+    expect(config.runtimeHooks?.refreshModels).toBeTypeOf('function');
+
+    config.modelRoster.chat = {
+      model: 'moonshotai/kimi-k2.5',
+      provider: 'openrouter',
+      maxTokens: 4096,
+      contextWindow: 128_000,
+    };
+    config.primaryModel = 'moonshotai/kimi-k2.5';
+    config.primaryProvider = 'openrouter';
+    config.primaryMaxTokens = 4096;
+
+    const callCountBeforeRefresh = setModelSpy.mock.calls.length;
+    config.runtimeHooks?.refreshModels?.();
+    expect(setModelSpy.mock.calls.length).toBeGreaterThan(callCountBeforeRefresh);
+
+    const refreshedModel = setModelSpy.mock.calls.at(-1)?.[0] as { id: string };
+    expect(refreshedModel.id).toBe('moonshotai/kimi-k2.5');
+    setModelSpy.mockRestore();
+  });
 });
 
 describe('SubstrateAgent.registerTool', () => {
@@ -250,6 +283,158 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(events).toContain('turn.end');
   });
 
+  it('emits agent.turn.usage after turn completion', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    const order: string[] = [];
+    eventBus.on('agent.turn.end', () => { order.push('end'); });
+    eventBus.on('agent.turn.usage', () => { order.push('usage'); });
+
+    await agent.handleMessage(makeMessage());
+
+    expect(order).toEqual(['end', 'usage']);
+  });
+
+  it('emits stage telemetry for trust, memory, context, prompt, first-token, and end', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    const stages: string[] = [];
+    const payloads: any[] = [];
+    (eventBus as any).on('agent.turn.stage', (data: any) => {
+      stages.push(data.stage);
+      payloads.push(data);
+    });
+
+    await agent.handleMessage(makeMessage());
+
+    expect(stages).toEqual(['trust', 'memory', 'context', 'first-token', 'prompt', 'end']);
+    const firstToken = payloads.find(data => data.stage === 'first-token');
+    expect(firstToken?.ttftMs).toBeGreaterThanOrEqual(0);
+    expect(firstToken?.source).toBe('fallback');
+  });
+
+  it('marks first-token telemetry as stream-driven when deltas arrive mid-prompt', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      await (eventBus as any).emit('agent.stream.delta', { channelId: 'test-channel', text: 'M' });
+      this.appendMessage({
+        role: 'assistant',
+        content: [{ type: 'text' as const, text: 'Mock response from PSFN' }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    });
+
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    const firstTokenStages: any[] = [];
+    (eventBus as any).on('agent.turn.stage', (data: any) => {
+      if (data.stage === 'first-token') firstTokenStages.push(data);
+    });
+
+    await agent.handleMessage(makeMessage());
+
+    expect(firstTokenStages).toHaveLength(1);
+    expect(firstTokenStages[0].source).toBe('stream');
+    expect(firstTokenStages[0].ttftMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('accumulates usage across tool loops and updates response metadata', async () => {
+    const config = makeConfig();
+    config.defaultContextWindow = 200;
+    if (config.modelRoster.chat) config.modelRoster.chat.contextWindow = 200;
+
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      this.appendMessage({
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'tool-1', name: 'think', arguments: { task: 'loop' } }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: {
+          input: 100,
+          output: 20,
+          cacheRead: 5,
+          cacheWrite: 0,
+          totalTokens: 120,
+          cost: { input: 0.001, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 },
+        },
+        stopReason: 'toolUse' as any,
+        timestamp: Date.now(),
+      });
+      this.appendMessage({
+        role: 'toolResult',
+        toolCallId: 'tool-1',
+        toolName: 'think',
+        content: [{ type: 'text', text: 'ok' }],
+        isError: false,
+        timestamp: Date.now(),
+      } as any);
+      this.appendMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Final response' }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: {
+          input: 130,
+          output: 30,
+          cacheRead: 7,
+          cacheWrite: 0,
+          totalTokens: 160,
+          cost: { input: 0.002, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.002 },
+        },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    });
+
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    let usageEvent: any = null;
+    eventBus.on('agent.turn.usage', ({ usage }) => { usageEvent = usage; });
+
+    const response = await agent.handleMessage(makeMessage());
+
+    expect(response.metadata.inputTokens).toBe(230);
+    expect(response.metadata.outputTokens).toBe(50);
+    expect(usageEvent).toMatchObject({
+      inputTokens: 230,
+      outputTokens: 50,
+      cacheReadTokens: 12,
+      llmCalls: 2,
+      toolCalls: 1,
+    });
+    expect(usageEvent.contextUtilization).toBeCloseTo(65);
+    expect(usageEvent.estimatedCostUsd).toBeCloseTo(0.003);
+  });
+
   it('records user message in session before LLM call', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
@@ -287,6 +472,53 @@ describe('SubstrateAgent.handleMessage', () => {
     );
   });
 
+  it('uses canonical contact key for continuity indexing and context lookup', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const mockContactStore = {
+      resolveChannelIdentity: vi.fn().mockReturnValue({
+        id: 'contact-canonical-1',
+        trustLevel: 'trusted',
+        discordUserId: 'discord-user-1',
+        channelIdentities: [
+          { channel: 'api', userId: 'api-user-1' },
+          { channel: 'discord', userId: 'discord-user-1' },
+        ],
+      }),
+    } as unknown as ContactStore;
+
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+    agent.contactStore = mockContactStore;
+
+    await agent.handleMessage(makeMessage({
+      authorId: 'api-user-1',
+      channelType: 'api',
+    }));
+
+    expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
+      'test-channel',
+      'Hello, PSFN!',
+      'api-user-1',
+      'TestUser',
+      undefined,
+      'contact-canonical-1',
+    );
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[4]).toBe('contact-canonical-1');
+    expect(buildCall[6]).toEqual(['api-user-1', 'discord-user-1']);
+
+    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
+      'test-channel',
+      'Mock response from PSFN',
+      'api-user-1',
+      undefined,
+      'contact-canonical-1',
+    );
+  });
+
   it('retrieves memories when memoryProvider is set', async () => {
     const config = makeConfig();
     const mockMemory: MemoryProvider = {
@@ -304,6 +536,32 @@ describe('SubstrateAgent.handleMessage', () => {
       'Hello, PSFN!',
       'test-channel',
       'regular',
+      { isDirectMessage: undefined },
+    );
+  });
+
+  it('uses primary trust for internal channels', async () => {
+    const config = makeConfig();
+    const mockMemory: MemoryProvider = {
+      retrieve: vi.fn<any>().mockResolvedValue('Internal memories'),
+    };
+
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+    agent.memoryProvider = mockMemory;
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'internal:heartbeat',
+      authorId: 'scheduler',
+      authorName: 'Scheduler',
+      content: 'heartbeat check',
+    }));
+
+    expect(mockMemory.retrieve).toHaveBeenCalledWith(
+      'heartbeat check',
+      'internal:heartbeat',
+      'primary',
       { isDirectMessage: undefined },
     );
   });
@@ -337,6 +595,55 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(response.channelId).toBe('test-channel');
     expect(response.metadata.model).toBe('deepseek/deepseek-v3.2');
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('passes taskKind to prompt composer for internal heartbeat turns', async () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'Base prompt', config,
+    );
+    const compose = vi.fn().mockReturnValue({
+      text: 'Layered prompt',
+      hash: 'abc123',
+      layerCount: 1,
+      layerIds: ['layer-1'],
+    });
+    agent.promptComposer = { compose } as any;
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'internal:heartbeat',
+      channelType: 'terminal',
+      content: 'heartbeat check',
+    }));
+
+    expect(compose).toHaveBeenCalledWith({
+      channelType: 'internal',
+      taskKind: 'heartbeat',
+    });
+  });
+
+  it('does not set taskKind for normal discord text turns', async () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'Base prompt', config,
+    );
+    const compose = vi.fn().mockReturnValue({
+      text: 'Layered prompt',
+      hash: 'abc123',
+      layerCount: 1,
+      layerIds: ['layer-1'],
+    });
+    agent.promptComposer = { compose } as any;
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'discord-channel-1',
+      channelType: 'discord',
+    }));
+
+    expect(compose).toHaveBeenCalledWith({
+      channelType: 'discord_text',
+      taskKind: undefined,
+    });
   });
 
   it('builds context with adapted system prompt for trust level', async () => {
@@ -396,6 +703,28 @@ describe('SubstrateAgent.handleMessage', () => {
       'TestUser',
       true,
     );
+  });
+
+  it('refreshes resolved model on next turn after config drift', async () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    await agent.handleMessage(makeMessage({ id: 'msg-1', content: 'turn one' }));
+
+    config.modelRoster.chat = {
+      model: 'moonshotai/kimi-k2.5',
+      provider: 'openrouter',
+      maxTokens: 4096,
+      contextWindow: 128_000,
+    };
+    config.primaryModel = 'moonshotai/kimi-k2.5';
+    config.primaryProvider = 'openrouter';
+    config.primaryMaxTokens = 4096;
+
+    const response = await agent.handleMessage(makeMessage({ id: 'msg-2', content: 'turn two' }));
+    expect(response.metadata.model).toBe('moonshotai/kimi-k2.5');
   });
 });
 

@@ -14,8 +14,8 @@ import { DiscordAdapter } from './channels/discord/adapter.js';
 import { EventBus } from './event-bus.js';
 import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
+import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
-import type { DiscordHandleMessageResult } from './gateway/protocol.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -25,6 +25,7 @@ async function main(): Promise<void> {
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const workspacePath = process.env.WORKSPACE_PATH ?? './workspace';
   const eventBus = new EventBus();
+  const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
   log.info('Initializing...');
 
@@ -85,12 +86,7 @@ async function main(): Promise<void> {
 
   // Wire voice handler to use reverse RPC to agent
   discord.setVoiceHandler(async (message) => {
-    const serialized = serializeMessage(message);
-    const result = await gateway.requestAgent<DiscordHandleMessageResult>(
-      'discord.handleMessage',
-      { message: serialized },
-      60_000,
-    );
+    const result = await gateway.requestAgentVoiceStream(message);
     return {
       content: result.content,
       channelId: result.channelId,
@@ -110,6 +106,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string) => {
     log.info(`Received ${signal}, shutting down...`);
+    stopDebugObserver();
     await gateway.stop();
     await discord.stop();
     auditDb.close();

@@ -37,6 +37,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 
 ### Channels
 - **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + ElevenLabs TTS)
+- **WebSocket voice runtime** — transport primitives for browser/app clients using `voice-wire-v1` session frames
 - **OpenAI-Compatible API** — `/v1/chat/completions` with SSE streaming for WebUI integration
 - **Admin GUI (admin UI)** — htmx-powered management panel: memory browser, session viewer, contacts, scheduler, settings, prompt editor, model discovery
 
@@ -76,7 +77,9 @@ CHARACTER_CARD_PATH=/path/to/character.json
 
 # Models (change to your preference)
 PRIMARY_MODEL=z-ai/glm-5
+PRIMARY_PROVIDER=openrouter
 EXTRACTION_MODEL=deepseek/deepseek-v3.2
+EXTRACTION_PROVIDER=openrouter
 
 # Embeddings (local Ollama)
 OLLAMA_URL=http://localhost:11434
@@ -87,6 +90,8 @@ EMBEDDING_DIMS=1024
 DATA_DIR=./data
 DATABASE_PATH=./data/psfn.db
 ```
+
+For the full configuration surface, use `.env.example` as the source of truth. Runtime parsing/defaults live in `src/types.ts`.
 
 ### Running
 
@@ -116,12 +121,17 @@ npm run agent:docker    # --network=none Docker container
 ```bash
 ADMIN_PORT=3001        # Activates admin UI
 ADMIN_TOKEN=your-token # Secures the panel
+ADMIN_HOST=127.0.0.1
+ADMIN_ALLOW_INSECURE=false # Set true only for local dev without token
 ```
 
 **OpenAI-compatible API:**
 ```bash
 API_PORT=3000          # Activates /v1/chat/completions
 API_KEY=your-key       # Optional auth
+API_HOST=127.0.0.1
+API_MODEL_NAME=psfn
+API_REQUEST_TIMEOUT_MS=90000
 ```
 
 **Voice (Discord):**
@@ -134,10 +144,27 @@ ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=YOUR_VOICE_ID
 ```
 
+**Voice (WebSocket runtime transport):**
+
+Expose your own WebSocket endpoint in gateway/runtime code, then attach accepted connections to `WebSocketVoiceServer` (`src/voice/transports/websocket/server.ts`). Inbound payloads must use `wire: "voice-wire-v1"` and one of: `session.start`, `audio.chunk`, `interrupt`, `session.end`, `ping`.
+
 **LiteLLM proxy (credential isolation):**
 ```bash
 npm run proxy:up                          # Start proxy
 LITELLM_BASE_URL=http://localhost:4000/v1 # Enable in .env
+```
+
+**Operational knobs (recommended):**
+```bash
+DISCORD_HEARTBEAT_CHANNEL=...        # Lifecycle/heartbeat notification destination
+DISCORD_BACKFILL_ON_STARTUP=true     # Process recent backlog after reconnect
+EXTRACTION_DRAIN_TIMEOUT_MS=10000    # Graceful shutdown wait for extraction drain
+ALLOW_HTTP_FETCH=false               # Gateway web fetch policy
+FETCH_DOMAIN_ALLOWLIST=example.com   # Optional gateway fetch domain restriction
+MODULE_REGISTRY_TRUSTED_READ=false   # Optional explicit allow for module registry reads
+MODULE_REGISTRY_PATH=psfn/modules/repl-registry.json
+AUDIT_DB_PATH=./data/gateway-audit.db
+LOG_LEVEL=info
 ```
 
 ## Architecture
@@ -172,6 +199,8 @@ Gateway (host)                    Agent (container, --network=none)
 | **Module System** | Hot-loadable TypeScript modules (planned) |
 | **Channel Layer** | Discord (text + voice), OpenAI API, admin GUI (admin UI) |
 | **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers |
+
+Heartbeat/reflection runtime wiring uses `wireHeartbeatRuntime` in `src/bootstrap/parity.ts`.
 
 ### Storage
 
@@ -232,7 +261,7 @@ docs/                       # Architecture docs and specs
 ## Development
 
 ```bash
-npm test             # Run tests (797 tests, ~1.3s)
+npm test             # Run tests
 npm run test:watch   # Watch mode
 npm run lint         # ESLint
 npm run build        # Compile with tsup

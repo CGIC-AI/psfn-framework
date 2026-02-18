@@ -15,21 +15,20 @@ import Database from 'better-sqlite3';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
-import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore } from './session/store.js';
-import { SessionManager } from './session/manager.js';
-import { AgentLoop } from './agent-loop.js';
 import { MemoryStore } from './memory/store.js';
-import { EmbeddingProvider } from './memory/embedding.js';
-import { MemoryRetriever } from './memory/retrieval.js';
-import { MemoryExtractor } from './memory/extraction.js';
-import { ShardManager } from './shards/manager.js';
-import { createSpawnShardTool } from './shards/tools.js';
-import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { runRLMLoop } from './repl/loop.js';
 import { dirname } from 'node:path';
+import {
+  composeIdentity,
+  composeSessionRuntime,
+  createEmbeddingProviderFromEnv,
+  composeAgentLoop,
+  wireMemoryRuntime,
+  wireShardAndThinkRuntime,
+} from './bootstrap/composition.js';
 
 // ── Test utilities ──
 
@@ -75,9 +74,11 @@ async function main(): Promise<void> {
   const sessionsDir = join(tempDir, 'sessions');
   mkdirSync(sessionsDir, { recursive: true });
 
-  // Use production database for memory (so we can see accumulated state)
-  mkdirSync(dirname(config.databasePath), { recursive: true });
-  const db = new Database(config.databasePath);
+  // Use isolated database by default so extraction assertions are deterministic.
+  // Override with E2E_DATABASE_PATH when you intentionally want to test against a shared DB.
+  const databasePath = process.env.E2E_DATABASE_PATH ?? join(tempDir, 'e2e.sqlite');
+  mkdirSync(dirname(databasePath), { recursive: true });
+  const db = new Database(databasePath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
@@ -94,59 +95,53 @@ async function main(): Promise<void> {
   eventBus.on('agent.error', track('error'));
 
   // Identity
-  const card = loadCharacterCard(config.characterCardPath);
-  const systemPrompt = composeSystemPrompt(card);
+  const { systemPrompt } = composeIdentity(config);
 
   // Core components
   const llmClient = new LLMClient(config);
-  const sessionStore = new SessionStore(sessionsDir);
-  const sessionManager = new SessionManager(sessionStore, config);
+  const sessionComposition = composeSessionRuntime({ config, sessionsDir });
+  const { sessionStore, sessionManager } = sessionComposition;
 
   // Embeddings
-  const embeddingProvider = new EmbeddingProvider({
-    ollamaUrl: process.env.OLLAMA_URL,
-    model: process.env.EMBEDDING_MODEL,
-    dims: process.env.EMBEDDING_DIMS ? parseInt(process.env.EMBEDDING_DIMS, 10) : undefined,
-  });
+  const embeddingProvider = createEmbeddingProviderFromEnv();
 
   const memoryStore = new MemoryStore(db, embeddingProvider.dims);
 
   // Agent loop
-  const agentLoop = new AgentLoop(eventBus, llmClient, sessionManager, systemPrompt, config);
-  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, embeddingProvider);
-  agentLoop.memoryExtractor = new MemoryExtractor(
-    llmClient, sessionManager, memoryStore, embeddingProvider, eventBus,
-  );
-
-  // Shards
-  const shardManager = new ShardManager({
+  const agentLoop = composeAgentLoop({
+    eventBus,
+    llmProvider: llmClient,
+    sessionManager,
+    systemPrompt,
+    config,
+  });
+  const memoryExtractor = wireMemoryRuntime({
+    agentLoop,
+    llmProvider: llmClient,
+    sessionManager,
+    memoryStore,
+    embeddingService: embeddingProvider,
+    eventBus,
+  });
+  wireShardAndThinkRuntime({
+    agentLoop,
     eventBus,
     llmProvider: llmClient,
     sessionStore,
     embeddingService: embeddingProvider,
-    memoryProvider: agentLoop.memoryProvider,
-    config,
-    parentSystemPrompt: systemPrompt,
-  });
-  agentLoop.registerTool(createSpawnShardTool(shardManager));
-
-  // Think tool (RLM+REPL)
-  agentLoop.registerTool(createThinkTool({
-    llmProvider: llmClient,
-    embeddingService: embeddingProvider,
     memoryStore,
     sessionManager,
-    scheduler: null,
-    eventBus,
-    config: DEFAULT_REPL_CONFIG,
-  }));
+    config,
+    parentSystemPrompt: systemPrompt,
+    replConfig: DEFAULT_REPL_CONFIG,
+  });
 
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});
 
   console.log(`Channel: ${CHANNEL}`);
   console.log(`Sessions dir: ${sessionsDir}`);
-  console.log(`Database: ${config.databasePath}`);
+  console.log(`Database: ${databasePath}`);
   console.log(`Primary model: ${config.primaryModel}`);
   console.log(`Extraction model: ${config.extractionModel}`);
 
@@ -260,8 +255,7 @@ async function main(): Promise<void> {
   events.length = 0;
   try {
     process.stdout.write('  Running extraction...');
-    const extractor = agentLoop.memoryExtractor as MemoryExtractor;
-    await extractor.extract(CHANNEL);
+    await memoryExtractor.extract(CHANNEL);
     console.log(' done');
 
     const extractionEnd = events.find(e => e.name === 'extraction.end');

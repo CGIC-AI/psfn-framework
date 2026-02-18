@@ -17,11 +17,11 @@ import { MemoryRetriever } from './memory/retrieval.js';
 import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
-import { MEMORY_CONFIG } from './memory/types.js';
 import { ShardManager } from './shards/manager.js';
 import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
 import { ApiServer } from './channels/api/server.js';
+import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
@@ -32,11 +32,14 @@ import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
+import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
   wirePromptRuntime,
+  wireStaticPromptRegistry,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
+import { attachVoiceObservers } from './voice/observers/index.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -56,11 +59,15 @@ export class SubstrateRuntime implements Lifecycle {
   private apiServer?: ApiServer;
   private adminServer?: AdminServer;
   private lifecycleNotifier?: LifecycleNotifier;
+  private stopVoiceObservers?: () => void;
+  private stopDebugObserver?: () => void;
   private startTime: number;
 
   constructor(config: SubstrateConfig) {
     this.config = config;
     this.eventBus = new EventBus();
+    this.stopVoiceObservers = attachVoiceObservers(this.eventBus);
+    this.stopDebugObserver = attachTerminalDebugObserver(this.eventBus, { scope: 'runtime' });
     this.startTime = Date.now();
   }
 
@@ -83,11 +90,17 @@ export class SubstrateRuntime implements Lifecycle {
     const card = loadCharacterCard(this.config.characterCardPath);
     const systemPrompt = composeSystemPrompt(card);
     log.info(`Loaded character: ${card.data.name}`);
+    const promptRegistry = wireStaticPromptRegistry(this.config.dataDir);
 
     // Initialize core components
     this.llmClient = new LLMClient(this.config);
     this.sessionStore = new SessionStore(join(this.config.dataDir, 'sessions'));
-    this.sessionManager = new SessionManager(this.sessionStore, this.config);
+    this.sessionManager = new SessionManager(
+      this.sessionStore,
+      this.config,
+      this.eventBus,
+      promptRegistry,
+    );
 
     // User continuity store — cross-channel context carryover
     const continuityStore = new UserContinuityStore(join(this.config.dataDir, 'sessions'));
@@ -139,6 +152,7 @@ export class SubstrateRuntime implements Lifecycle {
       embeddingProvider,
       this.eventBus,
       this.config,
+      promptRegistry,
     );
 
     this.salienceDecay = new SalienceDecay(this.memoryStore);
@@ -149,7 +163,7 @@ export class SubstrateRuntime implements Lifecycle {
       id: 'salience-decay',
       name: 'Memory Salience Decay',
       type: 'every',
-      intervalMs: MEMORY_CONFIG.maintenanceIntervalMs,
+      intervalMs: this.config.maintenanceIntervalMs,
       handler: () => this.salienceDecay.run(),
       state: 'idle',
     });
@@ -241,6 +255,12 @@ export class SubstrateRuntime implements Lifecycle {
     // API server — OpenAI-compatible endpoints
     const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;
     if (apiPort) {
+      const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
+        agentLoop: this.agentLoop,
+        eventBus: this.eventBus,
+        config: this.config,
+      });
+
       this.apiServer = new ApiServer({
         port: apiPort,
         host: process.env.API_HOST || undefined,
@@ -249,6 +269,7 @@ export class SubstrateRuntime implements Lifecycle {
         sessionManager: this.sessionManager,
         apiKey: process.env.API_KEY || undefined,
         modelName: process.env.API_MODEL_NAME,
+        voiceWebSocketRuntime,
       });
       await this.apiServer.init();
       log.info(`API server configured on port ${apiPort}`);
@@ -279,6 +300,7 @@ export class SubstrateRuntime implements Lifecycle {
         modelDiscovery,
         contactStore,
         promptStore,
+        promptRegistry,
       });
       await this.adminServer.init();
       log.info(`Admin GUI configured on port ${adminPort}`);
@@ -307,6 +329,10 @@ export class SubstrateRuntime implements Lifecycle {
   async stop(): Promise<void> {
     log.info('Shutting down...');
     await this.eventBus.emit('system.shutdown', {});
+    this.stopVoiceObservers?.();
+    this.stopVoiceObservers = undefined;
+    this.stopDebugObserver?.();
+    this.stopDebugObserver = undefined;
     this.scheduler.stop();
     if (this.apiServer) await this.apiServer.stop();
     if (this.adminServer) await this.adminServer.stop();

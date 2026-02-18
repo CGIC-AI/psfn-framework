@@ -97,6 +97,7 @@ export function createRebuildTool(
 
       // Schedule build + shutdown after tool result returns
       setImmediate(async () => {
+        let buildSucceeded = false;
         try {
           const { execSync } = await import('node:child_process');
           log.info('Running npm run build...');
@@ -105,18 +106,23 @@ export function createRebuildTool(
             stdio: 'pipe',
             timeout: 120_000,
           });
+          buildSucceeded = true;
           log.info('Build complete, shutting down...');
         } catch (err) {
-          log.error('Build failed', { error: String(err) });
-          // Still restart even if build fails — supervisor can sort it out
+          const errorText = err instanceof Error ? err.message : String(err);
+          log.error('Build failed; aborting restart', { error: errorText });
+          await notifier.notifyShutdown(`rebuild failed: ${errorText.slice(0, 160)}`);
+          return;
         }
 
-        try {
-          await stopFn();
-        } catch (err) {
-          log.error('Error during shutdown', { error: String(err) });
+        if (buildSucceeded) {
+          try {
+            await stopFn();
+          } catch (err) {
+            log.error('Error during shutdown', { error: String(err) });
+          }
+          process.exit(0);
         }
-        process.exit(0);
       });
 
       return {

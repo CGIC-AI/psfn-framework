@@ -4,15 +4,8 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { TextContent } from '@mariozechner/pi-ai';
 import type { PromptLayerStore } from './prompt-store.js';
-
-function textResult(text: string): AgentToolResult<Record<string, never>> {
-  return {
-    content: [{ type: 'text', text }] satisfies TextContent[],
-    details: {},
-  };
-}
+import { textResult } from '../tools/results.js';
 
 export function createPromptLayerListTool(store: PromptLayerStore): AgentTool<any> {
   return {

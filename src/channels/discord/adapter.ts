@@ -20,6 +20,8 @@ const MAX_DISCORD_LENGTH = 2000;
 const STARTUP_BACKFILL_LIMIT = 100;
 const BACKFILL_DEDUP_WINDOW = 500;
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+type StatusKind = 'compaction' | 'retry';
+type QueueTelemetryPhase = 'acquired' | 'contended' | 'released';
 
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
@@ -36,7 +38,11 @@ export class DiscordAdapter implements ChannelAdapter {
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
+  private lockStartedAt = new Map<string, number>();
+  private lockContention = new Map<string, number>();
   private voice: DiscordVoiceRuntime;
+  private statusMessages = new Map<string, Message>();
+  private statusUnsubscribers: Array<() => void> = [];
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.config = config;
@@ -87,6 +93,7 @@ export class DiscordAdapter implements ChannelAdapter {
     });
 
     this.voice.init();
+    this.registerStatusListeners();
   }
 
   async start(): Promise<void> {
@@ -100,15 +107,24 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
+    for (const unsub of this.statusUnsubscribers) unsub();
+    this.statusUnsubscribers = [];
+    await this.clearAllStatusMessages();
     await this.voice.stop();
     this.client.destroy();
   }
 
   async send(channelId: string, content: string): Promise<void> {
+    const normalized = content.trim();
+    if (!normalized) {
+      log.debug('Skipping empty Discord send', { channelId });
+      return;
+    }
+
     const channel = await this.client.channels.fetch(channelId);
     if (!channel?.isTextBased()) return;
 
-    const chunks = splitMessage(content);
+    const chunks = splitMessage(normalized);
     for (const chunk of chunks) {
       await (channel as TextChannel).send(chunk);
     }
@@ -146,23 +162,44 @@ export class DiscordAdapter implements ChannelAdapter {
 
     // If already processing this channel, steer (interrupt) instead of dropping
     if (this.processing.has(channelId)) {
+      const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
+      const queueDepth = (this.lockContention.get(channelId) ?? 0) + 1;
+      this.lockContention.set(channelId, queueDepth);
+      this.emitQueueTelemetry(channelId, 'contended', {
+        queueDepth,
+        waitMs: Math.max(0, Date.now() - lockStartMs),
+      });
       if (this.agent) {
         log.debug('Steering message into active stream', { channelId });
         this.agent.steer(substrateMsg);
       }
       return;
     }
+
     this.processing.add(channelId);
+    const lockStartMs = Date.now();
+    this.lockStartedAt.set(channelId, lockStartMs);
+    this.lockContention.set(channelId, 0);
+    this.emitQueueTelemetry(channelId, 'acquired', {
+      queueDepth: 0,
+      waitMs: 0,
+    });
 
     // Start typing indicator
     const typingInterval = this.startTyping(msg);
+    this.clearStatus(channelId, 'compaction').catch(() => undefined);
+    this.clearStatus(channelId, 'retry').catch(() => undefined);
 
     try {
       await this.eventBus.emit('message.received', { message: substrateMsg });
 
       const response = await this.handler(substrateMsg);
 
-      await this.send(channelId, response.content);
+      if (response.content.trim()) {
+        await this.send(channelId, response.content);
+      } else {
+        log.debug('Suppressing empty handler response for Discord channel', { channelId });
+      }
       await this.eventBus.emit('message.sent', { response });
 
     } catch (error) {
@@ -173,6 +210,14 @@ export class DiscordAdapter implements ChannelAdapter {
     } finally {
       clearInterval(typingInterval);
       this.processing.delete(channelId);
+      const lockHeldMs = Math.max(0, Date.now() - lockStartMs);
+      this.emitQueueTelemetry(channelId, 'released', {
+        queueDepth: this.lockContention.get(channelId) ?? 0,
+        waitMs: lockHeldMs,
+      });
+      this.lockStartedAt.delete(channelId);
+      this.lockContention.delete(channelId);
+      await this.clearStatus(channelId, 'compaction');
     }
   }
 
@@ -186,6 +231,150 @@ export class DiscordAdapter implements ChannelAdapter {
         (channel as TextChannel).sendTyping().catch(() => {});
       }
     }, TYPING_INTERVAL_MS);
+  }
+
+  private emitQueueTelemetry(
+    channelId: string,
+    phase: QueueTelemetryPhase,
+    details: { queueDepth: number; waitMs: number },
+  ): void {
+    const telemetry = {
+      channelId,
+      phase,
+      queueDepth: details.queueDepth,
+      waitMs: details.waitMs,
+      processingChannels: this.processing.size,
+      timestamp: Date.now(),
+    };
+    log.debug('Queue lock telemetry', telemetry);
+    const telemetryBus = this.eventBus as unknown as {
+      emit: (event: string, payload: Record<string, unknown>) => Promise<void>;
+    };
+    telemetryBus.emit('channel.queue.telemetry', telemetry).catch(() => undefined);
+  }
+
+  private registerStatusListeners(): void {
+    if (this.statusUnsubscribers.length > 0) return;
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.compaction.start', async ({
+      channelId,
+      tokensBefore,
+      tokenBudget,
+    }) => {
+      if (!this.processing.has(channelId)) return;
+      log.debug('Compaction started', { channelId, tokensBefore, tokenBudget });
+      await this.sendTypingToChannel(channelId);
+      await this.setStatus(
+        channelId,
+        'compaction',
+        'Organizing context to stay within token budget...',
+      );
+    }));
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.compaction.end', async ({
+      channelId,
+      tokensBefore,
+      tokensAfter,
+    }) => {
+      if (!this.processing.has(channelId)) return;
+      log.debug('Compaction finished', { channelId, tokensBefore, tokensAfter });
+      await this.clearStatus(channelId, 'compaction');
+    }));
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.retry.start', async ({
+      channelId,
+      attempt,
+      maxAttempts,
+      delayMs,
+      error,
+    }) => {
+      if (!this.processing.has(channelId)) return;
+      const delaySec = (delayMs / 1000).toFixed(1);
+      log.warn('LLM retry scheduled', { channelId, attempt, maxAttempts, delayMs, error });
+      await this.sendTypingToChannel(channelId);
+      await this.setStatus(
+        channelId,
+        'retry',
+        `Connection hiccup, retrying (${attempt}/${maxAttempts}) in ${delaySec}s...`,
+      );
+    }));
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.retry.end', async ({
+      channelId,
+      success,
+      attempt,
+    }) => {
+      if (!this.processing.has(channelId)) return;
+      log.debug('LLM retry finished', { channelId, success, attempt });
+      if (success) {
+        await this.clearStatus(channelId, 'retry');
+      } else {
+        await this.setStatus(
+          channelId,
+          'retry',
+          'Having trouble reaching my thoughts. Please try again.',
+        );
+      }
+    }));
+  }
+
+  private async sendTypingToChannel(channelId: string): Promise<void> {
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel?.isTextBased()) return;
+      if ('sendTyping' in channel) {
+        await (channel as TextChannel).sendTyping();
+      }
+    } catch {
+      // Ignore typing errors (permissions/network/transient fetch failures)
+    }
+  }
+
+  private statusKey(channelId: string, kind: StatusKind): string {
+    return `${channelId}:${kind}`;
+  }
+
+  private async setStatus(channelId: string, kind: StatusKind, content: string): Promise<void> {
+    const key = this.statusKey(channelId, kind);
+    const existing = this.statusMessages.get(key);
+    if (existing) {
+      try {
+        await existing.edit(content);
+        return;
+      } catch {
+        this.statusMessages.delete(key);
+      }
+    }
+
+    const channel = await this.client.channels.fetch(channelId);
+    if (!channel?.isTextBased()) return;
+    try {
+      const sent = await (channel as TextChannel).send(content);
+      this.statusMessages.set(key, sent as Message);
+    } catch {
+      // Ignore status send failures to avoid breaking primary response path
+    }
+  }
+
+  private async clearStatus(channelId: string, kind: StatusKind): Promise<void> {
+    const key = this.statusKey(channelId, kind);
+    const existing = this.statusMessages.get(key);
+    if (!existing) return;
+    this.statusMessages.delete(key);
+    try {
+      await existing.delete();
+    } catch {
+      // Ignore cleanup failures (already deleted / permission changes)
+    }
+  }
+
+  private async clearAllStatusMessages(): Promise<void> {
+    const pending: Promise<unknown>[] = [];
+    for (const message of this.statusMessages.values()) {
+      pending.push(message.delete().catch(() => undefined));
+    }
+    this.statusMessages.clear();
+    await Promise.allSettled(pending);
   }
 
   private async backfillOnStartup(): Promise<void> {

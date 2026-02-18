@@ -129,6 +129,35 @@ describe('MemoryWriter', () => {
       );
     });
 
+    it('marks memory durable when retentionClass is durable', async () => {
+      const result = await writer.write({
+        text: 'Our anniversary is on April 14',
+        type: 'relational',
+        retentionClass: 'durable',
+      });
+
+      expect(result.action).toBe('created');
+      expect(result.memory.retentionClass).toBe('durable');
+      expect(result.memory.tags).toContain('durable');
+
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.retentionClass).toBe('durable');
+      expect(insertedMemory.tags).toContain('durable');
+    });
+
+    it('auto-marks high-importance relational profile memories as durable', async () => {
+      const result = await writer.write({
+        text: 'V is my life partner',
+        type: 'relational',
+        importance: 0.9,
+        tags: ['profile'],
+      });
+
+      expect(result.memory.retentionClass).toBe('durable');
+      expect(result.memory.tags).toContain('profile');
+      expect(result.memory.tags).toContain('durable');
+    });
+
     it('throws on invalid memory type', async () => {
       await expect(
         writer.write({ text: 'test', type: 'invalid' as any }),
@@ -162,6 +191,29 @@ describe('MemoryWriter', () => {
 
       // Should NOT have inserted a new memory
       expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
+    it('upgrades duplicate memory tags when durable write deduplicates', async () => {
+      const existing = makeExistingMemory({
+        type: 'relational',
+        tags: ['relationship'],
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+
+      const result = await writer.write({
+        text: 'V is my partner',
+        type: 'relational',
+        importance: 0.95,
+        tags: ['core_profile'],
+      });
+
+      expect(result.action).toBe('deduplicated');
+      expect(store.updateMemory).toHaveBeenCalledWith('existing-001', expect.objectContaining({
+        tags: expect.arrayContaining(['relationship', 'core_profile', 'durable']),
+      }));
+      expect(result.memory.tags).toEqual(expect.arrayContaining(['relationship', 'core_profile', 'durable']));
+      expect(result.memory.retentionClass).toBe('durable');
     });
 
     it('skips dedup matches of a different type', async () => {
@@ -317,6 +369,20 @@ describe('MemoryWriter', () => {
       expect(result.memory.text).toBe('A brand new fact');
       expect(result.memory.sourceRef).toBe('tool:memory_upsert');
       expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('applies durable retention semantics during upsert', async () => {
+      const result = await writer.upsert({
+        text: 'Our first dance song is Clair de Lune',
+        type: 'relational',
+        retentionClass: 'durable',
+      });
+
+      expect(result.action).toBe('created');
+      expect(result.memory.retentionClass).toBe('durable');
+      expect(result.memory.tags).toContain('durable');
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.tags).toContain('durable');
     });
 
     it('supersedes similar memory and creates new one', async () => {

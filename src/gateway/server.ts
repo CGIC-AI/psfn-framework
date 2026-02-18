@@ -6,6 +6,7 @@ import * as readline from 'node:readline';
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { ChannelAdapter } from '../channels/types.js';
+import type { SubstrateMessage } from '../types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketServer } from './transport.js';
 import { sanitizeWebContent } from './sanitize.js';
@@ -23,7 +24,16 @@ import {
   type PolicyContext,
   type PolicyDecision,
   type LLMChunkNotification,
+  type RpcSubstrateMessage,
+  type DiscordHandleMessageResult,
+  type DiscordVoiceStreamStartParams,
+  type DiscordVoiceStreamChunkParams,
+  type DiscordVoiceStreamEndParams,
+  type DiscordVoiceStreamCancelParams,
+  type DiscordVoiceStreamEndResult,
+  type VoiceStreamMetadata,
 } from './protocol.js';
+import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, normalize, dirname } from 'node:path';
@@ -167,6 +177,22 @@ export interface GatewayServerOptions {
   discordAdapter: ChannelAdapter;
   policyConfig: PolicyConfig;
   auditStore?: AuditStore;
+}
+
+const DEFAULT_AGENT_TIMEOUT_MS = 60_000;
+const DEFAULT_VOICE_CHUNK_SIZE = 120;
+const DEFAULT_VOICE_QUEUE_SIZE = 32;
+const DEFAULT_VOICE_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
+
+export interface VoiceStreamRequestOptions {
+  timeoutMs?: number;
+  chunkSize?: number;
+  maxQueueSize?: number;
+  overflowPolicy?: QueueOverflowPolicy;
+  correlationId?: string;
+  streamId?: string;
+  metadata?: VoiceStreamMetadata;
+  signal?: AbortSignal;
 }
 
 export class GatewayServer {
@@ -484,7 +510,11 @@ export class GatewayServer {
   }
 
   /** Send an RPC request to the first connected agent and await its response */
-  async requestAgent<T = unknown>(method: string, params: unknown, timeoutMs = 60_000): Promise<T> {
+  async requestAgent<T = unknown>(
+    method: string,
+    params: unknown,
+    timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
+  ): Promise<T> {
     const first = this.rpcClients.values().next().value;
     if (!first) throw new Error('No agent connected');
 
@@ -495,6 +525,205 @@ export class GatewayServer {
       ),
     ]);
     return result as T;
+  }
+
+  async requestAgentVoiceStream(
+    message: SubstrateMessage,
+    options: VoiceStreamRequestOptions = {},
+  ): Promise<DiscordHandleMessageResult> {
+    const client = this.rpcClients.values().next().value as JSONRPCServerAndClient | undefined;
+    if (!client) {
+      throw new Error('No agent connected');
+    }
+
+    const timeoutMs = options.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
+    const chunkSize = this.normalizePositiveInt(options.chunkSize, DEFAULT_VOICE_CHUNK_SIZE);
+    const maxQueueSize = this.normalizePositiveInt(options.maxQueueSize, DEFAULT_VOICE_QUEUE_SIZE);
+    const overflowPolicy = options.overflowPolicy ?? DEFAULT_VOICE_OVERFLOW_POLICY;
+    const correlationId = options.correlationId ?? `voice-corr-${Date.now()}-${++this.streamRequestCounter}`;
+    const streamId = options.streamId ?? `voice-stream-${Date.now()}-${this.streamRequestCounter}`;
+
+    const queue = new BoundedQueue<string>({
+      maxSize: maxQueueSize,
+      overflowPolicy,
+    });
+
+    const chunks = this.chunkText(message.content ?? '', chunkSize);
+    let droppedChunks = 0;
+    for (const chunk of chunks) {
+      try {
+        const enqueueResult = queue.enqueue(chunk);
+        if (enqueueResult.droppedReason) {
+          droppedChunks += 1;
+        }
+      } catch (error) {
+        if (error instanceof QueueOverflowError) {
+          throw new JSONRPCErrorException(error.message, GatewayErrors.VOICE_STREAM_OVERFLOW);
+        }
+        throw error;
+      }
+    }
+
+    const baseFrame = {
+      correlationId,
+      streamId,
+      metadata: options.metadata,
+    } as const;
+
+    const invokeWithTimeout = async <T>(request: () => Promise<T>): Promise<T> => {
+      if (options.signal?.aborted) {
+        throw new Error('Voice stream aborted before dispatch');
+      }
+
+      return await Promise.race([
+        request(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Agent voice stream timed out')), timeoutMs),
+        ),
+      ]);
+    };
+
+    const sendCancel = async (sequence: number, reason: string): Promise<void> => {
+      const cancelPayload: DiscordVoiceStreamCancelParams = {
+        ...baseFrame,
+        sequence,
+        reason,
+      };
+      await invokeWithTimeout(() => client.request('discord.voice.cancel', cancelPayload))
+        .catch(() => undefined);
+    };
+
+    let sequence = 0;
+    const serializedMessage = this.serializeMessage({
+      ...message,
+      content: '',
+    });
+    const startParams: DiscordVoiceStreamStartParams = {
+      ...baseFrame,
+      sequence,
+      message: serializedMessage,
+    };
+
+    try {
+      await invokeWithTimeout(() => client.request('discord.voice.start', startParams));
+    } catch (error) {
+      if (this.isMethodNotFoundError(error)) {
+        return this.requestAgentViaLegacyPath(client, serializedMessage, timeoutMs);
+      }
+      throw error;
+    }
+
+    let cancelled = false;
+
+    try {
+      while (queue.size > 0) {
+        if (options.signal?.aborted) {
+          cancelled = true;
+          await sendCancel(sequence + 1, 'aborted');
+          throw new Error('Voice stream aborted');
+        }
+
+        const text = queue.dequeue();
+        if (text === undefined) break;
+
+        sequence += 1;
+        const chunkParams: DiscordVoiceStreamChunkParams = {
+          ...baseFrame,
+          sequence,
+          text,
+        };
+
+        const ack = await invokeWithTimeout(() =>
+          client.request('discord.voice.chunk', chunkParams) as Promise<{
+            accepted: boolean;
+            droppedChunks?: number;
+          }>,
+        );
+
+        if (!ack.accepted) {
+          droppedChunks += 1;
+        } else if (typeof ack.droppedChunks === 'number') {
+          droppedChunks = Math.max(droppedChunks, ack.droppedChunks);
+        }
+      }
+
+      sequence += 1;
+      const endParams: DiscordVoiceStreamEndParams = {
+        ...baseFrame,
+        sequence,
+        metadata: {
+          ...(options.metadata ?? {}),
+          droppedChunks,
+        },
+      };
+
+      const streamResult = await invokeWithTimeout(() =>
+        client.request('discord.voice.end', endParams) as Promise<DiscordVoiceStreamEndResult>,
+      );
+
+      return {
+        content: streamResult.content,
+        channelId: streamResult.channelId,
+        model: streamResult.model,
+        durationMs: streamResult.durationMs,
+      };
+    } catch (error) {
+      if (!cancelled) {
+        await sendCancel(sequence + 1, 'stream-error');
+      }
+      throw error;
+    }
+  }
+
+  private normalizePositiveInt(value: number | undefined, fallback: number): number {
+    if (!Number.isFinite(value) || value === undefined) {
+      return fallback;
+    }
+
+    const normalized = Math.floor(value);
+    return normalized > 0 ? normalized : fallback;
+  }
+
+  private chunkText(text: string, chunkSize: number): string[] {
+    const source = text ?? '';
+    if (!source) return [''];
+
+    const chunks: string[] = [];
+    for (let index = 0; index < source.length; index += chunkSize) {
+      chunks.push(source.slice(index, index + chunkSize));
+    }
+
+    return chunks;
+  }
+
+  private serializeMessage(message: SubstrateMessage): RpcSubstrateMessage {
+    return {
+      ...message,
+      timestamp: message.timestamp instanceof Date
+        ? message.timestamp.toISOString()
+        : message.timestamp,
+    };
+  }
+
+  private isMethodNotFoundError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const candidate = error as { code?: number; message?: string };
+    return candidate.code === -32601 || candidate.message === 'Method not found';
+  }
+
+  private async requestAgentViaLegacyPath(
+    client: JSONRPCServerAndClient,
+    message: RpcSubstrateMessage,
+    timeoutMs: number,
+  ): Promise<DiscordHandleMessageResult> {
+    const result = await Promise.race([
+      client.request('discord.handleMessage', { message }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Agent legacy voice request timed out')), timeoutMs),
+      ),
+    ]);
+
+    return result as DiscordHandleMessageResult;
   }
 
   async stop(): Promise<void> {

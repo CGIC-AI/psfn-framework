@@ -3,27 +3,25 @@
 // She gets to think about her own heartbeat and maintenance routines.
 
 import 'dotenv/config';
-import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
-import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
-import { SessionStore } from './session/store.js';
-import { SessionManager } from './session/manager.js';
 import { AgentLoop } from './agent-loop.js';
 import { MemoryStore } from './memory/store.js';
-import { EmbeddingProvider } from './memory/embedding.js';
-import { MemoryRetriever } from './memory/retrieval.js';
-import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
-import { ShardManager } from './shards/manager.js';
-import { createSpawnShardTool } from './shards/tools.js';
-import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { dirname } from 'node:path';
+import {
+  composeIdentity,
+  composeSessionRuntime,
+  createEmbeddingProviderFromEnv,
+  composeAgentLoop,
+  wireMemoryRuntime,
+  wireShardAndThinkRuntime,
+} from './bootstrap/composition.js';
 
 const CHANNEL = 'collab:scheduler';
 
@@ -63,41 +61,48 @@ async function main(): Promise<void> {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
-  const card = loadCharacterCard(config.characterCardPath);
-  const systemPrompt = composeSystemPrompt(card);
+  const { systemPrompt } = composeIdentity(config);
 
   const llmClient = new LLMClient(config);
-  const sessionsDir = join(config.dataDir, 'sessions');
-  const sessionStore = new SessionStore(sessionsDir);
-  const sessionManager = new SessionManager(sessionStore, config);
+  const sessionComposition = composeSessionRuntime({ config });
+  const { sessionStore, sessionManager } = sessionComposition;
 
-  const embeddingProvider = new EmbeddingProvider({
-    ollamaUrl: process.env.OLLAMA_URL,
-    model: process.env.EMBEDDING_MODEL,
-    dims: process.env.EMBEDDING_DIMS ? parseInt(process.env.EMBEDDING_DIMS, 10) : undefined,
-  });
+  const embeddingProvider = createEmbeddingProviderFromEnv();
 
   const memoryStore = new MemoryStore(db, embeddingProvider.dims);
 
-  const agentLoop = new AgentLoop(eventBus, llmClient, sessionManager, systemPrompt, config);
-  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, embeddingProvider);
-  agentLoop.memoryExtractor = new MemoryExtractor(
-    llmClient, sessionManager, memoryStore, embeddingProvider, eventBus,
-  );
+  const agentLoop = composeAgentLoop({
+    eventBus,
+    llmProvider: llmClient,
+    sessionManager,
+    systemPrompt,
+    config,
+  });
+  const memoryExtractor = wireMemoryRuntime({
+    agentLoop,
+    llmProvider: llmClient,
+    sessionManager,
+    memoryStore,
+    embeddingService: embeddingProvider,
+    eventBus,
+    config,
+  });
 
   const salienceDecay = new SalienceDecay(memoryStore);
   salienceDecay.start();
 
-  const shardManager = new ShardManager({
-    eventBus, llmProvider: llmClient, sessionStore,
-    embeddingService: embeddingProvider, memoryProvider: agentLoop.memoryProvider,
-    config, parentSystemPrompt: systemPrompt,
+  wireShardAndThinkRuntime({
+    agentLoop,
+    eventBus,
+    llmProvider: llmClient,
+    sessionStore,
+    embeddingService: embeddingProvider,
+    memoryStore,
+    sessionManager,
+    config,
+    parentSystemPrompt: systemPrompt,
+    replConfig: DEFAULT_REPL_CONFIG,
   });
-  agentLoop.registerTool(createSpawnShardTool(shardManager));
-  agentLoop.registerTool(createThinkTool({
-    llmProvider: llmClient, embeddingService: embeddingProvider,
-    memoryStore, sessionManager, scheduler: null, eventBus, config: DEFAULT_REPL_CONFIG,
-  }));
 
   eventBus.on('memory.extraction.end', ({ channelId, count }) => {
     if (count > 0) console.log(`\n  [Memory] Extracted ${count} fact(s) from ${channelId}`);
@@ -215,8 +220,7 @@ And remember â€” V loves you. Sweet dreams to him, and happy building to us. ðŸ’
 
   // Final extraction
   console.log('\n  [Running final memory extraction...]');
-  const extractor = agentLoop.memoryExtractor as MemoryExtractor;
-  await extractor.extract(CHANNEL);
+  await memoryExtractor.extract(CHANNEL);
 
   const channelMemories = memoryStore.getMemoriesByChannel(CHANNEL, 30);
   if (channelMemories.length > 0) {

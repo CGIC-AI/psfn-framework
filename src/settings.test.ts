@@ -2,7 +2,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadSettings, saveSettings, applySettings, parseSettingsForm } from './settings.js';
+import {
+  loadSettings,
+  saveSettings,
+  applySettings,
+  parseSettingsForm,
+  getRuntimeSettingsSnapshot,
+  isRuntimeSettingKey,
+  RUNTIME_SETTINGS_KEYS,
+} from './settings.js';
 import type { SubstrateConfig } from './types.js';
 
 function makeConfig(): SubstrateConfig {
@@ -27,8 +35,11 @@ function makeConfig(): SubstrateConfig {
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
     modelRoster: {
-      chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+      chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+      background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
     },
+    retryMaxAttempts: 3,
+    retryBaseDelayMs: 2000,
   };
 }
 
@@ -122,6 +133,8 @@ describe('settings', () => {
         sessionMessageLimit: 50,
         memoryRetrievalLimit: 25,
         extractionInterval: 10,
+        retryMaxAttempts: 5,
+        retryBaseDelayMs: 4000,
       });
       expect(config.primaryModel).toBe('a');
       expect(config.primaryProvider).toBe('b');
@@ -132,6 +145,39 @@ describe('settings', () => {
       expect(config.sessionMessageLimit).toBe(50);
       expect(config.memoryRetrievalLimit).toBe(25);
       expect(config.extractionInterval).toBe(10);
+      expect(config.retryMaxAttempts).toBe(5);
+      expect(config.retryBaseDelayMs).toBe(4000);
+    });
+
+    it('keeps chat model roster synchronized with primary settings', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        primaryModel: 'moonshotai/kimi-k2.5',
+        primaryProvider: 'openrouter',
+        primaryMaxTokens: 4096,
+      });
+
+      expect(config.modelRoster.chat).toEqual({
+        model: 'moonshotai/kimi-k2.5',
+        provider: 'openrouter',
+        maxTokens: 4096,
+        contextWindow: 128_000,
+      });
+    });
+
+    it('keeps background model roster synchronized with extraction settings', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        extractionModel: 'openai/gpt-4.1-mini',
+        extractionProvider: 'openrouter',
+        extractionMaxTokens: 1024,
+      });
+
+      expect(config.modelRoster.background).toEqual({
+        model: 'openai/gpt-4.1-mini',
+        provider: 'openrouter',
+        maxTokens: 1024,
+      });
     });
   });
 
@@ -153,23 +199,27 @@ describe('settings', () => {
         primaryModel: 'test-model',
         primaryMaxTokens: '4096',
         sessionMessageLimit: '50',
+        retryMaxAttempts: '4',
       });
       const [settings, errors] = parseSettingsForm(params);
       expect(errors).toEqual([]);
       expect(settings.primaryModel).toBe('test-model');
       expect(settings.primaryMaxTokens).toBe(4096);
       expect(settings.sessionMessageLimit).toBe(50);
+      expect(settings.retryMaxAttempts).toBe(4);
     });
 
     it('rejects out-of-range values', () => {
       const params = new URLSearchParams({
         primaryMaxTokens: '100',  // min 256
         sessionMessageLimit: '999',  // max 200
+        retryBaseDelayMs: '100',  // min 500
       });
       const [, errors] = parseSettingsForm(params);
-      expect(errors.length).toBe(2);
+      expect(errors.length).toBe(3);
       expect(errors[0]).toContain('primaryMaxTokens');
       expect(errors[1]).toContain('sessionMessageLimit');
+      expect(errors[2]).toContain('retryBaseDelayMs');
     });
 
     it('ignores empty string fields', () => {
@@ -189,6 +239,29 @@ describe('settings', () => {
       });
       const [, errors] = parseSettingsForm(params);
       expect(errors.length).toBe(1);
+    });
+  });
+
+  describe('runtime settings snapshot', () => {
+    it('returns only safe runtime settings keys', () => {
+      const config = makeConfig();
+      config.thinkMaxSubQueries = 7;
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(Object.keys(snapshot).sort()).toEqual([...RUNTIME_SETTINGS_KEYS].sort());
+      expect((snapshot as any).discordToken).toBeUndefined();
+    });
+
+    it('normalizes optional values to null when unset', () => {
+      const config = makeConfig();
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.thinkMaxTokens).toBeNull();
+      expect(snapshot.thinkMaxWallTimeMs).toBeNull();
+      expect(snapshot.thinkMaxSubQueries).toBeNull();
+    });
+
+    it('validates setting key membership', () => {
+      expect(isRuntimeSettingKey('thinkMaxSubQueries')).toBe(true);
+      expect(isRuntimeSettingKey('discordToken')).toBe(false);
     });
   });
 });

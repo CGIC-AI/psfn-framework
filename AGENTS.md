@@ -12,6 +12,14 @@ bd close <id>         # Complete work
 bd sync               # Sync with git
 ```
 
+## Code Structure Requirements
+
+- Do **not** create or expand god files.
+- Prefer small, focused modules with clear responsibility boundaries.
+- Prefer reusable helper functions/primitives over duplicated inline logic.
+- If a file is trending large, split by capability/domain before adding more code.
+- New work should extend existing primitives first, then add new abstractions only when needed.
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
@@ -37,4 +45,3 @@ bd sync               # Sync with git
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
-

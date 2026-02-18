@@ -22,9 +22,65 @@ export interface EditableSettings {
   thinkMaxTokens?: number;
   thinkMaxWallTimeMs?: number;
   thinkMaxSubQueries?: number;
+  retryMaxAttempts?: number;
+  retryBaseDelayMs?: number;
 }
 
 const SETTINGS_FILE = 'settings.json';
+
+export const RUNTIME_SETTINGS_KEYS = [
+  'primaryModel',
+  'primaryProvider',
+  'primaryMaxTokens',
+  'extractionModel',
+  'extractionProvider',
+  'extractionMaxTokens',
+  'sessionMessageLimit',
+  'memoryRetrievalLimit',
+  'extractionInterval',
+  'maintenanceIntervalMs',
+  'defaultContextWindow',
+  'memoryBudgetPct',
+  'extractionThresholdPct',
+  'compactionThresholdPct',
+  'thinkMaxTokens',
+  'thinkMaxWallTimeMs',
+  'thinkMaxSubQueries',
+  'retryMaxAttempts',
+  'retryBaseDelayMs',
+] as const;
+
+export type RuntimeSettingKey = typeof RUNTIME_SETTINGS_KEYS[number];
+export type RuntimeSettingValue = string | number | boolean | null;
+export type RuntimeSettingsSnapshot = Record<RuntimeSettingKey, RuntimeSettingValue>;
+
+export function isRuntimeSettingKey(value: string): value is RuntimeSettingKey {
+  return (RUNTIME_SETTINGS_KEYS as readonly string[]).includes(value);
+}
+
+export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSettingsSnapshot {
+  return {
+    primaryModel: config.primaryModel,
+    primaryProvider: config.primaryProvider,
+    primaryMaxTokens: config.primaryMaxTokens,
+    extractionModel: config.extractionModel,
+    extractionProvider: config.extractionProvider,
+    extractionMaxTokens: config.extractionMaxTokens,
+    sessionMessageLimit: config.sessionMessageLimit,
+    memoryRetrievalLimit: config.memoryRetrievalLimit,
+    extractionInterval: config.extractionInterval,
+    maintenanceIntervalMs: config.maintenanceIntervalMs,
+    defaultContextWindow: config.defaultContextWindow,
+    memoryBudgetPct: config.memoryBudgetPct,
+    extractionThresholdPct: config.extractionThresholdPct,
+    compactionThresholdPct: config.compactionThresholdPct,
+    thinkMaxTokens: config.thinkMaxTokens ?? null,
+    thinkMaxWallTimeMs: config.thinkMaxWallTimeMs ?? null,
+    thinkMaxSubQueries: config.thinkMaxSubQueries ?? null,
+    retryMaxAttempts: config.retryMaxAttempts ?? null,
+    retryBaseDelayMs: config.retryBaseDelayMs ?? null,
+  };
+}
 
 /** Load saved settings from data/settings.json. Returns {} if file missing. */
 export function loadSettings(dataDir: string): EditableSettings {
@@ -69,6 +125,36 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (settings.thinkMaxTokens !== undefined) config.thinkMaxTokens = settings.thinkMaxTokens;
   if (settings.thinkMaxWallTimeMs !== undefined) config.thinkMaxWallTimeMs = settings.thinkMaxWallTimeMs;
   if (settings.thinkMaxSubQueries !== undefined) config.thinkMaxSubQueries = settings.thinkMaxSubQueries;
+  if (settings.retryMaxAttempts !== undefined) config.retryMaxAttempts = settings.retryMaxAttempts;
+  if (settings.retryBaseDelayMs !== undefined) config.retryBaseDelayMs = settings.retryBaseDelayMs;
+
+  const syncChatSlot = (
+    settings.primaryModel !== undefined ||
+    settings.primaryProvider !== undefined ||
+    settings.primaryMaxTokens !== undefined
+  );
+  if (syncChatSlot) {
+    const contextWindow = config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow;
+    config.modelRoster.chat = {
+      model: config.primaryModel,
+      provider: config.primaryProvider,
+      maxTokens: config.primaryMaxTokens,
+      contextWindow,
+    };
+  }
+
+  const syncBackgroundSlot = (
+    settings.extractionModel !== undefined ||
+    settings.extractionProvider !== undefined ||
+    settings.extractionMaxTokens !== undefined
+  );
+  if (syncBackgroundSlot) {
+    config.modelRoster.background = {
+      model: config.extractionModel,
+      provider: config.extractionProvider,
+      maxTokens: config.extractionMaxTokens,
+    };
+  }
 }
 
 /** Validation ranges for settings values. */
@@ -81,6 +167,8 @@ export const SETTINGS_VALIDATION = {
   thinkMaxTokens: { min: 1000, max: 1000000 },
   thinkMaxWallTimeMs: { min: 5000, max: 600000 },
   thinkMaxSubQueries: { min: 1, max: 100 },
+  retryMaxAttempts: { min: 0, max: 10 },
+  retryBaseDelayMs: { min: 500, max: 30000 },
 } as const;
 
 /** Validate and parse form data into EditableSettings. Returns [settings, errors]. */

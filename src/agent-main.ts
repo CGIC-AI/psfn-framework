@@ -4,26 +4,16 @@
 
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
-import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
-import { SessionStore } from './session/store.js';
-import { SessionManager } from './session/manager.js';
-import { UserContinuityStore } from './session/continuity.js';
-import { AgentLoop } from './agent-loop.js';
 import { MemoryStore } from './memory/store.js';
-import { MemoryRetriever } from './memory/retrieval.js';
-import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
-import { MEMORY_CONFIG } from './memory/types.js';
 import { GatewayClient } from './gateway/client.js';
-import { ShardManager } from './shards/manager.js';
-import { createSpawnShardTool } from './shards/tools.js';
-import { createThinkTool } from './repl/tools.js';
+import { DEFAULT_GATEWAY_SOCKET_PATH } from './security/policy-constants.js';
 import { ApiServer } from './channels/api/server.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
@@ -36,14 +26,36 @@ import { GatewayGitOps } from './git/gateway-ops.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
+import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
+import {
+  composeIdentity,
+  composeSessionRuntime,
+  composeAgentLoop,
+  wireMemoryRuntime,
+  wireShardAndThinkRuntime,
+} from './bootstrap/composition.js';
 import {
   wirePromptRuntime,
+  wireStaticPromptRegistry,
+  wireSettingsRuntime,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
 
 const log = createComponentLogger('Agent');
-const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
+const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
+const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
+const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
+
+function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isExplicitTrue(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === 'true';
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -51,6 +63,7 @@ async function main(): Promise<void> {
   applySettings(config, savedSettings);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const eventBus = new EventBus();
+  const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
 
   log.info('Initializing...');
 
@@ -73,33 +86,35 @@ async function main(): Promise<void> {
 
   // ── Load identity (mounted read-only in container) ──
 
-  const card = loadCharacterCard(config.characterCardPath);
-  const systemPrompt = composeSystemPrompt(card);
+  const { card, systemPrompt } = composeIdentity(config);
   log.info(`Loaded character: ${card.data.name}`);
+  const promptRegistry = wireStaticPromptRegistry(config.dataDir);
 
   // ── Initialize local components ──
 
-  const sessionStore = new SessionStore(join(config.dataDir, 'sessions'));
-  const sessionManager = new SessionManager(sessionStore, config);
-
-  // User continuity store — cross-channel context carryover
-  const continuityStore = new UserContinuityStore(join(config.dataDir, 'sessions'));
-  sessionManager.continuityStore = continuityStore;
+  const sessionComposition = composeSessionRuntime({
+    config,
+    eventBus,
+    enableContinuity: true,
+    promptRegistry,
+  });
+  const { sessionStore, sessionManager } = sessionComposition;
 
   const memoryStore = new MemoryStore(db, gateway.dims);
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
-  const agentLoop = new AgentLoop(
+  const agentLoop = composeAgentLoop({
     eventBus,
-    gateway,  // GatewayClient implements LLMProvider
+    llmProvider: gateway,
     sessionManager,
     systemPrompt,
     config,
-  );
+  });
 
   // Prompt stack — layered, editable system prompt
   const promptStore = wirePromptRuntime(agentLoop, config.dataDir, systemPrompt);
+  wireSettingsRuntime(agentLoop, config);
 
   // Contact store + tools — trust-gated privacy system
   const contactStore = wireContactRuntime(
@@ -109,15 +124,16 @@ async function main(): Promise<void> {
   );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
-  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, gateway, config);
-  agentLoop.memoryExtractor = new MemoryExtractor(
-    gateway,  // GatewayClient implements LLMProvider
+  const memoryExtractor = wireMemoryRuntime({
+    agentLoop,
+    llmProvider: gateway,
     sessionManager,
     memoryStore,
-    gateway,  // GatewayClient implements EmbeddingService
+    embeddingService: gateway,
     eventBus,
     config,
-  );
+    promptRegistry,
+  });
 
   const salienceDecay = new SalienceDecay(memoryStore);
 
@@ -127,7 +143,7 @@ async function main(): Promise<void> {
     id: 'salience-decay',
     name: 'Memory Salience Decay',
     type: 'every',
-    intervalMs: MEMORY_CONFIG.maintenanceIntervalMs,
+    intervalMs: config.maintenanceIntervalMs,
     handler: () => salienceDecay.run(),
     state: 'idle',
   });
@@ -138,29 +154,20 @@ async function main(): Promise<void> {
   scheduler.start();
   log.info(`Memory system enabled (${gateway.dims}d embeddings via gateway)`);
 
-  // Shard manager — allows PSFN to spawn parallel sub-agents
-  const shardManager = new ShardManager({
+  const replConfig = buildReplConfig(config);
+  const shardManager = wireShardAndThinkRuntime({
+    agentLoop,
     eventBus,
     llmProvider: gateway,
     sessionStore,
     embeddingService: gateway,
-    memoryProvider: agentLoop.memoryProvider,
-    config,
-    parentSystemPrompt: systemPrompt,
-  });
-  agentLoop.registerTool(createSpawnShardTool(shardManager));
-
-  // Think tool — RLM+REPL sandbox for deep reasoning
-  const replConfig = buildReplConfig(config);
-  agentLoop.registerTool(createThinkTool({
-    llmProvider: gateway,
-    embeddingService: gateway,
     memoryStore,
     sessionManager,
+    config,
+    parentSystemPrompt: systemPrompt,
     scheduler,
-    eventBus,
-    config: replConfig,
-  }));
+    replConfig,
+  });
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
@@ -184,6 +191,10 @@ async function main(): Promise<void> {
       sessionManager,
       apiKey: process.env.API_KEY || undefined,
       modelName: process.env.API_MODEL_NAME,
+      requestTimeoutMs: parsePositiveIntEnv(
+        process.env.API_REQUEST_TIMEOUT_MS,
+        DEFAULT_API_REQUEST_TIMEOUT_MS,
+      ),
     });
     await apiServer.init();
     await apiServer.start();
@@ -201,10 +212,13 @@ async function main(): Promise<void> {
   let adminServer: AdminServer | undefined;
   const adminPort = process.env.ADMIN_PORT ? parseInt(process.env.ADMIN_PORT, 10) : undefined;
   if (adminPort) {
+    const adminToken = process.env.ADMIN_TOKEN || undefined;
+    const allowInsecureWithoutToken = isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE);
     adminServer = new AdminServer({
       port: adminPort,
       host: process.env.ADMIN_HOST || undefined,
-      token: process.env.ADMIN_TOKEN || undefined,
+      token: adminToken,
+      allowInsecureWithoutToken,
       memoryStore,
       sessionStore,
       sessionManager,
@@ -217,6 +231,7 @@ async function main(): Promise<void> {
       modelDiscovery,
       contactStore,
       promptStore,
+      promptRegistry,
     });
     await adminServer.init();
     await adminServer.start();
@@ -237,13 +252,26 @@ async function main(): Promise<void> {
     startTime,
   });
 
+  let shuttingDown = false;
   const stopFn = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     await eventBus.emit('system.shutdown', {});
+    stopDebugObserver();
     scheduler.stop();
+    const timeoutMs = parsePositiveIntEnv(
+      process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
+      DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+    );
+    const drained = await memoryExtractor.stop({ timeoutMs });
+    if (!drained) {
+      log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+    }
     if (apiServer) await apiServer.stop();
     if (adminServer) await adminServer.stop();
     gateway.destroy();
     db.close();
+    log.info('Stopped');
   };
 
   agentLoop.registerTool(createRestartTool(lifecycleNotifier, stopFn));
@@ -308,13 +336,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string) => {
     log.info(`Received ${signal}, shutting down...`);
-    await eventBus.emit('system.shutdown', {});
-    scheduler.stop();
-    if (apiServer) await apiServer.stop();
-    if (adminServer) await adminServer.stop();
-    gateway.destroy();
-    db.close();
-    log.info('Stopped');
+    await stopFn();
     process.exit(0);
   };
 

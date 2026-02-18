@@ -12,6 +12,8 @@
     "gateway:start": "node dist/gateway-main.js",
     "agent": "tsx src/agent-main.ts",
     "agent:start": "node dist/agent-main.js",
+    "split": "./scripts/start-gateway-agent.sh",
+    "split:debug": "./scripts/start-gateway-agent.sh --debug",
     "agent:docker": "docker compose -f docker/docker-compose.yml up --build",
     "proxy:up": "docker compose -f proxy/docker-compose.yml up -d",
     "proxy:down": "docker compose -f proxy/docker-compose.yml down",
@@ -20,6 +22,7 @@
     "test:watch": "vitest",
     "chat": "tsx src/chat-cli.ts",
     "e2e": "tsx src/e2e-test.ts",
+    "e2e:voice": "tsx src/e2e-voice-roundtrip.ts",
     "walkthrough": "tsx src/e2e-walkthrough.ts",
     "lint": "eslint src/"
   },
@@ -27,6 +30,7 @@
     "@discordjs/voice": "^0.19.0",
     "@mariozechner/pi-agent-core": "^0.52.12",
     "@mariozechner/pi-ai": "^0.52.12",
+    "@snazzah/davey": "^0.1.9",
     "better-sqlite3": "^11.7.0",
     "discord.js": "^14.16.0",
     "dotenv": "^16.4.0",
@@ -34,12 +38,14 @@
     "prism-media": "^1.3.5",
     "sqlite-vec": "^0.1.6",
     "uuid": "^11.0.0",
-    "winston": "^3.19.0"
+    "winston": "^3.19.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.0.0",
     "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

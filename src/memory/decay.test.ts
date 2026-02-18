@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryStore } from './store.js';
 import { SalienceDecay } from './decay.js';
-import { DECAY_HALFLIFE, MEMORY_CONFIG } from './types.js';
-import type { PurrMemory, MemoryType } from './types.js';
+import { MEMORY_CONFIG } from './types.js';
+import type { PurrMemory } from './types.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
@@ -43,6 +43,13 @@ describe('SalienceDecay', () => {
     sqliteVec.load(db);
     store = new MemoryStore(db);
     decay = new SalienceDecay(store);
+  });
+
+  afterEach(() => {
+    decay.stop();
+    db.close();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('decays old memories', () => {
@@ -105,6 +112,54 @@ describe('SalienceDecay', () => {
     expect(pr.salience).toBeGreaterThan(ep.salience);
   });
 
+  it('preserves durable core profile memories better than transient memories', () => {
+    const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
+
+    const durable = makeMemory({
+      id: 'durable-rel',
+      type: 'relational',
+      salience: 1.0,
+      lastAccessed: oneYearAgo,
+      tags: ['core_profile'],
+    });
+    const transient = makeMemory({
+      id: 'transient-rel',
+      type: 'relational',
+      salience: 1.0,
+      lastAccessed: oneYearAgo,
+      tags: [],
+    });
+
+    store.insertMemory(durable, makeEmbedding());
+    store.insertMemory(transient, makeEmbedding());
+
+    decay.run();
+
+    const all = store.getAllActiveMemories();
+    const durableUpdated = all.find(m => m.id === 'durable-rel')!;
+    const transientUpdated = all.find(m => m.id === 'transient-rel')!;
+
+    expect(transientUpdated.salience).toBe(MEMORY_CONFIG.salienceFloor);
+    expect(durableUpdated.salience).toBeGreaterThan(transientUpdated.salience);
+    expect(durableUpdated.salience).toBeGreaterThan(MEMORY_CONFIG.durableSalienceFloor);
+  });
+
+  it('never decays durable memories below durable floor', () => {
+    const veryOld = Date.now() - 20 * 365 * 24 * 60 * 60 * 1000;
+    const mem = makeMemory({
+      type: 'relational',
+      salience: 1.0,
+      lastAccessed: veryOld,
+      tags: ['core_relationship'],
+    });
+    store.insertMemory(mem, makeEmbedding());
+
+    decay.run();
+
+    const updated = store.getAllActiveMemories();
+    expect(updated[0].salience).toBe(MEMORY_CONFIG.durableSalienceFloor);
+  });
+
   it('does not update recently accessed memories', () => {
     const mem = makeMemory({
       salience: 0.8,
@@ -117,5 +172,23 @@ describe('SalienceDecay', () => {
     const updated = store.getAllActiveMemories();
     // No meaningful change, salience should remain 0.8
     expect(updated[0].salience).toBe(0.8);
+  });
+
+  it('uses provided maintenance interval when starting timer', () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+
+    decay.start(12_345);
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 12_345);
+  });
+
+  it('uses default maintenance interval when no override is provided', () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+
+    decay.start();
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MEMORY_CONFIG.maintenanceIntervalMs);
   });
 });

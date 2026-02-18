@@ -8,22 +8,23 @@
 // can import them unchanged via the agent-loop.ts re-export shim.
 
 import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentTool, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
-import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
+import { Type } from '@sinclair/typebox';
+import type { AssistantMessage, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type {
   AgentResponse,
   ContextMessage,
-  LLMContext,
-  LLMResponse,
-  StreamCallbacks,
   SubstrateConfig,
   SubstrateMessage,
+  TurnUsage,
 } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
+import type { Contact } from '../contacts/types.js';
+import type { LLMProvider, MemoryProvider, MemoryExtractor } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
-import type { ChannelMeta } from '../trust/policy.js';
+import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import { convertToLlm } from './messages.js';
@@ -32,32 +33,20 @@ import { createComponentLogger } from '../logger.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
-// ── Provider interfaces ──
-// Both direct clients (LLMClient, EmbeddingProvider) and GatewayClient implement these.
+export type {
+  LLMProvider,
+  EmbeddingService,
+  MemoryProvider,
+  MemoryExtractor,
+} from './contracts.js';
 
-export interface LLMProvider {
-  stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
-  complete(context: LLMContext, purpose: 'extraction' | 'summary'): Promise<LLMResponse>;
+interface ResolvedAuthorContext {
+  trustLevel: TrustLevel;
+  canonicalContactKey?: string;
+  continuityFallbackKeys: string[];
 }
 
-export interface EmbeddingService {
-  embed(text: string): Promise<Float32Array>;
-  embedBatch(texts: string[]): Promise<Float32Array[]>;
-  readonly dims: number;
-}
-
-export interface MemoryProvider {
-  retrieve(
-    contextText: string,
-    channelId: string,
-    trustLevel?: TrustLevel,
-    channelMeta?: ChannelMeta,
-  ): Promise<string>;
-}
-
-export interface MemoryExtractor {
-  maybeExtract(channelId: string): Promise<void>;
-}
+type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
 
 // ── SubstrateAgent ──
 
@@ -68,8 +57,11 @@ export class SubstrateAgent {
   private sessionManager: SessionManager;
   private systemPrompt: string;
   private config: SubstrateConfig;
-  private tools: AgentTool<any>[] = [];
+  private coreTools: AgentTool<any>[] = [];
+  private extendedTools: AgentTool<any>[] = [];
+  private loadedExtended = new Set<string>();
   private modelResolved = false;
+  private modelSignature: string | null = null;
   private bridge: EventBridge;
 
   // Pluggable memory — null until memory system is wired
@@ -101,14 +93,18 @@ export class SubstrateAgent {
       convertToLlm,
     });
 
+    this.installRuntimeHooks();
+
     // Persistent event bridge: pi-agent-core events → EventBus
     this.bridge = createEventBridge(this.agent, eventBus);
+
+    // Register the load_tools meta-tool as a core tool
+    this.coreTools.push(this.createLoadToolsTool());
 
     // Eagerly try to resolve the model, but don't throw if it fails
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
     try {
-      this.agent.setModel(resolveModel(config));
-      this.modelResolved = true;
+      this.refreshModelFromConfig('startup');
     } catch {
       // Model will be resolved lazily on first handleMessage
     }
@@ -116,15 +112,107 @@ export class SubstrateAgent {
 
   /** Ensure the model is resolved before calling agent.prompt() */
   private ensureModel(): void {
-    if (!this.modelResolved) {
-      this.agent.setModel(resolveModel(this.config));
+    this.refreshModelFromConfig('turn-start');
+  }
+
+  /**
+   * Re-resolve the chat model from current config.
+   * Safe for runtime updates: if a new model cannot be resolved, keep the last working model.
+   */
+  refreshRuntimeModels(): void {
+    this.refreshModelFromConfig('settings-update');
+  }
+
+  private installRuntimeHooks(): void {
+    const existingHooks = this.config.runtimeHooks ?? {};
+    this.config.runtimeHooks = {
+      ...existingHooks,
+      refreshModels: () => {
+        this.refreshRuntimeModels();
+      },
+    };
+  }
+
+  private getChatModelSignature(): string {
+    const chatSlot = this.config.modelRoster.chat;
+    const model = chatSlot?.model ?? this.config.primaryModel;
+    const provider = chatSlot?.provider ?? this.config.primaryProvider;
+    const maxTokens = chatSlot?.maxTokens ?? this.config.primaryMaxTokens;
+    const contextWindow = chatSlot?.contextWindow ?? this.config.defaultContextWindow;
+    return `${provider}::${model}::${maxTokens}::${contextWindow}`;
+  }
+
+  private refreshModelFromConfig(reason: 'startup' | 'turn-start' | 'settings-update'): void {
+    const nextSignature = this.getChatModelSignature();
+    if (this.modelResolved && this.modelSignature === nextSignature && this.agent.state.model) {
+      return;
+    }
+
+    try {
+      const resolved = resolveModel(this.config);
+      this.agent.setModel(resolved);
       this.modelResolved = true;
+      this.modelSignature = nextSignature;
+      log.info('Resolved runtime chat model', {
+        reason,
+        model: resolved.id,
+      });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      if (this.agent.state.model) {
+        this.modelResolved = true;
+        log.warn('Model refresh failed; keeping previous chat model', {
+          reason,
+          error: err.message,
+          currentModel: this.agent.state.model.id,
+        });
+        return;
+      }
+
+      this.modelResolved = false;
+      this.modelSignature = null;
+      throw err;
     }
   }
 
-  registerTool(tool: AgentTool<any>): void {
-    this.tools.push(tool);
-    this.agent.setTools(this.tools);
+  registerTool(tool: AgentTool<any>, category: 'core' | 'extended' = 'core'): void {
+    if (category === 'core') {
+      this.coreTools.push(tool);
+    } else {
+      this.extendedTools.push(tool);
+    }
+  }
+
+  private createLoadToolsTool(): AgentTool<any> {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      name: 'load_tools',
+      label: 'load_tools',
+      description: 'Load extended tool schemas by name. Call with tool names from the tool directory in your runtime context.',
+      parameters: Type.Object({
+        tools: Type.Array(Type.String(), { description: 'Names of extended tools to load' }),
+      }),
+      execute: async (
+        _toolCallId: string,
+        params: { tools: string[] },
+      ): Promise<AgentToolResult<any>> => {
+        const matched = self.extendedTools.filter(t => params.tools.includes(t.name));
+        for (const t of matched) self.loadedExtended.add(t.name);
+        const active = [
+          ...self.coreTools,
+          ...self.extendedTools.filter(t => self.loadedExtended.has(t.name)),
+        ];
+        self.agent.setTools(active);
+        const text = matched.length
+          ? `Loaded ${matched.length} tools: ${matched.map(t => t.name).join(', ')}`
+          : `No matching tools found. Available: ${self.extendedTools.map(t => t.name).join(', ')}`;
+        return {
+          content: [{ type: 'text' as const, text }],
+          details: {},
+        };
+      },
+    };
   }
 
   // ── Steering + follow-up + lifecycle ──
@@ -141,14 +229,8 @@ export class SubstrateAgent {
    */
   steer(message: SubstrateMessage): void {
     if (!this.agent.state.isStreaming) return;
-    // Record the steered message in session
-    this.sessionManager.recordUserMessage(
-      message.channelId,
-      message.content,
-      message.authorId,
-      message.authorName,
-      message.isDirectMessage,
-    );
+    const authorContext = this.resolveAuthorContext(message);
+    this.recordUserMessage(message, authorContext.canonicalContactKey);
     this.agent.steer({
       role: 'user',
       content: message.content,
@@ -162,13 +244,8 @@ export class SubstrateAgent {
    * Non-interrupting — waits for idle before delivery.
    */
   followUp(message: SubstrateMessage): void {
-    this.sessionManager.recordUserMessage(
-      message.channelId,
-      message.content,
-      message.authorId,
-      message.authorName,
-      message.isDirectMessage,
-    );
+    const authorContext = this.resolveAuthorContext(message);
+    this.recordUserMessage(message, authorContext.canonicalContactKey);
     this.agent.followUp({
       role: 'user',
       content: message.content,
@@ -192,20 +269,22 @@ export class SubstrateAgent {
 
     await this.eventBus.emit('agent.turn.start', { message });
 
+    const trustStageStart = Date.now();
+    const authorContext = this.resolveAuthorContext(message);
+    this.emitTurnStage(message, startTime, 'trust', {
+      durationMs: Date.now() - trustStageStart,
+      trustLevel: authorContext.trustLevel,
+      canonicalContactKey: authorContext.canonicalContactKey ?? null,
+    });
+
     // Record user message in session (JSONL append = L0 archival)
-    this.sessionManager.recordUserMessage(
-      message.channelId,
-      message.content,
-      message.authorId,
-      message.authorName,
-      message.isDirectMessage,
-    );
+    this.recordUserMessage(message, authorContext.canonicalContactKey);
 
     try {
-      // Resolve trust level for the message author
-      const trustLevel = this.resolveTrustLevel(message.authorId);
+      const trustLevel = authorContext.trustLevel;
 
       // Retrieve relevant memories (empty string if no memory provider)
+      const memoryStageStart = Date.now();
       const memoriesBlock = this.memoryProvider
         ? await this.memoryProvider.retrieve(
           message.content,
@@ -214,11 +293,17 @@ export class SubstrateAgent {
           { isDirectMessage: message.isDirectMessage },
         )
         : '';
+      this.emitTurnStage(message, startTime, 'memory', {
+        durationMs: Date.now() - memoryStageStart,
+        hasMemoryProvider: this.memoryProvider != null,
+        memoryChars: memoriesBlock.length,
+      });
 
       // Compose system prompt: layered stack if available, else static
       const channelType = this.resolveChannelType(message);
+      const taskKind = this.resolveTaskKind(message);
       const basePrompt = this.promptComposer
-        ? this.promptComposer.compose({ channelType }).text
+        ? this.promptComposer.compose({ channelType, taskKind }).text
         : this.systemPrompt;
 
       // Persona adaptation based on trust level (appended post-compose)
@@ -227,20 +312,37 @@ export class SubstrateAgent {
         ? basePrompt + '\n\n' + personaHint
         : basePrompt;
 
+      // Runtime context — date/time, channel, user, model info
+      const runtimeContext = this.buildRuntimeContext(
+        message,
+        trustLevel,
+        channelType,
+        authorContext.canonicalContactKey,
+      );
+      const fullPrompt = adaptedPrompt + '\n\n' + runtimeContext;
+
       // Build context (with auto-compaction + cross-channel continuity)
+      const contextStageStart = Date.now();
       const context = await this.sessionManager.buildContext(
         message.channelId,
-        adaptedPrompt,
+        fullPrompt,
         memoriesBlock,
         this.llmClient,
-        message.authorId,
+        authorContext.canonicalContactKey ?? message.authorId,
         { isDirectMessage: message.isDirectMessage },
+        authorContext.continuityFallbackKeys,
       );
+      this.emitTurnStage(message, startTime, 'context', {
+        durationMs: Date.now() - contextStageStart,
+        contextMessages: context.messages.length,
+        systemPromptChars: context.systemPrompt.length,
+      });
 
       // Configure pi-agent-core Agent for this turn
       this.ensureModel();
       this.agent.setSystemPrompt(context.systemPrompt);
-      this.agent.setTools(this.tools);
+      this.loadedExtended.clear();
+      this.agent.setTools(this.coreTools);
 
       // Convert ContextMessage[] to AgentMessage[] for the Agent.
       // Exclude the last message (the user message we just recorded) —
@@ -248,6 +350,21 @@ export class SubstrateAgent {
       const agentMessages = this.contextToAgentMessages(context.messages);
       const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
       this.agent.replaceMessages(historyMessages);
+      const turnStartMessageIndex = this.agent.state.messages.length;
+
+      const promptStageStart = Date.now();
+      let firstTokenAt: number | null = null;
+      const streamTelemetryBus = this.eventBus as unknown as {
+        on: (event: string, handler: (data: { channelId: string; text: string }) => void) => () => void;
+      };
+      const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
+        if (channelId !== message.channelId || firstTokenAt != null) return;
+        firstTokenAt = Date.now();
+        this.emitTurnStage(message, startTime, 'first-token', {
+          ttftMs: firstTokenAt - startTime,
+          source: 'stream',
+        });
+      });
 
       // Activate event bridge for this channel (streams deltas + tool events to EventBus)
       this.bridge.setChannel(message.channelId);
@@ -259,30 +376,49 @@ export class SubstrateAgent {
           timestamp: Date.now(),
         } satisfies UserMessage);
       } finally {
+        unsubscribeFirstToken();
         this.bridge.clearChannel();
       }
+      if (firstTokenAt == null) {
+        firstTokenAt = Date.now();
+        this.emitTurnStage(message, startTime, 'first-token', {
+          ttftMs: firstTokenAt - startTime,
+          source: 'fallback',
+        });
+      }
+      this.emitTurnStage(message, startTime, 'prompt', {
+        durationMs: Date.now() - promptStageStart,
+        ttftMs: firstTokenAt - startTime,
+      });
+
+      const turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
+      const turnUsage = this.accumulateTurnUsage(turnMessages);
 
       // Extract response from agent state (last assistant message)
       const responseText = this.extractResponseText();
 
       // Record assistant message (JSONL append = L0 archival)
-      this.sessionManager.recordAssistantMessage(
-        message.channelId, responseText,
-        message.authorId, message.isDirectMessage,
-      );
+      this.recordAssistantMessage(message, responseText, authorContext.canonicalContactKey);
 
       const agentResponse: AgentResponse = {
         content: responseText,
         channelId: message.channelId,
         metadata: {
           model: this.agent.state.model?.id ?? 'unknown',
-          inputTokens: 0,  // pi-agent-core doesn't surface token counts directly
-          outputTokens: 0,
+          inputTokens: turnUsage.inputTokens,
+          outputTokens: turnUsage.outputTokens,
           durationMs: Date.now() - startTime,
         },
       };
 
       await this.eventBus.emit('agent.turn.end', { message, response: agentResponse });
+      await this.eventBus.emit('agent.turn.usage', { message, usage: turnUsage });
+      this.emitTurnStage(message, startTime, 'end', {
+        durationMs: Date.now() - startTime,
+        ttftMs: firstTokenAt - startTime,
+        inputTokens: turnUsage.inputTokens,
+        outputTokens: turnUsage.outputTokens,
+      });
 
       // Trigger memory extraction (fire-and-forget)
       this.memoryExtractor?.maybeExtract(message.channelId).catch(err => {
@@ -298,6 +434,81 @@ export class SubstrateAgent {
   }
 
   // ── Private helpers ──
+
+  private emitTurnStage(
+    message: SubstrateMessage,
+    turnStartMs: number,
+    stage: TurnStageName,
+    payload: Record<string, unknown>,
+  ): void {
+    const telemetry = {
+      turnId: message.id,
+      channelId: message.channelId,
+      stage,
+      elapsedMs: Math.max(0, Date.now() - turnStartMs),
+      ...payload,
+    };
+    log.debug('Turn stage telemetry', telemetry);
+    this.emitTelemetry('agent.turn.stage', telemetry);
+  }
+
+  private emitTelemetry(event: string, payload: Record<string, unknown>): void {
+    const telemetryBus = this.eventBus as unknown as {
+      emit: (event: string, payload: Record<string, unknown>) => Promise<void>;
+    };
+    telemetryBus.emit(event, payload).catch(error => {
+      log.debug('Telemetry emit failed', {
+        event,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private recordUserMessage(message: SubstrateMessage, canonicalContactKey?: string): void {
+    if (canonicalContactKey) {
+      this.sessionManager.recordUserMessage(
+        message.channelId,
+        message.content,
+        message.authorId,
+        message.authorName,
+        message.isDirectMessage,
+        canonicalContactKey,
+      );
+      return;
+    }
+
+    this.sessionManager.recordUserMessage(
+      message.channelId,
+      message.content,
+      message.authorId,
+      message.authorName,
+      message.isDirectMessage,
+    );
+  }
+
+  private recordAssistantMessage(
+    message: SubstrateMessage,
+    responseText: string,
+    canonicalContactKey?: string,
+  ): void {
+    if (canonicalContactKey) {
+      this.sessionManager.recordAssistantMessage(
+        message.channelId,
+        responseText,
+        message.authorId,
+        message.isDirectMessage,
+        canonicalContactKey,
+      );
+      return;
+    }
+
+    this.sessionManager.recordAssistantMessage(
+      message.channelId,
+      responseText,
+      message.authorId,
+      message.isDirectMessage,
+    );
+  }
 
   /** Convert ContextMessage[] (from buildContext) to AgentMessage[] for pi-agent-core */
   private contextToAgentMessages(messages: ContextMessage[]): AgentMessage[] {
@@ -328,6 +539,60 @@ export class SubstrateAgent {
     });
   }
 
+  /** Aggregate usage stats for a single turn across all tool loop iterations. */
+  private accumulateTurnUsage(messages: AgentMessage[]): TurnUsage {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let llmCalls = 0;
+    let toolCalls = 0;
+    let maxInputTokens = 0;
+    let estimatedCostUsd = 0;
+
+    for (const message of messages) {
+      if (this.isAssistantAgentMessage(message)) {
+        llmCalls += 1;
+        inputTokens += message.usage.input;
+        outputTokens += message.usage.output;
+        cacheReadTokens += message.usage.cacheRead;
+        maxInputTokens = Math.max(maxInputTokens, message.usage.input);
+        estimatedCostUsd += message.usage.cost.total;
+        continue;
+      }
+
+      if (this.isToolResultAgentMessage(message)) {
+        toolCalls += 1;
+      }
+    }
+
+    const contextWindow = this.resolveContextWindow();
+    const contextUtilization = contextWindow > 0
+      ? Math.min(100, (maxInputTokens / contextWindow) * 100)
+      : 0;
+
+    return {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      llmCalls,
+      toolCalls,
+      contextUtilization,
+      ...(estimatedCostUsd > 0 ? { estimatedCostUsd } : {}),
+    };
+  }
+
+  private resolveContextWindow(): number {
+    return this.config.modelRoster.chat?.contextWindow ?? this.config.defaultContextWindow;
+  }
+
+  private isAssistantAgentMessage(message: AgentMessage): message is AssistantMessage {
+    return (message as { role?: string }).role === 'assistant';
+  }
+
+  private isToolResultAgentMessage(message: AgentMessage): message is ToolResultMessage {
+    return (message as { role?: string }).role === 'toolResult';
+  }
+
   /** Extract text from the last assistant message in Agent state */
   private extractResponseText(): string {
     const messages = this.agent.state.messages;
@@ -337,14 +602,65 @@ export class SubstrateAgent {
         const content = (msg as unknown as AssistantMessage).content;
         if (typeof content === 'string') return content;
         if (Array.isArray(content)) {
-          return content
-            .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-            .map(b => b.text)
+          const textParts = content
+            .filter((b: any) => b.type === 'text')
+            .map((b: any) => b.text)
             .join('');
+          if (!textParts) {
+            const thinkingParts = content.filter((b: any) => b.type === 'thinking');
+            if (thinkingParts.length) {
+              log.warn('Assistant produced thinking but no text content', {
+                thinkingBlocks: thinkingParts.length,
+                blockTypes: content.map((b: any) => b.type),
+              });
+            } else {
+              log.warn('Assistant message has no text content blocks', {
+                blockTypes: content.map((b: any) => b.type),
+              });
+            }
+          }
+          return textParts;
         }
       }
     }
+    log.warn('No assistant message found in agent state after prompt');
     return '';
+  }
+
+  /** Build a runtime context block with current time, channel, user, model info */
+  private buildRuntimeContext(
+    message: SubstrateMessage,
+    trustLevel: TrustLevel,
+    channelType: string | undefined,
+    canonicalContactKey?: string,
+  ): string {
+    const now = new Date();
+    const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
+    const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
+    const contextWindow = this.resolveContextWindow();
+    const coreCount = this.coreTools.length;
+    const extendedCount = this.extendedTools.length;
+
+    const lines = [
+      '[Runtime Context]',
+      `Current time: ${now.toISOString()}`,
+      `Channel: ${message.channelId} (type: ${channelType ?? 'unknown'}, visibility: ${visibility})`,
+      `Speaking with: ${message.authorName} (userId: ${message.authorId}, canonicalId: ${canonicalContactKey ?? message.authorId}, trust: ${trustLevel})`,
+      `Model: ${modelId}`,
+      `Context window: ${contextWindow} tokens`,
+      `Tools: ${coreCount} active` + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
+    ];
+
+    // Tool directory for extended tools
+    if (extendedCount > 0) {
+      lines.push('');
+      lines.push('Available extended tools (use load_tools to activate):');
+      for (const t of this.extendedTools) {
+        lines.push(`- ${t.name}: ${t.description.split('.')[0]}`);
+      }
+    }
+
+    return lines.join('\n');
   }
 
   /** Map message channel info to a channelType string for prompt composition */
@@ -353,6 +669,20 @@ export class SubstrateAgent {
     if (message.channelId.startsWith('api:')) return 'api';
     if (message.channelId.startsWith('internal:')) return 'internal';
     if (message.channelType === 'discord') return 'discord_text';
+    return undefined;
+  }
+
+  /** Map internal channel/task context to prompt taskKind overlays */
+  private resolveTaskKind(message: SubstrateMessage): string | undefined {
+    if (!message.channelId.startsWith('internal:')) return undefined;
+
+    const suffix = message.channelId.slice('internal:'.length).toLowerCase();
+    if (!suffix) return undefined;
+
+    if (suffix.includes('heartbeat')) return 'heartbeat';
+    if (suffix.includes('reflection')) return 'reflection';
+    if (suffix.includes('planning')) return 'planning';
+    if (suffix.includes('maintenance')) return 'maintenance';
     return undefined;
   }
 
@@ -371,9 +701,81 @@ export class SubstrateAgent {
     }
   }
 
-  private resolveTrustLevel(authorId?: string): TrustLevel {
-    if (!authorId || !this.contactStore) return 'regular';
-    const contact = this.contactStore.resolveUserId(authorId);
-    return contact?.trustLevel ?? 'regular';
+  private resolveIdentityChannel(message: SubstrateMessage): string {
+    if (message.channelType === 'discord') return 'discord';
+    if (message.channelType === 'api') return 'api';
+    if (message.channelType && message.channelType !== 'terminal') return message.channelType;
+    if (message.channelId.startsWith('discord-voice:')) return 'discord';
+    if (message.channelId.startsWith('api:')) return 'api';
+    if (message.channelId.startsWith('internal:')) return 'internal';
+    return 'unknown';
+  }
+
+  private collectContinuityFallbackKeys(
+    authorId: string,
+    canonicalContactKey: string,
+    contact?: Contact,
+  ): string[] {
+    const keys = new Set<string>();
+    const addKey = (value?: string): void => {
+      if (!value || value === canonicalContactKey) return;
+      keys.add(value);
+    };
+
+    addKey(authorId);
+    addKey(contact?.discordUserId);
+    for (const identity of contact?.channelIdentities ?? []) {
+      addKey(identity.userId);
+    }
+
+    return [...keys].sort((a, b) => a.localeCompare(b));
+  }
+
+  private resolveAuthorContext(message: SubstrateMessage): ResolvedAuthorContext {
+    // Internal system channels are self-context (heartbeat/reflection/planning).
+    // They should use full private trust for memory access.
+    if (message.channelId.startsWith('internal:')) {
+      return {
+        trustLevel: 'primary',
+        canonicalContactKey: message.authorId,
+        continuityFallbackKeys: [],
+      };
+    }
+
+    if (!message.authorId || !this.contactStore) {
+      return {
+        trustLevel: 'regular',
+        continuityFallbackKeys: [],
+      };
+    }
+
+    try {
+      const channel = this.resolveIdentityChannel(message);
+      const maybeChannelResolver = this.contactStore as ContactStore & {
+        resolveChannelIdentity?: (channel: string, userId: string, displayName?: string) => Contact;
+      };
+      const contact = typeof maybeChannelResolver.resolveChannelIdentity === 'function'
+        ? maybeChannelResolver.resolveChannelIdentity(channel, message.authorId, message.authorName)
+        : this.contactStore.resolveUserId(message.authorId);
+      const canonicalContactKey = contact?.id;
+
+      return {
+        trustLevel: contact?.trustLevel ?? 'regular',
+        canonicalContactKey,
+        continuityFallbackKeys: canonicalContactKey
+          ? this.collectContinuityFallbackKeys(message.authorId, canonicalContactKey, contact)
+          : [],
+      };
+    } catch (error) {
+      log.warn('Failed to resolve contact identity for trust/context routing', {
+        authorId: message.authorId,
+        channelId: message.channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        trustLevel: 'regular',
+        continuityFallbackKeys: [],
+      };
+    }
   }
 }

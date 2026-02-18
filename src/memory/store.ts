@@ -1,6 +1,57 @@
 import type Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type { PurrMemory, MemoryType, SensitivityLevel, ConsentFlags } from './types.js';
+import type { PurrMemory, SensitivityLevel, ConsentFlags } from './types.js';
+
+interface MemoryRow {
+  id: string;
+  text: string;
+  type: PurrMemory['type'];
+  importance: number;
+  confidence: number;
+  emotional_valence: number;
+  salience: number;
+  source_ref: string;
+  extracted_at: number;
+  last_accessed: number;
+  access_count: number;
+  superseded_by: string | null;
+  tags: string;
+  sensitivity: string | null;
+  consent_flags: string | null;
+}
+
+function mapMemoryRow(row: MemoryRow): PurrMemory {
+  let tags: string[] = [];
+  let consentFlags: ConsentFlags = {};
+  try {
+    tags = JSON.parse(row.tags) as string[];
+  } catch {
+    tags = [];
+  }
+  try {
+    consentFlags = JSON.parse(row.consent_flags ?? '{}') as ConsentFlags;
+  } catch {
+    consentFlags = {};
+  }
+
+  return {
+    id: row.id,
+    text: row.text,
+    type: row.type,
+    importance: row.importance,
+    confidence: row.confidence,
+    emotionalValence: row.emotional_valence,
+    salience: row.salience,
+    sourceRef: row.source_ref,
+    extractedAt: row.extracted_at,
+    lastAccessed: row.last_accessed,
+    accessCount: row.access_count,
+    supersededBy: row.superseded_by ?? undefined,
+    tags,
+    sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
+    consentFlags,
+  };
+}
 
 export class MemoryStore {
   private db: Database.Database;
@@ -113,22 +164,7 @@ export class MemoryStore {
       ORDER BY v.distance ASC
     `);
 
-    const rows = stmt.all(Buffer.from(embedding.buffer), limit * 2) as Array<{
-      id: string;
-      text: string;
-      type: MemoryType;
-      importance: number;
-      confidence: number;
-      emotional_valence: number;
-      salience: number;
-      source_ref: string;
-      extracted_at: number;
-      last_accessed: number;
-      access_count: number;
-      superseded_by: string | null;
-      tags: string;
-      sensitivity: string | null;
-      consent_flags: string | null;
+    const rows = stmt.all(Buffer.from(embedding.buffer), limit * 2) as Array<MemoryRow & {
       distance: number;
     }>;
 
@@ -136,30 +172,13 @@ export class MemoryStore {
       .map(row => {
         const similarity = 1 - row.distance;
         if (similarity < threshold) return null;
-        return {
-          id: row.id,
-          text: row.text,
-          type: row.type,
-          importance: row.importance,
-          confidence: row.confidence,
-          emotionalValence: row.emotional_valence,
-          salience: row.salience,
-          sourceRef: row.source_ref,
-          extractedAt: row.extracted_at,
-          lastAccessed: row.last_accessed,
-          accessCount: row.access_count,
-          supersededBy: row.superseded_by ?? undefined,
-          tags: JSON.parse(row.tags) as string[],
-          sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
-          consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
-          similarity,
-        };
+        return { ...mapMemoryRow(row), similarity };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null)
       .slice(0, limit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity'>>): void {
+  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'tags'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -183,6 +202,10 @@ export class MemoryStore {
       setClauses.push('sensitivity = ?');
       values.push(updates.sensitivity);
     }
+    if (updates.tags !== undefined) {
+      setClauses.push('tags = ?');
+      values.push(JSON.stringify(updates.tags));
+    }
 
     if (setClauses.length === 0) return;
 
@@ -197,80 +220,14 @@ export class MemoryStore {
     const stmt = this.db.prepare(`
       SELECT * FROM l2_memories WHERE superseded_by IS NULL
     `);
-    const rows = stmt.all() as Array<{
-      id: string;
-      text: string;
-      type: MemoryType;
-      importance: number;
-      confidence: number;
-      emotional_valence: number;
-      salience: number;
-      source_ref: string;
-      extracted_at: number;
-      last_accessed: number;
-      access_count: number;
-      superseded_by: string | null;
-      tags: string;
-      sensitivity: string | null;
-      consent_flags: string | null;
-    }>;
-
-    return rows.map(row => ({
-      id: row.id,
-      text: row.text,
-      type: row.type,
-      importance: row.importance,
-      confidence: row.confidence,
-      emotionalValence: row.emotional_valence,
-      salience: row.salience,
-      sourceRef: row.source_ref,
-      extractedAt: row.extracted_at,
-      lastAccessed: row.last_accessed,
-      accessCount: row.access_count,
-      supersededBy: row.superseded_by ?? undefined,
-      tags: JSON.parse(row.tags) as string[],
-      sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
-      consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
-    }));
+    const rows = stmt.all() as MemoryRow[];
+    return rows.map(mapMemoryRow);
   }
 
   getById(id: string): PurrMemory | undefined {
     const stmt = this.db.prepare('SELECT * FROM l2_memories WHERE id = ?');
-    const row = stmt.get(id) as {
-      id: string;
-      text: string;
-      type: MemoryType;
-      importance: number;
-      confidence: number;
-      emotional_valence: number;
-      salience: number;
-      source_ref: string;
-      extracted_at: number;
-      last_accessed: number;
-      access_count: number;
-      superseded_by: string | null;
-      tags: string;
-      sensitivity: string | null;
-      consent_flags: string | null;
-    } | undefined;
-    if (!row) return undefined;
-    return {
-      id: row.id,
-      text: row.text,
-      type: row.type,
-      importance: row.importance,
-      confidence: row.confidence,
-      emotionalValence: row.emotional_valence,
-      salience: row.salience,
-      sourceRef: row.source_ref,
-      extractedAt: row.extracted_at,
-      lastAccessed: row.last_accessed,
-      accessCount: row.access_count,
-      supersededBy: row.superseded_by ?? undefined,
-      tags: JSON.parse(row.tags) as string[],
-      sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
-      consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
-    };
+    const row = stmt.get(id) as MemoryRow | undefined;
+    return row ? mapMemoryRow(row) : undefined;
   }
 
   getStats(): { total: number; byType: Record<string, number>; avgSalience: number } {
@@ -297,40 +254,7 @@ export class MemoryStore {
       ORDER BY extracted_at DESC
       LIMIT ?
     `);
-    const rows = stmt.all(`${channelId}:%`, limit) as Array<{
-      id: string;
-      text: string;
-      type: MemoryType;
-      importance: number;
-      confidence: number;
-      emotional_valence: number;
-      salience: number;
-      source_ref: string;
-      extracted_at: number;
-      last_accessed: number;
-      access_count: number;
-      superseded_by: string | null;
-      tags: string;
-      sensitivity: string | null;
-      consent_flags: string | null;
-    }>;
-
-    return rows.map(row => ({
-      id: row.id,
-      text: row.text,
-      type: row.type,
-      importance: row.importance,
-      confidence: row.confidence,
-      emotionalValence: row.emotional_valence,
-      salience: row.salience,
-      sourceRef: row.source_ref,
-      extractedAt: row.extracted_at,
-      lastAccessed: row.last_accessed,
-      accessCount: row.access_count,
-      supersededBy: row.superseded_by ?? undefined,
-      tags: JSON.parse(row.tags) as string[],
-      sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
-      consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
-    }));
+    const rows = stmt.all(`${channelId}:%`, limit) as MemoryRow[];
+    return rows.map(mapMemoryRow);
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { GitOps, GitStatusResult, GitDiffResult, GitCommitResult } from './ops.js';
+import type { GitOperations, GitStatusResult, GitDiffResult, GitCommitResult } from './ops.js';
 import {
   createRepoStatusTool,
   createRepoDiffTool,
@@ -14,18 +14,14 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
   return result.content.map(c => c.text).join('');
 }
 
-function createMockGitOps(): Record<string, ReturnType<typeof vi.fn>> & GitOps {
+function createMockGitOps(): Record<string, ReturnType<typeof vi.fn>> & GitOperations {
   return {
     status: vi.fn(),
     diff: vi.fn(),
-    currentBranch: vi.fn(),
-    isProtectedBranch: vi.fn(),
     createBranch: vi.fn(),
     applyPatch: vi.fn(),
     commit: vi.fn(),
     openPR: vi.fn(),
-    validatePath: vi.fn(),
-    assertNotProtected: vi.fn(),
   } as any;
 }
 

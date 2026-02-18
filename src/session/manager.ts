@@ -3,23 +3,74 @@ import type { LLMProvider } from '../agent-loop.js';
 import type { SessionStore } from './store.js';
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
+import type { EventBus } from '../event-bus.js';
 import { estimateTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../logger.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
+import type { PromptRegistryStore } from '../identity/prompt-registry.js';
+import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../identity/prompt-registry.js';
 
 const log = createComponentLogger('SessionManager');
 
 /** Default number of cross-channel continuity messages to include in context. */
 const DEFAULT_CONTINUITY_CONTEXT_LIMIT = 10;
 
+interface RetryConfig {
+  maxRetries: number;
+  baseDelayMs: number;
+}
+
+interface RetryCallbacks {
+  onRetry?: (params: { attempt: number; delayMs: number; error: Error }) => Promise<void> | void;
+}
+
+async function withRetry<T>(
+  task: () => Promise<T>,
+  config: RetryConfig,
+  callbacks?: RetryCallbacks,
+): Promise<T> {
+  const maxRetries = Math.max(0, config.maxRetries);
+  const baseDelayMs = Math.max(0, config.baseDelayMs);
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await task();
+    } catch (error) {
+      if (attempt >= maxRetries) throw error;
+
+      const err = error instanceof Error ? error : new Error(String(error));
+      const retryAttempt = attempt + 1;
+      const delayMs = baseDelayMs * (2 ** attempt);
+      await callbacks?.onRetry?.({
+        attempt: retryAttempt,
+        delayMs,
+        error: err,
+      });
+
+      if (delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+}
+
 export class SessionManager {
   private store: SessionStore;
   private config: SubstrateConfig;
+  private eventBus: EventBus | null;
+  private promptRegistry: PromptRegistryStore | null;
   continuityStore: UserContinuityStore | null = null;
 
-  constructor(store: SessionStore, config: SubstrateConfig) {
+  constructor(
+    store: SessionStore,
+    config: SubstrateConfig,
+    eventBus?: EventBus,
+    promptRegistry?: PromptRegistryStore | null,
+  ) {
     this.store = store;
     this.config = config;
+    this.eventBus = eventBus ?? null;
+    this.promptRegistry = promptRegistry ?? null;
   }
 
   recordUserMessage(
@@ -28,6 +79,7 @@ export class SessionManager {
     authorId: string,
     authorName: string,
     isDirectMessage?: boolean,
+    continuityUserId?: string,
   ): void {
     this.store.append({
       channelId,
@@ -39,9 +91,10 @@ export class SessionManager {
     });
 
     // Also append to user continuity store (with origin metadata)
-    if (this.continuityStore && authorId) {
+    const continuityKey = continuityUserId ?? authorId;
+    if (this.continuityStore && continuityKey) {
       const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
-      this.continuityStore.append(authorId, {
+      this.continuityStore.append(continuityKey, {
         channelId,
         role: 'user',
         content,
@@ -54,7 +107,13 @@ export class SessionManager {
     }
   }
 
-  recordAssistantMessage(channelId: string, content: string, forUserId?: string, isDirectMessage?: boolean): void {
+  recordAssistantMessage(
+    channelId: string,
+    content: string,
+    forUserId?: string,
+    isDirectMessage?: boolean,
+    continuityUserId?: string,
+  ): void {
     this.store.append({
       channelId,
       role: 'assistant',
@@ -63,9 +122,10 @@ export class SessionManager {
     });
 
     // Also append to user continuity store (with origin metadata)
-    if (this.continuityStore && forUserId) {
+    const continuityKey = continuityUserId ?? forUserId;
+    if (this.continuityStore && continuityKey) {
       const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
-      this.continuityStore.append(forUserId, {
+      this.continuityStore.append(continuityKey, {
         channelId,
         role: 'assistant',
         content,
@@ -83,6 +143,7 @@ export class SessionManager {
     llmProvider?: LLMProvider,
     userId?: string,
     channelMeta?: ChannelMeta,
+    continuityFallbackUserIds: string[] = [],
   ): Promise<LLMContext> {
     let recent = this.store.getRecent(channelId, this.config.sessionMessageLimit);
 
@@ -99,6 +160,12 @@ export class SessionManager {
 
       if (totalTokens > tokenBudget) {
         log.info('Auto-compacting session', { channelId, totalTokens, budget: tokenBudget });
+        await this.eventBus?.emit('agent.compaction.start', {
+          channelId,
+          reason: 'threshold',
+          tokensBefore: totalTokens,
+          tokenBudget,
+        });
 
         // Compact oldest 50% of messages
         const splitPoint = Math.ceil(recent.length / 2);
@@ -109,24 +176,75 @@ export class SessionManager {
           .map(e => `${e.authorName ?? e.role}: ${e.content}`)
           .join('\n');
 
+        let tokensAfter = totalTokens;
+        let sawRetry = false;
+        let lastRetryAttempt = 1;
+        const retryMaxRetries = 2;
+        const retryMaxAttempts = retryMaxRetries + 1;
         try {
-          const summaryResponse = await llmProvider.complete(
+          const compactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
+            ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+          const summaryResponse = await withRetry(
+            () => llmProvider.complete(
+              {
+                systemPrompt: compactionPrompt,
+                messages: [{ role: 'user', content: compactText }],
+              },
+              'summary',
+            ),
+            { maxRetries: retryMaxRetries, baseDelayMs: 250 },
             {
-              systemPrompt: 'Summarize this conversation excerpt concisely, preserving key facts and context.',
-              messages: [{ role: 'user', content: compactText }],
+              onRetry: async ({ attempt, delayMs, error }) => {
+                sawRetry = true;
+                lastRetryAttempt = attempt + 1;
+                await this.eventBus?.emit('agent.retry.start', {
+                  channelId,
+                  attempt: lastRetryAttempt,
+                  maxAttempts: retryMaxAttempts,
+                  delayMs,
+                  error: error.message,
+                });
+              },
             },
-            'summary',
           );
 
           // Store compaction summary
           const coveredUpTo = toCompact[toCompact.length - 1].id;
           this.store.insertCompaction(channelId, summaryResponse.content, coveredUpTo);
+          const keepTokens = toKeep.reduce((sum, e) => sum + estimateTokens(e.content), 0);
+          const summaryTokens = estimateTokens(summaryResponse.content);
+          tokensAfter = systemTokens + keepTokens + summaryTokens;
 
           // Use only the kept (recent) messages going forward
           recent = toKeep;
+          if (sawRetry) {
+            await this.eventBus?.emit('agent.retry.end', {
+              channelId,
+              success: true,
+              attempt: lastRetryAttempt,
+            });
+          }
+          await this.eventBus?.emit('session.compacted', {
+            channelId,
+            before: totalTokens,
+            after: tokensAfter,
+          });
           log.info('Compaction complete', { compacted: toCompact.length, kept: toKeep.length });
         } catch (err) {
+          if (sawRetry) {
+            await this.eventBus?.emit('agent.retry.end', {
+              channelId,
+              success: false,
+              attempt: lastRetryAttempt,
+            });
+          }
           log.error('Auto-compaction failed, using full context', { error: String(err) });
+        } finally {
+          await this.eventBus?.emit('agent.compaction.end', {
+            channelId,
+            tokensBefore: totalTokens,
+            tokensAfter,
+          });
         }
       }
     }
@@ -150,10 +268,10 @@ export class SessionManager {
     // Cross-channel continuity: include recent activity from other channels
     if (this.continuityStore && userId) {
       const continuityLimit = (this.config as any).continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT;
-      const crossChannel = this.continuityStore.getRecent(
+      const crossChannel = this.getMergedContinuity(
         userId,
         continuityLimit,
-        channelId,
+        continuityFallbackUserIds,
         channelId,
         channelMeta,
       );
@@ -176,6 +294,61 @@ export class SessionManager {
       systemPrompt: fullSystem,
       messages,
     };
+  }
+
+  private getMergedContinuity(
+    canonicalUserId: string,
+    limit: number,
+    fallbackUserIds: string[],
+    channelId: string,
+    channelMeta?: ChannelMeta,
+  ): SessionEntry[] {
+    if (!this.continuityStore || !canonicalUserId) return [];
+
+    const candidateUserIds = [
+      canonicalUserId,
+      ...fallbackUserIds.filter(id => id && id !== canonicalUserId),
+    ];
+
+    const merged: SessionEntry[] = [];
+    const seen = new Set<string>();
+
+    for (const candidateUserId of candidateUserIds) {
+      const entries = this.continuityStore.getRecent(
+        candidateUserId,
+        limit,
+        channelId,
+        channelId,
+        channelMeta,
+      );
+
+      for (const entry of entries) {
+        const key = this.continuityEntryKey(entry);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(entry);
+      }
+    }
+
+    merged.sort((a, b) => {
+      const timestampDelta = a.timestamp - b.timestamp;
+      if (timestampDelta !== 0) return timestampDelta;
+      return a.id - b.id;
+    });
+
+    if (merged.length <= limit) return merged;
+    return merged.slice(-limit);
+  }
+
+  private continuityEntryKey(entry: SessionEntry): string {
+    return [
+      String(entry.timestamp),
+      String(entry.id),
+      entry.role,
+      entry.originChannelId ?? entry.channelId,
+      entry.authorId ?? '',
+      entry.content,
+    ].join('|');
   }
 
   /** Append a system note to a session. Visible in subsequent context builds. */

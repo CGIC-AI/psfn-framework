@@ -146,6 +146,27 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('requires approval for module registry path by default', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: '/app/psfn/modules/repl-registry.json' } },
+      policyConfig,
+    )).toBe('NEEDS_APPROVAL');
+  });
+
+  it('allows module registry path when explicitly trusted', () => {
+    const trustedConfig: PolicyConfig = {
+      ...policyConfig,
+      allowedReadPaths: [
+        ...(policyConfig.allowedReadPaths ?? []),
+        '/app/psfn/modules/repl-registry.json',
+      ],
+    };
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: '/app/psfn/modules/repl-registry.json' } },
+      trustedConfig,
+    )).toBe('ALLOW');
+  });
+
   it('does not allow fs.write on allowed read paths', () => {
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: '/app/identity/character.json' } },

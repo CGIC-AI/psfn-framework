@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
@@ -63,6 +63,47 @@ describe('SessionStore', () => {
     expect(store.getRecent('ch2', 10)).toHaveLength(1);
     expect(store.count('ch1')).toBe(1);
     expect(store.count('ch2')).toBe(1);
+  });
+
+  it('creates readable filename pattern for new channels and persists mapping', () => {
+    store.append({
+      channelId: 'api:e2e-internal',
+      role: 'user',
+      content: 'hello',
+      authorId: 'operator',
+      authorName: 'V',
+      timestamp: 1739443200000,
+    });
+
+    const sessionFiles = readdirSync(dir)
+      .filter(f => f.endsWith('.jsonl'))
+      .filter(f => !f.startsWith('user_'));
+    expect(sessionFiles).toHaveLength(1);
+    expect(sessionFiles[0]).toMatch(/^\d{8}_[a-z0-9-]+_[a-z0-9-]+_\d{6}\.jsonl$/);
+    expect(sessionFiles[0]).not.toContain('%3A');
+
+    expect(existsSync(join(dir, '_channel_index.json'))).toBe(true);
+    const index = JSON.parse(readFileSync(join(dir, '_channel_index.json'), 'utf-8')) as {
+      channels: Record<string, { filename: string }>;
+    };
+    expect(index.channels['api:e2e-internal'].filename).toBe(sessionFiles[0]);
+
+    const reloaded = new SessionStore(dir);
+    reloaded.append({
+      channelId: 'api:e2e-internal',
+      role: 'assistant',
+      content: 'world',
+      timestamp: 1739443201000,
+    });
+
+    const entries = reloaded.getRecent('api:e2e-internal', 10);
+    expect(entries).toHaveLength(2);
+
+    const filesAfter = readdirSync(dir)
+      .filter(f => f.endsWith('.jsonl'))
+      .filter(f => !f.startsWith('user_'));
+    expect(filesAfter).toHaveLength(1);
+    expect(filesAfter[0]).toBe(sessionFiles[0]);
   });
 
   it('stores and retrieves compaction summaries', () => {
@@ -238,6 +279,29 @@ describe('SessionStore', () => {
     const found = channels.find(c => c.channelId === 'api:session-1');
     expect(found).toBeDefined();
     expect(found!.messageCount).toBe(1);
+  });
+
+  it('falls back to disk scan when channel index is malformed', () => {
+    store.append({
+      channelId: 'api:fallback-test',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1000,
+    });
+    writeFileSync(join(dir, '_channel_index.json'), '{not valid json');
+
+    const reloaded = new SessionStore(dir);
+    const channels = reloaded.listChannels();
+    const found = channels.find(c => c.channelId === 'api:fallback-test');
+    expect(found).toBeDefined();
+    expect(found!.messageCount).toBe(1);
+  });
+
+  it('handles malformed journal files without throwing during channel discovery', () => {
+    writeFileSync(join(dir, 'broken-session.jsonl'), '{oops\n');
+
+    const reloaded = new SessionStore(dir);
+    expect(() => reloaded.listChannels()).not.toThrow();
   });
 });
 

@@ -1,4 +1,5 @@
 import { CHANNEL_PRIVACY_LEVELS, VALID_RELATIONSHIP_TYPES, type ChannelPrivacyLevel, type Contact, type ContactChannelLink } from '../../../contacts/types.js';
+import type { ContactProfileArtifact } from '../../../memory/store.js';
 import type { TrustLevel } from '../../../trust/types.js';
 import { escapeHtml } from './shared.js';
 
@@ -56,24 +57,46 @@ function channelList(channels: ContactChannelLink[]): string {
   return `<div class="channel-list">${channels.map(channelRow).join('')}</div>`;
 }
 
-export function contactsPage(contacts: Contact[]): string {
+function profileCard(profile?: ContactProfileArtifact): string {
+  if (!profile) {
+    return '<div class="crm-profile-empty">No synthesized profile yet</div>';
+  }
+
+  const updatedAt = new Date(profile.updatedAt).toLocaleString();
+  const sourceIds = profile.sourceMemoryIds.length > 0
+    ? profile.sourceMemoryIds.map(id => `<code>${escapeHtml(id)}</code>`).join(', ')
+    : 'none';
+
+  return `<div class="crm-profile-card">
+    <div class="crm-profile-summary">${escapeHtml(profile.summary)}</div>
+    <div class="crm-profile-meta">
+      Updated: ${escapeHtml(updatedAt)}<br>
+      Source IDs: ${sourceIds}
+    </div>
+  </div>`;
+}
+
+export function contactsPage(
+  contacts: Contact[],
+  profilesByContactId: ReadonlyMap<string, ContactProfileArtifact> = new Map(),
+): string {
   if (contacts.length === 0) {
     return '<div class="empty">No visitors have been seen in the garden yet</div>';
   }
 
-  const rows = contacts.map(c => contactRow(c)).join('');
+  const rows = contacts.map(c => contactRow(c, profilesByContactId.get(c.id))).join('');
   return `
     <div class="card">
       <table>
         <thead><tr>
-          <th>Person</th><th>Linked Channels</th><th>Relationship Notes</th><th>Activity</th><th></th>
+          <th>Person</th><th>Linked Channels</th><th>Relationship + Profile</th><th>Activity</th><th></th>
         </tr></thead>
         <tbody id="contacts-list">${rows}</tbody>
       </table>
     </div>`;
 }
 
-export function contactRow(c: Contact): string {
+export function contactRow(c: Contact, profile?: ContactProfileArtifact): string {
   const channels = resolveContactChannels(c);
   const firstSeen = new Date(c.firstSeen).toLocaleDateString();
   const lastSeen = new Date(c.lastSeen).toLocaleDateString();
@@ -88,6 +111,7 @@ export function contactRow(c: Contact): string {
     <td>
       <div><strong>${escapeHtml(c.relationshipType)}</strong></div>
       <div class="crm-notes">${c.notes ? escapeHtml(c.notes) : '<em>No notes</em>'}</div>
+      ${profileCard(profile)}
     </td>
     <td class="crm-activity">
       <div>First: ${firstSeen}</div>

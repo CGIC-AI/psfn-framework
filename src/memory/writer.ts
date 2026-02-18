@@ -35,6 +35,7 @@ export interface MemoryWriteOptions {
   sensitivity?: SensitivityLevel;    // default 'personal'
   consentFlags?: ConsentFlags;       // default {}
   retentionClass?: MemoryRetentionClass;
+  contactId?: string;
 }
 
 export interface WriteResult {
@@ -105,6 +106,7 @@ export class MemoryWriter {
       sensitivity = 'personal',
       consentFlags,
       retentionClass,
+      contactId,
     } = opts;
 
     // Validate type
@@ -128,7 +130,12 @@ export class MemoryWriter {
       3,
     );
 
-    const sameTypeDups = duplicates.filter(d => d.type === type);
+    const sameTypeDups = duplicates.filter(d => (
+      d.type === type && (
+        !contactId
+        || d.contactId === contactId
+      )
+    ));
     if (sameTypeDups.length > 0) {
       // Duplicate found -- bump access count and salience
       const existing = sameTypeDups[0];
@@ -173,7 +180,10 @@ export class MemoryWriter {
 
     let didSupersede = false;
     const sameTypeBroader = broader.filter(b => b.type === type);
-    for (const old of sameTypeBroader) {
+    const sameContactBroader = contactId
+      ? sameTypeBroader.filter(b => b.contactId === contactId)
+      : sameTypeBroader;
+    for (const old of sameContactBroader) {
       if (confidence > old.confidence) {
         this.memoryStore.updateMemory(old.id, {
           supersededBy: uuidv4(),
@@ -201,6 +211,7 @@ export class MemoryWriter {
       retentionClass: retention.retentionClass,
       sensitivity,
       consentFlags,
+      contactId,
     };
 
     this.memoryStore.insertMemory(memory, embedding);
@@ -229,6 +240,7 @@ export class MemoryWriter {
       sensitivity = 'personal',
       consentFlags,
       retentionClass,
+      contactId,
     } = opts;
 
     if (!VALID_MEMORY_TYPES.includes(type)) {
@@ -252,7 +264,12 @@ export class MemoryWriter {
     );
 
     let didSupersede = false;
-    const sameType = similar.filter(s => s.type === type);
+    const sameType = similar.filter(s => (
+      s.type === type && (
+        !contactId
+        || s.contactId === contactId
+      )
+    ));
     for (const old of sameType) {
       this.memoryStore.updateMemory(old.id, { supersededBy: uuidv4() });
       didSupersede = true;
@@ -277,6 +294,7 @@ export class MemoryWriter {
       retentionClass: retention.retentionClass,
       sensitivity,
       consentFlags,
+      contactId,
     };
 
     this.memoryStore.insertMemory(memory, embedding);

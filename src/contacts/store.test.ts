@@ -27,6 +27,47 @@ describe('ContactStore', () => {
       expect(() => new ContactStore(db, PRIMARY_USER_ID)).not.toThrow();
     });
 
+    it('migrates legacy contacts schema to include nickname', () => {
+      const legacyDb = new Database(':memory:');
+      legacyDb.exec(`
+        CREATE TABLE contacts (
+          id TEXT PRIMARY KEY,
+          discord_user_id TEXT UNIQUE,
+          display_name TEXT NOT NULL,
+          trust_level TEXT NOT NULL DEFAULT 'regular',
+          relationship_type TEXT NOT NULL DEFAULT 'stranger',
+          emotional_baseline TEXT DEFAULT '{}',
+          first_seen TEXT NOT NULL,
+          last_seen TEXT NOT NULL,
+          notes TEXT
+        );
+
+        CREATE TABLE contact_channel_ids (
+          contact_id TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          channel_user_id TEXT NOT NULL,
+          first_seen TEXT NOT NULL,
+          last_seen TEXT NOT NULL,
+          PRIMARY KEY (channel, channel_user_id)
+        );
+      `);
+
+      const now = new Date().toISOString();
+      legacyDb.prepare(`
+        INSERT INTO contacts (
+          id, discord_user_id, display_name, trust_level, relationship_type,
+          emotional_baseline, first_seen, last_seen, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run('legacy-contact', 'legacy-discord-id', 'Legacy', 'trusted', 'friend', '{}', now, now, null);
+
+      const migratedStore = new ContactStore(legacyDb, PRIMARY_USER_ID);
+      const columns = legacyDb.prepare('PRAGMA table_info(contacts)')
+        .all() as Array<{ name: string }>;
+      expect(columns.some(column => column.name === 'nickname')).toBe(true);
+      expect(migratedStore.updateIdentityProfile('legacy-contact', 'Legacy Updated', 'Leg')).toBe(true);
+      expect(migratedStore.getById('legacy-contact')?.nickname).toBe('Leg');
+    });
+
     it('migrates legacy discord_user_id rows into channel identity table', () => {
       const now = new Date().toISOString();
       db.prepare(`
@@ -39,6 +80,13 @@ describe('ContactStore', () => {
       const migratedStore = new ContactStore(db, PRIMARY_USER_ID);
       const byChannelIdentity = migratedStore.getByChannelIdentity('discord', 'legacy-discord-id');
       expect(byChannelIdentity?.id).toBe('legacy-contact');
+    });
+
+    it('creates contact_channel_activity table', () => {
+      const tables = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='contact_channel_activity'",
+      ).all();
+      expect(tables).toHaveLength(1);
     });
   });
 
@@ -222,6 +270,112 @@ describe('ContactStore', () => {
     });
   });
 
+  describe('recordChannelActivity', () => {
+    it('records channel activity and hydrates conversationChannels', () => {
+      const contact = store.upsert({ displayName: 'Activity User', discordUserId: 'activity-user-1' });
+      store.recordChannelActivity(contact.id, 'Discord', 'guild:123');
+
+      const hydrated = store.getById(contact.id);
+      expect(hydrated?.conversationChannels).toEqual([
+        expect.objectContaining({
+          channel: 'discord',
+          channelId: 'guild:123',
+        }),
+      ]);
+      expect(hydrated?.conversationChannels?.[0].firstSeen).toBeDefined();
+      expect(hydrated?.conversationChannels?.[0].lastSeen).toBeDefined();
+    });
+  });
+
+  describe('mergeContacts', () => {
+    it('remaps identities, activity, memories, and profiles to target', () => {
+      db.exec(`
+        CREATE TABLE l2_memories (
+          id TEXT PRIMARY KEY,
+          contact_id TEXT,
+          content TEXT
+        );
+
+        CREATE TABLE contact_profiles (
+          contact_id TEXT PRIMARY KEY,
+          profile_json TEXT
+        );
+      `);
+
+      const target = store.upsert({
+        displayName: 'Target',
+        discordUserId: 'target-discord-id',
+        trustLevel: 'regular',
+      });
+      const source = store.upsert({
+        displayName: 'Source',
+        channelIdentities: [{ channel: 'api', userId: 'source-api-id' }],
+        trustLevel: 'trusted',
+      });
+
+      db.prepare('INSERT INTO l2_memories (id, contact_id, content) VALUES (?, ?, ?)')
+        .run('memory-1', source.id, 'source memory');
+      db.prepare('INSERT INTO contact_profiles (contact_id, profile_json) VALUES (?, ?)')
+        .run(source.id, '{"nickname":"source"}');
+
+      db.prepare(`
+        INSERT INTO contact_channel_activity (contact_id, channel, channel_id, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(target.id, 'discord', 'guild:shared', '2024-01-01T00:00:00.000Z', '2024-01-05T00:00:00.000Z');
+      db.prepare(`
+        INSERT INTO contact_channel_activity (contact_id, channel, channel_id, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(source.id, 'discord', 'guild:shared', '2023-12-01T00:00:00.000Z', '2024-01-10T00:00:00.000Z');
+      db.prepare(`
+        INSERT INTO contact_channel_activity (contact_id, channel, channel_id, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(source.id, 'api', 'session:9', '2024-01-11T00:00:00.000Z', '2024-01-11T00:00:00.000Z');
+
+      const merged = store.mergeContacts(source.id, target.id);
+      expect(merged).toBe(true);
+      expect(store.getById(source.id)).toBeUndefined();
+
+      const sourceIdentityResolved = store.getByChannelIdentity('api', 'source-api-id');
+      expect(sourceIdentityResolved?.id).toBe(target.id);
+
+      const memoryContact = db.prepare('SELECT contact_id FROM l2_memories WHERE id = ?')
+        .get('memory-1') as { contact_id: string };
+      expect(memoryContact.contact_id).toBe(target.id);
+
+      const profileContact = db.prepare('SELECT contact_id FROM contact_profiles')
+        .get() as { contact_id: string };
+      expect(profileContact.contact_id).toBe(target.id);
+
+      const activityRows = db.prepare(`
+        SELECT channel, channel_id, first_seen, last_seen
+        FROM contact_channel_activity
+        WHERE contact_id = ?
+        ORDER BY channel ASC, channel_id ASC
+      `).all(target.id) as Array<{
+        channel: string;
+        channel_id: string;
+        first_seen: string;
+        last_seen: string;
+      }>;
+      expect(activityRows).toEqual([
+        {
+          channel: 'api',
+          channel_id: 'session:9',
+          first_seen: '2024-01-11T00:00:00.000Z',
+          last_seen: '2024-01-11T00:00:00.000Z',
+        },
+        {
+          channel: 'discord',
+          channel_id: 'guild:shared',
+          first_seen: '2023-12-01T00:00:00.000Z',
+          last_seen: '2024-01-10T00:00:00.000Z',
+        },
+      ]);
+
+      expect(store.getById(target.id)?.trustLevel).toBe('trusted');
+    });
+  });
+
   describe('updateNotes', () => {
     it('updates notes field', () => {
       const contact = store.upsert({ displayName: 'Heidi' });
@@ -312,6 +466,40 @@ describe('ContactStore', () => {
       const resolved = store.resolveChannelIdentity('api', 'v-api-id', 'V API');
       expect(resolved.id).toBe(contact.id);
       expect(resolved.trustLevel).toBe('primary');
+    });
+
+    it('reconciles duplicate primary contacts into canonical identity owner', () => {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO contacts (
+          id, discord_user_id, display_name, trust_level, relationship_type,
+          emotional_baseline, first_seen, last_seen, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run('primary-owner', PRIMARY_USER_ID, 'Primary Owner', 'regular', 'stranger', '{}', now, now, null);
+      db.prepare(`
+        INSERT INTO contact_channel_ids (
+          contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run('primary-owner', 'discord', PRIMARY_USER_ID, 'semi_private', now, now);
+
+      db.prepare(`
+        INSERT INTO contacts (
+          id, discord_user_id, display_name, trust_level, relationship_type,
+          emotional_baseline, first_seen, last_seen, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run('duplicate-primary', 'duplicate-discord-id', 'Duplicate Primary', 'primary', 'partner', '{}', now, now, null);
+      db.prepare(`
+        INSERT INTO contact_channel_ids (
+          contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run('duplicate-primary', 'api', 'primary-api-alias', 'private', now, now);
+
+      const resolved = store.resolveChannelIdentity('discord', PRIMARY_USER_ID, 'V');
+      expect(resolved.id).toBe('primary-owner');
+      expect(resolved.trustLevel).toBe('primary');
+      expect(resolved.relationshipType).toBe('partner');
+      expect(store.getById('duplicate-primary')).toBeUndefined();
+      expect(store.getByChannelIdentity('api', 'primary-api-alias')?.id).toBe('primary-owner');
     });
   });
 

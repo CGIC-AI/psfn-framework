@@ -763,6 +763,16 @@ export class SubstrateAgent {
         : this.contactStore.resolveUserId(message.authorId);
       const canonicalContactKey = contact?.id;
 
+      const maybeActivityRecorder = this.contactStore as ContactStore & {
+        recordChannelActivity?: (contactId: string, channel: string, channelId: string) => void;
+      };
+      if (
+        canonicalContactKey
+        && typeof maybeActivityRecorder.recordChannelActivity === 'function'
+      ) {
+        maybeActivityRecorder.recordChannelActivity(canonicalContactKey, channel, message.channelId);
+      }
+
       return {
         trustLevel: contact?.trustLevel ?? 'regular',
         canonicalContactKey,

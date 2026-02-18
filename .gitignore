@@ -5,3 +5,5 @@ data/
 proxy/.env
 *.db
 *.db-journal
+logs/
+import/

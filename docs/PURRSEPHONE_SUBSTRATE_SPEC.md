@@ -129,11 +129,11 @@ Ported and evolved from PURRSEPHONE_MEMORY_ARCHITECTURE_v2.md and the ElizaOS pl
 | **L5** | Attention model, care protocols | Runtime state | Phase 4 |
 
 **L2 specifics** (port from ElizaOS plugin-purrsephone):
-- 5 memory types: episodic, semantic, emotional, procedural, reflection
+- 6 memory types: episodic, semantic, emotional, procedural, reflection, relational
 - Per-extraction: importance (0-1), confidence (0-1), emotional valence (-1 to +1), salience (decaying)
 - Dedup via embedding similarity (per-type thresholds: 0.85-0.97)
 - Contradiction resolution: new higher-confidence fact supersedes old
-- Decay half-lives: episodic 7d, semantic 30d, emotional 14d, procedural 90d, reflection 60d
+- Decay half-lives: episodic 7d, semantic 30d, emotional 14d, procedural 90d, reflection 60d, relational 60d
 - Composite retrieval scoring: similarity * recency * emotionalWeight * importance * salience
 
 **L2 enhancement for RLM**: Instead of only injecting top-N memories into the prompt, expose the full memory store as a REPL variable. Purrsephone can query, filter, and reason about her memories programmatically — not just receive what the system thinks is relevant.

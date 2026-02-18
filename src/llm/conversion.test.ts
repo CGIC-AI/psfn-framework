@@ -1,0 +1,59 @@
+import { describe, expect, it } from 'vitest';
+import {
+  extractReasoningContent,
+  extractTextContent,
+  toPiContext,
+  toPiMessages,
+  toPiTools,
+} from './conversion.js';
+
+describe('llm conversion helpers', () => {
+  it('extracts text and reasoning blocks', () => {
+    const blocks = [
+      { type: 'text', text: 'hello' },
+      { type: 'thinking', thinking: 'hmm' },
+      { type: 'text', text: ' world' },
+    ];
+
+    expect(extractTextContent(blocks)).toBe('hello world');
+    expect(extractReasoningContent(blocks)).toBe('hmm');
+  });
+
+  it('converts context to pi context with tools', () => {
+    const context = toPiContext({
+      systemPrompt: 'system',
+      messages: [
+        { role: 'user', content: 'u1' },
+        { role: 'assistant', content: 'a1' },
+      ],
+      tools: [
+        {
+          name: 'tool_a',
+          description: 'Tool A',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+    });
+
+    expect(context.systemPrompt).toBe('system');
+    expect(context.messages).toHaveLength(2);
+    expect(context.tools).toHaveLength(1);
+    expect((context.messages[0] as any).role).toBe('user');
+    expect((context.messages[1] as any).role).toBe('assistant');
+  });
+
+  it('toPiMessages keeps order and toPiTools maps schema fields', () => {
+    const messages = toPiMessages([
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'second' },
+    ]);
+    const tools = toPiTools([
+      { name: 'x', description: 'desc', inputSchema: { type: 'object' } },
+    ]);
+
+    expect((messages[0] as any).content).toBe('first');
+    expect((messages[1] as any).content[0].text).toBe('second');
+    expect(tools[0].name).toBe('x');
+    expect((tools[0] as any).parameters).toEqual({ type: 'object' });
+  });
+});

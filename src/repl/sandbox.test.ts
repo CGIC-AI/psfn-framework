@@ -119,6 +119,17 @@ describe('REPLSandbox', () => {
     expect(result.output.length).toBeLessThan(250);
   });
 
+  it('enforces timeout for async code paths', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    const result = await sandbox.execute(
+      'await new Promise((resolve) => setTimeout(resolve, 50)); print("done");',
+      10,
+      8192,
+    );
+    expect(result.error).toContain('Execution timed out');
+    expect(result.output).toBe('');
+  });
+
   it('llm_query calls llmProvider.complete', async () => {
     const llm = mockLLM('sub-answer');
     const sandbox = new REPLSandbox(nullDeps(llm));
@@ -201,6 +212,143 @@ describe('REPLSandbox', () => {
     );
 
     expect(result.output).toBe('true');
+  });
+
+  it('repo_* helpers call gateway git methods when available', async () => {
+    const llm = {
+      ...mockLLM(),
+      gitStatus: vi.fn(async () => ({
+        branch: 'feature/test',
+        ahead: 0,
+        behind: 0,
+        staged: ['src/a.ts'],
+        modified: ['src/b.ts'],
+        untracked: [],
+      })),
+      gitDiff: vi.fn(async () => ({
+        staged: 'staged diff',
+        unstaged: 'unstaged diff',
+      })),
+      gitApplyPatch: vi.fn(async () => {}),
+      gitCommit: vi.fn(async () => ({
+        hash: 'abc1234',
+        message: 'test commit',
+        filesChanged: 1,
+      })),
+    } as unknown as LLMProvider;
+    const sandbox = new REPLSandbox(nullDeps(llm));
+
+    const result = await sandbox.execute(
+      [
+        'const s = await repo_status(); print(s.branch);',
+        'const d = await repo_diff(false); print(d.unstaged);',
+        'const a = await repo_apply_patch("src/file.ts", "export const x = 1;"); print(a.ok);',
+        'const c = await repo_commit("message", "intent"); print(c.hash);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('feature/test');
+    expect(result.output).toContain('unstaged diff');
+    expect(result.output).toContain('true');
+    expect(result.output).toContain('abc1234');
+  });
+
+  it('repo_apply_patch rejects disallowed paths before calling git', async () => {
+    const llm = {
+      ...mockLLM(),
+      gitApplyPatch: vi.fn(async () => {}),
+    } as unknown as LLMProvider;
+    const sandbox = new REPLSandbox(nullDeps(llm));
+
+    const result = await sandbox.execute(
+      'const r = await repo_apply_patch("../secrets.txt", "oops"); print(r.ok, r.error);',
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('false');
+    expect(result.output).toContain('path not allowed');
+    expect((llm as any).gitApplyPatch).not.toHaveBeenCalled();
+  });
+
+  it('crawler_fetch and web_research use gateway webFetch path', async () => {
+    const llm = {
+      ...mockSequentialLLM([
+        '["https://example.com/a","https://example.com/b"]',
+      ]),
+      webFetch: vi.fn(async (url: string) => `content for ${url}`),
+    } as unknown as LLMProvider;
+    const sandbox = new REPLSandbox(nullDeps(llm));
+    const result = await sandbox.execute(
+      [
+        'const c = await crawler_fetch("https://example.com/a"); print(c);',
+        'const r = await web_research("test query", 2);',
+        'print(r.length);',
+        'print(r[0].url);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('content for https://example.com/a');
+    expect(result.output).toContain('2');
+    expect(result.output).toContain('https://example.com/a');
+    expect((llm as any).webFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('crawler_fetch surfaces TLS diagnostics from gateway errors', async () => {
+    const fetchError = Object.assign(new Error('Fetch TLS failure: fetch failed'), {
+      code: -32003,
+      cause: {
+        code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+        message: 'unable to get local issuer certificate',
+      },
+    });
+    const llm = {
+      ...mockLLM(),
+      webFetch: vi.fn(async () => {
+        throw fetchError;
+      }),
+    } as unknown as LLMProvider;
+    const sandbox = new REPLSandbox(nullDeps(llm));
+    const result = await sandbox.execute(
+      'const c = await crawler_fetch("https://1.1.1.1/"); print(c);',
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('UNABLE_TO_GET_ISSUER_CERT_LOCALLY');
+    expect(result.output).toContain('code=-32003');
+  });
+
+  it('module_* APIs persist module registry via gateway fs methods', async () => {
+    let stored = '[]';
+    const llm = {
+      ...mockLLM(),
+      fsRead: vi.fn(async () => stored),
+      fsWrite: vi.fn(async (_path: string, content: string) => { stored = content; }),
+    } as unknown as LLMProvider;
+    const sandbox = new REPLSandbox(nullDeps(llm));
+
+    const result = await sandbox.execute(
+      [
+        'const install = await module_install("planner", "export default {};", true); print(install.ok);',
+        'const list = await module_list(); print(list.length);',
+        'print(list[0].name, list[0].enabled);',
+        'const off = await module_disable("planner"); print(off.ok);',
+        'const health = await module_health("planner"); print(health[0].health);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('true');
+    expect(result.output).toContain('1');
+    expect(result.output).toContain('planner true');
+    expect(result.output).toContain('disabled');
+    expect((llm as any).fsWrite).toHaveBeenCalled();
   });
 
   it('memory_search returns empty when no memory store', async () => {
@@ -372,6 +520,17 @@ describe('REPLSandbox', () => {
     expect(locals.event_emit).toBeUndefined();
     expect(locals.llm_query_strict).toBeUndefined();
     expect(locals.llm_query_json).toBeUndefined();
+    expect(locals.module_list).toBeUndefined();
+    expect(locals.module_install).toBeUndefined();
+    expect(locals.module_enable).toBeUndefined();
+    expect(locals.module_disable).toBeUndefined();
+    expect(locals.module_health).toBeUndefined();
+    expect(locals.repo_status).toBeUndefined();
+    expect(locals.repo_diff).toBeUndefined();
+    expect(locals.repo_apply_patch).toBeUndefined();
+    expect(locals.repo_commit).toBeUndefined();
+    expect(locals.crawler_fetch).toBeUndefined();
+    expect(locals.web_research).toBeUndefined();
   });
 
   it('tracks new variable creation in variablesChanged', async () => {

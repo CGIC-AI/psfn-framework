@@ -3,24 +3,27 @@ import {
   streamSimple,
   completeSimple,
   getEnvApiKey,
-  type TextContent,
-  type Message,
-  type UserMessage,
-  type AssistantMessage,
   type Model,
-  type Tool as PiTool,
-  type Context as PiContext,
 } from '@mariozechner/pi-ai';
 import type {
-  ContextMessage,
+  CompletionPurpose,
   LLMContext,
   LLMResponse,
   StreamCallbacks,
   SubstrateConfig,
   ToolCall,
-  ToolSchema,
 } from '../types.js';
 import { createModel } from './models.js';
+import { withRetry, markErrorAsNonRetryable } from './retry.js';
+import { llmRetryConfig } from './retry-config.js';
+import {
+  extractReasoningContent,
+  extractTextContent,
+  toPiContext,
+} from './conversion.js';
+import { createComponentLogger } from '../logger.js';
+
+const log = createComponentLogger('LLMClient');
 
 export class LLMClient {
   private config: SubstrateConfig;
@@ -54,73 +57,111 @@ export class LLMClient {
       this.config.primaryModel,
     );
 
+    const piContext = toPiContext(context);
+
     try {
-      const piContext: PiContext = {
-        systemPrompt: context.systemPrompt,
-        messages: toPiMessages(context.messages),
-        ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
-      };
-      const eventStream = streamSimple(
-        model,
-        piContext,
-        { apiKey, maxTokens: this.config.primaryMaxTokens },
-      );
+      const finalResponse = await withRetry(async () => {
+        const eventStream = streamSimple(
+          model,
+          piContext,
+          { apiKey, maxTokens: this.config.primaryMaxTokens },
+        );
 
-      let content = '';
-      const toolCalls: ToolCall[] = [];
-      let finalResponse: LLMResponse | null = null;
+        let content = '';
+        let reasoning = '';
+        const toolCalls: ToolCall[] = [];
+        let response: LLMResponse | null = null;
+        let emittedData = false;
 
-      for await (const event of eventStream) {
-        switch (event.type) {
-          case 'text_delta':
-            content += event.delta;
-            callbacks?.onText?.(event.delta);
-            break;
+        try {
+          for await (const event of eventStream) {
+            switch (event.type) {
+              case 'text_delta':
+                emittedData = true;
+                content += event.delta;
+                callbacks?.onText?.(event.delta);
+                break;
 
-          case 'toolcall_end':
-            toolCalls.push({
-              id: event.toolCall.id,
-              name: event.toolCall.name,
-              input: event.toolCall.arguments,
-            });
-            callbacks?.onToolCall?.(event.toolCall.name, event.toolCall.arguments);
-            break;
+              case 'thinking_delta':
+                emittedData = true;
+                reasoning += event.delta;
+                break;
 
-          case 'done':
-            // If text_delta events didn't fire, extract text from content blocks
-            if (!content && event.message.content) {
-              content = event.message.content
-                .filter((block: any) => block.type === 'text')
-                .map((block: any) => block.text)
-                .join('');
+              case 'toolcall_end':
+                emittedData = true;
+                toolCalls.push({
+                  id: event.toolCall.id,
+                  name: event.toolCall.name,
+                  input: event.toolCall.arguments,
+                });
+                callbacks?.onToolCall?.(event.toolCall.name, event.toolCall.arguments);
+                break;
+
+              case 'done': {
+                // If text_delta events didn't fire, extract text from content blocks
+                if (!content && event.message.content) {
+                  content = extractTextContent(event.message.content as unknown[]);
+                }
+                // Extract reasoning from content blocks if thinking_delta didn't fire
+                if (!reasoning && event.message.content) {
+                  reasoning = extractReasoningContent(event.message.content as unknown[]);
+                }
+                // Normalize away stringified content block arrays from streaming
+                content = normalizeContent(content);
+                response = {
+                  content,
+                  ...(reasoning ? { reasoning } : {}),
+                  toolCalls,
+                  model: event.message.model,
+                  inputTokens: event.message.usage.input,
+                  outputTokens: event.message.usage.output,
+                  stopReason: event.reason,
+                };
+                break;
+              }
+
+              case 'error': {
+                const error = new Error(event.error.errorMessage ?? 'LLM stream error');
+                if (emittedData) {
+                  markErrorAsNonRetryable(error);
+                }
+                throw error;
+              }
             }
-            // Normalize away stringified content block arrays from streaming
-            content = normalizeContent(content);
-            finalResponse = {
-              content,
-              toolCalls,
-              model: event.message.model,
-              inputTokens: event.message.usage.input,
-              outputTokens: event.message.usage.output,
-              stopReason: event.reason,
-            };
-            break;
-
-          case 'error':
-            throw new Error(event.error.errorMessage ?? 'LLM stream error');
+          }
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          if (emittedData) {
+            markErrorAsNonRetryable(err);
+          }
+          throw err;
         }
-      }
 
-      if (!finalResponse) {
-        finalResponse = {
+        if (response) {
+          return response;
+        }
+
+        log.warn('Stream completed without done event', { model: String(model.id), hasContent: !!content });
+        return {
           content,
+          ...(reasoning ? { reasoning } : {}),
           toolCalls,
           model: String(model.id),
           inputTokens: 0,
           outputTokens: 0,
           stopReason: 'unknown',
         };
-      }
+      }, llmRetryConfig(this.config), {
+        onRetry: ({ attempt, maxRetries, delayMs, error }) => {
+          log.warn('LLM stream failed, retrying', {
+            model: String(model.id),
+            attempt,
+            maxRetries,
+            delayMs,
+            error: error.message,
+          });
+        },
+      });
 
       callbacks?.onDone?.(finalResponse);
       return finalResponse;
@@ -131,39 +172,74 @@ export class LLMClient {
     }
   }
 
-  async complete(context: LLMContext, purpose: 'extraction' | 'summary'): Promise<LLMResponse> {
-    const provider = purpose === 'extraction'
-      ? this.config.extractionProvider
-      : this.config.primaryProvider;
-    const modelId = purpose === 'extraction'
-      ? this.config.extractionModel
-      : this.config.primaryModel;
+  async complete(context: LLMContext, purpose: CompletionPurpose): Promise<LLMResponse> {
+    const { provider, modelId, maxTokens } = this.resolveCompletionTarget(purpose);
+    const { model, apiKey } = this.getModelAndKey(provider, modelId, maxTokens);
 
-    const { model, apiKey } = this.getModelAndKey(provider, modelId);
-
-    const piContext: PiContext = {
-      systemPrompt: context.systemPrompt,
-      messages: toPiMessages(context.messages),
-      ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
-    };
-    const response = await completeSimple(
-      model,
-      piContext,
-      { apiKey, maxTokens: this.config.extractionMaxTokens },
+    const piContext = toPiContext(context);
+    const response = await withRetry(
+      () => completeSimple(
+        model,
+        piContext,
+        { apiKey, maxTokens },
+      ),
+      llmRetryConfig(this.config),
+      {
+        onRetry: ({ attempt, maxRetries, delayMs, error }) => {
+          log.warn('LLM complete failed, retrying', {
+            model: String(model.id),
+            purpose,
+            attempt,
+            maxRetries,
+            delayMs,
+            error: error.message,
+          });
+        },
+      },
     );
 
-    const content = response.content
-      .filter((block): block is TextContent => block.type === 'text')
-      .map(block => block.text)
-      .join('');
+    const content = extractTextContent(response.content as unknown[]);
+    const reasoning = extractReasoningContent(response.content as unknown[]);
 
     return {
       content: normalizeContent(content),
+      ...(reasoning ? { reasoning } : {}),
       toolCalls: [],
       model: response.model,
       inputTokens: response.usage.input,
       outputTokens: response.usage.output,
       stopReason: response.stopReason,
+    };
+  }
+
+  private resolveCompletionTarget(purpose: CompletionPurpose): {
+    provider: string;
+    modelId: string;
+    maxTokens: number;
+  } {
+    if (purpose === 'extraction') {
+      return {
+        provider: this.config.extractionProvider,
+        modelId: this.config.extractionModel,
+        maxTokens: this.config.extractionMaxTokens,
+      };
+    }
+
+    if (purpose === 'reasoning') {
+      const reasoningSlot = this.config.modelRoster.reasoning ?? this.config.modelRoster.chat;
+      if (reasoningSlot) {
+        return {
+          provider: reasoningSlot.provider,
+          modelId: reasoningSlot.model,
+          maxTokens: reasoningSlot.maxTokens,
+        };
+      }
+    }
+
+    return {
+      provider: this.config.primaryProvider,
+      modelId: this.config.primaryModel,
+      maxTokens: this.config.primaryMaxTokens,
     };
   }
 }
@@ -212,39 +288,4 @@ export function normalizeContent(content: string): string {
   return result;
 }
 
-// ── Tool conversion ──
-// Convert ToolSchema inputSchema (plain JSON Schema objects) to pi-ai Tool format.
-// The pi-ai Tool.parameters is typed as TSchema (TypeBox), but at runtime providers
-// just pass it through as JSON Schema — the cast is safe.
-
-export function toPiTools(tools: ToolSchema[]): PiTool[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.inputSchema as PiTool['parameters'],
-  }));
-}
-
-function toPiMessages(messages: ContextMessage[]): Message[] {
-  const now = Date.now();
-  return messages.map((m): Message => {
-    if (m.role === 'user') {
-      return {
-        role: 'user',
-        content: m.content,
-        timestamp: now,
-      } satisfies UserMessage;
-    }
-    // Assistant messages in conversation replay — construct minimal AssistantMessage
-    return {
-      role: 'assistant',
-      content: [{ type: 'text', text: m.content }],
-      api: '',
-      provider: '',
-      model: '',
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: 'stop',
-      timestamp: now,
-    } satisfies AssistantMessage;
-  });
-}
+export { toPiTools } from './conversion.js';

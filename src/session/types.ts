@@ -33,6 +33,8 @@ export interface JournalEntry {
   timestamp: number;
   discordMessageId?: string;
   metadata?: string;
+  originChannelId?: string;
+  channelVisibility?: string;
   // compaction fields
   summary?: string;
   coveredUpTo?: number;

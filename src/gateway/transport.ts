@@ -13,6 +13,10 @@ export interface TransportOptions {
   socketPath: string;
 }
 
+export interface SocketServerOptions {
+  onStartupError?: (error: NodeJS.ErrnoException) => void;
+}
+
 type MessageHandler = (message: unknown) => void;
 
 // ── Socket connection wrapper (both client and server connections) ──
@@ -64,24 +68,88 @@ export class NdjsonConnection extends EventEmitter {
 export function createSocketServer(
   socketPath: string,
   onConnection: (conn: NdjsonConnection) => void,
+  options: SocketServerOptions = {},
 ): net.Server {
   // Clean up stale socket file
   try {
     unlinkSync(socketPath);
-  } catch { /* doesn't exist, that's fine */ }
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code !== 'ENOENT') {
+      log.warn('Failed to remove stale socket path', {
+        socketPath,
+        code: e.code,
+        errno: e.errno,
+        syscall: e.syscall,
+        error: e.message,
+      });
+    }
+  }
 
   const server = net.createServer((socket) => {
     const conn = new NdjsonConnection(socket);
     onConnection(conn);
   });
 
-  server.listen(socketPath, () => {
+  let listening = false;
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    const startupPhase = !listening;
+    log.error(startupPhase ? 'Socket server startup error' : 'Socket server error', {
+      socketPath,
+      code: err.code,
+      errno: err.errno,
+      syscall: err.syscall,
+      error: err.message,
+    });
+
+    if (startupPhase) {
+      if (options.onStartupError) {
+        options.onStartupError(err);
+      } else {
+        queueMicrotask(() => {
+          throw err;
+        });
+      }
+    }
+  });
+
+  server.once('listening', () => {
+    listening = true;
+
     // Make socket accessible
     try {
       chmodSync(socketPath, 0o770);
-    } catch { /* ignore chmod errors */ }
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      log.warn('Failed to set socket permissions', {
+        socketPath,
+        code: e.code,
+        errno: e.errno,
+        syscall: e.syscall,
+        error: e.message,
+      });
+    }
     log.info(`Listening on ${socketPath}`);
   });
+
+  try {
+    server.listen(socketPath);
+  } catch (err) {
+    const startupErr = err as NodeJS.ErrnoException;
+    log.error('Socket server listen threw synchronously', {
+      socketPath,
+      code: startupErr.code,
+      errno: startupErr.errno,
+      syscall: startupErr.syscall,
+      error: startupErr.message,
+    });
+    if (options.onStartupError) {
+      options.onStartupError(startupErr);
+    } else {
+      throw startupErr;
+    }
+  }
 
   return server;
 }

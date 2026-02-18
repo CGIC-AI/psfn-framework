@@ -49,7 +49,15 @@ export interface REPLDeps {
 }
 
 export interface ThinkEvidence {
-  source: 'memory_search' | 'memory_get_by_id' | 'session_messages' | 'llm_query' | 'code';
+  source:
+    | 'memory_search'
+    | 'memory_get_by_id'
+    | 'session_messages'
+    | 'llm_query'
+    | 'web_fetch'
+    | 'repo'
+    | 'module'
+    | 'code';
   query?: string;         // search query or llm prompt (truncated)
   snippet: string;        // what was found (truncated to ~200 chars)
   resultCount?: number;   // how many results returned
@@ -59,11 +67,17 @@ export interface ThinkEvidence {
 
 export interface ThinkStep {
   iteration: number;
-  code: string;            // code the LLM wrote (truncated to 2000 chars)
-  output: string;          // execution output (truncated to 1000 chars)
+  timestamp: number;       // iteration completion timestamp
+  code: string;            // code the LLM wrote
+  output: string;          // execution output
   error: string | null;
   evidenceCollected: ThinkEvidence[];
-  tokensUsed: number;      // this iteration's token count (input + output)
+  inputTokens: number;     // prompt/context tokens for this iteration
+  outputTokens: number;    // model output tokens for this iteration
+  tokensUsed: number;      // deprecated alias: input + output
+  cumulativeTokens: number; // running total after this iteration
+  durationMs: number;      // wall time for this iteration (llm + execution)
+  variablesChanged: string[];
 }
 
 export interface ThinkResult {

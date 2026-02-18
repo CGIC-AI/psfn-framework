@@ -12,14 +12,15 @@ import type { EventBus, EventName, EventMap } from '../../event-bus.js';
 import type { EmbeddingService } from '../../agent-loop.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
-import type { DashboardStats, EnvInfo } from './types.js';
+import type { DashboardStats, EnvInfo, ThinkTraceView } from './types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
+import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { TrustLevel } from '../../trust/types.js';
-import type { RelationshipType } from '../../contacts/types.js';
+import type { RelationshipType, ChannelPrivacyLevel } from '../../contacts/types.js';
 import { TRUST_LEVELS } from '../../trust/types.js';
-import { VALID_RELATIONSHIP_TYPES } from '../../contacts/types.js';
+import { VALID_RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '../../contacts/types.js';
 import { MEMORY_CONFIG } from '../../memory/types.js';
 import { loadSettings, saveSettings, applySettings, parseSettingsForm } from '../../settings.js';
 import * as tpl from './templates.js';
@@ -37,6 +38,18 @@ export class AdminHandlers {
   private modelDiscovery: ModelDiscovery | null;
   private contactStore: ContactStore | null;
   private promptStore: PromptLayerStore | null;
+  private promptRegistry: PromptRegistryStore | null;
+  private usageTotals = {
+    turns: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    llmCalls: 0,
+    toolCalls: 0,
+    contextUtilizationSum: 0,
+    estimatedCostUsd: 0,
+  };
+  private thinkTraces: ThinkTraceView[] = [];
 
   constructor(deps: {
     memoryStore: MemoryStore;
@@ -51,6 +64,7 @@ export class AdminHandlers {
     modelDiscovery?: ModelDiscovery | null;
     contactStore?: ContactStore | null;
     promptStore?: PromptLayerStore | null;
+    promptRegistry?: PromptRegistryStore | null;
   }) {
     this.memoryStore = deps.memoryStore;
     this.sessionStore = deps.sessionStore;
@@ -64,6 +78,44 @@ export class AdminHandlers {
     this.modelDiscovery = deps.modelDiscovery ?? null;
     this.contactStore = deps.contactStore ?? null;
     this.promptStore = deps.promptStore ?? null;
+    this.promptRegistry = deps.promptRegistry ?? null;
+
+    this.eventBus.on('agent.turn.usage', ({ usage }) => {
+      this.usageTotals.turns += 1;
+      this.usageTotals.inputTokens += usage.inputTokens;
+      this.usageTotals.outputTokens += usage.outputTokens;
+      this.usageTotals.cacheReadTokens += usage.cacheReadTokens;
+      this.usageTotals.llmCalls += usage.llmCalls;
+      this.usageTotals.toolCalls += usage.toolCalls;
+      this.usageTotals.contextUtilizationSum += usage.contextUtilization;
+      this.usageTotals.estimatedCostUsd += usage.estimatedCostUsd ?? 0;
+    });
+
+    this.eventBus.on('agent.think.trace', ({ timestamp, task, result }) => {
+      const trace: ThinkTraceView = {
+        timestamp,
+        task,
+        iterations: result.iterations,
+        totalTokens: result.totalInputTokens + result.totalOutputTokens,
+        durationMs: result.durationMs,
+        truncated: result.truncated,
+        budgetStop: result.budgetStop,
+        steps: result.steps.map(step => ({
+          iteration: step.iteration,
+          inputTokens: step.inputTokens,
+          outputTokens: step.outputTokens,
+          cumulativeTokens: step.cumulativeTokens,
+          durationMs: step.durationMs,
+          code: step.code,
+          output: step.output,
+          error: step.error,
+          variablesChanged: step.variablesChanged,
+        })),
+      };
+
+      this.thinkTraces.unshift(trace);
+      if (this.thinkTraces.length > 5) this.thinkTraces.length = 5;
+    });
   }
 
   // ── Login ──
@@ -84,6 +136,19 @@ export class AdminHandlers {
       sessionCount: channels.length,
       schedulerTasks: this.scheduler.taskCount,
       activeShards: this.shardManager.getActiveCount(),
+      sessionUsage: {
+        turns: this.usageTotals.turns,
+        inputTokens: this.usageTotals.inputTokens,
+        outputTokens: this.usageTotals.outputTokens,
+        cacheReadTokens: this.usageTotals.cacheReadTokens,
+        llmCalls: this.usageTotals.llmCalls,
+        toolCalls: this.usageTotals.toolCalls,
+        avgContextUtilization: this.usageTotals.turns > 0
+          ? this.usageTotals.contextUtilizationSum / this.usageTotals.turns
+          : 0,
+        estimatedCostUsd: this.usageTotals.estimatedCostUsd,
+      },
+      recentThinkTraces: this.thinkTraces,
     };
     return tpl.layout('Dashboard', tpl.dashboardPage(stats), 'dashboard');
   }
@@ -200,6 +265,12 @@ export class AdminHandlers {
     const merged = { ...existing, ...settings };
     saveSettings(this.config.dataDir, merged);
     applySettings(this.config, merged);
+    try {
+      this.config.runtimeHooks?.refreshModels?.();
+    } catch {
+      // Keep settings save successful even if runtime model refresh fails.
+      // Next turn will still re-attempt refresh through SubstrateAgent drift detection.
+    }
 
     return tpl.settingsFormResult(true, 'Settings saved');
   }
@@ -232,12 +303,10 @@ export class AdminHandlers {
   }
 
   contactsListFragment(): string {
-    if (!this.contactStore) return '<tr><td colspan="6" class="empty">Contact store not available</td></tr>';
+    if (!this.contactStore) return '<tr><td colspan="5" class="empty">Contact store not available</td></tr>';
     const contacts = this.contactStore.listAll();
-    if (contacts.length === 0) return '<tr><td colspan="6" class="empty">No visitors found</td></tr>';
-    // Re-render the full table body by using the contactsPage internals
-    // We need individual rows, so return the page content minus wrapper
-    return tpl.contactsPage(contacts);
+    if (contacts.length === 0) return '<tr><td colspan="5" class="empty">No visitors found</td></tr>';
+    return contacts.map(contact => tpl.contactRow(contact)).join('');
   }
 
   contactEditFormFragment(contactId: string): string {
@@ -261,6 +330,30 @@ export class AdminHandlers {
     const trustLevel = params.get('trustLevel') as TrustLevel | null;
     const relationshipType = params.get('relationshipType') as RelationshipType | null;
     const notes = params.get('notes');
+    const channelCount = Number.parseInt(params.get('channelCount') ?? '0', 10);
+
+    const channelPrivacyUpdates: Array<{
+      channel: string;
+      channelUserId: string;
+      privacyLevel: ChannelPrivacyLevel;
+    }> = [];
+
+    if (!Number.isNaN(channelCount) && channelCount > 0) {
+      for (let index = 0; index < channelCount; index += 1) {
+        const channel = params.get(`channel_${index}`);
+        const channelUserId = params.get(`channelUserId_${index}`);
+        const privacyLevel = params.get(`channelPrivacy_${index}`);
+        if (!channel || !channelUserId || !privacyLevel) continue;
+        if (!CHANNEL_PRIVACY_LEVELS.includes(privacyLevel as ChannelPrivacyLevel)) {
+          return tpl.settingsFormResult(false, `Invalid channel privacy level: ${privacyLevel}`);
+        }
+        channelPrivacyUpdates.push({
+          channel,
+          channelUserId,
+          privacyLevel: privacyLevel as ChannelPrivacyLevel,
+        });
+      }
+    }
 
     // Validate trust level
     if (trustLevel && !TRUST_LEVELS.includes(trustLevel)) {
@@ -272,22 +365,37 @@ export class AdminHandlers {
       return tpl.settingsFormResult(false, `Invalid relationship type: ${relationshipType}`);
     }
 
-    // Apply updates — order matters: upsert first (may reset trust), then setTrustLevel
-    if (relationshipType && relationshipType !== contact.relationshipType && contact.discordUserId) {
-      // Update via upsert — requires discordUserId for existing record lookup
-      this.contactStore.upsert({
-        ...contact,
-        relationshipType,
-        trustLevel: trustLevel ?? contact.trustLevel,
-      });
+    if (trustLevel && trustLevel !== contact.trustLevel) {
+      const updatedTrust = this.contactStore.setTrustLevel(contactId, trustLevel);
+      if (!updatedTrust) {
+        return tpl.settingsFormResult(false, 'Unable to update trust level for this contact');
+      }
     }
 
-    if (trustLevel && trustLevel !== contact.trustLevel) {
-      this.contactStore.setTrustLevel(contactId, trustLevel);
+    if (relationshipType && relationshipType !== contact.relationshipType) {
+      const updatedRelationship = this.contactStore.updateRelationshipType(contactId, relationshipType);
+      if (!updatedRelationship) {
+        return tpl.settingsFormResult(false, 'Unable to update relationship type for this contact');
+      }
     }
 
     if (notes !== null) {
       this.contactStore.updateNotes(contactId, notes);
+    }
+
+    for (const update of channelPrivacyUpdates) {
+      const updated = this.contactStore.setChannelPrivacy(
+        contactId,
+        update.channel,
+        update.channelUserId,
+        update.privacyLevel,
+      );
+      if (!updated) {
+        return tpl.settingsFormResult(
+          false,
+          `Unable to update channel privacy for ${update.channel}:${update.channelUserId}`,
+        );
+      }
     }
 
     // Return the updated row
@@ -302,7 +410,8 @@ export class AdminHandlers {
 
   promptsPage(): string {
     const layers = this.promptStore?.getAll() ?? [];
-    return tpl.layout('Prompt Soil', tpl.promptsPage(layers), 'prompts');
+    const prompts = this.promptRegistry?.list() ?? [];
+    return tpl.layout('Prompt Soil', tpl.promptsPage(layers, prompts), 'prompts');
   }
 
   promptDetail(layerId: string): string | null {
@@ -317,6 +426,18 @@ export class AdminHandlers {
     );
   }
 
+  promptRegistryDetail(key: string): string | null {
+    if (!this.promptRegistry) return null;
+    const prompt = this.promptRegistry.getByKey(key);
+    if (!prompt) return null;
+    const history = this.promptRegistry.getPromptHistory(key);
+    return tpl.layout(
+      `${prompt.key} -- Prompt Registry`,
+      tpl.promptRegistryDetailPage(prompt, history),
+      'prompts',
+    );
+  }
+
   updatePromptLayer(body: string): string {
     if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
     const params = new URLSearchParams(body);
@@ -325,6 +446,19 @@ export class AdminHandlers {
     try {
       const layer = this.promptStore.update(layerId, content, 'admin');
       return tpl.settingsFormResult(true, `Updated "${layer.name}" to v${layer.version}`);
+    } catch (err) {
+      return tpl.settingsFormResult(false, String(err));
+    }
+  }
+
+  updatePromptRegistry(body: string): string {
+    if (!this.promptRegistry) return '<div class="form-error">Prompt registry not configured</div>';
+    const params = new URLSearchParams(body);
+    const key = params.get('key') ?? '';
+    const content = params.get('content') ?? '';
+    try {
+      const prompt = this.promptRegistry.update(key, content, 'admin');
+      return tpl.settingsFormResult(true, `Updated "${prompt.key}" to v${prompt.version}`);
     } catch (err) {
       return tpl.settingsFormResult(false, String(err));
     }
@@ -357,6 +491,29 @@ export class AdminHandlers {
     }
   }
 
+  rollbackPromptRegistry(body: string): string {
+    if (!this.promptRegistry) return '<div class="form-error">Prompt registry not configured</div>';
+    const params = new URLSearchParams(body);
+    const key = params.get('key') ?? '';
+    const version = parseInt(params.get('version') ?? '0', 10);
+    try {
+      const prompt = this.promptRegistry.rollback(key, version);
+      return tpl.settingsFormResult(true, `Rolled back "${prompt.key}" to content from v${version}`);
+    } catch (err) {
+      return tpl.settingsFormResult(false, String(err));
+    }
+  }
+
+  previewPromptLayerDiff(body: string): string {
+    if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
+    const params = new URLSearchParams(body);
+    const layerId = params.get('layerId') ?? '';
+    const proposed = params.get('content') ?? '';
+    const layer = this.promptStore.getById(layerId);
+    if (!layer) return '<div class="form-error">Prompt layer not found</div>';
+    return tpl.promptDiffFragment(layer.content, proposed);
+  }
+
   // ── Events (SSE) ──
 
   eventsPageHtml(): string {
@@ -374,8 +531,14 @@ export class AdminHandlers {
 
     const sseEvents: EventName[] = [
       'agent.turn.end',
+      'agent.turn.usage',
       'agent.tool.start',
       'agent.tool.end',
+      'agent.compaction.start',
+      'agent.compaction.end',
+      'agent.retry.start',
+      'agent.retry.end',
+      'agent.think.trace',
       'agent.error',
       'memory.extraction.end',
       'memory.retrieval',

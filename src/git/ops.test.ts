@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GitOps, type GitOpsConfig } from './ops.js';
+import { REPO_ALLOWED_PATHS } from '../security/policy-constants.js';
 
 // Mock child_process and fs
 vi.mock('node:child_process', () => ({
@@ -22,7 +23,7 @@ const mockedAppendFileSync = vi.mocked(appendFileSync);
 function createGitOps(overrides?: Partial<GitOpsConfig>): GitOps {
   return new GitOps({
     repoRoot: '/repo',
-    allowedPaths: ['src/', 'docs/', 'purrsephone/'],
+    allowedPaths: [...REPO_ALLOWED_PATHS],
     protectedBranches: ['main', 'master'],
     auditLogPath: 'data/repo-audit.jsonl',
     execTimeoutMs: 30_000,

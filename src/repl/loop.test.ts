@@ -62,6 +62,14 @@ describe('runRLMLoop', () => {
     expect(result.budgetStatus.iterations).toBe(1);
   });
 
+  it('routes think completions through reasoning purpose', async () => {
+    const llm = sequentialLLM(['FINAL("done")']);
+    await runRLMLoop('Reasoning route test', makeDeps(llm));
+
+    const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][1]).toBe('reasoning');
+  });
+
   it('handles multi-iteration with code execution', async () => {
     const llm = sequentialLLM([
       '```repl\nvar x = 21;\nprint(x * 2);\n```',
@@ -193,6 +201,26 @@ describe('runRLMLoop', () => {
     await expect(runRLMLoop('test', makeDeps(llm))).rejects.toThrow('LLM down');
   });
 
+  it('stops with explicit reason when LLM call exceeds remaining wall-time budget', async () => {
+    const llm: LLMProvider = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => {
+        await new Promise(resolve => setTimeout(resolve, 60));
+        return mockResponse('FINAL("too late")');
+      }),
+    };
+
+    const deps = makeDeps(llm, {
+      config: makeConfig({ maxWallTimeMs: 50 }),
+    });
+    const result = await runRLMLoop('Timeout guard test', deps);
+
+    expect(result.truncated).toBe(true);
+    expect(result.iterations).toBe(0);
+    expect(result.budgetStatus.exceeded).toBe('llm timeout');
+    expect(result.answer).toContain('timed out');
+  });
+
   it('records durationMs', async () => {
     const llm = sequentialLLM(['FINAL("quick")']);
     const result = await runRLMLoop('Quick task', makeDeps(llm));
@@ -244,7 +272,7 @@ describe('runRLMLoop', () => {
     const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
     const secondCallMessages = calls[1][0].messages;
     const feedback = secondCallMessages[2].content;
-    expect(feedback).toContain('Variables changed: myVar');
+    expect(feedback).toContain('vars changed: myVar');
     expect(result.answer).toBe('done');
   });
 
@@ -261,7 +289,13 @@ describe('runRLMLoop', () => {
     expect(result.steps[0].code).toContain('print("step output")');
     expect(result.steps[0].output).toContain('step output');
     expect(result.steps[0].error).toBeNull();
+    expect(result.steps[0].timestamp).toBeGreaterThan(0);
+    expect(result.steps[0].inputTokens).toBe(10);
+    expect(result.steps[0].outputTokens).toBe(20);
     expect(result.steps[0].tokensUsed).toBe(30); // 10 input + 20 output
+    expect(result.steps[0].cumulativeTokens).toBe(30);
+    expect(result.steps[0].durationMs).toBeGreaterThanOrEqual(0);
+    expect(result.steps[0].variablesChanged).toEqual([]);
   });
 
   it('flattens evidence from all steps', async () => {
@@ -329,7 +363,7 @@ describe('runRLMLoop', () => {
     expect(result.steps[0].code).toContain('throw new Error');
   });
 
-  it('code step truncates long code and output', async () => {
+  it('code step preserves code and keeps sandbox-truncated output', async () => {
     const longCode = 'print("' + 'x'.repeat(3000) + '");';
     const llm = sequentialLLM([
       '```repl\n' + longCode + '\n```',
@@ -337,7 +371,7 @@ describe('runRLMLoop', () => {
     ]);
     const result = await runRLMLoop('Truncation test', makeDeps(llm));
 
-    expect(result.steps[0].code.length).toBeLessThanOrEqual(2000);
-    expect(result.steps[0].output.length).toBeLessThanOrEqual(1000);
+    expect(result.steps[0].code.length).toBeGreaterThan(2000);
+    expect(result.steps[0].output.length).toBeLessThanOrEqual(DEFAULT_REPL_CONFIG.outputTruncation + 80);
   });
 });

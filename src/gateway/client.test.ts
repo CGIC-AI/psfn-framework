@@ -34,6 +34,10 @@ function createMockConnection() {
   return { conn: conn as unknown as NdjsonConnection, sent, _emit: conn._emit };
 }
 
+function getRpcResponse(sent: unknown[], id: number): any {
+  return sent.find((msg: any) => msg.id === id && ('result' in msg || 'error' in msg));
+}
+
 describe('GatewayClient streaming', () => {
   let conn: ReturnType<typeof createMockConnection>;
   let client: GatewayClient;
@@ -268,6 +272,216 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(response.result.content).toBe('voice response');
     expect(response.result.model).toBe('test-model');
     expect(response.result.durationMs).toBe(500);
+  });
+
+  it('handles discord.voice.start/chunk/end reverse RPC flow', async () => {
+    const handler = vi.fn().mockResolvedValue({
+      content: 'assembled response',
+      channelId: 'discord-voice:123',
+      metadata: { model: 'voice-model', inputTokens: 10, outputTokens: 4, durationMs: 250 },
+    });
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 100,
+      method: 'discord.voice.start',
+      params: {
+        correlationId: 'corr-1',
+        streamId: 'stream-1',
+        sequence: 0,
+        metadata: { format: 'text' },
+        message: {
+          id: 'voice-1',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'Voice User',
+          content: '',
+          timestamp: '2025-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 101,
+      method: 'discord.voice.chunk',
+      params: {
+        correlationId: 'corr-1',
+        streamId: 'stream-1',
+        sequence: 1,
+        text: 'hello ',
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 102,
+      method: 'discord.voice.chunk',
+      params: {
+        correlationId: 'corr-1',
+        streamId: 'stream-1',
+        sequence: 2,
+        text: 'voice',
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 103,
+      method: 'discord.voice.end',
+      params: {
+        correlationId: 'corr-1',
+        streamId: 'stream-1',
+        sequence: 3,
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].content).toBe('hello voice');
+    expect(handler.mock.calls[0][0].timestamp).toBeInstanceOf(Date);
+
+    expect(getRpcResponse(conn.sent, 100).result.accepted).toBe(true);
+    expect(getRpcResponse(conn.sent, 101).result.accepted).toBe(true);
+    expect(getRpcResponse(conn.sent, 102).result.accepted).toBe(true);
+    expect(getRpcResponse(conn.sent, 103).result.content).toBe('assembled response');
+  });
+
+  it('supports voice stream cancellation', async () => {
+    const handler = vi.fn().mockResolvedValue({
+      content: 'should not happen',
+      channelId: 'discord-voice:123',
+      metadata: { model: 'voice-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+    });
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 200,
+      method: 'discord.voice.start',
+      params: {
+        correlationId: 'corr-cancel',
+        streamId: 'stream-cancel',
+        sequence: 0,
+        message: {
+          id: 'voice-2',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'Voice User',
+          content: '',
+          timestamp: '2025-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 10));
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 201,
+      method: 'discord.voice.chunk',
+      params: {
+        correlationId: 'corr-cancel',
+        streamId: 'stream-cancel',
+        sequence: 1,
+        text: 'partial',
+      },
+    });
+    await new Promise(r => setTimeout(r, 10));
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 202,
+      method: 'discord.voice.cancel',
+      params: {
+        correlationId: 'corr-cancel',
+        streamId: 'stream-cancel',
+        sequence: 2,
+        reason: 'interrupted',
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(getRpcResponse(conn.sent, 202).result.cancelled).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(0);
+  });
+
+  it('applies drop_newest queue policy for voice chunks', async () => {
+    const localConn = createMockConnection();
+    const localClient = new GatewayClient(localConn.conn, 1024, {
+      voiceStreamQueueSize: 1,
+      voiceStreamOverflowPolicy: 'drop_newest',
+    });
+    const handler = vi.fn().mockResolvedValue({
+      content: 'ok',
+      channelId: 'discord-voice:123',
+      metadata: { model: 'voice-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+    });
+    localClient.onHandleMessage(handler);
+
+    localConn._emit({
+      jsonrpc: '2.0',
+      id: 300,
+      method: 'discord.voice.start',
+      params: {
+        correlationId: 'corr-drop',
+        streamId: 'stream-drop',
+        sequence: 0,
+        message: {
+          id: 'voice-3',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'Voice User',
+          content: '',
+          timestamp: '2025-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 10));
+    localConn._emit({
+      jsonrpc: '2.0',
+      id: 301,
+      method: 'discord.voice.chunk',
+      params: {
+        correlationId: 'corr-drop',
+        streamId: 'stream-drop',
+        sequence: 1,
+        text: 'first',
+      },
+    });
+    await new Promise(r => setTimeout(r, 10));
+    localConn._emit({
+      jsonrpc: '2.0',
+      id: 302,
+      method: 'discord.voice.chunk',
+      params: {
+        correlationId: 'corr-drop',
+        streamId: 'stream-drop',
+        sequence: 2,
+        text: 'second',
+      },
+    });
+    await new Promise(r => setTimeout(r, 10));
+    localConn._emit({
+      jsonrpc: '2.0',
+      id: 303,
+      method: 'discord.voice.end',
+      params: {
+        correlationId: 'corr-drop',
+        streamId: 'stream-drop',
+        sequence: 3,
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].content).toBe('first');
+    const droppedChunkResp = getRpcResponse(localConn.sent, 302);
+    expect(droppedChunkResp).toBeDefined();
+    expect(droppedChunkResp.result.accepted).toBe(false);
+    expect(getRpcResponse(localConn.sent, 303).result.droppedChunks).toBe(1);
+    localClient.destroy();
   });
 
   it('chunk routing still works after refactor', async () => {

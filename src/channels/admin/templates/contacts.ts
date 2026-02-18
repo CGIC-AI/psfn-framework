@@ -221,6 +221,10 @@ export function contactEditForm(contact: Contact): string {
       `;
     }).join('');
 
+  const addChannelPrivacyOptions = CHANNEL_PRIVACY_LEVELS
+    .map(level => `<option value="${level}"${level === 'semi_private' ? ' selected' : ''}>${level}</option>`)
+    .join('');
+
   return `<tr id="contact-row-${escapeHtml(contact.id)}">
     <td colspan="5">
       <form hx-post="/api/contacts/${encodeURIComponent(contact.id)}" hx-target="#contact-row-${escapeHtml(contact.id)}" hx-swap="outerHTML"
@@ -249,6 +253,23 @@ export function contactEditForm(contact: Contact): string {
         <div class="form-group">
           <label>Linked Channels</label>
           ${channelEditors}
+        </div>
+        <div class="form-group">
+          <label>Link New Channel Identity (optional)</label>
+          <div class="form-row" style="grid-template-columns:1.5fr 1.5fr 1fr">
+            <div class="form-group" style="margin-bottom:0">
+              <label>Channel</label>
+              <input type="text" name="newChannel" placeholder="discord / api / telegram">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label>Channel User ID</label>
+              <input type="text" name="newChannelUserId" placeholder="user id on that channel">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label>Privacy</label>
+              <select name="newChannelPrivacy">${addChannelPrivacyOptions}</select>
+            </div>
+          </div>
         </div>
         <div class="form-group">
           <label>Notes</label>

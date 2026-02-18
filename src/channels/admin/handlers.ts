@@ -12,7 +12,15 @@ import type { EventBus, EventName, EventMap } from '../../event-bus.js';
 import type { EmbeddingService } from '../../agent-loop.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
-import type { DashboardStats, EnvInfo, ThinkTraceView } from './types.js';
+import type {
+  DashboardStats,
+  EnvInfo,
+  ThinkTraceView,
+  AdminChatDebugCategory,
+  AdminChatDebugEventPayload,
+  AdminChatDebugStreamOptions,
+  AdminChatDebugDetailValue,
+} from './types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
@@ -42,6 +50,59 @@ interface ContactConversationChannelView {
   lastSeen?: string;
 }
 
+type ChatDebugEventName =
+  | 'agent.turn.start'
+  | 'agent.turn.stage'
+  | 'agent.turn.end'
+  | 'agent.stream.thinking'
+  | 'agent.stream.delta'
+  | 'agent.tool.start'
+  | 'agent.tool.end'
+  | 'memory.extraction.start'
+  | 'memory.extraction.end'
+  | 'memory.retrieval'
+  | 'agent.error'
+  | 'channel.voice.error'
+  | 'voice.turn.error'
+  | 'system.error';
+
+const CHAT_DEBUG_EVENTS: ChatDebugEventName[] = [
+  'agent.turn.start',
+  'agent.turn.stage',
+  'agent.turn.end',
+  'agent.stream.thinking',
+  'agent.stream.delta',
+  'agent.tool.start',
+  'agent.tool.end',
+  'memory.extraction.start',
+  'memory.extraction.end',
+  'memory.retrieval',
+  'agent.error',
+  'channel.voice.error',
+  'voice.turn.error',
+  'system.error',
+];
+
+const MAX_DEBUG_TEXT_CHARS = 280;
+const MAX_DEBUG_MESSAGE_CHARS = 220;
+const MAX_DEBUG_DETAILS = 6;
+
+function truncateDebugText(value: unknown, maxChars = MAX_DEBUG_TEXT_CHARS): string {
+  if (typeof value !== 'string') return '';
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}...`;
+}
+
+function toDebugDetailValue(value: unknown): AdminChatDebugDetailValue | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string') return truncateDebugText(value, 160);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'boolean') return value;
+  if (value instanceof Error) return truncateDebugText(value.message, 160);
+  if (Array.isArray(value)) return `[${value.length} items]`;
+  return undefined;
+}
+
 export class AdminHandlers {
   private memoryStore: MemoryStore;
   private sessionStore: SessionStore;
@@ -68,6 +129,7 @@ export class AdminHandlers {
     estimatedCostUsd: 0,
   };
   private thinkTraces: ThinkTraceView[] = [];
+  private chatDebugCounter = 0;
 
   constructor(deps: {
     memoryStore: MemoryStore;
@@ -847,5 +909,298 @@ export class AdminHandlers {
     return () => {
       for (const unsub of unsubscribers) unsub();
     };
+  }
+
+  setupChatDebugSSE(
+    res: ServerResponse,
+    options: AdminChatDebugStreamOptions = {},
+  ): () => void {
+    const channelIdFilter = options.channelId?.trim() || undefined;
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+    res.write(':ok\n\n');
+
+    const unsubscribers: Array<() => void> = [];
+    for (const eventName of CHAT_DEBUG_EVENTS) {
+      const unsub = this.eventBus.on(eventName, (data: EventMap[typeof eventName]) => {
+        if (res.writableEnded || res.destroyed) return;
+        const payload = this.toChatDebugPayload(eventName, data);
+        if (channelIdFilter && payload.channelId !== channelIdFilter) return;
+        res.write(`event: chat-debug\ndata: ${JSON.stringify(payload)}\n\n`);
+      });
+      unsubscribers.push(unsub);
+    }
+
+    return () => {
+      for (const unsub of unsubscribers) unsub();
+    };
+  }
+
+  private toChatDebugPayload(
+    eventName: ChatDebugEventName,
+    data: EventMap[ChatDebugEventName],
+  ): AdminChatDebugEventPayload {
+    switch (eventName) {
+      case 'agent.turn.start': {
+        const event = data as EventMap['agent.turn.start'];
+        return this.buildChatDebugEvent(eventName, 'text', 'Turn started', {
+          channelId: event.message.channelId,
+          details: this.compactDebugDetails({
+            messageId: event.message.id,
+            authorId: event.message.authorId,
+            authorName: event.message.authorName,
+            contentPreview: truncateDebugText(event.message.content, 120),
+          }),
+        });
+      }
+      case 'agent.turn.stage': {
+        const event = data as EventMap['agent.turn.stage'];
+        const extras = this.extractDebugExtras(event as Record<string, unknown>, [
+          'turnId',
+          'channelId',
+          'stage',
+          'elapsedMs',
+        ]);
+        return this.buildChatDebugEvent(eventName, 'text', `Turn stage: ${event.stage}`, {
+          channelId: event.channelId,
+          details: this.compactDebugDetails({
+            turnId: event.turnId,
+            elapsedMs: event.elapsedMs,
+            ...(extras ?? {}),
+          }),
+        });
+      }
+      case 'agent.turn.end': {
+        const event = data as EventMap['agent.turn.end'];
+        return this.buildChatDebugEvent(eventName, 'text', 'Turn completed', {
+          channelId: event.message.channelId,
+          details: this.compactDebugDetails({
+            model: event.response.metadata.model,
+            durationMs: event.response.metadata.durationMs,
+            inputTokens: event.response.metadata.inputTokens,
+            outputTokens: event.response.metadata.outputTokens,
+            responsePreview: truncateDebugText(event.response.content, 120),
+          }),
+        });
+      }
+      case 'agent.stream.thinking': {
+        const event = data as EventMap['agent.stream.thinking'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'thinking',
+          truncateDebugText(event.text, MAX_DEBUG_MESSAGE_CHARS) || '[thinking chunk]',
+          {
+            channelId: event.channelId,
+            details: this.compactDebugDetails({ chars: event.text.length }),
+          },
+        );
+      }
+      case 'agent.stream.delta': {
+        const event = data as EventMap['agent.stream.delta'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'text',
+          truncateDebugText(event.text, MAX_DEBUG_MESSAGE_CHARS) || '[text chunk]',
+          {
+            channelId: event.channelId,
+            details: this.compactDebugDetails({ chars: event.text.length }),
+          },
+        );
+      }
+      case 'agent.tool.start': {
+        const event = data as EventMap['agent.tool.start'];
+        return this.buildChatDebugEvent(eventName, 'tools', `Tool start: ${event.toolName}`, {
+          channelId: event.channelId,
+          details: this.compactDebugDetails({
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+          }),
+        });
+      }
+      case 'agent.tool.end': {
+        const event = data as EventMap['agent.tool.end'];
+        return this.buildChatDebugEvent(eventName, 'tools', `Tool end: ${event.toolName}`, {
+          channelId: event.channelId,
+          details: this.compactDebugDetails({
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+            isError: event.isError,
+          }),
+        });
+      }
+      case 'memory.extraction.start': {
+        const event = data as EventMap['memory.extraction.start'];
+        return this.buildChatDebugEvent(eventName, 'memory', 'Memory extraction started', {
+          channelId: event.channelId,
+          details: this.compactDebugDetails({
+            triggerReason: event.triggerReason,
+          }),
+        });
+      }
+      case 'memory.extraction.end': {
+        const event = data as EventMap['memory.extraction.end'];
+        return this.buildChatDebugEvent(eventName, 'memory', 'Memory extraction completed', {
+          channelId: event.channelId,
+          details: this.compactDebugDetails({
+            count: event.count,
+            parsedCount: event.parsedCount,
+            acceptedCount: event.acceptedCount,
+            rejectedCount: event.rejectedCount,
+            writeCount: event.writeCount,
+            rejectionBreakdown: this.formatRejectionBreakdown(event.rejectionBreakdown),
+          }),
+        });
+      }
+      case 'memory.retrieval': {
+        const event = data as EventMap['memory.retrieval'];
+        return this.buildChatDebugEvent(eventName, 'memory', 'Memory retrieval', {
+          channelId: event.channelId,
+          details: this.compactDebugDetails({
+            count: event.count,
+            candidates: event.candidates,
+            ranked: event.ranked,
+            returned: event.returned,
+            reason: event.reason,
+          }),
+        });
+      }
+      case 'agent.error': {
+        const event = data as EventMap['agent.error'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'errors',
+          `Agent error: ${truncateDebugText(event.error.message, 120)}`,
+          {
+            channelId: event.message.channelId,
+            details: this.compactDebugDetails({
+              messageId: event.message.id,
+              authorId: event.message.authorId,
+              contentPreview: truncateDebugText(event.message.content, 120),
+            }),
+          },
+        );
+      }
+      case 'channel.voice.error': {
+        const event = data as EventMap['channel.voice.error'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'errors',
+          `Voice channel error: ${truncateDebugText(event.error, 120)}`,
+          {
+            channelId: event.channelId,
+            details: this.compactDebugDetails({
+              guildId: event.guildId,
+              userId: event.userId,
+            }),
+          },
+        );
+      }
+      case 'voice.turn.error': {
+        const event = data as EventMap['voice.turn.error'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'errors',
+          `Voice turn error: ${truncateDebugText(event.error, 120)}`,
+          {
+            channelId: event.channelId,
+            details: this.compactDebugDetails({
+              turnId: event.turnId,
+              userId: event.userId,
+              stage: event.stage,
+              code: event.code,
+            }),
+          },
+        );
+      }
+      case 'system.error': {
+        const event = data as EventMap['system.error'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'errors',
+          `System error: ${truncateDebugText(event.error.message, 120)}`,
+          {
+            details: this.compactDebugDetails({
+              context: event.context,
+            }),
+          },
+        );
+      }
+      default: {
+        return this.buildChatDebugEvent(eventName, 'text', eventName);
+      }
+    }
+  }
+
+  private buildChatDebugEvent(
+    eventName: ChatDebugEventName,
+    category: AdminChatDebugCategory,
+    message: string,
+    options: {
+      channelId?: string;
+      details?: Record<string, AdminChatDebugDetailValue>;
+    } = {},
+  ): AdminChatDebugEventPayload {
+    const payload: AdminChatDebugEventPayload = {
+      id: `chat-debug-${Date.now()}-${++this.chatDebugCounter}`,
+      timestamp: Date.now(),
+      event: eventName,
+      category,
+      message: truncateDebugText(message, MAX_DEBUG_MESSAGE_CHARS) || eventName,
+    };
+
+    if (options.channelId) {
+      payload.channelId = options.channelId;
+    }
+    if (options.details && Object.keys(options.details).length > 0) {
+      payload.details = options.details;
+    }
+    return payload;
+  }
+
+  private compactDebugDetails(
+    details: Record<string, unknown>,
+  ): Record<string, AdminChatDebugDetailValue> | undefined {
+    const compact: Record<string, AdminChatDebugDetailValue> = {};
+    let count = 0;
+    for (const [key, value] of Object.entries(details)) {
+      if (value === undefined || count >= MAX_DEBUG_DETAILS) continue;
+      const normalizedValue = toDebugDetailValue(value);
+      if (normalizedValue === undefined) continue;
+      compact[key] = normalizedValue;
+      count += 1;
+    }
+    return count > 0 ? compact : undefined;
+  }
+
+  private extractDebugExtras(
+    data: Record<string, unknown>,
+    excludedKeys: string[],
+  ): Record<string, AdminChatDebugDetailValue> | undefined {
+    const excluded = new Set(excludedKeys);
+    const extras: Record<string, AdminChatDebugDetailValue> = {};
+    let count = 0;
+    for (const [key, value] of Object.entries(data)) {
+      if (excluded.has(key) || count >= MAX_DEBUG_DETAILS) continue;
+      const normalized = toDebugDetailValue(value);
+      if (normalized === undefined) continue;
+      extras[key] = normalized;
+      count += 1;
+    }
+    return count > 0 ? extras : undefined;
+  }
+
+  private formatRejectionBreakdown(breakdown?: Record<string, number>): string | undefined {
+    if (!breakdown) return undefined;
+    const entries = Object.entries(breakdown);
+    if (entries.length === 0) return undefined;
+    const summary = entries
+      .slice(0, 4)
+      .map(([reason, count]) => `${reason}:${count}`)
+      .join(', ');
+    return truncateDebugText(summary, 160);
   }
 }

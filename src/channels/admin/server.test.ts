@@ -63,6 +63,56 @@ function sseRequest(
   });
 }
 
+function captureSseBody(
+  port: number,
+  path: string,
+  options: {
+    predicate: (body: string) => boolean;
+    emit?: () => void | Promise<void>;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+  },
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 3000;
+  return new Promise((resolve, reject) => {
+    const req = http.get(
+      { hostname: '127.0.0.1', port, path, headers: { ...(options.headers ?? {}) } },
+      (res) => {
+        let body = '';
+        let settled = false;
+
+        const finish = (result: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutHandle);
+          res.socket?.destroy();
+          result();
+        };
+
+        const timeoutHandle = setTimeout(() => {
+          finish(() => reject(new Error(`Timed out waiting for SSE output on ${path}`)));
+        }, timeoutMs);
+
+        res.on('data', (chunk: Buffer) => {
+          body += chunk.toString();
+          if (options.predicate(body)) {
+            finish(() => resolve(body));
+          }
+        });
+
+        if (options.emit) {
+          setTimeout(() => {
+            Promise.resolve(options.emit?.()).catch((error) => {
+              finish(() => reject(error));
+            });
+          }, 25);
+        }
+      },
+    );
+    req.on('error', reject);
+  });
+}
+
 function allocatePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -474,8 +524,10 @@ describe('AdminServer', () => {
       expect(res.body).toContain('Chat Cockpit');
       expect(res.body).toContain('data-chat-cockpit');
       expect(res.body).toContain('data-chat-controls');
+      expect(res.body).toContain('data-chat-debug');
       expect(res.body).toContain('id="admin-chat-surface"');
       expect(res.body).toContain('<script type="module" src="/static/chat.js"></script>');
+      expect(res.body).toContain('<script type="module" src="/static/chat-debug.js"></script>');
     });
 
     it('returns synthetic bootstrap defaults', async () => {
@@ -701,6 +753,13 @@ describe('AdminServer', () => {
       expect(res.headers['cache-control']).toBe('no-cache');
     }, 5000);
 
+    it('chat debug SSE endpoint returns correct headers', async () => {
+      const res = await sseRequest(port, '/api/chat/events/stream');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toBe('text/event-stream');
+      expect(res.headers['cache-control']).toBe('no-cache');
+    }, 5000);
+
     it('SSE stream includes compaction/retry status events', async () => {
       const sseBody = await new Promise<string>((resolve, reject) => {
         const req = http.get({ hostname: '127.0.0.1', port, path: '/events/stream' }, (res) => {
@@ -751,6 +810,53 @@ describe('AdminServer', () => {
       expect(sseBody).toContain('agent.retry.start');
       expect(sseBody).toContain('attempt=2');
     });
+
+    it('chat debug SSE stream emits structured chat-debug payloads', async () => {
+      const sseBody = await captureSseBody(port, '/api/chat/events/stream', {
+        predicate: (body) => body.includes('event: chat-debug') && body.includes('"event":"agent.tool.start"'),
+        emit: () => eventBus.emit('agent.tool.start', {
+          channelId: 'debug-channel',
+          toolCallId: 'tool-1',
+          toolName: 'memory_search',
+        }),
+      });
+
+      expect(sseBody).toContain('event: chat-debug');
+      const payloadLine = sseBody
+        .split('\n')
+        .find(line => line.startsWith('data: ') && line.includes('"event":"agent.tool.start"'));
+      expect(payloadLine).toBeDefined();
+      const payload = JSON.parse(payloadLine!.slice(6)) as {
+        event: string;
+        category: string;
+        channelId?: string;
+        details?: Record<string, string>;
+      };
+      expect(payload.event).toBe('agent.tool.start');
+      expect(payload.category).toBe('tools');
+      expect(payload.channelId).toBe('debug-channel');
+      expect(payload.details?.toolName).toBe('memory_search');
+      expect(payload.details?.toolCallId).toBe('tool-1');
+    });
+
+    it('chat debug SSE channelId filter scopes events', async () => {
+      const sseBody = await captureSseBody(port, '/api/chat/events/stream?channelId=ch-filter', {
+        predicate: (body) => body.includes('"channelId":"ch-filter"'),
+        emit: async () => {
+          await eventBus.emit('agent.stream.delta', {
+            channelId: 'other-channel',
+            text: 'ignore me',
+          });
+          await eventBus.emit('agent.stream.delta', {
+            channelId: 'ch-filter',
+            text: 'include me',
+          });
+        },
+      });
+
+      expect(sseBody).toContain('"channelId":"ch-filter"');
+      expect(sseBody).not.toContain('"channelId":"other-channel"');
+    });
   });
 
   describe('Static files', () => {
@@ -775,6 +881,15 @@ describe('AdminServer', () => {
       expect(res.body).toContain('X-Session-ID');
     });
 
+    it('serves chat-debug.js', async () => {
+      const res = await request(port, 'GET', '/static/chat-debug.js');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toBe('application/javascript');
+      expect(res.body).toContain('/api/chat/events/stream');
+      expect(res.body).toContain("addEventListener('chat-debug'");
+      expect(res.body).toContain('MAX_TIMELINE_EVENTS');
+    });
+
     it('serves admin.css', async () => {
       const res = await request(port, 'GET', '/static/admin.css');
       expect(res.status).toBe(200);
@@ -784,6 +899,7 @@ describe('AdminServer', () => {
       expect(res.body).toContain('.think-trace');
       expect(res.body).toContain('.channel-privacy');
       expect(res.body).toContain('.chat-cockpit-grid');
+      expect(res.body).toContain('.chat-debug-panel');
     });
   });
 
@@ -863,6 +979,9 @@ describe('AdminServer with auth', () => {
 
     const chatBootstrap = await request(port, 'GET', '/api/chat/bootstrap');
     expect(chatBootstrap.status).toBe(401);
+
+    const chatDebugSse = await sseRequest(port, '/api/chat/events/stream');
+    expect(chatDebugSse.status).toBe(401);
   });
 
   it('rejects requests with wrong token', async () => {
@@ -889,6 +1008,15 @@ describe('AdminServer with auth', () => {
     expect(payload.api.chatCompletionsUrl).toBe('/v1/chat/completions');
   });
 
+  it('accepts chat debug SSE with correct token', async () => {
+    const res = await sseRequest(port, '/api/chat/events/stream', {
+      Authorization: 'Bearer test-admin-secret',
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('text/event-stream');
+    expect(res.headers['cache-control']).toBe('no-cache');
+  });
+
   it('allows login page without auth token', async () => {
     const res = await request(port, 'GET', '/login');
     expect(res.status).toBe(200);
@@ -903,6 +1031,10 @@ describe('AdminServer with auth', () => {
     const chat = await request(port, 'GET', '/static/chat.js');
     expect(chat.status).toBe(200);
     expect(chat.headers['content-type']).toBe('application/javascript');
+
+    const chatDebug = await request(port, 'GET', '/static/chat-debug.js');
+    expect(chatDebug.status).toBe(200);
+    expect(chatDebug.headers['content-type']).toBe('application/javascript');
   });
 });
 

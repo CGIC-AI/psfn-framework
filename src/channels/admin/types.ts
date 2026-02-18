@@ -80,6 +80,24 @@ export interface AdminEvent {
   payload: Record<string, unknown>;
 }
 
+export type AdminChatDebugCategory = 'thinking' | 'text' | 'tools' | 'memory' | 'errors';
+
+export type AdminChatDebugDetailValue = string | number | boolean | null;
+
+export interface AdminChatDebugEventPayload {
+  id: string;
+  timestamp: number;
+  event: string;
+  category: AdminChatDebugCategory;
+  channelId?: string;
+  message: string;
+  details?: Record<string, AdminChatDebugDetailValue>;
+}
+
+export interface AdminChatDebugStreamOptions {
+  channelId?: string;
+}
+
 export interface ChannelInfo {
   channelId: string;
   messageCount: number;

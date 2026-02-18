@@ -111,6 +111,7 @@ export class AdminServer implements Lifecycle {
       { file: 'htmx.min.js', contentType: 'application/javascript' },
       { file: 'sse.js', contentType: 'application/javascript' },
       { file: 'chat.js', contentType: 'application/javascript' },
+      { file: 'chat-debug.js', contentType: 'application/javascript' },
       { file: 'admin.css', contentType: 'text/css; charset=utf-8' },
     ];
     for (const { file, contentType } of staticAssets) {
@@ -308,6 +309,16 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/api/chat/bootstrap'),
         handle: (_req, res) => sendJson(res, 200, this.handlers.chatBootstrap()),
+      },
+      {
+        method: 'GET',
+        match: exactPath('/api/chat/events/stream'),
+        handle: (req, res) => {
+          const url = new URL(req.url ?? '/api/chat/events/stream', `http://${req.headers.host ?? 'localhost'}`);
+          const channelId = url.searchParams.get('channelId') ?? undefined;
+          const cleanup = this.handlers.setupChatDebugSSE(res, { channelId });
+          req.on('close', cleanup);
+        },
       },
       {
         method: 'POST',

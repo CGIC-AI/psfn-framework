@@ -136,7 +136,7 @@ export class SubstrateRuntime implements Lifecycle {
     const contactStore = wireContactRuntime(
       this.agentLoop,
       this.db,
-      process.env.PRIMARY_USER_ID,
+      process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID,
     );
 
     this.agentLoop.memoryProvider = new MemoryRetriever(

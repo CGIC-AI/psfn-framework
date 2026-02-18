@@ -330,6 +330,18 @@ export class AdminHandlers {
     }));
   }
 
+  private getPersistedConversationChannels(contact: Contact): ContactConversationChannelView[] {
+    if (!Array.isArray(contact.conversationChannels) || contact.conversationChannels.length === 0) {
+      return [];
+    }
+
+    return contact.conversationChannels.map(entry => ({
+      channel: entry.channel,
+      channelId: entry.channelId,
+      lastSeen: entry.lastSeen,
+    }));
+  }
+
   private splitSessionChannelId(channelId: string): { channel: string; channelId: string } {
     const separatorIndex = channelId.indexOf(':');
     if (separatorIndex <= 0 || separatorIndex >= channelId.length - 1) {
@@ -358,6 +370,12 @@ export class AdminHandlers {
     const map = new Map<string, ContactConversationChannelView[]>();
 
     for (const contact of contacts) {
+      const persistedChannels = this.getPersistedConversationChannels(contact);
+      if (persistedChannels.length > 0) {
+        map.set(contact.id, persistedChannels);
+        continue;
+      }
+
       const identities = this.getContactIdentityLinks(contact);
       const relatedChannels: ContactConversationChannelView[] = [];
       const seen = new Set<string>();

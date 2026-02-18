@@ -458,6 +458,41 @@ export class ContactStore {
     return trimmed.length > 0 ? trimmed : null;
   }
 
+  private looksLikeOpaqueIdentifier(value: string): boolean {
+    const trimmed = value.trim();
+    if (!trimmed) return true;
+    if (/^\d{8,}$/.test(trimmed)) return true;
+    if (trimmed.includes(':')) return true;
+    if (/^(api|discord|unknown|session|user|id)[-_:.]?[a-z0-9-_.]*$/i.test(trimmed)) return true;
+    return false;
+  }
+
+  private pickPreferredDisplayName(
+    targetDisplayName: string,
+    sourceDisplayName: string,
+    targetDiscordUserId: string | null,
+    sourceDiscordUserId: string | null,
+  ): string {
+    const normalizedTarget = targetDisplayName.trim();
+    const normalizedSource = sourceDisplayName.trim();
+    if (!normalizedTarget) return normalizedSource;
+    if (!normalizedSource) return normalizedTarget;
+
+    if (
+      targetDiscordUserId
+      && normalizedTarget === targetDiscordUserId
+      && normalizedSource !== (sourceDiscordUserId ?? '')
+    ) {
+      return normalizedSource;
+    }
+
+    if (this.looksLikeOpaqueIdentifier(normalizedTarget) && !this.looksLikeOpaqueIdentifier(normalizedSource)) {
+      return normalizedSource;
+    }
+
+    return normalizedTarget;
+  }
+
   private normalizeTrustLevel(value: string): TrustLevel {
     switch (value) {
       case 'primary':
@@ -923,7 +958,12 @@ export class ContactStore {
       const mergedRelationshipType = mergedTrustLevel === 'primary'
         ? 'partner'
         : (targetRow.relationship_type as RelationshipType);
-      const mergedDisplayName = targetRow.display_name || sourceRow.display_name;
+      const mergedDisplayName = this.pickPreferredDisplayName(
+        targetRow.display_name,
+        sourceRow.display_name,
+        targetRow.discord_user_id,
+        sourceRow.discord_user_id,
+      );
       const mergedNickname = targetRow.nickname ?? sourceRow.nickname;
       const mergedDiscordUserId = targetRow.discord_user_id ?? sourceRow.discord_user_id;
       const mergedBaseline = (targetRow.emotional_baseline && targetRow.emotional_baseline !== '{}')
@@ -1068,6 +1108,16 @@ export class ContactStore {
       if (this.isPrimaryIdentity(identity)) {
         this.promoteContactToPrimary(canonicalContactId);
         canonicalContactId = this.reconcilePrimaryContactDuplicates(canonicalContactId);
+      }
+
+      const candidateDisplayName = displayName?.trim();
+      if (
+        candidateDisplayName
+        && candidateDisplayName !== existing.displayName
+        && this.looksLikeOpaqueIdentifier(existing.displayName)
+      ) {
+        this.db.prepare('UPDATE contacts SET display_name = ? WHERE id = ?')
+          .run(candidateDisplayName, canonicalContactId);
       }
 
       return this.getById(canonicalContactId)!;

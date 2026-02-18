@@ -287,5 +287,46 @@ describe('MemoryStore', () => {
       const mem = store2.getById('m2');
       expect(mem!.sensitivity).toBe('public');
     });
+
+    it('migrates legacy l2_memories schema before creating contact index', () => {
+      const legacyDb = new Database(':memory:');
+      sqliteVec.load(legacyDb);
+      legacyDb.exec(`
+        CREATE TABLE l2_memories (
+          id TEXT PRIMARY KEY,
+          text TEXT NOT NULL,
+          type TEXT NOT NULL,
+          importance REAL NOT NULL DEFAULT 0.5,
+          confidence REAL NOT NULL DEFAULT 0.7,
+          emotional_valence REAL NOT NULL DEFAULT 0.0,
+          salience REAL NOT NULL DEFAULT 0.5,
+          source_ref TEXT NOT NULL,
+          extracted_at INTEGER NOT NULL,
+          last_accessed INTEGER NOT NULL,
+          access_count INTEGER NOT NULL DEFAULT 1,
+          superseded_by TEXT,
+          tags TEXT NOT NULL DEFAULT '[]',
+          sensitivity TEXT NOT NULL DEFAULT 'personal',
+          consent_flags TEXT NOT NULL DEFAULT '{}'
+        );
+      `);
+
+      const migratedStore = new MemoryStore(legacyDb);
+      const columns = legacyDb.prepare('PRAGMA table_info(l2_memories)')
+        .all() as Array<{ name: string }>;
+      expect(columns.some(column => column.name === 'contact_id')).toBe(true);
+
+      const emb = makeEmbedding(1);
+      migratedStore.insertMemory(
+        makeMemory('legacy-migrated', 'Legacy schema now supports contact', {
+          contactId: 'contact-legacy-1',
+        }),
+        emb,
+      );
+      const inserted = migratedStore.getById('legacy-migrated');
+      expect(inserted?.contactId).toBe('contact-legacy-1');
+
+      legacyDb.close();
+    });
   });
 });

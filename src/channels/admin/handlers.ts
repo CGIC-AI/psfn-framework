@@ -299,14 +299,20 @@ export class AdminHandlers {
       return tpl.layout('Garden Visitors', '<div class="empty">Contact store not available</div>', 'contacts');
     }
     const contacts = this.contactStore.listAll();
-    return tpl.layout('Garden Visitors', tpl.contactsPage(contacts), 'contacts');
+    const profileMap = new Map(
+      this.memoryStore.listContactProfiles().map(profile => [profile.contactId, profile] as const),
+    );
+    return tpl.layout('Garden Visitors', tpl.contactsPage(contacts, profileMap), 'contacts');
   }
 
   contactsListFragment(): string {
     if (!this.contactStore) return '<tr><td colspan="5" class="empty">Contact store not available</td></tr>';
     const contacts = this.contactStore.listAll();
     if (contacts.length === 0) return '<tr><td colspan="5" class="empty">No visitors found</td></tr>';
-    return contacts.map(contact => tpl.contactRow(contact)).join('');
+    const profileMap = new Map(
+      this.memoryStore.listContactProfiles().map(profile => [profile.contactId, profile] as const),
+    );
+    return contacts.map(contact => tpl.contactRow(contact, profileMap.get(contact.id))).join('');
   }
 
   contactEditFormFragment(contactId: string): string {
@@ -403,7 +409,7 @@ export class AdminHandlers {
     if (!updated) return tpl.settingsFormResult(false, 'Update failed');
 
     // Return a fresh table row so htmx replaces the edit form
-    return tpl.contactRow(updated);
+    return tpl.contactRow(updated, this.memoryStore.getContactProfile(updated.id));
   }
 
   // ── Prompt Stack ──

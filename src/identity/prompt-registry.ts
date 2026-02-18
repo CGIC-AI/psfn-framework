@@ -19,10 +19,12 @@ const log = createComponentLogger('PromptRegistry');
 
 export const EXTRACTION_PROMPT_KEY = 'memory.extraction' as const;
 export const COMPACTION_SUMMARY_PROMPT_KEY = 'session.compaction.summary' as const;
+export const PROFILE_SYNTHESIS_PROMPT_KEY = 'memory.profile.synthesis' as const;
 
 export type PromptRegistryKey =
   | typeof EXTRACTION_PROMPT_KEY
-  | typeof COMPACTION_SUMMARY_PROMPT_KEY;
+  | typeof COMPACTION_SUMMARY_PROMPT_KEY
+  | typeof PROFILE_SYNTHESIS_PROMPT_KEY;
 
 interface PromptSeed {
   key: PromptRegistryKey;
@@ -94,12 +96,33 @@ If there are no new facts worth extracting, respond with an empty response block
     consumers: ['src/session/manager.ts'],
     text: 'Summarize this conversation excerpt concisely, preserving key facts and context.',
   },
+  {
+    key: PROFILE_SYNTHESIS_PROMPT_KEY,
+    description:
+      'Canonical contact profile synthesis prompt. Must include {contact_id}, {existing_profile}, and {memory_facts}.',
+    consumers: ['src/memory/extraction.ts'],
+    text: `Synthesize a stable contact profile for canonical contact: {contact_id}.
+
+Existing profile (if any):
+{existing_profile}
+
+Source memories (most relevant first):
+{memory_facts}
+
+Write a concise profile in 1-2 short paragraphs. Keep durable identity/relationship facts, communication style, and emotionally important anchors. Exclude trivial chatter and transient logistics.
+
+Return XML only:
+<profile>
+  <summary>One to two paragraphs here.</summary>
+</profile>`,
+  },
 ];
 
 const REQUIRED_KEYS = new Set<PromptRegistryKey>(PROMPT_SEEDS.map(seed => seed.key));
 
 const REQUIRED_SUBSTRINGS: Partial<Record<PromptRegistryKey, string[]>> = {
   [EXTRACTION_PROMPT_KEY]: ['{existing_facts}', '{recent_messages}', '<response>', '<fact>'],
+  [PROFILE_SYNTHESIS_PROMPT_KEY]: ['{contact_id}', '{existing_profile}', '{memory_facts}', '<profile>', '<summary>'],
 };
 
 function contentChecksum(content: string): string {

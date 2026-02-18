@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { ContactStore } from './store.js';
 import {
+  createContactLinkIdentityTool,
   createContactSetTrustTool,
   createContactNoteTool,
   createContactLookupTool,
@@ -145,6 +146,7 @@ describe('contact tools', () => {
 
       const result = await tool.execute('call-7', { contactId: contact.id });
 
+      expect(resultText(result)).toContain(`Canonical ID: ${contact.id}`);
       expect(resultText(result)).toContain('Contact: Dana');
       expect(resultText(result)).toContain('Trust: regular');
       expect(resultText(result)).toContain('Relationship: stranger');
@@ -159,6 +161,20 @@ describe('contact tools', () => {
 
       expect(resultText(result)).toContain('Contact: Eve');
       expect(resultText(result)).toContain('Trust: regular');
+    });
+
+    it('looks up a contact by channel identity syntax', async () => {
+      const contact = store.upsert({
+        displayName: 'Sky',
+        channelIdentities: [{ channel: 'api', userId: 'sky-api-1' }],
+      });
+      const tool = createContactLookupTool(store);
+
+      const result = await tool.execute('call-8b', { contactId: 'api:sky-api-1' });
+
+      expect(resultText(result)).toContain(`Canonical ID: ${contact.id}`);
+      expect(resultText(result)).toContain('Contact: Sky');
+      expect(resultText(result)).toContain('Identities: api:sky-api-1');
     });
 
     it('returns not found for unknown ID', async () => {
@@ -226,6 +242,38 @@ describe('contact tools', () => {
       // The line should not end with ' — ' or contain ' — ' since there are no notes
       const irisLine = text.split('\n').find((l: string) => l.includes('Iris'))!;
       expect(irisLine).not.toContain(' — ');
+    });
+  });
+
+  describe('createContactLinkIdentityTool', () => {
+    it('links a new channel identity to an existing contact', async () => {
+      const contact = store.upsert({ displayName: 'Nova', discordUserId: 'nova-discord' });
+      const tool = createContactLinkIdentityTool(store);
+
+      const result = await tool.execute('call-14', {
+        contactId: contact.id,
+        channel: 'api',
+        channelUserId: 'nova-api',
+      });
+
+      expect(resultText(result)).toContain('Linked api:nova-api');
+      const resolved = store.getByChannelIdentity('api', 'nova-api');
+      expect(resolved?.id).toBe(contact.id);
+    });
+
+    it('returns conflict when identity belongs to another contact', async () => {
+      const first = store.upsert({ displayName: 'First', channelIdentities: [{ channel: 'api', userId: 'shared-api' }] });
+      const second = store.upsert({ displayName: 'Second', discordUserId: 'second-discord' });
+      expect(first.id).not.toBe(second.id);
+      const tool = createContactLinkIdentityTool(store);
+
+      const result = await tool.execute('call-15', {
+        contactId: second.id,
+        channel: 'api',
+        channelUserId: 'shared-api',
+      });
+
+      expect(resultText(result)).toContain('already linked to a different contact');
     });
   });
 });

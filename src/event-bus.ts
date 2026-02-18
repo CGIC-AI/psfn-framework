@@ -1,22 +1,108 @@
-import type { SubstrateMessage, AgentResponse } from './types.js';
+import type { SubstrateMessage, AgentResponse, TurnUsage } from './types.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
 
 // ── Event map: all typed events in the system ──
 
+export interface ExternalTelemetryEvent {
+  id: string;
+  source: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  occurredAt: string;
+  receivedAt: string;
+  nonce: string;
+  channelId?: string;
+  scope?: string;
+}
+
 export interface EventMap {
   'message.received': { message: SubstrateMessage };
   'message.sent': { response: AgentResponse };
   'agent.turn.start': { message: SubstrateMessage };
   'agent.turn.end': { message: SubstrateMessage; response: AgentResponse };
+  'agent.turn.stage': {
+    turnId: string;
+    channelId: string;
+    stage: string;
+    elapsedMs: number;
+    [key: string]: unknown;
+  };
+  'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage };
   'agent.stream.delta': { channelId: string; text: string };
+  'agent.stream.thinking': { channelId: string; text: string };
   'agent.tool.start': { channelId: string; toolCallId: string; toolName: string };
   'agent.tool.end': { channelId: string; toolCallId: string; toolName: string; isError: boolean };
+  'agent.compaction.start': {
+    channelId: string;
+    reason: 'threshold' | 'overflow';
+    tokensBefore: number;
+    tokenBudget: number;
+  };
+  'agent.compaction.end': { channelId: string; tokensBefore: number; tokensAfter: number };
+  'agent.retry.start': {
+    channelId: string;
+    attempt: number;
+    maxAttempts: number;
+    delayMs: number;
+    error: string;
+  };
+  'agent.retry.end': { channelId: string; success: boolean; attempt: number };
+  'agent.think.trace': {
+    timestamp: number;
+    task: string;
+    result: {
+      iterations: number;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      durationMs: number;
+      truncated: boolean;
+      budgetStop: string | null;
+      steps: Array<{
+        iteration: number;
+        timestamp: number;
+        code: string;
+        output: string;
+        error: string | null;
+        inputTokens: number;
+        outputTokens: number;
+        cumulativeTokens: number;
+        durationMs: number;
+        variablesChanged: string[];
+      }>;
+    };
+  };
   'agent.error': { message: SubstrateMessage; error: Error };
-  'memory.extraction.start': { channelId: string };
-  'memory.extraction.end': { channelId: string; count: number };
-  'memory.retrieval': { channelId: string; count: number };
+  'memory.extraction.start': { channelId: string; triggerReason?: string };
+  'memory.extraction.end': {
+    channelId: string;
+    count: number;
+    triggerReason?: string;
+    parsedCount?: number;
+    acceptedCount?: number;
+    rejectedCount?: number;
+    writeCount?: number;
+    deduplicatedCount?: number;
+    supersededCount?: number;
+    rejectionBreakdown?: Record<string, number>;
+  };
+  'memory.retrieval': {
+    channelId: string;
+    count: number;
+    candidates?: number;
+    ranked?: number;
+    returned?: number;
+    reason?: string;
+  };
+  'channel.queue.telemetry': {
+    channelId: string;
+    phase: 'acquired' | 'contended' | 'released';
+    queueDepth: number;
+    waitMs: number;
+    processingChannels: number;
+    timestamp: number;
+  };
   'session.created': { channelId: string };
   'session.compacted': { channelId: string; before: number; after: number };
   'schedule.tick': { timestamp: number };
@@ -24,6 +110,15 @@ export interface EventMap {
   'schedule.heartbeat': { timestamp: number; taskCount: number };
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };
+  'channel.voice.transcript.partial': {
+    guildId: string;
+    channelId: string;
+    userId: string;
+    transcript: string;
+    confidence?: number;
+    startMs?: number;
+    endMs?: number;
+  };
   'channel.voice.transcript': { guildId: string; channelId: string; userId: string; transcript: string };
   'channel.voice.tts.sent': { guildId: string; channelId: string; userId: string; text: string };
   'channel.voice.error': {
@@ -32,6 +127,73 @@ export interface EventMap {
     userId?: string;
     error: string;
   };
+  'voice.turn.start': {
+    turnId: string;
+    channelId?: string;
+    userId?: string;
+    timestampMs?: number;
+  };
+  'voice.turn.end': {
+    turnId: string;
+    channelId?: string;
+    userId?: string;
+    status?: 'completed' | 'cancelled' | 'timeout' | 'error';
+    reason?: string;
+    timestampMs?: number;
+  };
+  'voice.turn.interrupted': {
+    turnId: string;
+    channelId?: string;
+    userId?: string;
+    reason?: string;
+    timestampMs?: number;
+  };
+  'voice.frame.dropped': {
+    turnId?: string;
+    channelId?: string;
+    userId?: string;
+    stage?: 'transport' | 'stt' | 'tts' | 'pipeline' | 'unknown';
+    reason?: string;
+    count?: number;
+    timestampMs?: number;
+  };
+  'voice.turn.error': {
+    turnId?: string;
+    channelId?: string;
+    userId?: string;
+    stage?: 'transport' | 'stt' | 'tts' | 'orchestrator' | 'unknown';
+    code?: string;
+    error: string;
+    timestampMs?: number;
+  };
+  'voice.stt.partial': {
+    turnId: string;
+    channelId?: string;
+    userId?: string;
+    text?: string;
+    timestampMs?: number;
+  };
+  'voice.stt.final': {
+    turnId: string;
+    channelId?: string;
+    userId?: string;
+    text: string;
+    timestampMs?: number;
+  };
+  'voice.tts.requested': {
+    turnId: string;
+    channelId?: string;
+    userId?: string;
+    text?: string;
+    timestampMs?: number;
+  };
+  'voice.tts.first-byte': {
+    turnId: string;
+    channelId?: string;
+    userId?: string;
+    timestampMs?: number;
+  };
+  'external.telemetry.ingested': { event: ExternalTelemetryEvent };
   'system.init': Record<string, never>;
   'system.ready': Record<string, never>;
   'system.shutdown': Record<string, never>;

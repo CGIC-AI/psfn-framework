@@ -26,6 +26,20 @@ describe('ContactStore', () => {
     it('is idempotent — second construction does not throw', () => {
       expect(() => new ContactStore(db, PRIMARY_USER_ID)).not.toThrow();
     });
+
+    it('migrates legacy discord_user_id rows into channel identity table', () => {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO contacts (
+          id, discord_user_id, display_name, trust_level, relationship_type,
+          emotional_baseline, first_seen, last_seen
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run('legacy-contact', 'legacy-discord-id', 'Legacy', 'trusted', 'friend', '{}', now, now);
+
+      const migratedStore = new ContactStore(db, PRIMARY_USER_ID);
+      const byChannelIdentity = migratedStore.getByChannelIdentity('discord', 'legacy-discord-id');
+      expect(byChannelIdentity?.id).toBe('legacy-contact');
+    });
   });
 
   describe('upsert', () => {
@@ -120,6 +134,27 @@ describe('ContactStore', () => {
 
     it('returns undefined when not found', () => {
       expect(store.getByDiscordUserId('nonexistent')).toBeUndefined();
+    });
+  });
+
+  describe('getByChannelIdentity', () => {
+    it('returns contact when identity mapping exists', () => {
+      const contact = store.upsert({
+        displayName: 'Cross',
+        channelIdentities: [{ channel: 'api', userId: 'cross-api-1' }],
+      });
+
+      const found = store.getByChannelIdentity('api', 'cross-api-1');
+      expect(found?.id).toBe(contact.id);
+      expect(found?.displayName).toBe('Cross');
+    });
+
+    it('falls back to legacy discord_user_id rows', () => {
+      const contact = store.upsert({ displayName: 'Legacy', discordUserId: 'legacy-discord' });
+
+      const found = store.getByChannelIdentity('discord', 'legacy-discord');
+      expect(found?.id).toBe(contact.id);
+      expect(found?.discordUserId).toBe('legacy-discord');
     });
   });
 
@@ -257,6 +292,42 @@ describe('ContactStore', () => {
       expect(contact.trustLevel).toBe('primary');
       expect(contact.relationshipType).toBe('partner');
       expect(contact.discordUserId).toBe(PRIMARY_USER_ID);
+    });
+  });
+
+  describe('resolveChannelIdentity', () => {
+    it('creates channel-aware contact mappings for non-discord channels', () => {
+      const contact = store.resolveChannelIdentity('api', 'api-user-1', 'API User');
+      expect(contact.displayName).toBe('API User');
+      expect(contact.channelIdentities).toEqual([
+        { channel: 'api', userId: 'api-user-1' },
+      ]);
+    });
+
+    it('reuses canonical contact when linked channel identity exists', () => {
+      const contact = store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
+      const link = store.linkChannelIdentity(contact.id, 'api', 'v-api-id');
+      expect(link).toBe('linked');
+
+      const resolved = store.resolveChannelIdentity('api', 'v-api-id', 'V API');
+      expect(resolved.id).toBe(contact.id);
+      expect(resolved.trustLevel).toBe('primary');
+    });
+  });
+
+  describe('linkChannelIdentity', () => {
+    it('returns conflict when identity is already linked to another contact', () => {
+      const first = store.upsert({
+        displayName: 'First',
+        channelIdentities: [{ channel: 'api', userId: 'shared-api-id' }],
+      });
+      const second = store.upsert({ displayName: 'Second', discordUserId: 'second-discord-id' });
+
+      const result = store.linkChannelIdentity(second.id, 'api', 'shared-api-id');
+      expect(result).toBe('identity_conflict');
+
+      const found = store.getByChannelIdentity('api', 'shared-api-id');
+      expect(found?.id).toBe(first.id);
     });
   });
 

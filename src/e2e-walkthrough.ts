@@ -6,27 +6,25 @@
 // Run: npx tsx src/e2e-walkthrough.ts
 
 import 'dotenv/config';
-import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
-import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
-import { SessionStore } from './session/store.js';
-import { SessionManager } from './session/manager.js';
 import { AgentLoop } from './agent-loop.js';
 import { MemoryStore } from './memory/store.js';
-import { EmbeddingProvider } from './memory/embedding.js';
-import { MemoryRetriever } from './memory/retrieval.js';
-import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
-import { ShardManager } from './shards/manager.js';
-import { createSpawnShardTool } from './shards/tools.js';
-import { createThinkTool } from './repl/tools.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { dirname } from 'node:path';
+import {
+  composeIdentity,
+  composeSessionRuntime,
+  createEmbeddingProviderFromEnv,
+  composeAgentLoop,
+  wireMemoryRuntime,
+  wireShardAndThinkRuntime,
+} from './bootstrap/composition.js';
 
 const CHANNEL = 'walkthrough:orientation';
 
@@ -69,57 +67,52 @@ async function main(): Promise<void> {
   db.pragma('foreign_keys = ON');
 
   // Identity
-  const card = loadCharacterCard(config.characterCardPath);
-  const systemPrompt = composeSystemPrompt(card);
+  const { card, systemPrompt } = composeIdentity(config);
   console.log(`Character: ${card.data.name}`);
 
   // Core components
   const llmClient = new LLMClient(config);
-  const sessionsDir = join(config.dataDir, 'sessions');
-  const sessionStore = new SessionStore(sessionsDir);
-  const sessionManager = new SessionManager(sessionStore, config);
+  const sessionComposition = composeSessionRuntime({ config });
+  const { sessionStore, sessionManager } = sessionComposition;
 
   // Embeddings
-  const embeddingProvider = new EmbeddingProvider({
-    ollamaUrl: process.env.OLLAMA_URL,
-    model: process.env.EMBEDDING_MODEL,
-    dims: process.env.EMBEDDING_DIMS ? parseInt(process.env.EMBEDDING_DIMS, 10) : undefined,
-  });
+  const embeddingProvider = createEmbeddingProviderFromEnv();
 
   const memoryStore = new MemoryStore(db, embeddingProvider.dims);
 
   // Agent loop with all features
-  const agentLoop = new AgentLoop(eventBus, llmClient, sessionManager, systemPrompt, config);
-  agentLoop.memoryProvider = new MemoryRetriever(memoryStore, embeddingProvider);
-  agentLoop.memoryExtractor = new MemoryExtractor(
-    llmClient, sessionManager, memoryStore, embeddingProvider, eventBus,
-  );
+  const agentLoop = composeAgentLoop({
+    eventBus,
+    llmProvider: llmClient,
+    sessionManager,
+    systemPrompt,
+    config,
+  });
+  const memoryExtractor = wireMemoryRuntime({
+    agentLoop,
+    llmProvider: llmClient,
+    sessionManager,
+    memoryStore,
+    embeddingService: embeddingProvider,
+    eventBus,
+    config,
+  });
 
   const salienceDecay = new SalienceDecay(memoryStore);
   salienceDecay.start();
 
-  // Shards
-  const shardManager = new ShardManager({
+  wireShardAndThinkRuntime({
+    agentLoop,
     eventBus,
     llmProvider: llmClient,
     sessionStore,
     embeddingService: embeddingProvider,
-    memoryProvider: agentLoop.memoryProvider,
-    config,
-    parentSystemPrompt: systemPrompt,
-  });
-  agentLoop.registerTool(createSpawnShardTool(shardManager));
-
-  // Think tool (RLM+REPL)
-  agentLoop.registerTool(createThinkTool({
-    llmProvider: llmClient,
-    embeddingService: embeddingProvider,
     memoryStore,
     sessionManager,
-    scheduler: null,
-    eventBus,
-    config: DEFAULT_REPL_CONFIG,
-  }));
+    config,
+    parentSystemPrompt: systemPrompt,
+    replConfig: DEFAULT_REPL_CONFIG,
+  });
 
   // Stream events for visibility
   eventBus.on('memory.extraction.end', ({ channelId, count }) => {
@@ -207,8 +200,7 @@ async function main(): Promise<void> {
 
   // Force a final extraction to capture memories from this conversation
   console.log('\n\n  [Running final memory extraction...]');
-  const extractor = agentLoop.memoryExtractor as MemoryExtractor;
-  await extractor.extract(CHANNEL);
+  await memoryExtractor.extract(CHANNEL);
 
   // Print memories extracted from this walkthrough
   const walkthroughMemories = memoryStore.getMemoriesByChannel(CHANNEL, 30);
@@ -223,6 +215,9 @@ async function main(): Promise<void> {
   const sessionCount = sessionStore.count(CHANNEL);
   console.log(`\n  Session entries: ${sessionCount}`);
   console.log(`  Total active memories in database: ${memoryStore.getAllActiveMemories().length}`);
+
+  // Drain briefly, but do not block forever if one extraction call is still in-flight.
+  await memoryExtractor.stop({ timeoutMs: 10_000 });
 
   // Cleanup
   salienceDecay.stop();

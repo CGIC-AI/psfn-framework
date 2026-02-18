@@ -7,6 +7,7 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import type { ContactStore } from './store.js';
 import type { TrustLevel } from '../trust/types.js';
 import { TRUST_LEVELS } from '../trust/types.js';
+import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel } from './types.js';
 
 export function createContactSetTrustTool(contactStore: ContactStore): AgentTool<any> {
   return {
@@ -85,15 +86,78 @@ export function createContactNoteTool(contactStore: ContactStore): AgentTool<any
   };
 }
 
+export function createContactSetChannelPrivacyTool(contactStore: ContactStore): AgentTool<any> {
+  return {
+    name: 'contact_set_channel_privacy',
+    description:
+      'Set the privacy level for one linked channel identity on a contact.',
+    label: 'contact_set_channel_privacy',
+    parameters: Type.Object({
+      contactId: Type.String({ description: 'Canonical contact ID' }),
+      channel: Type.String({ minLength: 1, description: 'Channel key, for example: discord, api, telegram' }),
+      channelUserId: Type.String({ minLength: 1, description: 'User ID within that channel' }),
+      privacyLevel: Type.Unsafe<ChannelPrivacyLevel>({
+        type: 'string',
+        enum: [...CHANNEL_PRIVACY_LEVELS],
+        description: 'Privacy level: private, semi_private, public, broadcast',
+      }),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        contactId: string;
+        channel: string;
+        channelUserId: string;
+        privacyLevel: ChannelPrivacyLevel;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      if (!(CHANNEL_PRIVACY_LEVELS as readonly string[]).includes(params.privacyLevel)) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Invalid channel privacy level: ${params.privacyLevel}. Must be one of: ${CHANNEL_PRIVACY_LEVELS.join(', ')}`,
+          }] satisfies TextContent[],
+          details: {},
+        };
+      }
+
+      const updated = contactStore.setChannelPrivacy(
+        params.contactId,
+        params.channel,
+        params.channelUserId,
+        params.privacyLevel,
+      );
+      if (!updated) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Channel link not found for ${params.contactId}: ${params.channel}:${params.channelUserId}`,
+          }] satisfies TextContent[],
+          details: {},
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Updated ${params.channel}:${params.channelUserId} privacy to ${params.privacyLevel} for ${params.contactId}`,
+        }] satisfies TextContent[],
+        details: {},
+      };
+    },
+  };
+}
+
 export function createContactLookupTool(contactStore: ContactStore): AgentTool<any> {
   return {
     name: 'contact_lookup',
     description:
-      'Look up a contact by their ID or Discord user ID. ' +
+      'Look up a contact by canonical ID, Discord user ID, or channel identity (channel:userId). ' +
       'Returns trust level, relationship type, and notes.',
     label: 'contact_lookup',
     parameters: Type.Object({
-      contactId: Type.String({ description: 'The contact ID (or Discord user ID)' }),
+      contactId: Type.String({ description: 'Canonical contact ID, Discord user ID, or channel identity (channel:userId)' }),
     }),
     execute: async (
       _toolCallId: string,
@@ -102,10 +166,20 @@ export function createContactLookupTool(contactStore: ContactStore): AgentTool<a
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const id = params.contactId;
 
-      // Try direct ID first, then Discord user ID
+      // Try canonical ID first, then Discord user ID.
       let contact = contactStore.getById(id);
       if (!contact) {
         contact = contactStore.getByDiscordUserId(id);
+      }
+      if (!contact) {
+        const idx = id.indexOf(':');
+        if (idx > 0 && idx < id.length - 1) {
+          const channel = id.slice(0, idx).trim();
+          const channelUserId = id.slice(idx + 1).trim();
+          if (channel && channelUserId) {
+            contact = contactStore.getByChannelIdentity(channel, channelUserId);
+          }
+        }
       }
 
       if (!contact) {
@@ -115,19 +189,111 @@ export function createContactLookupTool(contactStore: ContactStore): AgentTool<a
         };
       }
 
+      const identities = contact.channelIdentities
+        ?.map(identity => `${identity.channel}:${identity.userId}`)
+        .join(', ');
+      const channels = contact.channels
+        ?.map(channel => `${channel.channel}:${channel.userId}[${channel.privacyLevel}]`)
+        .join(', ');
+
       return {
         content: [{
           type: 'text',
           text:
+            `Canonical ID: ${contact.id}\n` +
             `Contact: ${contact.displayName}\n` +
             `Trust: ${contact.trustLevel}\n` +
             `Relationship: ${contact.relationshipType}\n` +
+            (identities ? `Identities: ${identities}\n` : '') +
+            (channels ? `Channels: ${channels}\n` : '') +
             `First seen: ${contact.firstSeen}\n` +
             `Last seen: ${contact.lastSeen}` +
             (contact.notes ? `\nNotes: ${contact.notes}` : ''),
         }] satisfies TextContent[],
         details: {},
       };
+    },
+  };
+}
+
+export function createContactLinkIdentityTool(contactStore: ContactStore): AgentTool<any> {
+  return {
+    name: 'contact_link_identity',
+    description:
+      'Link a channel-specific user ID to an existing contact so trust and continuity can be shared cross-channel.',
+    label: 'contact_link_identity',
+    parameters: Type.Object({
+      contactId: Type.String({ description: 'Canonical contact ID to extend' }),
+      channel: Type.String({ minLength: 1, description: 'Channel key, for example: discord, api, telegram' }),
+      channelUserId: Type.String({ minLength: 1, description: 'User ID within that channel' }),
+      privacyLevel: Type.Optional(Type.Unsafe<ChannelPrivacyLevel>({
+        type: 'string',
+        enum: [...CHANNEL_PRIVACY_LEVELS],
+        description: 'Optional privacy level for this channel link',
+      })),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        contactId: string;
+        channel: string;
+        channelUserId: string;
+        privacyLevel?: ChannelPrivacyLevel;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      if (params.privacyLevel && !(CHANNEL_PRIVACY_LEVELS as readonly string[]).includes(params.privacyLevel)) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Invalid channel privacy level: ${params.privacyLevel}. Must be one of: ${CHANNEL_PRIVACY_LEVELS.join(', ')}`,
+          }] satisfies TextContent[],
+          details: {},
+        };
+      }
+
+      const result = contactStore.linkChannelIdentity(
+        params.contactId,
+        params.channel,
+        params.channelUserId,
+        { privacyLevel: params.privacyLevel },
+      );
+
+      switch (result) {
+        case 'linked':
+          return {
+            content: [{
+              type: 'text',
+              text: `Linked ${params.channel}:${params.channelUserId} to ${params.contactId}`,
+            }] satisfies TextContent[],
+            details: {},
+          };
+        case 'already_linked':
+          return {
+            content: [{
+              type: 'text',
+              text: `${params.channel}:${params.channelUserId} is already linked to ${params.contactId}`,
+            }] satisfies TextContent[],
+            details: {},
+          };
+        case 'contact_not_found':
+          return {
+            content: [{
+              type: 'text',
+              text: `Contact ${params.contactId} not found`,
+            }] satisfies TextContent[],
+            details: {},
+          };
+        case 'identity_conflict':
+        default:
+          return {
+            content: [{
+              type: 'text',
+              text: `${params.channel}:${params.channelUserId} is already linked to a different contact`,
+            }] satisfies TextContent[],
+            details: {},
+          };
+      }
     },
   };
 }
@@ -154,6 +320,7 @@ export function createContactListTool(contactStore: ContactStore): AgentTool<any
 
       const lines = contacts.map(c =>
         `- ${c.displayName} [${c.trustLevel}/${c.relationshipType}]` +
+        ((c.channels?.length ?? 0) > 0 ? ` channels=${c.channels!.length}` : '') +
         (c.notes ? ` — ${c.notes}` : ''),
       );
       return {

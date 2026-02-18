@@ -6,20 +6,13 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { TextContent } from '@mariozechner/pi-ai';
 import type { HeartbeatPolicyStore } from './heartbeat-policy.js';
 import type { Scheduler } from './scheduler.js';
 import type { AgentLoop } from '../agent-loop.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
+import { textResultWithError as textResult } from '../tools/results.js';
 
 // ── Helpers ──
-
-function textResult(text: string, isError = false): AgentToolResult<{ isError?: boolean }> {
-  return {
-    content: [{ type: 'text', text }] satisfies TextContent[],
-    details: { isError: isError || undefined },
-  };
-}
 
 function formatMs(ms: number): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;

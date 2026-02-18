@@ -327,3 +327,216 @@ describe('DiscordAdapter startup backfill', () => {
     expect(store.count('123456789012345678')).toBe(1);
   });
 });
+
+interface MockSentMessage {
+  content: string;
+  edit: (next: string) => Promise<MockSentMessage>;
+  delete: () => Promise<void>;
+}
+
+function makeInteractiveTextChannel() {
+  const sent: string[] = [];
+  const edits: string[] = [];
+  const deleted: string[] = [];
+  let typingCalls = 0;
+
+  const channel = {
+    isTextBased: () => true,
+    messages: {
+      fetch: vi.fn(async () => new Map()),
+    },
+    sendTyping: vi.fn(async () => { typingCalls++; }),
+    send: vi.fn(async (content: string) => {
+      const message: MockSentMessage = {
+        content,
+        edit: async (next: string) => {
+          message.content = next;
+          edits.push(next);
+          return message;
+        },
+        delete: async () => {
+          deleted.push(message.content);
+        },
+      };
+      sent.push(content);
+      return message;
+    }),
+  };
+
+  return { channel, sent, edits, deleted, get typingCalls() { return typingCalls; } };
+}
+
+function makeDiscordIncomingMessage(
+  channelId: string,
+  channel: any,
+  overrides?: { id?: string; content?: string },
+) {
+  return {
+    id: overrides?.id ?? 'msg-1',
+    channelId,
+    channel,
+    guild: null,
+    content: overrides?.content ?? 'hello',
+    createdAt: new Date(),
+    author: {
+      id: 'user-1',
+      bot: false,
+      username: 'User',
+      displayName: 'User',
+    },
+    mentions: { has: () => false },
+    reply: vi.fn(async () => {}),
+  };
+}
+
+describe('DiscordAdapter status visibility', () => {
+  beforeEach(() => {
+    discordMock.channelsById.clear();
+    discordMock.createdClients.length = 0;
+    voiceMock.init.mockReset();
+    voiceMock.stop.mockReset();
+    voiceMock.stop.mockResolvedValue(undefined);
+  });
+
+  it('shows and clears compaction status messages', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch1';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    adapter.onMessage(async () => {
+      await eventBus.emit('agent.compaction.start', {
+        channelId,
+        reason: 'threshold',
+        tokensBefore: 2000,
+        tokenBudget: 1500,
+      });
+      await eventBus.emit('agent.compaction.end', {
+        channelId,
+        tokensBefore: 2000,
+        tokensAfter: 1200,
+      });
+      return {
+        content: 'final reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+    expect(interactive.typingCalls).toBeGreaterThan(0);
+    expect(interactive.sent).toContain('Organizing context to stay within token budget...');
+    expect(interactive.deleted).toContain('Organizing context to stay within token budget...');
+    expect(interactive.sent).toContain('final reply');
+  });
+
+  it('surfaces retry status updates and failure notice', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch2';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    adapter.onMessage(async () => {
+      await eventBus.emit('agent.retry.start', {
+        channelId,
+        attempt: 2,
+        maxAttempts: 3,
+        delayMs: 250,
+        error: '429 rate limit',
+      });
+      await eventBus.emit('agent.retry.end', {
+        channelId,
+        success: false,
+        attempt: 2,
+      });
+      return {
+        content: 'final reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+    expect(interactive.sent.some(msg => msg.includes('Connection hiccup, retrying (2/3)'))).toBe(true);
+    expect(interactive.edits).toContain('Having trouble reaching my thoughts. Please try again.');
+  });
+
+  it('emits queue telemetry for lock acquisition, contention, and release', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-queue';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const queueEvents: any[] = [];
+    (eventBus as any).on('channel.queue.telemetry', (event: any) => {
+      queueEvents.push(event);
+    });
+
+    let releaseFirstTurn: (() => void) | null = null;
+    const firstTurnGate = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+
+    adapter.onMessage(async () => {
+      await firstTurnGate;
+      return {
+        content: 'final reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+
+    const steerSpy = vi.fn();
+    (adapter as any).agent = { steer: steerSpy };
+
+    const firstTurn = (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, { id: 'msg-1', content: 'first' }),
+    );
+    await Promise.resolve();
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, { id: 'msg-2', content: 'second' }),
+    );
+
+    expect(steerSpy).toHaveBeenCalledTimes(1);
+    expect(queueEvents.some(event => event.phase === 'acquired' && event.queueDepth === 0)).toBe(true);
+    expect(queueEvents.some(event => event.phase === 'contended' && event.queueDepth === 1)).toBe(true);
+
+    releaseFirstTurn?.();
+    await firstTurn;
+
+    expect(queueEvents.some(event => event.phase === 'released' && event.waitMs >= 0)).toBe(true);
+  });
+
+  it('suppresses empty handler responses instead of sending empty Discord messages', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-empty';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    adapter.onMessage(async () => {
+      return {
+        content: '   ',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+    expect(interactive.sent).toHaveLength(0);
+  });
+});

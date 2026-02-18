@@ -2,12 +2,13 @@
 // Agent-side typed RPC wrapper. Implements LLMProvider and EmbeddingService
 // so it can be used as a drop-in replacement for direct clients.
 
-import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient } from 'json-rpc-2.0';
+import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { AgentResponse, LLMContext, LLMResponse, StreamCallbacks, SubstrateMessage } from '../types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketClient } from './transport.js';
 import { createComponentLogger } from '../logger.js';
+import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 const log = createComponentLogger('GatewayClient');
 import type {
   LLMChatResult,
@@ -21,7 +22,35 @@ import type {
   LLMChunkNotification,
   DiscordHandleMessageParams,
   DiscordHandleMessageResult,
+  RpcSubstrateMessage,
+  DiscordVoiceStreamStartParams,
+  DiscordVoiceStreamChunkParams,
+  DiscordVoiceStreamEndParams,
+  DiscordVoiceStreamCancelParams,
+  DiscordVoiceStreamAckResult,
+  DiscordVoiceStreamEndResult,
+  DiscordVoiceStreamCancelResult,
 } from './protocol.js';
+import { GatewayErrors } from './protocol.js';
+
+const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
+const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
+
+export interface GatewayClientOptions {
+  voiceStreamQueueSize?: number;
+  voiceStreamOverflowPolicy?: QueueOverflowPolicy;
+}
+
+interface VoiceStreamState {
+  correlationId: string;
+  streamId: string;
+  baseMessage: RpcSubstrateMessage;
+  expectedSequence: number;
+  chunkQueue: BoundedQueue<string>;
+  chunks: string[];
+  droppedChunks: number;
+  cancelled: boolean;
+}
 
 export class GatewayClient implements LLMProvider, EmbeddingService {
   private rpcInstance: JSONRPCServerAndClient;
@@ -30,10 +59,21 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   private notificationHandlers = new Map<string, Array<(params: unknown) => void>>();
   private chunkHandlers = new Map<string, (text: string) => void>();
   private requestCounter = 0;
+  private reverseMethodsRegistered = false;
+  private handleMessageHandler: ((message: SubstrateMessage) => Promise<AgentResponse>) | null = null;
+  private voiceStreams = new Map<string, VoiceStreamState>();
+  private readonly voiceStreamQueueSize: number;
+  private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
 
-  constructor(conn: NdjsonConnection, embeddingDims: number) {
+  constructor(conn: NdjsonConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
     this.embeddingDims = embeddingDims;
+    this.voiceStreamQueueSize = options.voiceStreamQueueSize ?? DEFAULT_VOICE_STREAM_QUEUE_SIZE;
+    this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
+
+    if (!Number.isInteger(this.voiceStreamQueueSize) || this.voiceStreamQueueSize <= 0) {
+      throw new Error(`voiceStreamQueueSize must be a positive integer, got ${this.voiceStreamQueueSize}`);
+    }
 
     // Create bidirectional RPC instance (client sends requests to gateway,
     // server handles incoming requests from gateway like discord.handleMessage)
@@ -63,9 +103,13 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     });
   }
 
-  static async connect(socketPath: string, embeddingDims: number): Promise<GatewayClient> {
+  static async connect(
+    socketPath: string,
+    embeddingDims: number,
+    options: GatewayClientOptions = {},
+  ): Promise<GatewayClient> {
     const conn = await createSocketClient({ socketPath });
-    return new GatewayClient(conn, embeddingDims);
+    return new GatewayClient(conn, embeddingDims, options);
   }
 
   // ── LLMProvider interface ──
@@ -203,23 +247,209 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   /** Register a handler for reverse RPC calls from gateway (e.g. voice messages) */
   onHandleMessage(handler: (message: SubstrateMessage) => Promise<AgentResponse>): void {
+    this.handleMessageHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  private registerReverseMethods(): void {
+    if (this.reverseMethodsRegistered) return;
+    this.reverseMethodsRegistered = true;
+
     this.rpcInstance.addMethod(
       'discord.handleMessage',
-      async (params: DiscordHandleMessageParams) => {
-        const msg = params.message;
-        // Deserialize Date from JSON transport
-        if (typeof msg.timestamp === 'string') {
-          msg.timestamp = new Date(msg.timestamp);
-        }
-        const response = await handler(msg);
-        return {
-          content: response.content,
-          channelId: response.channelId,
-          model: response.metadata.model,
-          durationMs: response.metadata.durationMs,
-        } satisfies DiscordHandleMessageResult;
-      },
+      async (params: DiscordHandleMessageParams) => this.dispatchHandleMessage(params.message),
     );
+    this.rpcInstance.addMethod(
+      'discord.voice.start',
+      async (params: DiscordVoiceStreamStartParams) => this.handleVoiceStreamStart(params),
+    );
+    this.rpcInstance.addMethod(
+      'discord.voice.chunk',
+      async (params: DiscordVoiceStreamChunkParams) => this.handleVoiceStreamChunk(params),
+    );
+    this.rpcInstance.addMethod(
+      'discord.voice.end',
+      async (params: DiscordVoiceStreamEndParams) => this.handleVoiceStreamEnd(params),
+    );
+    this.rpcInstance.addMethod(
+      'discord.voice.cancel',
+      async (params: DiscordVoiceStreamCancelParams) => this.handleVoiceStreamCancel(params),
+    );
+  }
+
+  private async dispatchHandleMessage(message: RpcSubstrateMessage): Promise<DiscordHandleMessageResult> {
+    if (!this.handleMessageHandler) {
+      throw new Error('No discord.handleMessage handler registered');
+    }
+
+    const substrateMessage = this.deserializeMessage(message);
+    const response = await this.handleMessageHandler(substrateMessage);
+    return {
+      content: response.content,
+      channelId: response.channelId,
+      model: response.metadata.model,
+      durationMs: response.metadata.durationMs,
+    } satisfies DiscordHandleMessageResult;
+  }
+
+  private handleVoiceStreamStart(params: DiscordVoiceStreamStartParams): DiscordVoiceStreamAckResult {
+    const key = this.voiceStreamKey(params.correlationId, params.streamId);
+    if (this.voiceStreams.has(key)) {
+      throw this.rpcError('Voice stream already exists', GatewayErrors.VOICE_STREAM_SEQUENCE);
+    }
+
+    const state: VoiceStreamState = {
+      correlationId: params.correlationId,
+      streamId: params.streamId,
+      baseMessage: params.message,
+      expectedSequence: params.sequence + 1,
+      chunkQueue: new BoundedQueue<string>({
+        maxSize: this.voiceStreamQueueSize,
+        overflowPolicy: this.voiceStreamOverflowPolicy,
+      }),
+      chunks: [],
+      droppedChunks: 0,
+      cancelled: false,
+    };
+    this.voiceStreams.set(key, state);
+
+    return this.streamAck(state, params.sequence, true);
+  }
+
+  private handleVoiceStreamChunk(params: DiscordVoiceStreamChunkParams): DiscordVoiceStreamAckResult {
+    const state = this.requireVoiceStream(params.correlationId, params.streamId);
+    this.assertSequence(state, params.sequence);
+    if (state.cancelled) {
+      throw this.rpcError('Voice stream cancelled', GatewayErrors.VOICE_STREAM_CANCELLED);
+    }
+
+    let accepted = true;
+    try {
+      const result = state.chunkQueue.enqueue(params.text);
+      accepted = result.accepted;
+      if (result.droppedReason) {
+        state.droppedChunks += 1;
+      }
+    } catch (error) {
+      if (error instanceof QueueOverflowError) {
+        throw this.rpcError(error.message, GatewayErrors.VOICE_STREAM_OVERFLOW);
+      }
+      throw error;
+    }
+
+    state.expectedSequence = params.sequence + 1;
+    return this.streamAck(state, params.sequence, accepted);
+  }
+
+  private async handleVoiceStreamEnd(
+    params: DiscordVoiceStreamEndParams,
+  ): Promise<DiscordVoiceStreamEndResult> {
+    const key = this.voiceStreamKey(params.correlationId, params.streamId);
+    const state = this.requireVoiceStream(params.correlationId, params.streamId);
+    if (state.cancelled) {
+      this.voiceStreams.delete(key);
+      throw this.rpcError('Voice stream cancelled', GatewayErrors.VOICE_STREAM_CANCELLED);
+    }
+    this.assertSequence(state, params.sequence);
+    state.expectedSequence = params.sequence + 1;
+    this.drainQueuedChunks(state);
+
+    try {
+      const result = await this.dispatchHandleMessage({
+        ...state.baseMessage,
+        content: state.baseMessage.content + state.chunks.join(''),
+      });
+      return {
+        ...result,
+        correlationId: state.correlationId,
+        streamId: state.streamId,
+        droppedChunks: state.droppedChunks,
+      };
+    } finally {
+      this.voiceStreams.delete(key);
+    }
+  }
+
+  private async handleVoiceStreamCancel(
+    params: DiscordVoiceStreamCancelParams,
+  ): Promise<DiscordVoiceStreamCancelResult> {
+    const key = this.voiceStreamKey(params.correlationId, params.streamId);
+    const state = this.voiceStreams.get(key);
+    if (!state) {
+      return {
+        correlationId: params.correlationId,
+        streamId: params.streamId,
+        cancelled: false,
+      };
+    }
+
+    state.cancelled = true;
+    state.chunkQueue.clear();
+    this.voiceStreams.delete(key);
+
+    return {
+      correlationId: params.correlationId,
+      streamId: params.streamId,
+      cancelled: true,
+    };
+  }
+
+  private streamAck(
+    state: VoiceStreamState,
+    sequence: number,
+    accepted: boolean,
+  ): DiscordVoiceStreamAckResult {
+    return {
+      correlationId: state.correlationId,
+      streamId: state.streamId,
+      sequence,
+      accepted,
+      queueDepth: state.chunkQueue.size,
+      droppedChunks: state.droppedChunks,
+    };
+  }
+
+  private requireVoiceStream(correlationId: string, streamId: string): VoiceStreamState {
+    const state = this.voiceStreams.get(this.voiceStreamKey(correlationId, streamId));
+    if (!state) {
+      throw this.rpcError('Voice stream not found', GatewayErrors.VOICE_STREAM_NOT_FOUND);
+    }
+    return state;
+  }
+
+  private assertSequence(state: VoiceStreamState, sequence: number): void {
+    if (sequence !== state.expectedSequence) {
+      throw this.rpcError(
+        `Unexpected voice stream sequence: expected ${state.expectedSequence}, got ${sequence}`,
+        GatewayErrors.VOICE_STREAM_SEQUENCE,
+      );
+    }
+  }
+
+  private drainQueuedChunks(state: VoiceStreamState): void {
+    while (state.chunkQueue.size > 0) {
+      const chunk = state.chunkQueue.dequeue();
+      if (chunk !== undefined) {
+        state.chunks.push(chunk);
+      }
+    }
+  }
+
+  private deserializeMessage(message: RpcSubstrateMessage): SubstrateMessage {
+    return {
+      ...message,
+      timestamp: typeof message.timestamp === 'string'
+        ? new Date(message.timestamp)
+        : message.timestamp,
+    };
+  }
+
+  private voiceStreamKey(correlationId: string, streamId: string): string {
+    return `${correlationId}::${streamId}`;
+  }
+
+  private rpcError(message: string, code: number): Error {
+    return new JSONRPCErrorException(message, code);
   }
 
   private handleChunkNotification(params: unknown): void {
@@ -259,6 +489,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   // ── Lifecycle ──
 
   destroy(): void {
+    this.voiceStreams.clear();
     this.conn.destroy();
   }
 }

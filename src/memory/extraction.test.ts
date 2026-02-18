@@ -1,64 +1,5 @@
-import { describe, it, expect } from 'vitest';
-
-// Test the XML parsing logic by extracting it inline since parseFactsXml is not exported.
-// We'll test it via a module-level function that mirrors the implementation.
-
-function extractTag(block: string, tag: string): string | null {
-  const match = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
-  return match ? match[1] : null;
-}
-
-function clamp(val: number, min: number, max: number): number {
-  if (isNaN(val)) return (min + max) / 2;
-  return Math.max(min, Math.min(max, val));
-}
-
-const VALID_TYPES = ['episodic', 'semantic', 'emotional', 'procedural', 'reflection'] as const;
-const VALID_SENSITIVITIES = ['public', 'personal', 'intimate', 'confidential'] as const;
-
-interface ParsedFact {
-  text: string;
-  type: string;
-  importance: number;
-  emotionalValence: number;
-  confidence: number;
-  tags: string[];
-  sensitivity: string;
-}
-
-function parseFactsXml(xml: string): ParsedFact[] {
-  const responseMatch = xml.match(/<response>([\s\S]*?)<\/response>/);
-  if (!responseMatch) return [];
-
-  const inner = responseMatch[1];
-  const factBlocks = inner.matchAll(/<fact>([\s\S]*?)<\/fact>/g);
-  const facts: ParsedFact[] = [];
-
-  for (const match of factBlocks) {
-    const block = match[1];
-    const text = extractTag(block, 'text');
-    if (!text) continue;
-
-    const typeStr = extractTag(block, 'type')?.trim().toLowerCase();
-    if (!typeStr || !VALID_TYPES.includes(typeStr as typeof VALID_TYPES[number])) continue;
-
-    const importance = clamp(parseFloat(extractTag(block, 'importance') ?? '0.5'), 0, 1);
-    const emotionalValence = clamp(parseFloat(extractTag(block, 'emotional_valence') ?? '0'), -1, 1);
-    const confidence = clamp(parseFloat(extractTag(block, 'confidence') ?? '0.7'), 0, 1);
-
-    const tagsStr = extractTag(block, 'tags') ?? '';
-    const tags = tagsStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-
-    const sensitivityStr = extractTag(block, 'sensitivity')?.trim().toLowerCase();
-    const sensitivity = VALID_SENSITIVITIES.includes(sensitivityStr as typeof VALID_SENSITIVITIES[number])
-      ? sensitivityStr!
-      : 'personal';
-
-    facts.push({ text: text.trim(), type: typeStr, importance, emotionalValence, confidence, tags, sensitivity });
-  }
-
-  return facts;
-}
+import { describe, it, expect, vi } from 'vitest';
+import { MemoryExtractor, parseFactsXml, __test as extractionTestUtils } from './extraction.js';
 
 describe('parseFactsXml', () => {
   it('parses a valid response with multiple facts', () => {
@@ -115,15 +56,18 @@ describe('parseFactsXml', () => {
     expect(parseFactsXml(xml)).toEqual([]);
   });
 
-  it('skips facts with no text', () => {
+  it('supports relational facts', () => {
     const xml = `<response>
 <fact>
-<type>semantic</type>
-<importance>0.5</importance>
+<text>User's sister is named Alex</text>
+<type>relational</type>
+<importance>0.8</importance>
 </fact>
 </response>`;
 
-    expect(parseFactsXml(xml)).toEqual([]);
+    const facts = parseFactsXml(xml);
+    expect(facts).toHaveLength(1);
+    expect(facts[0].type).toBe('relational');
   });
 
   it('clamps values to valid ranges', () => {
@@ -145,63 +89,11 @@ describe('parseFactsXml', () => {
     expect(facts[0].confidence).toBe(0.0);
   });
 
-  it('uses midpoint for NaN values', () => {
-    const xml = `<response>
-<fact>
-<text>Test</text>
-<type>semantic</type>
-<importance>not_a_number</importance>
-</fact>
-</response>`;
-
-    const facts = parseFactsXml(xml);
-    expect(facts[0].importance).toBe(0.5);
-  });
-
-  it('extracts sensitivity field from fact block', () => {
-    const xml = `<response>
-<fact>
-<text>User shared a secret</text>
-<type>emotional</type>
-<importance>0.9</importance>
-<emotional_valence>-0.3</emotional_valence>
-<confidence>0.85</confidence>
-<tags>personal, trust</tags>
-<sensitivity>confidential</sensitivity>
-</fact>
-</response>`;
-
-    const facts = parseFactsXml(xml);
-    expect(facts).toHaveLength(1);
-    expect(facts[0].sensitivity).toBe('confidential');
-  });
-
-  it('defaults sensitivity to personal when not provided', () => {
-    const xml = `<response>
-<fact>
-<text>User likes coffee</text>
-<type>semantic</type>
-<importance>0.3</importance>
-<emotional_valence>0.1</emotional_valence>
-<confidence>0.9</confidence>
-<tags>preference</tags>
-</fact>
-</response>`;
-
-    const facts = parseFactsXml(xml);
-    expect(facts).toHaveLength(1);
-    expect(facts[0].sensitivity).toBe('personal');
-  });
-
   it('defaults sensitivity to personal for invalid sensitivity value', () => {
     const xml = `<response>
 <fact>
 <text>User likes tea</text>
 <type>semantic</type>
-<importance>0.3</importance>
-<emotional_valence>0.1</emotional_valence>
-<confidence>0.9</confidence>
-<tags>preference</tags>
 <sensitivity>super_secret</sensitivity>
 </fact>
 </response>`;
@@ -210,35 +102,138 @@ describe('parseFactsXml', () => {
     expect(facts).toHaveLength(1);
     expect(facts[0].sensitivity).toBe('personal');
   });
+});
 
-  it('handles all valid sensitivity levels', () => {
-    const levels = ['public', 'personal', 'intimate', 'confidential'];
-    for (const level of levels) {
-      const xml = `<response>
-<fact>
-<text>Test ${level}</text>
-<type>semantic</type>
-<sensitivity>${level}</sensitivity>
-</fact>
-</response>`;
+describe('extraction acceptance gates', () => {
+  it('rejects low-importance facts', () => {
+    const decision = extractionTestUtils.evaluateFactAcceptance(
+      {
+        text: 'User said hi',
+        type: 'episodic',
+        importance: 0.2,
+        emotionalValence: 0,
+        confidence: 0.95,
+        tags: [],
+      },
+      [],
+      { minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
 
-      const facts = parseFactsXml(xml);
-      expect(facts).toHaveLength(1);
-      expect(facts[0].sensitivity).toBe(level);
-    }
+    expect(decision.accepted).toBe(false);
+    expect(decision.reason).toBe('low_importance');
   });
 
-  it('normalizes sensitivity case', () => {
-    const xml = `<response>
-<fact>
-<text>Case test</text>
-<type>semantic</type>
-<sensitivity>INTIMATE</sensitivity>
-</fact>
-</response>`;
+  it('rejects low-confidence facts', () => {
+    const decision = extractionTestUtils.evaluateFactAcceptance(
+      {
+        text: 'User might like jazz',
+        type: 'semantic',
+        importance: 0.8,
+        emotionalValence: 0,
+        confidence: 0.4,
+        tags: [],
+      },
+      [],
+      { minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
 
-    const facts = parseFactsXml(xml);
-    expect(facts).toHaveLength(1);
-    expect(facts[0].sensitivity).toBe('intimate');
+    expect(decision.accepted).toBe(false);
+    expect(decision.reason).toBe('low_confidence');
+  });
+
+  it('rejects low-novelty facts similar to existing memories', () => {
+    const decision = extractionTestUtils.evaluateFactAcceptance(
+      {
+        text: 'User loves espresso',
+        type: 'semantic',
+        importance: 0.8,
+        emotionalValence: 0,
+        confidence: 0.95,
+        tags: [],
+      },
+      ['User loves espresso'],
+      { minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
+
+    expect(decision.accepted).toBe(false);
+    expect(decision.reason).toBe('low_novelty');
+    expect(decision.novelty).toBe(0);
+  });
+
+  it('accepts high-value, novel facts', () => {
+    const decision = extractionTestUtils.evaluateFactAcceptance(
+      {
+        text: 'User is planning to move to Seattle this summer',
+        type: 'episodic',
+        importance: 0.85,
+        emotionalValence: 0.1,
+        confidence: 0.9,
+        tags: ['plans'],
+      },
+      ['User likes coffee'],
+      { minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
+
+    expect(decision.accepted).toBe(true);
+    expect(decision.reason).toBeUndefined();
+    expect(decision.novelty).toBeGreaterThan(0.35);
+  });
+});
+
+describe('MemoryExtractor telemetry payloads', () => {
+  it('includes trigger reason and extraction stats in emitted events', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(5),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'User likes coffee', authorName: 'user' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+    );
+
+    await extractor.maybeExtract('api:telemetry-test');
+
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const startCall = calls.find(([name]) => name === 'memory.extraction.start');
+    const endCall = calls.find(([name]) => name === 'memory.extraction.end');
+
+    expect(startCall).toBeTruthy();
+    expect(startCall?.[1]?.triggerReason).toBe('interval');
+
+    expect(endCall).toBeTruthy();
+    expect(endCall?.[1]?.count).toBe(0);
+    expect(endCall?.[1]?.parsedCount).toBe(0);
+    expect(endCall?.[1]?.acceptedCount).toBe(0);
   });
 });

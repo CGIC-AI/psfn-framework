@@ -10,17 +10,17 @@ Platform research: `docs/PLATFORM_COMPARISON_ANALYSIS.md`
 
 ## Architecture
 
-Nine layers, ~12,800 LoC:
+Nine layers:
 
-1. **Runtime Core** (~2200 LoC) — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications, bidirectional gateway RPC (voice reverse RPC)
-2. **REPL Sandbox** (~800 LoC) — RLM-style code execution, sub-LM calls, context-as-object
-3. **Memory System** (~1800 LoC) — L0 archive, L2 extraction/retrieval/decay (SQLite+sqlite-vec), 6 memory types (episodic, semantic, emotional, procedural, reflection, relational), memory writer (shared dedup/contradiction logic), agent-accessible memory/contact write tools, sensitivity tagging
-4. **Trust & Privacy** (~500 LoC) — Honne/tatemae model: 4-tier trust (primary/trusted/regular/public), 4-tier sensitivity (public/personal/intimate/confidential), 5-layer policy precedence (operator→consent→trust→visibility→default), contact store (SQLite), channel visibility classification, persona adaptation, trust-gated retrieval, consent flags
-5. **Identity & Prompts** (~600 LoC) — Character card loader, layered prompt stack (base→operator→runtime→channel→task), versioned layers with JSONL history, context-aware composition, admin UI "Prompt Soil" page, agent tools for self-editing
-6. **Git Self-Modification** (~500 LoC) — `GitOps` service (status, diff, branch, patch, commit, PR), 6 agent tools with path allowlist + protected branch blocking + audit logging
+1. **Runtime Core** — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications, bidirectional gateway RPC (voice reverse RPC), runtime context injection, lazy tool loading (`coreTools`/`extendedTools`/`load_tools`), reasoning support (`thinkingFormat` compat, `thinking_delta` bridging, `ThinkingContent` extraction)
+2. **REPL Sandbox** — RLM-style code execution, sub-LM calls, context-as-object
+3. **Memory System** — L0 archive, L2 extraction/retrieval/decay (SQLite+sqlite-vec), 6 memory types (episodic, semantic, emotional, procedural, reflection, relational), memory writer (shared dedup/contradiction logic), agent-accessible memory/contact write tools, sensitivity tagging
+4. **Trust & Privacy** — Honne/tatemae model: 4-tier trust (primary/trusted/regular/public), 4-tier sensitivity (public/personal/intimate/confidential), 5-layer policy precedence (operator→consent→trust→visibility→default), contact store (SQLite), channel visibility classification, persona adaptation, trust-gated retrieval, consent flags
+5. **Identity & Prompts** — Character card loader, layered prompt stack (base→operator→runtime→channel→task), versioned layers with JSONL history, context-aware composition, admin UI "Prompt Soil" page, agent tools for self-editing
+6. **Git Self-Modification** — `GitOps` service (status, diff, branch, patch, commit, PR), 6 agent tools with path allowlist + protected branch blocking + audit logging
 7. **Module System** — hot-loadable TypeScript modules, self-installable via REPL (not yet built)
-8. **Channel Layer** (~1400 LoC) — Discord adapter (voice reverse RPC for gateway split), OpenAI-compatible API, admin GUI (Purrsephone's Garden: editable settings, model discovery, garden primer, memory type filters, session dates, full identity view, contacts/trust management, prompt soil)
-9. **Scheduler** (~400 LoC) — cron, heartbeat, one-shot, `updateTask`, configurable maintenance interval
+8. **Channel Layer** — Discord adapter (voice reverse RPC for gateway split), OpenAI-compatible API, admin GUI (Purrsephone's Garden: editable settings, model discovery, garden primer, memory type filters, session dates, full identity view, contacts/trust management, prompt soil)
+9. **Scheduler** — cron, heartbeat, one-shot, `updateTask`, configurable maintenance interval
 
 ### Key Design Principle: RLM+REPL
 
@@ -38,7 +38,6 @@ Reference: https://alexzhang13.github.io/blog/2025/rlm/
 - **Database**: SQLite via better-sqlite3 + sqlite-vec for embeddings
 - **Discord**: discord.js
 - **Gateway RPC**: `json-rpc-2.0` over NDJSON Unix socket
-- **Module loading**: jiti (hot-load TypeScript without compilation)
 - **Build**: tsup
 - **Test**: Vitest
 - **Package manager**: npm
@@ -54,6 +53,34 @@ npm run lint             # ESLint
 npm run gateway          # Start gateway (host-side, holds secrets)
 npm run agent            # Start agent (connects to gateway)
 npm run agent:docker     # Start agent in --network=none container
+```
+
+## Configuration Source Of Truth
+
+- `.env.example` is the canonical runtime env reference.
+- `src/types.ts` is the canonical parser/defaults source for runtime config.
+- When docs and code disagree, prefer `src/types.ts` and entrypoint wiring (`src/runtime.ts`, `src/agent-main.ts`, `src/gateway-main.ts`).
+
+## E2E Testing (Gateway + Agent)
+
+Start the stack in two terminals:
+
+```bash
+# Terminal 1: Gateway
+npm run gateway
+
+# Terminal 2: Agent (agent-main.ts does NOT import dotenv)
+set -a && source .env && set +a && npm run agent
+```
+
+Custom socket path: `GATEWAY_SOCKET=/tmp/psfn-gateway/gateway.sock`
+Default socket requires `/run/psfn/` directory.
+
+Verify connectivity:
+
+```bash
+curl -H "Authorization: Bearer $API_KEY" http://127.0.0.1:3100/v1/models
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:3001/
 ```
 
 ## Project Structure
@@ -127,7 +154,7 @@ Port from ElizaOS plugin-purrsephone (`/home/user/ai/eliza/packages/plugin-purrs
 - **Extraction**: LLM-powered post-conversation, XML parsing
 - **Dedup**: Embedding similarity per type (thresholds 0.85-0.97)
 - **Contradiction**: Higher-confidence new facts supersede old
-- **Decay**: Exponential salience — episodic 7d, semantic 30d, emotional 14d, procedural 90d, reflection 60d
+- **Decay**: Exponential salience — episodic 7d, semantic 30d, emotional 14d, procedural 90d, reflection 60d, relational 60d
 - **Retrieval**: Composite score = similarity * recency * emotionalWeight * importance * salience
 
 ## Purrsephone Identity
@@ -165,16 +192,19 @@ Additional hardening:
 - **Content block normalization**: `normalizeContent()` in LLM/gateway clients unwraps stringified `[{'type': 'text', 'text': '...'}]` content blocks that LiteLLM streaming can produce
 - **Bidirectional gateway RPC**: `JSONRPCServerAndClient` per connection enables voice turns to await agent responses via reverse RPC (`discord.handleMessage`), while text messages remain fire-and-forget notifications
 - **Git path allowlisting**: `GitOps.validatePath()` restricts self-modification to `src/`, `docs/`, `purrsephone/` with protected branch blocking on `main`/`master`
+- **Reasoning support**: `thinkingFormat` in model compat (`'qwen'` for kimi-k2.5, `'zai'` for glm-5), `thinking_delta` events bridged to `agent.stream.thinking`, `ThinkingContent` extracted alongside `TextContent` in LLMClient and SubstrateAgent. `LLMResponse.reasoning` propagated through gateway protocol
+- **Runtime context injection**: `buildRuntimeContext()` in SubstrateAgent injects current time, channel/visibility, user/trust, model, tool counts into system prompt every turn — eliminates confabulation of model identity and temporal awareness
+- **Lazy tool loading**: Tools split into `coreTools` (9: think, spawn_shard, memory_write, memory_import_batch, contact_lookup, contact_list, self_restart, self_rebuild, load_tools) and `extendedTools` (15: git, prompt, heartbeat, contact_set_trust, contact_note). `load_tools` meta-tool hot-swaps active set via `agent.setTools()`. Per-turn reset in `handleMessage()`
 
 Single-process mode (`npm run dev`) is preserved — uses concrete classes directly, no socket.
 
 ## Current State
 
-- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **git self-modification tools**, **layered prompt stack**
-- **~12,800 LoC** production code across 72 files, **797 tests** all passing (46 test files)
+- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **git self-modification tools**, **layered prompt stack**, **heartbeat reflections**, **RLM evidence tracking**, **reasoning support (thinkingFormat)**, **runtime context injection**, **lazy tool loading**
+- **Verification cadence**: use `npm test`, `npm run build`, and `npm run e2e` for current status instead of relying on static counts in docs.
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. Auto-compaction in `SessionManager.buildContext()` when context exceeds `compactionThresholdPct`. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`
-- **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5)
+- **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5 — reasoning models supported via `thinkingFormat` compat)
 - **Embeddings**: Local Ollama at your-ollama-host:11434 (snowflake-arctic-embed2, 1024d)
 - **Purrsephone still runs on OpenClaw/BotMaker** at `/mnt/samesung/ai/botmaker` until substrate is live-tested
 - **Not yet built**: module system, capability tokens
@@ -182,6 +212,7 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 ## Guidelines
 
 - If a file exceeds 500 lines, split it.
+- Avoid god files entirely: ship small, composable modules and reusable primitives.
 - Every module must have typed interfaces with lifecycle hooks.
 - Events are the integration surface — modules compose by subscribing to events.
 - The REPL sandbox is a security boundary — code runs isolated.

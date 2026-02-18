@@ -1,5 +1,5 @@
 import type { MemoryStore } from './store.js';
-import { DECAY_HALFLIFE, MEMORY_CONFIG } from './types.js';
+import { DECAY_HALFLIFE, MEMORY_CONFIG, getMemoryDecayProfile } from './types.js';
 import type { MemoryType } from './types.js';
 
 export class SalienceDecay {
@@ -10,10 +10,11 @@ export class SalienceDecay {
     this.memoryStore = memoryStore;
   }
 
-  start(): void {
+  start(intervalMs: number = MEMORY_CONFIG.maintenanceIntervalMs): void {
+    this.stop();
     this.timer = setInterval(() => {
       this.run();
-    }, MEMORY_CONFIG.maintenanceIntervalMs);
+    }, intervalMs);
   }
 
   stop(): void {
@@ -28,13 +29,14 @@ export class SalienceDecay {
     const memories = this.memoryStore.getAllActiveMemories();
 
     for (const memory of memories) {
-      const halflife = DECAY_HALFLIFE[memory.type as MemoryType];
-      if (!halflife) continue;
+      const profile = getMemoryDecayProfile(memory);
+      const halflife = DECAY_HALFLIFE[memory.type as MemoryType] * profile.halflifeMultiplier;
+      if (!halflife || halflife <= 0) continue;
 
       const dt = now - memory.lastAccessed;
       const decayFactor = Math.exp((-Math.LN2 * dt) / halflife);
       const newSalience = Math.max(
-        MEMORY_CONFIG.salienceFloor,
+        profile.salienceFloor,
         memory.salience * decayFactor,
       );
 

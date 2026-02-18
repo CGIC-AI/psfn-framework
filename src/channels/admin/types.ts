@@ -11,6 +11,7 @@ import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
+import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 
 export interface AdminServerConfig {
   port: number;
@@ -27,6 +28,7 @@ export interface AdminServerConfig {
   embeddingService: EmbeddingService | null;
   modelDiscovery?: ModelDiscovery | null;
   promptStore?: PromptLayerStore | null;
+  promptRegistry?: PromptRegistryStore | null;
 }
 
 export interface DashboardStats {
@@ -36,6 +38,40 @@ export interface DashboardStats {
   sessionCount: number;
   schedulerTasks: number;
   activeShards: number;
+  sessionUsage: {
+    turns: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    llmCalls: number;
+    toolCalls: number;
+    avgContextUtilization: number;
+    estimatedCostUsd: number;
+  };
+  recentThinkTraces: ThinkTraceView[];
+}
+
+export interface ThinkTraceStepView {
+  iteration: number;
+  inputTokens: number;
+  outputTokens: number;
+  cumulativeTokens: number;
+  durationMs: number;
+  code: string;
+  output: string;
+  error: string | null;
+  variablesChanged: string[];
+}
+
+export interface ThinkTraceView {
+  timestamp: number;
+  task: string;
+  iterations: number;
+  totalTokens: number;
+  durationMs: number;
+  truncated: boolean;
+  budgetStop: string | null;
+  steps: ThinkTraceStepView[];
 }
 
 export interface AdminEvent {

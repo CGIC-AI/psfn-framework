@@ -5,6 +5,7 @@ import type { EmbeddingService } from '../agent-loop.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
+import type { EventBus } from '../event-bus.js';
 
 // ── Helpers ──
 
@@ -45,6 +46,12 @@ function makeMockEmbedding(): EmbeddingService {
     embedBatch: vi.fn(),
     dims: 1024,
   };
+}
+
+function makeMockEventBus(): EventBus {
+  return {
+    emit: vi.fn().mockResolvedValue(undefined),
+  } as unknown as EventBus;
 }
 
 // ── Tests ──
@@ -344,5 +351,51 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).toContain('[semantic]');
     expect(result).toContain('[emotional]');
     expect(result).toContain('What you remember about this person:');
+  });
+
+  it('emits structured retrieval telemetry event when event bus is provided', async () => {
+    const memories = [
+      makeMemory({ text: 'Public A', sensitivity: 'public', similarity: 0.95 }),
+      makeMemory({ text: 'Public B', sensitivity: 'public', similarity: 0.9 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await retriever.retrieve('test query', 'api:test', 'primary');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      channelId: 'api:test',
+      count: 2,
+      reason: 'ok',
+      candidateCount: 2,
+      rankedCount: 2,
+      returnedCount: 2,
+    });
+  });
+
+  it('emits telemetry for empty retrieval results', async () => {
+    const store = makeMockStore([]);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    expect(result).toBe('');
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      channelId: 'api:test',
+      count: 0,
+      reason: 'no_candidates',
+      candidateCount: 0,
+      returnedCount: 0,
+    });
   });
 });

@@ -4,8 +4,22 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from './store.js';
-import type { PurrMemory, MemoryType, SensitivityLevel, ConsentFlags } from './types.js';
-import { DEDUP_THRESHOLD, MEMORY_CONFIG, VALID_MEMORY_TYPES } from './types.js';
+import type {
+  PurrMemory,
+  MemoryType,
+  SensitivityLevel,
+  ConsentFlags,
+  MemoryRetentionClass,
+} from './types.js';
+import {
+  DEDUP_THRESHOLD,
+  DURABLE_RETENTION_TAG,
+  MEMORY_CONFIG,
+  VALID_MEMORY_TYPES,
+  inferMemoryRetentionClass,
+  isDurableMemory,
+  normalizeMemoryTags,
+} from './types.js';
 import { createComponentLogger } from '../logger.js';
 
 const log = createComponentLogger('MemoryWriter');
@@ -20,6 +34,7 @@ export interface MemoryWriteOptions {
   sourceRef?: string;        // default 'tool:memory_write'
   sensitivity?: SensitivityLevel;    // default 'personal'
   consentFlags?: ConsentFlags;       // default {}
+  retentionClass?: MemoryRetentionClass;
 }
 
 export interface WriteResult {
@@ -35,6 +50,33 @@ export interface BatchImportResult {
   superseded: number;
   errors: number;
   results: WriteResult[];
+}
+
+function applyRetentionSemantics(input: {
+  type: MemoryType;
+  importance: number;
+  tags: readonly string[];
+  retentionClass?: MemoryRetentionClass;
+}): {
+  tags: string[];
+  retentionClass?: MemoryRetentionClass;
+} {
+  const tags = normalizeMemoryTags(input.tags);
+  const inferred = inferMemoryRetentionClass({
+    type: input.type,
+    importance: input.importance,
+    tags,
+    retentionClass: input.retentionClass,
+  });
+
+  if (inferred === 'durable' && !tags.includes(DURABLE_RETENTION_TAG)) {
+    tags.push(DURABLE_RETENTION_TAG);
+  }
+
+  return {
+    tags,
+    retentionClass: inferred === 'durable' ? 'durable' : undefined,
+  };
 }
 
 export class MemoryWriter {
@@ -62,12 +104,20 @@ export class MemoryWriter {
       sourceRef = 'tool:memory_write',
       sensitivity = 'personal',
       consentFlags,
+      retentionClass,
     } = opts;
 
     // Validate type
     if (!VALID_MEMORY_TYPES.includes(type)) {
       throw new Error(`Invalid memory type: ${type}. Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`);
     }
+
+    const retention = applyRetentionSemantics({
+      type,
+      importance,
+      tags,
+      retentionClass,
+    });
 
     const embedding = await this.embeddingService.embed(text);
 
@@ -82,13 +132,36 @@ export class MemoryWriter {
     if (sameTypeDups.length > 0) {
       // Duplicate found -- bump access count and salience
       const existing = sameTypeDups[0];
-      this.memoryStore.updateMemory(existing.id, {
+      const updates: {
+        lastAccessed: number;
+        accessCount: number;
+        salience: number;
+        tags?: string[];
+      } = {
         lastAccessed: Date.now(),
         accessCount: existing.accessCount + 1,
         salience: Math.min(1, existing.salience + MEMORY_CONFIG.salienceBumpOnAccess),
-      });
+      };
+
+      // If this write is durable, upgrade duplicate memory tags so durability survives persistence.
+      if (retention.retentionClass === 'durable' && !isDurableMemory(existing)) {
+        updates.tags = normalizeMemoryTags([...existing.tags, ...retention.tags, DURABLE_RETENTION_TAG]);
+      }
+
+      this.memoryStore.updateMemory(existing.id, updates);
       log.debug('Deduplicated memory', { existingId: existing.id, text: text.slice(0, 60) });
-      return { action: 'deduplicated', memory: existing, existingId: existing.id };
+      return {
+        action: 'deduplicated',
+        memory: {
+          ...existing,
+          lastAccessed: updates.lastAccessed,
+          accessCount: updates.accessCount,
+          salience: updates.salience,
+          tags: updates.tags ?? existing.tags,
+          retentionClass: retention.retentionClass ?? existing.retentionClass,
+        },
+        existingId: existing.id,
+      };
     }
 
     // 2. Check for contradictions (lower threshold)
@@ -124,7 +197,8 @@ export class MemoryWriter {
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,
-      tags,
+      tags: retention.tags,
+      retentionClass: retention.retentionClass,
       sensitivity,
       consentFlags,
     };
@@ -154,11 +228,19 @@ export class MemoryWriter {
       sourceRef = 'tool:memory_upsert',
       sensitivity = 'personal',
       consentFlags,
+      retentionClass,
     } = opts;
 
     if (!VALID_MEMORY_TYPES.includes(type)) {
       throw new Error(`Invalid memory type: ${type}. Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`);
     }
+
+    const retention = applyRetentionSemantics({
+      type,
+      importance,
+      tags,
+      retentionClass,
+    });
 
     const embedding = await this.embeddingService.embed(text);
 
@@ -191,7 +273,8 @@ export class MemoryWriter {
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,
-      tags,
+      tags: retention.tags,
+      retentionClass: retention.retentionClass,
       sensitivity,
       consentFlags,
     };

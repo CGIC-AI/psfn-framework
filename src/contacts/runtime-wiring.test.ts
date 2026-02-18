@@ -23,9 +23,11 @@ describe('wireContactRuntime', () => {
 
     expect(target.contactStore).toBe(contactStore);
     expect(target.tools.map(t => t.name).sort()).toEqual([
+      'contact_link_identity',
       'contact_list',
       'contact_lookup',
       'contact_note',
+      'contact_set_channel_privacy',
       'contact_set_trust',
     ]);
   });

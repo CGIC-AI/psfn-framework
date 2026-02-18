@@ -5,19 +5,12 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { TextContent } from '@mariozechner/pi-ai';
-import type { GitOps } from './ops.js';
+import type { GitOperations } from './ops.js';
+import { textResult } from '../tools/results.js';
 
 const MAX_DIFF_CHARS = 8000;
 
-function textResult(text: string): AgentToolResult<Record<string, never>> {
-  return {
-    content: [{ type: 'text', text }] satisfies TextContent[],
-    details: {},
-  };
-}
-
-export function createRepoStatusTool(gitOps: GitOps): AgentTool<any> {
+export function createRepoStatusTool(gitOps: GitOperations): AgentTool<any> {
   return {
     name: 'repo_status',
     label: 'repo_status',
@@ -25,7 +18,7 @@ export function createRepoStatusTool(gitOps: GitOps): AgentTool<any> {
       'Show the current git repository status: branch, ahead/behind, staged, modified, and untracked files.',
     parameters: Type.Object({}),
     execute: async (): Promise<AgentToolResult<Record<string, never>>> => {
-      const status = gitOps.status();
+      const status = await gitOps.status();
       const lines = [
         `Branch: ${status.branch}`,
         status.ahead > 0 || status.behind > 0
@@ -46,7 +39,7 @@ export function createRepoStatusTool(gitOps: GitOps): AgentTool<any> {
   };
 }
 
-export function createRepoDiffTool(gitOps: GitOps): AgentTool<any> {
+export function createRepoDiffTool(gitOps: GitOperations): AgentTool<any> {
   return {
     name: 'repo_diff',
     label: 'repo_diff',
@@ -61,7 +54,7 @@ export function createRepoDiffTool(gitOps: GitOps): AgentTool<any> {
       _toolCallId: string,
       params: { staged?: boolean },
     ): Promise<AgentToolResult<Record<string, never>>> => {
-      const diff = gitOps.diff({ staged: params.staged });
+      const diff = await gitOps.diff({ staged: params.staged });
       const parts: string[] = [];
       if (diff.staged) {
         const truncated =
@@ -82,7 +75,7 @@ export function createRepoDiffTool(gitOps: GitOps): AgentTool<any> {
   };
 }
 
-export function createRepoApplyPatchTool(gitOps: GitOps): AgentTool<any> {
+export function createRepoApplyPatchTool(gitOps: GitOperations): AgentTool<any> {
   return {
     name: 'repo_apply_patch',
     label: 'repo_apply_patch',
@@ -99,13 +92,13 @@ export function createRepoApplyPatchTool(gitOps: GitOps): AgentTool<any> {
       _toolCallId: string,
       params: { file_path: string; content: string },
     ): Promise<AgentToolResult<Record<string, never>>> => {
-      gitOps.applyPatch(params.file_path, params.content);
+      await gitOps.applyPatch(params.file_path, params.content);
       return textResult(`Applied and staged: ${params.file_path}`);
     },
   };
 }
 
-export function createRepoCommitTool(gitOps: GitOps): AgentTool<any> {
+export function createRepoCommitTool(gitOps: GitOperations): AgentTool<any> {
   return {
     name: 'repo_commit',
     label: 'repo_commit',
@@ -124,7 +117,7 @@ export function createRepoCommitTool(gitOps: GitOps): AgentTool<any> {
       _toolCallId: string,
       params: { message: string; intent: string; scope?: string },
     ): Promise<AgentToolResult<Record<string, never>>> => {
-      const result = gitOps.commit(params.message, params.intent, params.scope);
+      const result = await gitOps.commit(params.message, params.intent, params.scope);
       return textResult(
         `Committed ${result.hash}: ${result.message} (${result.filesChanged} files changed)`,
       );
@@ -132,7 +125,7 @@ export function createRepoCommitTool(gitOps: GitOps): AgentTool<any> {
   };
 }
 
-export function createRepoCreateBranchTool(gitOps: GitOps): AgentTool<any> {
+export function createRepoCreateBranchTool(gitOps: GitOperations): AgentTool<any> {
   return {
     name: 'repo_create_branch',
     label: 'repo_create_branch',
@@ -150,13 +143,13 @@ export function createRepoCreateBranchTool(gitOps: GitOps): AgentTool<any> {
       _toolCallId: string,
       params: { name: string; start_point?: string },
     ): Promise<AgentToolResult<Record<string, never>>> => {
-      const name = gitOps.createBranch(params.name, params.start_point);
+      const name = await gitOps.createBranch(params.name, params.start_point);
       return textResult(`Created and checked out branch: ${name}`);
     },
   };
 }
 
-export function createRepoOpenPRTool(gitOps: GitOps): AgentTool<any> {
+export function createRepoOpenPRTool(gitOps: GitOperations): AgentTool<any> {
   return {
     name: 'repo_open_pr',
     label: 'repo_open_pr',
@@ -173,7 +166,7 @@ export function createRepoOpenPRTool(gitOps: GitOps): AgentTool<any> {
       _toolCallId: string,
       params: { title: string; body: string; base?: string },
     ): Promise<AgentToolResult<Record<string, never>>> => {
-      const url = gitOps.openPR(params.title, params.body, params.base);
+      const url = await gitOps.openPR(params.title, params.body, params.base);
       return textResult(`PR created: ${url}`);
     },
   };

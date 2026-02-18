@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
+import net from 'node:net';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,8 @@ import { SessionManager } from '../../session/manager.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
 import { ContactStore } from '../../contacts/store.js';
+import { PromptLayerStore } from '../../identity/prompt-store.js';
+import { PromptRegistryStore, EXTRACTION_PROMPT_KEY } from '../../identity/prompt-registry.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { LLMProvider } from '../../agent-loop.js';
@@ -56,6 +59,26 @@ function sseRequest(
       },
     );
     req.on('error', () => {});
+  });
+}
+
+function allocatePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('Failed to allocate port')));
+        return;
+      }
+      const { port } = address;
+      server.close((err) => {
+        if (err) reject(err);
+        else resolve(port);
+      });
+    });
   });
 }
 
@@ -114,6 +137,8 @@ describe('AdminServer', () => {
   let sessionManager: SessionManager;
   let scheduler: Scheduler;
   let shardManager: ShardManager;
+  let promptStore: PromptLayerStore;
+  let promptRegistry: PromptRegistryStore;
   let server: AdminServer;
   let port: number;
 
@@ -128,8 +153,17 @@ describe('AdminServer', () => {
     eventBus = new EventBus();
     memoryStore = new MemoryStore(db, 3);
     sessionStore = new SessionStore(sessionsDir);
-    sessionManager = new SessionManager(sessionStore, testConfig);
+    sessionManager = new SessionManager(sessionStore, testConfig, eventBus);
     scheduler = new Scheduler(eventBus);
+    promptStore = new PromptLayerStore(
+      join(tempDir, 'prompt-layers.json'),
+      join(tempDir, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('Base test system prompt');
+    promptRegistry = new PromptRegistryStore(
+      join(tempDir, 'prompt-registry.json'),
+      join(tempDir, 'prompt-registry-history.jsonl'),
+    );
     scheduler.register({
       id: 'test-task',
       name: 'Test Task',
@@ -150,9 +184,10 @@ describe('AdminServer', () => {
       parentSystemPrompt: '',
     });
 
-    port = 30000 + Math.floor(Math.random() * 10000);
+    port = await allocatePort();
     server = new AdminServer({
       port,
+      allowInsecureWithoutToken: true,
       memoryStore,
       sessionStore,
       sessionManager,
@@ -162,6 +197,8 @@ describe('AdminServer', () => {
       characterCard: testCard,
       config: testConfig,
       embeddingService: null,
+      promptStore,
+      promptRegistry,
     });
     await server.init();
     await server.start();
@@ -180,12 +217,98 @@ describe('AdminServer', () => {
       expect(res.headers['content-type']).toContain('text/html');
       expect(res.body).toContain("Purrsephone's Garden");
       expect(res.body).toContain('Dashboard');
+      expect(res.body).toContain('<link rel="stylesheet" href="/static/admin.css">');
     });
 
     it('shows memory stats', async () => {
       const res = await request(port, 'GET', '/');
       expect(res.body).toContain('Total Memories');
       expect(res.body).toContain('Scheduled Tasks');
+    });
+
+    it('shows session usage stats when usage events are emitted', async () => {
+      await eventBus.emit('agent.turn.usage', {
+        message: {
+          id: 'msg-usage-1',
+          channelId: 'test-channel',
+          channelType: 'terminal',
+          authorId: 'user-1',
+          authorName: 'Tester',
+          content: 'hello',
+          timestamp: new Date(),
+        },
+        usage: {
+          inputTokens: 1500,
+          outputTokens: 250,
+          cacheReadTokens: 300,
+          llmCalls: 2,
+          toolCalls: 1,
+          contextUtilization: 42.5,
+          estimatedCostUsd: 0.0123,
+        },
+      });
+
+      const res = await request(port, 'GET', '/');
+      expect(res.body).toContain('Session Usage');
+      expect(res.body).toContain('Tracked Turns');
+      expect(res.body).toContain('1.5k');
+      expect(res.body).toContain('42.5%');
+      expect(res.body).toContain('$0.0123');
+    });
+
+    it('shows reasoning traces when think trace events are emitted', async () => {
+      await eventBus.emit('agent.think.trace', {
+        timestamp: Date.now(),
+        task: 'Analyze recent memory drift',
+        result: {
+          iterations: 2,
+          totalInputTokens: 320,
+          totalOutputTokens: 140,
+          durationMs: 910,
+          truncated: false,
+          budgetStop: null,
+          steps: [
+            {
+              iteration: 1,
+              timestamp: Date.now(),
+              code: 'const m = await memory_search("drift");',
+              output: 'Found 3 memories',
+              error: null,
+              inputTokens: 120,
+              outputTokens: 60,
+              cumulativeTokens: 180,
+              durationMs: 410,
+              variablesChanged: ['m'],
+            },
+            {
+              iteration: 2,
+              timestamp: Date.now(),
+              code: 'FINAL("done")',
+              output: 'done',
+              error: null,
+              inputTokens: 200,
+              outputTokens: 80,
+              cumulativeTokens: 460,
+              durationMs: 500,
+              variablesChanged: [],
+            },
+          ],
+        },
+      });
+
+      const res = await request(port, 'GET', '/');
+      expect(res.body).toContain('Reasoning Traces');
+      expect(res.body).toContain('Analyze recent memory drift');
+      expect(res.body).toContain('Found 3 memories');
+    });
+  });
+
+  describe('Login', () => {
+    it('returns login page with external stylesheet', async () => {
+      const res = await request(port, 'GET', '/login');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain("Login - Purrsephone's Garden");
+      expect(res.body).toContain('<link rel="stylesheet" href="/static/admin.css">');
     });
   });
 
@@ -423,6 +546,72 @@ describe('AdminServer', () => {
     });
   });
 
+  describe('Prompts', () => {
+    it('returns prompts page with static prompt key list', async () => {
+      const res = await request(port, 'GET', '/prompts');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Prompt Soil');
+      expect(res.body).toContain('Static Prompt Registry');
+      expect(res.body).toContain(EXTRACTION_PROMPT_KEY);
+    });
+
+    it('returns static prompt detail editor page', async () => {
+      const key = encodeURIComponent(EXTRACTION_PROMPT_KEY);
+      const res = await request(port, 'GET', `/prompts/static/${key}`);
+      expect(res.status).toBe(200);
+      expect(res.body).toContain(EXTRACTION_PROMPT_KEY);
+      expect(res.body).toContain('name="content"');
+      expect(res.body).toContain('/api/prompts/static/update');
+    });
+
+    it('updates static prompt via POST', async () => {
+      const content = [
+        'Tune extraction behavior.',
+        '{existing_facts}',
+        '{recent_messages}',
+        '<response><fact></fact></response>',
+      ].join('\n');
+      const body = new URLSearchParams({
+        key: EXTRACTION_PROMPT_KEY,
+        content,
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/prompts/static/update', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Updated');
+      expect(promptRegistry.getPrompt(EXTRACTION_PROMPT_KEY)).toContain('Tune extraction behavior.');
+    });
+
+    it('rolls back static prompt to an earlier version', async () => {
+      promptRegistry.update(
+        EXTRACTION_PROMPT_KEY,
+        'Version A\n{existing_facts}\n{recent_messages}\n<response><fact></fact></response>',
+        'test',
+      );
+      promptRegistry.update(
+        EXTRACTION_PROMPT_KEY,
+        'Version B\n{existing_facts}\n{recent_messages}\n<response><fact></fact></response>',
+        'test',
+      );
+
+      const body = new URLSearchParams({
+        key: EXTRACTION_PROMPT_KEY,
+        version: '1',
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/prompts/static/rollback', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Rolled back');
+      expect(promptRegistry.getPrompt(EXTRACTION_PROMPT_KEY)).toContain('You are analyzing a conversation');
+    });
+  });
+
   describe('Primer', () => {
     it('returns primer page', async () => {
       const res = await request(port, 'GET', '/primer');
@@ -453,6 +642,57 @@ describe('AdminServer', () => {
       expect(res.headers['content-type']).toBe('text/event-stream');
       expect(res.headers['cache-control']).toBe('no-cache');
     }, 5000);
+
+    it('SSE stream includes compaction/retry status events', async () => {
+      const sseBody = await new Promise<string>((resolve, reject) => {
+        const req = http.get({ hostname: '127.0.0.1', port, path: '/events/stream' }, (res) => {
+          let body = '';
+          let settled = false;
+          const timeout = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            res.socket?.destroy();
+            reject(new Error('Timed out waiting for SSE events'));
+          }, 3000);
+
+          const finish = (result: string) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            res.socket?.destroy();
+            resolve(result);
+          };
+
+          res.on('data', (chunk: Buffer) => {
+            body += chunk.toString();
+            if (body.includes('agent.compaction.start') && body.includes('agent.retry.start')) {
+              finish(body);
+            }
+          });
+
+          setTimeout(async () => {
+            await eventBus.emit('agent.compaction.start', {
+              channelId: 'ch1',
+              reason: 'threshold',
+              tokensBefore: 2000,
+              tokenBudget: 1500,
+            });
+            await eventBus.emit('agent.retry.start', {
+              channelId: 'ch1',
+              attempt: 2,
+              maxAttempts: 3,
+              delayMs: 250,
+              error: '429 rate limit',
+            });
+          }, 25);
+        });
+        req.on('error', reject);
+      });
+
+      expect(sseBody).toContain('agent.compaction.start');
+      expect(sseBody).toContain('agent.retry.start');
+      expect(sseBody).toContain('attempt=2');
+    });
   });
 
   describe('Static files', () => {
@@ -466,6 +706,16 @@ describe('AdminServer', () => {
     it('serves sse.js', async () => {
       const res = await request(port, 'GET', '/static/sse.js');
       expect(res.status).toBe(200);
+    });
+
+    it('serves admin.css', async () => {
+      const res = await request(port, 'GET', '/static/admin.css');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/css');
+      expect(res.body).toContain('.layout');
+      expect(res.body).toContain('.login-wrap');
+      expect(res.body).toContain('.think-trace');
+      expect(res.body).toContain('.channel-privacy');
     });
   });
 
@@ -501,14 +751,14 @@ describe('AdminServer with auth', () => {
     sqliteVec.load(db);
     const eventBus = new EventBus();
 
-    port = 30000 + Math.floor(Math.random() * 10000);
+    port = await allocatePort();
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
     server = new AdminServer({
       port,
       token: 'test-admin-secret',
       memoryStore: new MemoryStore(db, 3),
       sessionStore: new SessionStore(sessionsDir),
-      sessionManager: new SessionManager(new SessionStore(sessionsDir), testConfig),
+      sessionManager: new SessionManager(new SessionStore(sessionsDir), testConfig, eventBus),
       scheduler: new Scheduler(eventBus),
       shardManager: new ShardManager({
         eventBus,
@@ -553,6 +803,103 @@ describe('AdminServer with auth', () => {
     expect(res.status).toBe(200);
     expect(res.body).toContain('Dashboard');
   });
+
+  it('allows login page without auth token', async () => {
+    const res = await request(port, 'GET', '/login');
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Enter the Garden');
+  });
+
+  it('allows static assets without auth token', async () => {
+    const res = await request(port, 'GET', '/static/htmx.min.js');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/javascript');
+  });
+});
+
+describe('AdminServer auth configuration', () => {
+  let tempDir: string;
+  let db: Database.Database;
+  let eventBus: EventBus;
+  let memoryStore: MemoryStore;
+  let sessionStore: SessionStore;
+  let sessionManager: SessionManager;
+  let scheduler: Scheduler;
+  let shardManager: ShardManager;
+  let port: number;
+
+  beforeEach(async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'admin-auth-config-'));
+    const sessionsDir = join(tempDir, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+
+    db = new Database(':memory:');
+    sqliteVec.load(db);
+    eventBus = new EventBus();
+    memoryStore = new MemoryStore(db, 3);
+    sessionStore = new SessionStore(sessionsDir);
+    sessionManager = new SessionManager(sessionStore, testConfig, eventBus);
+    scheduler = new Scheduler(eventBus);
+    const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
+    shardManager = new ShardManager({
+      eventBus,
+      llmProvider: mockLlmProvider,
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: testConfig,
+      parentSystemPrompt: '',
+    });
+    port = await allocatePort();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('fails startup without token unless insecure mode is explicitly enabled', async () => {
+    const unguardedServer = new AdminServer({
+      port,
+      memoryStore,
+      sessionStore,
+      sessionManager,
+      scheduler,
+      shardManager,
+      eventBus,
+      characterCard: testCard,
+      config: testConfig,
+      embeddingService: null,
+    });
+    await unguardedServer.init();
+
+    await expect(unguardedServer.start()).rejects.toThrow(
+      'ADMIN_TOKEN is required unless ADMIN_ALLOW_INSECURE=true',
+    );
+  });
+
+  it('starts without token only when insecure mode is explicitly enabled', async () => {
+    const insecureServer = new AdminServer({
+      port,
+      allowInsecureWithoutToken: true,
+      memoryStore,
+      sessionStore,
+      sessionManager,
+      scheduler,
+      shardManager,
+      eventBus,
+      characterCard: testCard,
+      config: testConfig,
+      embeddingService: null,
+    });
+    await insecureServer.init();
+    await insecureServer.start();
+
+    const res = await request(port, 'GET', '/');
+    expect(res.status).toBe(200);
+
+    await insecureServer.stop();
+  });
 });
 
 describe('AdminServer with contacts', () => {
@@ -573,13 +920,14 @@ describe('AdminServer with contacts', () => {
     eventBus = new EventBus();
     contactStore = new ContactStore(db);
 
-    port = 30000 + Math.floor(Math.random() * 10000);
+    port = await allocatePort();
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
     server = new AdminServer({
       port,
+      allowInsecureWithoutToken: true,
       memoryStore: new MemoryStore(db, 3),
       sessionStore: new SessionStore(sessionsDir),
-      sessionManager: new SessionManager(new SessionStore(sessionsDir), testConfig),
+      sessionManager: new SessionManager(new SessionStore(sessionsDir), testConfig, eventBus),
       scheduler: new Scheduler(eventBus),
       shardManager: new ShardManager({
         eventBus,

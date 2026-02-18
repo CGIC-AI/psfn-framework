@@ -24,6 +24,7 @@ export interface MemoryExtractorConfig {
   minImportance?: number;
   minConfidence?: number;
   minNovelty?: number;
+  maxWrites?: number;
   telemetryEnabled?: boolean;
 }
 
@@ -32,7 +33,12 @@ export interface MemoryExtractorDrainOptions {
 }
 
 type ExtractionTriggerReason = 'manual' | 'interval' | 'context_threshold' | 'interval_and_threshold';
-type ExtractionRejectionReason = 'low_importance' | 'low_confidence' | 'low_novelty';
+type ExtractionRejectionReason =
+  | 'low_importance'
+  | 'low_confidence'
+  | 'low_novelty'
+  | 'low_signal'
+  | 'write_cap';
 type ProfileRefreshReason = 'memory_update' | 'interval' | 'memory_update_and_interval';
 
 interface ExtractionGateConfig {
@@ -78,9 +84,17 @@ interface AcceptedFactWrite {
   confidence: number;
 }
 
+interface AcceptedFactCandidate {
+  fact: ExtractedFact;
+  novelty: number;
+  valueScore: number;
+  index: number;
+}
+
 const DEFAULT_MIN_IMPORTANCE = 0.45;
 const DEFAULT_MIN_CONFIDENCE = 0.6;
 const DEFAULT_MIN_NOVELTY = 0.35;
+const DEFAULT_MAX_WRITES = 2;
 const DEFAULT_PROFILE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PROFILE_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_PROFILE_MIN_WRITES = 1;
@@ -89,6 +103,57 @@ const DEFAULT_PROFILE_MIN_CONFIDENCE = 0.7;
 const DEFAULT_PROFILE_MIN_NOVELTY = 0.12;
 const DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT = 16;
 const DEFAULT_PROFILE_MIN_SOURCE_MEMORIES = 2;
+const RELATIONSHIP_SIGNAL_HINTS = new Set([
+  'partner',
+  'spouse',
+  'wife',
+  'husband',
+  'fiance',
+  'fiancee',
+  'girlfriend',
+  'boyfriend',
+  'sister',
+  'brother',
+  'mother',
+  'father',
+  'mom',
+  'dad',
+  'parent',
+  'son',
+  'daughter',
+  'child',
+  'family',
+  'roommate',
+  'friend',
+  'coworker',
+  'colleague',
+  'manager',
+  'mentor',
+]);
+const LOW_SIGNAL_EXACT_TEXT = new Set([
+  'hi',
+  'hello',
+  'hey',
+  'good morning',
+  'good afternoon',
+  'good evening',
+  'how are you',
+  'whats up',
+  'thank you',
+  'thanks',
+  'bye',
+  'goodbye',
+  'see you',
+  'talk later',
+]);
+const LOW_SIGNAL_PATTERNS = [
+  /\b(user|assistant)\s+(greeted|greets|said|says|thanked|thanks|apologized|asked)\b.*\b(hi|hello|hey|thanks|thank you|goodbye|bye|how are you|whats up)\b/,
+  /\b(exchanged|shared)\s+(greetings|pleasantries|small talk|chit chat|chitchat)\b/,
+  /\b(quick|brief|short|rapid)\s+(chat|conversation|exchange|back and forth|chatter)\b/,
+  /\bquick succession chatter\b/,
+  /\b(user|assistant)\s+(joined|left|started|ended)\s+(the )?(chat|conversation)\b/,
+  /\b(greetings|pleasantries|small talk|chit chat|chitchat)\b/,
+];
 
 export class MemoryExtractor {
   private llmClient: LLMProvider;
@@ -101,6 +166,7 @@ export class MemoryExtractor {
   private minImportance: number;
   private minConfidence: number;
   private minNovelty: number;
+  private maxWrites: number;
   private telemetryEnabled: boolean;
   private promptRegistry: PromptRegistryStore | null;
   private acceptingExtractions = true;
@@ -130,6 +196,7 @@ export class MemoryExtractor {
       this.minImportance = config.memoryExtractionMinImportance ?? DEFAULT_MIN_IMPORTANCE;
       this.minConfidence = config.memoryExtractionMinConfidence ?? DEFAULT_MIN_CONFIDENCE;
       this.minNovelty = config.memoryExtractionMinNovelty ?? DEFAULT_MIN_NOVELTY;
+      this.maxWrites = normalizeMaxWrites(config.memoryExtractionMaxWrites, DEFAULT_MAX_WRITES);
       this.telemetryEnabled = config.memoryExtractionTelemetryEnabled ?? true;
     } else {
       const extractorConfig = config as MemoryExtractorConfig | undefined;
@@ -138,6 +205,7 @@ export class MemoryExtractor {
       this.minImportance = extractorConfig?.minImportance ?? DEFAULT_MIN_IMPORTANCE;
       this.minConfidence = extractorConfig?.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
       this.minNovelty = extractorConfig?.minNovelty ?? DEFAULT_MIN_NOVELTY;
+      this.maxWrites = normalizeMaxWrites(extractorConfig?.maxWrites, DEFAULT_MAX_WRITES);
       this.telemetryEnabled = extractorConfig?.telemetryEnabled ?? true;
     }
     this.promptRegistry = promptRegistry ?? null;
@@ -329,6 +397,8 @@ export class MemoryExtractor {
             low_importance: 0,
             low_confidence: 0,
             low_novelty: 0,
+            low_signal: 0,
+            write_cap: 0,
           },
         });
         return;
@@ -339,16 +409,13 @@ export class MemoryExtractor {
         low_importance: 0,
         low_confidence: 0,
         low_novelty: 0,
+        low_signal: 0,
+        write_cap: 0,
       };
 
-      // Process each fact after acceptance gates
-      let acceptedCount = 0;
-      let writeCount = 0;
-      let deduplicatedCount = 0;
-      let supersededCount = 0;
-      const acceptedWrites: AcceptedFactWrite[] = [];
-
-      for (const fact of facts) {
+      // Gate first, then rank accepted facts so the cap preserves highest-value writes.
+      const acceptedCandidates: AcceptedFactCandidate[] = [];
+      for (const [index, fact] of facts.entries()) {
         const decision = evaluateFactAcceptance(fact, noveltyCorpus, gateConfig);
         if (!decision.accepted) {
           if (decision.reason) rejectionBreakdown[decision.reason]++;
@@ -368,9 +435,44 @@ export class MemoryExtractor {
           continue;
         }
 
+        acceptedCandidates.push({
+          fact,
+          novelty: decision.novelty,
+          valueScore: computeFactValueScore(fact, decision.novelty),
+          index,
+        });
+        noveltyCorpus.push(fact.text);
+      }
+
+      const maxWrites = this.resolveMaxWrites();
+      const rankedCandidates = acceptedCandidates
+        .slice()
+        .sort(compareAcceptedFactCandidates);
+      const selectedCandidates = rankedCandidates.slice(0, maxWrites);
+      const skippedByCap = rankedCandidates.length - selectedCandidates.length;
+      if (skippedByCap > 0) {
+        rejectionBreakdown.write_cap += skippedByCap;
+        if (this.isTelemetryEnabled()) {
+          log.debug('Skipped extracted facts due to write cap', {
+            channelId,
+            maxWrites,
+            skippedByCap,
+            acceptedBeforeCap: rankedCandidates.length,
+          });
+        }
+      }
+
+      // Process accepted facts that survived cap.
+      let acceptedCount = 0;
+      let writeCount = 0;
+      let deduplicatedCount = 0;
+      let supersededCount = 0;
+      const acceptedWrites: AcceptedFactWrite[] = [];
+
+      for (const candidate of selectedCandidates) {
+        const { fact } = candidate;
         try {
           const result = await this.processFact(fact, channelId, canonicalContactId);
-          noveltyCorpus.push(fact.text);
           acceptedCount++;
 
           switch (result.action) {
@@ -415,7 +517,7 @@ export class MemoryExtractor {
       };
 
       if (this.isTelemetryEnabled()) {
-        log.info('Extraction completed', telemetry);
+        log.info('Extraction completed', { ...telemetry, maxWrites });
       }
       await this.emitExtractionEnd(telemetry);
       this.maybeRefreshContactProfile(
@@ -697,6 +799,13 @@ export class MemoryExtractor {
     };
   }
 
+  private resolveMaxWrites(): number {
+    return normalizeMaxWrites(
+      this.runtimeConfig?.memoryExtractionMaxWrites,
+      this.maxWrites,
+    );
+  }
+
   private isTelemetryEnabled(): boolean {
     return this.runtimeConfig?.memoryExtractionTelemetryEnabled ?? this.telemetryEnabled;
   }
@@ -761,12 +870,41 @@ function evaluateFactAcceptance(
     return { accepted: false, reason: 'low_confidence', novelty: 1 };
   }
 
+  if (isLowSignalFact(fact.text)) {
+    return { accepted: false, reason: 'low_signal', novelty: 1 };
+  }
+
   const novelty = computeNoveltyScore(fact.text, existingTexts);
   if (novelty < gateConfig.minNovelty) {
     return { accepted: false, reason: 'low_novelty', novelty };
   }
 
   return { accepted: true, novelty };
+}
+
+function isLowSignalFact(text: string): boolean {
+  const normalized = normalizeForSimilarity(text);
+  if (!normalized) return true;
+  if (LOW_SIGNAL_EXACT_TEXT.has(normalized)) return true;
+
+  const tokens = tokenizeForSimilarity(normalized);
+  if (tokens.some(token => RELATIONSHIP_SIGNAL_HINTS.has(token))) {
+    return false;
+  }
+
+  return LOW_SIGNAL_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+function computeFactValueScore(fact: ExtractedFact, novelty: number): number {
+  return clamp(fact.importance, 0, 1) * clamp(fact.confidence, 0, 1) * clamp(novelty, 0, 1);
+}
+
+function compareAcceptedFactCandidates(left: AcceptedFactCandidate, right: AcceptedFactCandidate): number {
+  if (right.valueScore !== left.valueScore) return right.valueScore - left.valueScore;
+  if (right.fact.importance !== left.fact.importance) return right.fact.importance - left.fact.importance;
+  if (right.fact.confidence !== left.fact.confidence) return right.fact.confidence - left.fact.confidence;
+  if (right.novelty !== left.novelty) return right.novelty - left.novelty;
+  return left.index - right.index;
 }
 
 function computeNoveltyScore(text: string, existingTexts: string[]): number {
@@ -869,6 +1007,12 @@ function jaccardSimilarity(left: string[], right: string[]): number {
 
   const union = leftSet.size + rightSet.size - intersection;
   return union === 0 ? 0 : intersection / union;
+}
+
+function normalizeMaxWrites(value: number | undefined, fallback: number): number {
+  const candidate = Number.isFinite(value) ? Math.floor(value as number) : fallback;
+  if (!Number.isFinite(candidate)) return DEFAULT_MAX_WRITES;
+  return Math.max(0, candidate);
 }
 
 export const __test = {

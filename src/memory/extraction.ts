@@ -14,6 +14,7 @@ import {
   PROFILE_SYNTHESIS_PROMPT_KEY,
   getDefaultPromptText,
 } from '../identity/prompt-registry.js';
+import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 const log = createComponentLogger('Extraction');
 
 // Track last extraction per channel
@@ -362,7 +363,7 @@ export class MemoryExtractor {
       // Build prompt
       const extractionPrompt = this.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
         ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
-      const prompt = extractionPrompt
+      const prompt = injectPromptRuntimeTokens(extractionPrompt)
         .replace('{existing_facts}', existingFacts)
         .replace('{recent_messages}', recentMessages);
 
@@ -710,7 +711,7 @@ export class MemoryExtractor {
 
     const profilePrompt = this.promptRegistry?.getPrompt(PROFILE_SYNTHESIS_PROMPT_KEY)
       ?? getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY);
-    const prompt = profilePrompt
+    const prompt = injectPromptRuntimeTokens(profilePrompt)
       .replace('{contact_id}', canonicalContactId)
       .replace('{existing_profile}', existingProfile?.summary ?? '(none yet)')
       .replace('{memory_facts}', memoryFacts);

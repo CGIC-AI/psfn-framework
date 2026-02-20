@@ -647,8 +647,8 @@ describe('AdminServer', () => {
       const res = await request(port, 'GET', '/settings');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Settings');
-      expect(res.body).toContain('Models');
-      expect(res.body).toContain('Token Limits');
+      expect(res.body).toContain('Model Catalog (Roster v2)');
+      expect(res.body).toContain('Purpose Mappings');
       expect(res.body).toContain('Memory');
       expect(res.body).toContain('Sessions');
       expect(res.body).toContain('Secrets');
@@ -659,6 +659,8 @@ describe('AdminServer', () => {
       expect(res.body).toContain('test-model');
       expect(res.body).toContain('test-extract');
       expect(res.body).toContain('name="primaryModel"');
+      expect(res.body).toContain('name="modelCatalogJson"');
+      expect(res.body).toContain('name="modelRoleAssignmentsJson"');
     });
 
     it('shows memory settings', async () => {
@@ -695,6 +697,59 @@ describe('AdminServer', () => {
       // Reset for other tests
       testConfig.primaryMaxTokens = 16384;
       testConfig.sessionMessageLimit = 30;
+    });
+
+    it('saves roster-v2 model catalog and role assignments via POST', async () => {
+      const body = new URLSearchParams({
+        modelCatalogJson: JSON.stringify({
+          chatfast: {
+            model: 'moonshotai/kimi-k2.5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 6144, contextWindow: 200000 },
+          },
+          extract: {
+            model: 'openai/gpt-4.1-mini',
+            provider: 'openrouter',
+            defaults: { maxTokens: 1536 },
+          },
+        }),
+        modelRoleAssignmentsJson: JSON.stringify({
+          chat: 'chatfast',
+          summary: 'chatfast',
+          reasoning: 'chatfast',
+          longContext: 'chatfast',
+          extraction: 'extract',
+          background: 'extract',
+        }),
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/settings', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Settings saved');
+
+      expect(testConfig.primaryModel).toBe('moonshotai/kimi-k2.5');
+      expect(testConfig.primaryProvider).toBe('openrouter');
+      expect(testConfig.primaryMaxTokens).toBe(6144);
+      expect(testConfig.extractionModel).toBe('openai/gpt-4.1-mini');
+      expect(testConfig.extractionMaxTokens).toBe(1536);
+      expect(testConfig.modelRoleAssignments?.chat).toBe('chatfast');
+      expect(testConfig.modelRoleAssignments?.extraction).toBe('extract');
+      expect(testConfig.modelCatalog?.chatfast?.defaults?.contextWindow).toBe(200000);
+      expect(testConfig.modelRoster.reasoning?.model).toBe('moonshotai/kimi-k2.5');
+
+      testConfig.primaryModel = 'test-model';
+      testConfig.primaryProvider = 'test';
+      testConfig.primaryMaxTokens = 16384;
+      testConfig.extractionModel = 'test-extract';
+      testConfig.extractionProvider = 'test';
+      testConfig.extractionMaxTokens = 8192;
+      testConfig.modelCatalog = undefined;
+      testConfig.modelRoleAssignments = undefined;
+      testConfig.modelRoster = {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+      };
     });
 
     it('rejects invalid settings values', async () => {

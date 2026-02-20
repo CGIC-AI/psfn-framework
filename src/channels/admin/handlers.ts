@@ -30,7 +30,13 @@ import type { Contact, RelationshipType, ChannelPrivacyLevel } from '../../conta
 import { TRUST_LEVELS } from '../../trust/types.js';
 import { VALID_RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '../../contacts/types.js';
 import { MEMORY_CONFIG } from '../../memory/types.js';
-import { loadSettings, saveSettings, applySettings, parseSettingsForm } from '../../settings.js';
+import {
+  loadSettings,
+  saveSettings,
+  applySettings,
+  parseSettingsForm,
+  normalizeEditableSettings,
+} from '../../settings.js';
 import {
   AdminChatBootstrapService,
   type AdminChatBootstrapResponse,
@@ -424,7 +430,10 @@ export class AdminHandlers {
 
     // Load existing saved settings, merge, save, and apply to live config
     const existing = loadSettings(this.config.dataDir);
-    const merged = { ...existing, ...settings };
+    const merged = normalizeEditableSettings(
+      { ...existing, ...settings },
+      { defaultContextWindow: this.config.defaultContextWindow },
+    );
     saveSettings(this.config.dataDir, merged);
     applySettings(this.config, merged);
     try {

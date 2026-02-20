@@ -14,6 +14,12 @@ import type {
   SubstrateConfig,
 } from './types.js';
 import { createComponentLogger } from './logger.js';
+import {
+  MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
+  resolveMemoryRetrievalBudgetPct,
+  resolveSessionHistoryBudgetPct,
+  SESSION_HISTORY_BUDGET_PCT_RANGE,
+} from './context-budget.js';
 
 const log = createComponentLogger('Settings');
 
@@ -43,6 +49,8 @@ export interface EditableSettings {
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
   modelRoster?: Partial<Record<ModelPurpose, ModelSlot>>;
+  sessionHistoryBudgetPct?: number;
+  memoryRetrievalBudgetPct?: number;
   sessionMessageLimit?: number;
   memoryRetrievalLimit?: number;
   extractionInterval?: number;
@@ -60,6 +68,8 @@ export const RUNTIME_SETTINGS_KEYS = [
   'extractionModel',
   'extractionProvider',
   'extractionMaxTokens',
+  'sessionHistoryBudgetPct',
+  'memoryRetrievalBudgetPct',
   'sessionMessageLimit',
   'memoryRetrievalLimit',
   'extractionInterval',
@@ -94,6 +104,12 @@ function toPositiveInteger(value: unknown): number | undefined {
     return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
   }
   return undefined;
+}
+
+function toIntegerInRange(value: unknown, min: number, max: number): number | undefined {
+  const parsed = toPositiveInteger(value);
+  if (parsed === undefined) return undefined;
+  return parsed >= min && parsed <= max ? parsed : undefined;
 }
 
 function toNonEmptyString(value: unknown): string | undefined {
@@ -292,6 +308,48 @@ function resolvePurposeSlot(
   return modelSlotFromCatalogEntry(entry, fallback);
 }
 
+function normalizeContextControlSettings(settings: EditableSettings): EditableSettings {
+  const normalized: EditableSettings = { ...settings };
+
+  const sessionLimit = toIntegerInRange(settings.sessionMessageLimit, 5, 200);
+  if (sessionLimit !== undefined) {
+    normalized.sessionMessageLimit = sessionLimit;
+  } else {
+    delete normalized.sessionMessageLimit;
+  }
+
+  const retrievalLimit = toIntegerInRange(settings.memoryRetrievalLimit, 1, 50);
+  if (retrievalLimit !== undefined) {
+    normalized.memoryRetrievalLimit = retrievalLimit;
+  } else {
+    delete normalized.memoryRetrievalLimit;
+  }
+
+  const sessionBudgetPct = toIntegerInRange(
+    settings.sessionHistoryBudgetPct,
+    SESSION_HISTORY_BUDGET_PCT_RANGE.min,
+    SESSION_HISTORY_BUDGET_PCT_RANGE.max,
+  );
+  if (sessionBudgetPct !== undefined) {
+    normalized.sessionHistoryBudgetPct = sessionBudgetPct;
+  } else {
+    delete normalized.sessionHistoryBudgetPct;
+  }
+
+  const retrievalBudgetPct = toIntegerInRange(
+    settings.memoryRetrievalBudgetPct,
+    MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
+    MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
+  );
+  if (retrievalBudgetPct !== undefined) {
+    normalized.memoryRetrievalBudgetPct = retrievalBudgetPct;
+  } else {
+    delete normalized.memoryRetrievalBudgetPct;
+  }
+
+  return normalized;
+}
+
 function hasModelSettings(settings: EditableSettings): boolean {
   return settings.primaryModel !== undefined
     || settings.primaryProvider !== undefined
@@ -308,14 +366,16 @@ export function normalizeEditableSettings(
   settings: EditableSettings,
   options?: { defaultContextWindow?: number },
 ): EditableSettings {
-  if (!hasModelSettings(settings)) {
-    return { ...settings };
+  const normalizedInput = normalizeContextControlSettings(settings);
+
+  if (!hasModelSettings(normalizedInput)) {
+    return { ...normalizedInput };
   }
 
-  const normalized: EditableSettings = { ...settings };
-  const catalog = sanitizeModelCatalog(settings.modelCatalog);
-  const assignments = sanitizeModelRoleAssignments(settings.modelRoleAssignments);
-  const roster = sanitizeModelRoster(settings.modelRoster);
+  const normalized: EditableSettings = { ...normalizedInput };
+  const catalog = sanitizeModelCatalog(normalizedInput.modelCatalog);
+  const assignments = sanitizeModelRoleAssignments(normalizedInput.modelRoleAssignments);
+  const roster = sanitizeModelRoster(normalizedInput.modelRoster);
 
   for (const [purpose, slot] of Object.entries(roster) as Array<[ModelPurpose, ModelSlot]>) {
     const slotKey = assignments[purpose] ?? defaultSlotKeyForPurpose(purpose);
@@ -329,15 +389,15 @@ export function normalizeEditableSettings(
   }
 
   mergeCatalogSlot(catalog, PRIMARY_MODEL_SLOT_KEY, {
-    model: settings.primaryModel,
-    provider: settings.primaryProvider,
-    maxTokens: settings.primaryMaxTokens,
+    model: normalizedInput.primaryModel,
+    provider: normalizedInput.primaryProvider,
+    maxTokens: normalizedInput.primaryMaxTokens,
     contextWindow: roster.chat?.contextWindow ?? options?.defaultContextWindow,
   });
   mergeCatalogSlot(catalog, EXTRACTION_MODEL_SLOT_KEY, {
-    model: settings.extractionModel,
-    provider: settings.extractionProvider,
-    maxTokens: settings.extractionMaxTokens,
+    model: normalizedInput.extractionModel,
+    provider: normalizedInput.extractionProvider,
+    maxTokens: normalizedInput.extractionMaxTokens,
   });
 
   if (catalog[PRIMARY_MODEL_SLOT_KEY]) {
@@ -362,7 +422,7 @@ export function normalizeEditableSettings(
     assignments,
     'chat',
     {
-      maxTokens: settings.primaryMaxTokens,
+      maxTokens: normalizedInput.primaryMaxTokens,
       contextWindow: roster.chat?.contextWindow ?? options?.defaultContextWindow,
     },
     PRIMARY_MODEL_SLOT_KEY,
@@ -373,7 +433,7 @@ export function normalizeEditableSettings(
     assignments,
     'extraction',
     {
-      maxTokens: settings.extractionMaxTokens ?? settings.primaryMaxTokens,
+      maxTokens: normalizedInput.extractionMaxTokens ?? normalizedInput.primaryMaxTokens,
     },
     assignments.background ?? EXTRACTION_MODEL_SLOT_KEY,
   );
@@ -383,7 +443,7 @@ export function normalizeEditableSettings(
     assignments,
     'background',
     {
-      maxTokens: extractionSlot?.maxTokens ?? settings.extractionMaxTokens ?? settings.primaryMaxTokens,
+      maxTokens: extractionSlot?.maxTokens ?? normalizedInput.extractionMaxTokens ?? normalizedInput.primaryMaxTokens,
     },
     assignments.extraction ?? EXTRACTION_MODEL_SLOT_KEY,
   );
@@ -393,7 +453,7 @@ export function normalizeEditableSettings(
     assignments,
     'reasoning',
     {
-      maxTokens: chatSlot?.maxTokens ?? settings.primaryMaxTokens,
+      maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
       contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
     },
     assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
@@ -404,7 +464,7 @@ export function normalizeEditableSettings(
     assignments,
     'longContext',
     {
-      maxTokens: chatSlot?.maxTokens ?? settings.primaryMaxTokens,
+      maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
       contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
     },
     assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
@@ -461,6 +521,9 @@ export function isRuntimeSettingKey(value: string): value is RuntimeSettingKey {
 }
 
 export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSettingsSnapshot {
+  const sessionBudgetPct = resolveSessionHistoryBudgetPct(config);
+  const retrievalBudgetPct = resolveMemoryRetrievalBudgetPct(config);
+
   return {
     primaryModel: config.primaryModel,
     primaryProvider: config.primaryProvider,
@@ -468,8 +531,10 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     extractionModel: config.extractionModel,
     extractionProvider: config.extractionProvider,
     extractionMaxTokens: config.extractionMaxTokens,
-    sessionMessageLimit: config.sessionMessageLimit,
-    memoryRetrievalLimit: config.memoryRetrievalLimit,
+    sessionHistoryBudgetPct: sessionBudgetPct,
+    memoryRetrievalBudgetPct: retrievalBudgetPct,
+    sessionMessageLimit: config.sessionMessageLimit ?? null,
+    memoryRetrievalLimit: config.memoryRetrievalLimit ?? null,
     extractionInterval: config.extractionInterval,
     maintenanceIntervalMs: config.maintenanceIntervalMs,
     defaultContextWindow: config.defaultContextWindow,
@@ -517,6 +582,12 @@ export function saveSettings(dataDir: string, settings: EditableSettings): void 
 
 /** Mutate config in place with defined settings values. */
 export function applySettings(config: SubstrateConfig, settings: EditableSettings): void {
+  if (settings.sessionHistoryBudgetPct !== undefined) {
+    config.sessionHistoryBudgetPct = settings.sessionHistoryBudgetPct;
+  }
+  if (settings.memoryRetrievalBudgetPct !== undefined) {
+    config.memoryRetrievalBudgetPct = settings.memoryRetrievalBudgetPct;
+  }
   if (settings.sessionMessageLimit !== undefined) config.sessionMessageLimit = settings.sessionMessageLimit;
   if (settings.memoryRetrievalLimit !== undefined) config.memoryRetrievalLimit = settings.memoryRetrievalLimit;
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
@@ -554,8 +625,16 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
 
 /** Validation ranges for settings values. */
 export const SETTINGS_VALIDATION = {
-  primaryMaxTokens: { min: 256, max: 65536 },
-  extractionMaxTokens: { min: 256, max: 65536 },
+  primaryMaxTokens: { min: 256, max: 1_000_000 },
+  extractionMaxTokens: { min: 256, max: 1_000_000 },
+  sessionHistoryBudgetPct: {
+    min: SESSION_HISTORY_BUDGET_PCT_RANGE.min,
+    max: SESSION_HISTORY_BUDGET_PCT_RANGE.max,
+  },
+  memoryRetrievalBudgetPct: {
+    min: MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
+    max: MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
+  },
   sessionMessageLimit: { min: 5, max: 200 },
   memoryRetrievalLimit: { min: 1, max: 50 },
   extractionInterval: { min: 1, max: 50 },

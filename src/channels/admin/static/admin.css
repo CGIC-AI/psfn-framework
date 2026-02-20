@@ -157,6 +157,10 @@ h2 {
   color: #3A3226;
 }
 
+.badge-relational {
+  background: #4A5C8B;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -437,6 +441,38 @@ td {
   font-weight: bold;
   letter-spacing: 0.02em;
   color: white;
+}
+
+.memory-sensitivity {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  color: white;
+}
+
+.memory-sensitivity-public {
+  background: #4A5C8B;
+}
+
+.memory-sensitivity-personal {
+  background: #6C5B7B;
+}
+
+.memory-sensitivity-intimate {
+  background: #C44569;
+}
+
+.memory-sensitivity-confidential {
+  background: #8F3B3B;
+}
+
+.session-label-muted {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-family: 'Courier New', monospace;
 }
 
 .crm-notes {

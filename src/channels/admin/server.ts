@@ -290,7 +290,7 @@ export class AdminServer implements Lifecycle {
               (html) => this.sendFragment(res, html),
               (err) => {
                 log.error('Memory search error', { error: String(err) });
-                this.sendFragment(res, '<tr><td colspan="6" class="empty">Search error</td></tr>');
+                this.sendFragment(res, '<tr><td colspan="8" class="empty">Search error</td></tr>');
               },
             );
           });

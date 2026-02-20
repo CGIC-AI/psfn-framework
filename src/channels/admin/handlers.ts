@@ -86,6 +86,7 @@ const CHAT_DEBUG_EVENTS: ChatDebugEventName[] = [
 const MAX_DEBUG_TEXT_CHARS = 280;
 const MAX_DEBUG_MESSAGE_CHARS = 220;
 const MAX_DEBUG_DETAILS = 6;
+const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 
 function truncateDebugText(value: unknown, maxChars = MAX_DEBUG_TEXT_CHARS): string {
   if (typeof value !== 'string') return '';
@@ -236,33 +237,45 @@ export class AdminHandlers {
 
   // ── Memory ──
 
+  private buildContactSummaryMap(): Map<string, { id: string; displayName: string }> {
+    if (!this.contactStore) return new Map();
+    const map = new Map<string, { id: string; displayName: string }>();
+    for (const contact of this.contactStore.listAll()) {
+      map.set(contact.id, { id: contact.id, displayName: contact.displayName });
+    }
+    return map;
+  }
+
   memoryList(): string {
     const memories = this.memoryStore.getAllActiveMemories();
-    return tpl.layout('Memory Blossoms', tpl.memoryListPage(memories), 'memory');
+    return tpl.layout('Memory Blossoms', tpl.memoryListPage(memories, this.buildContactSummaryMap()), 'memory');
   }
 
   memoryDetail(id: string): string | null {
     const m = this.memoryStore.getById(id);
     if (!m) return null;
-    return tpl.layout(`Memory: ${m.text.slice(0, 40)}...`, tpl.memoryDetailPage(m), 'memory');
+    const linkedContact = m.contactId ? this.buildContactSummaryMap().get(m.contactId) : undefined;
+    return tpl.layout(`Memory: ${m.text.slice(0, 40)}...`, tpl.memoryDetailPage(m, linkedContact), 'memory');
   }
 
   memoryListFragment(): string {
     const memories = this.memoryStore.getAllActiveMemories();
+    const contactsById = this.buildContactSummaryMap();
     return memories.length > 0
-      ? memories.map(m => tpl.memoryRow(m)).join('')
-      : '<tr><td colspan="6" class="empty">No memories found</td></tr>';
+      ? memories.map(m => tpl.memoryRow(m, m.contactId ? contactsById.get(m.contactId) : undefined)).join('')
+      : '<tr><td colspan="8" class="empty">No memories found</td></tr>';
   }
 
   async memorySearch(query: string): Promise<string> {
     if (!this.embeddingService) {
-      return '<tr><td colspan="6" class="empty">Embedding service not available</td></tr>';
+      return '<tr><td colspan="8" class="empty">Embedding service not available</td></tr>';
     }
     const embedding = await this.embeddingService.embed(query);
     const results = this.memoryStore.searchByEmbedding(embedding, 0.1, 50);
+    const contactsById = this.buildContactSummaryMap();
     return results.length > 0
-      ? results.map(m => tpl.memoryRow(m)).join('')
-      : '<tr><td colspan="6" class="empty">No matching memories</td></tr>';
+      ? results.map(m => tpl.memoryRow(m, m.contactId ? contactsById.get(m.contactId) : undefined)).join('')
+      : '<tr><td colspan="8" class="empty">No matching memories</td></tr>';
   }
 
   memorySupersede(id: string): string {
@@ -274,9 +287,72 @@ export class AdminHandlers {
 
   // ── Sessions ──
 
+  private normalizeSessionChannelType(channelId: string): string {
+    const parsed = this.splitSessionChannelId(channelId);
+    if (parsed.channel !== 'session') return parsed.channel;
+    if (DISCORD_CHANNEL_ID_PATTERN.test(channelId)) return 'discord';
+    return parsed.channel;
+  }
+
+  private sessionMatchesConversationChannel(
+    sessionChannelId: string,
+    conversationChannel: ContactConversationChannelView,
+  ): boolean {
+    const normalizedSession = sessionChannelId.trim().toLowerCase();
+    const normalizedChannel = conversationChannel.channel.trim().toLowerCase();
+    const normalizedChannelId = conversationChannel.channelId.trim().toLowerCase();
+    if (!normalizedChannelId) return false;
+    return normalizedSession === normalizedChannelId
+      || normalizedSession === `${normalizedChannel}:${normalizedChannelId}`;
+  }
+
+  private getLinkedContactForSession(channelId: string, contacts: Contact[]): Contact | undefined {
+    if (!this.contactStore || contacts.length === 0) return undefined;
+
+    const channelType = this.normalizeSessionChannelType(channelId);
+    const lastEntry = this.sessionStore.getLastEntry(channelId);
+    if (channelType !== 'session' && lastEntry?.authorId) {
+      const contactByAuthor = this.contactStore.getByChannelIdentity(channelType, lastEntry.authorId);
+      if (contactByAuthor) return contactByAuthor;
+    }
+
+    for (const contact of contacts) {
+      const persistedChannels = this.getPersistedConversationChannels(contact);
+      if (persistedChannels.some(entry => this.sessionMatchesConversationChannel(channelId, entry))) {
+        return contact;
+      }
+
+      const identities = this.getContactIdentityLinks(contact);
+      if (identities.some(identity => this.sessionMatchesIdentity(channelId, identity))) {
+        return contact;
+      }
+    }
+
+    const parsed = this.splitSessionChannelId(channelId);
+    if (channelType !== 'session') {
+      const userIdHint = parsed.channelId.split(':').pop();
+      if (userIdHint) {
+        const contactByHint = this.contactStore.getByChannelIdentity(channelType, userIdHint);
+        if (contactByHint) return contactByHint;
+      }
+    }
+
+    return undefined;
+  }
+
   sessionList(): string {
     const channels = this.sessionStore.listChannels();
-    return tpl.layout('Conversation Roots', tpl.sessionListPage(channels), 'sessions');
+    const contacts = this.contactStore?.listAll() ?? [];
+    const renderedChannels = channels.map(channel => {
+      const linkedContact = this.getLinkedContactForSession(channel.channelId, contacts);
+      if (!linkedContact) return channel;
+      return {
+        ...channel,
+        linkedContactId: linkedContact.id,
+        linkedContactName: linkedContact.displayName,
+      };
+    });
+    return tpl.layout('Conversation Roots', tpl.sessionListPage(renderedChannels), 'sessions');
   }
 
   sessionMessages(channelId: string): string {

@@ -1,3 +1,10 @@
+import {
+  MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
+  MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
+  SESSION_HISTORY_BUDGET_PCT_DEFAULT,
+  SESSION_HISTORY_BUDGET_PCT_RANGE,
+} from './context-budget.js';
+
 // ── Channel-agnostic message types ──
 
 export type ChannelType = 'discord' | 'terminal' | 'api';
@@ -141,8 +148,10 @@ export interface SubstrateConfig {
   characterCardPath: string;
   dataDir: string;
   databasePath: string;
-  sessionMessageLimit: number;
-  memoryRetrievalLimit: number;
+  sessionMessageLimit?: number;
+  memoryRetrievalLimit?: number;
+  sessionHistoryBudgetPct?: number;
+  memoryRetrievalBudgetPct?: number;
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;
@@ -260,6 +269,20 @@ export function loadConfig(): SubstrateConfig {
   const profileSynthesisMinSourceMemories = parseInt(process.env.PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES ?? '2', 10);
   const retryMaxAttempts = parseInt(process.env.RETRY_MAX_ATTEMPTS ?? '3', 10);
   const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
+  const sessionMessageLimit = parseOptionalIntegerEnv(process.env.SESSION_MESSAGE_LIMIT, 1);
+  const memoryRetrievalLimit = parseOptionalIntegerEnv(process.env.MEMORY_RETRIEVAL_LIMIT, 1);
+  const sessionHistoryBudgetPct = parseBoundedIntegerEnv(
+    process.env.SESSION_HISTORY_BUDGET_PCT,
+    SESSION_HISTORY_BUDGET_PCT_DEFAULT,
+    SESSION_HISTORY_BUDGET_PCT_RANGE.min,
+    SESSION_HISTORY_BUDGET_PCT_RANGE.max,
+  );
+  const memoryRetrievalBudgetPct = parseBoundedIntegerEnv(
+    process.env.MEMORY_RETRIEVAL_BUDGET_PCT,
+    MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
+    MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
+    MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
+  );
 
   return {
     primaryModel,
@@ -273,8 +296,10 @@ export function loadConfig(): SubstrateConfig {
     characterCardPath: process.env.CHARACTER_CARD_PATH ?? '/path/to/your/character.json',
     dataDir: process.env.DATA_DIR ?? './data',
     databasePath: process.env.DATABASE_PATH ?? './data/purrsephone.db',
-    sessionMessageLimit: parseInt(process.env.SESSION_MESSAGE_LIMIT ?? '30', 10),
-    memoryRetrievalLimit: parseInt(process.env.MEMORY_RETRIEVAL_LIMIT ?? '15', 10),
+    ...(sessionMessageLimit !== undefined ? { sessionMessageLimit } : {}),
+    ...(memoryRetrievalLimit !== undefined ? { memoryRetrievalLimit } : {}),
+    sessionHistoryBudgetPct,
+    memoryRetrievalBudgetPct,
     extractionInterval: parseInt(process.env.EXTRACTION_INTERVAL ?? '5', 10),
     maintenanceIntervalMs: parseInt(process.env.MAINTENANCE_INTERVAL_MS ?? '300000', 10),
     defaultContextWindow,
@@ -326,6 +351,24 @@ function parseIntegerEnv(value: string | undefined, fallback: number, min: numbe
   const parsed = Number.parseInt(value ?? '', 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, parsed);
+}
+
+function parseOptionalIntegerEnv(value: string | undefined, min: number): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return undefined;
+  return parsed >= min ? parsed : undefined;
+}
+
+function parseBoundedIntegerEnv(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 // ── Lifecycle ──

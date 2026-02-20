@@ -25,6 +25,8 @@ function makeConfig(): SubstrateConfig {
     characterCardPath: '',
     dataDir: './data',
     databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
     sessionMessageLimit: 30,
     memoryRetrievalLimit: 15,
     extractionInterval: 5,
@@ -205,12 +207,16 @@ describe('settings', () => {
     it('applies all non-model fields', () => {
       const config = makeConfig();
       applySettings(config, {
+        sessionHistoryBudgetPct: 8,
+        memoryRetrievalBudgetPct: 3,
         sessionMessageLimit: 50,
         memoryRetrievalLimit: 25,
         extractionInterval: 10,
         retryMaxAttempts: 5,
         retryBaseDelayMs: 4000,
       });
+      expect(config.sessionHistoryBudgetPct).toBe(8);
+      expect(config.memoryRetrievalBudgetPct).toBe(3);
       expect(config.sessionMessageLimit).toBe(50);
       expect(config.memoryRetrievalLimit).toBe(25);
       expect(config.extractionInterval).toBe(10);
@@ -349,6 +355,8 @@ describe('settings', () => {
         primaryModel: 'test-model',
         primaryProvider: 'openrouter',
         primaryMaxTokens: '4096',
+        sessionHistoryBudgetPct: '7',
+        memoryRetrievalBudgetPct: '3',
         sessionMessageLimit: '50',
         retryMaxAttempts: '4',
       });
@@ -356,6 +364,8 @@ describe('settings', () => {
       expect(errors).toEqual([]);
       expect(settings.primaryModel).toBe('test-model');
       expect(settings.primaryMaxTokens).toBe(4096);
+      expect(settings.sessionHistoryBudgetPct).toBe(7);
+      expect(settings.memoryRetrievalBudgetPct).toBe(3);
       expect(settings.sessionMessageLimit).toBe(50);
       expect(settings.retryMaxAttempts).toBe(4);
       expect(settings.modelCatalog?.primary?.model).toBe('test-model');
@@ -409,14 +419,16 @@ describe('settings', () => {
     it('rejects out-of-range values', () => {
       const params = new URLSearchParams({
         primaryMaxTokens: '100',
+        sessionHistoryBudgetPct: '0',
         sessionMessageLimit: '999',
         retryBaseDelayMs: '100',
       });
       const [, errors] = parseSettingsForm(params);
-      expect(errors.length).toBe(3);
-      expect(errors[0]).toContain('primaryMaxTokens');
-      expect(errors[1]).toContain('sessionMessageLimit');
-      expect(errors[2]).toContain('retryBaseDelayMs');
+      expect(errors.length).toBe(4);
+      expect(errors.some(err => err.includes('primaryMaxTokens'))).toBe(true);
+      expect(errors.some(err => err.includes('sessionHistoryBudgetPct'))).toBe(true);
+      expect(errors.some(err => err.includes('sessionMessageLimit'))).toBe(true);
+      expect(errors.some(err => err.includes('retryBaseDelayMs'))).toBe(true);
     });
 
     it('ignores empty string fields', () => {
@@ -454,6 +466,20 @@ describe('settings', () => {
       expect(snapshot.thinkMaxTokens).toBeNull();
       expect(snapshot.thinkMaxWallTimeMs).toBeNull();
       expect(snapshot.thinkMaxSubQueries).toBeNull();
+    });
+
+    it('resolves budget percentages and nullable hard overrides', () => {
+      const config = makeConfig();
+      config.sessionHistoryBudgetPct = undefined;
+      config.memoryRetrievalBudgetPct = undefined;
+      config.sessionMessageLimit = undefined;
+      config.memoryRetrievalLimit = undefined;
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.sessionHistoryBudgetPct).toBe(6);
+      expect(snapshot.memoryRetrievalBudgetPct).toBe(2);
+      expect(snapshot.sessionMessageLimit).toBeNull();
+      expect(snapshot.memoryRetrievalLimit).toBeNull();
     });
 
     it('validates setting key membership', () => {

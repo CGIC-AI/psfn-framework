@@ -145,6 +145,8 @@ const testConfig: SubstrateConfig = {
   characterCardPath: '',
   dataDir: './data',
   databasePath: '',
+  sessionHistoryBudgetPct: 6,
+  memoryRetrievalBudgetPct: 2,
   sessionMessageLimit: 30,
   memoryRetrievalLimit: 15,
   extractionInterval: 5,
@@ -665,8 +667,11 @@ describe('AdminServer', () => {
 
     it('shows memory settings', async () => {
       const res = await request(port, 'GET', '/settings');
-      expect(res.body).toContain('Retrieval Limit');
+      expect(res.body).toContain('Retrieval Budget %');
+      expect(res.body).toContain('Retrieval Hard Override');
       expect(res.body).toContain('Extraction Interval');
+      expect(res.body).toContain('History Budget %');
+      expect(res.body).toContain('Message Hard Override');
       expect(res.body).toContain('Salience Floor');
     });
 
@@ -697,6 +702,21 @@ describe('AdminServer', () => {
       // Reset for other tests
       testConfig.primaryMaxTokens = 16384;
       testConfig.sessionMessageLimit = 30;
+    });
+
+    it('saves context budget percentages via POST', async () => {
+      const body = 'sessionHistoryBudgetPct=9&memoryRetrievalBudgetPct=4';
+      const res = await request(port, 'POST', '/api/settings', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Settings saved');
+
+      expect(testConfig.sessionHistoryBudgetPct).toBe(9);
+      expect(testConfig.memoryRetrievalBudgetPct).toBe(4);
+
+      testConfig.sessionHistoryBudgetPct = 6;
+      testConfig.memoryRetrievalBudgetPct = 2;
     });
 
     it('saves roster-v2 model catalog and role assignments via POST', async () => {

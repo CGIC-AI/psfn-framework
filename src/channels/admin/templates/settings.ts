@@ -1,6 +1,16 @@
 import type { DiscoveredModel } from '../../../llm/discovery.js';
 import type { ModelCatalogEntry, ModelRoleAssignments, SubstrateConfig } from '../../../types.js';
 import type { EnvInfo } from '../types.js';
+import {
+  MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
+  MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
+  MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM,
+  resolveMemoryRetrievalBudget,
+  resolveSessionHistoryBudget,
+  SESSION_HISTORY_BUDGET_PCT_DEFAULT,
+  SESSION_HISTORY_BUDGET_PCT_RANGE,
+  SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE,
+} from '../../../context-budget.js';
 import { escapeHtml } from './shared.js';
 
 const DEFAULT_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
@@ -123,6 +133,8 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
   const availableModels = models ?? [];
   const catalogRows = buildCatalogRows(config);
   const roleAssignments = buildRoleAssignments(config);
+  const sessionBudget = resolveSessionHistoryBudget(config);
+  const retrievalBudget = resolveMemoryRetrievalBudget(config);
   const retryMaxAttempts = config.retryMaxAttempts ?? 3;
   const retryBaseDelayMs = config.retryBaseDelayMs ?? 2000;
 
@@ -232,8 +244,13 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
         <h3 style="margin-bottom:0.75rem">Memory</h3>
         <div class="form-row">
           <div class="form-group">
-            <label>Retrieval Limit (1-50)</label>
-            <input type="number" name="memoryRetrievalLimit" value="${config.memoryRetrievalLimit}" min="1" max="50">
+            <label>Retrieval Budget % (${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min}-${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max})</label>
+            <input type="number" name="memoryRetrievalBudgetPct" value="${retrievalBudget.budgetPct}" min="${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min}" max="${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max}">
+            <p class="note" style="margin:0.4rem 0 0 0" data-memory-budget-preview></p>
+          </div>
+          <div class="form-group">
+            <label>Retrieval Hard Override (optional, 1-50)</label>
+            <input type="number" name="memoryRetrievalLimit" value="${toTextNumber(config.memoryRetrievalLimit)}" min="1" max="50" placeholder="auto">
           </div>
           <div class="form-group">
             <label>Extraction Interval (1-50 messages)</label>
@@ -248,9 +265,16 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
 
       <div class="card">
         <h3 style="margin-bottom:0.75rem">Sessions</h3>
-        <div class="form-group">
-          <label>Message Limit (5-200)</label>
-          <input type="number" name="sessionMessageLimit" value="${config.sessionMessageLimit}" min="5" max="200">
+        <div class="form-row">
+          <div class="form-group">
+            <label>History Budget % (${SESSION_HISTORY_BUDGET_PCT_RANGE.min}-${SESSION_HISTORY_BUDGET_PCT_RANGE.max})</label>
+            <input type="number" name="sessionHistoryBudgetPct" value="${sessionBudget.budgetPct}" min="${SESSION_HISTORY_BUDGET_PCT_RANGE.min}" max="${SESSION_HISTORY_BUDGET_PCT_RANGE.max}">
+            <p class="note" style="margin:0.4rem 0 0 0" data-session-budget-preview></p>
+          </div>
+          <div class="form-group">
+            <label>Message Hard Override (optional, 5-200)</label>
+            <input type="number" name="sessionMessageLimit" value="${toTextNumber(config.sessionMessageLimit)}" min="5" max="200" placeholder="auto">
+          </div>
         </div>
       </div>
 
@@ -327,6 +351,12 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
         const legacyExtractionMax = form.querySelector('input[data-legacy-extraction-max]');
         const aliasPrimary = form.querySelector('input[data-alias-primary-model]');
         const aliasExtraction = form.querySelector('input[data-alias-extraction-model]');
+        const sessionBudgetInput = form.querySelector('input[name="sessionHistoryBudgetPct"]');
+        const sessionHardLimitInput = form.querySelector('input[name="sessionMessageLimit"]');
+        const memoryBudgetInput = form.querySelector('input[name="memoryRetrievalBudgetPct"]');
+        const memoryHardLimitInput = form.querySelector('input[name="memoryRetrievalLimit"]');
+        const sessionBudgetPreview = form.querySelector('[data-session-budget-preview]');
+        const memoryBudgetPreview = form.querySelector('[data-memory-budget-preview]');
 
         if (!catalogBody || !assignmentsBody || !modelSlotTemplate || !purposeTemplate || !hiddenCatalog || !hiddenAssignments
           || !legacyPrimaryModel || !legacyPrimaryProvider || !legacyPrimaryMax || !legacyExtractionModel
@@ -341,11 +371,23 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
           modelMeta = {};
         }
 
+        const DEFAULT_CONTEXT_WINDOW = ${config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow};
+        const DEFAULT_SESSION_BUDGET_PCT = ${config.sessionHistoryBudgetPct ?? SESSION_HISTORY_BUDGET_PCT_DEFAULT};
+        const DEFAULT_MEMORY_BUDGET_PCT = ${config.memoryRetrievalBudgetPct ?? MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT};
+        const SESSION_BUDGET_RANGE = { min: ${SESSION_HISTORY_BUDGET_PCT_RANGE.min}, max: ${SESSION_HISTORY_BUDGET_PCT_RANGE.max} };
+        const MEMORY_BUDGET_RANGE = { min: ${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min}, max: ${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max} };
+        const SESSION_TOKENS_PER_MESSAGE = ${SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE};
+        const MEMORY_TOKENS_PER_ITEM = ${MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM};
+
         const toPositiveInt = (raw) => {
           const parsed = Number.parseInt(String(raw || '').trim(), 10);
           if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
           return parsed;
         };
+
+        const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+        const formatInt = (value) => Number(value).toLocaleString('en-US');
 
         const getInputValue = (node, selector) => {
           const input = node.querySelector(selector);
@@ -392,6 +434,7 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
             }
             select.removeAttribute('data-selected-slot');
           }
+          updateBudgetPreviews();
         };
 
         const applyMetadataDefaults = (row) => {
@@ -460,6 +503,24 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
           return first ? catalog[first] : undefined;
         };
 
+        const resolveChatContextWindow = (catalog, assignments) => {
+          const chatSlot = resolvePurposeSlot(catalog, assignments, 'chat', 'primary');
+          const overrideWindow = toPositiveInt(chatSlot?.overrides?.contextWindow);
+          if (overrideWindow !== undefined) return overrideWindow;
+          const defaultWindow = toPositiveInt(chatSlot?.defaults?.contextWindow);
+          if (defaultWindow !== undefined) return defaultWindow;
+          return DEFAULT_CONTEXT_WINDOW;
+        };
+
+        const formatBudgetPreview = (params) => {
+          const tokenBudget = Math.max(1, Math.floor(params.contextWindow * (params.pct / 100)));
+          const estimatedCount = Math.max(params.minCount, Math.floor(tokenBudget / params.tokensPerItem));
+          return {
+            tokenBudget,
+            estimatedCount,
+          };
+        };
+
         const applyLegacyAliases = (catalog, assignments) => {
           const chatSlot = resolvePurposeSlot(catalog, assignments, 'chat', 'primary');
           const extractionSlot = resolvePurposeSlot(
@@ -486,6 +547,60 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
           }
         };
 
+        const updateBudgetPreviews = () => {
+          const catalog = buildCatalog();
+          const assignments = buildAssignments();
+          const contextWindow = resolveChatContextWindow(catalog, assignments);
+
+          const sessionPct = clamp(
+            toPositiveInt(sessionBudgetInput?.value) ?? DEFAULT_SESSION_BUDGET_PCT,
+            SESSION_BUDGET_RANGE.min,
+            SESSION_BUDGET_RANGE.max,
+          );
+          const memoryPct = clamp(
+            toPositiveInt(memoryBudgetInput?.value) ?? DEFAULT_MEMORY_BUDGET_PCT,
+            MEMORY_BUDGET_RANGE.min,
+            MEMORY_BUDGET_RANGE.max,
+          );
+
+          const sessionBudgetData = formatBudgetPreview({
+            contextWindow,
+            pct: sessionPct,
+            tokensPerItem: SESSION_TOKENS_PER_MESSAGE,
+            minCount: 5,
+          });
+          const memoryBudgetData = formatBudgetPreview({
+            contextWindow,
+            pct: memoryPct,
+            tokensPerItem: MEMORY_TOKENS_PER_ITEM,
+            minCount: 1,
+          });
+
+          if (sessionBudgetPreview) {
+            const hard = toPositiveInt(sessionHardLimitInput?.value);
+            sessionBudgetPreview.textContent = hard !== undefined
+              ? 'Hard override active: ' + formatInt(hard)
+                  + ' messages. Budget preview: ~' + formatInt(sessionBudgetData.estimatedCount)
+                  + ' messages (' + formatInt(sessionBudgetData.tokenBudget) + ' tokens of '
+                  + formatInt(contextWindow) + ').'
+              : 'Auto budget: ~' + formatInt(sessionBudgetData.estimatedCount)
+                  + ' messages (' + formatInt(sessionBudgetData.tokenBudget) + ' tokens of '
+                  + formatInt(contextWindow) + ').';
+          }
+
+          if (memoryBudgetPreview) {
+            const hard = toPositiveInt(memoryHardLimitInput?.value);
+            memoryBudgetPreview.textContent = hard !== undefined
+              ? 'Hard override active: ' + formatInt(hard)
+                  + ' memories. Budget preview: ~' + formatInt(memoryBudgetData.estimatedCount)
+                  + ' memories (' + formatInt(memoryBudgetData.tokenBudget) + ' tokens of '
+                  + formatInt(contextWindow) + ').'
+              : 'Auto budget: ~' + formatInt(memoryBudgetData.estimatedCount)
+                  + ' memories (' + formatInt(memoryBudgetData.tokenBudget) + ' tokens of '
+                  + formatInt(contextWindow) + ').';
+          }
+        };
+
         const bindCatalogRow = (row) => {
           const remove = row.querySelector('[data-remove-slot]');
           const modelInput = row.querySelector('[data-model-id]');
@@ -500,17 +615,30 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
             slotInput.addEventListener('input', () => refreshRoleSlotOptions());
           }
           if (modelInput) {
-            modelInput.addEventListener('change', () => applyMetadataDefaults(row));
+            modelInput.addEventListener('change', () => {
+              applyMetadataDefaults(row);
+              updateBudgetPreviews();
+            });
           }
+          row.addEventListener('input', () => updateBudgetPreviews());
           applyMetadataDefaults(row);
         };
 
         const bindPurposeRow = (row) => {
           const remove = row.querySelector('[data-remove-purpose]');
+          const purposeInput = row.querySelector('[data-purpose]');
+          const slotSelect = row.querySelector('[data-purpose-slot]');
           if (remove) {
             remove.addEventListener('click', () => {
               row.remove();
+              updateBudgetPreviews();
             });
+          }
+          if (purposeInput) {
+            purposeInput.addEventListener('input', () => updateBudgetPreviews());
+          }
+          if (slotSelect) {
+            slotSelect.addEventListener('change', () => updateBudgetPreviews());
           }
         };
 
@@ -518,6 +646,17 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
         for (const row of assignmentsBody.querySelectorAll('[data-purpose-row]')) bindPurposeRow(row);
 
         refreshRoleSlotOptions();
+        updateBudgetPreviews();
+
+        for (const input of [
+          sessionBudgetInput,
+          sessionHardLimitInput,
+          memoryBudgetInput,
+          memoryHardLimitInput,
+        ]) {
+          if (!input) continue;
+          input.addEventListener('input', () => updateBudgetPreviews());
+        }
 
         if (addSlotButton) {
           addSlotButton.addEventListener('click', () => {

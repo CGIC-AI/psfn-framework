@@ -21,6 +21,8 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     characterCardPath: '',
     dataDir: './data',
     databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
     sessionMessageLimit: 50,
     memoryRetrievalLimit: 15,
     extractionInterval: 5,
@@ -86,6 +88,59 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('ch1', 'System', 'Memory block');
     expect(ctx.systemPrompt).toContain('Memory block');
+  });
+
+  it('uses context-budgeted history when hard override is unset', async () => {
+    const budgetConfig = makeConfig({
+      sessionMessageLimit: undefined,
+      sessionHistoryBudgetPct: 6,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 4_000 },
+      },
+    });
+    const overrideConfig = makeConfig({
+      sessionMessageLimit: 40,
+      sessionHistoryBudgetPct: 6,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 4_000 },
+      },
+    });
+
+    const budgetMgr = new SessionManager(store, budgetConfig);
+    const overrideStore = new SessionStore(join(dir, 'override-sessions'));
+    const overrideMgr = new SessionManager(overrideStore, overrideConfig);
+
+    for (let i = 0; i < 20; i++) {
+      const userText = `User ${i} ` + 'A'.repeat(220);
+      const assistantText = `Assistant ${i} ` + 'B'.repeat(220);
+      budgetMgr.recordUserMessage('ch-budget', userText, 'u1', 'User');
+      budgetMgr.recordAssistantMessage('ch-budget', assistantText);
+      overrideMgr.recordUserMessage('ch-override', userText, 'u1', 'User');
+      overrideMgr.recordAssistantMessage('ch-override', assistantText);
+    }
+
+    const budgetCtx = await budgetMgr.buildContext('ch-budget', 'Sys', '');
+    const overrideCtx = await overrideMgr.buildContext('ch-override', 'Sys', '');
+
+    expect(budgetCtx.messages.length).toBeLessThan(overrideCtx.messages.length);
+  });
+
+  it('prefers hard session limit over budget percentage', async () => {
+    const config = makeConfig({
+      sessionMessageLimit: 8,
+      sessionHistoryBudgetPct: 1,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 2_000 },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+    for (let i = 0; i < 5; i++) {
+      mgr.recordUserMessage('ch1', `U${i}`, 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `A${i}`);
+    }
+
+    const ctx = await mgr.buildContext('ch1', 'Sys', '');
+    expect(ctx.messages.length).toBe(8);
   });
 
   it('indexes continuity by canonical contact key when provided', () => {

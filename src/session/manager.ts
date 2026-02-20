@@ -9,6 +9,10 @@ import { createComponentLogger } from '../logger.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../identity/prompt-registry.js';
+import {
+  resolveSessionHistoryBudget,
+  SESSION_HISTORY_MIN_MESSAGES,
+} from '../context-budget.js';
 
 const log = createComponentLogger('SessionManager');
 
@@ -52,6 +56,28 @@ async function withRetry<T>(
       }
     }
   }
+}
+
+function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBudget: number): SessionEntry[] {
+  if (entries.length === 0) return [];
+  if (tokenBudget <= 0) {
+    return entries.slice(-SESSION_HISTORY_MIN_MESSAGES);
+  }
+
+  let usedTokens = 0;
+  const selected: SessionEntry[] = [];
+
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    const entryTokens = Math.max(1, estimateTokens(entry.content));
+    if (selected.length >= SESSION_HISTORY_MIN_MESSAGES && usedTokens + entryTokens > tokenBudget) {
+      break;
+    }
+    selected.push(entry);
+    usedTokens += entryTokens;
+  }
+
+  return selected.reverse();
 }
 
 export class SessionManager {
@@ -145,7 +171,11 @@ export class SessionManager {
     channelMeta?: ChannelMeta,
     continuityFallbackUserIds: string[] = [],
   ): Promise<LLMContext> {
-    let recent = this.store.getRecent(channelId, this.config.sessionMessageLimit);
+    const historyBudget = resolveSessionHistoryBudget(this.config);
+    let recent = this.store.getRecent(channelId, historyBudget.estimatedCount);
+    if (historyBudget.mode === 'budget') {
+      recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
+    }
 
     // Auto-compaction: when total context tokens exceed threshold, compact oldest half
     if (llmProvider && recent.length > 4) {
@@ -364,7 +394,16 @@ export class SessionManager {
   }
 
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {
-    return this.store.getRecent(channelId, limit ?? this.config.sessionMessageLimit);
+    if (limit !== undefined) {
+      return this.store.getRecent(channelId, limit);
+    }
+
+    const historyBudget = resolveSessionHistoryBudget(this.config);
+    const recent = this.store.getRecent(channelId, historyBudget.estimatedCount);
+    if (historyBudget.mode === 'hard_limit') {
+      return recent;
+    }
+    return trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
   }
 
   getMessageCount(channelId: string): number {

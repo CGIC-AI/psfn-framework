@@ -1,16 +1,24 @@
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { SubstrateConfig } from '../../../types.js';
+import {
+  resolveMemoryRetrievalBudgetPct,
+  resolveSessionHistoryBudgetPct,
+} from '../../../context-budget.js';
 import { escapeHtml } from './shared.js';
 
 export function identityPage(card: CharacterCardV2, config: SubstrateConfig): string {
   const d = card.data;
+  const sessionBudgetPct = resolveSessionHistoryBudgetPct(config);
+  const retrievalBudgetPct = resolveMemoryRetrievalBudgetPct(config);
   const maskedConfig: Record<string, string> = {
     'Primary Model': config.primaryModel,
     'Extraction Model': config.extractionModel,
     'Discord Bot ID': config.discordBotId,
     'Data Dir': config.dataDir,
-    'Session Limit': String(config.sessionMessageLimit),
-    'Memory Retrieval Limit': String(config.memoryRetrievalLimit),
+    'Session History Budget %': String(sessionBudgetPct),
+    'Session Message Hard Override': config.sessionMessageLimit ? String(config.sessionMessageLimit) : 'auto',
+    'Memory Retrieval Budget %': String(retrievalBudgetPct),
+    'Memory Retrieval Hard Override': config.memoryRetrievalLimit ? String(config.memoryRetrievalLimit) : 'auto',
   };
 
   const configRows = Object.entries(maskedConfig)

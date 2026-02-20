@@ -100,6 +100,26 @@ export interface ModelSlot {
   contextWindow?: number;
 }
 
+export interface ModelSlotDefaults {
+  maxTokens?: number;
+  contextWindow?: number;
+  description?: string;
+}
+
+export interface ModelSlotOverrides {
+  maxTokens?: number;
+  contextWindow?: number;
+}
+
+export interface ModelCatalogEntry {
+  model: string;
+  provider: string;
+  defaults?: ModelSlotDefaults;
+  overrides?: ModelSlotOverrides;
+}
+
+export type ModelRoleAssignments = Record<string, string>;
+
 export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext';
 export type CompletionPurpose = 'extraction' | 'summary' | 'reasoning';
 
@@ -145,6 +165,8 @@ export interface SubstrateConfig {
   profileSynthesisSourceMemoryLimit?: number;
   profileSynthesisMinSourceMemories?: number;
   modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
+  modelCatalog?: Record<string, ModelCatalogEntry>;
+  modelRoleAssignments?: ModelRoleAssignments;
   runtimeHooks?: RuntimeConfigHooks;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
@@ -171,6 +193,37 @@ export function loadConfig(): SubstrateConfig {
   const extractionModel = process.env.EXTRACTION_MODEL ?? 'deepseek/deepseek-v3.2';
   const extractionProvider = process.env.EXTRACTION_PROVIDER ?? 'openrouter';
   const extractionMaxTokens = parseInt(process.env.EXTRACTION_MAX_TOKENS ?? '8192', 10);
+  const modelCatalog = {
+    primary: {
+      model: primaryModel,
+      provider: primaryProvider,
+      defaults: {
+        maxTokens: primaryMaxTokens,
+        contextWindow: defaultContextWindow,
+      },
+      overrides: {
+        maxTokens: primaryMaxTokens,
+      },
+    },
+    extraction: {
+      model: extractionModel,
+      provider: extractionProvider,
+      defaults: {
+        maxTokens: extractionMaxTokens,
+      },
+      overrides: {
+        maxTokens: extractionMaxTokens,
+      },
+    },
+  } satisfies Record<string, ModelCatalogEntry>;
+  const modelRoleAssignments: ModelRoleAssignments = {
+    chat: 'primary',
+    background: 'extraction',
+    extraction: 'extraction',
+    summary: 'primary',
+    reasoning: 'primary',
+    longContext: 'primary',
+  };
   const memoryExtractionMinImportance = parseNumberEnv(
     process.env.MEMORY_EXTRACTION_MIN_IMPORTANCE,
     0.45,
@@ -243,6 +296,8 @@ export function loadConfig(): SubstrateConfig {
     profileSynthesisMinNovelty,
     profileSynthesisSourceMemoryLimit,
     profileSynthesisMinSourceMemories,
+    modelCatalog,
+    modelRoleAssignments,
     modelRoster: {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },

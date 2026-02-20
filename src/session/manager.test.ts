@@ -372,4 +372,31 @@ describe('SessionManager', () => {
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
     expect(call.systemPrompt).toBe(customPrompt);
   });
+
+  it('injects runtime datetime tokens in compaction prompts', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const promptRegistry = new PromptRegistryStore(
+      join(dir, 'prompt-registry.json'),
+      join(dir, 'prompt-registry-history.jsonl'),
+    );
+    promptRegistry.update(
+      COMPACTION_SUMMARY_PROMPT_KEY,
+      'Summarize at {{current_datetime}} with key facts only.',
+      'test',
+    );
+
+    const mgr = new SessionManager(store, config, undefined, promptRegistry);
+    const mockLLM = makeMockLLM();
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
+    }
+
+    await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+
+    const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
+    expect(call.systemPrompt).not.toContain('{{current_datetime}}');
+    expect(call.systemPrompt).toMatch(/Summarize at \d{4}-\d{2}-\d{2}T/);
+  });
 });

@@ -1,6 +1,13 @@
 import type { PromptLayer, PromptHistoryEntry } from '../../../identity/prompt-types.js';
 import { LAYER_TYPE_ORDER } from '../../../identity/prompt-types.js';
 import type { PromptRegistryEntry, PromptRegistryHistoryEntry } from '../../../identity/prompt-registry.js';
+import {
+  STRUCTURED_PROMPT_FORMAT,
+  STRUCTURED_PROMPT_SECTION_KEYS,
+  STRUCTURED_PROMPT_SECTION_LABELS,
+  decomposePromptContent,
+  type StructuredPromptSectionKey,
+} from '../prompt-structured-content.js';
 import { escapeHtml } from './shared.js';
 
 // ── Prompt Stack Templates ──
@@ -11,6 +18,16 @@ const LAYER_TYPE_COLORS: Record<string, string> = {
   runtime: '#4A7C59',
   channel: '#4A5C8B',
   task: '#8B6914',
+};
+
+const STRUCTURED_PROMPT_SECTION_ROWS: Record<StructuredPromptSectionKey, number> = {
+  description: 4,
+  personality: 4,
+  system_prompt: 7,
+  post_history_instructions: 4,
+  scenario: 4,
+  mes_example: 7,
+  first_mes: 4,
 };
 
 export function promptsPage(layers: PromptLayer[], prompts: PromptRegistryEntry[]): string {
@@ -164,6 +181,7 @@ export function promptDiffFragment(oldContent: string, newContent: string): stri
 
 export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry[]): string {
   const color = LAYER_TYPE_COLORS[layer.type] ?? '#666';
+  const parsedContent = decomposePromptContent(layer.content);
 
   const historyRows = [...history].reverse().slice(0, 20).map(h => `
     <tr>
@@ -180,6 +198,53 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
       </td>
     </tr>
   `).join('');
+
+  const parseWarnings = parsedContent.warnings.map(warning => `
+    <div style="background:#FFF7DE;border:1px solid #E6CC7E;color:#6A4C00;border-radius:6px;padding:0.6rem 0.75rem;margin-bottom:0.75rem">
+      ${escapeHtml(warning)}
+    </div>
+  `).join('');
+
+  const parseErrors = parsedContent.errors.length > 0
+    ? `
+      <div class="form-error" style="margin-bottom:0.5rem">
+        Malformed structured prompt content detected. Fix the raw content below to restore structured editing.
+      </div>
+      <ul style="margin:0 0 0.75rem 1.25rem;color:var(--error);font-size:0.9rem">
+        ${parsedContent.errors.map(err => `<li>${escapeHtml(err)}</li>`).join('')}
+      </ul>
+    `
+    : '';
+
+  const structuredFields = STRUCTURED_PROMPT_SECTION_KEYS.map(key => `
+    <div style="margin-bottom:0.75rem">
+      <label style="display:block;font-size:0.85rem;font-weight:600;margin-bottom:0.35rem">${STRUCTURED_PROMPT_SECTION_LABELS[key]}</label>
+      <textarea name="${key}" rows="${STRUCTURED_PROMPT_SECTION_ROWS[key]}" style="width:100%;font-family:monospace;font-size:0.9rem;padding:0.5rem;border:1px solid var(--border);border-radius:4px;resize:vertical">${escapeHtml(parsedContent.sections[key])}</textarea>
+    </div>
+  `).join('');
+
+  const editorForm = parsedContent.errors.length > 0
+    ? `
+      <form hx-post="/api/prompts/update" hx-target="#prompt-result" hx-swap="innerHTML">
+        <input type="hidden" name="layerId" value="${layer.id}">
+        <textarea name="content" rows="20" style="width:100%;font-family:monospace;font-size:0.9rem;padding:0.5rem;border:1px solid var(--border);border-radius:4px;resize:vertical">${escapeHtml(layer.content)}</textarea>
+        <div class="form-actions">
+          <button type="submit" formaction="/api/prompts/diff" hx-post="/api/prompts/diff" hx-target="#prompt-diff-preview" hx-swap="innerHTML" class="btn">Preview Diff</button>
+          <button type="submit" class="btn">Save Changes</button>
+        </div>
+      </form>
+    `
+    : `
+      <form hx-post="/api/prompts/update" hx-target="#prompt-result" hx-swap="innerHTML">
+        <input type="hidden" name="layerId" value="${layer.id}">
+        <input type="hidden" name="prompt_format" value="${STRUCTURED_PROMPT_FORMAT}">
+        ${structuredFields}
+        <div class="form-actions">
+          <button type="submit" formaction="/api/prompts/diff" hx-post="/api/prompts/diff" hx-target="#prompt-diff-preview" hx-swap="innerHTML" class="btn">Preview Diff</button>
+          <button type="submit" class="btn">Save Changes</button>
+        </div>
+      </form>
+    `;
 
   return `
     <p style="margin-bottom:1rem">
@@ -201,14 +266,9 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
 
     <div class="card">
       <h3 style="margin-bottom:0.75rem">Content</h3>
-      <form hx-post="/api/prompts/update" hx-target="#prompt-result" hx-swap="innerHTML">
-        <input type="hidden" name="layerId" value="${layer.id}">
-        <textarea name="content" rows="20" style="width:100%;font-family:monospace;font-size:0.9rem;padding:0.5rem;border:1px solid var(--border);border-radius:4px;resize:vertical">${escapeHtml(layer.content)}</textarea>
-        <div class="form-actions">
-          <button type="submit" formaction="/api/prompts/diff" hx-post="/api/prompts/diff" hx-target="#prompt-diff-preview" hx-swap="innerHTML" class="btn">Preview Diff</button>
-          <button type="submit" class="btn">Save Changes</button>
-        </div>
-      </form>
+      ${parseWarnings}
+      ${parseErrors}
+      ${editorForm}
       <div id="prompt-diff-preview"></div>
     </div>
 

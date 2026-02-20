@@ -20,6 +20,7 @@ import {
   memoryDetailPage,
   memoryRow,
   promptLayersFragment,
+  promptDetailPage,
   sessionListPage,
 } from './templates.js';
 
@@ -163,6 +164,52 @@ describe('admin templates', () => {
     expect(basePos).toBeGreaterThanOrEqual(0);
     expect(operatorPos).toBeGreaterThan(basePos);
     expect(runtimePos).toBeGreaterThan(operatorPos);
+  });
+
+  it('renders structured prompt editor fields for legacy prompt content', () => {
+    const layer: PromptLayer = {
+      id: 'layer-legacy',
+      type: 'base',
+      name: 'Legacy Foundation',
+      content: 'Legacy prompt body',
+      enabled: true,
+      priority: 0,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'system',
+      checksum: 'legacy123',
+      version: 3,
+    };
+
+    const html = promptDetailPage(layer, []);
+    expect(html).toContain('name="description"');
+    expect(html).toContain('name="personality"');
+    expect(html).toContain('name="system_prompt"');
+    expect(html).toContain('name="post_history_instructions"');
+    expect(html).toContain('name="scenario"');
+    expect(html).toContain('name="mes_example"');
+    expect(html).toContain('name="first_mes"');
+    expect(html).toContain('name="prompt_format" value="ccv3_sections_v1"');
+    expect(html).toContain('Legacy prompt body');
+  });
+
+  it('falls back to raw editor when structured prompt content is malformed', () => {
+    const layer: PromptLayer = {
+      id: 'layer-malformed',
+      type: 'base',
+      name: 'Malformed Foundation',
+      content: ['### description', 'Good section', '', '### unknown_section', 'Oops'].join('\n'),
+      enabled: true,
+      priority: 0,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'system',
+      checksum: 'malformed123',
+      version: 4,
+    };
+
+    const html = promptDetailPage(layer, []);
+    expect(html).toContain('Malformed structured prompt content detected');
+    expect(html).toContain('name="content"');
+    expect(html).toContain('unknown structured section &quot;unknown_section&quot;');
   });
 
   it('renders contact row with stable name, nickname, and merged linked identities', () => {

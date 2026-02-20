@@ -716,6 +716,94 @@ describe('AdminServer', () => {
       expect(res.body).toContain(EXTRACTION_PROMPT_KEY);
     });
 
+    it('returns prompt layer detail page with structured section editors', async () => {
+      const layer = promptStore.getAll()[0];
+      if (!layer) throw new Error('Expected seeded prompt layer');
+      const res = await request(port, 'GET', `/prompts/${encodeURIComponent(layer.id)}`);
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('name="description"');
+      expect(res.body).toContain('name="personality"');
+      expect(res.body).toContain('name="system_prompt"');
+      expect(res.body).toContain('name="post_history_instructions"');
+      expect(res.body).toContain('name="scenario"');
+      expect(res.body).toContain('name="mes_example"');
+      expect(res.body).toContain('name="first_mes"');
+      expect(res.body).toContain('name="prompt_format" value="ccv3_sections_v1"');
+      expect(res.body).toContain('Base test system prompt');
+    });
+
+    it('updates prompt layer via structured section form and persists composed content', async () => {
+      const layer = promptStore.getAll()[0];
+      if (!layer) throw new Error('Expected seeded prompt layer');
+      const body = new URLSearchParams({
+        layerId: layer.id,
+        prompt_format: 'ccv3_sections_v1',
+        description: 'A steady, observant companion.',
+        personality: 'Warm and concise.',
+        system_prompt: 'Explain tradeoffs and cite assumptions.',
+        post_history_instructions: 'Re-check recent context before final answer.',
+        scenario: 'Operating inside the admin panel.',
+        mes_example: 'User: show status\nAssistant: Here is the status.',
+        first_mes: 'Hello, I am ready to help.',
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/prompts/update', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Updated');
+
+      const updated = promptStore.getById(layer.id);
+      expect(updated?.content).toContain('### description\nA steady, observant companion.');
+      expect(updated?.content).toContain('### personality\nWarm and concise.');
+      expect(updated?.content).toContain('### system_prompt\nExplain tradeoffs and cite assumptions.');
+      expect(updated?.content).toContain('### post_history_instructions\nRe-check recent context before final answer.');
+      expect(updated?.content).toContain('### scenario\nOperating inside the admin panel.');
+      expect(updated?.content).toContain('### mes_example\nUser: show status\nAssistant: Here is the status.');
+      expect(updated?.content).toContain('### first_mes\nHello, I am ready to help.');
+    });
+
+    it('rejects malformed structured prompt content updates', async () => {
+      const layer = promptStore.getAll()[0];
+      if (!layer) throw new Error('Expected seeded prompt layer');
+      const before = promptStore.getById(layer.id);
+      const beforeVersion = before?.version;
+      const beforeContent = before?.content;
+      const body = new URLSearchParams({
+        layerId: layer.id,
+        content: ['### description', 'A valid section', '', '### unknown_section', 'Bad section'].join('\n'),
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/prompts/update', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Malformed structured prompt content');
+      expect(res.body).toContain('unknown structured section');
+
+      const after = promptStore.getById(layer.id);
+      expect(after?.version).toBe(beforeVersion);
+      expect(after?.content).toBe(beforeContent);
+    });
+
+    it('shows malformed structured prompt errors on prompt detail page', async () => {
+      const layer = promptStore.getAll()[0];
+      if (!layer) throw new Error('Expected seeded prompt layer');
+      promptStore.update(
+        layer.id,
+        ['### description', 'A good start', '', '### unknown_section', 'Broken block'].join('\n'),
+        'test',
+      );
+
+      const res = await request(port, 'GET', `/prompts/${encodeURIComponent(layer.id)}`);
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Malformed structured prompt content detected');
+      expect(res.body).toContain('name="content"');
+      expect(res.body).toContain('unknown structured section');
+    });
+
     it('returns static prompt detail editor page', async () => {
       const key = encodeURIComponent(EXTRACTION_PROMPT_KEY);
       const res = await request(port, 'GET', `/prompts/static/${key}`);

@@ -451,6 +451,18 @@ describe('AdminServer', () => {
       expect(res.body).toContain('Conversation Roots');
     });
 
+    it('shows human-readable channel labels for typed session ids', async () => {
+      sessionStore.append({
+        channelId: 'api:session-friendly',
+        role: 'user',
+        content: 'Hello from API',
+        timestamp: Date.now(),
+      });
+
+      const res = await request(port, 'GET', '/sessions');
+      expect(res.body).toContain('API · session-friendly');
+    });
+
     it('shows channels when sessions exist', async () => {
       sessionStore.append({
         channelId: 'test-channel',
@@ -1254,6 +1266,46 @@ describe('AdminServer with contacts', () => {
     expect(res.body).toContain('Alice Wonderland');
     expect(res.body).toContain('trusted');
     expect(res.body).toContain('friend');
+  });
+
+  it('renders relational memory contact links and sensitivity cues', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Memory Contact',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+    });
+
+    memoryStore.insertMemory({
+      id: 'rel-memory-ui-1',
+      text: 'Relational memory linked to a contact.',
+      type: 'relational',
+      importance: 0.84,
+      confidence: 0.79,
+      emotionalValence: 0.41,
+      salience: 0.73,
+      sourceRef: 'test:memory-contact',
+      extractedAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 1,
+      tags: ['relationship'],
+      sensitivity: 'confidential',
+      consentFlags: {
+        allowRecall: false,
+      },
+      contactId: contact.id,
+    }, new Float32Array([0.25, 0.5, 0.75]));
+
+    const listRes = await request(port, 'GET', '/memory');
+    expect(listRes.status).toBe(200);
+    expect(listRes.body).toContain('Memory Contact');
+    expect(listRes.body).toContain(`/contacts#contact-row-${contact.id}`);
+    expect(listRes.body).toContain(`/api/contacts/${contact.id}/edit`);
+    expect(listRes.body).toContain('confidential');
+
+    const detailRes = await request(port, 'GET', '/memory/rel-memory-ui-1');
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body).toContain('Related Contact');
+    expect(detailRes.body).toContain('Consent Flags');
   });
 
   it('returns contacts list fragment via API', async () => {

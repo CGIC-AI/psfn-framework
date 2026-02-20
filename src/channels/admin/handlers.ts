@@ -363,7 +363,7 @@ export class AdminHandlers {
   // ── Chat ──
 
   chatPage(): string {
-    return tpl.layout('Chat Cockpit', tpl.chatPage(), 'chat');
+    return tpl.layout('Garden Chat', tpl.chatPage(), 'chat');
   }
 
   chatBootstrap(): AdminChatBootstrapResponse {

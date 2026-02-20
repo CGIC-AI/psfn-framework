@@ -34,17 +34,45 @@ const CHANNEL_PRIVACY_COLORS: Record<ChannelPrivacyLevel, string> = {
   broadcast: '#C44569',
 };
 
+function identityKey(channel: string, userId: string): string {
+  return `${channel.trim().toLowerCase()}:${userId.trim().toLowerCase()}`;
+}
+
 function resolveContactChannels(contact: Contact): ContactChannelLink[] {
-  if (Array.isArray(contact.channels) && contact.channels.length > 0) {
-    return contact.channels;
+  const resolved: ContactChannelLink[] = [];
+  const seen = new Set<string>();
+
+  const addChannel = (channel: ContactChannelLink): void => {
+    const key = identityKey(channel.channel, channel.userId);
+    if (!channel.channel.trim() || !channel.userId.trim() || seen.has(key)) return;
+    resolved.push(channel);
+    seen.add(key);
+  };
+
+  if (Array.isArray(contact.channels)) {
+    for (const channel of contact.channels) {
+      addChannel({
+        channel: channel.channel,
+        userId: channel.userId,
+        privacyLevel: channel.privacyLevel,
+        firstSeen: channel.firstSeen,
+        lastSeen: channel.lastSeen,
+      });
+    }
   }
 
-  if (!Array.isArray(contact.channelIdentities)) return [];
-  return contact.channelIdentities.map(identity => ({
-    channel: identity.channel,
-    userId: identity.userId,
-    privacyLevel: 'semi_private',
-  }));
+  if (Array.isArray(contact.channelIdentities)) {
+    for (const identity of contact.channelIdentities) {
+      addChannel({
+        channel: identity.channel,
+        userId: identity.userId,
+        privacyLevel: 'semi_private',
+        lastSeen: contact.lastSeen,
+      });
+    }
+  }
+
+  return resolved;
 }
 
 function getContactNickname(contact: Contact): string | undefined {
@@ -52,6 +80,18 @@ function getContactNickname(contact: Contact): string | undefined {
   if (typeof nickname !== 'string') return undefined;
   const trimmed = nickname.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function getContactDisplayName(contact: Contact): string {
+  const trimmed = contact.displayName.trim();
+  if (trimmed.length > 0) return trimmed;
+  return `contact:${contact.id}`;
+}
+
+function contactNicknameLabel(displayName: string, nickname?: string): string {
+  if (!nickname) return '';
+  if (displayName.trim().toLowerCase() === nickname.trim().toLowerCase()) return '';
+  return `<div class="crm-notes">Nickname: ${escapeHtml(nickname)}</div>`;
 }
 
 function channelPrivacyBadge(level: ChannelPrivacyLevel): string {
@@ -145,6 +185,7 @@ export function contactRow(
   profile?: ContactProfileArtifact,
   relatedChannels: RelatedConversationChannel[] = [],
 ): string {
+  const displayName = getContactDisplayName(c);
   const channels = resolveContactChannels(c);
   const nickname = getContactNickname(c);
   const fallbackChannels = channels.map(channel => ({
@@ -158,8 +199,8 @@ export function contactRow(
   return `<tr id="contact-row-${escapeHtml(c.id)}">
     <td>
       <div class="crm-person">
-        <div><strong>${escapeHtml(c.displayName)}</strong> ${trustBadge(c.trustLevel)}</div>
-        ${nickname ? `<div class="crm-notes">aka: ${escapeHtml(nickname)}</div>` : ''}
+        <div><strong>${escapeHtml(displayName)}</strong> ${trustBadge(c.trustLevel)}</div>
+        ${contactNicknameLabel(displayName, nickname)}
         <div class="crm-person-id">contact:${escapeHtml(c.id)}</div>
       </div>
     </td>
@@ -186,6 +227,7 @@ export function contactRow(
 }
 
 export function contactEditForm(contact: Contact): string {
+  const displayName = getContactDisplayName(contact);
   const channels = resolveContactChannels(contact);
   const nickname = getContactNickname(contact);
   const trustOptions = (['primary', 'trusted', 'regular', 'public'] as TrustLevel[])
@@ -232,12 +274,12 @@ export function contactEditForm(contact: Contact): string {
         <input type="hidden" name="channelCount" value="${channels.length}">
         <div class="form-row">
           <div class="form-group">
-            <label>Name</label>
-            <input type="text" name="displayName" value="${escapeHtml(contact.displayName)}" required>
+            <label>Name (stable)</label>
+            <input type="text" name="displayName" value="${escapeHtml(displayName)}" required>
           </div>
           <div class="form-group">
-            <label>Nickname / aka</label>
-            <input type="text" name="nickname" value="${escapeHtml(nickname ?? '')}" placeholder="Optional">
+            <label>Nickname</label>
+            <input type="text" name="nickname" value="${escapeHtml(nickname ?? '')}" placeholder="Optional alias">
           </div>
         </div>
         <div class="form-row">
@@ -254,23 +296,26 @@ export function contactEditForm(contact: Contact): string {
           <label>Linked Channels</label>
           ${channelEditors}
         </div>
-        <div class="form-group">
-          <label>Link New Channel Identity (optional)</label>
-          <div class="form-row" style="grid-template-columns:1.5fr 1.5fr 1fr">
-            <div class="form-group" style="margin-bottom:0">
-              <label>Channel</label>
-              <input type="text" name="newChannel" placeholder="discord / api / telegram">
-            </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label>Channel User ID</label>
-              <input type="text" name="newChannelUserId" placeholder="user id on that channel">
-            </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label>Privacy</label>
-              <select name="newChannelPrivacy">${addChannelPrivacyOptions}</select>
+        <details class="form-group" style="margin-top:0.75rem">
+          <summary class="btn" style="width:fit-content;font-size:0.8rem;cursor:pointer">+ Add channel</summary>
+          <div style="margin-top:0.65rem">
+            <div class="crm-notes" style="margin-top:0">Link another identity to this canonical contact.</div>
+            <div class="form-row" style="grid-template-columns:1.5fr 1.5fr 1fr">
+              <div class="form-group" style="margin-bottom:0">
+                <label>Channel</label>
+                <input type="text" name="newChannel" placeholder="e.g. discord">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label>Channel User ID</label>
+                <input type="text" name="newChannelUserId" placeholder="exact user id">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label>Privacy</label>
+                <select name="newChannelPrivacy">${addChannelPrivacyOptions}</select>
+              </div>
             </div>
           </div>
-        </div>
+        </details>
         <div class="form-group">
           <label>Notes</label>
           <textarea name="notes" rows="3" style="width:100%;padding:0.5rem;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:0.9rem;resize:vertical">${escapeHtml(contact.notes ?? '')}</textarea>

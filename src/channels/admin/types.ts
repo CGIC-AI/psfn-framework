@@ -101,6 +101,9 @@ export interface AdminChatDebugStreamOptions {
 export interface ChannelInfo {
   channelId: string;
   messageCount: number;
+  displayLabel?: string;
+  linkedContactId?: string;
+  linkedContactName?: string;
 }
 
 export interface EnvInfo {

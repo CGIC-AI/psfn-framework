@@ -12,7 +12,16 @@ import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import { EventBus } from '../../event-bus.js';
 import { AdminHandlers } from './handlers.js';
-import { contactEditForm, contactRow, layout, loginPage, memoryRow, promptLayersFragment } from './templates.js';
+import {
+  contactEditForm,
+  contactRow,
+  layout,
+  loginPage,
+  memoryDetailPage,
+  memoryRow,
+  promptLayersFragment,
+  sessionListPage,
+} from './templates.js';
 
 describe('admin templates', () => {
   it('renders layout with external stylesheet', () => {
@@ -48,6 +57,62 @@ describe('admin templates', () => {
     expect(html).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;');
     expect(html).toContain('/memory/id%20with%20spaces%2Fand%2Fslash');
     expect(html).toContain('/api/memory/id%20with%20spaces%2Fand%2Fslash/supersede');
+  });
+
+  it('renders session list with readable channel label and linked contact', () => {
+    const html = sessionListPage([{
+      channelId: 'api:session-42',
+      messageCount: 12,
+      linkedContactId: 'contact-1',
+      linkedContactName: 'Vega',
+    }]);
+
+    expect(html).toContain('API · session-42');
+    expect(html).toContain('Contact:');
+    expect(html).toContain('/contacts#contact-row-contact-1');
+    expect(html).toContain('/api/contacts/contact-1/edit');
+  });
+
+  it('renders relational memory contact links and sensitivity cues', () => {
+    const memory: PurrMemory = {
+      id: 'rel-memory-1',
+      text: 'The operator feels safer with concise check-ins.',
+      type: 'relational',
+      importance: 0.9,
+      confidence: 0.88,
+      emotionalValence: 0.52,
+      salience: 0.81,
+      sourceRef: 'test:relational',
+      extractedAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 2,
+      tags: ['relationship'],
+      sensitivity: 'confidential',
+      consentFlags: {
+        allowRecall: false,
+        deleteOnRequest: true,
+      },
+      contactId: 'contact-1',
+    };
+
+    const rowHtml = memoryRow(memory, {
+      id: 'contact-1',
+      displayName: 'Vega',
+    });
+    expect(rowHtml).toContain('/contacts#contact-row-contact-1');
+    expect(rowHtml).toContain('/api/contacts/contact-1/edit');
+    expect(rowHtml).toContain('Vega');
+    expect(rowHtml).toContain('memory-sensitivity-confidential');
+    expect(rowHtml).toContain('recall denied');
+    expect(rowHtml).toContain('delete on request');
+
+    const detailHtml = memoryDetailPage(memory, {
+      id: 'contact-1',
+      displayName: 'Vega',
+    });
+    expect(detailHtml).toContain('Related Contact');
+    expect(detailHtml).toContain('/api/contacts/contact-1/edit');
+    expect(detailHtml).toContain('Consent Flags');
   });
 
   it('sorts prompt layers by type order then priority', () => {
@@ -395,5 +460,61 @@ describe('admin templates', () => {
 
     const html = handlers.contactsListFragment();
     expect(html).toContain('discord:1310672143113130108');
+  });
+
+  it('renders linked contact names in session list when identity mappings exist', () => {
+    const contact = {
+      id: 'contact-operator',
+      displayName: 'Operator One',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      firstSeen: '2024-01-01T00:00:00.000Z',
+      lastSeen: '2024-01-02T00:00:00.000Z',
+      channels: [{
+        channel: 'api',
+        userId: 'operator-1',
+        privacyLevel: 'private',
+      }],
+    } as Contact;
+
+    const handlers = new AdminHandlers({
+      memoryStore: {
+        listContactProfiles: vi.fn(() => []),
+        getContactProfile: vi.fn(() => undefined),
+      } as unknown as MemoryStore,
+      sessionStore: {
+        listChannels: vi.fn(() => [{
+          channelId: 'api:session-1',
+          messageCount: 4,
+        }]),
+        getLastEntry: vi.fn(() => ({
+          id: 1,
+          channelId: 'api:session-1',
+          role: 'user',
+          content: 'hello',
+          authorId: 'operator-1',
+          timestamp: Date.now(),
+        })),
+      } as unknown as SessionStore,
+      sessionManager: {} as SessionManager,
+      scheduler: { taskCount: 0 } as Scheduler,
+      shardManager: {} as ShardManager,
+      eventBus: new EventBus(),
+      embeddingService: null,
+      characterCard: {} as CharacterCardV2,
+      config: { dataDir: '/tmp' } as SubstrateConfig,
+      contactStore: {
+        listAll: vi.fn(() => [contact]),
+        getByChannelIdentity: vi.fn((channel: string, userId: string) => (
+          channel === 'api' && userId === 'operator-1' ? contact : undefined
+        )),
+      } as unknown as ContactStore,
+    });
+
+    const html = handlers.sessionList();
+    expect(html).toContain('API · session-1');
+    expect(html).toContain('Contact:');
+    expect(html).toContain('Operator One');
+    expect(html).toContain('/contacts#contact-row-contact-operator');
   });
 });

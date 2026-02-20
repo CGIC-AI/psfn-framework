@@ -100,7 +100,7 @@ describe('admin templates', () => {
     expect(runtimePos).toBeGreaterThan(operatorPos);
   });
 
-  it('renders contact row with nickname, linked identities, and related channels', () => {
+  it('renders contact row with stable name, nickname, and merged linked identities', () => {
     const contact = {
       id: 'contact-1',
       displayName: 'Alice Example',
@@ -116,6 +116,10 @@ describe('admin templates', () => {
         firstSeen: '2024-01-01T00:00:00.000Z',
         lastSeen: '2024-01-02T00:00:00.000Z',
       }],
+      channelIdentities: [
+        { channel: 'discord', userId: 'alice-user' },
+        { channel: 'telegram', userId: 'alice-tg' },
+      ],
       notes: 'prefers concise updates',
     } as Contact & { nickname?: string };
 
@@ -126,10 +130,12 @@ describe('admin templates', () => {
     }]);
 
     expect(html).toContain('Alice Example');
-    expect(html).toContain('aka: Ace');
+    expect(html).toContain('Nickname: Ace');
     expect(html).toContain('Linked identities');
     expect(html).toContain('discord:alice-user');
+    expect((html.match(/discord:alice-user/g) ?? []).length).toBe(1);
     expect(html).toContain('semi_private');
+    expect(html).toContain('telegram:alice-tg');
     expect(html).toContain('Related channels');
     expect(html).toContain('discord:1234567890');
     expect(html).toContain('Last seen:');
@@ -158,6 +164,7 @@ describe('admin templates', () => {
     expect(html).toContain('name="displayName" value="Bob Example" required');
     expect(html).toContain('name="nickname"');
     expect(html).toContain('name="nickname" value="Bobby"');
+    expect(html).toContain('+ Add channel');
     expect(html).toContain('name="newChannel"');
     expect(html).toContain('name="newChannelUserId"');
     expect(html).toContain('name="newChannelPrivacy"');
@@ -265,7 +272,76 @@ describe('admin templates', () => {
       { privacyLevel: 'private' },
     );
     expect(html).toContain('Carol Danvers');
-    expect(html).toContain('aka: Captain');
+    expect(html).toContain('Nickname: Captain');
+  });
+
+  it('does not fail no-op save when add-channel fields are untouched', () => {
+    const contact = {
+      id: 'contact-noop',
+      displayName: 'No Op',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      firstSeen: '2024-01-01T00:00:00.000Z',
+      lastSeen: '2024-01-02T00:00:00.000Z',
+      channels: [{
+        channel: 'discord',
+        userId: 'noop-user',
+        privacyLevel: 'semi_private',
+        firstSeen: '2024-01-01T00:00:00.000Z',
+        lastSeen: '2024-01-02T00:00:00.000Z',
+      }],
+      notes: 'steady',
+    } as Contact;
+
+    const mockContactStore = {
+      getById: vi.fn((id: string) => (id === contact.id ? contact : undefined)),
+      setTrustLevel: vi.fn(() => true),
+      updateRelationshipType: vi.fn(() => true),
+      updateNotes: vi.fn(() => true),
+      setChannelPrivacy: vi.fn(() => true),
+      linkChannelIdentity: vi.fn(() => 'linked'),
+      upsert: vi.fn(() => contact),
+      updateIdentityProfile: vi.fn(() => true),
+    } as unknown as ContactStore;
+
+    const handlers = new AdminHandlers({
+      memoryStore: {
+        listContactProfiles: vi.fn(() => []),
+        getContactProfile: vi.fn(() => undefined),
+      } as unknown as MemoryStore,
+      sessionStore: {
+        listChannels: vi.fn(() => []),
+        getLastEntry: vi.fn(() => undefined),
+      } as unknown as SessionStore,
+      sessionManager: {} as SessionManager,
+      scheduler: { taskCount: 0 } as Scheduler,
+      shardManager: {} as ShardManager,
+      eventBus: new EventBus(),
+      embeddingService: null,
+      characterCard: {} as CharacterCardV2,
+      config: { dataDir: '/tmp' } as SubstrateConfig,
+      contactStore: mockContactStore,
+    });
+
+    const body = new URLSearchParams({
+      displayName: 'No Op',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      notes: 'steady',
+      channelCount: '1',
+      channel_0: 'discord',
+      channelUserId_0: 'noop-user',
+      channelPrivacy_0: 'semi_private',
+      newChannel: '',
+      newChannelUserId: '',
+      newChannelPrivacy: 'semi_private',
+    }).toString();
+
+    const html = handlers.handleContactUpdate(contact.id, body);
+
+    expect(html).toContain('No Op');
+    expect(html).not.toContain('To link a new channel, both channel and channel user ID are required');
+    expect(mockContactStore.linkChannelIdentity).not.toHaveBeenCalled();
   });
 
   it('prefers persisted contact conversation channels in contacts list rendering', () => {

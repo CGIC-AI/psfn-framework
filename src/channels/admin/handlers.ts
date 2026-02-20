@@ -461,21 +461,42 @@ export class AdminHandlers {
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
+  private identityLinkKey(channel: string, userId: string): string {
+    return `${channel.trim().toLowerCase()}:${userId.trim().toLowerCase()}`;
+  }
+
   private getContactIdentityLinks(contact: Contact): ContactIdentityLinkView[] {
-    if (Array.isArray(contact.channels) && contact.channels.length > 0) {
-      return contact.channels.map(channel => ({
-        channel: channel.channel,
-        userId: channel.userId,
-        lastSeen: channel.lastSeen,
-      }));
+    const links: ContactIdentityLinkView[] = [];
+    const seen = new Set<string>();
+
+    const addLink = (link: ContactIdentityLinkView): void => {
+      const key = this.identityLinkKey(link.channel, link.userId);
+      if (!link.channel.trim() || !link.userId.trim() || seen.has(key)) return;
+      links.push(link);
+      seen.add(key);
+    };
+
+    if (Array.isArray(contact.channels)) {
+      for (const channel of contact.channels) {
+        addLink({
+          channel: channel.channel,
+          userId: channel.userId,
+          lastSeen: channel.lastSeen,
+        });
+      }
     }
 
-    if (!Array.isArray(contact.channelIdentities)) return [];
-    return contact.channelIdentities.map(identity => ({
-      channel: identity.channel,
-      userId: identity.userId,
-      lastSeen: contact.lastSeen,
-    }));
+    if (Array.isArray(contact.channelIdentities)) {
+      for (const identity of contact.channelIdentities) {
+        addLink({
+          channel: identity.channel,
+          userId: identity.userId,
+          lastSeen: contact.lastSeen,
+        });
+      }
+    }
+
+    return links;
   }
 
   private getPersistedConversationChannels(contact: Contact): ContactConversationChannelView[] {
@@ -642,7 +663,8 @@ export class AdminHandlers {
     const newChannel = (params.get('newChannel') ?? '').trim();
     const newChannelUserId = (params.get('newChannelUserId') ?? '').trim();
     const newChannelPrivacyRaw = (params.get('newChannelPrivacy') ?? '').trim();
-    const newChannelPrivacy = newChannelPrivacyRaw as ChannelPrivacyLevel;
+    const newChannelPrivacy = (newChannelPrivacyRaw || 'semi_private') as ChannelPrivacyLevel;
+    const wantsNewChannelLink = newChannel.length > 0 || newChannelUserId.length > 0;
     const currentNickname = this.getContactNickname(contact);
 
     if (!displayName) {
@@ -682,14 +704,11 @@ export class AdminHandlers {
       return tpl.settingsFormResult(false, `Invalid relationship type: ${relationshipType}`);
     }
 
-    if (
-      (newChannel || newChannelUserId || newChannelPrivacyRaw)
-      && (!newChannel || !newChannelUserId)
-    ) {
+    if (wantsNewChannelLink && (!newChannel || !newChannelUserId)) {
       return tpl.settingsFormResult(false, 'To link a new channel, both channel and channel user ID are required');
     }
 
-    if (newChannel && !CHANNEL_PRIVACY_LEVELS.includes(newChannelPrivacy)) {
+    if (wantsNewChannelLink && !CHANNEL_PRIVACY_LEVELS.includes(newChannelPrivacy)) {
       return tpl.settingsFormResult(false, `Invalid new channel privacy level: ${newChannelPrivacyRaw}`);
     }
 
@@ -733,7 +752,7 @@ export class AdminHandlers {
       }
     }
 
-    if (newChannel && newChannelUserId) {
+    if (wantsNewChannelLink && newChannel && newChannelUserId) {
       const linkResult = this.contactStore.linkChannelIdentity(contactId, newChannel, newChannelUserId, {
         privacyLevel: newChannelPrivacy || 'semi_private',
       });

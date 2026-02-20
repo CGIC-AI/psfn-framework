@@ -1,15 +1,11 @@
 import { initializeChatVoiceCockpit } from './chat-voice.js';
 
-const PI_VERSION = '0.52.12';
 const BOOTSTRAP_URL = '/api/chat/bootstrap';
 const DEFAULT_MODEL_ID = 'psfn-admin-chat';
-const DEFAULT_MODEL_NAME = 'PSFN Admin Cockpit';
-const DEFAULT_SYSTEM_PROMPT = 'You are PSFN speaking through the admin cockpit.';
-const PI_WEB_UI_MODULE = `https://esm.sh/@mariozechner/pi-web-ui@${PI_VERSION}?bundle`;
-const PI_AGENT_CORE_MODULE = `https://esm.sh/@mariozechner/pi-agent-core@${PI_VERSION}?bundle`;
-const PI_AI_MODULE = `https://esm.sh/@mariozechner/pi-ai@${PI_VERSION}?bundle`;
-const PI_WEB_UI_CSS = `https://esm.sh/@mariozechner/pi-web-ui@${PI_VERSION}/app.css`;
+const DEFAULT_MODEL_NAME = 'PSFN Garden Chat';
+const DEFAULT_SYSTEM_PROMPT = 'You are PSFN speaking through the garden chat canopy.';
 const PROVIDER_KEY_PLACEHOLDER = 'admin-chat-local-key';
+const MAX_CONTEXT_MESSAGES = 40;
 
 function requiredElement(root, selector) {
   const element = root.querySelector(selector);
@@ -24,26 +20,28 @@ function normalizeText(value) {
   return value.trim();
 }
 
+function formatClockTime(timestampMs) {
+  return new Date(timestampMs).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function setStatus(dom, message, isError = false) {
   dom.status.textContent = message;
   dom.status.classList.toggle('is-error', isError);
 }
 
 function setControlsDisabled(dom, disabled) {
-  const fields = dom.form.querySelectorAll('input, select');
+  const fields = dom.form.querySelectorAll('input, select, textarea, button');
   for (const field of fields) {
     field.disabled = disabled;
   }
 }
 
-function ensureWebUiStylesheet() {
-  const existing = document.querySelector('link[data-chat-cockpit-pi-ui="true"]');
-  if (existing) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = PI_WEB_UI_CSS;
-  link.setAttribute('data-chat-cockpit-pi-ui', 'true');
-  document.head.append(link);
+function setComposerDisabled(dom, disabled) {
+  dom.input.disabled = disabled;
+  dom.sendButton.disabled = disabled;
 }
 
 async function readJsonBody(response) {
@@ -100,35 +98,6 @@ function readBootstrapApiKey(bootstrap) {
 
 function resolveClientApiKey(bootstrap) {
   return readBootstrapApiKey(bootstrap) || PROVIDER_KEY_PLACEHOLDER;
-}
-
-function createOpenAICompletionsModel(bootstrap) {
-  const endpointUrl = new URL(bootstrap.api.chatCompletionsUrl, window.location.origin);
-  const suffix = '/chat/completions';
-  const baseUrl = new URL(endpointUrl.toString());
-  if (baseUrl.pathname.endsWith(suffix)) {
-    baseUrl.pathname = baseUrl.pathname.slice(0, -suffix.length) || '/';
-  }
-  baseUrl.search = '';
-  baseUrl.hash = '';
-
-  return {
-    id: DEFAULT_MODEL_ID,
-    name: DEFAULT_MODEL_NAME,
-    api: 'openai-completions',
-    provider: 'openai',
-    baseUrl: baseUrl.toString(),
-    reasoning: false,
-    input: ['text'],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: 128_000,
-    maxTokens: 16_384,
-  };
 }
 
 function createBootstrapSelectionFromControls(dom) {
@@ -235,7 +204,7 @@ function renderControls(dom, bootstrap) {
 
   const nickname = normalizeText(bootstrap.nickname);
   const displayName = nickname ? `${bootstrap.displayName} (${nickname})` : bootstrap.displayName;
-  dom.contactMeta.textContent = `Mapped contact: ${displayName} | Session: ${bootstrap.defaultSessionId}`;
+  dom.contactMeta.textContent = `Mapped contact: ${displayName} | Session: ${bootstrap.defaultSessionId} | Model: ${DEFAULT_MODEL_NAME}`;
 }
 
 function createDomBindings(root) {
@@ -250,6 +219,11 @@ function createDomBindings(root) {
     contactMeta: requiredElement(root, '[data-chat-contact-meta]'),
     status: requiredElement(root, '[data-chat-status]'),
     chatSurface: requiredElement(root, '#admin-chat-surface'),
+    thread: requiredElement(root, '[data-chat-thread]'),
+    composer: requiredElement(root, '[data-chat-composer]'),
+    input: requiredElement(root, '[data-chat-input]'),
+    sendButton: requiredElement(root, '[data-chat-send]'),
+    clearButton: requiredElement(root, '[data-chat-clear]'),
   };
 }
 
@@ -258,97 +232,130 @@ function formatError(error) {
   return String(error);
 }
 
-function createAppStorageStub(getBootstrapState) {
-  return {
-    settings: {
-      async get() {
-        return undefined;
-      },
-      async set() {},
-    },
-    providerKeys: {
-      async get() {
-        return resolveClientApiKey(getBootstrapState());
-      },
-      async set() {},
-    },
-    sessions: {},
-    customProviders: {},
-    backend: {},
-  };
+function createMessageNode(entry) {
+  const item = document.createElement('article');
+  item.className = `chat-message chat-message-${entry.role}`;
+
+  const meta = document.createElement('div');
+  meta.className = 'chat-message-meta';
+  meta.textContent = `${entry.label} • ${formatClockTime(entry.timestamp)}`;
+
+  const content = document.createElement('div');
+  content.className = 'chat-message-content';
+  content.textContent = entry.content;
+
+  item.append(meta, content);
+  return item;
 }
 
-async function loadPiModules(getBootstrapState) {
-  const [agentCore, webUi, piAi] = await Promise.all([
-    import(PI_AGENT_CORE_MODULE),
-    import(PI_WEB_UI_MODULE),
-    import(PI_AI_MODULE),
-  ]);
+function appendMessage(dom, role, content, timestamp = Date.now()) {
+  const roleLabel = role === 'user'
+    ? 'You'
+    : role === 'assistant'
+      ? 'PSFN'
+      : role === 'error'
+        ? 'Error'
+        : 'System';
 
-  if (typeof webUi.setAppStorage !== 'function') {
-    throw new Error('pi-web-ui setAppStorage export not found');
-  }
-
-  webUi.setAppStorage(createAppStorageStub(getBootstrapState));
-  return { agentCore, webUi, piAi };
-}
-
-function createStreamFunction(piAi, getBootstrapState) {
-  return (model, context, options = {}) => {
-    const bootstrap = getBootstrapState();
-    return piAi.streamSimple(model, context, {
-      ...options,
-      apiKey: resolveClientApiKey(bootstrap),
-      sessionId: bootstrap.defaultSessionId,
-      headers: {
-        ...(options.headers ?? {}),
-        ...buildTransportHeaders(bootstrap),
-      },
-    });
-  };
-}
-
-function createAgent(modules, getBootstrapState) {
-  const bootstrap = getBootstrapState();
-  const streamFn = createStreamFunction(modules.piAi, getBootstrapState);
-  const convertToLlm = typeof modules.webUi.defaultConvertToLlm === 'function'
-    ? modules.webUi.defaultConvertToLlm
-    : undefined;
-  if (!convertToLlm) {
-    throw new Error('pi-web-ui defaultConvertToLlm export not found');
-  }
-
-  return new modules.agentCore.Agent({
-    initialState: {
-      systemPrompt: DEFAULT_SYSTEM_PROMPT,
-      model: createOpenAICompletionsModel(bootstrap),
-      thinkingLevel: 'off',
-      messages: [],
-      tools: [],
-    },
-    convertToLlm,
-    streamFn,
-    getApiKey: () => resolveClientApiKey(getBootstrapState()),
-    sessionId: bootstrap.defaultSessionId,
+  const node = createMessageNode({
+    role,
+    content,
+    timestamp,
+    label: roleLabel,
   });
+  dom.thread.append(node);
+  dom.thread.scrollTop = dom.thread.scrollHeight;
 }
 
-function mountAgentInterface(dom, agent) {
-  const agentInterface = document.createElement('agent-interface');
-  agentInterface.session = agent;
-  agentInterface.enableAttachments = false;
-  agentInterface.enableModelSelector = false;
-  agentInterface.enableThinkingSelector = false;
-  agentInterface.showThemeToggle = false;
-  agentInterface.onApiKeyRequired = async () => true;
-
-  dom.chatSurface.replaceChildren(agentInterface);
-  return agentInterface;
+function clearConversation(context) {
+  context.messages = [];
+  context.dom.thread.replaceChildren();
+  appendMessage(context.dom, 'system', 'Garden bed cleared. Start a fresh turn.');
 }
 
-function syncAgentWithBootstrap(agent, bootstrap) {
-  agent.sessionId = bootstrap.defaultSessionId;
-  agent.setModel(createOpenAICompletionsModel(bootstrap));
+function parseMessageContentText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object') {
+          if (typeof part.text === 'string') return part.text;
+          if (part.type === 'text' && typeof part.content === 'string') return part.content;
+          if (typeof part.content === 'string') return part.content;
+        }
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text;
+    if (typeof content.content === 'string') return content.content;
+  }
+  return '';
+}
+
+function parseCompletionText(payload) {
+  const choice = payload?.choices?.[0];
+  if (!choice) return '';
+
+  const fromMessage = parseMessageContentText(choice?.message?.content);
+  if (fromMessage) return fromMessage;
+
+  const fromDelta = parseMessageContentText(choice?.delta?.content);
+  if (fromDelta) return fromDelta;
+
+  return '';
+}
+
+function buildApiMessages(history) {
+  const recent = history.slice(-MAX_CONTEXT_MESSAGES);
+  const messages = [{
+    role: 'system',
+    content: DEFAULT_SYSTEM_PROMPT,
+  }];
+
+  for (const message of recent) {
+    messages.push({
+      role: message.role,
+      content: message.content,
+    });
+  }
+
+  return messages;
+}
+
+async function requestChatCompletion(context) {
+  const endpointUrl = new URL(context.bootstrap.api.chatCompletionsUrl, window.location.origin);
+  const apiKey = resolveClientApiKey(context.bootstrap);
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    ...buildTransportHeaders(context.bootstrap),
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetch(endpointUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: DEFAULT_MODEL_ID,
+      stream: false,
+      messages: buildApiMessages(context.messages),
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await readJsonBody(response).catch(() => ({}));
+    const reason = body?.error?.message || body?.error?.type || `status ${response.status}`;
+    throw new Error(`Completion request failed: ${reason}`);
+  }
+
+  return readJsonBody(response);
 }
 
 function bindControlPersistence(context) {
@@ -356,6 +363,7 @@ function bindControlPersistence(context) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     const changedField = target.getAttribute('name') ?? '';
+    if (!changedField) return;
     void persistControlChanges(context, changedField);
   };
 
@@ -371,7 +379,7 @@ async function persistControlChanges(context, changedField) {
   context.isUpdating = true;
   context.pendingField = '';
   setControlsDisabled(context.dom, true);
-  setStatus(context.dom, 'Saving selection...');
+  setStatus(context.dom, 'Saving garden identity settings...');
 
   try {
     const normalizedSelection = normalizeSelectionForSubmit(context.dom, context.bootstrap, changedField);
@@ -379,10 +387,9 @@ async function persistControlChanges(context, changedField) {
     const refreshed = await postBootstrapState(payload);
     context.bootstrap = refreshed;
     renderControls(context.dom, refreshed);
-    syncAgentWithBootstrap(context.agent, refreshed);
-    setStatus(context.dom, 'Chat cockpit is ready.');
+    setStatus(context.dom, 'Garden chat is ready.');
   } catch (error) {
-    setStatus(context.dom, `Unable to update cockpit state: ${formatError(error)}`, true);
+    setStatus(context.dom, `Unable to update garden chat settings: ${formatError(error)}`, true);
   } finally {
     setControlsDisabled(context.dom, false);
     context.isUpdating = false;
@@ -394,35 +401,79 @@ async function persistControlChanges(context, changedField) {
   }
 }
 
-async function initializeCockpit() {
+async function sendPrompt(context, promptText) {
+  if (context.isSending) return;
+
+  context.isSending = true;
+  setComposerDisabled(context.dom, true);
+
+  const sentAt = Date.now();
+  context.messages.push({ role: 'user', content: promptText });
+  appendMessage(context.dom, 'user', promptText, sentAt);
+  context.dom.input.value = '';
+  setStatus(context.dom, 'Waiting for PSFN...');
+
+  try {
+    const completion = await requestChatCompletion(context);
+    const assistantText = parseCompletionText(completion);
+    if (!assistantText) {
+      throw new Error('Completion payload did not include assistant text');
+    }
+    context.messages.push({ role: 'assistant', content: assistantText });
+    appendMessage(context.dom, 'assistant', assistantText);
+    setStatus(context.dom, 'Garden chat is ready.');
+  } catch (error) {
+    const message = formatError(error);
+    appendMessage(context.dom, 'error', message);
+    setStatus(context.dom, `Garden chat request failed: ${message}`, true);
+  } finally {
+    context.isSending = false;
+    setComposerDisabled(context.dom, false);
+    context.dom.input.focus();
+  }
+}
+
+function bindComposer(context) {
+  context.dom.composer.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const prompt = normalizeText(context.dom.input.value);
+    if (!prompt) {
+      context.dom.input.focus();
+      return;
+    }
+    void sendPrompt(context, prompt);
+  });
+
+  context.dom.clearButton.addEventListener('click', () => {
+    clearConversation(context);
+  });
+}
+
+async function initializeGardenChat() {
   const root = document.querySelector('[data-chat-cockpit]');
   if (!root) return;
 
   const dom = createDomBindings(root);
-  ensureWebUiStylesheet();
-  setStatus(dom, 'Loading cockpit state...');
+  setStatus(dom, 'Loading garden chat state...');
 
   try {
-    let bootstrapState = null;
-    const modulesPromise = loadPiModules(() => bootstrapState);
     const bootstrap = await fetchBootstrapState();
-    bootstrapState = bootstrap;
-    const modules = await modulesPromise;
 
     const context = {
       bootstrap,
-      modules,
       dom,
-      agent: null,
+      messages: [],
       isUpdating: false,
       pendingField: '',
+      isSending: false,
     };
 
-    context.agent = createAgent(modules, () => context.bootstrap);
-    mountAgentInterface(dom, context.agent);
     renderControls(dom, bootstrap);
-    syncAgentWithBootstrap(context.agent, bootstrap);
     bindControlPersistence(context);
+    bindComposer(context);
+    dom.input.focus();
+    setStatus(dom, 'Garden chat is ready.');
+
     try {
       initializeChatVoiceCockpit({
         root,
@@ -431,11 +482,10 @@ async function initializeCockpit() {
     } catch (voiceError) {
       console.error('[admin/chat/voice]', voiceError);
     }
-    setStatus(dom, 'Chat cockpit is ready.');
   } catch (error) {
-    setStatus(dom, `Failed to initialize chat cockpit: ${formatError(error)}`, true);
+    setStatus(dom, `Failed to initialize garden chat: ${formatError(error)}`, true);
     console.error('[admin/chat]', error);
   }
 }
 
-void initializeCockpit();
+void initializeGardenChat();

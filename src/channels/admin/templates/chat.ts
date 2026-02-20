@@ -1,17 +1,26 @@
 export function chatPage(): string {
   return `
-    <section class="chat-cockpit" data-chat-cockpit>
-      <div class="chat-cockpit-grid">
-        <div class="card chat-controls-card">
-          <h3>Channel Identity Binding</h3>
-          <p class="chat-controls-note">
-            Select the canonical contact + channel identity used by cockpit turns.
-          </p>
-          <form class="chat-controls" data-chat-controls autocomplete="off">
+    <section class="garden-chat" data-chat-cockpit>
+      <div class="card chat-surface-card">
+        <section class="chat-controls-bar" data-chat-controls autocomplete="off">
+          <div class="chat-controls-head">
+            <h3>Garden Chat Canopy</h3>
+            <p class="chat-controls-note">
+              Keep the conversation rooted to a canonical contact and privacy level.
+            </p>
+          </div>
+          <div class="chat-controls-inline">
             <div class="form-group">
               <label for="chat-canonical-contact">Canonical Contact</label>
               <select id="chat-canonical-contact" name="canonicalContactId"></select>
             </div>
+            <div class="form-group">
+              <label for="chat-privacy">Privacy Level</label>
+              <select id="chat-privacy" name="privacyLevel"></select>
+            </div>
+          </div>
+          <details class="chat-identity-details">
+            <summary>Identity details</summary>
             <div class="form-row">
               <div class="form-group">
                 <label for="chat-channel">Channel</label>
@@ -21,10 +30,6 @@ export function chatPage(): string {
                 <label for="chat-user-id">Channel User ID</label>
                 <input id="chat-user-id" name="userId" type="text" placeholder="channel identity user id">
               </div>
-            </div>
-            <div class="form-group">
-              <label for="chat-privacy">Privacy Level</label>
-              <select id="chat-privacy" name="privacyLevel"></select>
             </div>
             <div class="form-row">
               <div class="form-group">
@@ -36,41 +41,60 @@ export function chatPage(): string {
                 <input id="chat-author-id" name="defaultAuthorId" type="text" placeholder="stable author id">
               </div>
             </div>
-            <div class="chat-contact-meta" data-chat-contact-meta></div>
-            <div class="chat-status" data-chat-status>Loading cockpit state...</div>
+          </details>
+          <div class="chat-contact-meta" data-chat-contact-meta></div>
+          <div class="chat-status" data-chat-status>Loading garden chat...</div>
+        </section>
+
+        <div class="chat-surface" id="admin-chat-surface">
+          <div class="chat-thread" data-chat-thread>
+            <article class="chat-message chat-message-assistant">
+              <div class="chat-message-meta">PSFN</div>
+              <div class="chat-message-content">Preparing the garden chat bed...</div>
+            </article>
+          </div>
+          <form class="chat-composer" data-chat-composer autocomplete="off">
+            <textarea
+              id="chat-composer-input"
+              data-chat-input
+              rows="3"
+              placeholder="Type a message for PSFN"
+            ></textarea>
+            <div class="chat-composer-actions">
+              <button type="submit" class="btn" data-chat-send>Send</button>
+              <button type="button" class="btn chat-clear-btn" data-chat-clear>Clear</button>
+            </div>
           </form>
         </div>
-        <div class="card chat-surface-card">
-          <div class="chat-surface" id="admin-chat-surface"></div>
-          <section class="chat-debug-panel" data-chat-debug>
-            <div class="chat-debug-controls">
-              <label class="chat-debug-enable">
-                <input type="checkbox" data-chat-debug-enable checked>
-                Enable debug stream
-              </label>
-              <div class="chat-debug-channel">
-                <label for="chat-debug-channel-filter">Channel filter</label>
-                <input
-                  id="chat-debug-channel-filter"
-                  type="text"
-                  data-chat-debug-channel
-                  placeholder="optional channelId"
-                  autocomplete="off"
-                >
-              </div>
-              <button type="button" class="btn chat-debug-clear" data-chat-debug-clear>Clear</button>
+
+        <section class="chat-debug-panel" data-chat-debug>
+          <div class="chat-debug-controls">
+            <label class="chat-debug-enable">
+              <input type="checkbox" data-chat-debug-enable checked>
+              Enable debug stream
+            </label>
+            <div class="chat-debug-channel">
+              <label for="chat-debug-channel-filter">Channel filter</label>
+              <input
+                id="chat-debug-channel-filter"
+                type="text"
+                data-chat-debug-channel
+                placeholder="optional channelId"
+                autocomplete="off"
+              >
             </div>
-            <div class="chat-debug-toggles" role="group" aria-label="Debug categories">
-              <label><input type="checkbox" value="thinking" data-chat-debug-category checked>Thinking</label>
-              <label><input type="checkbox" value="text" data-chat-debug-category checked>Text</label>
-              <label><input type="checkbox" value="tools" data-chat-debug-category checked>Tools</label>
-              <label><input type="checkbox" value="memory" data-chat-debug-category checked>Memory</label>
-              <label><input type="checkbox" value="errors" data-chat-debug-category checked>Errors</label>
-            </div>
-            <div class="chat-debug-status" data-chat-debug-status>Connecting...</div>
-            <div class="chat-debug-timeline" data-chat-debug-timeline></div>
-          </section>
-        </div>
+            <button type="button" class="btn chat-debug-clear" data-chat-debug-clear>Clear</button>
+          </div>
+          <div class="chat-debug-toggles" role="group" aria-label="Debug categories">
+            <label><input type="checkbox" value="thinking" data-chat-debug-category checked>Thinking</label>
+            <label><input type="checkbox" value="text" data-chat-debug-category checked>Text</label>
+            <label><input type="checkbox" value="tools" data-chat-debug-category checked>Tools</label>
+            <label><input type="checkbox" value="memory" data-chat-debug-category checked>Memory</label>
+            <label><input type="checkbox" value="errors" data-chat-debug-category checked>Errors</label>
+          </div>
+          <div class="chat-debug-status" data-chat-debug-status>Connecting...</div>
+          <div class="chat-debug-timeline" data-chat-debug-timeline></div>
+        </section>
       </div>
     </section>
     <script type="module" src="/static/chat.js"></script>

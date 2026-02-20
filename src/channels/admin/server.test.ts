@@ -518,14 +518,17 @@ describe('AdminServer', () => {
   });
 
   describe('Chat (without contactStore)', () => {
-    it('returns chat cockpit page shell', async () => {
+    it('returns garden chat page shell', async () => {
       const res = await request(port, 'GET', '/chat');
       expect(res.status).toBe(200);
-      expect(res.body).toContain('Chat Cockpit');
+      expect(res.body).toContain('Garden Chat');
+      expect(res.body).toContain('Garden Chat Canopy');
       expect(res.body).toContain('data-chat-cockpit');
       expect(res.body).toContain('data-chat-controls');
+      expect(res.body).toContain('data-chat-composer');
       expect(res.body).toContain('data-chat-debug');
       expect(res.body).toContain('id="admin-chat-surface"');
+      expect(res.body).not.toContain('Channel Identity Binding');
       expect(res.body).toContain('<script type="module" src="/static/chat.js"></script>');
       expect(res.body).toContain('<script type="module" src="/static/chat-debug.js"></script>');
     });
@@ -913,10 +916,10 @@ describe('AdminServer', () => {
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toBe('application/javascript');
       expect(res.body).toContain('/api/chat/bootstrap');
-      expect(res.body).toContain('openai-completions');
       expect(res.body).toContain('X-Session-ID');
       expect(res.body).toContain('./chat-voice.js');
       expect(res.body).toContain('bootstrap?.api?.apiKey');
+      expect(res.body).not.toContain('esm.sh');
     });
 
     it('serves chat-voice.js', async () => {
@@ -944,7 +947,8 @@ describe('AdminServer', () => {
       expect(res.body).toContain('.login-wrap');
       expect(res.body).toContain('.think-trace');
       expect(res.body).toContain('.channel-privacy');
-      expect(res.body).toContain('.chat-cockpit-grid');
+      expect(res.body).toContain('.chat-controls-bar');
+      expect(res.body).toContain('.chat-thread');
       expect(res.body).toContain('.chat-debug-panel');
     });
   });

@@ -7,13 +7,16 @@ import { createHash } from 'node:crypto';
 import type { ComposeContext, ComposeResult } from './prompt-types.js';
 import { LAYER_TYPE_ORDER } from './prompt-types.js';
 import type { PromptLayerStore } from './prompt-store.js';
+import { PromptManager } from './prompt-manager.js';
 
 export class PromptComposer {
   private store: PromptLayerStore;
+  private manager: PromptManager;
   private lastKnownGood: ComposeResult | null = null;
 
-  constructor(store: PromptLayerStore) {
+  constructor(store: PromptLayerStore, manager: PromptManager = new PromptManager()) {
     this.store = store;
+    this.manager = manager;
   }
 
   compose(ctx?: ComposeContext): ComposeResult {
@@ -48,8 +51,9 @@ export class PromptComposer {
       return a.priority - b.priority;
     });
 
-    // 4. Join
-    const text = sorted.map(l => l.content).join('\n\n');
+    // 4. Prompt-manager composition (required prompts, deterministic prompt ordering, auto-heal)
+    const managed = this.manager.compose(sorted);
+    const text = managed.text;
 
     // 5. Hash
     const hash = createHash('sha256').update(text).digest('hex').slice(0, 16);
@@ -59,6 +63,8 @@ export class PromptComposer {
       hash,
       layerCount: sorted.length,
       layerIds: sorted.map(l => l.id),
+      promptIdentifiers: managed.prompts.map(prompt => prompt.identifier),
+      autoHealedPromptIdentifiers: managed.autoHealedIdentifiers,
     };
 
     // 6. Fallback guard

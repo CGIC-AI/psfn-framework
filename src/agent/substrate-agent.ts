@@ -57,6 +57,7 @@ export class SubstrateAgent {
   private llmClient: LLMProvider;
   private sessionManager: SessionManager;
   private systemPrompt: string;
+  private characterName: string;
   private config: SubstrateConfig;
   private coreTools: AgentTool<any>[] = [];
   private extendedTools: AgentTool<any>[] = [];
@@ -81,12 +82,13 @@ export class SubstrateAgent {
     sessionManager: SessionManager,
     systemPrompt: string,
     config: SubstrateConfig,
-    options?: { streamFn?: StreamFn },
+    options?: { streamFn?: StreamFn; characterName?: string },
   ) {
     this.eventBus = eventBus;
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.systemPrompt = systemPrompt;
+    this.characterName = options?.characterName?.trim() || this.deriveCharacterName(systemPrompt);
     this.config = config;
 
     this.agent = new Agent({
@@ -315,7 +317,17 @@ export class SubstrateAgent {
         : basePrompt;
 
       const runtimeNow = new Date();
-      const runtimePrompt = injectPromptRuntimeTokens(adaptedPrompt, { now: runtimeNow });
+      const templateVariables = this.buildPromptTemplateVariables(
+        message,
+        trustLevel,
+        channelType,
+        authorContext.canonicalContactKey,
+        runtimeNow,
+      );
+      const runtimePrompt = injectPromptRuntimeTokens(adaptedPrompt, {
+        now: runtimeNow,
+        variables: templateVariables,
+      });
 
       // Runtime context — date/time, channel, user, model info
       const runtimeContext = this.buildRuntimeContext(
@@ -634,6 +646,43 @@ export class SubstrateAgent {
     }
     log.warn('No assistant message found in agent state after prompt');
     return '';
+  }
+
+  private deriveCharacterName(systemPrompt: string): string {
+    const firstLine = systemPrompt.split('\n')[0]?.trim() ?? '';
+    const match = firstLine.match(/^You are\s+(.+?)\.?$/i);
+    const candidate = match?.[1]?.trim();
+    return candidate && candidate.length > 0 ? candidate : 'Assistant';
+  }
+
+  private buildPromptTemplateVariables(
+    message: SubstrateMessage,
+    trustLevel: TrustLevel,
+    channelType: string | undefined,
+    canonicalContactKey: string | undefined,
+    now: Date,
+  ): Record<string, string> {
+    const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
+    const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
+
+    return {
+      user: message.authorName,
+      user_name: message.authorName,
+      user_id: message.authorId,
+      char: this.characterName,
+      char_name: this.characterName,
+      character: this.characterName,
+      character_name: this.characterName,
+      channel: message.channelId,
+      channel_id: message.channelId,
+      channel_type: channelType ?? 'unknown',
+      channel_visibility: visibility,
+      trust_level: trustLevel,
+      canonical_contact_id: canonicalContactKey ?? message.authorId,
+      model: modelId,
+      model_id: modelId,
+      now_iso: now.toISOString(),
+    };
   }
 
   /** Build a runtime context block with current time, channel, user, model info */

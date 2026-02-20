@@ -70,6 +70,9 @@ export class PromptLayerStore {
     type: LayerType;
     name: string;
     content: string;
+    identifier?: string;
+    role?: 'system' | 'user' | 'assistant';
+    promptOrder?: number;
     priority?: number;
     channelType?: string;
     taskKind?: string;
@@ -79,6 +82,9 @@ export class PromptLayerStore {
       id: randomUUID(),
       type: params.type,
       name: params.name,
+      identifier: params.identifier,
+      role: params.role,
+      promptOrder: params.promptOrder,
       content: params.content,
       enabled: true,
       priority: params.priority ?? 0,
@@ -178,15 +184,67 @@ export class PromptLayerStore {
 
   /** Seed from character card if store is empty */
   seedFromCharacterCard(systemPrompt: string): void {
-    if (this.layers.length > 0) return;
-    this.create({
-      type: 'base',
-      name: 'Character Foundation',
-      content: systemPrompt,
-      priority: 0,
-      updatedBy: 'system',
-    });
-    log.info('Seeded prompt store from character card');
+    if (this.layers.length === 0) {
+      this.create({
+        type: 'base',
+        name: 'Character Foundation',
+        identifier: 'main',
+        role: 'system',
+        content: systemPrompt,
+        priority: 0,
+        updatedBy: 'system',
+      });
+      log.info('Seeded prompt store from character card');
+      return;
+    }
+
+    const baseLayers = this.layers.filter(layer => layer.type === 'base');
+    if (baseLayers.length !== 1) return;
+
+    const base = baseLayers[0];
+    let touched = false;
+
+    if (!base.identifier) {
+      base.identifier = 'main';
+      touched = true;
+    }
+    if (!base.role) {
+      base.role = 'system';
+      touched = true;
+    }
+
+    const looksLikeLegacySystemSeed = (
+      base.name === 'Character Foundation'
+      && base.updatedBy === 'system'
+      && base.version === 1
+      && !base.content.includes('{{user}}')
+      && /\bUser\b/.test(base.content)
+    );
+
+    if (looksLikeLegacySystemSeed && base.content !== systemPrompt) {
+      this.appendHistory({
+        layerId: base.id,
+        layerName: base.name,
+        previousContent: base.content,
+        previousChecksum: base.checksum,
+        newContent: systemPrompt,
+        newChecksum: contentChecksum(systemPrompt),
+        updatedBy: 'system:migrate-user-token',
+        timestamp: new Date().toISOString(),
+        version: base.version,
+      });
+      base.content = systemPrompt;
+      base.checksum = contentChecksum(systemPrompt);
+      base.version += 1;
+      base.updatedAt = new Date().toISOString();
+      base.updatedBy = 'system:migrate-user-token';
+      touched = true;
+      log.info('Upgraded base prompt seed to runtime {{user}} template');
+    }
+
+    if (touched) {
+      this.save();
+    }
   }
 
   /** Get count of layers */

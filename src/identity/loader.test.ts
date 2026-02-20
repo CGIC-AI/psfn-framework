@@ -31,6 +31,11 @@ describe('composeSystemPrompt', () => {
     expect(prompt).not.toContain('{{char}}');
   });
 
+  it('preserves {{user}} tokens by default for runtime interpolation', () => {
+    const prompt = composeSystemPrompt(TEST_CARD);
+    expect(prompt).toContain('{{user}} and TestChar are chatting');
+  });
+
   it('replaces {{user}} tokens', () => {
     const prompt = composeSystemPrompt(TEST_CARD, 'Alice');
     expect(prompt).toContain('Alice and TestChar are chatting');

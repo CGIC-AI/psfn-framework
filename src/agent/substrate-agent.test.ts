@@ -669,6 +669,27 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).toContain('honne');
   });
 
+  it('interpolates {{user}} and {{char}} variables per turn before context build', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'You are {{char}}.\nAddress {{user}} by name.',
+      config,
+      { characterName: 'PSFN' },
+    );
+
+    await agent.handleMessage(makeMessage({ authorName: 'Operator' }));
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[1]).toContain('You are PSFN.');
+    expect(buildCall[1]).toContain('Address Operator by name.');
+    expect(buildCall[1]).not.toContain('{{char}}');
+    expect(buildCall[1]).not.toContain('{{user}}');
+  });
+
   it('emits agent.error on handleMessage failure', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

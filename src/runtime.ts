@@ -123,6 +123,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.sessionManager,
       systemPrompt,
       this.config,
+      { characterName: card.data.name },
     );
 
     // Prompt stack — layered, editable system prompt

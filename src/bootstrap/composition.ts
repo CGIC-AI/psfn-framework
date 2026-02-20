@@ -81,6 +81,7 @@ export interface AgentLoopCompositionOptions {
   llmProvider: LLMProvider;
   sessionManager: SessionManager;
   systemPrompt: string;
+  characterName?: string;
   config: SubstrateConfig;
 }
 
@@ -91,6 +92,7 @@ export function composeAgentLoop(options: AgentLoopCompositionOptions): AgentLoo
     options.sessionManager,
     options.systemPrompt,
     options.config,
+    options.characterName ? { characterName: options.characterName } : undefined,
   );
 }
 

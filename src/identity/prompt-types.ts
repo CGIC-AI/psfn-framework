@@ -15,6 +15,19 @@ export interface PromptLayer {
   id: string;
   type: LayerType;
   name: string;
+  /**
+   * Optional prompt-manager identifier (for deterministic ordering and required-entry checks).
+   * Examples: main, charDescription, charPersonality, scenario, dialogueExamples.
+   */
+  identifier?: string;
+  /**
+   * Optional role metadata for future prompt-manager routing.
+   */
+  role?: 'system' | 'user' | 'assistant';
+  /**
+   * Optional prompt-manager order override (lower = earlier).
+   */
+  promptOrder?: number;
   content: string;
   enabled: boolean;
   priority: number;        // within same type, lower = first
@@ -36,6 +49,8 @@ export interface ComposeResult {
   hash: string;
   layerCount: number;
   layerIds: string[];
+  promptIdentifiers?: string[];
+  autoHealedPromptIdentifiers?: string[];
 }
 
 export interface PromptHistoryEntry {

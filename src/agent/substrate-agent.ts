@@ -30,6 +30,7 @@ import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
+import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -313,14 +314,18 @@ export class SubstrateAgent {
         ? basePrompt + '\n\n' + personaHint
         : basePrompt;
 
+      const runtimeNow = new Date();
+      const runtimePrompt = injectPromptRuntimeTokens(adaptedPrompt, { now: runtimeNow });
+
       // Runtime context — date/time, channel, user, model info
       const runtimeContext = this.buildRuntimeContext(
         message,
         trustLevel,
         channelType,
         authorContext.canonicalContactKey,
+        runtimeNow,
       );
-      const fullPrompt = adaptedPrompt + '\n\n' + runtimeContext;
+      const fullPrompt = runtimePrompt + '\n\n' + runtimeContext;
 
       // Build context (with auto-compaction + cross-channel continuity)
       const contextStageStart = Date.now();
@@ -637,8 +642,8 @@ export class SubstrateAgent {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey?: string,
+    now: Date = new Date(),
   ): string {
-    const now = new Date();
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
     const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
     const contextWindow = this.resolveContextWindow();

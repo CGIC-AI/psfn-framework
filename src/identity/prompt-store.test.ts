@@ -220,6 +220,8 @@ describe('PromptLayerStore', () => {
       expect(layers[0].type).toBe('base');
       expect(layers[0].name).toBe('Character Foundation');
       expect(layers[0].content).toBe('You are Purrsephone.');
+      expect(layers[0].identifier).toBe('main');
+      expect(layers[0].role).toBe('system');
     });
 
     it('skips seeding when layers already exist', () => {
@@ -228,6 +230,24 @@ describe('PromptLayerStore', () => {
 
       expect(store.getAll()).toHaveLength(1);
       expect(store.getAll()[0].name).toBe('Existing');
+    });
+
+    it('upgrades untouched legacy system seed with frozen User token', () => {
+      store.create({
+        type: 'base',
+        name: 'Character Foundation',
+        content: 'You are Purrsephone.\nHello User.',
+        updatedBy: 'system',
+      });
+
+      store.seedFromCharacterCard('You are Purrsephone.\nHello {{user}}.');
+
+      const upgraded = store.getAll()[0];
+      expect(upgraded.identifier).toBe('main');
+      expect(upgraded.role).toBe('system');
+      expect(upgraded.content).toContain('{{user}}');
+      expect(upgraded.updatedBy).toBe('system:migrate-user-token');
+      expect(upgraded.version).toBe(2);
     });
   });
 

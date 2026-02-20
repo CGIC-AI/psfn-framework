@@ -109,6 +109,7 @@ async function main(): Promise<void> {
     llmProvider: gateway,
     sessionManager,
     systemPrompt,
+    characterName: card.data.name,
     config,
   });
 

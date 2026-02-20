@@ -1,5 +1,6 @@
 export interface PromptRuntimeContext {
   now?: Date;
+  variables?: Record<string, unknown>;
 }
 
 function utcIso(now: Date): string {
@@ -28,7 +29,69 @@ const TOKEN_RESOLVERS: Array<[RegExp, TokenResolver]> = [
 ];
 
 export const PROMPT_RUNTIME_TOKEN_HINT =
-  'Runtime tokens: {{current_datetime}} / {{now()}}, {{current_date}}, {{current_time}}, {{unix_timestamp}}';
+  'Runtime tokens: {{current_datetime}} / {{now()}}, {{current_date}}, {{current_time}}, {{unix_timestamp}}, '
+  + '{{user}}, {{char}}, {{channel_id}}, {{channel_type}}, {{trust_level}}, {{model}}';
+
+function toSnakeCase(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s-]+/g, '_')
+    .toLowerCase();
+}
+
+function normalizeLookupKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function stringifyVariableValue(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  return null;
+}
+
+function setVariableLookup(lookup: Map<string, string>, key: string, value: string): void {
+  if (!key) return;
+  const normalized = normalizeLookupKey(key);
+  if (!lookup.has(normalized)) {
+    lookup.set(normalized, value);
+  }
+}
+
+function addVariable(
+  lookup: Map<string, string>,
+  key: string,
+  value: string,
+): void {
+  setVariableLookup(lookup, key, value);
+  setVariableLookup(lookup, toSnakeCase(key), value);
+}
+
+function buildVariableLookup(variables: Record<string, unknown>): Map<string, string> {
+  const lookup = new Map<string, string>();
+
+  const walk = (obj: Record<string, unknown>, prefix?: string): void => {
+    for (const [rawKey, rawValue] of Object.entries(obj)) {
+      if (!rawKey.trim()) continue;
+
+      const dottedKey = prefix ? `${prefix}.${rawKey}` : rawKey;
+      const primitive = stringifyVariableValue(rawValue);
+      if (primitive != null) {
+        addVariable(lookup, dottedKey, primitive);
+      }
+
+      if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue) && !(rawValue instanceof Date)) {
+        walk(rawValue as Record<string, unknown>, dottedKey);
+      }
+    }
+  };
+
+  walk(variables);
+  return lookup;
+}
 
 /**
  * Replace runtime date/time tokens in prompt text.
@@ -41,12 +104,19 @@ export function injectPromptRuntimeTokens(
   if (!text) return text;
 
   const now = context.now ?? new Date();
+  const variableLookup = buildVariableLookup(context.variables ?? {});
   let output = text;
 
   for (const [pattern, resolver] of TOKEN_RESOLVERS) {
     output = output.replace(pattern, () => resolver(now));
   }
 
+  output = output.replace(/\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g, (fullToken, rawName: string) => {
+    const cleaned = rawName.endsWith('()') ? rawName.slice(0, -2) : rawName;
+    const normalized = normalizeLookupKey(cleaned);
+    const resolved = variableLookup.get(normalized);
+    return resolved ?? fullToken;
+  });
+
   return output;
 }
-

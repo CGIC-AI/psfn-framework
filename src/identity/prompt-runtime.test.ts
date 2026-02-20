@@ -33,5 +33,34 @@ describe('injectPromptRuntimeTokens', () => {
 
     expect(output).toBe('Keep {{unknown_token}} unchanged');
   });
-});
 
+  it('injects simple prompt variables', () => {
+    const input = 'Hello {{user}}, you are speaking with {{char}} in {{channel_id}}';
+    const output = injectPromptRuntimeTokens(input, {
+      now: fixedNow,
+      variables: {
+        user: 'Vega',
+        char: 'Purrsephone',
+        channel_id: 'discord:dm:vega',
+      },
+    });
+
+    expect(output).toBe('Hello Vega, you are speaking with Purrsephone in discord:dm:vega');
+  });
+
+  it('supports dotted and snake-case aliases for variables', () => {
+    const input = 'Model={{model_id}} Trust={{trust_level}} Canonical={{contact.canonicalId}}';
+    const output = injectPromptRuntimeTokens(input, {
+      now: fixedNow,
+      variables: {
+        modelId: 'moonshotai/kimi-k2.5',
+        trustLevel: 'primary',
+        contact: {
+          canonicalId: 'contact-123',
+        },
+      },
+    });
+
+    expect(output).toBe('Model=moonshotai/kimi-k2.5 Trust=primary Canonical=contact-123');
+  });
+});

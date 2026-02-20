@@ -30,7 +30,7 @@ export function loadCharacterCard(path: string): CharacterCardV2 {
   return card;
 }
 
-export function composeSystemPrompt(card: CharacterCardV2, userName = 'User'): string {
+export function composeSystemPrompt(card: CharacterCardV2, userName = '{{user}}'): string {
   const d = card.data;
   const name = d.name;
 

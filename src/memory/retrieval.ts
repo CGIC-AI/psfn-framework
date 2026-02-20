@@ -5,6 +5,12 @@ import { MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
 import type { TrustLevel } from '../trust/types.js';
+import { estimateTokens } from '../llm/tokens.js';
+import type { ContextBudgetConfigLike } from '../context-budget.js';
+import {
+  MEMORY_RETRIEVAL_MIN_ITEMS,
+  resolveMemoryRetrievalBudget,
+} from '../context-budget.js';
 import {
   classifyChannel,
   getAllowedSensitivities,
@@ -30,20 +36,29 @@ interface RetrievalTelemetry {
   returnedCount: number;
   retrievalLimit: number;
   retrievalThreshold: number;
+  retrievalBudgetPct: number;
+  retrievalTokenBudget: number;
+  retrievalLimitMode: 'budget' | 'hard_limit';
   profileIncluded?: boolean;
 }
 
 export interface MemoryRetrieverConfig {
   retrievalLimit?: number;
+  retrievalBudgetPct?: number;
+  contextWindow?: number;
   retrievalThreshold?: number;
   telemetryEnabled?: boolean;
+}
+
+function isSubstrateConfig(config: MemoryRetrieverConfig | SubstrateConfig | undefined): config is SubstrateConfig {
+  return !!config && typeof config === 'object' && 'defaultContextWindow' in config;
 }
 
 export class MemoryRetriever implements MemoryProvider {
   private memoryStore: MemoryStore;
   private embeddingService: EmbeddingService;
   private runtimeConfig: SubstrateConfig | null;
-  private retrievalLimit: number;
+  private fallbackBudgetConfig: ContextBudgetConfigLike | null;
   private retrievalThreshold: number;
   private eventBus?: EventBus;
   private telemetryEnabled: boolean;
@@ -57,19 +72,40 @@ export class MemoryRetriever implements MemoryProvider {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
     this.eventBus = eventBus;
-    // If config has memoryRetrievalLimit, it's a SubstrateConfig — read per-call
-    if (config && 'memoryRetrievalLimit' in config) {
+    if (isSubstrateConfig(config)) {
       this.runtimeConfig = config;
-      this.retrievalLimit = config.memoryRetrievalLimit;
+      this.fallbackBudgetConfig = null;
       this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
       this.telemetryEnabled = config.memoryRetrievalTelemetryEnabled ?? true;
     } else {
       const retrieverConfig = config as MemoryRetrieverConfig | undefined;
       this.runtimeConfig = null;
-      this.retrievalLimit = retrieverConfig?.retrievalLimit ?? MEMORY_CONFIG.maxRetrievalCount;
+      this.fallbackBudgetConfig = {
+        defaultContextWindow: retrieverConfig?.contextWindow ?? 128_000,
+        modelRoster: {},
+        ...(retrieverConfig?.retrievalLimit !== undefined
+          ? { memoryRetrievalLimit: retrieverConfig.retrievalLimit }
+          : {}),
+        ...(retrieverConfig?.retrievalBudgetPct !== undefined
+          ? { memoryRetrievalBudgetPct: retrieverConfig.retrievalBudgetPct }
+          : {}),
+      };
       this.retrievalThreshold = retrieverConfig?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
       this.telemetryEnabled = retrieverConfig?.telemetryEnabled ?? true;
     }
+  }
+
+  private resolveRetrievalBudget(): ReturnType<typeof resolveMemoryRetrievalBudget> {
+    if (this.runtimeConfig) {
+      return resolveMemoryRetrievalBudget(this.runtimeConfig);
+    }
+
+    return resolveMemoryRetrievalBudget(
+      this.fallbackBudgetConfig ?? {
+        defaultContextWindow: 128_000,
+        modelRoster: {},
+      },
+    );
   }
 
   async retrieve(
@@ -79,8 +115,8 @@ export class MemoryRetriever implements MemoryProvider {
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
   ): Promise<string> {
-    // Read limit per-call from live config if available
-    const limit = this.runtimeConfig?.memoryRetrievalLimit ?? this.retrievalLimit;
+    const budget = this.resolveRetrievalBudget();
+    const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const telemetry: RetrievalTelemetry = {
@@ -94,6 +130,9 @@ export class MemoryRetriever implements MemoryProvider {
       returnedCount: 0,
       retrievalLimit: limit,
       retrievalThreshold: this.retrievalThreshold,
+      retrievalBudgetPct: budget.budgetPct,
+      retrievalTokenBudget: budget.tokenBudget,
+      retrievalLimitMode: budget.mode,
       profileIncluded: false,
     };
     const profile = canonicalContactId
@@ -109,11 +148,12 @@ export class MemoryRetriever implements MemoryProvider {
 
     try {
       const embedding = await this.embeddingService.embed(contextText);
+      const candidateLimit = Math.max(20, limit * (budget.mode === 'hard_limit' ? 2 : 3));
 
       const memories = this.memoryStore.searchByEmbedding(
         embedding,
         this.retrievalThreshold,
-        20,
+        candidateLimit,
       );
       telemetry.candidateCount = memories.length;
 
@@ -123,18 +163,20 @@ export class MemoryRetriever implements MemoryProvider {
         return renderPromptBlock(profile);
       }
 
-      // Score, rank, take top N
       const scored: ScoredMemory[] = memories
         .map(memory => ({
           memory,
           score: computeRetrievalScore(memory),
         }))
         .filter(s => s.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
-      telemetry.rankedCount = scored.length;
+        .sort((a, b) => b.score - a.score);
 
-      if (scored.length === 0) {
+      const ranked = budget.mode === 'hard_limit'
+        ? scored.slice(0, limit)
+        : scored;
+      telemetry.rankedCount = ranked.length;
+
+      if (ranked.length === 0) {
         telemetry.reason = 'score_filtered';
         await this.emitRetrievalTelemetry(telemetry);
         return renderPromptBlock(profile);
@@ -143,7 +185,7 @@ export class MemoryRetriever implements MemoryProvider {
       // Trust-gated filtering: apply trust level + channel visibility restrictions
       const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
 
-      const filtered = scored.filter(s => {
+      const filtered = ranked.filter(s => {
         // Quick check: is the sensitivity level allowed for this trust+visibility?
         if (!allowed.includes(s.memory.sensitivity)) return false;
 
@@ -157,12 +199,10 @@ export class MemoryRetriever implements MemoryProvider {
         return policy.decision === 'allow';
       });
 
-      telemetry.returnedCount = filtered.length;
-
       log.debug('Trust filter applied', {
         trustLevel: effectiveTrust,
         channelVisibility,
-        before: scored.length,
+        before: ranked.length,
         after: filtered.length,
       });
 
@@ -172,8 +212,14 @@ export class MemoryRetriever implements MemoryProvider {
         return renderPromptBlock(profile);
       }
 
+      const selected = budget.mode === 'hard_limit'
+        ? filtered.slice(0, limit)
+        : selectWithinTokenBudget(filtered, budget.tokenBudget);
+
+      telemetry.returnedCount = selected.length;
+
       // Update access stats (fire-and-forget)
-      for (const s of filtered) {
+      for (const s of selected) {
         try {
           this.memoryStore.updateMemory(s.memory.id, {
             lastAccessed: Date.now(),
@@ -182,11 +228,10 @@ export class MemoryRetriever implements MemoryProvider {
         } catch { /* ignore */ }
       }
 
-      telemetry.count = filtered.length;
-      telemetry.returnedCount = filtered.length;
+      telemetry.count = selected.length;
       telemetry.reason = 'ok';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, filtered);
+      return renderPromptBlock(profile, selected);
     } catch (err) {
       log.error('Retrieval error', { error: String(err) });
       telemetry.reason = 'error';
@@ -240,6 +285,27 @@ function computeRetrievalScore(memory: PurrMemory & { similarity: number }): num
     memory.importance *
     memory.salience
   );
+}
+
+function estimateMemoryPromptTokens(memory: PurrMemory): number {
+  return Math.max(1, estimateTokens(`[${memory.type}] ${memory.text}`));
+}
+
+function selectWithinTokenBudget(scored: ScoredMemory[], tokenBudget: number): ScoredMemory[] {
+  if (scored.length === 0) return [];
+  if (tokenBudget <= 0) return scored.slice(0, MEMORY_RETRIEVAL_MIN_ITEMS);
+
+  let usedTokens = 0;
+  const selected: ScoredMemory[] = [];
+  for (const item of scored) {
+    const itemTokens = estimateMemoryPromptTokens(item.memory);
+    if (selected.length >= MEMORY_RETRIEVAL_MIN_ITEMS && usedTokens + itemTokens > tokenBudget) {
+      break;
+    }
+    selected.push(item);
+    usedTokens += itemTokens;
+  }
+  return selected;
 }
 
 function renderPromptBlock(

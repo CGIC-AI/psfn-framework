@@ -6,6 +6,7 @@ import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
 import type { EventBus } from '../event-bus.js';
+import type { SubstrateConfig } from '../types.js';
 
 // ── Helpers ──
 
@@ -53,6 +54,39 @@ function makeMockEventBus(): EventBus {
   return {
     emit: vi.fn().mockResolvedValue(undefined),
   } as unknown as EventBus;
+}
+
+function makeRuntimeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test',
+    extractionModel: 'test-extract',
+    extractionProvider: 'test',
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir: './data',
+    databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
+    extractionInterval: 5,
+    primaryMaxTokens: 16384,
+    extractionMaxTokens: 8192,
+    maintenanceIntervalMs: 300000,
+    defaultContextWindow: 128_000,
+    memoryBudgetPct: 20,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    modelRoster: {
+      chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+    },
+    ...overrides,
+  };
+}
+
+function countRenderedMemories(block: string): number {
+  const matches = block.match(/^- \[/gm);
+  return matches ? matches.length : 0;
 }
 
 // ── Tests ──
@@ -336,6 +370,59 @@ describe('MemoryRetriever basic behavior', () => {
     const result = await retriever.retrieve('test query', 'api:test', 'primary');
 
     expect(result).toBe('');
+  });
+
+  it('scales retrieval count with context-window budgets when no hard limit is set', async () => {
+    const memories = Array.from({ length: 12 }, (_, idx) => makeMemory({
+      text: `Budget memory ${idx} ` + 'x'.repeat(260),
+      sensitivity: 'public',
+      similarity: 0.98 - idx * 0.01,
+    }));
+    const embedding = makeMockEmbedding();
+
+    const smallConfig = makeRuntimeConfig({
+      memoryRetrievalLimit: undefined,
+      memoryRetrievalBudgetPct: 2,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 2_000 },
+      },
+    });
+    const largeConfig = makeRuntimeConfig({
+      memoryRetrievalLimit: undefined,
+      memoryRetrievalBudgetPct: 2,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 12_000 },
+      },
+    });
+
+    const smallRetriever = new MemoryRetriever(makeMockStore(memories), embedding, smallConfig);
+    const largeRetriever = new MemoryRetriever(makeMockStore(memories), embedding, largeConfig);
+
+    const smallResult = await smallRetriever.retrieve('budget query', 'api:test', 'primary');
+    const largeResult = await largeRetriever.retrieve('budget query', 'api:test', 'primary');
+
+    expect(countRenderedMemories(largeResult)).toBeGreaterThan(countRenderedMemories(smallResult));
+  });
+
+  it('uses hard retrieval limit override when provided', async () => {
+    const memories = Array.from({ length: 10 }, (_, idx) => makeMemory({
+      text: `Hard limit memory ${idx} ` + 'x'.repeat(240),
+      sensitivity: 'public',
+      similarity: 0.97 - idx * 0.01,
+    }));
+    const embedding = makeMockEmbedding();
+    const config = makeRuntimeConfig({
+      memoryRetrievalLimit: 2,
+      memoryRetrievalBudgetPct: 25,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 256_000 },
+      },
+    });
+    const retriever = new MemoryRetriever(makeMockStore(memories), embedding, config);
+
+    const result = await retriever.retrieve('budget query', 'api:test', 'primary');
+
+    expect(countRenderedMemories(result)).toBe(2);
   });
 
   it('formats output with memory type labels', async () => {

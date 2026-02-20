@@ -36,6 +36,11 @@ import {
   type AdminChatBootstrapResponse,
   type AdminChatBootstrapUpdateInput,
 } from './chat/index.js';
+import {
+  containsStructuredPromptSections,
+  getMalformedStructuredPromptErrors,
+  parseStructuredPromptForm,
+} from './prompt-structured-content.js';
 import * as tpl from './templates.js';
 
 interface ContactIdentityLinkView {
@@ -851,6 +856,22 @@ export class AdminHandlers {
 
   // ── Prompt Stack ──
 
+  private resolvePromptLayerContent(params: URLSearchParams): { content: string } | { error: string } {
+    if (containsStructuredPromptSections(params)) {
+      const structured = parseStructuredPromptForm(params);
+      if (!structured.ok) return { error: structured.error };
+      return { content: structured.content };
+    }
+
+    const content = params.get('content') ?? '';
+    const malformedStructuredErrors = getMalformedStructuredPromptErrors(content);
+    if (malformedStructuredErrors.length > 0) {
+      return { error: `Malformed structured prompt content: ${malformedStructuredErrors.join(' ')}` };
+    }
+
+    return { content };
+  }
+
   promptsPage(): string {
     const layers = this.promptStore?.getAll() ?? [];
     const prompts = this.promptRegistry?.list() ?? [];
@@ -885,9 +906,10 @@ export class AdminHandlers {
     if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
     const params = new URLSearchParams(body);
     const layerId = params.get('layerId') ?? '';
-    const content = params.get('content') ?? '';
+    const resolved = this.resolvePromptLayerContent(params);
+    if ('error' in resolved) return tpl.settingsFormResult(false, resolved.error);
     try {
-      const layer = this.promptStore.update(layerId, content, 'admin');
+      const layer = this.promptStore.update(layerId, resolved.content, 'admin');
       return tpl.settingsFormResult(true, `Updated "${layer.name}" to v${layer.version}`);
     } catch (err) {
       return tpl.settingsFormResult(false, String(err));
@@ -951,10 +973,11 @@ export class AdminHandlers {
     if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
     const params = new URLSearchParams(body);
     const layerId = params.get('layerId') ?? '';
-    const proposed = params.get('content') ?? '';
+    const resolved = this.resolvePromptLayerContent(params);
+    if ('error' in resolved) return tpl.settingsFormResult(false, resolved.error);
     const layer = this.promptStore.getById(layerId);
     if (!layer) return '<div class="form-error">Prompt layer not found</div>';
-    return tpl.promptDiffFragment(layer.content, proposed);
+    return tpl.promptDiffFragment(layer.content, resolved.content);
   }
 
   // ── Events (SSE) ──

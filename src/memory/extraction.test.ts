@@ -273,6 +273,54 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(endCall?.[1]?.acceptedCount).toBe(0);
   });
 
+  it('injects runtime datetime tokens in extraction prompts', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'User likes coffee', authorName: 'user' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const promptRegistry = {
+      getPrompt: vi.fn().mockReturnValue(
+        'Extraction run at {{current_datetime}}.\nKnown:\n{existing_facts}\nRecent:\n{recent_messages}',
+      ),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+      promptRegistry,
+    );
+
+    await extractor.extract('api:telemetry-test');
+
+    const firstCall = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
+    expect(firstCall.systemPrompt).not.toContain('{{current_datetime}}');
+    expect(firstCall.systemPrompt).toMatch(/Extraction run at \d{4}-\d{2}-\d{2}T/);
+  });
+
   it('caps writes by ranked value and reports write_cap rejections', async () => {
     const llmClient = {
       complete: vi.fn().mockResolvedValue({

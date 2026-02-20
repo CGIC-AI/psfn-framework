@@ -1,6 +1,7 @@
 import type { PromptLayer, PromptHistoryEntry } from '../../../identity/prompt-types.js';
 import { LAYER_TYPE_ORDER } from '../../../identity/prompt-types.js';
 import type { PromptRegistryEntry, PromptRegistryHistoryEntry } from '../../../identity/prompt-registry.js';
+import { PROMPT_RUNTIME_TOKEN_HINT } from '../../../identity/prompt-runtime.js';
 import {
   STRUCTURED_PROMPT_FORMAT,
   STRUCTURED_PROMPT_SECTION_KEYS,
@@ -266,6 +267,9 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
 
     <div class="card">
       <h3 style="margin-bottom:0.75rem">Content</h3>
+      <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 0.75rem 0">
+        ${escapeHtml(PROMPT_RUNTIME_TOKEN_HINT)}
+      </p>
       ${parseWarnings}
       ${parseErrors}
       ${editorForm}
@@ -333,6 +337,9 @@ export function promptRegistryDetailPage(
 
     <div class="card">
       <h3 style="margin-bottom:0.75rem">Prompt Text</h3>
+      <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 0.75rem 0">
+        ${escapeHtml(PROMPT_RUNTIME_TOKEN_HINT)}
+      </p>
       <form hx-post="/api/prompts/static/update" hx-target="#prompt-registry-result" hx-swap="innerHTML">
         <input type="hidden" name="key" value="${escapeHtml(prompt.key)}">
         <textarea name="content" rows="20" style="width:100%;font-family:monospace;font-size:0.9rem;padding:0.5rem;border:1px solid var(--border);border-radius:4px;resize:vertical">${escapeHtml(prompt.text)}</textarea>

@@ -9,6 +9,7 @@ import { createComponentLogger } from '../logger.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../identity/prompt-registry.js';
+import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import {
   resolveSessionHistoryBudget,
   SESSION_HISTORY_MIN_MESSAGES,
@@ -214,10 +215,11 @@ export class SessionManager {
         try {
           const compactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
             ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+          const runtimeCompactionPrompt = injectPromptRuntimeTokens(compactionPrompt);
           const summaryResponse = await withRetry(
             () => llmProvider.complete(
               {
-                systemPrompt: compactionPrompt,
+                systemPrompt: runtimeCompactionPrompt,
                 messages: [{ role: 'user', content: compactText }],
               },
               'summary',

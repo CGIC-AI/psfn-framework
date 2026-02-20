@@ -1419,6 +1419,50 @@ describe('AdminServer with contacts', () => {
     expect(updated?.notes).toBe('A good friend');
   });
 
+  it('accepts no-op contact save when add-channel form remains untouched', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Noop Contact',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      notes: 'steady',
+      channels: [{
+        channel: 'discord',
+        userId: 'noop-discord',
+        privacyLevel: 'semi_private',
+      }],
+    });
+
+    const body = new URLSearchParams({
+      displayName: 'Noop Contact',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      notes: 'steady',
+      channelCount: '1',
+      channel_0: 'discord',
+      channelUserId_0: 'noop-discord',
+      channelPrivacy_0: 'semi_private',
+      newChannel: '',
+      newChannelUserId: '',
+      newChannelPrivacy: 'semi_private',
+    }).toString();
+
+    const res = await request(port, 'POST', `/api/contacts/${contact.id}`, body, {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Noop Contact');
+    expect(res.body).not.toContain('To link a new channel, both channel and channel user ID are required');
+
+    const updated = contactStore.getById(contact.id);
+    expect(updated?.channels?.length).toBe(1);
+    expect(updated?.channels?.[0]).toMatchObject({
+      channel: 'discord',
+      userId: 'noop-discord',
+      privacyLevel: 'semi_private',
+    });
+  });
+
   it('returns empty for edit form of non-existent contact', async () => {
     const res = await request(port, 'GET', '/api/contacts/nonexistent/edit');
     expect(res.status).toBe(200);

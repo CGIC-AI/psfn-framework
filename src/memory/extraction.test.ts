@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryExtractor, parseFactsXml, __test as extractionTestUtils } from './extraction.js';
+import { __test as tokenTestUtils } from '../llm/tokens.js';
+
+afterEach(() => {
+  tokenTestUtils.resetTokenizerState();
+});
 
 describe('parseFactsXml', () => {
   it('parses a valid response with multiple facts', () => {
@@ -271,6 +276,87 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(endCall?.[1]?.count).toBe(0);
     expect(endCall?.[1]?.parsedCount).toBe(0);
     expect(endCall?.[1]?.acceptedCount).toBe(0);
+  });
+
+  it('uses framed message token counting for context-threshold triggers', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(1),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'a', authorName: 'user' },
+        { role: 'assistant', content: 'b', authorName: 'assistant' },
+        { role: 'user', content: 'c', authorName: 'user' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        primaryModel: 'test-model',
+        primaryProvider: 'test-provider',
+        extractionModel: 'test-model',
+        extractionProvider: 'test-provider',
+        primaryMaxTokens: 4096,
+        extractionMaxTokens: 4096,
+        discordToken: '',
+        discordBotId: '',
+        characterCardPath: '',
+        dataDir: '',
+        databasePath: '',
+        sessionMessageLimit: 30,
+        memoryRetrievalLimit: 15,
+        extractionInterval: 10,
+        maintenanceIntervalMs: 60_000,
+        defaultContextWindow: 60,
+        memoryBudgetPct: 20,
+        extractionThresholdPct: 50,
+        compactionThresholdPct: 70,
+        memoryExtractionTelemetryEnabled: true,
+        modelRoster: {
+          chat: {
+            model: 'test-model',
+            provider: 'test-provider',
+            maxTokens: 4096,
+            contextWindow: 60,
+          },
+        },
+      } as any,
+    );
+
+    await extractor.maybeExtract('api:threshold-tokens-callsite');
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const startCall = calls.find(([name]) => name === 'memory.extraction.start');
+    expect(startCall?.[1]?.triggerReason).toBe('context_threshold');
   });
 
   it('injects runtime datetime tokens in extraction prompts', async () => {

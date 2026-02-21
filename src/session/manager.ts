@@ -4,7 +4,7 @@ import type { SessionStore } from './store.js';
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
 import type { EventBus } from '../event-bus.js';
-import { estimateTokens } from '../llm/tokens.js';
+import { countMessageTokens, countTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../logger.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -70,7 +70,7 @@ function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBudget: nu
 
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
-    const entryTokens = Math.max(1, estimateTokens(entry.content));
+    const entryTokens = Math.max(1, countTokens(entry.content));
     if (selected.length >= SESSION_HISTORY_MIN_MESSAGES && usedTokens + entryTokens > tokenBudget) {
       break;
     }
@@ -185,8 +185,8 @@ export class SessionManager {
       const thresholdPct = this.config.compactionThresholdPct ?? 70;
       const tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
 
-      const systemTokens = estimateTokens(systemPrompt) + estimateTokens(memoriesBlock);
-      const messageTokens = recent.reduce((sum, e) => sum + estimateTokens(e.content), 0);
+      const systemTokens = countTokens(systemPrompt) + countTokens(memoriesBlock);
+      const messageTokens = countMessageTokens(this.entriesToMessages(recent));
       const totalTokens = systemTokens + messageTokens;
 
       if (totalTokens > tokenBudget) {
@@ -243,8 +243,8 @@ export class SessionManager {
           // Store compaction summary
           const coveredUpTo = toCompact[toCompact.length - 1].id;
           this.store.insertCompaction(channelId, summaryResponse.content, coveredUpTo);
-          const keepTokens = toKeep.reduce((sum, e) => sum + estimateTokens(e.content), 0);
-          const summaryTokens = estimateTokens(summaryResponse.content);
+          const keepTokens = countMessageTokens(this.entriesToMessages(toKeep));
+          const summaryTokens = countTokens(summaryResponse.content);
           tokensAfter = systemTokens + keepTokens + summaryTokens;
 
           // Use only the kept (recent) messages going forward

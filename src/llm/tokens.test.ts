@@ -1,24 +1,63 @@
-import { describe, it, expect } from 'vitest';
-import { estimateTokens, formatTokens } from './tokens.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  __test as tokenTestUtils,
+  countMessageTokens,
+  countTokens,
+  estimateTokens,
+  formatTokens,
+} from './tokens.js';
 
-describe('estimateTokens', () => {
-  it('estimates ~1 token per 4 characters', () => {
-    expect(estimateTokens('abcd')).toBe(1);
-    expect(estimateTokens('abcdefgh')).toBe(2);
+afterEach(() => {
+  tokenTestUtils.resetTokenizerState();
+});
+
+describe('countTokens', () => {
+  it('uses real tokenizer counts for non-trivial text', () => {
+    const fallbackEstimate = Math.ceil('你好世界你好世界'.length / 4);
+    const realCount = countTokens('你好世界你好世界');
+
+    expect(realCount).toBeGreaterThan(fallbackEstimate);
   });
 
-  it('rounds up partial tokens', () => {
-    expect(estimateTokens('abc')).toBe(1); // 3/4 = 0.75, ceil = 1
-    expect(estimateTokens('abcde')).toBe(2); // 5/4 = 1.25, ceil = 2
+  it('falls back to chars/4 when tokenizer init fails', () => {
+    tokenTestUtils.setTokenizerFactory(() => {
+      throw new Error('boom');
+    });
+
+    expect(countTokens('abcd')).toBe(1);
+    expect(countTokens('abcde')).toBe(2);
   });
 
-  it('returns 0 for empty string', () => {
-    expect(estimateTokens('')).toBe(0);
+  it('falls back to chars/4 when tokenizer encode throws', () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: () => {
+        throw new Error('encode failed');
+      },
+    }));
+
+    expect(countTokens('abc')).toBe(1);
+    expect(countTokens('abcdefgh')).toBe(2);
   });
 
-  it('handles long text', () => {
-    const text = 'a'.repeat(1000);
-    expect(estimateTokens(text)).toBe(250);
+  it('supports message framing overhead counting', () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const tokens = countMessageTokens([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'yo', name: 'bot' },
+    ]);
+
+    expect(tokens).toBe(31);
+  });
+
+  it('keeps estimateTokens as compatibility alias', () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    expect(estimateTokens('abc')).toBe(3);
   });
 });
 

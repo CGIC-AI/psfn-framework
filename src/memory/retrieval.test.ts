@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRetriever } from './retrieval.js';
 import type { MemoryStore } from './store.js';
 import type { EmbeddingService } from '../agent-loop.js';
@@ -7,6 +7,7 @@ import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
 import type { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
+import { __test as tokenTestUtils } from '../llm/tokens.js';
 
 // ── Helpers ──
 
@@ -94,6 +95,10 @@ function countRenderedMemories(block: string): number {
 describe('MemoryRetriever trust-gated filtering', () => {
   beforeEach(() => {
     idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
   });
 
   // Helper to build a set of memories spanning all sensitivity levels
@@ -351,6 +356,10 @@ describe('MemoryRetriever basic behavior', () => {
     idCounter = 0;
   });
 
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
   it('returns empty string for empty input', async () => {
     const store = makeMockStore([]);
     const embedding = makeMockEmbedding();
@@ -423,6 +432,31 @@ describe('MemoryRetriever basic behavior', () => {
     const result = await retriever.retrieve('budget query', 'api:test', 'primary');
 
     expect(countRenderedMemories(result)).toBe(2);
+  });
+
+  it('uses real token counts for budgeted memory selection', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const memories = Array.from({ length: 4 }, (_, idx) => makeMemory({
+      text: `High token memory ${idx} ` + 'x'.repeat(90),
+      sensitivity: 'public',
+      similarity: 0.98 - idx * 0.01,
+    }));
+    const embedding = makeMockEmbedding();
+    const config = makeRuntimeConfig({
+      memoryRetrievalLimit: undefined,
+      memoryRetrievalBudgetPct: 5,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 1_000 },
+      },
+    });
+    const retriever = new MemoryRetriever(makeMockStore(memories), embedding, config);
+
+    const result = await retriever.retrieve('budget query', 'api:test', 'primary');
+
+    expect(countRenderedMemories(result)).toBe(1);
   });
 
   it('formats output with memory type labels', async () => {

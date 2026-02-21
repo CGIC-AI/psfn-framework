@@ -30,6 +30,7 @@ describe('admin templates', () => {
     expect(html).toContain('<link rel="stylesheet" href="/static/admin.css">');
     expect(html).toContain('<script src="/static/htmx.min.js"></script>');
     expect(html).toContain('<script src="/static/sse.js"></script>');
+    expect(html).toContain('href="/skills"');
   });
 
   it('escapes login errors', () => {

@@ -9,6 +9,7 @@ export { schedulerPage, taskRow } from './templates/scheduler.js';
 export { shardsPage, shardCard } from './templates/shards.js';
 export { identityPage } from './templates/identity.js';
 export { settingsPage, settingsFormResult } from './templates/settings.js';
+export { skillsPage } from './templates/skills.js';
 export { primerPage } from './templates/primer.js';
 export { contactsPage, contactRow, contactEditForm } from './templates/contacts.js';
 export { chatPage } from './templates/chat.js';

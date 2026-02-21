@@ -26,7 +26,12 @@ import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { TrustLevel } from '../../trust/types.js';
-import type { Contact, RelationshipType, ChannelPrivacyLevel } from '../../contacts/types.js';
+import type {
+  Contact,
+  RelationshipType,
+  ChannelPrivacyLevel,
+  ContactIdentityLinkVerification,
+} from '../../contacts/types.js';
 import type { SkillsRuntime } from '../../skills/runtime.js';
 import { TRUST_LEVELS } from '../../trust/types.js';
 import { VALID_RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '../../contacts/types.js';
@@ -735,7 +740,13 @@ export class AdminHandlers {
       this.memoryStore.listContactProfiles().map(profile => [profile.contactId, profile] as const),
     );
     const relatedChannelMap = this.buildRelatedConversationChannelMap(contacts);
-    return tpl.layout('Garden Visitors', tpl.contactsPage(contacts, profileMap, relatedChannelMap), 'contacts');
+    const maybeVerificationLister = this.contactStore as ContactStore & {
+      listIdentityLinkVerifications?: (limit?: number) => ContactIdentityLinkVerification[];
+    };
+    const verifications = typeof maybeVerificationLister.listIdentityLinkVerifications === 'function'
+      ? maybeVerificationLister.listIdentityLinkVerifications(20)
+      : [];
+    return tpl.layout('Garden Visitors', tpl.contactsPage(contacts, profileMap, relatedChannelMap, verifications), 'contacts');
   }
 
   contactsListFragment(): string {

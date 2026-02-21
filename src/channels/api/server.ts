@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { SubstrateMessage } from '../../types.js';
+import type { ContactStore } from '../../contacts/store.js';
 import type { AgentLoop } from '../../agent-loop.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -45,11 +46,21 @@ const MAX_BODY_SIZE = 1_048_576; // 1MB
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 90_000;
 const TELEMETRY_MAX_SKEW_MS = 5 * 60_000;
 const TELEMETRY_NONCE_TTL_MS = 10 * 60_000;
+const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
   'external.telemetry.heartbeat',
   'external.telemetry.status',
   'external.telemetry.incident',
 ]);
+
+const IDENTITY_CLAIM_HEADERS = {
+  canonicalContactId: 'x-canonical-contact-id',
+  sourceChannel: 'x-identity-claim-channel',
+  sourceUserId: 'x-identity-claim-user-id',
+  nonce: 'x-identity-claim-nonce',
+  expires: 'x-identity-claim-expires',
+  signature: 'x-identity-claim-signature',
+} as const;
 
 type LifecycleInterrupt = 'timeout' | 'client_disconnected';
 
@@ -86,12 +97,22 @@ interface PreparedTurn {
   turnPromise: Promise<AgentTurnResult>;
 }
 
+interface IdentityClaimHeaders {
+  canonicalContactId: string;
+  sourceChannel: string;
+  sourceUserId: string;
+  nonce?: string;
+  expiresAt?: string;
+  signature?: string;
+}
+
 export interface ApiServerConfig {
   port: number;
   host?: string;
   agentLoop: AgentLoop;
   eventBus: EventBus;
   sessionManager: SessionManager;
+  contactStore?: ContactStore;
   apiKey?: string;
   modelName?: string;
   requestTimeoutMs?: number;
@@ -126,6 +147,7 @@ export class ApiServer implements ChannelAdapter {
   private agentLoop: AgentLoop;
   private eventBus: EventBus;
   private sessionManager: SessionManager;
+  private contactStore: ContactStore | null;
   private apiKey?: string;
   private modelName: string;
   private requestTimeoutMs: number;
@@ -139,6 +161,7 @@ export class ApiServer implements ChannelAdapter {
     this.agentLoop = config.agentLoop;
     this.eventBus = config.eventBus;
     this.sessionManager = config.sessionManager;
+    this.contactStore = config.contactStore ?? null;
     this.apiKey = config.apiKey;
     this.modelName = config.modelName ?? 'purrsephone';
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
@@ -322,7 +345,19 @@ export class ApiServer implements ChannelAdapter {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, X-Session-ID, X-User-ID, X-User-Name',
+      [
+        'Content-Type',
+        'Authorization',
+        'X-Session-ID',
+        'X-User-ID',
+        'X-User-Name',
+        'X-Canonical-Contact-ID',
+        'X-Identity-Claim-Channel',
+        'X-Identity-Claim-User-ID',
+        'X-Identity-Claim-Nonce',
+        'X-Identity-Claim-Expires',
+        'X-Identity-Claim-Signature',
+      ].join(', '),
     );
 
     // Preflight
@@ -607,6 +642,236 @@ export class ApiServer implements ChannelAdapter {
     return messages[messages.length - 1].content;
   }
 
+  private readIdentityClaimHeaders(req: IncomingMessage): IdentityClaimHeaders | null {
+    const canonicalContactId = this.clampHeader(
+      this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.canonicalContactId]),
+      128,
+    );
+    if (!canonicalContactId) return null;
+
+    return {
+      canonicalContactId,
+      sourceChannel: this.clampHeader(
+        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.sourceChannel]),
+        64,
+      ) ?? '',
+      sourceUserId: this.clampHeader(
+        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.sourceUserId]),
+        256,
+      ) ?? '',
+      nonce: this.clampHeader(
+        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.nonce]),
+        128,
+      ),
+      expiresAt: this.clampHeader(
+        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.expires]),
+        64,
+      ),
+      signature: this.clampHeader(
+        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.signature]),
+        256,
+      ),
+    };
+  }
+
+  private challengePayload(
+    claim: IdentityClaimHeaders,
+    authorId: string,
+    challenge: {
+      nonce: string;
+      expiresAt: string;
+      signature: string;
+    },
+  ): Record<string, unknown> {
+    return {
+      canonicalContactId: claim.canonicalContactId,
+      sourceChannel: claim.sourceChannel,
+      sourceUserId: claim.sourceUserId,
+      targetChannel: 'api',
+      targetUserId: authorId,
+      nonce: challenge.nonce,
+      expiresAt: challenge.expiresAt,
+      signature: challenge.signature,
+      requiredHeaders: {
+        canonicalContactId: 'X-Canonical-Contact-ID',
+        sourceChannel: 'X-Identity-Claim-Channel',
+        sourceUserId: 'X-Identity-Claim-User-ID',
+        nonce: 'X-Identity-Claim-Nonce',
+        expiresAt: 'X-Identity-Claim-Expires',
+        signature: 'X-Identity-Claim-Signature',
+      },
+    };
+  }
+
+  private enforceIdentityClaim(
+    req: IncomingMessage,
+    res: ServerResponse,
+    authorId: string,
+  ): boolean {
+    const claim = this.readIdentityClaimHeaders(req);
+    if (!claim) return true;
+
+    if (!this.contactStore) {
+      this.sendError(
+        res,
+        503,
+        'identity_claim_unavailable',
+        'Identity claim verification is unavailable because contact store is not configured',
+      );
+      return false;
+    }
+
+    if (!claim.sourceChannel || !claim.sourceUserId) {
+      this.sendError(
+        res,
+        400,
+        'invalid_identity_claim',
+        'X-Identity-Claim-Channel and X-Identity-Claim-User-ID are required when claiming a canonical contact',
+      );
+      return false;
+    }
+
+    const hasCompleteVerificationHeaders = Boolean(claim.nonce && claim.expiresAt && claim.signature);
+    const existingApiIdentity = this.contactStore.getByChannelIdentity('api', authorId);
+    if (existingApiIdentity?.id === claim.canonicalContactId && !hasCompleteVerificationHeaders) {
+      return true;
+    }
+    if (existingApiIdentity && existingApiIdentity.id !== claim.canonicalContactId) {
+      this.sendError(
+        res,
+        409,
+        'identity_claim_conflict',
+        `API identity api:${authorId} is already linked to another canonical contact`,
+      );
+      return false;
+    }
+
+    const requiresChallenge = !claim.nonce || !claim.expiresAt || !claim.signature;
+    if (requiresChallenge) {
+      const challengeResult = this.contactStore.createIdentityLinkChallenge({
+        contactId: claim.canonicalContactId,
+        sourceChannel: claim.sourceChannel,
+        sourceUserId: claim.sourceUserId,
+        targetChannel: 'api',
+        targetUserId: authorId,
+        ttlMs: IDENTITY_LINK_CHALLENGE_TTL_MS,
+      });
+
+      switch (challengeResult.status) {
+        case 'challenge_created':
+        case 'pending_exists': {
+          const payload = this.challengePayload(claim, authorId, challengeResult.verification);
+          this.sendError(
+            res,
+            428,
+            'identity_verification_required',
+            'Identity claim requires challenge verification headers',
+            { verification: payload },
+          );
+          return false;
+        }
+        case 'already_linked':
+          return true;
+        case 'contact_not_found':
+          this.sendError(
+            res,
+            404,
+            'identity_claim_contact_not_found',
+            `Canonical contact ${claim.canonicalContactId} was not found`,
+          );
+          return false;
+        case 'source_identity_not_linked':
+          this.sendError(
+            res,
+            403,
+            'identity_claim_source_not_linked',
+            `${claim.sourceChannel}:${claim.sourceUserId} is not linked to canonical contact ${claim.canonicalContactId}`,
+          );
+          return false;
+        case 'identity_conflict':
+          this.sendError(
+            res,
+            409,
+            'identity_claim_conflict',
+            `API identity api:${authorId} is already linked to a different canonical contact`,
+          );
+          return false;
+        default:
+          this.sendError(res, 400, 'invalid_identity_claim', 'Unable to create identity claim challenge');
+          return false;
+      }
+    }
+
+    const verificationResult = this.contactStore.verifyIdentityLinkChallenge({
+      contactId: claim.canonicalContactId,
+      sourceChannel: claim.sourceChannel,
+      sourceUserId: claim.sourceUserId,
+      targetChannel: 'api',
+      targetUserId: authorId,
+      nonce: claim.nonce,
+      expiresAt: claim.expiresAt,
+      signature: claim.signature,
+    });
+
+    switch (verificationResult.status) {
+      case 'linked':
+      case 'already_linked':
+        return true;
+      case 'verification_not_found':
+        this.sendError(
+          res,
+          428,
+          'identity_verification_required',
+          'Identity claim challenge not found. Request a fresh challenge and retry with the returned headers.',
+        );
+        return false;
+      case 'verification_replayed':
+        this.sendError(res, 409, 'identity_verification_replayed', 'Identity claim challenge has already been used');
+        return false;
+      case 'verification_expired':
+        this.sendError(res, 410, 'identity_verification_expired', 'Identity claim challenge has expired');
+        return false;
+      case 'invalid_signature':
+        this.sendError(res, 401, 'identity_verification_invalid_signature', 'Identity claim signature did not match challenge');
+        return false;
+      case 'claim_mismatch':
+        this.sendError(
+          res,
+          403,
+          'identity_verification_claim_mismatch',
+          'Identity claim payload did not match the issued challenge',
+        );
+        return false;
+      case 'source_identity_not_linked':
+        this.sendError(
+          res,
+          403,
+          'identity_claim_source_not_linked',
+          `${claim.sourceChannel}:${claim.sourceUserId} is not linked to canonical contact ${claim.canonicalContactId}`,
+        );
+        return false;
+      case 'identity_conflict':
+        this.sendError(
+          res,
+          409,
+          'identity_claim_conflict',
+          `API identity api:${authorId} is already linked to a different canonical contact`,
+        );
+        return false;
+      case 'contact_not_found':
+        this.sendError(
+          res,
+          404,
+          'identity_claim_contact_not_found',
+          `Canonical contact ${claim.canonicalContactId} was not found`,
+        );
+        return false;
+      default:
+        this.sendError(res, 400, 'invalid_identity_claim', 'Unable to verify identity claim');
+        return false;
+    }
+  }
+
   private prepareTurn(
     request: ChatCompletionRequest,
     req: IncomingMessage,
@@ -620,6 +885,10 @@ export class ApiServer implements ChannelAdapter {
     }
 
     const { authorId, authorName } = this.deriveAuthor(req);
+    if (!this.enforceIdentityClaim(req, res, authorId)) {
+      this.releaseChannel(channelId, claimToken);
+      return null;
+    }
     this.seedSession(channelId, request.messages, authorId, authorName);
 
     const lastUserMsg = this.getLastUserMessage(request.messages);
@@ -835,9 +1104,16 @@ export class ApiServer implements ChannelAdapter {
     status: number,
     type: string,
     message: string,
+    details?: Record<string, unknown>,
   ): void {
     sendJson(res, status, {
-      error: { message, type, param: null, code: null },
+      error: {
+        message,
+        type,
+        param: null,
+        code: null,
+        ...(details ? { details } : {}),
+      },
     });
   }
 }

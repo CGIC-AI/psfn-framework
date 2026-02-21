@@ -32,6 +32,71 @@ export type ContactIdentityLinkResult =
   | 'contact_not_found'
   | 'identity_conflict';
 
+export type ContactIdentityLinkVerificationState =
+  | 'pending'
+  | 'verified'
+  | 'failed'
+  | 'expired';
+
+export interface ContactIdentityLinkVerification {
+  id: string;
+  contactId: string;
+  sourceChannel: ContactChannel;
+  sourceUserId: string;
+  targetChannel: ContactChannel;
+  targetUserId: string;
+  nonce: string;
+  expiresAt: string;
+  signature: string;
+  status: ContactIdentityLinkVerificationState;
+  createdAt: string;
+  updatedAt: string;
+  verifiedAt?: string;
+  failureReason?: string;
+}
+
+export interface ContactIdentityLinkChallengeInput {
+  contactId: string;
+  sourceChannel: ContactChannel;
+  sourceUserId: string;
+  targetChannel: ContactChannel;
+  targetUserId: string;
+  ttlMs?: number;
+}
+
+export type ContactIdentityLinkChallengeResult =
+  | {
+    status: 'challenge_created' | 'pending_exists';
+    verification: ContactIdentityLinkVerification;
+  }
+  | { status: 'already_linked' }
+  | { status: 'contact_not_found' }
+  | { status: 'source_identity_not_linked' }
+  | { status: 'identity_conflict' };
+
+export interface ContactIdentityLinkVerificationInput {
+  contactId: string;
+  sourceChannel: ContactChannel;
+  sourceUserId: string;
+  targetChannel: ContactChannel;
+  targetUserId: string;
+  nonce: string;
+  expiresAt: string;
+  signature: string;
+  privacyLevel?: ChannelPrivacyLevel;
+}
+
+export type ContactIdentityLinkVerificationResult =
+  | { status: 'linked' | 'already_linked'; verification: ContactIdentityLinkVerification }
+  | { status: 'verification_not_found' }
+  | { status: 'verification_replayed'; verification: ContactIdentityLinkVerification }
+  | { status: 'verification_expired'; verification: ContactIdentityLinkVerification }
+  | { status: 'invalid_signature'; verification: ContactIdentityLinkVerification }
+  | { status: 'claim_mismatch'; verification: ContactIdentityLinkVerification }
+  | { status: 'source_identity_not_linked'; verification: ContactIdentityLinkVerification }
+  | { status: 'identity_conflict'; verification: ContactIdentityLinkVerification }
+  | { status: 'contact_not_found' };
+
 export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
   'private',
   'semi_private',

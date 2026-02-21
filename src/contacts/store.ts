@@ -8,6 +8,12 @@ import type {
   ContactConversationChannel,
   ContactIdentityLinkOptions,
   ContactIdentityLinkResult,
+  ContactIdentityLinkChallengeInput,
+  ContactIdentityLinkChallengeResult,
+  ContactIdentityLinkVerification,
+  ContactIdentityLinkVerificationInput,
+  ContactIdentityLinkVerificationResult,
+  ContactIdentityLinkVerificationState,
   ChannelPrivacyLevel,
   RelationshipType,
 } from './types.js';
@@ -17,6 +23,7 @@ import { createComponentLogger } from '../logger.js';
 
 const log = createComponentLogger('ContactStore');
 const LEGACY_DISCORD_CHANNEL = 'discord';
+const DEFAULT_LINK_VERIFICATION_TTL_MS = 5 * 60_000;
 
 interface ContactRow {
   id: string;
@@ -46,6 +53,23 @@ interface ContactChannelActivityRow {
   channel_id: string;
   first_seen: string;
   last_seen: string;
+}
+
+interface ContactIdentityVerificationRow {
+  id: string;
+  contact_id: string;
+  source_channel: string;
+  source_user_id: string;
+  target_channel: string;
+  target_user_id: string;
+  nonce: string;
+  expires_at: string;
+  signature: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  verified_at: string | null;
+  failure_reason: string | null;
 }
 
 export class ContactStore {
@@ -94,6 +118,24 @@ export class ContactStore {
         FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS contact_identity_link_verifications (
+        id TEXT PRIMARY KEY,
+        contact_id TEXT NOT NULL,
+        source_channel TEXT NOT NULL,
+        source_user_id TEXT NOT NULL,
+        target_channel TEXT NOT NULL,
+        target_user_id TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        verified_at TEXT,
+        failure_reason TEXT,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);
       CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);
       CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);
@@ -102,6 +144,17 @@ export class ContactStore {
         ON contact_channel_activity(contact_id, last_seen);
       CREATE INDEX IF NOT EXISTS idx_contact_channel_activity_channel
         ON contact_channel_activity(channel, channel_id);
+      CREATE INDEX IF NOT EXISTS idx_contact_identity_link_verifications_contact
+        ON contact_identity_link_verifications(contact_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_contact_identity_link_verifications_lookup
+        ON contact_identity_link_verifications(
+          contact_id,
+          source_channel,
+          source_user_id,
+          target_channel,
+          target_user_id,
+          nonce
+        );
     `);
 
     this.ensureNicknameColumn();
@@ -201,6 +254,50 @@ export class ContactStore {
 
   private identityKey(identity: ContactChannelIdentity): string {
     return `${identity.channel}:${identity.userId}`;
+  }
+
+  private normalizeVerificationTtlMs(ttlMs: number | undefined): number {
+    if (!Number.isFinite(ttlMs) || !ttlMs || ttlMs <= 0) {
+      return DEFAULT_LINK_VERIFICATION_TTL_MS;
+    }
+    return Math.min(Math.floor(ttlMs), 60 * 60_000);
+  }
+
+  private createVerificationToken(): string {
+    return uuidv4().replace(/-/g, '');
+  }
+
+  private normalizeVerificationState(value: string): ContactIdentityLinkVerificationState {
+    switch (value) {
+      case 'verified':
+      case 'failed':
+      case 'expired':
+      case 'pending':
+        return value;
+      default:
+        return 'pending';
+    }
+  }
+
+  private toIdentityLinkVerification(
+    row: ContactIdentityVerificationRow,
+  ): ContactIdentityLinkVerification {
+    return {
+      id: row.id,
+      contactId: row.contact_id,
+      sourceChannel: row.source_channel,
+      sourceUserId: row.source_user_id,
+      targetChannel: row.target_channel,
+      targetUserId: row.target_user_id,
+      nonce: row.nonce,
+      expiresAt: row.expires_at,
+      signature: row.signature,
+      status: this.normalizeVerificationState(row.status),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      verifiedAt: row.verified_at ?? undefined,
+      failureReason: row.failure_reason ?? undefined,
+    };
   }
 
   private collectUpsertIdentities(partial: Partial<Contact>): ContactChannelLink[] {
@@ -1052,6 +1149,238 @@ export class ContactStore {
     return result.changes > 0;
   }
 
+  private markIdentityLinkVerification(
+    verificationId: string,
+    status: ContactIdentityLinkVerificationState,
+    failureReason?: string,
+    verifiedAt?: string,
+  ): ContactIdentityLinkVerification | undefined {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE contact_identity_link_verifications
+      SET status = ?,
+          updated_at = ?,
+          verified_at = COALESCE(?, verified_at),
+          failure_reason = ?
+      WHERE id = ?
+    `).run(
+      status,
+      now,
+      verifiedAt ?? null,
+      failureReason ?? null,
+      verificationId,
+    );
+
+    const row = this.db.prepare(`
+      SELECT *
+      FROM contact_identity_link_verifications
+      WHERE id = ?
+      LIMIT 1
+    `).get(verificationId) as ContactIdentityVerificationRow | undefined;
+    return row ? this.toIdentityLinkVerification(row) : undefined;
+  }
+
+  createIdentityLinkChallenge(
+    input: ContactIdentityLinkChallengeInput,
+  ): ContactIdentityLinkChallengeResult {
+    const contact = this.getById(input.contactId);
+    if (!contact) return { status: 'contact_not_found' };
+
+    const sourceIdentity = this.normalizeIdentity(input.sourceChannel, input.sourceUserId);
+    const targetIdentity = this.normalizeIdentity(input.targetChannel, input.targetUserId);
+    const sourceOwner = this.getByChannelIdentity(sourceIdentity.channel, sourceIdentity.userId);
+    if (!sourceOwner || sourceOwner.id !== contact.id) {
+      return { status: 'source_identity_not_linked' };
+    }
+
+    const targetOwner = this.getByChannelIdentity(targetIdentity.channel, targetIdentity.userId);
+    if (targetOwner && targetOwner.id !== contact.id) {
+      return { status: 'identity_conflict' };
+    }
+    if (targetOwner && targetOwner.id === contact.id) {
+      return { status: 'already_linked' };
+    }
+
+    const existingPending = this.db.prepare(`
+      SELECT *
+      FROM contact_identity_link_verifications
+      WHERE contact_id = ?
+        AND source_channel = ?
+        AND source_user_id = ?
+        AND target_channel = ?
+        AND target_user_id = ?
+        AND status = 'pending'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(
+      contact.id,
+      sourceIdentity.channel,
+      sourceIdentity.userId,
+      targetIdentity.channel,
+      targetIdentity.userId,
+    ) as ContactIdentityVerificationRow | undefined;
+
+    if (existingPending) {
+      const expiresAtMs = Date.parse(existingPending.expires_at);
+      if (Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()) {
+        return {
+          status: 'pending_exists',
+          verification: this.toIdentityLinkVerification(existingPending),
+        };
+      }
+      this.markIdentityLinkVerification(existingPending.id, 'expired', 'expired');
+    }
+
+    const now = new Date();
+    const createdAt = now.toISOString();
+    const expiresAt = new Date(
+      now.getTime() + this.normalizeVerificationTtlMs(input.ttlMs),
+    ).toISOString();
+    const verification: ContactIdentityLinkVerification = {
+      id: uuidv4(),
+      contactId: contact.id,
+      sourceChannel: sourceIdentity.channel,
+      sourceUserId: sourceIdentity.userId,
+      targetChannel: targetIdentity.channel,
+      targetUserId: targetIdentity.userId,
+      nonce: this.createVerificationToken(),
+      expiresAt,
+      signature: this.createVerificationToken(),
+      status: 'pending',
+      createdAt,
+      updatedAt: createdAt,
+    };
+
+    this.db.prepare(`
+      INSERT INTO contact_identity_link_verifications (
+        id,
+        contact_id,
+        source_channel,
+        source_user_id,
+        target_channel,
+        target_user_id,
+        nonce,
+        expires_at,
+        signature,
+        status,
+        created_at,
+        updated_at,
+        verified_at,
+        failure_reason
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      verification.id,
+      verification.contactId,
+      verification.sourceChannel,
+      verification.sourceUserId,
+      verification.targetChannel,
+      verification.targetUserId,
+      verification.nonce,
+      verification.expiresAt,
+      verification.signature,
+      verification.status,
+      verification.createdAt,
+      verification.updatedAt,
+      null,
+      null,
+    );
+
+    return { status: 'challenge_created', verification };
+  }
+
+  verifyIdentityLinkChallenge(
+    input: ContactIdentityLinkVerificationInput,
+  ): ContactIdentityLinkVerificationResult {
+    const contact = this.getById(input.contactId);
+    if (!contact) return { status: 'contact_not_found' };
+
+    const sourceIdentity = this.normalizeIdentity(input.sourceChannel, input.sourceUserId);
+    const targetIdentity = this.normalizeIdentity(input.targetChannel, input.targetUserId);
+
+    const row = this.db.prepare(`
+      SELECT *
+      FROM contact_identity_link_verifications
+      WHERE contact_id = ?
+        AND source_channel = ?
+        AND source_user_id = ?
+        AND target_channel = ?
+        AND target_user_id = ?
+        AND nonce = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(
+      input.contactId,
+      sourceIdentity.channel,
+      sourceIdentity.userId,
+      targetIdentity.channel,
+      targetIdentity.userId,
+      input.nonce.trim(),
+    ) as ContactIdentityVerificationRow | undefined;
+
+    if (!row) {
+      return { status: 'verification_not_found' };
+    }
+
+    const mappedRow = this.toIdentityLinkVerification(row);
+    if (mappedRow.status !== 'pending') {
+      return { status: 'verification_replayed', verification: mappedRow };
+    }
+
+    if (row.expires_at !== input.expiresAt.trim()) {
+      const failed = this.markIdentityLinkVerification(row.id, 'failed', 'claim_mismatch')
+        ?? mappedRow;
+      return { status: 'claim_mismatch', verification: failed };
+    }
+
+    const now = Date.now();
+    const expiresAtMs = Date.parse(row.expires_at);
+    if (!Number.isFinite(expiresAtMs) || now > expiresAtMs) {
+      const expired = this.markIdentityLinkVerification(row.id, 'expired', 'expired')
+        ?? mappedRow;
+      return { status: 'verification_expired', verification: expired };
+    }
+
+    if (row.signature !== input.signature.trim()) {
+      const failed = this.markIdentityLinkVerification(row.id, 'failed', 'invalid_signature')
+        ?? mappedRow;
+      return { status: 'invalid_signature', verification: failed };
+    }
+
+    const sourceOwner = this.getByChannelIdentity(sourceIdentity.channel, sourceIdentity.userId);
+    if (!sourceOwner || sourceOwner.id !== input.contactId) {
+      const failed = this.markIdentityLinkVerification(row.id, 'failed', 'source_identity_not_linked')
+        ?? mappedRow;
+      return { status: 'source_identity_not_linked', verification: failed };
+    }
+
+    const linkResult = this.linkChannelIdentity(
+      input.contactId,
+      targetIdentity.channel,
+      targetIdentity.userId,
+      { privacyLevel: input.privacyLevel },
+    );
+
+    if (linkResult === 'identity_conflict') {
+      const failed = this.markIdentityLinkVerification(row.id, 'failed', 'identity_conflict')
+        ?? mappedRow;
+      return { status: 'identity_conflict', verification: failed };
+    }
+
+    if (linkResult === 'contact_not_found') {
+      return { status: 'contact_not_found' };
+    }
+
+    const verified = this.markIdentityLinkVerification(
+      row.id,
+      'verified',
+      undefined,
+      new Date(now).toISOString(),
+    ) ?? mappedRow;
+
+    return { status: linkResult, verification: verified };
+  }
+
   /** Link an additional channel identity to an existing contact. */
   linkChannelIdentity(
     contactId: string,
@@ -1082,6 +1411,21 @@ export class ContactStore {
   listAll(): Contact[] {
     const rows = this.db.prepare('SELECT * FROM contacts ORDER BY last_seen DESC').all() as ContactRow[];
     return rows.map(row => this.hydrateContact(row));
+  }
+
+  listIdentityLinkVerifications(limit = 25): ContactIdentityLinkVerification[] {
+    const normalizedLimit = Number.isFinite(limit)
+      ? Math.max(1, Math.min(Math.floor(limit), 200))
+      : 25;
+
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM contact_identity_link_verifications
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(normalizedLimit) as ContactIdentityVerificationRow[];
+
+    return rows.map(row => this.toIdentityLinkVerification(row));
   }
 
   /**

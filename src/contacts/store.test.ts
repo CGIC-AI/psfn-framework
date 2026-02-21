@@ -88,6 +88,13 @@ describe('ContactStore', () => {
       ).all();
       expect(tables).toHaveLength(1);
     });
+
+    it('creates contact_identity_link_verifications table', () => {
+      const tables = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='contact_identity_link_verifications'",
+      ).all();
+      expect(tables).toHaveLength(1);
+    });
   });
 
   describe('upsert', () => {
@@ -534,6 +541,82 @@ describe('ContactStore', () => {
 
       const found = store.getByChannelIdentity('api', 'shared-api-id');
       expect(found?.id).toBe(first.id);
+    });
+  });
+
+  describe('identity link verification challenges', () => {
+    it('issues a challenge, verifies it, and commits the target link', () => {
+      const contact = store.upsert({
+        displayName: 'Vega',
+        channelIdentities: [{ channel: 'discord', userId: 'vega-discord' }],
+      });
+
+      const challenge = store.createIdentityLinkChallenge({
+        contactId: contact.id,
+        sourceChannel: 'discord',
+        sourceUserId: 'vega-discord',
+        targetChannel: 'api',
+        targetUserId: 'vega-api',
+      });
+
+      expect(challenge.status).toBe('challenge_created');
+      if (challenge.status !== 'challenge_created') return;
+
+      const verified = store.verifyIdentityLinkChallenge({
+        contactId: contact.id,
+        sourceChannel: 'discord',
+        sourceUserId: 'vega-discord',
+        targetChannel: 'api',
+        targetUserId: 'vega-api',
+        nonce: challenge.verification.nonce,
+        expiresAt: challenge.verification.expiresAt,
+        signature: challenge.verification.signature,
+      });
+
+      expect(verified.status).toBe('linked');
+      expect(store.getByChannelIdentity('api', 'vega-api')?.id).toBe(contact.id);
+      expect(store.listIdentityLinkVerifications(5)[0]?.status).toBe('verified');
+    });
+
+    it('rejects replayed verification challenges', () => {
+      const contact = store.upsert({
+        displayName: 'Replay Tester',
+        channelIdentities: [{ channel: 'discord', userId: 'replay-discord' }],
+      });
+
+      const challenge = store.createIdentityLinkChallenge({
+        contactId: contact.id,
+        sourceChannel: 'discord',
+        sourceUserId: 'replay-discord',
+        targetChannel: 'api',
+        targetUserId: 'replay-api',
+      });
+      expect(challenge.status).toBe('challenge_created');
+      if (challenge.status !== 'challenge_created') return;
+
+      const first = store.verifyIdentityLinkChallenge({
+        contactId: contact.id,
+        sourceChannel: 'discord',
+        sourceUserId: 'replay-discord',
+        targetChannel: 'api',
+        targetUserId: 'replay-api',
+        nonce: challenge.verification.nonce,
+        expiresAt: challenge.verification.expiresAt,
+        signature: challenge.verification.signature,
+      });
+      expect(first.status).toBe('linked');
+
+      const second = store.verifyIdentityLinkChallenge({
+        contactId: contact.id,
+        sourceChannel: 'discord',
+        sourceUserId: 'replay-discord',
+        targetChannel: 'api',
+        targetUserId: 'replay-api',
+        nonce: challenge.verification.nonce,
+        expiresAt: challenge.verification.expiresAt,
+        signature: challenge.verification.signature,
+      });
+      expect(second.status).toBe('verification_replayed');
     });
   });
 

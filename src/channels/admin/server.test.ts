@@ -1508,6 +1508,28 @@ describe('AdminServer with contacts', () => {
     expect(res.body).toContain('friend');
   });
 
+  it('shows recent identity link verification state on contacts page', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Verifier',
+      channelIdentities: [{ channel: 'discord', userId: 'verifier-discord' }],
+    });
+    const challenge = contactStore.createIdentityLinkChallenge({
+      contactId: contact.id,
+      sourceChannel: 'discord',
+      sourceUserId: 'verifier-discord',
+      targetChannel: 'api',
+      targetUserId: 'verifier-api',
+    });
+    expect(challenge.status).toBe('challenge_created');
+
+    const res = await request(port, 'GET', '/contacts');
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Identity link verifications');
+    expect(res.body).toContain('src=discord:verifier-discord');
+    expect(res.body).toContain('target=api:verifier-api');
+    expect(res.body).toContain(contact.id);
+  });
+
   it('renders relational memory contact links and sensitivity cues', async () => {
     const contact = contactStore.upsert({
       displayName: 'Memory Contact',

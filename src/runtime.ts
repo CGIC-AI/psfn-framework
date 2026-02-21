@@ -314,6 +314,7 @@ export class SubstrateRuntime implements Lifecycle {
         agentLoop: this.agentLoop,
         eventBus: this.eventBus,
         sessionManager: this.sessionManager,
+        contactStore,
         apiKey: process.env.API_KEY || undefined,
         modelName: process.env.API_MODEL_NAME,
         voiceWebSocketRuntime,

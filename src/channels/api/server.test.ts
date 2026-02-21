@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
 import WebSocket from 'ws';
+import Database from 'better-sqlite3';
 import { EventBus } from '../../event-bus.js';
+import { ContactStore } from '../../contacts/store.js';
 import { ApiServer } from './server.js';
 import type { AgentLoop } from '../../agent-loop.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -377,6 +379,189 @@ describe('ApiServer', () => {
       const call = (mockAgent.handleMessage as any).mock.calls[0][0];
       expect(call.authorId).toBe('v-primary');
       expect(call.authorName).toBe('V');
+    });
+
+    it('returns explicit verification challenge and does not link unverified identity claims', async () => {
+      const db = new Database(':memory:');
+      const contactStore = new ContactStore(db);
+      const contact = contactStore.upsert({
+        displayName: 'Vega',
+        channelIdentities: [{ channel: 'discord', userId: 'vega-discord' }],
+      });
+
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        contactStore,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'hello with claim' }],
+      }, {
+        'X-User-ID': 'api-vega',
+        'X-Canonical-Contact-ID': contact.id,
+        'X-Identity-Claim-Channel': 'discord',
+        'X-Identity-Claim-User-ID': 'vega-discord',
+      });
+
+      expect(res.status).toBe(428);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('identity_verification_required');
+      expect(body.error.details?.verification?.nonce).toBeTruthy();
+      expect(body.error.details?.verification?.expiresAt).toBeTruthy();
+      expect(body.error.details?.verification?.signature).toBeTruthy();
+      expect(contactStore.getByChannelIdentity('api', 'api-vega')).toBeUndefined();
+
+      db.close();
+    });
+
+    it('links claimed identity after challenge verification and rejects replayed proof', async () => {
+      const db = new Database(':memory:');
+      const contactStore = new ContactStore(db);
+      const contact = contactStore.upsert({
+        displayName: 'Vega',
+        channelIdentities: [{ channel: 'discord', userId: 'vega-discord' }],
+      });
+
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        contactStore,
+      });
+      await server.init();
+      await server.start();
+
+      const initial = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'claim me' }],
+      }, {
+        'X-User-ID': 'api-vega',
+        'X-Canonical-Contact-ID': contact.id,
+        'X-Identity-Claim-Channel': 'discord',
+        'X-Identity-Claim-User-ID': 'vega-discord',
+      });
+      const initialBody = JSON.parse(initial.body);
+      const verification = initialBody.error.details.verification as {
+        nonce: string;
+        expiresAt: string;
+        signature: string;
+      };
+
+      const verified = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'claim me verified' }],
+      }, {
+        'X-User-ID': 'api-vega',
+        'X-Canonical-Contact-ID': contact.id,
+        'X-Identity-Claim-Channel': 'discord',
+        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-Nonce': verification.nonce,
+        'X-Identity-Claim-Expires': verification.expiresAt,
+        'X-Identity-Claim-Signature': verification.signature,
+      });
+
+      expect(verified.status).toBe(200);
+      expect(contactStore.getByChannelIdentity('api', 'api-vega')?.id).toBe(contact.id);
+
+      const replay = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'replay proof' }],
+      }, {
+        'X-User-ID': 'api-vega',
+        'X-Canonical-Contact-ID': contact.id,
+        'X-Identity-Claim-Channel': 'discord',
+        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-Nonce': verification.nonce,
+        'X-Identity-Claim-Expires': verification.expiresAt,
+        'X-Identity-Claim-Signature': verification.signature,
+      });
+
+      expect(replay.status).toBe(409);
+      expect(JSON.parse(replay.body).error.type).toBe('identity_verification_replayed');
+
+      db.close();
+    });
+
+    it('rejects expired and spoofed identity claim verification attempts', async () => {
+      const db = new Database(':memory:');
+      const contactStore = new ContactStore(db);
+      const contact = contactStore.upsert({
+        displayName: 'Vega',
+        channelIdentities: [{ channel: 'discord', userId: 'vega-discord' }],
+      });
+
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        contactStore,
+      });
+      await server.init();
+      await server.start();
+
+      const spoofed = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'spoofed claim' }],
+      }, {
+        'X-User-ID': 'api-spoof',
+        'X-Canonical-Contact-ID': contact.id,
+        'X-Identity-Claim-Channel': 'discord',
+        'X-Identity-Claim-User-ID': 'not-linked-user',
+      });
+      expect(spoofed.status).toBe(403);
+      expect(JSON.parse(spoofed.body).error.type).toBe('identity_claim_source_not_linked');
+
+      const initial = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'issue challenge' }],
+      }, {
+        'X-User-ID': 'api-expiring',
+        'X-Canonical-Contact-ID': contact.id,
+        'X-Identity-Claim-Channel': 'discord',
+        'X-Identity-Claim-User-ID': 'vega-discord',
+      });
+      const initialBody = JSON.parse(initial.body);
+      const verification = initialBody.error.details.verification as {
+        nonce: string;
+        expiresAt: string;
+        signature: string;
+      };
+
+      const expiredAt = new Date(Date.now() - 60_000).toISOString();
+      db.prepare(`
+        UPDATE contact_identity_link_verifications
+        SET expires_at = ?
+        WHERE nonce = ?
+      `).run(expiredAt, verification.nonce);
+
+      const expired = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'use expired challenge' }],
+      }, {
+        'X-User-ID': 'api-expiring',
+        'X-Canonical-Contact-ID': contact.id,
+        'X-Identity-Claim-Channel': 'discord',
+        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-Nonce': verification.nonce,
+        'X-Identity-Claim-Expires': expiredAt,
+        'X-Identity-Claim-Signature': verification.signature,
+      });
+
+      expect(expired.status).toBe(410);
+      expect(JSON.parse(expired.body).error.type).toBe('identity_verification_expired');
+
+      db.close();
     });
 
     it('returns 400 for missing messages', async () => {

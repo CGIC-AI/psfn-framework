@@ -80,9 +80,12 @@ describe('settings', () => {
   });
 
   describe('loadSettings', () => {
-    it('returns empty object when file missing', () => {
+    it('seeds defaults when file missing', () => {
       const result = loadSettings(tempDir);
-      expect(result).toEqual({});
+      expect(result.sessionHistoryBudgetPct).toBe(6);
+      expect(result.memoryRetrievalBudgetPct).toBe(2);
+      expect(result.extractionInterval).toBe(5);
+      expect(existsSync(join(tempDir, 'settings.json'))).toBe(true);
     });
 
     it('migrates legacy model fields on load', () => {
@@ -103,18 +106,20 @@ describe('settings', () => {
       expect(result.modelRoleAssignments?.extraction).toBe('extraction');
     });
 
-    it('returns empty object for invalid JSON', () => {
+    it('reseeds defaults for invalid JSON', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, 'not json', 'utf-8');
       const result = loadSettings(tempDir);
-      expect(result).toEqual({});
+      expect(result.sessionHistoryBudgetPct).toBe(6);
+      expect(result.memoryRetrievalBudgetPct).toBe(2);
     });
 
-    it('returns empty object for array JSON', () => {
+    it('reseeds defaults for array JSON', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, '[]', 'utf-8');
       const result = loadSettings(tempDir);
-      expect(result).toEqual({});
+      expect(result.sessionHistoryBudgetPct).toBe(6);
+      expect(result.memoryRetrievalBudgetPct).toBe(2);
     });
   });
 

@@ -85,7 +85,11 @@ function createMinimalOptions(): GatewayServerOptions {
       dims: 1024,
     } as any,
     discordAdapter: {
-      send: vi.fn(),
+      id: 'discord',
+      outbound: {
+        textChunkLimit: 2000,
+        sendText: vi.fn(),
+      },
     } as any,
     policyConfig: {
       workspacePath: '/workspace',

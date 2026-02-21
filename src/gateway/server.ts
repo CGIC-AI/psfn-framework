@@ -5,7 +5,7 @@ import * as net from 'node:net';
 import * as readline from 'node:readline';
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
-import type { ChannelAdapter } from '../channels/types.js';
+import type { ChannelOutboundDock } from '../channels/types.js';
 import type { SubstrateMessage } from '../types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketServer } from './transport.js';
@@ -174,7 +174,7 @@ export interface GatewayServerOptions {
   socketPath: string;
   llmProvider: LLMProvider;
   embeddingService: EmbeddingService;
-  discordAdapter: ChannelAdapter;
+  discordAdapter: ChannelOutboundDock;
   policyConfig: PolicyConfig;
   auditStore?: AuditStore;
 }
@@ -329,7 +329,10 @@ export class GatewayServer {
 
     target.addMethod('discord.send', this.audited('discord.send',
       async (params: DiscordSendParams) => {
-        await discordAdapter.send(params.channelId, params.content);
+        await discordAdapter.outbound.sendText(
+          { channelId: params.channelId },
+          params.content,
+        );
         return { success: true };
       },
       (p) => ({ channelId: p.channelId }),

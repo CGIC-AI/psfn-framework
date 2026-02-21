@@ -9,7 +9,10 @@ const discordDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'discord.send',
     handler: async (params: DiscordSendParams, runtime) => {
-      await runtime.discordAdapter.send(params.channelId, params.content);
+      await runtime.discordAdapter.outbound.sendText(
+        { channelId: params.channelId },
+        params.content,
+      );
       return { success: true };
     },
     summary: (p: DiscordSendParams) => ({ channelId: p.channelId }),

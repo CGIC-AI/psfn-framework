@@ -1,5 +1,9 @@
 import type { DiscoveredModel } from '../../../llm/discovery.js';
 import type { ModelCatalogEntry, ModelRoleAssignments, SubstrateConfig } from '../../../types.js';
+import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
+import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
+import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
+import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
 import type { EnvInfo } from '../types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
@@ -30,6 +34,13 @@ interface CatalogRowView {
   defaultContextWindow: string;
   overrideMaxTokens: string;
   overrideContextWindow: string;
+}
+
+export interface SettingsConfigEditors {
+  models: ModelsRuntimeConfig;
+  skills: SkillsRuntimeConfig;
+  scheduler: SchedulerRuntimeConfig;
+  trustPolicy: TrustPolicyConfig;
 }
 
 function jsonScript(value: unknown): string {
@@ -129,7 +140,43 @@ function renderRoleRows(assignments: ModelRoleAssignments): string {
     .join('');
 }
 
-export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?: DiscoveredModel[]): string {
+function renderJsonConfigEditor(options: {
+  title: string;
+  fileName: string;
+  description: string;
+  action: string;
+  resultId: string;
+  config: unknown;
+  rows?: number;
+}): string {
+  const rows = options.rows ?? 16;
+  return `
+    <div class="card" style="margin-top:1.5rem">
+      <h3 style="margin-bottom:0.5rem">${escapeHtml(options.title)}</h3>
+      <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
+        ${escapeHtml(options.description)}
+      </p>
+      <form hx-post="${escapeHtml(options.action)}" hx-target="#${escapeHtml(options.resultId)}" hx-swap="innerHTML">
+        <textarea
+          name="configJson"
+          rows="${rows}"
+          style="width:100%;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        >${escapeHtml(JSON.stringify(options.config, null, 2))}</textarea>
+        <div class="form-actions" style="margin-top:0.75rem">
+          <button type="submit" class="btn">Save ${escapeHtml(options.fileName)}</button>
+          <span id="${escapeHtml(options.resultId)}"></span>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+export function settingsPage(
+  config: SubstrateConfig,
+  envInfo: EnvInfo,
+  configEditors: SettingsConfigEditors,
+  models?: DiscoveredModel[],
+): string {
   const availableModels = models ?? [];
   const catalogRows = buildCatalogRows(config);
   const roleAssignments = buildRoleAssignments(config);
@@ -302,6 +349,46 @@ export function settingsPage(config: SubstrateConfig, envInfo: EnvInfo, models?:
       <h3 style="margin-bottom:0.75rem">Secrets</h3>
       <table class="config-table">${secretsRowsHtml}</table>
     </div>
+
+    ${renderJsonConfigEditor({
+      title: 'Models JSON (models.json)',
+      fileName: 'models.json',
+      description: 'Raw model roster config. Prefer the roster UI above for guided editing; this is advanced mode.',
+      action: '/api/settings/models',
+      resultId: 'models-config-result',
+      config: configEditors.models,
+      rows: 20,
+    })}
+
+    ${renderJsonConfigEditor({
+      title: 'Skills JSON (skills.json)',
+      fileName: 'skills.json',
+      description: 'Controls skill directories, load budgets, and disabled skill IDs.',
+      action: '/api/settings/skills',
+      resultId: 'skills-config-result',
+      config: configEditors.skills,
+      rows: 14,
+    })}
+
+    ${renderJsonConfigEditor({
+      title: 'Scheduler JSON (scheduler.json)',
+      fileName: 'scheduler.json',
+      description: 'Controls scheduler tick cadence, heartbeat cadence, and salience decay interval.',
+      action: '/api/settings/scheduler',
+      resultId: 'scheduler-config-result',
+      config: configEditors.scheduler,
+      rows: 12,
+    })}
+
+    ${renderJsonConfigEditor({
+      title: 'Trust Policy JSON (trust-policy.json)',
+      fileName: 'trust-policy.json',
+      description: 'Defines trust ceilings, visibility caps, and channel classification rules.',
+      action: '/api/settings/trust-policy',
+      resultId: 'trust-policy-config-result',
+      config: configEditors.trustPolicy,
+      rows: 20,
+    })}
 
     <script type="application/json" data-settings-model-meta>${escapeHtml(jsonScript(discoveryMeta))}</script>
     <template data-model-slot-template>

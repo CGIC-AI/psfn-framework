@@ -30,6 +30,7 @@ import { GatewayGitOps } from './git/gateway-ops.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
+import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
@@ -314,6 +315,7 @@ async function main(): Promise<void> {
 
   agentLoop.registerTool(createRestartTool(lifecycleNotifier, stopFn));
   agentLoop.registerTool(createRebuildTool(lifecycleNotifier, stopFn));
+  agentLoop.registerTool(createNotifyOperatorTool(createGatewayNtfyNotifier(gateway)));
 
   // Heartbeat reflections — policy-driven multi-template reflection system
   wireHeartbeatRuntime(

@@ -63,6 +63,13 @@ export interface ApprovalRequestParams {
   reason: string;
 }
 
+export interface NotifyNtfyParams {
+  message: string;
+  title?: string;
+  priority?: number;
+  topic?: string;
+}
+
 // ── Result types (gateway → agent) ──
 
 export interface LLMChatResult {
@@ -113,6 +120,12 @@ export interface ApprovalResult {
   capabilityToken?: string;
 }
 
+export interface NotifyNtfyResult {
+  status: 'sent' | 'debounced';
+  topic: string;
+  messageId?: string;
+}
+
 // ── Notification types (gateway → agent, no response) ──
 
 export interface LLMChunkNotification {
@@ -136,6 +149,7 @@ export interface GatewayMethods {
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
+  'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
 }
 
 export interface GatewayNotifications {

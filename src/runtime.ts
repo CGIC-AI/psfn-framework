@@ -25,6 +25,7 @@ import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-r
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
+import { loadModelsConfig } from './config/models-config.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -78,6 +79,10 @@ export class SubstrateRuntime implements Lifecycle {
     // Load persisted settings and apply over env defaults
     const savedSettings = loadSettings(this.config.dataDir);
     applySettings(this.config, savedSettings);
+    const modelsConfig = loadModelsConfig(this.config.dataDir, {
+      defaultContextWindow: this.config.defaultContextWindow,
+    });
+    applySettings(this.config, modelsConfig);
 
     // Ensure data directory exists
     mkdirSync(dirname(this.config.databasePath), { recursive: true });

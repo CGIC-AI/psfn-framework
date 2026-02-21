@@ -38,6 +38,7 @@ import {
   parseSettingsForm,
   normalizeEditableSettings,
 } from '../../settings.js';
+import { saveModelsConfig } from '../../config/models-config.js';
 import {
   AdminChatBootstrapService,
   type AdminChatBootstrapResponse,
@@ -448,6 +449,21 @@ export class AdminHandlers {
     );
     saveSettings(this.config.dataDir, merged);
     applySettings(this.config, merged);
+    if (this.config.modelCatalog && this.config.modelRoleAssignments) {
+      try {
+        saveModelsConfig(
+          this.config.dataDir,
+          {
+            modelCatalog: this.config.modelCatalog,
+            modelRoleAssignments: this.config.modelRoleAssignments,
+          },
+          { defaultContextWindow: this.config.defaultContextWindow },
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return tpl.settingsFormResult(false, `Settings saved but models config write failed: ${message}`);
+      }
+    }
     try {
       this.config.runtimeHooks?.refreshModels?.();
     } catch {

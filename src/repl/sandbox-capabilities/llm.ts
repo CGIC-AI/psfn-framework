@@ -29,7 +29,7 @@ export function createLLMCapabilities(options: CreateLLMCapabilitiesOptions): LL
         systemPrompt: 'You are a helpful assistant. Answer concisely.',
         messages: [{ role: 'user', content: prompt }],
       },
-      'extraction',
+      'reasoning',
     );
 
     addEvidence(options.pushEvidence, {

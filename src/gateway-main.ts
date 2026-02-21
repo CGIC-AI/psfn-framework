@@ -16,12 +16,20 @@ import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
+import { loadSettings, applySettings } from './settings.js';
+import { loadModelsConfig } from './config/models-config.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const savedSettings = loadSettings(config.dataDir);
+  applySettings(config, savedSettings);
+  const modelsConfig = loadModelsConfig(config.dataDir, {
+    defaultContextWindow: config.defaultContextWindow,
+  });
+  applySettings(config, modelsConfig);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const workspacePath = process.env.WORKSPACE_PATH ?? './workspace';
   const eventBus = new EventBus();

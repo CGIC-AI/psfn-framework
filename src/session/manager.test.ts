@@ -9,6 +9,7 @@ import { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
 import type { LLMProvider } from '../agent-loop.js';
 import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
+import { __test as tokenTestUtils } from '../llm/tokens.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
@@ -66,6 +67,7 @@ describe('SessionManager', () => {
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    tokenTestUtils.resetTokenizerState();
   });
 
   it('buildContext returns system prompt and messages', async () => {
@@ -216,6 +218,30 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBeLessThan(20);
     // Compaction summary should be in system prompt
     expect(ctx.systemPrompt).toContain('Previous conversation summary');
+  });
+
+  it('uses framed message token counting for compaction thresholds', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const config = makeConfig({
+      compactionThresholdPct: 50,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 80 },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+
+    for (let i = 0; i < 3; i++) {
+      mgr.recordUserMessage('ch1', 'x', 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'y');
+    }
+
+    await mgr.buildContext('ch1', 'S', '', mockLLM);
+
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
   });
 
   it('skips compaction when no llmProvider given', async () => {

@@ -5,7 +5,7 @@ import { MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
 import type { TrustLevel } from '../trust/types.js';
-import { estimateTokens } from '../llm/tokens.js';
+import { countTokens } from '../llm/tokens.js';
 import type { ContextBudgetConfigLike } from '../context-budget.js';
 import {
   MEMORY_RETRIEVAL_MIN_ITEMS,
@@ -288,7 +288,7 @@ function computeRetrievalScore(memory: PurrMemory & { similarity: number }): num
 }
 
 function estimateMemoryPromptTokens(memory: PurrMemory): number {
-  return Math.max(1, estimateTokens(`[${memory.type}] ${memory.text}`));
+  return Math.max(1, countTokens(`[${memory.type}] ${memory.text}`));
 }
 
 function selectWithinTokenBudget(scored: ScoredMemory[], tokenBudget: number): ScoredMemory[] {

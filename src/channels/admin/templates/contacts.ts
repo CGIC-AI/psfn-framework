@@ -1,4 +1,11 @@
-import { CHANNEL_PRIVACY_LEVELS, VALID_RELATIONSHIP_TYPES, type ChannelPrivacyLevel, type Contact, type ContactChannelLink } from '../../../contacts/types.js';
+import {
+  CHANNEL_PRIVACY_LEVELS,
+  VALID_RELATIONSHIP_TYPES,
+  type ChannelPrivacyLevel,
+  type Contact,
+  type ContactChannelLink,
+  type ContactIdentityLinkVerification,
+} from '../../../contacts/types.js';
 import type { ContactProfileArtifact } from '../../../memory/store.js';
 import type { TrustLevel } from '../../../trust/types.js';
 import { escapeHtml } from './shared.js';
@@ -32,6 +39,13 @@ const CHANNEL_PRIVACY_COLORS: Record<ChannelPrivacyLevel, string> = {
   semi_private: '#8B7355',
   public: '#4A5C8B',
   broadcast: '#C44569',
+};
+
+const LINK_VERIFICATION_COLORS: Record<string, string> = {
+  pending: '#8B7355',
+  verified: '#4A7C59',
+  failed: '#A64545',
+  expired: '#6C757D',
 };
 
 function identityKey(channel: string, userId: string): string {
@@ -155,10 +169,45 @@ function profileCard(profile?: ContactProfileArtifact): string {
   </div>`;
 }
 
+function linkVerificationBadge(status: string): string {
+  const color = LINK_VERIFICATION_COLORS[status] ?? '#6C757D';
+  return `<span class="channel-privacy" style="background:${color}">${escapeHtml(status)}</span>`;
+}
+
+function linkVerificationPanel(verifications: ContactIdentityLinkVerification[]): string {
+  if (verifications.length === 0) {
+    return '';
+  }
+
+  const rows = verifications.slice(0, 10).map((verification) => {
+    const summary = [
+      `src=${verification.sourceChannel}:${verification.sourceUserId}`,
+      `target=${verification.targetChannel}:${verification.targetUserId}`,
+      `contact=${verification.contactId}`,
+      `nonce=${verification.nonce}`,
+      `expires=${verification.expiresAt}`,
+      verification.failureReason ? `reason=${verification.failureReason}` : undefined,
+    ].filter(Boolean).join(' · ');
+    return `<div class="channel-row" style="align-items:flex-start;gap:0.5rem;margin-bottom:0.35rem">
+      ${linkVerificationBadge(verification.status)}
+      <div style="min-width:0">
+        <div style="font-family:'Courier New',monospace;font-size:0.78rem">${escapeHtml(summary)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="card" style="margin-bottom:0.9rem">
+    <h3 style="margin-top:0">Identity link verifications</h3>
+    <div class="crm-notes">Recent challenge state for cross-channel identity claims.</div>
+    <div style="margin-top:0.5rem">${rows}</div>
+  </div>`;
+}
+
 export function contactsPage(
   contacts: Contact[],
   profilesByContactId: ReadonlyMap<string, ContactProfileArtifact> = new Map(),
   relatedChannelsByContactId: ReadonlyMap<string, RelatedConversationChannel[]> = new Map(),
+  verifications: ContactIdentityLinkVerification[] = [],
 ): string {
   if (contacts.length === 0) {
     return '<div class="empty">No visitors have been seen in the garden yet</div>';
@@ -170,6 +219,7 @@ export function contactsPage(
     relatedChannelsByContactId.get(c.id) ?? [],
   )).join('');
   return `
+    ${linkVerificationPanel(verifications)}
     <div class="card">
       <table>
         <thead><tr>

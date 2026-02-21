@@ -202,6 +202,7 @@ async function main(): Promise<void> {
       agentLoop,
       eventBus,
       sessionManager,
+      contactStore,
       apiKey: process.env.API_KEY || undefined,
       modelName: process.env.API_MODEL_NAME,
       requestTimeoutMs: parsePositiveIntEnv(

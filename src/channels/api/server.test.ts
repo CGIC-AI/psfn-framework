@@ -6,7 +6,7 @@ import { EventBus } from '../../event-bus.js';
 import { ApiServer } from './server.js';
 import type { AgentLoop } from '../../agent-loop.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse } from '../../types.js';
+import type { AgentResponse, SubstrateMessage } from '../../types.js';
 import type {
   VoiceWebSocketCloseReason,
   VoiceWebSocketRuntimeHooks,
@@ -260,6 +260,47 @@ describe('ApiServer', () => {
 
   afterEach(async () => {
     await stopServer(server);
+  });
+
+  describe('channel adapter facets', () => {
+    it('exposes prompt/capability metadata for registry integration', () => {
+      expect(server.id).toBe('api');
+      expect(server.name).toBe('api');
+      expect(server.meta.label).toBe('API Server');
+      expect(server.capabilities.promptChannelType).toBe('api');
+      expect(server.gateway).toBe(server);
+      expect(server.prompt?.resolveChannelType({
+        id: 'msg-1',
+        channelId: 'api:session-1',
+        channelType: 'api',
+        authorId: 'api-user',
+        authorName: 'User',
+        content: 'hello',
+        timestamp: new Date(),
+      } satisfies SubstrateMessage)).toBe('api');
+    });
+
+    it('routes outbound text through session manager without mutating API routes', async () => {
+      const mockSessionMgr = createMockSessionManager();
+      const localServer = new ApiServer({
+        port: await allocatePort(),
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: mockSessionMgr,
+      });
+
+      await localServer.outbound.sendText({ channelId: 'api:facet' }, '  assistant reply  ');
+      await localServer.send('api:facet', 'second reply');
+
+      expect(mockSessionMgr.recordAssistantMessage).toHaveBeenCalledWith(
+        'api:facet',
+        'assistant reply',
+      );
+      expect(mockSessionMgr.recordAssistantMessage).toHaveBeenCalledWith(
+        'api:facet',
+        'second reply',
+      );
+    });
   });
 
   describe('GET /v1/models', () => {

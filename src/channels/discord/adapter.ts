@@ -6,7 +6,19 @@ import {
   type TextChannel,
 } from 'discord.js';
 import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
-import type { MessageHandler, ChannelAdapter } from '../types.js';
+import type {
+  ChannelAdapter,
+  ChannelCapabilities,
+  ChannelConfigAdapter,
+  ChannelGatewayAdapter,
+  ChannelOutboundAdapter,
+  ChannelPromptAdapter,
+  ChannelSecurityAdapter,
+  ChannelStreamingAdapter,
+  ChannelThreadingAdapter,
+  MessageHandler,
+  OutboundContext,
+} from '../types.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../event-bus.js';
 import type { SessionStore } from '../../session/store.js';
@@ -28,10 +40,30 @@ interface DiscordAdapterOptions {
 }
 
 export class DiscordAdapter implements ChannelAdapter {
-  readonly name = 'discord';
+  readonly id = 'discord';
+  readonly name = this.id;
+  readonly meta = {
+    label: 'Discord',
+    emoji: ':speech_balloon:',
+  };
+  readonly capabilities: ChannelCapabilities = {
+    chatTypes: ['direct', 'channel', 'thread'],
+    media: true,
+    reactions: true,
+    threads: true,
+    streaming: true,
+    promptChannelType: 'discord_text',
+  };
+  readonly config: ChannelConfigAdapter;
+  readonly outbound: ChannelOutboundAdapter;
+  readonly gateway: ChannelGatewayAdapter;
+  readonly security: ChannelSecurityAdapter;
+  readonly streaming: ChannelStreamingAdapter;
+  readonly threading: ChannelThreadingAdapter;
+  readonly prompt: ChannelPromptAdapter;
 
   private client: Client;
-  private config: SubstrateConfig;
+  private runtimeConfig: SubstrateConfig;
   private eventBus: EventBus;
   private sessionStore: SessionStore | null;
   private handler: MessageHandler | null = null;
@@ -45,9 +77,45 @@ export class DiscordAdapter implements ChannelAdapter {
   private statusUnsubscribers: Array<() => void> = [];
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
-    this.config = config;
+    this.runtimeConfig = config;
     this.eventBus = eventBus;
     this.sessionStore = options.sessionStore ?? null;
+    this.config = {
+      enabled: Boolean(config.discordToken),
+      accountId: config.discordBotId || undefined,
+      connectionLabel: 'discord',
+    };
+    this.outbound = {
+      textChunkLimit: MAX_DISCORD_LENGTH,
+      sendText: async (ctx: OutboundContext, text: string): Promise<void> => {
+        await this.send(ctx.channelId, text);
+      },
+    };
+    this.gateway = this;
+    this.security = {
+      supportsDirectMessages: true,
+      requiresMentionForChannelMessages: true,
+    };
+    this.streaming = {
+      typingIntervalMs: TYPING_INTERVAL_MS,
+      sendTyping: async (channelId: string): Promise<void> => {
+        await this.sendTypingToChannel(channelId);
+      },
+    };
+    this.threading = {
+      toThreadChannelId: (channelId: string, threadId: string): string => `${channelId}:${threadId}`,
+      fromThreadChannelId: (channelId: string): string | null => {
+        const idx = channelId.indexOf(':');
+        if (idx <= 0 || idx >= channelId.length - 1) return null;
+        return channelId.slice(idx + 1);
+      },
+    };
+    this.prompt = {
+      resolveChannelType: (message: SubstrateMessage): string | undefined => {
+        if (message.channelId.startsWith('discord-voice:')) return 'discord_voice';
+        return 'discord_text';
+      },
+    };
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -97,11 +165,11 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   async start(): Promise<void> {
-    if (!this.config.discordToken) {
+    if (!this.runtimeConfig.discordToken) {
       throw new Error('DISCORD_TOKEN is required');
     }
-    await this.client.login(this.config.discordToken);
-    if (this.config.discordBackfillOnStartup !== false) {
+    await this.client.login(this.runtimeConfig.discordToken);
+    if (this.runtimeConfig.discordBackfillOnStartup !== false) {
       await this.backfillOnStartup();
     }
   }
@@ -132,20 +200,20 @@ export class DiscordAdapter implements ChannelAdapter {
 
   private async onDiscordMessage(msg: Message): Promise<void> {
     // Ignore self
-    if (msg.author.id === this.config.discordBotId) return;
+    if (msg.author.id === this.runtimeConfig.discordBotId) return;
     if (msg.author.bot) return;
     if (!this.handler) return;
 
     // Respond to DMs always, guild messages only when mentioned
     const isDM = !msg.guild;
-    const isMentioned = msg.mentions.has(this.config.discordBotId);
+    const isMentioned = msg.mentions.has(this.runtimeConfig.discordBotId);
     if (!isDM && !isMentioned) return;
 
     const channelId = msg.channelId;
 
     // Strip bot mention from content
     let content = msg.content
-      .replace(new RegExp(`<@!?${this.config.discordBotId}>`, 'g'), '')
+      .replace(new RegExp(`<@!?${this.runtimeConfig.discordBotId}>`, 'g'), '')
       .trim();
     if (!content) content = '(empty message)';
 
@@ -196,7 +264,7 @@ export class DiscordAdapter implements ChannelAdapter {
       const response = await this.handler(substrateMsg);
 
       if (response.content.trim()) {
-        await this.send(channelId, response.content);
+        await this.outbound.sendText({ channelId }, response.content);
       } else {
         log.debug('Suppressing empty handler response for Discord channel', { channelId });
       }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../event-bus.js';
 import { SessionStore } from '../../session/store.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
 
 const discordMock = vi.hoisted(() => {
   return {
@@ -396,6 +396,51 @@ describe('DiscordAdapter status visibility', () => {
     voiceMock.init.mockReset();
     voiceMock.stop.mockReset();
     voiceMock.stop.mockResolvedValue(undefined);
+  });
+
+  it('exposes composable channel adapter facets', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+
+    expect(adapter.id).toBe('discord');
+    expect(adapter.name).toBe('discord');
+    expect(adapter.meta.label).toBe('Discord');
+    expect(adapter.capabilities.promptChannelType).toBe('discord_text');
+    expect(adapter.gateway).toBe(adapter);
+    expect(adapter.outbound.textChunkLimit).toBe(2000);
+    expect(adapter.security?.requiresMentionForChannelMessages).toBe(true);
+
+    const promptTextType = adapter.prompt?.resolveChannelType({
+      id: 'msg-1',
+      channelId: '123456789012345678',
+      channelType: 'discord',
+      authorId: 'u1',
+      authorName: 'User',
+      content: 'hello',
+      timestamp: new Date(),
+    } satisfies SubstrateMessage);
+    const promptVoiceType = adapter.prompt?.resolveChannelType({
+      id: 'msg-2',
+      channelId: 'discord-voice:guild-1',
+      channelType: 'discord',
+      authorId: 'u1',
+      authorName: 'User',
+      content: 'hello',
+      timestamp: new Date(),
+    } satisfies SubstrateMessage);
+
+    expect(promptTextType).toBe('discord_text');
+    expect(promptVoiceType).toBe('discord_voice');
+
+    const channelId = 'facet-channel';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    await adapter.outbound.sendText({ channelId }, 'facet reply');
+    await adapter.streaming?.sendTyping(channelId);
+
+    expect(interactive.sent).toContain('facet reply');
+    expect(interactive.typingCalls).toBeGreaterThan(0);
   });
 
   it('shows and clears compaction status messages', async () => {

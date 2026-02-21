@@ -7,10 +7,19 @@ import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
-import type { Lifecycle, SubstrateMessage } from '../../types.js';
+import type { SubstrateMessage } from '../../types.js';
 import type { AgentLoop } from '../../agent-loop.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
+import type {
+  ChannelAdapter,
+  ChannelCapabilities,
+  ChannelConfigAdapter,
+  ChannelGatewayAdapter,
+  ChannelOutboundAdapter,
+  ChannelPromptAdapter,
+  OutboundContext,
+} from '../types.js';
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -91,7 +100,26 @@ export interface ApiServerConfig {
   voiceWebSocketHooks?: VoiceWebSocketRuntimeHooks;
 }
 
-export class ApiServer implements Lifecycle {
+export class ApiServer implements ChannelAdapter {
+  readonly id = 'api';
+  readonly name = this.id;
+  readonly meta = {
+    label: 'API Server',
+    emoji: ':globe_with_meridians:',
+  };
+  readonly capabilities: ChannelCapabilities = {
+    chatTypes: ['direct'],
+    media: false,
+    reactions: false,
+    threads: false,
+    streaming: true,
+    promptChannelType: 'api',
+  };
+  readonly config: ChannelConfigAdapter;
+  readonly outbound: ChannelOutboundAdapter;
+  readonly gateway: ChannelGatewayAdapter;
+  readonly prompt: ChannelPromptAdapter;
+
   private server: Server;
   private port: number;
   private host: string;
@@ -120,8 +148,28 @@ export class ApiServer implements Lifecycle {
       runtime: config.voiceWebSocketRuntime,
       runtimeHooks: config.voiceWebSocketHooks,
     });
+    this.config = {
+      enabled: true,
+      connectionLabel: `${this.host}:${this.port}`,
+    };
+    this.outbound = {
+      textChunkLimit: Number.MAX_SAFE_INTEGER,
+      sendText: async (ctx: OutboundContext, text: string): Promise<void> => {
+        const normalized = text.trim();
+        if (!normalized) return;
+        this.sessionManager.recordAssistantMessage(ctx.channelId, normalized);
+      },
+    };
+    this.gateway = this;
+    this.prompt = {
+      resolveChannelType: (): string => 'api',
+    };
     this.server = createServer((req, res) => this.handleRequest(req, res));
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
+  }
+
+  async send(channelId: string, content: string): Promise<void> {
+    await this.outbound.sendText({ channelId }, content);
   }
 
   async init(): Promise<void> {}

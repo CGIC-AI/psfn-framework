@@ -1,6 +1,6 @@
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../../agent-loop.js';
-import type { ChannelAdapter } from '../../channels/types.js';
+import type { ChannelOutboundDock } from '../../channels/types.js';
 import type { GitOperations } from '../../git/ops.js';
 import type { UrlPolicyConfig } from '../url-policy.js';
 
@@ -8,7 +8,7 @@ export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
   llmProvider: LLMProvider;
   embeddingService: EmbeddingService;
-  discordAdapter: ChannelAdapter;
+  discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
   policyConfig: { urlPolicy?: UrlPolicyConfig };
   notifyAll(method: string, params: unknown): void;

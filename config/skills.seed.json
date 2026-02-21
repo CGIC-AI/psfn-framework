@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "directories": [
+    "purrsephone/skills",
+    "skills"
+  ],
+  "extraDirectories": [],
+  "maxLoadedSkills": 32,
+  "maxSkillChars": 24000,
+  "disabledSkills": []
+}

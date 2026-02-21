@@ -1,0 +1,5 @@
+{
+  "tickIntervalMs": 60000,
+  "heartbeatIntervalMs": 1800000,
+  "salienceDecayIntervalMs": 300000
+}

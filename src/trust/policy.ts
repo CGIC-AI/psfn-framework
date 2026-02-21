@@ -15,7 +15,7 @@ import type {
   ChannelVisibility,
   ConsentFlags,
 } from './types.js';
-import { TRUST_CEILING } from './types.js';
+import { getRuntimeTrustPolicy } from './runtime-policy.js';
 
 export interface ChannelMeta {
   isDirectMessage?: boolean;
@@ -41,6 +41,8 @@ export interface PolicyResult {
 }
 
 export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
+  const trustPolicy = getRuntimeTrustPolicy();
+
   // Layer 1: Operator explicit approval overrides all restrictions
   if (ctx.operatorApproval === true) {
     return { decision: 'allow', reason: 'Operator approval override', layer: 'operator' };
@@ -52,7 +54,7 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
   }
 
   // Layer 3: Trust ceiling — hard structural filter
-  const allowed = TRUST_CEILING[ctx.trustLevel];
+  const allowed = trustPolicy.trustCeiling[ctx.trustLevel];
   if (!allowed.includes(ctx.memorySensitivity)) {
     return {
       decision: 'deny',
@@ -62,34 +64,13 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
   }
 
   // Layer 4: Visibility gate — channel type imposes additional restrictions
-  if (ctx.channelVisibility === 'broadcast') {
-    if (ctx.memorySensitivity !== 'public') {
-      return {
-        decision: 'deny',
-        reason: 'Broadcast channels restricted to public memories only',
-        layer: 'visibility',
-      };
-    }
-  }
-
-  if (ctx.channelVisibility === 'public') {
-    if (ctx.memorySensitivity !== 'public') {
-      return {
-        decision: 'deny',
-        reason: 'Public channels restricted to public memories only',
-        layer: 'visibility',
-      };
-    }
-  }
-
-  if (ctx.channelVisibility === 'semi_private') {
-    if (ctx.memorySensitivity === 'intimate' || ctx.memorySensitivity === 'confidential') {
-      return {
-        decision: 'deny',
-        reason: 'Semi-private channels cannot access intimate/confidential memories',
-        layer: 'visibility',
-      };
-    }
+  const allowedByVisibility = trustPolicy.visibilityAllowed[ctx.channelVisibility];
+  if (!allowedByVisibility.includes(ctx.memorySensitivity)) {
+    return {
+      decision: 'deny',
+      reason: `${ctx.channelVisibility} channels restrict '${ctx.memorySensitivity}' memory access`,
+      layer: 'visibility',
+    };
   }
 
   // Layer 5: Default — within bounds
@@ -102,24 +83,20 @@ export function classifyChannel(
   channelId: string,
   meta?: ChannelMeta,
 ): ChannelVisibility {
+  const trustPolicy = getRuntimeTrustPolicy();
+
   // Discord DMs explicitly flagged by adapter — private (honne)
   if (meta?.isDirectMessage) return 'private';
 
-  // Primary user interfaces — 1:1 private channels (honne)
-  if (channelId.startsWith('api:')) return 'private';
-  if (channelId.startsWith('sillytavern:')) return 'private';
-  if (channelId.startsWith('openwebui:')) return 'private';
+  if (trustPolicy.channelClassification.privatePrefixes.some(prefix => channelId.startsWith(prefix))) {
+    return 'private';
+  }
 
-  // Shard and internal channels are private
-  if (channelId.startsWith('shard:')) return 'private';
-  if (channelId.startsWith('internal:')) return 'private';
+  if (trustPolicy.channelClassification.broadcastPrefixes.some(prefix => channelId.startsWith(prefix))) {
+    return 'broadcast';
+  }
 
-  // Broadcast / social media
-  if (channelId.startsWith('twitter:')) return 'broadcast';
-  if (channelId.startsWith('social:')) return 'broadcast';
-
-  // Default: Discord guild channels and unknown channel types — semi_private
-  return 'semi_private';
+  return trustPolicy.channelClassification.defaultVisibility;
 }
 
 // ── Continuity sharing ──
@@ -141,16 +118,9 @@ export function getAllowedSensitivities(
   trustLevel: TrustLevel,
   channelVisibility: ChannelVisibility,
 ): SensitivityLevel[] {
-  const trustAllowed = TRUST_CEILING[trustLevel];
+  const trustPolicy = getRuntimeTrustPolicy();
+  const trustAllowed = trustPolicy.trustCeiling[trustLevel];
+  const visibilityAllowed = trustPolicy.visibilityAllowed[channelVisibility];
 
-  if (channelVisibility === 'broadcast' || channelVisibility === 'public') {
-    return ['public'];
-  }
-
-  if (channelVisibility === 'semi_private') {
-    return trustAllowed.filter(s => s === 'public' || s === 'personal') as SensitivityLevel[];
-  }
-
-  // Private — full trust ceiling applies
-  return [...trustAllowed];
+  return trustAllowed.filter(sensitivity => visibilityAllowed.includes(sensitivity)) as SensitivityLevel[];
 }

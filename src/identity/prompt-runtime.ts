@@ -28,9 +28,68 @@ const TOKEN_RESOLVERS: Array<[RegExp, TokenResolver]> = [
   [/\{\{\s*(?:current_timestamp|unix_timestamp|timestamp|timestamp\(\))\s*\}\}/gi, unixTimestamp],
 ];
 
-export const PROMPT_RUNTIME_TOKEN_HINT =
-  'Runtime tokens: {{current_datetime}} / {{now()}}, {{current_date}}, {{current_time}}, {{unix_timestamp}}, '
-  + '{{user}}, {{char}}, {{channel_id}}, {{channel_type}}, {{trust_level}}, {{model}}';
+export interface PromptRuntimeMacroHint {
+  token: string;
+  description: string;
+  example: string;
+}
+
+export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  {
+    token: '{{current_datetime}} / {{now()}}',
+    description: 'Current UTC datetime in ISO-8601 format.',
+    example: '2026-02-21T13:20:11.123Z',
+  },
+  {
+    token: '{{current_date}}',
+    description: 'Current UTC calendar date.',
+    example: '2026-02-21',
+  },
+  {
+    token: '{{current_time}}',
+    description: 'Current UTC time.',
+    example: '13:20:11Z',
+  },
+  {
+    token: '{{unix_timestamp}}',
+    description: 'Current Unix epoch timestamp in seconds.',
+    example: '1769020811',
+  },
+  {
+    token: '{{user}}',
+    description: 'Current author/user display name from runtime context.',
+    example: 'Operator',
+  },
+  {
+    token: '{{char}}',
+    description: 'Character/assistant name from runtime context.',
+    example: 'PSFN',
+  },
+  {
+    token: '{{channel_id}}',
+    description: 'Resolved channel/session identifier.',
+    example: 'discord:dm:123456789',
+  },
+  {
+    token: '{{channel_type}}',
+    description: 'Resolved channel type.',
+    example: 'discord_text',
+  },
+  {
+    token: '{{trust_level}}',
+    description: 'Current trust tier for the author/context.',
+    example: 'primary',
+  },
+  {
+    token: '{{model}}',
+    description: 'Current active model identifier.',
+    example: 'moonshotai/kimi-k2.5',
+  },
+];
+
+export const PROMPT_RUNTIME_TOKEN_HINT = `Runtime tokens: ${PROMPT_RUNTIME_MACRO_HINTS
+  .map(entry => entry.token)
+  .join(', ')}`;
 
 function toSnakeCase(value: string): string {
   return value

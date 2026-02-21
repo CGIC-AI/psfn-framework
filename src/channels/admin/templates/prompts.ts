@@ -1,7 +1,7 @@
 import type { PromptLayer, PromptHistoryEntry } from '../../../identity/prompt-types.js';
-import { LAYER_TYPE_ORDER } from '../../../identity/prompt-types.js';
+import { LAYER_TYPE_ORDER, PROMPT_LAYER_ROLES } from '../../../identity/prompt-types.js';
 import type { PromptRegistryEntry, PromptRegistryHistoryEntry } from '../../../identity/prompt-registry.js';
-import { PROMPT_RUNTIME_TOKEN_HINT } from '../../../identity/prompt-runtime.js';
+import { PROMPT_RUNTIME_MACRO_HINTS, PROMPT_RUNTIME_TOKEN_HINT } from '../../../identity/prompt-runtime.js';
 import {
   STRUCTURED_PROMPT_FORMAT,
   STRUCTURED_PROMPT_SECTION_KEYS,
@@ -31,9 +31,70 @@ const STRUCTURED_PROMPT_SECTION_ROWS: Record<StructuredPromptSectionKey, number>
   first_mes: 4,
 };
 
+function promptMacroCatalogFragment(): string {
+  const rows = PROMPT_RUNTIME_MACRO_HINTS.map(entry => `
+    <tr>
+      <td><code>${escapeHtml(entry.token)}</code></td>
+      <td>${escapeHtml(entry.description)}</td>
+      <td><code>${escapeHtml(entry.example)}</code></td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="card">
+      <h3 style="margin-bottom:0.75rem">Macro Catalog</h3>
+      <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 0.75rem 0">
+        Prompt macros resolve at runtime when context is available.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Macro</th>
+            <th>Meaning</th>
+            <th>Example</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function promptMetadataFields(layer: PromptLayer): string {
+  const roleOptions = [
+    { value: '', label: 'Unset' },
+    ...PROMPT_LAYER_ROLES.map(role => ({ value: role, label: role })),
+  ].map(({ value, label }) => {
+    const selected = (layer.role ?? '') === value ? ' selected' : '';
+    return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(label)}</option>`;
+  }).join('');
+
+  const identifierValue = escapeHtml(layer.identifier ?? '');
+  const promptOrderValue = layer.promptOrder != null ? String(layer.promptOrder) : '';
+
+  return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0.75rem;margin-bottom:1rem">
+      <label style="display:block">
+        <span style="display:block;font-size:0.85rem;font-weight:600;margin-bottom:0.35rem">Identifier</span>
+        <input type="text" name="identifier" value="${identifierValue}" placeholder="main" style="width:100%">
+      </label>
+      <label style="display:block">
+        <span style="display:block;font-size:0.85rem;font-weight:600;margin-bottom:0.35rem">Role</span>
+        <select name="role" style="width:100%">
+          ${roleOptions}
+        </select>
+      </label>
+      <label style="display:block">
+        <span style="display:block;font-size:0.85rem;font-weight:600;margin-bottom:0.35rem">Prompt Order</span>
+        <input type="number" name="promptOrder" min="0" step="1" value="${escapeHtml(promptOrderValue)}" style="width:100%">
+      </label>
+    </div>`;
+}
+
 export function promptsPage(layers: PromptLayer[], prompts: PromptRegistryEntry[]): string {
   return `
     <p class="description" style="color:var(--text-muted);margin-bottom:1rem">The layered foundation that shapes PSFN's voice. Base &rarr; Operator &rarr; Runtime &rarr; Channel &rarr; Task.</p>
+
+    ${promptMacroCatalogFragment()}
 
     ${promptRegistryFragment(prompts)}
 
@@ -228,6 +289,7 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
     ? `
       <form hx-post="/api/prompts/update" hx-target="#prompt-result" hx-swap="innerHTML">
         <input type="hidden" name="layerId" value="${layer.id}">
+        ${promptMetadataFields(layer)}
         <textarea name="content" rows="20" style="width:100%;font-family:monospace;font-size:0.9rem;padding:0.5rem;border:1px solid var(--border);border-radius:4px;resize:vertical">${escapeHtml(layer.content)}</textarea>
         <div class="form-actions">
           <button type="submit" formaction="/api/prompts/diff" hx-post="/api/prompts/diff" hx-target="#prompt-diff-preview" hx-swap="innerHTML" class="btn">Preview Diff</button>
@@ -239,6 +301,7 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
       <form hx-post="/api/prompts/update" hx-target="#prompt-result" hx-swap="innerHTML">
         <input type="hidden" name="layerId" value="${layer.id}">
         <input type="hidden" name="prompt_format" value="${STRUCTURED_PROMPT_FORMAT}">
+        ${promptMetadataFields(layer)}
         ${structuredFields}
         <div class="form-actions">
           <button type="submit" formaction="/api/prompts/diff" hx-post="/api/prompts/diff" hx-target="#prompt-diff-preview" hx-swap="innerHTML" class="btn">Preview Diff</button>
@@ -261,6 +324,9 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
       Updated ${new Date(layer.updatedAt).toLocaleString()} by ${escapeHtml(layer.updatedBy)}
       ${layer.channelType ? ` &middot; Channel: ${escapeHtml(layer.channelType)}` : ''}
       ${layer.taskKind ? ` &middot; Task: ${escapeHtml(layer.taskKind)}` : ''}
+      &middot; Identifier: <code>${escapeHtml(layer.identifier ?? '(unset)')}</code>
+      &middot; Role: <code>${escapeHtml(layer.role ?? '(unset)')}</code>
+      &middot; Order: <code>${escapeHtml(String(layer.promptOrder ?? '(unset)'))}</code>
     </p>
 
     <div id="prompt-result"></div>

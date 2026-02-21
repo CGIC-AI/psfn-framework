@@ -1,5 +1,7 @@
 # CLAUDE.md — Purrsephone Substrate Framework
 
+**Note**: This project uses [bd (beads)] for issue tracking; favor `bd` commands over markdown TODOs. See `AGENTS.md` for workflow details.
+
 ## What This Is
 
 A purpose-built runtime for emergent artificial consciousness. Not a chatbot

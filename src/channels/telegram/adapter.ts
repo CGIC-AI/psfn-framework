@@ -14,6 +14,7 @@ import type {
 } from '../types.js';
 import type { SubstrateMessage } from '../../types.js';
 import type { EventBus } from '../../event-bus.js';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { TelegramChannelConfig } from '../config.js';
 import { createComponentLogger } from '../../logger.js';
 
@@ -22,6 +23,7 @@ const log = createComponentLogger('Telegram');
 const TELEGRAM_TEXT_LIMIT = 4_096;
 const DEFAULT_TYPING_INTERVAL_MS = 4_000;
 const DEFAULT_LONG_POLL_TIMEOUT_SECONDS = 20;
+const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 512 * 1_024;
 const THREAD_DELIMITER = '/thread/';
 const MAX_CONTEXT_MAP_SIZE = 2_000;
 
@@ -128,6 +130,9 @@ interface OutboundTarget {
   replyToMessageId?: number;
 }
 
+type TelegramMediaMethod = 'sendPhoto' | 'sendDocument' | 'sendVoice';
+type TelegramMediaField = 'photo' | 'document' | 'voice';
+
 export function parseTelegramCommand(content: string): TelegramCommand | null {
   const normalized = content.trim();
   if (!normalized.startsWith('/')) return null;
@@ -207,6 +212,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private activePoll: Promise<void> | undefined;
   private nextUpdateOffset = 0;
+  private webhookServer: Server | undefined;
   private requestControllers = new Set<AbortController>();
   private processingChannels = new Set<string>();
   private messagePointers = new Map<string, MessagePointer>();
@@ -240,7 +246,7 @@ export class TelegramAdapter implements ChannelAdapter {
         await this.sendTextInternal(ctx, text);
       },
       sendMedia: async (ctx: OutboundContext, media: MediaAttachment): Promise<void> => {
-        await this.sendMediaStub(ctx, media);
+        await this.sendMediaInternal(ctx, media);
       },
     };
     this.gateway = this;
@@ -294,20 +300,36 @@ export class TelegramAdapter implements ChannelAdapter {
       throw new Error('Telegram is enabled but no bot token is configured');
     }
 
+    this.running = true;
     if (this.telegram.mode === 'webhook') {
-      log.warn('Webhook mode is not implemented yet; falling back to polling');
+      await this.startWebhookMode();
+      return;
     }
 
-    this.running = true;
     this.schedulePoll(0);
   }
 
   async stop(): Promise<void> {
+    const wasRunning = this.running;
     this.running = false;
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
     }
+
+    if (this.telegram.mode === 'webhook') {
+      if (wasRunning) {
+        try {
+          await this.callApi('deleteWebhook', { drop_pending_updates: false });
+        } catch (error) {
+          log.warn('Failed to delete Telegram webhook during shutdown', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      await this.stopWebhookServer();
+    }
+
     for (const controller of this.requestControllers) {
       controller.abort();
     }
@@ -353,6 +375,152 @@ export class TelegramAdapter implements ChannelAdapter {
       this.nextUpdateOffset = Math.max(this.nextUpdateOffset, update.update_id + 1);
       await this.handleUpdate(update);
     }
+  }
+
+  private async startWebhookMode(): Promise<void> {
+    if (!this.telegram.webhook.url) {
+      this.running = false;
+      throw new Error('Telegram webhook mode requires webhook.url to be configured');
+    }
+
+    await this.startWebhookServer();
+    try {
+      await this.callApi('setWebhook', {
+        url: this.telegram.webhook.url,
+        allowed_updates: ['message', 'edited_message'],
+        ...(this.telegram.webhook.secret
+          ? { secret_token: this.telegram.webhook.secret }
+          : {}),
+      });
+    } catch (error) {
+      this.running = false;
+      await this.stopWebhookServer();
+      throw error;
+    }
+  }
+
+  private async startWebhookServer(): Promise<void> {
+    if (this.webhookServer) return;
+
+    const server = createServer((req, res) => {
+      void this.handleWebhookRequest(req, res);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error): void => {
+        server.off('listening', onListening);
+        reject(error);
+      };
+      const onListening = (): void => {
+        server.off('error', onError);
+        resolve();
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(this.telegram.webhook.port, this.telegram.webhook.host);
+    });
+
+    this.webhookServer = server;
+  }
+
+  private async stopWebhookServer(): Promise<void> {
+    const server = this.webhookServer;
+    if (!server) return;
+    this.webhookServer = undefined;
+
+    await new Promise<void>((resolve, reject) => {
+      server.close((error?: Error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  private async handleWebhookRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      this.writeWebhookResponse(res, 405, 'method not allowed');
+      return;
+    }
+    if (!this.isWebhookPath(req.url)) {
+      this.writeWebhookResponse(res, 404, 'not found');
+      return;
+    }
+    if (!this.isWebhookSecretValid(req)) {
+      this.writeWebhookResponse(res, 401, 'unauthorized');
+      return;
+    }
+
+    let rawBody = '';
+    try {
+      rawBody = await this.readWebhookBody(req);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const statusCode = message.includes('too large') ? 413 : 400;
+      this.writeWebhookResponse(res, statusCode, message);
+      return;
+    }
+
+    let update: TelegramUpdate;
+    try {
+      update = JSON.parse(rawBody) as TelegramUpdate;
+    } catch {
+      this.writeWebhookResponse(res, 400, 'invalid json');
+      return;
+    }
+
+    try {
+      await this.handleUpdate(update);
+      this.writeWebhookResponse(res, 200, 'ok');
+    } catch (error) {
+      log.error('Telegram webhook update handling error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.writeWebhookResponse(res, 500, 'error');
+    }
+  }
+
+  private isWebhookPath(url: string | undefined): boolean {
+    if (!url) return false;
+    try {
+      const pathname = new URL(url, 'http://127.0.0.1').pathname;
+      return pathname === this.telegram.webhook.path;
+    } catch {
+      return false;
+    }
+  }
+
+  private isWebhookSecretValid(req: IncomingMessage): boolean {
+    if (!this.telegram.webhook.secret) return true;
+    const header = req.headers['x-telegram-bot-api-secret-token'];
+    const provided = Array.isArray(header) ? header[0] : header;
+    return provided === this.telegram.webhook.secret;
+  }
+
+  private async readWebhookBody(req: IncomingMessage): Promise<string> {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += part.length;
+      if (size > TELEGRAM_WEBHOOK_MAX_BODY_BYTES) {
+        throw new Error('payload too large');
+      }
+      chunks.push(part);
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  }
+
+  private writeWebhookResponse(res: ServerResponse, statusCode: number, body: string): void {
+    if (res.writableEnded) return;
+    res.statusCode = statusCode;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.end(body);
   }
 
   private async handleUpdate(update: TelegramUpdate): Promise<void> {
@@ -572,11 +740,49 @@ export class TelegramAdapter implements ChannelAdapter {
     }
   }
 
-  private async sendMediaStub(ctx: OutboundContext, media: MediaAttachment): Promise<void> {
-    const descriptor = media.name ? media.name : 'attachment';
-    const contentType = media.contentType || 'application/octet-stream';
-    const text = `[media stub] ${descriptor} (${contentType}) ${media.url}`;
-    await this.sendTextInternal(ctx, text);
+  private async sendMediaInternal(ctx: OutboundContext, media: MediaAttachment): Promise<void> {
+    const mediaUrl = this.toTelegramMediaInput(media.url);
+    if (!mediaUrl) {
+      throw new Error('Telegram media attachment URL is required');
+    }
+
+    const target = this.resolveOutboundTarget(ctx);
+    const { method, field } = this.resolveMediaMethod(media.contentType);
+    const sent = await this.callApi<TelegramSentMessage>(method, {
+      chat_id: target.chatId,
+      [field]: mediaUrl,
+      ...(target.threadId ? { message_thread_id: Number(target.threadId) } : {}),
+      ...(target.replyToMessageId ? { reply_to_message_id: target.replyToMessageId } : {}),
+    });
+
+    const pointer: MessagePointer = {
+      chatId: target.chatId,
+      messageId: sent.message_id,
+      ...(target.threadId ? { threadId: target.threadId } : {}),
+    };
+    this.recordMessagePointer(this.toSubstrateMessageId(target.chatId, sent.message_id), pointer);
+  }
+
+  private resolveMediaMethod(contentType: string | undefined): {
+    method: TelegramMediaMethod;
+    field: TelegramMediaField;
+  } {
+    const normalized = (contentType ?? '').toLowerCase();
+    if (normalized.startsWith('image/')) {
+      return { method: 'sendPhoto', field: 'photo' };
+    }
+    if (normalized.startsWith('audio/')) {
+      return { method: 'sendVoice', field: 'voice' };
+    }
+    return { method: 'sendDocument', field: 'document' };
+  }
+
+  private toTelegramMediaInput(mediaUrl: string): string {
+    const prefix = 'telegram://file/';
+    if (mediaUrl.startsWith(prefix)) {
+      return mediaUrl.slice(prefix.length);
+    }
+    return mediaUrl;
   }
 
   private extractAttachments(message: TelegramIncomingMessage): MediaAttachment[] {

@@ -7,3 +7,6 @@ proxy/.env
 *.db-journal
 logs/
 import/
+
+# bv (beads viewer) local config and caches
+.bv/

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -21,6 +21,8 @@ import type { CharacterCardV2 } from '../../identity/types.js';
 import type { LLMProvider } from '../../agent-loop.js';
 import type { SkillSnapshot } from '../../skills/types.js';
 import type { AdminChatBootstrapResponse } from './chat/index.js';
+import { classifyChannel } from '../../trust/policy.js';
+import { resetRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
 
 // ── Helpers ──
 
@@ -252,6 +254,7 @@ describe('AdminServer', () => {
   let promptRegistry: PromptRegistryStore;
   let server: AdminServer;
   let port: number;
+  let skillsRuntimeInvalidate: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-test-'));
@@ -283,6 +286,17 @@ describe('AdminServer', () => {
       handler: () => {},
       state: 'idle',
     });
+    scheduler.register({
+      id: 'salience-decay',
+      name: 'Memory Salience Decay',
+      type: 'every',
+      intervalMs: testConfig.maintenanceIntervalMs,
+      handler: () => {},
+      state: 'idle',
+    });
+    scheduler.registerHeartbeat(() => {});
+
+    skillsRuntimeInvalidate = vi.fn();
 
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
     shardManager = new ShardManager({
@@ -310,7 +324,10 @@ describe('AdminServer', () => {
       embeddingService: null,
       promptStore,
       promptRegistry,
-      skillsRuntime: { getSnapshot: () => testSkillSnapshot } as any,
+      skillsRuntime: {
+        getSnapshot: () => testSkillSnapshot,
+        invalidate: skillsRuntimeInvalidate,
+      } as any,
     });
     await server.init();
     await server.start();
@@ -320,6 +337,7 @@ describe('AdminServer', () => {
     await server.stop();
     db.close();
     rmSync(tempDir, { recursive: true, force: true });
+    resetRuntimeTrustPolicy();
   });
 
   describe('Dashboard', () => {
@@ -746,6 +764,28 @@ describe('AdminServer', () => {
       expect(res.body).toContain('Settings');
     });
 
+    it('renders externalized JSON config editors', async () => {
+      const res = await request(port, 'GET', '/settings');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Models JSON (models.json)');
+      expect(res.body).toContain('Skills JSON (skills.json)');
+      expect(res.body).toContain('Scheduler JSON (scheduler.json)');
+      expect(res.body).toContain('Trust Policy JSON (trust-policy.json)');
+      expect(res.body).toContain('hx-post="/api/settings/models"');
+      expect(res.body).toContain('hx-post="/api/settings/skills"');
+      expect(res.body).toContain('hx-post="/api/settings/scheduler"');
+      expect(res.body).toContain('hx-post="/api/settings/trust-policy"');
+    });
+
+    it('returns persisted skills config via GET endpoint', async () => {
+      const res = await request(port, 'GET', '/api/settings/skills');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('application/json');
+      const payload = JSON.parse(res.body) as { maxLoadedSkills: number; directories: string[] };
+      expect(payload.maxLoadedSkills).toBe(32);
+      expect(payload.directories).toContain('skills');
+    });
+
     it('saves settings via POST', async () => {
       const body = 'primaryMaxTokens=4096&sessionMessageLimit=50';
       const res = await request(port, 'POST', '/api/settings', body, {
@@ -838,6 +878,161 @@ describe('AdminServer', () => {
       });
       expect(res.status).toBe(200);
       expect(res.body).toContain('primaryMaxTokens');
+    });
+
+    it('saves models.json via dedicated POST endpoint', async () => {
+      const body = new URLSearchParams({
+        configJson: JSON.stringify({
+          modelCatalog: {
+            primary: {
+              model: 'openai/gpt-4.1-mini',
+              provider: 'openrouter',
+              defaults: { maxTokens: 4096, contextWindow: 128000 },
+            },
+            extraction: {
+              model: 'deepseek/deepseek-v3.2',
+              provider: 'openrouter',
+              defaults: { maxTokens: 2048 },
+            },
+          },
+          modelRoleAssignments: {
+            chat: 'primary',
+            extraction: 'extraction',
+            background: 'extraction',
+          },
+        }),
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/settings/models', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('models.json saved');
+
+      const saved = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
+        modelCatalog: Record<string, { model: string }>;
+      };
+      expect(saved.modelCatalog.primary.model).toBe('openai/gpt-4.1-mini');
+      expect(testConfig.primaryModel).toBe('openai/gpt-4.1-mini');
+
+      testConfig.primaryModel = 'test-model';
+      testConfig.primaryProvider = 'test';
+      testConfig.primaryMaxTokens = 16384;
+      testConfig.extractionModel = 'test-extract';
+      testConfig.extractionProvider = 'test';
+      testConfig.extractionMaxTokens = 8192;
+      testConfig.modelCatalog = undefined;
+      testConfig.modelRoleAssignments = undefined;
+      testConfig.modelRoster = {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+      };
+    });
+
+    it('saves skills.json via dedicated POST endpoint and invalidates runtime cache', async () => {
+      const body = new URLSearchParams({
+        configJson: JSON.stringify({
+          enabled: true,
+          directories: ['skills'],
+          extraDirectories: ['history/skills'],
+          maxLoadedSkills: 16,
+          maxSkillChars: 12000,
+          disabledSkills: ['git-ops'],
+        }),
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/settings/skills', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('skills.json saved');
+      expect(skillsRuntimeInvalidate).toHaveBeenCalledTimes(1);
+
+      const saved = JSON.parse(readFileSync(join(tempDir, 'skills.json'), 'utf-8')) as {
+        maxLoadedSkills: number;
+        disabledSkills: string[];
+      };
+      expect(saved.maxLoadedSkills).toBe(16);
+      expect(saved.disabledSkills).toEqual(['git-ops']);
+    });
+
+    it('saves scheduler.json via dedicated POST endpoint and updates runtime intervals', async () => {
+      const body = new URLSearchParams({
+        configJson: JSON.stringify({
+          tickIntervalMs: 1500,
+          heartbeatIntervalMs: 9000,
+          salienceDecayIntervalMs: 12000,
+        }),
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/settings/scheduler', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('scheduler.json saved');
+
+      const saved = JSON.parse(readFileSync(join(tempDir, 'scheduler.json'), 'utf-8')) as {
+        tickIntervalMs: number;
+        heartbeatIntervalMs: number;
+        salienceDecayIntervalMs: number;
+      };
+      expect(saved.tickIntervalMs).toBe(1500);
+      expect(saved.heartbeatIntervalMs).toBe(9000);
+      expect(saved.salienceDecayIntervalMs).toBe(12000);
+      expect(scheduler.getTask('heartbeat')?.intervalMs).toBe(9000);
+      expect(scheduler.getTask('salience-decay')?.intervalMs).toBe(12000);
+      expect(testConfig.maintenanceIntervalMs).toBe(12000);
+
+      testConfig.maintenanceIntervalMs = 300_000;
+    });
+
+    it('saves trust-policy.json via dedicated POST endpoint and updates runtime trust policy', async () => {
+      const body = new URLSearchParams({
+        configJson: JSON.stringify({
+          trustCeiling: {
+            primary: ['public', 'personal', 'intimate', 'confidential'],
+            trusted: ['public', 'personal'],
+            regular: ['public'],
+            public: ['public'],
+          },
+          visibilityAllowed: {
+            private: ['public', 'personal', 'intimate', 'confidential'],
+            semi_private: ['public', 'personal'],
+            public: ['public'],
+            broadcast: ['public'],
+          },
+          channelClassification: {
+            privatePrefixes: ['custom:'],
+            broadcastPrefixes: ['social:'],
+            defaultVisibility: 'public',
+          },
+        }),
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/settings/trust-policy', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('trust-policy.json saved');
+
+      const saved = JSON.parse(readFileSync(join(tempDir, 'trust-policy.json'), 'utf-8')) as {
+        channelClassification: { privatePrefixes: string[]; defaultVisibility: string };
+      };
+      expect(saved.channelClassification.privatePrefixes).toEqual(['custom:']);
+      expect(saved.channelClassification.defaultVisibility).toBe('public');
+      expect(classifyChannel('custom:123')).toBe('private');
+      expect(classifyChannel('unknown:123')).toBe('public');
+    });
+
+    it('shows validation error for invalid JSON config payloads', async () => {
+      const body = new URLSearchParams({
+        configJson: '{bad json',
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/settings/skills', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('configJson must be valid JSON');
     });
   });
 

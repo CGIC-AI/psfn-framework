@@ -43,7 +43,28 @@ import {
   parseSettingsForm,
   normalizeEditableSettings,
 } from '../../settings.js';
-import { saveModelsConfig } from '../../config/models-config.js';
+import {
+  loadModelsConfig,
+  saveModelsConfig,
+  type ModelsRuntimeConfig,
+} from '../../config/models-config.js';
+import {
+  loadSkillsConfig,
+  saveSkillsConfig,
+  type SkillsRuntimeConfig,
+} from '../../config/skills-config.js';
+import {
+  loadSchedulerConfig,
+  saveSchedulerConfig,
+  type SchedulerRuntimeConfig,
+} from '../../config/scheduler-config.js';
+import {
+  loadTrustPolicyConfig,
+  saveTrustPolicyConfig,
+  type TrustPolicyConfig,
+} from '../../config/trust-policy-config.js';
+import { resolveRuntimeSchedulerConfig } from '../../config/scheduler-runtime.js';
+import { setRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
 import {
   AdminChatBootstrapService,
   type AdminChatBootstrapResponse,
@@ -66,6 +87,13 @@ interface ContactConversationChannelView {
   channel: string;
   channelId: string;
   lastSeen?: string;
+}
+
+interface SettingsConfigEditors {
+  models: ModelsRuntimeConfig;
+  skills: SkillsRuntimeConfig;
+  scheduler: SchedulerRuntimeConfig;
+  trustPolicy: TrustPolicyConfig;
 }
 
 type ChatDebugEventName =
@@ -422,12 +450,49 @@ export class AdminHandlers {
     };
   }
 
+  private loadSettingsConfigEditors(): SettingsConfigEditors {
+    return {
+      models: loadModelsConfig(this.config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+        defaultContextWindow: this.config.defaultContextWindow,
+      }),
+      skills: loadSkillsConfig(this.config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      }),
+      scheduler: loadSchedulerConfig(this.config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      }),
+      trustPolicy: loadTrustPolicyConfig(this.config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      }),
+    };
+  }
+
+  private parseConfigJsonBody(body: string): unknown {
+    const params = new URLSearchParams(body);
+    const configJson = (params.get('configJson') ?? '').trim();
+    if (!configJson) {
+      throw new Error('configJson is required');
+    }
+
+    try {
+      return JSON.parse(configJson);
+    } catch {
+      throw new Error('configJson must be valid JSON');
+    }
+  }
+
+  private formatConfigError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
   async settingsPage(): Promise<string> {
     const envInfo = this.getEnvInfo();
     const models = this.modelDiscovery
       ? await this.modelDiscovery.getAvailableModels().catch(() => undefined)
       : undefined;
-    return tpl.layout('Settings', tpl.settingsPage(this.config, envInfo, models), 'settings');
+    const configEditors = this.loadSettingsConfigEditors();
+    return tpl.layout('Settings', tpl.settingsPage(this.config, envInfo, configEditors, models), 'settings');
   }
 
   skillsPage(): string {
@@ -477,6 +542,104 @@ export class AdminHandlers {
     }
 
     return tpl.settingsFormResult(true, 'Settings saved');
+  }
+
+  modelsConfigJson(): string {
+    const config = loadModelsConfig(this.config.dataDir, {
+      seedDir: process.env.CONFIG_DIR,
+      defaultContextWindow: this.config.defaultContextWindow,
+    });
+    return JSON.stringify(config, null, 2);
+  }
+
+  updateModelsConfig(body: string): string {
+    try {
+      const payload = this.parseConfigJsonBody(body);
+      const saved = saveModelsConfig(
+        this.config.dataDir,
+        payload,
+        { defaultContextWindow: this.config.defaultContextWindow },
+      );
+      applySettings(this.config, saved);
+      try {
+        this.config.runtimeHooks?.refreshModels?.();
+      } catch {
+        // Preserve successful save result even when runtime model refresh fails.
+      }
+      return tpl.settingsFormResult(true, 'models.json saved');
+    } catch (error) {
+      return tpl.settingsFormResult(false, this.formatConfigError(error));
+    }
+  }
+
+  skillsConfigJson(): string {
+    const config = loadSkillsConfig(this.config.dataDir, {
+      seedDir: process.env.CONFIG_DIR,
+    });
+    return JSON.stringify(config, null, 2);
+  }
+
+  updateSkillsConfig(body: string): string {
+    try {
+      const payload = this.parseConfigJsonBody(body);
+      saveSkillsConfig(this.config.dataDir, payload);
+      this.skillsRuntime?.invalidate();
+      return tpl.settingsFormResult(true, 'skills.json saved');
+    } catch (error) {
+      return tpl.settingsFormResult(false, this.formatConfigError(error));
+    }
+  }
+
+  schedulerConfigJson(): string {
+    const config = loadSchedulerConfig(this.config.dataDir, {
+      seedDir: process.env.CONFIG_DIR,
+    });
+    return JSON.stringify(config, null, 2);
+  }
+
+  updateSchedulerConfig(body: string): string {
+    try {
+      const payload = this.parseConfigJsonBody(body);
+      saveSchedulerConfig(this.config.dataDir, payload);
+      const resolved = resolveRuntimeSchedulerConfig({
+        dataDir: this.config.dataDir,
+        seedDir: process.env.CONFIG_DIR,
+      });
+
+      this.config.maintenanceIntervalMs = resolved.salienceDecayIntervalMs;
+
+      const schedulerWithConfig = this.scheduler as Scheduler & {
+        updateConfig?: (config: { tickIntervalMs?: number; heartbeatIntervalMs?: number }) => void;
+      };
+      schedulerWithConfig.updateConfig?.({
+        tickIntervalMs: resolved.tickIntervalMs,
+        heartbeatIntervalMs: resolved.heartbeatIntervalMs,
+      });
+      this.scheduler.updateTask('heartbeat', { intervalMs: resolved.heartbeatIntervalMs });
+      this.scheduler.updateTask('salience-decay', { intervalMs: resolved.salienceDecayIntervalMs });
+
+      return tpl.settingsFormResult(true, 'scheduler.json saved');
+    } catch (error) {
+      return tpl.settingsFormResult(false, this.formatConfigError(error));
+    }
+  }
+
+  trustPolicyConfigJson(): string {
+    const config = loadTrustPolicyConfig(this.config.dataDir, {
+      seedDir: process.env.CONFIG_DIR,
+    });
+    return JSON.stringify(config, null, 2);
+  }
+
+  updateTrustPolicyConfig(body: string): string {
+    try {
+      const payload = this.parseConfigJsonBody(body);
+      const saved = saveTrustPolicyConfig(this.config.dataDir, payload);
+      setRuntimeTrustPolicy(saved);
+      return tpl.settingsFormResult(true, 'trust-policy.json saved');
+    } catch (error) {
+      return tpl.settingsFormResult(false, this.formatConfigError(error));
+    }
   }
 
   primerPage(): string {

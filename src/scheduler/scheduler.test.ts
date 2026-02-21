@@ -350,6 +350,18 @@ describe('Scheduler', () => {
       await scheduler.tick();
       expect(fn).toHaveBeenCalledOnce();
     });
+
+    it('applies updated heartbeat interval to registered heartbeat task', () => {
+      scheduler.registerHeartbeat(() => {});
+      scheduler.updateConfig({ heartbeatIntervalMs: 1_250 });
+      expect(scheduler.getTask('heartbeat')?.intervalMs).toBe(1_250);
+    });
+
+    it('uses updated heartbeat interval for future heartbeat registration', () => {
+      scheduler.updateConfig({ heartbeatIntervalMs: 2_000 });
+      scheduler.registerHeartbeat(() => {});
+      expect(scheduler.getTask('heartbeat')?.intervalMs).toBe(2_000);
+    });
   });
 
   describe('error handling', () => {

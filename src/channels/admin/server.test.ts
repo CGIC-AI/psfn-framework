@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -712,12 +712,66 @@ describe('AdminServer', () => {
       expect(res.status).toBe(200);
       expect(res.body).toContain('TestBot');
       expect(res.body).toContain('tester');
+      expect(res.body).toContain('hx-post="/api/identity/import"');
     });
 
     it('shows runtime config without secrets', async () => {
       const res = await request(port, 'GET', '/identity');
       expect(res.body).toContain('test-model');
       expect(res.body).not.toContain('discordToken');
+    });
+
+    it('imports a character card from disk via POST endpoint', async () => {
+      testConfig.characterCardPath = join(tempDir, 'character.json');
+      const sourcePath = join(tempDir, 'incoming-character.json');
+      writeFileSync(sourcePath, JSON.stringify({
+        spec: 'chara_card_v3',
+        spec_version: '3.0',
+        data: {
+          name: 'ImportedBot',
+          description: 'Imported description',
+          personality: 'Imported personality',
+          scenario: 'Imported scenario',
+          first_mes: 'Hi from import',
+          mes_example: '{{user}}: hi\n{{char}}: hey',
+          creator: 'import-test',
+          tags: ['imported'],
+          creator_notes: 'Imported note',
+          system_prompt: 'Imported system prompt',
+          post_history_instructions: 'Imported post-history prompt',
+          character_version: '1.0',
+        },
+      }), 'utf-8');
+
+      const body = new URLSearchParams({ path: sourcePath }).toString();
+      const res = await request(port, 'POST', '/api/identity/import', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Imported &quot;ImportedBot&quot;');
+      expect(res.body).toContain('form-success');
+
+      const saved = JSON.parse(readFileSync(testConfig.characterCardPath, 'utf-8')) as CharacterCardV2;
+      expect(saved.spec).toBe('chara_card_v2');
+      expect(saved.data.name).toBe('ImportedBot');
+      expect(saved.data.personality).toBe('Imported personality');
+
+      const identity = await request(port, 'GET', '/identity');
+      expect(identity.status).toBe(200);
+      expect(identity.body).toContain('ImportedBot');
+    });
+
+    it('returns a clear error when import path is invalid', async () => {
+      testConfig.characterCardPath = join(tempDir, 'character.json');
+      const body = new URLSearchParams({ path: join(tempDir, 'missing-card.png') }).toString();
+      const res = await request(port, 'POST', '/api/identity/import', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('form-error');
+      expect(res.body).toContain('Import failed');
     });
   });
 

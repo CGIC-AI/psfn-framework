@@ -21,6 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "chat": "tsx src/chat-cli.ts",
+    "import-character": "tsx src/import-character.ts",
     "e2e": "tsx src/e2e-test.ts",
     "e2e:voice": "tsx src/e2e-voice-roundtrip.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
@@ -28,6 +29,7 @@
     "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
+    "@character-foundry/character-foundry": "^0.5.0",
     "@discordjs/voice": "^0.19.0",
     "@mariozechner/pi-agent-core": "^0.52.12",
     "@mariozechner/pi-ai": "^0.52.12",

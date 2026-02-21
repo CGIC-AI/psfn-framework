@@ -264,6 +264,15 @@ export class AdminServer implements Lifecycle {
       { method: 'GET', match: exactPath('/chat'), handle: (_req, res) => this.sendHtml(res, this.handlers.chatPage()) },
       { method: 'GET', match: exactPath('/identity'), handle: (_req, res) => this.sendHtml(res, this.handlers.identityPage()) },
       {
+        method: 'POST',
+        match: exactPath('/api/identity/import'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.importIdentityCard(body));
+          });
+        },
+      },
+      {
         method: 'GET',
         match: exactPath('/settings'),
         handle: (_req, res) => {

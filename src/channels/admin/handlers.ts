@@ -196,6 +196,7 @@ export class AdminHandlers {
     promptStore?: PromptLayerStore | null;
     promptRegistry?: PromptRegistryStore | null;
     skillsRuntime?: SkillsRuntime | null;
+    apiBaseUrl?: string;
   }) {
     this.memoryStore = deps.memoryStore;
     this.sessionStore = deps.sessionStore;
@@ -211,7 +212,9 @@ export class AdminHandlers {
     this.promptStore = deps.promptStore ?? null;
     this.promptRegistry = deps.promptRegistry ?? null;
     this.skillsRuntime = deps.skillsRuntime ?? null;
-    this.chatBootstrapService = new AdminChatBootstrapService(this.contactStore);
+    this.chatBootstrapService = new AdminChatBootstrapService(this.contactStore, {
+      apiBaseUrl: deps.apiBaseUrl,
+    });
 
     this.eventBus.on('agent.turn.usage', ({ usage }) => {
       this.usageTotals.turns += 1;

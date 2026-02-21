@@ -639,8 +639,8 @@ describe('AdminServer', () => {
         userId: 'admin-user',
         privacyLevel: 'private',
       });
-      expect(payload.api.chatCompletionsUrl).toBe('/v1/chat/completions');
-      expect(payload.api.voiceWebSocketUrl).toBe('/v1/voice/ws');
+      expect(payload.api.chatCompletionsUrl).toBe('http://127.0.0.1:3000/v1/chat/completions');
+      expect(payload.api.voiceWebSocketUrl).toBe('http://127.0.0.1:3000/v1/voice/ws');
       expect(payload.defaultSessionId).toBe('api:admin-user');
       expect(payload.defaultAuthorName).toBe('Primary Contact');
       expect(payload.defaultAuthorId).toBe('admin-user');
@@ -1622,7 +1622,7 @@ describe('AdminServer with auth', () => {
     });
     expect(res.status).toBe(200);
     const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
-    expect(payload.api.chatCompletionsUrl).toBe('/v1/chat/completions');
+    expect(payload.api.chatCompletionsUrl).toBe('http://127.0.0.1:3000/v1/chat/completions');
   });
 
   it('accepts chat debug SSE with correct token', async () => {

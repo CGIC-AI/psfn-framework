@@ -12,9 +12,13 @@ import type {
   AdminChatContactOption,
   AdminChatLinkedChannelOption,
 } from './types.js';
+import {
+  buildAbsoluteAdminChatApiUrl,
+  resolveAdminChatApiBaseUrl,
+} from './api-base-url.js';
 
-const DEFAULT_CHAT_COMPLETIONS_URL = '/v1/chat/completions';
-const DEFAULT_VOICE_WEBSOCKET_URL = '/v1/voice/ws';
+const CHAT_COMPLETIONS_PATH = '/v1/chat/completions';
+const VOICE_WEBSOCKET_PATH = '/v1/voice/ws';
 const SYNTHETIC_CONTACT_ID = 'admin.synthetic.default';
 const SYNTHETIC_DISPLAY_NAME = 'Primary Contact';
 const SYNTHETIC_CHANNEL = 'api';
@@ -36,6 +40,7 @@ interface SelectionState {
 
 interface AdminChatBootstrapServiceOptions {
   apiKey?: string;
+  apiBaseUrl?: string;
 }
 
 function normalizeTrimmed(value: string | undefined): string | undefined {
@@ -59,11 +64,15 @@ function isSameIdentity(
 export class AdminChatBootstrapService {
   private readonly contactStore: ContactStore | null;
   private readonly configuredApiKey?: string;
+  private readonly apiBaseUrl: string;
   private selection: SelectionState = {};
 
   constructor(contactStore?: ContactStore | null, options: AdminChatBootstrapServiceOptions = {}) {
     this.contactStore = contactStore ?? null;
     this.configuredApiKey = normalizeTrimmed(options.apiKey);
+    this.apiBaseUrl = resolveAdminChatApiBaseUrl({
+      explicitApiBaseUrl: options.apiBaseUrl,
+    });
   }
 
   buildBootstrap(): AdminChatBootstrapResponse {
@@ -200,8 +209,8 @@ export class AdminChatBootstrapService {
         selectedLevel: selectedIdentity.privacyLevel,
       },
       api: {
-        chatCompletionsUrl: DEFAULT_CHAT_COMPLETIONS_URL,
-        voiceWebSocketUrl: DEFAULT_VOICE_WEBSOCKET_URL,
+        chatCompletionsUrl: buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, this.apiBaseUrl),
+        voiceWebSocketUrl: buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, this.apiBaseUrl),
         apiKey: this.resolveApiKey(),
       },
       defaultSessionId: `${selectedIdentity.channel}:${selectedIdentity.userId}`,

@@ -5,7 +5,7 @@ import type { MemoryStore } from './store.js';
 import type { ExtractedFact, MemoryType, SensitivityLevel } from './types.js';
 import { VALID_MEMORY_TYPES, MEMORY_CONFIG, VALID_SENSITIVITY_LEVELS } from './types.js';
 import type { SubstrateConfig } from '../types.js';
-import { estimateTokens } from '../llm/tokens.js';
+import { countMessageTokens } from '../llm/tokens.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
 import { createComponentLogger } from '../logger.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -19,6 +19,12 @@ const log = createComponentLogger('Extraction');
 
 // Track last extraction per channel
 const lastExtractionCount = new Map<string, number>();
+
+function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } {
+  if (entry.role === 'assistant') return { role: 'assistant', content: entry.content };
+  if (entry.role === 'system') return { role: 'user', content: `[System note] ${entry.content}` };
+  return { role: 'user', content: entry.content };
+}
 
 export interface MemoryExtractorConfig {
   extractionInterval?: number;
@@ -237,7 +243,7 @@ export class MemoryExtractor {
       tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
 
       const recent = this.sessionManager.getRecentMessages(channelId);
-      totalTokens = recent.reduce((sum, e) => sum + estimateTokens(e.content), 0);
+      totalTokens = countMessageTokens(recent.map(toTokenMessage));
       thresholdMet = totalTokens > tokenBudget;
     }
 

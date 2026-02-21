@@ -27,6 +27,7 @@ import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { TrustLevel } from '../../trust/types.js';
 import type { Contact, RelationshipType, ChannelPrivacyLevel } from '../../contacts/types.js';
+import type { SkillsRuntime } from '../../skills/runtime.js';
 import { TRUST_LEVELS } from '../../trust/types.js';
 import { VALID_RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '../../contacts/types.js';
 import { MEMORY_CONFIG } from '../../memory/types.js';
@@ -129,6 +130,7 @@ export class AdminHandlers {
   private contactStore: ContactStore | null;
   private promptStore: PromptLayerStore | null;
   private promptRegistry: PromptRegistryStore | null;
+  private skillsRuntime: SkillsRuntime | null;
   private chatBootstrapService: AdminChatBootstrapService;
   private usageTotals = {
     turns: 0,
@@ -157,6 +159,7 @@ export class AdminHandlers {
     contactStore?: ContactStore | null;
     promptStore?: PromptLayerStore | null;
     promptRegistry?: PromptRegistryStore | null;
+    skillsRuntime?: SkillsRuntime | null;
   }) {
     this.memoryStore = deps.memoryStore;
     this.sessionStore = deps.sessionStore;
@@ -171,6 +174,7 @@ export class AdminHandlers {
     this.contactStore = deps.contactStore ?? null;
     this.promptStore = deps.promptStore ?? null;
     this.promptRegistry = deps.promptRegistry ?? null;
+    this.skillsRuntime = deps.skillsRuntime ?? null;
     this.chatBootstrapService = new AdminChatBootstrapService(this.contactStore);
 
     this.eventBus.on('agent.turn.usage', ({ usage }) => {
@@ -418,6 +422,14 @@ export class AdminHandlers {
       ? await this.modelDiscovery.getAvailableModels().catch(() => undefined)
       : undefined;
     return tpl.layout('Settings', tpl.settingsPage(this.config, envInfo, models), 'settings');
+  }
+
+  skillsPage(): string {
+    if (!this.skillsRuntime) {
+      return tpl.layout('Skills', '<div class="empty">Skills runtime not configured</div>', 'skills');
+    }
+    const snapshot = this.skillsRuntime.getSnapshot();
+    return tpl.layout('Skills', tpl.skillsPage(snapshot), 'skills');
   }
 
   updateSettings(body: string): string {

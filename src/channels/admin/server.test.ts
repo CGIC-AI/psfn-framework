@@ -19,6 +19,7 @@ import { PromptRegistryStore, EXTRACTION_PROMPT_KEY } from '../../identity/promp
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { LLMProvider } from '../../agent-loop.js';
+import type { SkillSnapshot } from '../../skills/types.js';
 import type { AdminChatBootstrapResponse } from './chat/index.js';
 
 // ── Helpers ──
@@ -179,6 +180,63 @@ const testCard: CharacterCardV2 = {
   },
 };
 
+const testSkillSnapshot: SkillSnapshot = {
+  generatedAt: '2026-02-20T00:00:00.000Z',
+  signature: 'skills-snapshot-signature',
+  configEnabled: true,
+  budget: {
+    maxSkills: 32,
+    maxChars: 24_000,
+  },
+  directories: [
+    {
+      absolutePath: '/repo/purrsephone/skills',
+      relativePath: 'purrsephone/skills',
+      source: 'purrsephone',
+      precedence: 0,
+    },
+    {
+      absolutePath: '/repo/skills',
+      relativePath: 'skills',
+      source: 'bundled',
+      precedence: 1,
+    },
+  ],
+  scannedFiles: 2,
+  loadedSkills: 2,
+  includedSkills: [
+    {
+      id: 'conversation@skills/conversation/SKILL.md',
+      name: 'conversation',
+      description: 'Conversation guidance',
+      always: true,
+      requires: {
+        binaries: [],
+        env: [],
+        config: [],
+      },
+      content: '# Conversation\\nUse concise responses.',
+      absolutePath: '/repo/skills/conversation/SKILL.md',
+      relativePath: 'skills/conversation/SKILL.md',
+      source: 'bundled',
+      precedence: 1,
+      mtimeMs: 1,
+      size: 1,
+    },
+  ],
+  promptXml: '<skills><skill name=\"conversation\" /></skills>',
+  skipped: [
+    {
+      kind: 'ineligible',
+      name: 'git-ops',
+      relativePath: 'skills/git-ops/SKILL.md',
+      source: 'bundled',
+      reason: 'missing env vars: OPENROUTER_API_KEY',
+      details: ['missing env vars: OPENROUTER_API_KEY'],
+    },
+  ],
+};
+
 // ── Tests ──
 
 describe('AdminServer', () => {
@@ -252,6 +310,7 @@ describe('AdminServer', () => {
       embeddingService: null,
       promptStore,
       promptRegistry,
+      skillsRuntime: { getSnapshot: () => testSkillSnapshot } as any,
     });
     await server.init();
     await server.start();
@@ -779,6 +838,24 @@ describe('AdminServer', () => {
       });
       expect(res.status).toBe(200);
       expect(res.body).toContain('primaryMaxTokens');
+    });
+  });
+
+  describe('Skills', () => {
+    it('returns skills page with included and filtered metadata', async () => {
+      const res = await request(port, 'GET', '/skills');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Skills');
+      expect(res.body).toContain('Runtime Snapshot');
+      expect(res.body).toContain('Injected Skills');
+      expect(res.body).toContain('conversation');
+      expect(res.body).toContain('missing env vars: OPENROUTER_API_KEY');
+    });
+
+    it('appears in navigation', async () => {
+      const res = await request(port, 'GET', '/');
+      expect(res.body).toContain('href=\"/skills\"');
+      expect(res.body).toContain('Skills');
     });
   });
 

@@ -1,0 +1,33 @@
+{
+  "modelCatalog": {
+    "primary": {
+      "model": "z-ai/glm-5",
+      "provider": "openrouter",
+      "defaults": {
+        "maxTokens": 16384,
+        "contextWindow": 128000
+      },
+      "overrides": {
+        "maxTokens": 16384
+      }
+    },
+    "extraction": {
+      "model": "deepseek/deepseek-v3.2",
+      "provider": "openrouter",
+      "defaults": {
+        "maxTokens": 8192
+      },
+      "overrides": {
+        "maxTokens": 8192
+      }
+    }
+  },
+  "modelRoleAssignments": {
+    "chat": "primary",
+    "background": "extraction",
+    "extraction": "extraction",
+    "summary": "primary",
+    "reasoning": "primary",
+    "longContext": "primary"
+  }
+}

@@ -34,6 +34,7 @@ import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
+import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
 import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
@@ -304,6 +305,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.lifecycleNotifier,
       () => this.stop(),
     ));
+    this.agentLoop.registerTool(createNotifyOperatorTool(createHttpNtfyNotifierFromEnv()));
 
     // Heartbeat reflections — policy-driven multi-template reflection system
     wireHeartbeatRuntime(

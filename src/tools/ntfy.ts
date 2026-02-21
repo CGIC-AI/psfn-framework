@@ -1,0 +1,212 @@
+import { Type } from '@sinclair/typebox';
+import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { NotifyNtfyParams, NotifyNtfyResult } from '../gateway/protocol.js';
+import { textResult, textResultWithError } from './results.js';
+
+const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
+const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
+
+export interface NtfyNotifier {
+  notify(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
+}
+
+export interface HttpNtfyNotifierOptions {
+  baseUrl?: string;
+  topic?: string;
+  token?: string;
+  timeoutMs?: number;
+  debounceWindowMs?: number;
+  fetchImpl?: typeof fetch;
+  now?: () => number;
+}
+
+class HttpNtfyNotifier implements NtfyNotifier {
+  private readonly baseUrl?: string;
+  private readonly topic?: string;
+  private readonly token?: string;
+  private readonly timeoutMs: number;
+  private readonly debounceWindowMs: number;
+  private readonly fetchImpl: typeof fetch;
+  private readonly now: () => number;
+  private readonly recentAlerts = new Map<string, number>();
+
+  constructor(options: HttpNtfyNotifierOptions) {
+    this.baseUrl = options.baseUrl?.trim() || undefined;
+    this.topic = options.topic?.trim() || undefined;
+    this.token = options.token?.trim() || undefined;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_NTFY_TIMEOUT_MS;
+    this.debounceWindowMs = options.debounceWindowMs ?? DEFAULT_NTFY_DEBOUNCE_MS;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.now = options.now ?? Date.now;
+  }
+
+  async notify(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
+    if (!this.baseUrl || !this.topic) {
+      throw new Error('ntfy is not configured (set NTFY_BASE_URL and NTFY_TOPIC)');
+    }
+
+    const message = params.message?.trim();
+    if (!message) {
+      throw new Error('message is required');
+    }
+
+    const topic = params.topic?.trim() || this.topic;
+    const title = params.title?.trim();
+    const priority = this.normalizePriority(params.priority);
+
+    const fingerprint = JSON.stringify({ topic, title: title ?? '', priority, message });
+    if (this.isDebounced(fingerprint)) {
+      return { status: 'debounced', topic };
+    }
+
+    const endpoint = `${this.baseUrl.replace(/\/+$/, '')}/${encodeURIComponent(topic)}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'text/plain; charset=utf-8',
+    };
+    if (title) {
+      headers.Title = title;
+    }
+    if (priority !== undefined) {
+      headers.Priority = String(priority);
+    }
+    if (this.token) {
+      headers.Authorization = `Bearer ${this.token}`;
+    }
+
+    const response = await this.fetchImpl(endpoint, {
+      method: 'POST',
+      headers,
+      body: message,
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    if (!response.ok) {
+      throw new Error(`ntfy request failed: ${response.status} ${response.statusText}`);
+    }
+
+    const messageId = response.headers.get('x-message-id') ?? undefined;
+    return { status: 'sent', topic, ...(messageId ? { messageId } : {}) };
+  }
+
+  private normalizePriority(priority: number | undefined): number | undefined {
+    if (typeof priority !== 'number' || !Number.isFinite(priority)) {
+      return undefined;
+    }
+    return Math.max(1, Math.min(5, Math.trunc(priority)));
+  }
+
+  private isDebounced(fingerprint: string): boolean {
+    if (this.debounceWindowMs <= 0) {
+      return false;
+    }
+
+    const now = this.now();
+    const minTimestamp = now - this.debounceWindowMs;
+    for (const [key, lastSeenAt] of this.recentAlerts) {
+      if (lastSeenAt < minTimestamp) {
+        this.recentAlerts.delete(key);
+      }
+    }
+
+    const previous = this.recentAlerts.get(fingerprint);
+    this.recentAlerts.set(fingerprint, now);
+    return previous !== undefined && now - previous < this.debounceWindowMs;
+  }
+}
+
+function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function createGatewayNtfyNotifier(
+  gateway: { notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> },
+): NtfyNotifier {
+  return {
+    notify: (params) => gateway.notifyNtfy(params),
+  };
+}
+
+export function createHttpNtfyNotifier(options: HttpNtfyNotifierOptions): NtfyNotifier {
+  return new HttpNtfyNotifier(options);
+}
+
+export function createHttpNtfyNotifierFromEnv(env: NodeJS.ProcessEnv = process.env): NtfyNotifier {
+  return createHttpNtfyNotifier({
+    baseUrl: env.NTFY_BASE_URL,
+    topic: env.NTFY_TOPIC,
+    token: env.NTFY_TOKEN,
+    timeoutMs: parsePositiveIntEnv(env.NTFY_TIMEOUT_MS, DEFAULT_NTFY_TIMEOUT_MS),
+    debounceWindowMs: parsePositiveIntEnv(env.NTFY_DEBOUNCE_MS, DEFAULT_NTFY_DEBOUNCE_MS),
+  });
+}
+
+export function createNotifyOperatorTool(notifier: NtfyNotifier): AgentTool<any> {
+  return {
+    name: 'notify_operator',
+    label: 'notify_operator',
+    description:
+      'Send an out-of-band operator alert via ntfy. ' +
+      'Returns explicit sent, debounced, or failure status.',
+    parameters: Type.Object({
+      message: Type.String({
+        minLength: 1,
+        description: 'Alert body text sent to ntfy.',
+      }),
+      title: Type.Optional(
+        Type.String({
+          description: 'Optional ntfy notification title.',
+        }),
+      ),
+      priority: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: 5,
+          description: 'Optional ntfy priority (1-5).',
+        }),
+      ),
+      topic: Type.Optional(
+        Type.String({
+          description: 'Optional topic override; defaults to configured NTFY_TOPIC.',
+        }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        message: string;
+        title?: string;
+        priority?: number;
+        topic?: string;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const message = params.message?.trim();
+      if (!message) {
+        return textResultWithError('notify_operator: failure (message is required).', true);
+      }
+
+      try {
+        const result = await notifier.notify({
+          message,
+          title: params.title?.trim(),
+          priority: params.priority,
+          topic: params.topic?.trim(),
+        });
+
+        if (result.status === 'debounced') {
+          return textResult(
+            `notify_operator: debounced (duplicate alert suppressed for topic "${result.topic}").`,
+          );
+        }
+
+        return textResult(
+          `notify_operator: success (sent to topic "${result.topic}"${result.messageId ? `, id ${result.messageId}` : ''}).`,
+        );
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        return textResultWithError(`notify_operator: failure (${messageText}).`, true);
+      }
+    },
+  };
+}

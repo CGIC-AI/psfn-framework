@@ -21,6 +21,8 @@ import {
   type WebFetchParams,
   type FsReadParams,
   type FsWriteParams,
+  type NotifyNtfyParams,
+  type NotifyNtfyResult,
   type PolicyContext,
   type PolicyDecision,
   type LLMChunkNotification,
@@ -48,6 +50,14 @@ export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
   urlPolicy?: UrlPolicyConfig;
+}
+
+export interface GatewayNtfyConfig {
+  baseUrl: string;
+  defaultTopic: string;
+  token?: string;
+  timeoutMs: number;
+  debounceWindowMs: number;
 }
 
 /** Check whether a resolved path falls inside any of the allowed prefixes */
@@ -101,6 +111,7 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
     case 'llm.embed':
     case 'discord.send':
     case 'discord.typing':
+    case 'notify.ntfy':
       return 'ALLOW';
 
     case 'web.fetch': {
@@ -176,6 +187,7 @@ export interface GatewayServerOptions {
   embeddingService: EmbeddingService;
   discordAdapter: ChannelOutboundDock;
   policyConfig: PolicyConfig;
+  ntfy?: GatewayNtfyConfig;
   auditStore?: AuditStore;
 }
 
@@ -201,6 +213,7 @@ export class GatewayServer {
   private rpcClients = new Map<NdjsonConnection, JSONRPCServerAndClient>();
   private options: GatewayServerOptions;
   private streamRequestCounter = 0;
+  private ntfyRecentAlerts = new Map<string, number>();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -340,6 +353,74 @@ export class GatewayServer {
 
     target.addMethod('discord.typing', this.audited('discord.typing',
       async (_params: DiscordTypingParams) => ({ success: true }),
+    ));
+
+    // ── ntfy operator alerts ──
+
+    target.addMethod('notify.ntfy', this.audited('notify.ntfy',
+      async (params: NotifyNtfyParams): Promise<NotifyNtfyResult> => {
+        const config = this.options.ntfy;
+        if (!config) {
+          throw new JSONRPCErrorException('ntfy is not configured', GatewayErrors.PROVIDER_ERROR);
+        }
+
+        const message = params.message?.trim();
+        if (!message) {
+          throw new JSONRPCErrorException('notify.ntfy requires a non-empty message', GatewayErrors.PROVIDER_ERROR);
+        }
+
+        const topic = params.topic?.trim() || config.defaultTopic;
+        if (!topic) {
+          throw new JSONRPCErrorException('notify.ntfy topic is not configured', GatewayErrors.PROVIDER_ERROR);
+        }
+
+        const title = params.title?.trim();
+        const priority = typeof params.priority === 'number'
+          ? Math.max(1, Math.min(5, Math.trunc(params.priority)))
+          : undefined;
+
+        const fingerprint = JSON.stringify({ topic, title: title ?? '', priority, message });
+        if (this.isDebouncedNtfyAlert(fingerprint, config.debounceWindowMs)) {
+          return { status: 'debounced', topic };
+        }
+
+        const baseUrl = config.baseUrl.replace(/\/+$/, '');
+        const endpoint = `${baseUrl}/${encodeURIComponent(topic)}`;
+        const headers: Record<string, string> = {
+          'Content-Type': 'text/plain; charset=utf-8',
+        };
+        if (title) {
+          headers.Title = title;
+        }
+        if (priority !== undefined) {
+          headers.Priority = String(priority);
+        }
+        if (config.token) {
+          headers.Authorization = `Bearer ${config.token}`;
+        }
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: message,
+          signal: AbortSignal.timeout(config.timeoutMs),
+        });
+        if (!response.ok) {
+          throw new JSONRPCErrorException(
+            `ntfy request failed: ${response.status} ${response.statusText}`,
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
+
+        const messageId = response.headers.get('x-message-id') ?? undefined;
+        return { status: 'sent', topic, ...(messageId ? { messageId } : {}) };
+      },
+      (p) => ({
+        topic: p.topic ? 'override' : 'default',
+        hasTitle: !!p.title,
+        priority: p.priority,
+        messageLength: typeof p.message === 'string' ? p.message.length : 0,
+      }),
     ));
 
     // ── Web Fetch (gated) ──
@@ -697,6 +778,24 @@ export class GatewayServer {
     }
 
     return chunks;
+  }
+
+  private isDebouncedNtfyAlert(fingerprint: string, windowMs: number): boolean {
+    if (windowMs <= 0) {
+      return false;
+    }
+
+    const now = Date.now();
+    const minTimestamp = now - windowMs;
+    for (const [key, lastSeenAt] of this.ntfyRecentAlerts) {
+      if (lastSeenAt < minTimestamp) {
+        this.ntfyRecentAlerts.delete(key);
+      }
+    }
+
+    const previous = this.ntfyRecentAlerts.get(fingerprint);
+    this.ntfyRecentAlerts.set(fingerprint, now);
+    return previous !== undefined && now - previous < windowMs;
   }
 
   private serializeMessage(message: SubstrateMessage): RpcSubstrateMessage {

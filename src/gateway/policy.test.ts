@@ -28,6 +28,10 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy({ method: 'discord.send', params: {} }, policyConfig)).toBe('ALLOW');
   });
 
+  it('allows notify.ntfy', () => {
+    expect(evaluatePolicy({ method: 'notify.ntfy', params: {} }, policyConfig)).toBe('ALLOW');
+  });
+
   it('allows web.fetch with valid HTTPS URL', () => {
     expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'https://example.com' } }, policyConfig)).toBe('ALLOW');
   });

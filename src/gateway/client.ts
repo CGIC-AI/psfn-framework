@@ -29,6 +29,8 @@ import type {
   LLMChunkNotification,
   DiscordHandleMessageParams,
   DiscordHandleMessageResult,
+  NotifyNtfyParams,
+  NotifyNtfyResult,
   RpcSubstrateMessage,
   DiscordVoiceStreamStartParams,
   DiscordVoiceStreamChunkParams,
@@ -231,6 +233,10 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   async fsWrite(path: string, content: string): Promise<void> {
     await this.rpcInstance.request('fs.write', { path, content }) as FsWriteResult;
+  }
+
+  async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
+    return await this.rpcInstance.request('notify.ntfy', params) as NotifyNtfyResult;
   }
 
   // ── Notification handlers ──

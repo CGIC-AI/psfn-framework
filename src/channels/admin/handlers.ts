@@ -23,9 +23,10 @@ import type {
 } from './types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { ContactStore } from '../../contacts/store.js';
-import type { PromptLayerStore } from '../../identity/prompt-store.js';
+import type { PromptLayerMetadataUpdate, PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { importCharacterCardToPath } from '../../identity/importer.js';
+import { PROMPT_LAYER_ROLES, type PromptLayerRole } from '../../identity/prompt-types.js';
 import type { TrustLevel } from '../../trust/types.js';
 import type {
   Contact,
@@ -1112,6 +1113,43 @@ export class AdminHandlers {
     return { content };
   }
 
+  private resolvePromptLayerMetadata(
+    params: URLSearchParams,
+  ): { metadata: PromptLayerMetadataUpdate } | { error: string } {
+    const metadata: PromptLayerMetadataUpdate = {};
+
+    if (params.has('identifier')) {
+      const rawIdentifier = params.get('identifier');
+      metadata.identifier = rawIdentifier?.trim() ? rawIdentifier.trim() : undefined;
+    }
+
+    if (params.has('role')) {
+      const rawRole = params.get('role');
+      const role = rawRole?.trim() ?? '';
+      if (role.length === 0) {
+        metadata.role = undefined;
+      } else if (!PROMPT_LAYER_ROLES.includes(role as PromptLayerRole)) {
+        return { error: `role must be one of: ${PROMPT_LAYER_ROLES.join(', ')}` };
+      } else {
+        metadata.role = role as PromptLayerRole;
+      }
+    }
+
+    if (params.has('promptOrder')) {
+      const rawPromptOrder = params.get('promptOrder');
+      const value = rawPromptOrder?.trim() ?? '';
+      if (value.length === 0) {
+        metadata.promptOrder = undefined;
+      } else if (!/^\d+$/.test(value)) {
+        return { error: 'promptOrder must be an integer >= 0' };
+      } else {
+        metadata.promptOrder = parseInt(value, 10);
+      }
+    }
+
+    return { metadata };
+  }
+
   promptsPage(): string {
     const layers = this.promptStore?.getAll() ?? [];
     const prompts = this.promptRegistry?.list() ?? [];
@@ -1148,8 +1186,10 @@ export class AdminHandlers {
     const layerId = params.get('layerId') ?? '';
     const resolved = this.resolvePromptLayerContent(params);
     if ('error' in resolved) return tpl.settingsFormResult(false, resolved.error);
+    const resolvedMetadata = this.resolvePromptLayerMetadata(params);
+    if ('error' in resolvedMetadata) return tpl.settingsFormResult(false, resolvedMetadata.error);
     try {
-      const layer = this.promptStore.update(layerId, resolved.content, 'admin');
+      const layer = this.promptStore.update(layerId, resolved.content, 'admin', resolvedMetadata.metadata);
       return tpl.settingsFormResult(true, `Updated "${layer.name}" to v${layer.version}`);
     } catch (err) {
       return tpl.settingsFormResult(false, String(err));

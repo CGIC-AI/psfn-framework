@@ -6,13 +6,47 @@ import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { PromptLayer, LayerType, PromptHistoryEntry } from './prompt-types.js';
+import {
+  PROMPT_LAYER_ROLES,
+  type PromptLayer,
+  type LayerType,
+  type PromptHistoryEntry,
+  type PromptLayerRole,
+} from './prompt-types.js';
 import { createComponentLogger } from '../logger.js';
 
 const log = createComponentLogger('PromptStore');
 
 function contentChecksum(content: string): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16);
+}
+
+function normalizePromptIdentifier(identifier: string | undefined): string | undefined {
+  if (identifier == null) return undefined;
+  const trimmed = identifier.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function validatePromptRole(role: unknown): PromptLayerRole | undefined {
+  if (role == null) return undefined;
+  if (typeof role !== 'string' || !PROMPT_LAYER_ROLES.includes(role as PromptLayerRole)) {
+    throw new Error(`Invalid prompt role "${String(role)}". Expected one of: ${PROMPT_LAYER_ROLES.join(', ')}`);
+  }
+  return role as PromptLayerRole;
+}
+
+function validatePromptOrder(promptOrder: unknown): number | undefined {
+  if (promptOrder == null) return undefined;
+  if (typeof promptOrder !== 'number' || !Number.isInteger(promptOrder) || promptOrder < 0) {
+    throw new Error('promptOrder must be an integer >= 0');
+  }
+  return promptOrder;
+}
+
+export interface PromptLayerMetadataUpdate {
+  identifier?: string;
+  role?: PromptLayerRole;
+  promptOrder?: number;
 }
 
 export class PromptLayerStore {
@@ -71,20 +105,24 @@ export class PromptLayerStore {
     name: string;
     content: string;
     identifier?: string;
-    role?: 'system' | 'user' | 'assistant';
+    role?: PromptLayerRole;
     promptOrder?: number;
     priority?: number;
     channelType?: string;
     taskKind?: string;
     updatedBy?: string;
   }): PromptLayer {
+    const identifier = normalizePromptIdentifier(params.identifier);
+    const role = validatePromptRole(params.role);
+    const promptOrder = validatePromptOrder(params.promptOrder);
+
     const layer: PromptLayer = {
       id: randomUUID(),
       type: params.type,
       name: params.name,
-      identifier: params.identifier,
-      role: params.role,
-      promptOrder: params.promptOrder,
+      identifier,
+      role,
+      promptOrder,
       content: params.content,
       enabled: true,
       priority: params.priority ?? 0,
@@ -101,9 +139,17 @@ export class PromptLayerStore {
     return layer;
   }
 
-  update(id: string, content: string, updatedBy: string): PromptLayer {
+  update(id: string, content: string, updatedBy: string, metadata: PromptLayerMetadataUpdate = {}): PromptLayer {
     const layer = this.layers.find(l => l.id === id);
     if (!layer) throw new Error(`Prompt layer not found: ${id}`);
+
+    const hasIdentifier = Object.prototype.hasOwnProperty.call(metadata, 'identifier');
+    const hasRole = Object.prototype.hasOwnProperty.call(metadata, 'role');
+    const hasPromptOrder = Object.prototype.hasOwnProperty.call(metadata, 'promptOrder');
+
+    const identifier = hasIdentifier ? normalizePromptIdentifier(metadata.identifier) : undefined;
+    const role = hasRole ? validatePromptRole(metadata.role) : undefined;
+    const promptOrder = hasPromptOrder ? validatePromptOrder(metadata.promptOrder) : undefined;
 
     // Record history before modifying
     this.appendHistory({
@@ -119,6 +165,9 @@ export class PromptLayerStore {
     });
 
     layer.content = content;
+    if (hasIdentifier) layer.identifier = identifier;
+    if (hasRole) layer.role = role;
+    if (hasPromptOrder) layer.promptOrder = promptOrder;
     layer.checksum = contentChecksum(content);
     layer.version += 1;
     layer.updatedAt = new Date().toISOString();
@@ -190,6 +239,7 @@ export class PromptLayerStore {
         name: 'Character Foundation',
         identifier: 'main',
         role: 'system',
+        promptOrder: 0,
         content: systemPrompt,
         priority: 0,
         updatedBy: 'system',
@@ -208,8 +258,12 @@ export class PromptLayerStore {
       base.identifier = 'main';
       touched = true;
     }
-    if (!base.role) {
+    if (!base.role || !PROMPT_LAYER_ROLES.includes(base.role)) {
       base.role = 'system';
+      touched = true;
+    }
+    if (base.promptOrder == null || !Number.isInteger(base.promptOrder) || base.promptOrder < 0) {
+      base.promptOrder = 0;
       touched = true;
     }
 

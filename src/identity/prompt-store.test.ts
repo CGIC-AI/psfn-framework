@@ -135,6 +135,40 @@ describe('PromptLayerStore', () => {
       expect(updated.updatedBy).toBe('admin');
     });
 
+    it('updates metadata fields when provided', () => {
+      const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
+      const updated = store.update(layer.id, 'v2', 'admin', {
+        identifier: 'runtime.main',
+        role: 'assistant',
+        promptOrder: 4,
+      });
+
+      expect(updated.identifier).toBe('runtime.main');
+      expect(updated.role).toBe('assistant');
+      expect(updated.promptOrder).toBe(4);
+    });
+
+    it('allows clearing optional metadata fields', () => {
+      const layer = store.create({
+        type: 'runtime',
+        name: 'Test',
+        content: 'v1',
+        identifier: 'runtime.main',
+        role: 'assistant',
+        promptOrder: 2,
+      });
+
+      const updated = store.update(layer.id, 'v2', 'admin', {
+        identifier: '   ',
+        role: undefined,
+        promptOrder: undefined,
+      });
+
+      expect(updated.identifier).toBeUndefined();
+      expect(updated.role).toBeUndefined();
+      expect(updated.promptOrder).toBeUndefined();
+    });
+
     it('writes history entry', () => {
       const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
       store.update(layer.id, 'v2', 'admin');
@@ -149,6 +183,17 @@ describe('PromptLayerStore', () => {
 
     it('throws for unknown layer', () => {
       expect(() => store.update('nonexistent', 'content', 'admin')).toThrow('Prompt layer not found');
+    });
+
+    it('validates role enum values', () => {
+      const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
+      expect(() => store.update(layer.id, 'v2', 'admin', { role: 'bad' as any })).toThrow('Invalid prompt role');
+    });
+
+    it('validates promptOrder as integer >= 0', () => {
+      const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
+      expect(() => store.update(layer.id, 'v2', 'admin', { promptOrder: -1 })).toThrow('promptOrder must be an integer >= 0');
+      expect(() => store.update(layer.id, 'v2', 'admin', { promptOrder: 1.5 })).toThrow('promptOrder must be an integer >= 0');
     });
   });
 
@@ -222,6 +267,7 @@ describe('PromptLayerStore', () => {
       expect(layers[0].content).toBe('You are Purrsephone.');
       expect(layers[0].identifier).toBe('main');
       expect(layers[0].role).toBe('system');
+      expect(layers[0].promptOrder).toBe(0);
     });
 
     it('skips seeding when layers already exist', () => {
@@ -245,6 +291,7 @@ describe('PromptLayerStore', () => {
       const upgraded = store.getAll()[0];
       expect(upgraded.identifier).toBe('main');
       expect(upgraded.role).toBe('system');
+      expect(upgraded.promptOrder).toBe(0);
       expect(upgraded.content).toContain('{{user}}');
       expect(upgraded.updatedBy).toBe('system:migrate-user-token');
       expect(upgraded.version).toBe(2);

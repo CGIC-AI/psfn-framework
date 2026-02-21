@@ -1113,6 +1113,9 @@ describe('AdminServer', () => {
       const res = await request(port, 'GET', '/prompts');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Prompt Soil');
+      expect(res.body).toContain('Macro Catalog');
+      expect(res.body).toContain('{{user}}');
+      expect(res.body).toContain('{{trust_level}}');
       expect(res.body).toContain('Static Prompt Registry');
       expect(res.body).toContain(EXTRACTION_PROMPT_KEY);
     });
@@ -1129,15 +1132,23 @@ describe('AdminServer', () => {
       expect(res.body).toContain('name="scenario"');
       expect(res.body).toContain('name="mes_example"');
       expect(res.body).toContain('name="first_mes"');
+      expect(res.body).toContain('name="identifier"');
+      expect(res.body).toContain('name="role"');
+      expect(res.body).toContain('name="promptOrder"');
+      expect(res.body).toContain('value="main"');
+      expect(res.body).toContain('value="0"');
       expect(res.body).toContain('name="prompt_format" value="ccv3_sections_v1"');
       expect(res.body).toContain('Base test system prompt');
     });
 
-    it('updates prompt layer via structured section form and persists composed content', async () => {
+    it('updates prompt layer via structured section form and persists composed content + metadata', async () => {
       const layer = promptStore.getAll()[0];
       if (!layer) throw new Error('Expected seeded prompt layer');
       const body = new URLSearchParams({
         layerId: layer.id,
+        identifier: 'garden.main',
+        role: 'system',
+        promptOrder: '3',
         prompt_format: 'ccv3_sections_v1',
         description: 'A steady, observant companion.',
         personality: 'Warm and concise.',
@@ -1163,6 +1174,61 @@ describe('AdminServer', () => {
       expect(updated?.content).toContain('### scenario\nOperating inside the admin panel.');
       expect(updated?.content).toContain('### mes_example\nUser: show status\nAssistant: Here is the status.');
       expect(updated?.content).toContain('### first_mes\nHello, I am ready to help.');
+      expect(updated?.identifier).toBe('garden.main');
+      expect(updated?.role).toBe('system');
+      expect(updated?.promptOrder).toBe(3);
+    });
+
+    it('rejects invalid role metadata updates', async () => {
+      const layer = promptStore.getAll()[0];
+      if (!layer) throw new Error('Expected seeded prompt layer');
+      const before = promptStore.getById(layer.id);
+
+      const body = new URLSearchParams({
+        layerId: layer.id,
+        role: 'bad-role',
+        content: 'Base test system prompt',
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/prompts/update', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('role must be one of: system, user, assistant');
+
+      const after = promptStore.getById(layer.id);
+      expect(after?.version).toBe(before?.version);
+      expect(after?.role).toBe(before?.role);
+    });
+
+    it('rejects non-integer or negative promptOrder updates', async () => {
+      const layer = promptStore.getAll()[0];
+      if (!layer) throw new Error('Expected seeded prompt layer');
+
+      const badDecimal = new URLSearchParams({
+        layerId: layer.id,
+        promptOrder: '1.5',
+        content: 'Base test system prompt',
+      }).toString();
+
+      const decimalRes = await request(port, 'POST', '/api/prompts/update', badDecimal, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(decimalRes.status).toBe(200);
+      expect(decimalRes.body).toContain('promptOrder must be an integer');
+
+      const badNegative = new URLSearchParams({
+        layerId: layer.id,
+        promptOrder: '-1',
+        content: 'Base test system prompt',
+      }).toString();
+
+      const negativeRes = await request(port, 'POST', '/api/prompts/update', badNegative, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(negativeRes.status).toBe(200);
+      expect(negativeRes.body).toContain('promptOrder must be an integer');
     });
 
     it('rejects malformed structured prompt content updates', async () => {

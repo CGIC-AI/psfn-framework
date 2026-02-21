@@ -21,6 +21,7 @@ import { ShardManager } from './shards/manager.js';
 import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
 import { ApiServer } from './channels/api/server.js';
+import type { ChannelAdapter } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
@@ -58,7 +59,7 @@ export class SubstrateRuntime implements Lifecycle {
   private salienceDecay!: SalienceDecay;
   private scheduler!: Scheduler;
   private shardManager!: ShardManager;
-  private apiServer?: ApiServer;
+  private channelRegistry = new Map<string, ChannelAdapter>();
   private adminServer?: AdminServer;
   private lifecycleNotifier?: LifecycleNotifier;
   private stopVoiceObservers?: () => void;
@@ -71,6 +72,24 @@ export class SubstrateRuntime implements Lifecycle {
     this.stopVoiceObservers = attachVoiceObservers(this.eventBus);
     this.stopDebugObserver = attachTerminalDebugObserver(this.eventBus, { scope: 'runtime' });
     this.startTime = Date.now();
+  }
+
+  private registerChannelAdapter(adapter: ChannelAdapter): void {
+    this.channelRegistry.set(adapter.id, adapter);
+    this.agentLoop.setChannelRegistry(this.channelRegistry);
+  }
+
+  private async startChannels(): Promise<void> {
+    for (const adapter of this.channelRegistry.values()) {
+      await adapter.gateway.start();
+    }
+  }
+
+  private async stopChannels(): Promise<void> {
+    const adapters = [...this.channelRegistry.values()].reverse();
+    for (const adapter of adapters) {
+      await adapter.gateway.stop();
+    }
   }
 
   async init(): Promise<void> {
@@ -230,6 +249,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
     this.discord.setAgent(this.agentLoop);
     await this.discord.init();
+    this.registerChannelAdapter(this.discord);
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
     const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
@@ -274,7 +294,7 @@ export class SubstrateRuntime implements Lifecycle {
         config: this.config,
       });
 
-      this.apiServer = new ApiServer({
+      const apiServer = new ApiServer({
         port: apiPort,
         host: process.env.API_HOST || undefined,
         agentLoop: this.agentLoop,
@@ -284,7 +304,8 @@ export class SubstrateRuntime implements Lifecycle {
         modelName: process.env.API_MODEL_NAME,
         voiceWebSocketRuntime,
       });
-      await this.apiServer.init();
+      await apiServer.init();
+      this.registerChannelAdapter(apiServer);
       log.info(`API server configured on port ${apiPort}`);
     }
 
@@ -327,8 +348,7 @@ export class SubstrateRuntime implements Lifecycle {
   async start(): Promise<void> {
     log.info('Starting...');
     this.scheduler.start();
-    await this.discord.start();
-    if (this.apiServer) await this.apiServer.start();
+    await this.startChannels();
     if (this.adminServer) await this.adminServer.start();
     await this.eventBus.emit('system.ready', {});
 
@@ -348,9 +368,8 @@ export class SubstrateRuntime implements Lifecycle {
     this.stopDebugObserver?.();
     this.stopDebugObserver = undefined;
     this.scheduler.stop();
-    if (this.apiServer) await this.apiServer.stop();
     if (this.adminServer) await this.adminServer.stop();
-    await this.discord.stop();
+    await this.stopChannels();
     this.db.close();
     log.info('Stopped');
   }

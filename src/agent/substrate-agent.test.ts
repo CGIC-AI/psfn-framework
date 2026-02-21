@@ -6,6 +6,7 @@ import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type { ContactStore } from '../contacts/store.js';
+import type { ChannelPromptDock } from '../channels/types.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -644,6 +645,69 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(compose).toHaveBeenCalledWith({
       channelType: 'discord_text',
+      taskKind: undefined,
+    });
+  });
+
+  it('prefers channel prompt adapter channelType from the runtime registry', async () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'Base prompt', config,
+    );
+    const compose = vi.fn().mockReturnValue({
+      text: 'Layered prompt',
+      hash: 'abc123',
+      layerCount: 1,
+      layerIds: ['layer-1'],
+    });
+    agent.promptComposer = { compose } as any;
+
+    const discordDock: ChannelPromptDock = {
+      id: 'discord',
+      capabilities: { promptChannelType: 'discord_capability' },
+      prompt: {
+        resolveChannelType: () => 'discord_registry_prompt',
+      },
+    };
+    agent.setChannelRegistry(new Map([['discord', discordDock]]));
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'discord-channel-2',
+      channelType: 'discord',
+    }));
+
+    expect(compose).toHaveBeenCalledWith({
+      channelType: 'discord_registry_prompt',
+      taskKind: undefined,
+    });
+  });
+
+  it('falls back to channel capabilities promptChannelType when prompt adapter is absent', async () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'Base prompt', config,
+    );
+    const compose = vi.fn().mockReturnValue({
+      text: 'Layered prompt',
+      hash: 'abc123',
+      layerCount: 1,
+      layerIds: ['layer-1'],
+    });
+    agent.promptComposer = { compose } as any;
+
+    const apiDock: ChannelPromptDock = {
+      id: 'api',
+      capabilities: { promptChannelType: 'api_capability' },
+    };
+    agent.setChannelRegistry(new Map([['api', apiDock]]));
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'api:session-77',
+      channelType: 'api',
+    }));
+
+    expect(compose).toHaveBeenCalledWith({
+      channelType: 'api_capability',
       taskKind: undefined,
     });
   });

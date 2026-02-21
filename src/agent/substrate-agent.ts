@@ -25,6 +25,7 @@ import type { Contact } from '../contacts/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
+import type { ChannelPromptDock } from '../channels/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import { convertToLlm } from './messages.js';
@@ -66,6 +67,7 @@ export class SubstrateAgent {
   private modelResolved = false;
   private modelSignature: string | null = null;
   private bridge: EventBridge;
+  private channelRegistry = new Map<string, ChannelPromptDock>();
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -188,6 +190,10 @@ export class SubstrateAgent {
     } else {
       this.extendedTools.push(tool);
     }
+  }
+
+  setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {
+    this.channelRegistry = new Map(registry);
   }
 
   private createLoadToolsTool(): AgentTool<any> {
@@ -733,7 +739,32 @@ export class SubstrateAgent {
   }
 
   /** Map message channel info to a channelType string for prompt composition */
+  private resolveChannelPromptDock(message: SubstrateMessage): ChannelPromptDock | undefined {
+    const fromChannelType = this.channelRegistry.get(message.channelType);
+    if (fromChannelType) return fromChannelType;
+
+    const separatorIndex = message.channelId.indexOf(':');
+    if (separatorIndex > 0) {
+      const prefix = message.channelId.slice(0, separatorIndex);
+      const fromPrefix = this.channelRegistry.get(prefix);
+      if (fromPrefix) return fromPrefix;
+    }
+
+    if (message.channelId.startsWith('discord-voice:')) {
+      return this.channelRegistry.get('discord');
+    }
+    return undefined;
+  }
+
+  /** Map message channel info to a channelType string for prompt composition */
   private resolveChannelType(message: SubstrateMessage): string | undefined {
+    const channelDock = this.resolveChannelPromptDock(message);
+    const adapterType = channelDock?.prompt?.resolveChannelType(message);
+    if (adapterType) return adapterType;
+    if (channelDock?.capabilities.promptChannelType) {
+      return channelDock.capabilities.promptChannelType;
+    }
+
     if (message.channelId.startsWith('discord-voice:')) return 'discord_voice';
     if (message.channelId.startsWith('api:')) return 'api';
     if (message.channelId.startsWith('internal:')) return 'internal';
@@ -743,6 +774,10 @@ export class SubstrateAgent {
 
   /** Map internal channel/task context to prompt taskKind overlays */
   private resolveTaskKind(message: SubstrateMessage): string | undefined {
+    const channelDock = this.resolveChannelPromptDock(message);
+    const adapterTaskKind = channelDock?.prompt?.resolveTaskKind?.(message);
+    if (adapterTaskKind) return adapterTaskKind;
+
     if (!message.channelId.startsWith('internal:')) return undefined;
 
     const suffix = message.channelId.slice('internal:'.length).toLowerCase();

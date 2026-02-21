@@ -1,0 +1,19 @@
+{
+  "trustCeiling": {
+    "primary": ["public", "personal", "intimate", "confidential"],
+    "trusted": ["public", "personal"],
+    "regular": ["public"],
+    "public": ["public"]
+  },
+  "visibilityAllowed": {
+    "private": ["public", "personal", "intimate", "confidential"],
+    "semi_private": ["public", "personal"],
+    "public": ["public"],
+    "broadcast": ["public"]
+  },
+  "channelClassification": {
+    "privatePrefixes": ["api:", "sillytavern:", "openwebui:", "shard:", "internal:"],
+    "broadcastPrefixes": ["twitter:", "social:"],
+    "defaultVisibility": "semi_private"
+  }
+}

@@ -2,7 +2,6 @@
 // Subset of SubstrateConfig that can be changed at runtime via admin GUI.
 // Persisted to data/settings.json. Loaded at startup, merged over env defaults.
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   ModelCatalogEntry,
@@ -20,10 +19,12 @@ import {
   resolveSessionHistoryBudgetPct,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from './context-budget.js';
+import { loadOrSeedJson, writeJsonAtomic } from './config/load-or-seed.js';
 
 const log = createComponentLogger('Settings');
 
 const SETTINGS_FILE = 'settings.json';
+const SETTINGS_SEED_FILE = 'settings.seed.json';
 const PRIMARY_MODEL_SLOT_KEY = 'primary';
 const EXTRACTION_MODEL_SLOT_KEY = 'extraction';
 const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'reasoning', 'longContext'];
@@ -54,6 +55,26 @@ export interface EditableSettings {
   sessionMessageLimit?: number;
   memoryRetrievalLimit?: number;
   extractionInterval?: number;
+  maintenanceIntervalMs?: number;
+  defaultContextWindow?: number;
+  memoryBudgetPct?: number;
+  extractionThresholdPct?: number;
+  compactionThresholdPct?: number;
+  memoryExtractionMinImportance?: number;
+  memoryExtractionMinConfidence?: number;
+  memoryExtractionMinNovelty?: number;
+  memoryExtractionMaxWrites?: number;
+  memoryExtractionTelemetryEnabled?: boolean;
+  memoryRetrievalTelemetryEnabled?: boolean;
+  profileSynthesisEnabled?: boolean;
+  profileSynthesisRefreshIntervalMs?: number;
+  profileSynthesisCooldownMs?: number;
+  profileSynthesisMinWrites?: number;
+  profileSynthesisMinImportance?: number;
+  profileSynthesisMinConfidence?: number;
+  profileSynthesisMinNovelty?: number;
+  profileSynthesisSourceMemoryLimit?: number;
+  profileSynthesisMinSourceMemories?: number;
   thinkMaxTokens?: number;
   thinkMaxWallTimeMs?: number;
   thinkMaxSubQueries?: number;
@@ -549,34 +570,35 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
   };
 }
 
-/** Load saved settings from data/settings.json. Returns {} if file missing. */
-export function loadSettings(dataDir: string): EditableSettings {
+/** Load saved settings from data/settings.json, seeding from config/settings.seed.json when missing/corrupt. */
+export function loadSettings(
+  dataDir: string,
+  options?: { seedDir?: string },
+): EditableSettings {
   const path = join(dataDir, SETTINGS_FILE);
-  try {
-    const raw = readFileSync(path, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (!isRecord(parsed)) {
-      log.warn('Invalid settings file format, ignoring');
-      return {};
-    }
-    log.info('Loaded saved settings');
-    return normalizeEditableSettings(parsed as EditableSettings);
-  } catch (err: unknown) {
-    const code = isRecord(err) ? err.code : undefined;
-    if (code === 'ENOENT') return {};
-    log.warn('Error reading settings file', { error: String(err) });
-    return {};
-  }
+  const seedDir = options?.seedDir ?? process.env.CONFIG_DIR ?? './config';
+  const seedPath = join(seedDir, SETTINGS_SEED_FILE);
+
+  const loaded = loadOrSeedJson({
+    dataPath: path,
+    seedPath,
+    validate: (raw, sourcePath) => {
+      if (!isRecord(raw)) {
+        throw new Error(`Invalid settings file format at ${sourcePath}`);
+      }
+      return normalizeEditableSettings(raw as EditableSettings);
+    },
+  });
+
+  log.info('Loaded saved settings');
+  return loaded;
 }
 
 /** Atomic write: write to .tmp then rename. */
 export function saveSettings(dataDir: string, settings: EditableSettings): void {
-  mkdirSync(dataDir, { recursive: true });
   const path = join(dataDir, SETTINGS_FILE);
-  const tmpPath = path + '.tmp';
   const normalized = normalizeEditableSettings(settings);
-  writeFileSync(tmpPath, JSON.stringify(normalized, null, 2) + '\n', 'utf-8');
-  renameSync(tmpPath, path);
+  writeJsonAtomic(path, normalized);
   log.info('Saved settings');
 }
 

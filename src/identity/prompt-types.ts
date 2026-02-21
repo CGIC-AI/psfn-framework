@@ -2,6 +2,8 @@
 // Layered prompt composition: base -> operator -> runtime -> channel -> task
 
 export type LayerType = 'base' | 'operator' | 'runtime' | 'channel' | 'task';
+export const PROMPT_LAYER_ROLES = ['system', 'user', 'assistant'] as const;
+export type PromptLayerRole = (typeof PROMPT_LAYER_ROLES)[number];
 
 export const LAYER_TYPE_ORDER: Record<LayerType, number> = {
   base: 0,
@@ -23,7 +25,7 @@ export interface PromptLayer {
   /**
    * Optional role metadata for future prompt-manager routing.
    */
-  role?: 'system' | 'user' | 'assistant';
+  role?: PromptLayerRole;
   /**
    * Optional prompt-manager order override (lower = earlier).
    */

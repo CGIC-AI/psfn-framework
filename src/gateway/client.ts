@@ -4,7 +4,14 @@
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
-import type { AgentResponse, LLMContext, LLMResponse, StreamCallbacks, SubstrateMessage } from '../types.js';
+import type {
+  AgentResponse,
+  CompletionPurpose,
+  LLMContext,
+  LLMResponse,
+  StreamCallbacks,
+  SubstrateMessage,
+} from '../types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketClient } from './transport.js';
 import { createComponentLogger } from '../logger.js';
@@ -154,7 +161,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     }
   }
 
-  async complete(context: LLMContext, purpose: 'extraction' | 'summary'): Promise<LLMResponse> {
+  async complete(context: LLMContext, purpose: CompletionPurpose): Promise<LLMResponse> {
     const result = await this.rpcInstance.request('llm.complete', {
       model: '',
       provider: '',

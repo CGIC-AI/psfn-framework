@@ -1,7 +1,12 @@
 // ── JSON-RPC 2.0 method definitions ──
 // The contract between gateway (host) and agent (container).
 
-import type { ContextMessage, SubstrateMessage, ToolSchema } from '../types.js';
+import type {
+  CompletionPurpose,
+  ContextMessage,
+  SubstrateMessage,
+  ToolSchema,
+} from '../types.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -21,7 +26,7 @@ export interface LLMCompleteParams {
   provider: string;
   messages: ContextMessage[];
   systemPrompt: string;
-  purpose: 'extraction' | 'summary';
+  purpose: CompletionPurpose;
   maxTokens?: number;
 }
 

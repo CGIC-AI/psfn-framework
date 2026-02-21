@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { GatewayServer, type GatewayServerOptions } from './server.js';
 import type { NdjsonConnection } from './transport.js';
@@ -107,6 +107,32 @@ function makeVoiceMessage(content: string) {
     content,
     timestamp: new Date('2025-01-01T00:00:00.000Z'),
   };
+}
+
+async function invokeRpc(
+  conn: ReturnType<typeof createMockConnection>,
+  id: number,
+  method: string,
+  params: unknown,
+): Promise<any> {
+  conn._emit({
+    jsonrpc: '2.0',
+    id,
+    method,
+    params,
+  });
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const response = conn.sent.find(
+      (msg: any) => msg.id === id && ('result' in msg || 'error' in msg),
+    );
+    if (response) {
+      return response;
+    }
+    await new Promise(r => setTimeout(r, 5));
+  }
+
+  throw new Error(`No RPC response found for id ${id}`);
 }
 
 describe('GatewayServer', () => {
@@ -408,6 +434,118 @@ describe('GatewayServer', () => {
 
       // Now requestAgent should throw "No agent connected"
       await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+    });
+  });
+
+  describe('notify.ntfy', () => {
+    const fetchMock = vi.fn();
+
+    beforeEach(() => {
+      fetchMock.mockReset();
+      vi.stubGlobal('fetch', fetchMock);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('posts to ntfy and returns sent status', async () => {
+      fetchMock.mockResolvedValue(
+        new Response('', {
+          status: 200,
+          headers: { 'x-message-id': 'msg-123' },
+        }),
+      );
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        ntfy: {
+          baseUrl: 'https://ntfy.local',
+          defaultTopic: 'default-topic',
+          token: 'test-token',
+          timeoutMs: 1_000,
+          debounceWindowMs: 60_000,
+        },
+      });
+
+      const response = await invokeRpc(conn, 1, 'notify.ntfy', {
+        message: 'Discord gateway offline',
+        title: 'Incident',
+        priority: 5,
+        topic: 'urgent',
+      });
+
+      expect(response.result).toEqual({
+        status: 'sent',
+        topic: 'urgent',
+        messageId: 'msg-123',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://ntfy.local/urgent',
+        expect.objectContaining({
+          method: 'POST',
+          body: 'Discord gateway offline',
+          headers: expect.objectContaining({
+            Title: 'Incident',
+            Priority: '5',
+            Authorization: 'Bearer test-token',
+          }),
+        }),
+      );
+    });
+
+    it('debounces duplicate alerts', async () => {
+      fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        ntfy: {
+          baseUrl: 'https://ntfy.local',
+          defaultTopic: 'ops',
+          timeoutMs: 1_000,
+          debounceWindowMs: 60_000,
+        },
+      });
+
+      const params = {
+        message: 'Discord gateway offline',
+        title: 'Incident',
+        priority: 5,
+      };
+      const first = await invokeRpc(conn, 2, 'notify.ntfy', params);
+      const second = await invokeRpc(conn, 3, 'notify.ntfy', params);
+
+      expect(first.result.status).toBe('sent');
+      expect(second.result).toEqual({
+        status: 'debounced',
+        topic: 'ops',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns provider error when ntfy responds non-2xx', async () => {
+      fetchMock.mockResolvedValue(
+        new Response('error', {
+          status: 500,
+          statusText: 'Internal Server Error',
+        }),
+      );
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        ntfy: {
+          baseUrl: 'https://ntfy.local',
+          defaultTopic: 'ops',
+          timeoutMs: 1_000,
+          debounceWindowMs: 60_000,
+        },
+      });
+
+      const response = await invokeRpc(conn, 4, 'notify.ntfy', {
+        message: 'Discord gateway offline',
+      });
+
+      expect(response.error).toBeDefined();
+      expect(response.error.code).toBe(-32003);
+      expect(response.error.message).toContain('ntfy request failed: 500');
     });
   });
 });

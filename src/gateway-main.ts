@@ -21,6 +21,14 @@ import { loadModelsConfig } from './config/models-config.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
+const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
+const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
+
+function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -32,6 +40,11 @@ async function main(): Promise<void> {
   applySettings(config, modelsConfig);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const workspacePath = process.env.WORKSPACE_PATH ?? './workspace';
+  const ntfyBaseUrl = process.env.NTFY_BASE_URL?.trim() || undefined;
+  const ntfyTopic = process.env.NTFY_TOPIC?.trim() || undefined;
+  const ntfyToken = process.env.NTFY_TOKEN?.trim() || undefined;
+  const ntfyTimeoutMs = parsePositiveIntEnv(process.env.NTFY_TIMEOUT_MS, DEFAULT_NTFY_TIMEOUT_MS);
+  const ntfyDebounceMs = parsePositiveIntEnv(process.env.NTFY_DEBOUNCE_MS, DEFAULT_NTFY_DEBOUNCE_MS);
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
@@ -72,8 +85,21 @@ async function main(): Promise<void> {
       workspacePath,
       allowedReadPaths: process.env.ALLOWED_READ_PATHS?.split(':'),
     },
+    ntfy: ntfyBaseUrl && ntfyTopic
+      ? {
+        baseUrl: ntfyBaseUrl,
+        defaultTopic: ntfyTopic,
+        token: ntfyToken,
+        timeoutMs: ntfyTimeoutMs,
+        debounceWindowMs: ntfyDebounceMs,
+      }
+      : undefined,
     auditStore,
   });
+
+  if ((ntfyBaseUrl && !ntfyTopic) || (!ntfyBaseUrl && ntfyTopic)) {
+    log.warn('ntfy alerts disabled: both NTFY_BASE_URL and NTFY_TOPIC are required');
+  }
 
   // ── Wire Discord → Agent notifications ──
 

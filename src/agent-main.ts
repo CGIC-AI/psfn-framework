@@ -19,6 +19,9 @@ import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
+import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
+import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
+import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
@@ -67,6 +70,15 @@ async function main(): Promise<void> {
     defaultContextWindow: config.defaultContextWindow,
   });
   applySettings(config, modelsConfig);
+  const trustPolicyConfig = loadTrustPolicyConfig(config.dataDir, {
+    seedDir: process.env.CONFIG_DIR,
+  });
+  setRuntimeTrustPolicy(trustPolicyConfig);
+  const schedulerConfig = resolveRuntimeSchedulerConfig({
+    dataDir: config.dataDir,
+    seedDir: process.env.CONFIG_DIR,
+  });
+  config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
@@ -151,7 +163,10 @@ async function main(): Promise<void> {
   const salienceDecay = new SalienceDecay(memoryStore);
 
   // Scheduler — PSFN's internal clock
-  const scheduler = new Scheduler(eventBus);
+  const scheduler = new Scheduler(eventBus, {
+    tickIntervalMs: schedulerConfig.tickIntervalMs,
+    heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,
+  });
   scheduler.register({
     id: 'salience-decay',
     name: 'Memory Salience Decay',

@@ -28,6 +28,9 @@ import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
+import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
+import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
+import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -104,6 +107,15 @@ export class SubstrateRuntime implements Lifecycle {
       defaultContextWindow: this.config.defaultContextWindow,
     });
     applySettings(this.config, modelsConfig);
+    const trustPolicyConfig = loadTrustPolicyConfig(this.config.dataDir, {
+      seedDir: process.env.CONFIG_DIR,
+    });
+    setRuntimeTrustPolicy(trustPolicyConfig);
+    const schedulerConfig = resolveRuntimeSchedulerConfig({
+      dataDir: this.config.dataDir,
+      seedDir: process.env.CONFIG_DIR,
+    });
+    this.config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
 
     // Ensure data directory exists
     mkdirSync(dirname(this.config.databasePath), { recursive: true });
@@ -192,7 +204,10 @@ export class SubstrateRuntime implements Lifecycle {
     this.salienceDecay = new SalienceDecay(this.memoryStore);
 
     // Scheduler — PSFN's internal clock
-    this.scheduler = new Scheduler(this.eventBus);
+    this.scheduler = new Scheduler(this.eventBus, {
+      tickIntervalMs: schedulerConfig.tickIntervalMs,
+      heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,
+    });
     this.scheduler.register({
       id: 'salience-decay',
       name: 'Memory Salience Decay',

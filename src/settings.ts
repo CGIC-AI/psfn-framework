@@ -524,13 +524,17 @@ export function normalizeEditableSettings(
 }
 
 function mergeModelSettingsWithConfig(config: SubstrateConfig, settings: EditableSettings): EditableSettings {
+  const hasStructuredModelInputs = settings.modelCatalog !== undefined
+    || settings.modelRoleAssignments !== undefined
+    || settings.modelRoster !== undefined;
+
   return {
-    primaryModel: settings.primaryModel ?? config.primaryModel,
-    primaryProvider: settings.primaryProvider ?? config.primaryProvider,
-    extractionModel: settings.extractionModel ?? config.extractionModel,
-    extractionProvider: settings.extractionProvider ?? config.extractionProvider,
-    primaryMaxTokens: settings.primaryMaxTokens ?? config.primaryMaxTokens,
-    extractionMaxTokens: settings.extractionMaxTokens ?? config.extractionMaxTokens,
+    primaryModel: hasStructuredModelInputs ? settings.primaryModel : (settings.primaryModel ?? config.primaryModel),
+    primaryProvider: hasStructuredModelInputs ? settings.primaryProvider : (settings.primaryProvider ?? config.primaryProvider),
+    extractionModel: hasStructuredModelInputs ? settings.extractionModel : (settings.extractionModel ?? config.extractionModel),
+    extractionProvider: hasStructuredModelInputs ? settings.extractionProvider : (settings.extractionProvider ?? config.extractionProvider),
+    primaryMaxTokens: hasStructuredModelInputs ? settings.primaryMaxTokens : (settings.primaryMaxTokens ?? config.primaryMaxTokens),
+    extractionMaxTokens: hasStructuredModelInputs ? settings.extractionMaxTokens : (settings.extractionMaxTokens ?? config.extractionMaxTokens),
     modelCatalog: settings.modelCatalog ?? config.modelCatalog,
     modelRoleAssignments: settings.modelRoleAssignments ?? config.modelRoleAssignments,
     modelRoster: settings.modelRoster,

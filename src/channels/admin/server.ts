@@ -369,6 +369,70 @@ export class AdminServer implements Lifecycle {
       },
       {
         method: 'GET',
+        match: exactPath('/api/settings/models'),
+        handle: (_req, res) => sendText(res, 200, this.handlers.modelsConfigJson(), {
+          'Content-Type': 'application/json',
+        }),
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/settings/models'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.updateModelsConfig(body));
+          });
+        },
+      },
+      {
+        method: 'GET',
+        match: exactPath('/api/settings/skills'),
+        handle: (_req, res) => sendText(res, 200, this.handlers.skillsConfigJson(), {
+          'Content-Type': 'application/json',
+        }),
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/settings/skills'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.updateSkillsConfig(body));
+          });
+        },
+      },
+      {
+        method: 'GET',
+        match: exactPath('/api/settings/scheduler'),
+        handle: (_req, res) => sendText(res, 200, this.handlers.schedulerConfigJson(), {
+          'Content-Type': 'application/json',
+        }),
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/settings/scheduler'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.updateSchedulerConfig(body));
+          });
+        },
+      },
+      {
+        method: 'GET',
+        match: exactPath('/api/settings/trust-policy'),
+        handle: (_req, res) => sendText(res, 200, this.handlers.trustPolicyConfigJson(), {
+          'Content-Type': 'application/json',
+        }),
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/settings/trust-policy'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.updateTrustPolicyConfig(body));
+          });
+        },
+      },
+      {
+        method: 'GET',
         match: exactPath('/api/models'),
         handle: (_req, res) => {
           this.handlers.modelListJson().then(

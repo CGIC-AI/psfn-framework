@@ -20,6 +20,24 @@ export class Scheduler {
     this.config = { ...DEFAULT_SCHEDULER_CONFIG, ...config };
   }
 
+  updateConfig(config: Partial<SchedulerConfig>): void {
+    const next = { ...this.config, ...config };
+    const tickChanged = next.tickIntervalMs !== this.config.tickIntervalMs;
+    const heartbeatChanged = next.heartbeatIntervalMs !== this.config.heartbeatIntervalMs;
+
+    this.config = next;
+
+    if (heartbeatChanged) {
+      this.updateTask('heartbeat', { intervalMs: this.config.heartbeatIntervalMs });
+    }
+
+    if (tickChanged && this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+      this.start();
+    }
+  }
+
   register(task: ScheduledTask, opts?: { skipFirstRun?: boolean }): void {
     if (this.tasks.has(task.id)) {
       throw new Error(`Task "${task.id}" is already registered`);

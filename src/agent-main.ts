@@ -46,6 +46,7 @@ import {
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
+import { resolveAdminChatApiBaseUrl } from './channels/admin/chat/api-base-url.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -209,11 +210,17 @@ async function main(): Promise<void> {
   // ── API server (optional) ──
 
   let apiServer: ApiServer | undefined;
+  const apiHost = process.env.API_HOST || undefined;
   const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;
+  const adminChatApiBaseUrl = resolveAdminChatApiBaseUrl({
+    explicitApiBaseUrl: process.env.API_BASE_URL,
+    apiHost,
+    apiPort,
+  });
   if (apiPort) {
     apiServer = new ApiServer({
       port: apiPort,
-      host: process.env.API_HOST || undefined,
+      host: apiHost,
       agentLoop,
       eventBus,
       sessionManager,
@@ -248,6 +255,7 @@ async function main(): Promise<void> {
       host: process.env.ADMIN_HOST || undefined,
       token: adminToken,
       allowInsecureWithoutToken,
+      apiBaseUrl: adminChatApiBaseUrl,
       memoryStore,
       sessionStore,
       sessionManager,

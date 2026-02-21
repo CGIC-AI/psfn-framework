@@ -100,6 +100,7 @@ export class AdminServer implements Lifecycle {
       promptStore: config.promptStore,
       promptRegistry: config.promptRegistry,
       skillsRuntime: config.skillsRuntime,
+      apiBaseUrl: config.apiBaseUrl,
     });
     this.routes = this.buildRoutes();
     this.server = createServer((req, res) => this.handleRequest(req, res));

@@ -11,6 +11,7 @@ import { SessionManager } from './session/manager.js';
 import { UserContinuityStore } from './session/continuity.js';
 import { AgentLoop } from './agent-loop.js';
 import { DiscordAdapter } from './channels/discord/adapter.js';
+import { TelegramAdapter } from './channels/telegram/adapter.js';
 import { MemoryStore } from './memory/store.js';
 import { EmbeddingProvider } from './memory/embedding.js';
 import { MemoryRetriever } from './memory/retrieval.js';
@@ -43,6 +44,7 @@ import {
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
 import { attachVoiceObservers } from './voice/observers/index.js';
+import { loadRuntimeChannelsConfig } from './channels/config.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -242,6 +244,7 @@ export class SubstrateRuntime implements Lifecycle {
       allowedPaths: ['src/', 'docs/', 'purrsephone/'],
     });
     log.info('Git self-modification tools enabled');
+    const channelsConfig = loadRuntimeChannelsConfig(this.config.dataDir);
 
     // Discord adapter — setAgent enables steering (mid-stream message injection)
     this.discord = new DiscordAdapter(this.config, this.eventBus, {
@@ -250,6 +253,17 @@ export class SubstrateRuntime implements Lifecycle {
     this.discord.setAgent(this.agentLoop);
     await this.discord.init();
     this.registerChannelAdapter(this.discord);
+
+    if (channelsConfig.telegram.enabled) {
+      const telegram = new TelegramAdapter(channelsConfig.telegram, this.eventBus);
+      telegram.onMessage((message) => this.agentLoop.handleMessage(message));
+      await telegram.init();
+      this.registerChannelAdapter(telegram);
+      log.info('Telegram adapter configured', {
+        mode: channelsConfig.telegram.mode,
+        allowlistSize: channelsConfig.telegram.allowedUsers.length,
+      });
+    }
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
     const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;

@@ -7,7 +7,7 @@ import {
 
 // ── Channel-agnostic message types ──
 
-export type ChannelType = 'discord' | 'terminal' | 'api';
+export type ChannelType = 'discord' | 'terminal' | 'api' | 'telegram';
 
 export interface SubstrateMessage {
   id: string;

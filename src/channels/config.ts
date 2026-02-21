@@ -7,8 +7,19 @@ const log = createComponentLogger('ChannelConfig');
 const CHANNELS_CONFIG_FILE = 'channels.json';
 const ENV_TOKEN_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const DEFAULT_TELEGRAM_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_TELEGRAM_WEBHOOK_HOST = '0.0.0.0';
+const DEFAULT_TELEGRAM_WEBHOOK_PORT = 8_080;
+const DEFAULT_TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 
 export type TelegramMode = 'polling' | 'webhook';
+
+export interface TelegramWebhookConfig {
+  url: string;
+  secret: string;
+  host: string;
+  port: number;
+  path: string;
+}
 
 export interface TelegramChannelConfig {
   enabled: boolean;
@@ -16,6 +27,7 @@ export interface TelegramChannelConfig {
   allowedUsers: string[];
   mode: TelegramMode;
   pollIntervalMs: number;
+  webhook: TelegramWebhookConfig;
 }
 
 export interface RuntimeChannelsConfig {
@@ -28,6 +40,13 @@ const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
   allowedUsers: [],
   mode: 'polling',
   pollIntervalMs: DEFAULT_TELEGRAM_POLL_INTERVAL_MS,
+  webhook: {
+    url: '',
+    secret: '',
+    host: DEFAULT_TELEGRAM_WEBHOOK_HOST,
+    port: DEFAULT_TELEGRAM_WEBHOOK_PORT,
+    path: DEFAULT_TELEGRAM_WEBHOOK_PATH,
+  },
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,6 +95,11 @@ function parseTelegramMode(value: unknown): TelegramMode | undefined {
   return value;
 }
 
+function parseString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return value.trim();
+}
+
 function parseStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -90,6 +114,24 @@ function parseAllowlistFromEnv(value: string | undefined): string[] | undefined 
     .split(',')
     .map(entry => entry.trim())
     .filter(entry => entry.length > 0);
+}
+
+function parseWebhookPath(value: unknown, fallback: string): string {
+  const parsed = parseString(value) ?? fallback;
+  const normalized = parsed.trim();
+  if (!normalized) return fallback;
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
+function deriveWebhookPathFromUrl(webhookUrl: string): string | undefined {
+  if (!webhookUrl) return undefined;
+  try {
+    const parsed = new URL(webhookUrl);
+    const path = parsed.pathname.trim();
+    return path || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function loadRawChannelsConfig(dataDir: string): Record<string, unknown> {
@@ -144,6 +186,28 @@ export function loadRuntimeChannelsConfig(
     ?? parsePositiveInteger(telegramConfig.pollIntervalMs)
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.pollIntervalMs;
 
+  const webhookConfig = isRecord(telegramConfig.webhook)
+    ? telegramConfig.webhook
+    : {};
+  const webhookUrl = (env.TELEGRAM_WEBHOOK_URL
+    ?? parseString(webhookConfig.url)
+    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.url).trim();
+  const webhookSecret = (env.TELEGRAM_WEBHOOK_SECRET
+    ?? parseString(webhookConfig.secret)
+    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.secret).trim();
+  const webhookHost = (env.TELEGRAM_WEBHOOK_HOST
+    ?? parseString(webhookConfig.host)
+    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.host).trim();
+  const webhookPort = parsePositiveInteger(env.TELEGRAM_WEBHOOK_PORT)
+    ?? parsePositiveInteger(webhookConfig.port)
+    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.port;
+  const webhookPathFallback = deriveWebhookPathFromUrl(webhookUrl)
+    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.path;
+  const webhookPath = parseWebhookPath(
+    env.TELEGRAM_WEBHOOK_PATH ?? webhookConfig.path,
+    webhookPathFallback,
+  );
+
   return {
     telegram: {
       enabled,
@@ -151,6 +215,13 @@ export function loadRuntimeChannelsConfig(
       allowedUsers,
       mode,
       pollIntervalMs,
+      webhook: {
+        url: webhookUrl,
+        secret: webhookSecret,
+        host: webhookHost || DEFAULT_TELEGRAM_WEBHOOK_HOST,
+        port: webhookPort,
+        path: webhookPath,
+      },
     },
   };
 }

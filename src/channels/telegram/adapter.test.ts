@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createServer, type AddressInfo } from 'node:net';
 import { EventBus } from '../../event-bus.js';
 import type { AgentResponse, SubstrateMessage } from '../../types.js';
 import type { TelegramChannelConfig } from '../config.js';
@@ -9,14 +10,33 @@ interface FetchCall {
   body: Record<string, unknown>;
 }
 
-function makeConfig(overrides: Partial<TelegramChannelConfig> = {}): TelegramChannelConfig {
-  return {
+type TelegramConfigOverrides = Partial<Omit<TelegramChannelConfig, 'webhook'>> & {
+  webhook?: Partial<TelegramChannelConfig['webhook']>;
+};
+
+function makeConfig(overrides: TelegramConfigOverrides = {}): TelegramChannelConfig {
+  const base: TelegramChannelConfig = {
     enabled: true,
     token: 'telegram-token',
     allowedUsers: [],
     mode: 'polling',
     pollIntervalMs: 50,
+    webhook: {
+      url: 'https://example.com/telegram/webhook',
+      secret: '',
+      host: '127.0.0.1',
+      port: 8080,
+      path: '/telegram/webhook',
+    },
+  };
+
+  return {
+    ...base,
     ...overrides,
+    webhook: {
+      ...base.webhook,
+      ...overrides.webhook,
+    },
   };
 }
 
@@ -65,6 +85,28 @@ function okResponse(channelId: string): AgentResponse {
       durationMs: 1,
     },
   };
+}
+
+async function reservePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+  const address = server.address() as AddressInfo | null;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  if (!address) {
+    throw new Error('Unable to allocate an ephemeral test port');
+  }
+  return address.port;
 }
 
 describe('TelegramAdapter', () => {
@@ -195,10 +237,13 @@ describe('TelegramAdapter', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('provides media receive mapping and media send stub', async () => {
+  it('provides media receive mapping and native media send method selection', async () => {
     const { fetchImpl, calls } = makeFetchMock({
       sendChatAction: () => true,
       sendMessage: () => ({ message_id: 700 }),
+      sendPhoto: () => ({ message_id: 701 }),
+      sendVoice: () => ({ message_id: 702 }),
+      sendDocument: () => ({ message_id: 703 }),
     });
     const received: SubstrateMessage[] = [];
 
@@ -227,12 +272,93 @@ describe('TelegramAdapter', () => {
     expect(received[0].attachments?.[0].url).toContain('photo-file');
 
     await adapter.outbound.sendMedia?.(
-      { channelId: 'telegram:321' },
+      {
+        channelId: 'telegram:321/thread/9',
+        replyToMessageId: 'telegram:321:55',
+      },
       { url: 'https://example.com/file.png', contentType: 'image/png', name: 'file.png' },
     );
+    await adapter.outbound.sendMedia?.(
+      { channelId: 'telegram:321/thread/9' },
+      { url: 'telegram://file/voice-file', contentType: 'audio/ogg', name: 'voice.ogg' },
+    );
+    await adapter.outbound.sendMedia?.(
+      { channelId: 'telegram:321/thread/9' },
+      { url: 'https://example.com/spec.pdf', contentType: 'application/pdf', name: 'spec.pdf' },
+    );
 
-    const sendCalls = calls.filter(call => call.method === 'sendMessage');
-    expect(sendCalls.at(-1)?.body.text).toContain('[media stub]');
+    const sendPhotoCall = calls.find(call => call.method === 'sendPhoto');
+    expect(sendPhotoCall?.body.chat_id).toBe('321');
+    expect(sendPhotoCall?.body.message_thread_id).toBe(9);
+    expect(sendPhotoCall?.body.reply_to_message_id).toBe(55);
+    expect(sendPhotoCall?.body.photo).toBe('https://example.com/file.png');
+
+    const sendVoiceCall = calls.find(call => call.method === 'sendVoice');
+    expect(sendVoiceCall?.body.chat_id).toBe('321');
+    expect(sendVoiceCall?.body.message_thread_id).toBe(9);
+    expect(sendVoiceCall?.body.voice).toBe('voice-file');
+
+    const sendDocumentCall = calls.find(call => call.method === 'sendDocument');
+    expect(sendDocumentCall?.body.chat_id).toBe('321');
+    expect(sendDocumentCall?.body.message_thread_id).toBe(9);
+    expect(sendDocumentCall?.body.document).toBe('https://example.com/spec.pdf');
+  });
+
+  it('registers webhook mode lifecycle and routes incoming updates through listener', async () => {
+    const webhookPort = await reservePort();
+    const { fetchImpl, calls } = makeFetchMock({
+      setWebhook: () => true,
+      deleteWebhook: () => true,
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 901 }),
+    });
+    const handled: SubstrateMessage[] = [];
+    const adapter = new TelegramAdapter(makeConfig({
+      mode: 'webhook',
+      webhook: {
+        url: 'https://public.example.com/hooks/telegram',
+        secret: 'shared-secret',
+        host: '127.0.0.1',
+        port: webhookPort,
+        path: '/hooks/telegram',
+      },
+    }), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => {
+      handled.push(message);
+      return okResponse(message.channelId);
+    });
+
+    await adapter.start();
+
+    const registerCall = calls.find(call => call.method === 'setWebhook');
+    expect(registerCall?.body.url).toBe('https://public.example.com/hooks/telegram');
+    expect(registerCall?.body.secret_token).toBe('shared-secret');
+
+    const response = await fetch(`http://127.0.0.1:${webhookPort}/hooks/telegram`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-telegram-bot-api-secret-token': 'shared-secret',
+      },
+      body: JSON.stringify({
+        update_id: 10,
+        message: {
+          message_id: 33,
+          date: 1_700_000_900,
+          text: 'webhook hello',
+          chat: { id: 444, type: 'private' },
+          from: { id: 55, is_bot: false, username: 'webhook_user' },
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(handled).toHaveLength(1);
+    expect(handled[0].content).toBe('webhook hello');
+    expect(handled[0].channelId).toBe('telegram:444');
+
+    await adapter.stop();
+    const deregisterCall = calls.find(call => call.method === 'deleteWebhook');
+    expect(deregisterCall?.body.drop_pending_updates).toBe(false);
   });
 
   it('starts/stops polling lifecycle through gateway facet', async () => {

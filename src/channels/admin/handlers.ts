@@ -25,6 +25,7 @@ import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import { importCharacterCardToPath } from '../../identity/importer.js';
 import type { TrustLevel } from '../../trust/types.js';
 import type {
   Contact,
@@ -432,6 +433,34 @@ export class AdminHandlers {
 
   identityPage(): string {
     return tpl.layout('Identity', tpl.identityPage(this.characterCard, this.config), 'identity');
+  }
+
+  importIdentityCard(body: string): string {
+    const params = new URLSearchParams(body);
+    const sourcePath = (params.get('path') ?? '').trim();
+    if (!sourcePath) {
+      return tpl.identityImportResult(false, 'path is required');
+    }
+
+    const destinationPath = this.config.characterCardPath?.trim();
+    if (!destinationPath) {
+      return tpl.identityImportResult(false, 'CHARACTER_CARD_PATH is not configured');
+    }
+
+    try {
+      const imported = importCharacterCardToPath(sourcePath, destinationPath);
+      this.characterCard = imported.card;
+      const warningSuffix = imported.warnings.length > 0
+        ? ` Warnings: ${imported.warnings.join('; ')}`
+        : '';
+      return tpl.identityImportResult(
+        true,
+        `Imported "${imported.card.data.name}" from ${imported.sourcePath} (${imported.containerFormat}/${imported.spec}).${warningSuffix}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return tpl.identityImportResult(false, `Import failed: ${message}`);
+    }
   }
 
   // ── Settings ──

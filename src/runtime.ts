@@ -32,6 +32,7 @@ import { MemoryWriter } from './memory/writer.js';
 import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
+import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
   wirePromptRuntime,
@@ -125,6 +126,12 @@ export class SubstrateRuntime implements Lifecycle {
       this.config,
       { characterName: card.data.name },
     );
+
+    const skillsRuntime = wireSkillsRuntime(this.agentLoop, {
+      dataDir: this.config.dataDir,
+      seedDir: process.env.CONFIG_DIR,
+      repoRoot: process.cwd(),
+    });
 
     // Prompt stack — layered, editable system prompt
     const promptStore = wirePromptRuntime(
@@ -302,6 +309,7 @@ export class SubstrateRuntime implements Lifecycle {
         contactStore,
         promptStore,
         promptRegistry,
+        skillsRuntime,
       });
       await this.adminServer.init();
       log.info(`Admin GUI configured on port ${adminPort}`);

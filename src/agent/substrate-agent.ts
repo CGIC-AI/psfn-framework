@@ -31,6 +31,7 @@ import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
+import type { SkillsRuntime } from '../skills/runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -75,6 +76,9 @@ export class SubstrateAgent {
 
   // Prompt composition — null falls back to static systemPrompt
   promptComposer: PromptComposer | null = null;
+
+  // SKILL.md runtime — null until skills system is wired
+  skillsRuntime: SkillsRuntime | null = null;
 
   constructor(
     eventBus: EventBus,
@@ -698,6 +702,7 @@ export class SubstrateAgent {
     const contextWindow = this.resolveContextWindow();
     const coreCount = this.coreTools.length;
     const extendedCount = this.extendedTools.length;
+    const skillsContext = this.skillsRuntime?.getPromptXml() ?? '';
 
     const lines = [
       '[Runtime Context]',
@@ -716,6 +721,12 @@ export class SubstrateAgent {
       for (const t of this.extendedTools) {
         lines.push(`- ${t.name}: ${t.description.split('.')[0]}`);
       }
+    }
+
+    if (skillsContext) {
+      lines.push('');
+      lines.push('[Skills]');
+      lines.push(skillsContext);
     }
 
     return lines.join('\n');

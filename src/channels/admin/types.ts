@@ -12,6 +12,7 @@ import type { SubstrateConfig } from '../../types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { SkillsRuntime } from '../../skills/runtime.js';
 
 export interface AdminServerConfig {
   port: number;
@@ -29,6 +30,7 @@ export interface AdminServerConfig {
   modelDiscovery?: ModelDiscovery | null;
   promptStore?: PromptLayerStore | null;
   promptRegistry?: PromptRegistryStore | null;
+  skillsRuntime?: SkillsRuntime | null;
 }
 
 export interface DashboardStats {

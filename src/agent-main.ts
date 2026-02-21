@@ -27,6 +27,7 @@ import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/no
 import type { MessageSender } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
+import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -111,6 +112,12 @@ async function main(): Promise<void> {
     systemPrompt,
     characterName: card.data.name,
     config,
+  });
+
+  const skillsRuntime = wireSkillsRuntime(agentLoop, {
+    dataDir: config.dataDir,
+    seedDir: process.env.CONFIG_DIR,
+    repoRoot: process.cwd(),
   });
 
   // Prompt stack — layered, editable system prompt
@@ -233,6 +240,7 @@ async function main(): Promise<void> {
       contactStore,
       promptStore,
       promptRegistry,
+      skillsRuntime,
     });
     await adminServer.init();
     await adminServer.start();

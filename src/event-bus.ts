@@ -128,6 +128,15 @@ export interface EventMap {
     userId?: string;
     error: string;
   };
+  'voice.connection.state': {
+    guildId: string;
+    channelId: string;
+    userId: string;
+    generation: number;
+    previousStatus: string;
+    status: string;
+    timestampMs: number;
+  };
   'voice.turn.start': {
     turnId: string;
     channelId?: string;

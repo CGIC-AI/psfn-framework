@@ -56,6 +56,14 @@ const securityMocks = vi.hoisted(() => {
 });
 
 const voiceSdkMocks = vi.hoisted(() => {
+  const VoiceConnectionStatus = {
+    Ready: 'ready',
+    Connecting: 'connecting',
+    Signalling: 'signalling',
+    Disconnected: 'disconnected',
+    Destroyed: 'destroyed',
+  };
+
   return {
     createAudioResource: vi.fn((resource: unknown) => ({ resource })),
     entersState: vi.fn(async () => undefined),
@@ -63,6 +71,8 @@ const voiceSdkMocks = vi.hoisted(() => {
       play: vi.fn(),
       stop: vi.fn(),
     })),
+    joinVoiceChannel: vi.fn(),
+    VoiceConnectionStatus,
   };
 });
 
@@ -74,14 +84,12 @@ vi.mock('@discordjs/voice', () => {
       AfterSilence: 'after-silence',
     },
     entersState: voiceSdkMocks.entersState,
-    joinVoiceChannel: vi.fn(),
+    joinVoiceChannel: voiceSdkMocks.joinVoiceChannel,
     AudioPlayerStatus: {
       Playing: 'playing',
       Idle: 'idle',
     },
-    VoiceConnectionStatus: {
-      Ready: 'ready',
-    },
+    VoiceConnectionStatus: voiceSdkMocks.VoiceConnectionStatus,
   };
 });
 
@@ -214,6 +222,70 @@ async function* makeFinalTranscriptStream(text: string): AsyncGenerator<{
   };
 }
 
+type MockStateListener = (oldState: { status: string }, newState: { status: string }) => void;
+type MockSpeakingListener = (userId: string) => void;
+
+function createMockVoiceConnection(initialStatus = voiceSdkMocks.VoiceConnectionStatus.Ready): any {
+  const stateListeners: MockStateListener[] = [];
+  let lastStateListener: MockStateListener | null = null;
+
+  const connection: any = {
+    state: { status: initialStatus },
+    receiver: {
+      subscribe: vi.fn(() => new PassThrough()),
+      speaking: {
+        on: vi.fn((_event: string, _handler: MockSpeakingListener) => undefined),
+        off: vi.fn((_event: string, _handler: MockSpeakingListener) => undefined),
+      },
+    },
+    subscribe: vi.fn(),
+    destroy: vi.fn(),
+    rejoin: vi.fn(() => true),
+    rejoinAttempts: 0,
+    on: vi.fn((event: string, handler: MockStateListener) => {
+      if (event !== 'stateChange') return;
+      stateListeners.push(handler);
+      lastStateListener = handler;
+    }),
+    off: vi.fn((event: string, handler: MockStateListener) => {
+      if (event !== 'stateChange') return;
+      const index = stateListeners.indexOf(handler);
+      if (index !== -1) {
+        stateListeners.splice(index, 1);
+      }
+    }),
+    emitStateChange: (previousStatus: string, status: string) => {
+      const oldState = { status: previousStatus };
+      const nextState = { status };
+      connection.state = nextState;
+      stateListeners.slice().forEach((listener) => listener(oldState, nextState));
+    },
+    invokeLastStateListener: (previousStatus: string, status: string) => {
+      if (!lastStateListener) return;
+      lastStateListener({ status: previousStatus }, { status });
+    },
+  };
+
+  return connection;
+}
+
+function makeVoiceChannel(id: string): any {
+  return {
+    id,
+    guild: {
+      id: 'guild-1',
+      voiceAdapterCreator: {},
+    },
+    members: new Map([
+      ['user-1', { displayName: 'Voice User', user: { username: 'Voice User', bot: false } }],
+    ]),
+  };
+}
+
+async function flushAsyncWork(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function makeRuntimeHarness(
   eventBus: EventBus,
   handler: (...args: any[]) => any,
@@ -269,6 +341,7 @@ describe('DiscordVoiceRuntime', () => {
 
     voiceSdkMocks.entersState.mockReset();
     voiceSdkMocks.entersState.mockImplementation(async () => undefined);
+    voiceSdkMocks.joinVoiceChannel.mockReset();
   });
 
   it('emits partial transcript events and uses streaming TTS playback', async () => {
@@ -458,5 +531,162 @@ describe('DiscordVoiceRuntime', () => {
         error: 'tts buffer fallback failed',
       }),
     ]);
+  });
+
+  it('emits connection state events and attempts reconnect when disconnected', async () => {
+    const eventBus = new EventBus();
+    const stateEvents: Array<{ previousStatus: string; status: string; generation: number }> = [];
+    eventBus.on('voice.connection.state', (event) => {
+      stateEvents.push({
+        previousStatus: event.previousStatus,
+        status: event.status,
+        generation: event.generation,
+      });
+    });
+
+    const runtime = new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig(),
+      eventBus,
+      getHandler: () => null,
+    });
+
+    const connection = createMockVoiceConnection();
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection);
+
+    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+
+    connection.emitStateChange(voiceSdkMocks.VoiceConnectionStatus.Ready, voiceSdkMocks.VoiceConnectionStatus.Signalling);
+    connection.emitStateChange(voiceSdkMocks.VoiceConnectionStatus.Signalling, voiceSdkMocks.VoiceConnectionStatus.Disconnected);
+    await flushAsyncWork();
+
+    expect(connection.on).toHaveBeenCalledWith('stateChange', expect.any(Function));
+    expect(connection.rejoin).toHaveBeenCalledTimes(1);
+    expect(stateEvents).toEqual([
+      expect.objectContaining({
+        previousStatus: voiceSdkMocks.VoiceConnectionStatus.Ready,
+        status: voiceSdkMocks.VoiceConnectionStatus.Signalling,
+        generation: 1,
+      }),
+      expect.objectContaining({
+        previousStatus: voiceSdkMocks.VoiceConnectionStatus.Signalling,
+        status: voiceSdkMocks.VoiceConnectionStatus.Disconnected,
+        generation: 1,
+      }),
+    ]);
+  });
+
+  it('cleans up runtime state when disconnected and reconnect fails', async () => {
+    const eventBus = new EventBus();
+    const endReasons: string[] = [];
+    eventBus.on('channel.voice.end', (event) => {
+      endReasons.push(event.reason);
+    });
+
+    const runtime = new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig(),
+      eventBus,
+      getHandler: () => null,
+    });
+
+    const connection = createMockVoiceConnection();
+    connection.rejoin.mockReturnValue(false);
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection);
+
+    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+
+    connection.emitStateChange(voiceSdkMocks.VoiceConnectionStatus.Ready, voiceSdkMocks.VoiceConnectionStatus.Disconnected);
+    await flushAsyncWork();
+
+    expect(connection.receiver.speaking.off).toHaveBeenCalledWith('start', expect.any(Function));
+    expect(connection.off).toHaveBeenCalledWith('stateChange', expect.any(Function));
+    expect(connection.destroy).toHaveBeenCalledTimes(1);
+    expect((runtime as any).connection).toBeNull();
+    expect((runtime as any).player).toBeNull();
+    expect((runtime as any).activeChannel).toBeNull();
+    expect(endReasons).toContain('connection-disconnected');
+  });
+
+  it('cleans up runtime state when connection is destroyed', async () => {
+    const eventBus = new EventBus();
+    const endReasons: string[] = [];
+    eventBus.on('channel.voice.end', (event) => {
+      endReasons.push(event.reason);
+    });
+
+    const runtime = new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig(),
+      eventBus,
+      getHandler: () => null,
+    });
+
+    const connection = createMockVoiceConnection();
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection);
+
+    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+
+    connection.emitStateChange(voiceSdkMocks.VoiceConnectionStatus.Ready, voiceSdkMocks.VoiceConnectionStatus.Destroyed);
+    await flushAsyncWork();
+
+    expect(connection.receiver.speaking.off).toHaveBeenCalledWith('start', expect.any(Function));
+    expect(connection.off).toHaveBeenCalledWith('stateChange', expect.any(Function));
+    expect(connection.destroy).toHaveBeenCalledTimes(1);
+    expect((runtime as any).connection).toBeNull();
+    expect((runtime as any).player).toBeNull();
+    expect((runtime as any).activeChannel).toBeNull();
+    expect(endReasons).toContain('connection-destroyed');
+  });
+
+  it('ignores stale state events from prior connections', async () => {
+    const eventBus = new EventBus();
+    const stateEvents: string[] = [];
+    const endReasons: string[] = [];
+    eventBus.on('voice.connection.state', (event) => {
+      stateEvents.push(event.status);
+    });
+    eventBus.on('channel.voice.end', (event) => {
+      endReasons.push(event.reason);
+    });
+
+    const runtime = new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig(),
+      eventBus,
+      getHandler: () => null,
+    });
+
+    const firstConnection = createMockVoiceConnection();
+    const secondConnection = createMockVoiceConnection();
+    voiceSdkMocks.joinVoiceChannel
+      .mockReturnValueOnce(firstConnection)
+      .mockReturnValueOnce(secondConnection);
+
+    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+    await (runtime as any).joinChannel(makeVoiceChannel('channel-2'));
+
+    firstConnection.invokeLastStateListener(
+      voiceSdkMocks.VoiceConnectionStatus.Ready,
+      voiceSdkMocks.VoiceConnectionStatus.Destroyed,
+    );
+    await flushAsyncWork();
+
+    expect((runtime as any).connection).toBe(secondConnection);
+    expect((runtime as any).activeChannel?.id).toBe('channel-2');
+    expect(stateEvents).toEqual([]);
+    expect(endReasons).not.toContain('connection-destroyed');
   });
 });

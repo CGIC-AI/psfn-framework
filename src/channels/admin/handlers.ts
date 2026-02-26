@@ -3,6 +3,7 @@
 
 import type { ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import type { MemoryStore } from '../../memory/store.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -97,6 +98,7 @@ import {
   parseStructuredPromptForm,
 } from './prompt-structured-content.js';
 import { AdminAuditTimelineStore } from './audit-timeline.js';
+import { ValuesJournalStore } from '../../values/store.js';
 import {
   buildCompactionSourceBlock,
   computeCompactionSourceSha256,
@@ -215,6 +217,7 @@ export class AdminHandlers {
   private thinkTraces: ThinkTraceView[] = [];
   private chatDebugCounter = 0;
   private auditTimeline = new AdminAuditTimelineStore();
+  private valuesJournal: ValuesJournalStore;
   private activeToolInvocations = new Map<string, ActiveToolInvocation>();
 
   constructor(deps: {
@@ -255,6 +258,7 @@ export class AdminHandlers {
     this.chatBootstrapService = new AdminChatBootstrapService(this.contactStore, {
       apiBaseUrl: deps.apiBaseUrl,
     });
+    this.valuesJournal = new ValuesJournalStore(join(this.config.dataDir, 'values.jsonl'));
 
     this.eventBus.on('agent.turn.usage', ({ usage }) => {
       this.usageTotals.turns += 1;
@@ -1992,6 +1996,11 @@ export class AdminHandlers {
   }
 
   // ── Events (SSE) ──
+
+  valuesTimelinePageHtml(): string {
+    const entries = this.valuesJournal.list({ limit: 250 });
+    return tpl.layout('Values Timeline', tpl.valuesTimelinePage({ entries }), 'values');
+  }
 
   eventsPageHtml(searchParams?: URLSearchParams): string {
     const filters = this.auditTimeline.parseFilters(searchParams);

@@ -300,9 +300,12 @@ describe('SessionManager', () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const eventBus = new EventBus();
     const mgr = new SessionManager(store, config, eventBus);
+    const callOrder: string[] = [];
+    let flushCompleted = false;
 
     const extractionComplete = vi.fn<LLMProvider['complete']>().mockImplementation(async (context, purpose) => {
       if (purpose === 'extraction' && context.systemPrompt.includes('Kyoto trip in April')) {
+        await new Promise(resolve => setTimeout(resolve, 10));
         return {
           content: `<response>
 <fact>
@@ -343,6 +346,29 @@ describe('SessionManager', () => {
       }),
       complete: extractionComplete,
     };
+    const compactionComplete = vi.fn<LLMProvider['complete']>().mockImplementation(async () => {
+      expect(flushCompleted).toBe(true);
+      callOrder.push('compaction-summary');
+      return {
+        content: 'Summary of old messages.',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      };
+    });
+    const compactionLLM: LLMProvider = {
+      stream: async () => ({
+        content: '',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+      complete: compactionComplete,
+    };
     const embeddingService = {
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
       embedBatch: vi.fn(),
@@ -364,6 +390,8 @@ describe('SessionManager', () => {
 
       mgr.setPreCompactionExtractionHandler(async ({ channelId, entries, canonicalContactId }) => {
         await extractor.queueCompactionExtraction(channelId, entries, canonicalContactId);
+        flushCompleted = true;
+        callOrder.push('flush-complete');
       });
 
       mgr.recordUserMessage('ch1', 'I am planning a Kyoto trip in April.', 'u1', 'User');
@@ -373,11 +401,14 @@ describe('SessionManager', () => {
         mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
       }
 
-      await mgr.buildContext('ch1', 'Sys', '', makeMockLLM(), 'contact-canonical-1');
+      await mgr.buildContext('ch1', 'Sys', '', compactionLLM, 'contact-canonical-1');
 
       const memories = memoryStore.getMemoriesByChannel('ch1', 10);
+      expect(callOrder).toEqual(['flush-complete', 'compaction-summary']);
+      expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
       expect(memories.some(memory => memory.text.includes('Kyoto trip in April'))).toBe(true);
       expect(extractionComplete).toHaveBeenCalled();
+      expect(compactionComplete).toHaveBeenCalledTimes(1);
     } finally {
       db.close();
     }

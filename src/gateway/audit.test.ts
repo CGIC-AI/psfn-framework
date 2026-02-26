@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { AuditStore } from './audit.js';
 
@@ -89,5 +89,62 @@ describe('AuditStore', () => {
     expect(params).toContain('500 chars');
     expect(params).toContain('2 messages');
     expect(params).toContain('300 chars');
+  });
+
+  it('prunes oldest rows when maxCount is exceeded', () => {
+    store = new AuditStore(db, {
+      maxCount: 2,
+      maxAgeMs: 60_000,
+      maxSizeBytes: 10_000,
+    });
+
+    store.log('first', 'ALLOW');
+    store.log('second', 'ALLOW');
+    store.log('third', 'ALLOW');
+
+    expect(store.count()).toBe(2);
+    expect(store.getRecent(10).map(entry => entry.method)).toEqual(['third', 'second']);
+  });
+
+  it('prunes rows older than maxAgeMs', () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      store = new AuditStore(db, {
+        maxCount: 100,
+        maxAgeMs: 1_000,
+        maxSizeBytes: 10_000,
+      });
+
+      nowSpy.mockReturnValueOnce(1_000);
+      store.log('old', 'ALLOW');
+
+      nowSpy.mockReturnValueOnce(3_000);
+      store.log('fresh', 'ALLOW');
+
+      expect(store.count()).toBe(1);
+      expect(store.getRecent(10)[0].method).toBe('fresh');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('prunes oldest rows when approximate payload size exceeds maxSizeBytes', () => {
+    store = new AuditStore(db, {
+      maxCount: 100,
+      maxAgeMs: 60_000,
+      maxSizeBytes: 220,
+    });
+
+    store.log('first', 'ALLOW', { note: 'a'.repeat(140) });
+    store.log('second', 'ALLOW', { note: 'b'.repeat(140) });
+
+    expect(store.count()).toBe(1);
+    expect(store.getRecent(10)[0].method).toBe('second');
+  });
+
+  it('rejects invalid rotation configuration', () => {
+    expect(() => new AuditStore(db, { maxCount: 0 })).toThrow('maxCount');
+    expect(() => new AuditStore(db, { maxAgeMs: 0 })).toThrow('maxAgeMs');
+    expect(() => new AuditStore(db, { maxSizeBytes: 0 })).toThrow('maxSizeBytes');
   });
 });

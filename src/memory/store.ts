@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import * as sqliteVec from 'sqlite-vec';
 import type { PurrMemory, SensitivityLevel, ConsentFlags } from './types.js';
 
+const SCRATCHPAD_MAX_ENTRIES = 64;
+const SCRATCHPAD_MAX_CONTENT_CHARS = 1_000;
+
 interface MemoryRow {
   id: string;
   text: string;
@@ -45,6 +48,13 @@ interface ContactProfileRow {
   updated_at: number;
 }
 
+interface ScratchpadRow {
+  id: string;
+  content: string;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface ContactProfileArtifact {
   contactId: string;
   summary: string;
@@ -63,6 +73,18 @@ export interface MemoryDeleteVersion {
   deleteReason?: string;
   restoredAt?: number;
   restoredBy?: string;
+}
+
+export interface ScratchpadEntry {
+  id: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ScratchpadAddResult {
+  entry: ScratchpadEntry;
+  evictedIds: string[];
 }
 
 function mapMemoryDeleteVersionRow(row: MemoryDeleteVersionRow): MemoryDeleteVersion {
@@ -136,6 +158,15 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
   };
 }
 
+function mapScratchpadRow(row: ScratchpadRow): ScratchpadEntry {
+  return {
+    id: row.id,
+    content: row.content,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export class MemoryStore {
   private db: Database.Database;
   private embeddingDims: number;
@@ -203,6 +234,14 @@ export class MemoryStore {
         memory_id TEXT PRIMARY KEY,
         embedding float[${this.embeddingDims}]
       );
+
+      CREATE TABLE IF NOT EXISTS scratchpad_entries (
+        id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_scratchpad_updated_at ON scratchpad_entries(updated_at DESC, created_at DESC);
     `);
   }
 
@@ -259,6 +298,16 @@ export class MemoryStore {
     `);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_memory ON l2_memory_delete_versions(memory_id)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_active ON l2_memory_delete_versions(restored_at, deleted_at)`);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS scratchpad_entries (
+        id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_scratchpad_updated_at ON scratchpad_entries(updated_at DESC, created_at DESC)`);
   }
 
   // ── L2 Memories ──
@@ -645,5 +694,124 @@ export class MemoryStore {
         updatedAt: row.updated_at,
       };
     });
+  }
+
+  addScratchpadEntry(
+    content: string,
+    options: {
+      id?: string;
+      now?: number;
+    } = {},
+  ): ScratchpadAddResult {
+    const normalizedContent = this.normalizeScratchpadContent(content);
+    const id = options.id?.trim() || randomUUID();
+    const now = options.now ?? Date.now();
+
+    const countStmt = this.db.prepare(`SELECT COUNT(*) as count FROM scratchpad_entries`);
+    const oldestStmt = this.db.prepare(`
+      SELECT id
+      FROM scratchpad_entries
+      ORDER BY updated_at ASC, created_at ASC
+      LIMIT ?
+    `);
+    const deleteStmt = this.db.prepare(`DELETE FROM scratchpad_entries WHERE id = ?`);
+    const insertStmt = this.db.prepare(`
+      INSERT INTO scratchpad_entries (id, content, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const evictedIds = this.db.transaction(() => {
+      const row = countStmt.get() as { count: number };
+      const overflow = Math.max(0, row.count - SCRATCHPAD_MAX_ENTRIES + 1);
+      let evicted: string[] = [];
+
+      if (overflow > 0) {
+        const rows = oldestStmt.all(overflow) as Array<{ id: string }>;
+        evicted = rows.map(entry => entry.id);
+        for (const evictedId of evicted) {
+          deleteStmt.run(evictedId);
+        }
+      }
+
+      insertStmt.run(id, normalizedContent, now, now);
+      return evicted;
+    })();
+
+    const entry = this.getScratchpadEntry(id);
+    if (!entry) {
+      throw new Error(`Failed to load scratchpad entry after insert: ${id}`);
+    }
+
+    return { entry, evictedIds };
+  }
+
+  replaceScratchpadEntry(
+    id: string,
+    content: string,
+    options: {
+      now?: number;
+    } = {},
+  ): ScratchpadEntry | null {
+    const normalizedId = id.trim();
+    if (!normalizedId) return null;
+    const normalizedContent = this.normalizeScratchpadContent(content);
+    const now = options.now ?? Date.now();
+
+    const result = this.db.prepare(`
+      UPDATE scratchpad_entries
+      SET content = ?, updated_at = ?
+      WHERE id = ?
+    `).run(normalizedContent, now, normalizedId);
+
+    if (result.changes === 0) return null;
+    return this.getScratchpadEntry(normalizedId) ?? null;
+  }
+
+  removeScratchpadEntry(id: string): boolean {
+    const normalizedId = id.trim();
+    if (!normalizedId) return false;
+    const result = this.db.prepare(`DELETE FROM scratchpad_entries WHERE id = ?`).run(normalizedId);
+    return result.changes > 0;
+  }
+
+  getScratchpadEntry(id: string): ScratchpadEntry | undefined {
+    const normalizedId = id.trim();
+    if (!normalizedId) return undefined;
+    const row = this.db.prepare(`
+      SELECT id, content, created_at, updated_at
+      FROM scratchpad_entries
+      WHERE id = ?
+      LIMIT 1
+    `).get(normalizedId) as ScratchpadRow | undefined;
+    return row ? mapScratchpadRow(row) : undefined;
+  }
+
+  listScratchpadEntries(limit: number = SCRATCHPAD_MAX_ENTRIES): ScratchpadEntry[] {
+    const normalizedLimit = this.normalizeScratchpadLimit(limit);
+    const rows = this.db.prepare(`
+      SELECT id, content, created_at, updated_at
+      FROM scratchpad_entries
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT ?
+    `).all(normalizedLimit) as ScratchpadRow[];
+    return rows.map(mapScratchpadRow);
+  }
+
+  private normalizeScratchpadContent(content: string): string {
+    const normalized = content.trim();
+    if (!normalized) {
+      throw new Error('Scratchpad content is required');
+    }
+    if (normalized.length > SCRATCHPAD_MAX_CONTENT_CHARS) {
+      throw new Error(
+        `Scratchpad content exceeds ${SCRATCHPAD_MAX_CONTENT_CHARS} characters`,
+      );
+    }
+    return normalized;
+  }
+
+  private normalizeScratchpadLimit(limit: number): number {
+    if (!Number.isFinite(limit)) return SCRATCHPAD_MAX_ENTRIES;
+    return Math.max(1, Math.min(SCRATCHPAD_MAX_ENTRIES, Math.floor(limit)));
   }
 }

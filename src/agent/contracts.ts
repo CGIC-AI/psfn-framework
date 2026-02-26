@@ -35,3 +35,14 @@ export interface MemoryProvider {
 export interface MemoryExtractor {
   maybeExtract(channelId: string, canonicalContactId?: string): Promise<void>;
 }
+
+export interface ScratchpadEntry {
+  id: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ScratchpadProvider {
+  listScratchpadEntries(limit?: number): ScratchpadEntry[];
+}

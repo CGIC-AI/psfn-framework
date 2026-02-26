@@ -35,6 +35,8 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   memory_import_batch: 'reversible',
   memory_delete: 'irreversible',
   undo_memory_delete: 'reversible',
+  scratchpad_read: 'reversible',
+  scratchpad_write: 'irreversible',
   repo_status: 'reversible',
   repo_diff: 'reversible',
   repo_apply_patch: 'irreversible',
@@ -551,4 +553,3 @@ export function createExternalCommunicationRateLimiterFromEnv(
     ),
   });
 }
-

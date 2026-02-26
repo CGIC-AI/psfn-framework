@@ -1,10 +1,11 @@
 // ── RLM Iteration Loop ──
 // Runs an ephemeral think cycle: LLM → code → output → repeat until FINAL.
 
-import type { ContextMessage, LLMResponse } from '../types.js';
+import type { CapabilityTier, ContextMessage, LLMResponse } from '../types.js';
 import type {
   BudgetStatus,
   REPLDeps,
+  REPLConfig,
   ThinkBudget,
   ThinkResult,
   ThinkStep,
@@ -28,6 +29,24 @@ import {
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
 const LLM_TIMEOUT_ANSWER = '[Think loop timed out waiting for LLM response]';
+const INVOCATION_RATE_LIMIT_REASON = 'invocation rate limit';
+const NURSERY_DAILY_COST_REASON = 'daily cost cap';
+const RATE_LIMIT_ANSWER = '[Think invocation rate limit exceeded; try again shortly]';
+const NURSERY_DAILY_CAP_ANSWER = '[Think daily cost cap reached for nursery tier]';
+
+interface DailyCostSnapshot {
+  dayKey: string;
+  totalUsd: number;
+}
+
+interface ReplGovernanceState {
+  invocationTimestampsMs: number[];
+  dailyCostByTier: Record<CapabilityTier, DailyCostSnapshot>;
+}
+
+const GOVERNANCE_DEFAULT_DAY = '1970-01-01';
+const GOVERNANCE_DEFAULT_COST: DailyCostSnapshot = { dayKey: GOVERNANCE_DEFAULT_DAY, totalUsd: 0 };
+const REPL_GOVERNANCE_BY_PROVIDER = new WeakMap<object, ReplGovernanceState>();
 
 class LLMIterationTimeoutError extends Error {
   constructor(timeoutMs: number) {
@@ -59,6 +78,94 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
       },
     );
   });
+}
+
+function resolveTierKey(tier: CapabilityTier): 'nursery' | 'apprentice' | 'autonomous' {
+  if (tier === 'nursery' || tier === 'apprentice' || tier === 'autonomous') {
+    return tier;
+  }
+  return 'autonomous';
+}
+
+function toDayKey(nowMs: number): string {
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+function getOrCreateGovernanceState(provider: object): ReplGovernanceState {
+  const existing = REPL_GOVERNANCE_BY_PROVIDER.get(provider);
+  if (existing) return existing;
+  const created: ReplGovernanceState = {
+    invocationTimestampsMs: [],
+    dailyCostByTier: {
+      nursery: { ...GOVERNANCE_DEFAULT_COST },
+      apprentice: { ...GOVERNANCE_DEFAULT_COST },
+      autonomous: { ...GOVERNANCE_DEFAULT_COST },
+      custom: { ...GOVERNANCE_DEFAULT_COST },
+    },
+  };
+  REPL_GOVERNANCE_BY_PROVIDER.set(provider, created);
+  return created;
+}
+
+function getDailyCostSnapshot(
+  state: ReplGovernanceState,
+  tier: CapabilityTier,
+  dayKey: string,
+): DailyCostSnapshot {
+  const current = state.dailyCostByTier[tier];
+  if (current.dayKey !== dayKey) {
+    const reset = { dayKey, totalUsd: 0 };
+    state.dailyCostByTier[tier] = reset;
+    return reset;
+  }
+  return current;
+}
+
+function estimateIterationCostUsd(
+  config: REPLConfig,
+  inputTokens: number,
+  outputTokens: number,
+): number {
+  const inputRate = Number.isFinite(config.cost.inputUsdPerMillionTokens)
+    ? Math.max(0, config.cost.inputUsdPerMillionTokens)
+    : 0;
+  const outputRate = Number.isFinite(config.cost.outputUsdPerMillionTokens)
+    ? Math.max(0, config.cost.outputUsdPerMillionTokens)
+    : 0;
+
+  return ((inputTokens * inputRate) + (outputTokens * outputRate)) / 1_000_000;
+}
+
+function resolveEffectiveBudget(config: REPLConfig, tier: CapabilityTier): ThinkBudget {
+  const tierKey = resolveTierKey(tier);
+  const tierBudget = config.tierBudgets[tierKey];
+
+  const baseIterations = Number.isFinite(config.budget.maxIterations)
+    ? Math.max(1, Math.floor(config.budget.maxIterations))
+    : tierBudget.maxIterations;
+
+  const baseWallTime = typeof config.budget.maxWallTimeMs === 'number' && Number.isFinite(config.budget.maxWallTimeMs)
+    ? Math.max(1, Math.floor(config.budget.maxWallTimeMs))
+    : tierBudget.maxWallTimeMs;
+
+  const baseSubQueries = typeof config.budget.maxSubQueries === 'number' && Number.isFinite(config.budget.maxSubQueries)
+    ? Math.max(1, Math.floor(config.budget.maxSubQueries))
+    : tierBudget.maxSubQueries;
+
+  return {
+    ...config.budget,
+    maxIterations: Math.min(baseIterations, tierBudget.maxIterations),
+    maxWallTimeMs: Math.min(baseWallTime, tierBudget.maxWallTimeMs),
+    maxSubQueries: Math.min(baseSubQueries, tierBudget.maxSubQueries),
+  };
+}
+
+function resolveMemoryCeilingBytes(config: REPLConfig, tier: CapabilityTier): number | undefined {
+  const tierLimitMb = config.tierBudgets[resolveTierKey(tier)].memoryCeilingMb;
+  if (!Number.isFinite(tierLimitMb) || tierLimitMb <= 0) {
+    return undefined;
+  }
+  return Math.floor(tierLimitMb * 1024 * 1024);
 }
 
 interface BuildResultOptions {
@@ -114,21 +221,84 @@ function pushPassiveStep(
 export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkResult> {
   const startTime = Date.now();
   const { config, llmProvider } = deps;
-  const budget = config.budget;
+  const tier = deps.getCapabilityTier?.() ?? 'autonomous';
+  const budget = resolveEffectiveBudget(config, tier);
 
   // Budget tracking
   const budgetStatus = createBudgetStatus();
+  const governanceState = getOrCreateGovernanceState(llmProvider);
+  const dayKey = toDayKey(startTime);
+  const dayCost = getDailyCostSnapshot(governanceState, tier, dayKey);
+  budgetStatus.dayCostUsd = dayCost.totalUsd;
+
+  const rateWindowMs = Number.isFinite(config.rateLimit.windowMs)
+    ? Math.max(1, Math.floor(config.rateLimit.windowMs))
+    : 60_000;
+  const maxInvocationsPerWindow = Number.isFinite(config.rateLimit.maxInvocationsPerMinute)
+    ? Math.floor(config.rateLimit.maxInvocationsPerMinute)
+    : 5;
+
+  if (maxInvocationsPerWindow > 0) {
+    const cutoff = startTime - rateWindowMs;
+    governanceState.invocationTimestampsMs = governanceState.invocationTimestampsMs
+      .filter(ts => ts > cutoff);
+    if (governanceState.invocationTimestampsMs.length >= maxInvocationsPerWindow) {
+      updateBudgetRuntime(budgetStatus, startTime, 0);
+      budgetStatus.exceeded = INVOCATION_RATE_LIMIT_REASON;
+      return buildThinkResult({
+        answer: RATE_LIMIT_ANSWER,
+        iterations: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        startTime,
+        truncated: true,
+        budgetStatus,
+        steps: [],
+      });
+    }
+    governanceState.invocationTimestampsMs.push(startTime);
+  }
+
+  const nurseryDailyCapUsd = Number.isFinite(config.cost.nurseryDailyCapUsd)
+    ? Math.max(0, config.cost.nurseryDailyCapUsd)
+    : 0;
+  if (tier === 'nursery' && nurseryDailyCapUsd > 0 && dayCost.totalUsd >= nurseryDailyCapUsd) {
+    updateBudgetRuntime(budgetStatus, startTime, 0);
+    budgetStatus.exceeded = NURSERY_DAILY_COST_REASON;
+    return buildThinkResult({
+      answer: NURSERY_DAILY_CAP_ANSWER,
+      iterations: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      startTime,
+      truncated: true,
+      budgetStatus,
+      steps: [],
+    });
+  }
 
   // Shared budget ref for sandbox llm_query tracking
   const budgetRef: SandboxBudgetRef = {
     subQueries: 0,
     maxSubQueries: budget.maxSubQueries ?? 20,
   };
+  const sandboxTokenUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+  };
+  const sandboxLLMProvider = Object.create(llmProvider) as typeof llmProvider;
+  sandboxLLMProvider.complete = async (context, purpose) => {
+    const response = await llmProvider.complete(context, purpose);
+    sandboxTokenUsage.inputTokens += response.inputTokens;
+    sandboxTokenUsage.outputTokens += response.outputTokens;
+    return response;
+  };
 
   const steps: ThinkStep[] = [];
+  const memoryCeilingBytes = resolveMemoryCeilingBytes(config, tier);
 
   const sandbox = new REPLSandbox({
-    llmProvider,
+    llmProvider: sandboxLLMProvider,
     embeddingService: deps.embeddingService,
     memoryStore: deps.memoryStore,
     sessionManager: deps.sessionManager,
@@ -137,7 +307,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     getCapabilityTier: deps.getCapabilityTier,
     moduleInstallConfirmationQueue: deps.moduleInstallConfirmationQueue,
     onModuleRegistryMutation: deps.onModuleRegistryMutation,
-  }, budgetRef);
+  }, budgetRef, { memoryCeilingBytes });
 
   // Gather context metadata for system prompt
   const stats = deps.memoryStore?.getStats();
@@ -161,8 +331,40 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
 
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let autonomousCostWarningSent = false;
+  const autonomousWarningUsd = Number.isFinite(config.cost.autonomousDailyWarningUsd)
+    ? Math.max(0, config.cost.autonomousDailyWarningUsd)
+    : 0;
+  const applyCostCharge = (inputTokens: number, outputTokens: number): void => {
+    const iterationCostUsd = estimateIterationCostUsd(
+      config,
+      inputTokens,
+      outputTokens,
+    );
+    budgetStatus.sessionCostUsd += iterationCostUsd;
+    dayCost.totalUsd += iterationCostUsd;
+    budgetStatus.dayCostUsd = dayCost.totalUsd;
+
+    if (
+      tier === 'autonomous'
+      && autonomousWarningUsd > 0
+      && !autonomousCostWarningSent
+      && dayCost.totalUsd >= autonomousWarningUsd
+    ) {
+      budgetStatus.warnings.push(
+        `Autonomous daily think spend warning: $${dayCost.totalUsd.toFixed(4)} >= $${autonomousWarningUsd.toFixed(4)}`,
+      );
+      autonomousCostWarningSent = true;
+    }
+  };
 
   for (let i = 0; i < budget.maxIterations; i++) {
+    if (tier === 'nursery' && nurseryDailyCapUsd > 0 && dayCost.totalUsd >= nurseryDailyCapUsd) {
+      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries);
+      budgetStatus.exceeded = NURSERY_DAILY_COST_REASON;
+      break;
+    }
+
     const iterationStart = Date.now();
     const remainingBeforeLLM = getRemainingWallTimeMs(startTime, budget);
     if (remainingBeforeLLM !== null && remainingBeforeLLM <= 0) {
@@ -210,6 +412,8 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
       startTime,
       budgetRef.subQueries,
     );
+
+    applyCostCharge(response.inputTokens, response.outputTokens);
 
     const text = response.content;
     messages.push({ role: 'assistant', content: text });
@@ -263,7 +467,14 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
       }
 
       case 'code': {
+        const sandboxInputBefore = sandboxTokenUsage.inputTokens;
+        const sandboxOutputBefore = sandboxTokenUsage.outputTokens;
         const result = await sandbox.execute(action.code, config.executionTimeoutMs, config.outputTruncation);
+        const sandboxInputDelta = sandboxTokenUsage.inputTokens - sandboxInputBefore;
+        const sandboxOutputDelta = sandboxTokenUsage.outputTokens - sandboxOutputBefore;
+        if (sandboxInputDelta > 0 || sandboxOutputDelta > 0) {
+          applyCostCharge(sandboxInputDelta, sandboxOutputDelta);
+        }
         const stepEvidence = sandbox.collectEvidence();
         const stepTokens = response.inputTokens + response.outputTokens;
 
@@ -331,6 +542,8 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
   }
   const timeoutFallback = budgetStatus.exceeded === LLM_TIMEOUT_REASON
     ? LLM_TIMEOUT_ANSWER
+    : budgetStatus.exceeded === NURSERY_DAILY_COST_REASON
+      ? NURSERY_DAILY_CAP_ANSWER
     : '[No response generated]';
   return buildThinkResult({
     answer: lastAssistant?.content ?? timeoutFallback,

@@ -1649,6 +1649,7 @@ export class AdminHandlers {
           details: this.compactDebugDetails({
             toolName: event.toolName,
             toolCallId: event.toolCallId,
+            shardId: event.shardId,
           }),
         });
       }
@@ -1660,6 +1661,7 @@ export class AdminHandlers {
             toolName: event.toolName,
             toolCallId: event.toolCallId,
             isError: event.isError,
+            shardId: event.shardId,
           }),
         });
       }

@@ -23,6 +23,7 @@ function mockTool(name: string): AgentTool<any> {
 describe('tool reversibility tagging', () => {
   it('classifies known irreversible tools', () => {
     expect(resolveToolReversibility('memory_delete')).toBe('irreversible');
+    expect(resolveToolReversibility('scratchpad_write')).toBe('irreversible');
     expect(resolveToolReversibility('self_restart')).toBe('irreversible');
     expect(resolveToolReversibility('repo_commit')).toBe('irreversible');
   });
@@ -166,4 +167,3 @@ describe('ExternalCommunicationRateLimiter', () => {
     expect(limiter.evaluate({ channel: 'discord', scope: 'alerts' }).allowed).toBe(true);
   });
 });
-

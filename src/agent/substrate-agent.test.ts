@@ -805,6 +805,67 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).toContain('conversation');
   });
 
+  it('injects bounded scratchpad notes into system context when scratchpad provider is wired', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    agent.scratchpadProvider = {
+      listScratchpadEntries: vi.fn().mockReturnValue([
+        {
+          id: 'sp-1',
+          content: 'Remember to confirm backup status before restart.',
+          createdAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_010_000,
+        },
+      ]),
+    } as any;
+
+    await agent.handleMessage(makeMessage());
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[1]).toContain('[Scratchpad]');
+    expect(buildCall[1]).toContain('sp-1');
+    expect(buildCall[1]).toContain('confirm backup status');
+  });
+
+  it('caps scratchpad prompt injection to a limited number of entries', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    agent.scratchpadProvider = {
+      listScratchpadEntries: vi.fn().mockReturnValue(
+        Array.from({ length: 12 }, (_, index) => ({
+          id: `sp-${index}`,
+          content: `note ${index} ${'x'.repeat(80)}`,
+          createdAt: 1_700_000_000_000 + index,
+          updatedAt: 1_700_000_000_000 + index,
+        })),
+      ),
+    } as any;
+
+    await agent.handleMessage(makeMessage());
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const prompt = buildCall[1] as string;
+    const injectedEntries = prompt
+      .split('\n')
+      .filter(line => line.startsWith('- sp-'));
+    expect(injectedEntries.length).toBeLessThanOrEqual(8);
+    expect(prompt).toContain('(4 additional notes omitted for context budget)');
+  });
+
   it('emits agent.error on handleMessage failure', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

@@ -23,7 +23,7 @@ import type {
 } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { Contact } from '../contacts/types.js';
-import type { LLMProvider, MemoryProvider, MemoryExtractor } from './contracts.js';
+import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
@@ -47,6 +47,7 @@ export type {
   EmbeddingService,
   MemoryProvider,
   MemoryExtractor,
+  ScratchpadProvider,
 } from './contracts.js';
 
 interface ResolvedAuthorContext {
@@ -65,6 +66,10 @@ interface ProactiveMemoryProvider extends MemoryProvider {
 }
 
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
+const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
+const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
+const SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS = 240;
+const SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS = 1_600;
 
 // ── SubstrateAgent ──
 
@@ -89,6 +94,7 @@ export class SubstrateAgent {
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
   memoryExtractor: MemoryExtractor | null = null;
+  scratchpadProvider: ScratchpadProvider | null = null;
 
   // Trust resolution — null until contacts are wired
   contactStore: ContactStore | null = null;
@@ -402,12 +408,15 @@ export class SubstrateAgent {
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
+      const scratchpadBlock = this.buildScratchpadContextBlock();
       this.emitTurnStage(message, startTime, 'memory', {
         durationMs: Date.now() - memoryStageStart,
         hasMemoryProvider: memoryProvider != null,
         memoryChars: memoryContextBlock.length,
         proactiveRecallChars: proactiveRecallBlock.length,
         proactiveRecallIncluded: proactiveRecallBlock.length > 0,
+        scratchpadChars: scratchpadBlock.length,
+        scratchpadIncluded: scratchpadBlock.length > 0,
       });
 
       // Compose system prompt: layered stack if available, else static
@@ -444,7 +453,10 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         runtimeNow,
       );
-      const fullPrompt = runtimePrompt + '\n\n' + runtimeContext;
+      const fullPrompt = [runtimePrompt, runtimeContext, scratchpadBlock]
+        .map(section => section.trim())
+        .filter(section => section.length > 0)
+        .join('\n\n');
 
       // Build context (with auto-compaction + cross-channel continuity)
       const contextStageStart = Date.now();
@@ -836,6 +848,54 @@ export class SubstrateAgent {
     }
 
     return lines.join('\n');
+  }
+
+  private buildScratchpadContextBlock(): string {
+    if (!this.scratchpadProvider) return '';
+
+    try {
+      const entries = this.scratchpadProvider.listScratchpadEntries(SCRATCHPAD_PROMPT_SCAN_LIMIT);
+      if (entries.length === 0) return '';
+
+      const lines = [
+        '[Scratchpad]',
+        'Working notes (short-term, may be stale; verify before acting):',
+      ];
+
+      let included = 0;
+      let usedChars = 0;
+      for (const entry of entries) {
+        if (included >= SCRATCHPAD_PROMPT_MAX_ENTRIES) break;
+
+        const normalized = entry.content.replace(/\s+/g, ' ').trim();
+        if (!normalized) continue;
+
+        const clipped = normalized.length > SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS
+          ? `${normalized.slice(0, SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS - 3)}...`
+          : normalized;
+
+        const line = `- ${entry.id}: ${clipped}`;
+        const projectedChars = usedChars + line.length;
+        if (projectedChars > SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS) break;
+
+        lines.push(line);
+        usedChars = projectedChars;
+        included += 1;
+      }
+
+      if (included === 0) return '';
+      const omitted = Math.max(0, entries.length - included);
+      if (omitted > 0) {
+        lines.push(`- (${omitted} additional notes omitted for context budget)`);
+      }
+
+      return lines.join('\n');
+    } catch (error) {
+      log.debug('Scratchpad context injection skipped due to provider error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return '';
+    }
   }
 
   /** Map message channel info to a channelType string for prompt composition */

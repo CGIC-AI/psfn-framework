@@ -41,6 +41,8 @@ import {
   createMemoryImportTool,
   createMemoryDeleteTool,
   createUndoMemoryDeleteTool,
+  createScratchpadReadTool,
+  createScratchpadWriteTool,
 } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
@@ -229,6 +231,7 @@ async function main(): Promise<void> {
     characterName: card.data.name,
     config,
   });
+  agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
   const safeguardAuditTrail = createSafeguardAuditTrail(config.dataDir);
   const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
@@ -343,6 +346,8 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createMemoryImportTool(memoryWriter));
   agentLoop.registerTool(createMemoryDeleteTool(memoryStore));
   agentLoop.registerTool(createUndoMemoryDeleteTool(memoryStore));
+  agentLoop.registerTool(createScratchpadReadTool(memoryStore));
+  agentLoop.registerTool(createScratchpadWriteTool(memoryStore));
 
   // Git tools — self-modification via gateway-hosted git ops
   registerGitTools(agentLoop, new GatewayGitOps(gateway));

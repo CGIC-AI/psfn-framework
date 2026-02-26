@@ -1,30 +1,55 @@
-import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
+import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
+import type { EventBus } from '../event-bus.js';
+import type { PromptRegistryStore } from '../identity/prompt-registry.js';
+import type { ContactStore } from '../contacts/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { SessionStore } from '../session/store.js';
 import type { SessionEntry } from '../session/types.js';
-import type { EventBus } from '../event-bus.js';
-import type { MemoryStore } from './store.js';
-import type { ExtractedFact, MemoryType, SensitivityLevel } from './types.js';
-import { VALID_MEMORY_TYPES, MEMORY_CONFIG, VALID_SENSITIVITY_LEVELS } from './types.js';
 import type { SubstrateConfig } from '../types.js';
-import { countMessageTokens } from '../llm/tokens.js';
-import { MemoryWriter, type WriteResult } from './writer.js';
 import { createComponentLogger } from '../logger.js';
-import type { PromptRegistryStore } from '../identity/prompt-registry.js';
-import type { ContactStore } from '../contacts/store.js';
+import { countMessageTokens } from '../llm/tokens.js';
+import type { MemoryStore } from './store.js';
+import type { ExtractedFact } from './types.js';
+import { MEMORY_CONFIG } from './types.js';
+import { MemoryWriter, type WriteResult } from './writer.js';
 import {
-  EXTRACTION_PROMPT_KEY,
-  PROFILE_SYNTHESIS_PROMPT_KEY,
-  getDefaultPromptText,
-} from '../identity/prompt-registry.js';
-import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
-import { classifyChannel } from '../trust/policy.js';
-import type { ChannelVisibility } from '../trust/types.js';
-import { extractBoundaryFactsFromEntries } from './boundary-log.js';
-import { toErrorMessage } from '../utils/errors.js';
+  DEFAULT_MAX_WRITES,
+  DEFAULT_MIN_CONFIDENCE,
+  DEFAULT_MIN_IMPORTANCE,
+  DEFAULT_MIN_NOVELTY,
+  type AcceptedFactWrite,
+  type ExtractionTriggerReason,
+  type MemoryExtractorConfig,
+  type MemoryExtractorDrainOptions,
+  type ProfileSynthesisConfig,
+} from './extraction/types.js';
+import {
+  normalizeMaxWrites,
+  resolveGateConfig,
+  resolveMaxWrites,
+  resolveProfileConfig,
+  resolveTelemetryEnabled,
+} from './extraction/config.js';
+import { runExtractionOrchestration } from './extraction/orchestrator.js';
+import { refreshContactProfile as runProfileRefresh } from './extraction/profile-synthesis.js';
+import { persistEmotionalStateFromExtraction } from './extraction/emotional.js';
+import {
+  emitExtractionEnd as emitExtractionEndEvent,
+  emitExtractionStart as emitExtractionStartEvent,
+  recordExtractionMarker as persistExtractionMarker,
+  resolveCoveredUpToMessageId as resolveCoveredMarker,
+  scheduleProfileRefresh,
+} from './extraction/runtime-helpers.js';
+import {
+  computeNoveltyScore,
+  computeProfileNovelty,
+  deriveEmotionalSignal,
+  evaluateFactAcceptance,
+} from './extraction/signals.js';
+import { parseFactsXml } from './extraction/parser.js';
+
 const log = createComponentLogger('Extraction');
 
-// Track last extraction per channel
 const lastExtractionCount = new Map<string, number>();
 
 function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } {
@@ -32,186 +57,6 @@ function toTokenMessage(entry: { role: string; content: string }): { role: strin
   if (entry.role === 'system') return { role: 'user', content: `[System note] ${entry.content}` };
   return { role: 'user', content: entry.content };
 }
-
-export interface MemoryExtractorConfig {
-  extractionInterval?: number;
-  minImportance?: number;
-  minConfidence?: number;
-  minNovelty?: number;
-  maxWrites?: number;
-  telemetryEnabled?: boolean;
-}
-
-export interface MemoryExtractorDrainOptions {
-  timeoutMs?: number;
-}
-
-type ExtractionTriggerReason =
-  | 'manual'
-  | 'interval'
-  | 'context_threshold'
-  | 'interval_and_threshold'
-  | 'pre_compaction'
-  | 'crash_recovery';
-type ExtractionRejectionReason =
-  | 'low_importance'
-  | 'low_confidence'
-  | 'low_novelty'
-  | 'low_signal'
-  | 'write_cap';
-type ProfileRefreshReason = 'memory_update' | 'interval' | 'memory_update_and_interval';
-
-interface ExtractionGateConfig {
-  minImportance: number;
-  minConfidence: number;
-  minNovelty: number;
-}
-
-interface FactAcceptanceDecision {
-  accepted: boolean;
-  reason?: ExtractionRejectionReason;
-  novelty: number;
-}
-
-interface ExtractionEndTelemetry {
-  channelId: string;
-  count: number;
-  triggerReason: ExtractionTriggerReason;
-  coveredUpToMessageId?: number;
-  parsedCount: number;
-  acceptedCount: number;
-  rejectedCount: number;
-  writeCount: number;
-  deduplicatedCount: number;
-  supersededCount: number;
-  rejectionBreakdown: Record<ExtractionRejectionReason, number>;
-}
-
-interface ProfileSynthesisConfig {
-  enabled: boolean;
-  refreshIntervalMs: number;
-  cooldownMs: number;
-  minWrites: number;
-  minImportance: number;
-  minConfidence: number;
-  minNovelty: number;
-  sourceMemoryLimit: number;
-  minSourceMemories: number;
-}
-
-interface AcceptedFactWrite {
-  memoryId: string;
-  importance: number;
-  confidence: number;
-}
-
-interface AcceptedFactCandidate {
-  fact: ExtractedFact;
-  novelty: number;
-  valueScore: number;
-  index: number;
-}
-
-interface EmotionalSignal {
-  valence: number;
-  confidence: number;
-}
-
-const DEFAULT_MIN_IMPORTANCE = 0.45;
-const DEFAULT_MIN_CONFIDENCE = 0.6;
-const DEFAULT_MIN_NOVELTY = 0.35;
-const DEFAULT_MAX_WRITES = 2;
-const DEFAULT_PROFILE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const DEFAULT_PROFILE_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
-const DEFAULT_PROFILE_MIN_WRITES = 1;
-const DEFAULT_PROFILE_MIN_IMPORTANCE = 0.65;
-const DEFAULT_PROFILE_MIN_CONFIDENCE = 0.7;
-const DEFAULT_PROFILE_MIN_NOVELTY = 0.12;
-const DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT = 16;
-const DEFAULT_PROFILE_MIN_SOURCE_MEMORIES = 2;
-const RECOVERY_CONTEXT_MESSAGE_LIMIT = 50;
-const RELATIONSHIP_SIGNAL_HINTS = new Set([
-  'partner',
-  'spouse',
-  'wife',
-  'husband',
-  'fiance',
-  'fiancee',
-  'girlfriend',
-  'boyfriend',
-  'sister',
-  'brother',
-  'mother',
-  'father',
-  'mom',
-  'dad',
-  'parent',
-  'son',
-  'daughter',
-  'child',
-  'family',
-  'roommate',
-  'friend',
-  'coworker',
-  'colleague',
-  'manager',
-  'mentor',
-]);
-const LOW_SIGNAL_EXACT_TEXT = new Set([
-  'hi',
-  'hello',
-  'hey',
-  'good morning',
-  'good afternoon',
-  'good evening',
-  'how are you',
-  'whats up',
-  'thank you',
-  'thanks',
-  'bye',
-  'goodbye',
-  'see you',
-  'talk later',
-]);
-const LOW_SIGNAL_PATTERNS = [
-  /\b(user|assistant)\s+(greeted|greets|said|says|thanked|thanks|apologized|asked)\b.*\b(hi|hello|hey|thanks|thank you|goodbye|bye|how are you|whats up)\b/,
-  /\b(exchanged|shared)\s+(greetings|pleasantries|small talk|chit chat|chitchat)\b/,
-  /\b(quick|brief|short|rapid)\s+(chat|conversation|exchange|back and forth|chatter)\b/,
-  /\bquick succession chatter\b/,
-  /\b(user|assistant)\s+(joined|left|started|ended)\s+(the )?(chat|conversation)\b/,
-  /\b(greetings|pleasantries|small talk|chit chat|chitchat)\b/,
-];
-const POSITIVE_EMOTION_HINTS = new Set([
-  'happy',
-  'excited',
-  'grateful',
-  'thankful',
-  'relieved',
-  'hopeful',
-  'optimistic',
-  'joy',
-  'joyful',
-  'love',
-  'loved',
-  'loving',
-]);
-const NEGATIVE_EMOTION_HINTS = new Set([
-  'sad',
-  'anxious',
-  'anxiety',
-  'angry',
-  'upset',
-  'stressed',
-  'overwhelmed',
-  'afraid',
-  'scared',
-  'hurt',
-  'lonely',
-  'heartbroken',
-  'devastated',
-  'grieving',
-]);
-const TRANSCRIPT_EMOTIONAL_SIGNAL_LIMIT = 12;
 
 export class MemoryExtractor {
   private llmClient: LLMProvider;
@@ -251,7 +96,7 @@ export class MemoryExtractor {
     this.memoryStore = memoryStore;
     this.writer = new MemoryWriter(memoryStore, embeddingService);
     this.eventBus = eventBus;
-    // If config has extractionInterval as a direct number property on SubstrateConfig, use per-call
+
     if (config && 'primaryModel' in config) {
       this.runtimeConfig = config;
       this.extractionInterval = config.extractionInterval;
@@ -270,6 +115,7 @@ export class MemoryExtractor {
       this.maxWrites = normalizeMaxWrites(extractorConfig?.maxWrites, DEFAULT_MAX_WRITES);
       this.telemetryEnabled = extractorConfig?.telemetryEnabled ?? true;
     }
+
     this.promptRegistry = promptRegistry ?? null;
     this.sessionStore = sessionStore ?? null;
     this.contactStore = contactStore ?? null;
@@ -287,12 +133,7 @@ export class MemoryExtractor {
     }
 
     const orderedEntries = [...recoveredEntries].sort((left, right) => left.id - right.id);
-    await this.trackExtraction(
-      channelId,
-      'crash_recovery',
-      canonicalContactId,
-      orderedEntries,
-    );
+    await this.trackExtraction(channelId, 'crash_recovery', canonicalContactId, orderedEntries);
   }
 
   async queueCompactionExtraction(
@@ -307,12 +148,7 @@ export class MemoryExtractor {
     }
 
     const orderedEntries = [...compactedEntries].sort((left, right) => left.id - right.id);
-    await this.trackExtraction(
-      channelId,
-      'pre_compaction',
-      canonicalContactId,
-      orderedEntries,
-    );
+    await this.trackExtraction(channelId, 'pre_compaction', canonicalContactId, orderedEntries);
   }
 
   async maybeExtract(channelId: string, canonicalContactId?: string): Promise<void> {
@@ -324,11 +160,9 @@ export class MemoryExtractor {
     const currentCount = this.sessionManager.getMessageCount(channelId);
     const lastCount = lastExtractionCount.get(channelId) ?? 0;
 
-    // Read interval per-call from live config if available
     const interval = this.runtimeConfig?.extractionInterval ?? this.extractionInterval;
     const intervalMet = currentCount - lastCount >= interval;
 
-    // Also trigger extraction when session content exceeds % of context window
     let thresholdMet = false;
     let totalTokens = 0;
     let tokenBudget = 0;
@@ -345,6 +179,7 @@ export class MemoryExtractor {
     }
 
     if (!intervalMet && !thresholdMet) return;
+
     const triggerReason: ExtractionTriggerReason = intervalMet && thresholdMet
       ? 'interval_and_threshold'
       : intervalMet
@@ -394,6 +229,7 @@ export class MemoryExtractor {
       ...this.inFlightExtractions,
       ...this.inFlightProfileRefreshes,
     ]).then(() => true);
+
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<boolean>((resolve) => {
       if (timeoutMs <= 0) return;
@@ -431,12 +267,7 @@ export class MemoryExtractor {
       return existing;
     }
 
-    const promise = this.runExtraction(
-      channelId,
-      triggerReason,
-      canonicalContactId,
-      recoveredEntries,
-    );
+    const promise = this.runExtraction(channelId, triggerReason, canonicalContactId, recoveredEntries);
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(channelId, promise);
     promise.finally(() => {
@@ -445,6 +276,7 @@ export class MemoryExtractor {
         this.inFlightByChannel.delete(channelId);
       }
     });
+
     return promise;
   }
 
@@ -454,216 +286,46 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
   ): Promise<void> {
-    await this.emitExtractionStart(channelId, triggerReason);
-
-    try {
-      // For crash recovery, force extraction over recovered un-extracted entries.
-      const recentEntries = (recoveredEntries && recoveredEntries.length > 0
-        ? recoveredEntries
-        : this.sessionManager.getRecentMessages(channelId, 10)
-      ).slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
-      const channelVisibility = classifyChannel(channelId);
-      const sourceRef = buildExtractionSourceRef(channelId, recentEntries, channelVisibility);
-      const recentMessages = recentEntries
-        .map(e => `${e.authorName ?? e.role}: ${e.content}`)
-        .join('\n');
-      const coveredUpToMessageId = this.resolveCoveredUpToMessageId(channelId, recentEntries);
-
-      // Get existing memories for dedup context
-      const existing = this.memoryStore.getMemoriesByChannel(channelId, 30);
-      const noveltyCorpus = existing.map(m => m.text);
-      const existingFacts = existing
-        .map(m => `- [${m.type}] ${m.text}`)
-        .join('\n') || '(none yet)';
-
-      // Build prompt
-      const extractionPrompt = this.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
-        ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
-      const prompt = injectPromptRuntimeTokens(extractionPrompt)
-        .replace('{existing_facts}', existingFacts)
-        .replace('{recent_messages}', recentMessages);
-
-      // Call extraction LLM
-      const response = await this.llmClient.complete(
-        {
-          systemPrompt: prompt,
-          messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
-        },
-        'background',
-      );
-
-      // Parse XML response + synthesize refusal-boundary memories directly from transcript.
-      const parsedFacts = parseFactsXml(response.content);
-      const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
-      const facts = [...parsedFacts, ...inferredBoundaryFacts]
-        .map(fact => applyChannelImportanceCaps(fact, channelVisibility));
-
-      if (inferredBoundaryFacts.length > 0 && this.isTelemetryEnabled()) {
-        log.info('Detected refusal-boundary facts from conversation transcript', {
-          channelId,
-          triggerReason,
-          inferredCount: inferredBoundaryFacts.length,
-        });
-      }
-      if (!this.acceptingExtractions) {
-        log.debug('Skipping fact writes while extractor is stopping', {
-          channelId,
-          factCount: facts.length,
-          triggerReason,
-        });
-        await this.emitExtractionEnd({
-          channelId,
-          count: 0,
-          triggerReason,
-          parsedCount: facts.length,
-          acceptedCount: 0,
-          rejectedCount: 0,
-          writeCount: 0,
-          deduplicatedCount: 0,
-          supersededCount: 0,
-          rejectionBreakdown: {
-            low_importance: 0,
-            low_confidence: 0,
-            low_novelty: 0,
-            low_signal: 0,
-            write_cap: 0,
-          },
-        });
-        return;
-      }
-
-      const gateConfig = this.resolveGateConfig();
-      const rejectionBreakdown: Record<ExtractionRejectionReason, number> = {
-        low_importance: 0,
-        low_confidence: 0,
-        low_novelty: 0,
-        low_signal: 0,
-        write_cap: 0,
-      };
-
-      // Gate first, then rank accepted facts so the cap preserves highest-value writes.
-      const acceptedCandidates: AcceptedFactCandidate[] = [];
-      for (const [index, fact] of facts.entries()) {
-        const decision = evaluateFactAcceptance(fact, noveltyCorpus, gateConfig);
-        if (!decision.accepted) {
-          if (decision.reason) rejectionBreakdown[decision.reason]++;
-          if (this.isTelemetryEnabled()) {
-            log.debug('Rejected extracted fact', {
-              channelId,
-              reason: decision.reason,
-              novelty: decision.novelty,
-              minNovelty: gateConfig.minNovelty,
-              importance: fact.importance,
-              minImportance: gateConfig.minImportance,
-              confidence: fact.confidence,
-              minConfidence: gateConfig.minConfidence,
-              textPreview: fact.text.slice(0, 120),
-            });
-          }
-          continue;
-        }
-
-        acceptedCandidates.push({
-          fact,
-          novelty: decision.novelty,
-          valueScore: computeFactValueScore(fact, decision.novelty),
-          index,
-        });
-        noveltyCorpus.push(fact.text);
-      }
-
-      const maxWrites = this.resolveMaxWrites();
-      const rankedCandidates = acceptedCandidates
-        .slice()
-        .sort(compareAcceptedFactCandidates);
-      const selectedCandidates = rankedCandidates.slice(0, maxWrites);
-      const skippedByCap = rankedCandidates.length - selectedCandidates.length;
-      if (skippedByCap > 0) {
-        rejectionBreakdown.write_cap += skippedByCap;
-        if (this.isTelemetryEnabled()) {
-          log.debug('Skipped extracted facts due to write cap', {
-            channelId,
-            maxWrites,
-            skippedByCap,
-            acceptedBeforeCap: rankedCandidates.length,
-          });
-        }
-      }
-
-      // Process accepted facts that survived cap.
-      let acceptedCount = 0;
-      let writeCount = 0;
-      let deduplicatedCount = 0;
-      let supersededCount = 0;
-      const acceptedWrites: AcceptedFactWrite[] = [];
-
-      for (const candidate of selectedCandidates) {
-        const { fact } = candidate;
-        try {
-          const result = await this.processFact(fact, sourceRef, canonicalContactId);
-          acceptedCount++;
-
-          switch (result.action) {
-            case 'created':
-              writeCount++;
-              acceptedWrites.push({
-                memoryId: result.memory.id,
-                importance: fact.importance,
-                confidence: fact.confidence,
-              });
-              break;
-            case 'superseded':
-              writeCount++;
-              supersededCount++;
-              acceptedWrites.push({
-                memoryId: result.memory.id,
-                importance: fact.importance,
-                confidence: fact.confidence,
-              });
-              break;
-            case 'deduplicated':
-              deduplicatedCount++;
-              break;
-          }
-        } catch (err) {
-          log.error('Error processing fact', { error: String(err) });
-        }
-      }
-
-      const rejectedCount = facts.length - acceptedCount;
-      const telemetry: ExtractionEndTelemetry = {
-        channelId,
-        count: acceptedCount,
-        triggerReason,
-        coveredUpToMessageId: coveredUpToMessageId ?? undefined,
-        parsedCount: facts.length,
-        acceptedCount,
-        rejectedCount,
-        writeCount,
-        deduplicatedCount,
-        supersededCount,
-        rejectionBreakdown,
-      };
-
-      if (this.isTelemetryEnabled()) {
-        log.info('Extraction completed', { ...telemetry, maxWrites });
-      }
-      this.recordExtractionMarker(channelId, coveredUpToMessageId);
-      await this.emitExtractionEnd(telemetry);
-      this.maybePersistEmotionalState(
-        canonicalContactId,
-        acceptedCandidates.map(candidate => candidate.fact),
-        recentEntries,
-      );
-      this.maybeRefreshContactProfile(
-        channelId,
-        triggerReason,
-        canonicalContactId,
+    await runExtractionOrchestration({
+      channelId,
+      triggerReason,
+      canonicalContactId,
+      recoveredEntries,
+      llmClient: this.llmClient,
+      sessionManager: this.sessionManager,
+      memoryStore: this.memoryStore,
+      promptRegistry: this.promptRegistry,
+      gateConfig: resolveGateConfig(this.runtimeConfig, {
+        minImportance: this.minImportance,
+        minConfidence: this.minConfidence,
+        minNovelty: this.minNovelty,
+      }),
+      maxWrites: resolveMaxWrites(this.runtimeConfig, this.maxWrites),
+      telemetryEnabled: this.isTelemetryEnabled(),
+      isAcceptingExtractions: () => this.acceptingExtractions,
+      processFact: (fact, sourceRef, maybeContactId) => this.processFact(fact, sourceRef, maybeContactId),
+      emitExtractionStart: (extractionChannelId, reason) => (
+        emitExtractionStartEvent(this.eventBus, this.isTelemetryEnabled(), extractionChannelId, reason)
+      ),
+      emitExtractionEnd: telemetry => (
+        emitExtractionEndEvent(this.eventBus, this.isTelemetryEnabled(), telemetry)
+      ),
+      resolveCoveredUpToMessageId: (extractionChannelId, entries) => (
+        resolveCoveredMarker(this.sessionManager, extractionChannelId, entries)
+      ),
+      recordExtractionMarker: (extractionChannelId, coveredUpToMessageId) => (
+        persistExtractionMarker(this.sessionStore, extractionChannelId, coveredUpToMessageId)
+      ),
+      maybePersistEmotionalState: (contactId, acceptedFacts, recentEntries) => (
+        this.maybePersistEmotionalState(contactId, acceptedFacts, recentEntries)
+      ),
+      maybeRefreshContactProfile: (
+        extractionChannelId,
+        reason,
+        contactId,
         acceptedWrites,
-      );
-    } catch (err) {
-      log.error('Extraction error', { error: String(err), triggerReason });
-    }
+      ) => this.maybeRefreshContactProfile(extractionChannelId, reason, contactId, acceptedWrites),
+    });
   }
 
   private async processFact(
@@ -690,38 +352,19 @@ export class MemoryExtractor {
     canonicalContactId: string | undefined,
     acceptedWrites: AcceptedFactWrite[],
   ): void {
-    if (!canonicalContactId) return;
-    if (!this.acceptingExtractions) return;
-
-    const profileConfig = this.resolveProfileConfig();
-    if (!profileConfig.enabled) return;
-
-    const existing = this.inFlightProfileByContact.get(canonicalContactId);
-    if (existing) {
-      if (this.isTelemetryEnabled()) {
-        log.debug('Profile refresh already in flight; skipping trigger', {
-          channelId,
-          canonicalContactId,
-          triggerReason,
-        });
-      }
-      return;
-    }
-
-    const promise = this.refreshContactProfile(
+    scheduleProfileRefresh({
       channelId,
       triggerReason,
       canonicalContactId,
       acceptedWrites,
-      profileConfig,
-    );
-    this.inFlightProfileRefreshes.add(promise);
-    this.inFlightProfileByContact.set(canonicalContactId, promise);
-    promise.finally(() => {
-      this.inFlightProfileRefreshes.delete(promise);
-      if (this.inFlightProfileByContact.get(canonicalContactId) === promise) {
-        this.inFlightProfileByContact.delete(canonicalContactId);
-      }
+      acceptingExtractions: this.acceptingExtractions,
+      profileConfig: resolveProfileConfig(this.runtimeConfig),
+      telemetryEnabled: this.isTelemetryEnabled(),
+      inFlightProfileByContact: this.inFlightProfileByContact,
+      inFlightProfileRefreshes: this.inFlightProfileRefreshes,
+      startRefresh: (refreshChannelId, refreshReason, contactId, writes, config) => (
+        this.refreshContactProfile(refreshChannelId, refreshReason, contactId, writes, config)
+      ),
     });
   }
 
@@ -732,184 +375,17 @@ export class MemoryExtractor {
     acceptedWrites: AcceptedFactWrite[],
     config: ProfileSynthesisConfig,
   ): Promise<void> {
-    const profileStore = this.memoryStore as unknown as {
-      getContactProfile?: (contactId: string) => {
-        summary: string;
-        updatedAt: number;
-      } | undefined;
-      getMemoriesByContact?: (contactId: string, limit: number) => Array<{
-        id: string;
-        type: MemoryType;
-        text: string;
-        importance: number;
-        confidence: number;
-        salience: number;
-      }>;
-      upsertContactProfile?: (profile: {
-        contactId: string;
-        summary: string;
-        sourceMemoryIds: string[];
-        confidenceScore: number;
-        noveltyScore: number;
-        updatedAt: number;
-      }) => void;
-    };
-
-    if (
-      typeof profileStore.getContactProfile !== 'function'
-      || typeof profileStore.getMemoriesByContact !== 'function'
-      || typeof profileStore.upsertContactProfile !== 'function'
-    ) {
-      return;
-    }
-
-    const now = Date.now();
-    const existingProfile = profileStore.getContactProfile(canonicalContactId);
-    const intervalElapsed = !existingProfile
-      || (now - existingProfile.updatedAt) >= config.refreshIntervalMs;
-    const withinCooldown = !!existingProfile
-      && (now - existingProfile.updatedAt) < config.cooldownMs;
-
-    const writeCount = acceptedWrites.length;
-    const avgWriteImportance = writeCount > 0
-      ? acceptedWrites.reduce((sum, write) => sum + write.importance, 0) / writeCount
-      : 0;
-    const avgWriteConfidence = writeCount > 0
-      ? acceptedWrites.reduce((sum, write) => sum + write.confidence, 0) / writeCount
-      : 0;
-
-    const meaningfulUpdate = writeCount >= config.minWrites
-      && avgWriteImportance >= config.minImportance
-      && avgWriteConfidence >= config.minConfidence;
-
-    if (!meaningfulUpdate && !intervalElapsed) {
-      if (this.isTelemetryEnabled()) {
-        log.debug('Skipped profile refresh trigger', {
-          channelId,
-          canonicalContactId,
-          triggerReason,
-          reason: 'no_meaningful_update',
-          writeCount,
-          avgWriteImportance,
-          avgWriteConfidence,
-        });
-      }
-      return;
-    }
-
-    if (withinCooldown && !intervalElapsed) {
-      if (this.isTelemetryEnabled()) {
-        log.debug('Skipped profile refresh due to cooldown', {
-          channelId,
-          canonicalContactId,
-          triggerReason,
-          cooldownMs: config.cooldownMs,
-        });
-      }
-      return;
-    }
-
-    const sourceMemories = profileStore.getMemoriesByContact(canonicalContactId, config.sourceMemoryLimit);
-    if (sourceMemories.length < config.minSourceMemories) {
-      if (this.isTelemetryEnabled()) {
-        log.debug('Skipped profile refresh due to insufficient source memories', {
-          channelId,
-          canonicalContactId,
-          sourceMemoryCount: sourceMemories.length,
-          minSourceMemories: config.minSourceMemories,
-        });
-      }
-      return;
-    }
-
-    const averageSourceConfidence = sourceMemories.reduce((sum, memory) => sum + memory.confidence, 0)
-      / sourceMemories.length;
-    if (averageSourceConfidence < config.minConfidence) {
-      if (this.isTelemetryEnabled()) {
-        log.debug('Skipped profile refresh due to low source confidence', {
-          channelId,
-          canonicalContactId,
-          averageSourceConfidence,
-          minConfidence: config.minConfidence,
-        });
-      }
-      return;
-    }
-
-    const memoryFacts = sourceMemories
-      .map(memory => (
-        `- [${memory.id}] [${memory.type}] ${memory.text} `
-        + `(importance=${memory.importance.toFixed(2)}, confidence=${memory.confidence.toFixed(2)}, salience=${memory.salience.toFixed(2)})`
-      ))
-      .join('\n');
-
-    const profilePrompt = this.promptRegistry?.getPrompt(PROFILE_SYNTHESIS_PROMPT_KEY)
-      ?? getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY);
-    const prompt = injectPromptRuntimeTokens(profilePrompt)
-      .replace('{contact_id}', canonicalContactId)
-      .replace('{existing_profile}', existingProfile?.summary ?? '(none yet)')
-      .replace('{memory_facts}', memoryFacts);
-
-    const response = await this.llmClient.complete(
-      {
-        systemPrompt: prompt,
-        messages: [{ role: 'user', content: 'Synthesize the stable contact profile now.' }],
-      },
-      'background',
-    );
-
-    const summary = normalizeProfileSummary(parseProfileSummary(response.content));
-    if (!summary) {
-      if (this.isTelemetryEnabled()) {
-        log.debug('Skipped profile refresh due to empty summary output', {
-          channelId,
-          canonicalContactId,
-        });
-      }
-      return;
-    }
-
-    const noveltyScore = existingProfile
-      ? computeProfileNovelty(summary, existingProfile.summary)
-      : 1;
-    if (existingProfile && noveltyScore < config.minNovelty) {
-      if (this.isTelemetryEnabled()) {
-        log.debug('Skipped profile refresh due to low novelty', {
-          channelId,
-          canonicalContactId,
-          noveltyScore,
-          minNovelty: config.minNovelty,
-        });
-      }
-      return;
-    }
-
-    const refreshReason: ProfileRefreshReason = meaningfulUpdate && intervalElapsed
-      ? 'memory_update_and_interval'
-      : meaningfulUpdate
-        ? 'memory_update'
-        : 'interval';
-
-    profileStore.upsertContactProfile({
-      contactId: canonicalContactId,
-      summary,
-      sourceMemoryIds: sourceMemories.map(memory => memory.id),
-      confidenceScore: averageSourceConfidence,
-      noveltyScore,
-      updatedAt: Date.now(),
+    await runProfileRefresh({
+      llmClient: this.llmClient,
+      promptRegistry: this.promptRegistry,
+      memoryStore: this.memoryStore,
+      channelId,
+      triggerReason,
+      canonicalContactId,
+      acceptedWrites,
+      config,
+      telemetryEnabled: this.isTelemetryEnabled(),
     });
-
-    if (this.isTelemetryEnabled()) {
-      log.info('Contact profile refreshed', {
-        channelId,
-        canonicalContactId,
-        triggerReason,
-        refreshReason,
-        sourceMemoryCount: sourceMemories.length,
-        averageSourceConfidence,
-        noveltyScore,
-      });
-    }
   }
 
   private maybePersistEmotionalState(
@@ -917,449 +393,26 @@ export class MemoryExtractor {
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
   ): void {
-    if (!canonicalContactId) return;
-    if (!this.contactStore) return;
-
-    const signal = deriveEmotionalSignal(acceptedFacts, recentEntries);
-    if (!signal) return;
-
-    try {
-      const updated = this.contactStore.updateEmotionalBaseline(canonicalContactId, {
-        valence: signal.valence,
-        confidence: signal.confidence,
-        observedAtMs: Date.now(),
-      });
-      if (!updated) return;
-
-      if (this.isTelemetryEnabled()) {
-        log.debug('Updated contact emotional baseline from extraction signals', {
-          canonicalContactId,
-          signalValence: signal.valence,
-          signalConfidence: signal.confidence,
-          moodBaseline: updated.emotionalBaseline?.valenceBaseline ?? 0,
-          moodValence: updated.emotionalBaseline?.moodValence ?? 0,
-          moodDrift: updated.emotionalBaseline?.moodDrift ?? 0,
-          moodSamples: updated.emotionalBaseline?.moodSamples ?? 0,
-        });
-      }
-    } catch (error) {
-      log.warn('Failed to persist emotional baseline update', {
-        canonicalContactId,
-        error: toErrorMessage(error),
-      });
-    }
-  }
-
-  private resolveProfileConfig(): ProfileSynthesisConfig {
-    return {
-      enabled: this.runtimeConfig?.profileSynthesisEnabled ?? true,
-      refreshIntervalMs: this.runtimeConfig?.profileSynthesisRefreshIntervalMs ?? DEFAULT_PROFILE_REFRESH_INTERVAL_MS,
-      cooldownMs: this.runtimeConfig?.profileSynthesisCooldownMs ?? DEFAULT_PROFILE_REFRESH_COOLDOWN_MS,
-      minWrites: this.runtimeConfig?.profileSynthesisMinWrites ?? DEFAULT_PROFILE_MIN_WRITES,
-      minImportance: this.runtimeConfig?.profileSynthesisMinImportance ?? DEFAULT_PROFILE_MIN_IMPORTANCE,
-      minConfidence: this.runtimeConfig?.profileSynthesisMinConfidence ?? DEFAULT_PROFILE_MIN_CONFIDENCE,
-      minNovelty: this.runtimeConfig?.profileSynthesisMinNovelty ?? DEFAULT_PROFILE_MIN_NOVELTY,
-      sourceMemoryLimit: this.runtimeConfig?.profileSynthesisSourceMemoryLimit ?? DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT,
-      minSourceMemories: this.runtimeConfig?.profileSynthesisMinSourceMemories ?? DEFAULT_PROFILE_MIN_SOURCE_MEMORIES,
-    };
-  }
-
-  private resolveGateConfig(): ExtractionGateConfig {
-    return {
-      minImportance: clamp(this.runtimeConfig?.memoryExtractionMinImportance ?? this.minImportance, 0, 1),
-      minConfidence: clamp(this.runtimeConfig?.memoryExtractionMinConfidence ?? this.minConfidence, 0, 1),
-      minNovelty: clamp(this.runtimeConfig?.memoryExtractionMinNovelty ?? this.minNovelty, 0, 1),
-    };
-  }
-
-  private resolveMaxWrites(): number {
-    return normalizeMaxWrites(
-      this.runtimeConfig?.memoryExtractionMaxWrites,
-      this.maxWrites,
-    );
+    persistEmotionalStateFromExtraction({
+      canonicalContactId,
+      acceptedFacts,
+      recentEntries,
+      contactStore: this.contactStore,
+      telemetryEnabled: this.isTelemetryEnabled(),
+    });
   }
 
   private isTelemetryEnabled(): boolean {
-    return this.runtimeConfig?.memoryExtractionTelemetryEnabled ?? this.telemetryEnabled;
-  }
-
-  private resolveCoveredUpToMessageId(channelId: string, entries: SessionEntry[]): number | null {
-    for (let index = entries.length - 1; index >= 0; index--) {
-      const candidate = entries[index]?.id;
-      if (typeof candidate === 'number' && Number.isFinite(candidate)) {
-        return candidate;
-      }
-    }
-
-    const latestEntry = this.sessionManager.getRecentMessages(channelId, 1)[0];
-    if (typeof latestEntry?.id === 'number' && Number.isFinite(latestEntry.id)) {
-      return latestEntry.id;
-    }
-    return null;
-  }
-
-  private recordExtractionMarker(channelId: string, coveredUpToMessageId: number | null): void {
-    if (!this.sessionStore) return;
-    if (coveredUpToMessageId === null) return;
-
-    try {
-      this.sessionStore.insertExtractionMarker(channelId, coveredUpToMessageId);
-    } catch (error) {
-      log.warn('Failed to persist extraction marker', {
-        channelId,
-        coveredUpToMessageId,
-        error: toErrorMessage(error),
-      });
-    }
-  }
-
-  private async emitExtractionStart(channelId: string, triggerReason: ExtractionTriggerReason): Promise<void> {
-    if (!this.isTelemetryEnabled()) {
-      await this.eventBus.emit('memory.extraction.start', { channelId });
-      return;
-    }
-
-    await this.eventBus.emit(
-      'memory.extraction.start',
-      { channelId, triggerReason } as { channelId: string },
-    );
-  }
-
-  private async emitExtractionEnd(telemetry: ExtractionEndTelemetry): Promise<void> {
-    if (!this.isTelemetryEnabled()) {
-      await this.eventBus.emit('memory.extraction.end', {
-        channelId: telemetry.channelId,
-        count: telemetry.count,
-      });
-      return;
-    }
-
-    await this.eventBus.emit(
-      'memory.extraction.end',
-      telemetry as { channelId: string; count: number },
-    );
+    return resolveTelemetryEnabled(this.runtimeConfig, this.telemetryEnabled);
   }
 }
 
-// ── XML Parsing ──
+export { parseFactsXml };
 
-export function parseFactsXml(xml: string): ExtractedFact[] {
-  const responseMatch = xml.match(/<response>([\s\S]*?)<\/response>/);
-  if (!responseMatch) return [];
-
-  const inner = responseMatch[1];
-  const factBlocks = inner.matchAll(/<fact>([\s\S]*?)<\/fact>/g);
-  const facts: ExtractedFact[] = [];
-
-  for (const match of factBlocks) {
-    const block = match[1];
-    const fact = parseFactBlock(block);
-    if (fact) facts.push(fact);
-  }
-
-  return facts;
-}
-
-function evaluateFactAcceptance(
-  fact: ExtractedFact,
-  existingTexts: string[],
-  gateConfig: ExtractionGateConfig,
-): FactAcceptanceDecision {
-  if (fact.importance < gateConfig.minImportance) {
-    return { accepted: false, reason: 'low_importance', novelty: 1 };
-  }
-
-  if (fact.confidence < gateConfig.minConfidence) {
-    return { accepted: false, reason: 'low_confidence', novelty: 1 };
-  }
-
-  if (isLowSignalFact(fact.text)) {
-    return { accepted: false, reason: 'low_signal', novelty: 1 };
-  }
-
-  const novelty = computeNoveltyScore(fact.text, existingTexts);
-  if (novelty < gateConfig.minNovelty) {
-    return { accepted: false, reason: 'low_novelty', novelty };
-  }
-
-  return { accepted: true, novelty };
-}
-
-function isLowSignalFact(text: string): boolean {
-  const normalized = normalizeForSimilarity(text);
-  if (!normalized) return true;
-  if (LOW_SIGNAL_EXACT_TEXT.has(normalized)) return true;
-
-  const tokens = tokenizeForSimilarity(normalized);
-  if (tokens.some(token => RELATIONSHIP_SIGNAL_HINTS.has(token))) {
-    return false;
-  }
-
-  return LOW_SIGNAL_PATTERNS.some(pattern => pattern.test(normalized));
-}
-
-function computeFactValueScore(fact: ExtractedFact, novelty: number): number {
-  const typeBoost = fact.type === 'boundary' ? 1.6 : 1;
-  return clamp(fact.importance, 0, 1) * clamp(fact.confidence, 0, 1) * clamp(novelty, 0, 1) * typeBoost;
-}
-
-function deriveEmotionalSignal(
-  acceptedFacts: ExtractedFact[],
-  recentEntries: SessionEntry[],
-): EmotionalSignal | null {
-  const factSignal = deriveFactEmotionalSignal(acceptedFacts);
-  const transcriptSignal = deriveTranscriptEmotionalSignal(recentEntries);
-
-  if (!factSignal && !transcriptSignal) return null;
-  if (factSignal && !transcriptSignal) return factSignal;
-  if (!factSignal || !transcriptSignal) return transcriptSignal;
-
-  const combinedConfidence = clamp(
-    (factSignal.confidence * 0.7) + (transcriptSignal.confidence * 0.3),
-    0,
-    1,
-  );
-  const denominator = factSignal.confidence + transcriptSignal.confidence;
-  const combinedValence = denominator > 0
-    ? clamp(
-      (
-        (factSignal.valence * factSignal.confidence)
-        + (transcriptSignal.valence * transcriptSignal.confidence)
-      ) / denominator,
-      -1,
-      1,
-    )
-    : 0;
-
-  if (Math.abs(combinedValence) < 0.08 && combinedConfidence < 0.5) {
-    return null;
-  }
-
-  return { valence: combinedValence, confidence: combinedConfidence };
-}
-
-function deriveFactEmotionalSignal(facts: ExtractedFact[]): EmotionalSignal | null {
-  const emotionalFacts = facts.filter((fact) => (
-    fact.type === 'emotional' || Math.abs(fact.emotionalValence) >= 0.2
-  ));
-  if (emotionalFacts.length === 0) return null;
-
-  let weightedValence = 0;
-  let totalWeight = 0;
-  let confidenceSum = 0;
-
-  for (const fact of emotionalFacts) {
-    const weight = clamp((fact.importance * 0.6) + (fact.confidence * 0.4), 0.1, 1);
-    weightedValence += clamp(fact.emotionalValence, -1, 1) * weight;
-    totalWeight += weight;
-    confidenceSum += clamp(fact.confidence, 0, 1);
-  }
-
-  if (totalWeight <= 0) return null;
-
-  return {
-    valence: clamp(weightedValence / totalWeight, -1, 1),
-    confidence: clamp(confidenceSum / emotionalFacts.length, 0.4, 1),
-  };
-}
-
-function deriveTranscriptEmotionalSignal(entries: SessionEntry[]): EmotionalSignal | null {
-  const userEntries = entries
-    .filter(entry => entry.role === 'user')
-    .slice(-TRANSCRIPT_EMOTIONAL_SIGNAL_LIMIT);
-  if (userEntries.length === 0) return null;
-
-  let valenceSum = 0;
-  let signalCount = 0;
-
-  for (const entry of userEntries) {
-    const entrySignal = scoreTranscriptEmotionalValence(entry.content);
-    if (entrySignal === null) continue;
-    valenceSum += entrySignal;
-    signalCount++;
-  }
-
-  if (signalCount === 0) return null;
-
-  return {
-    valence: clamp(valenceSum / signalCount, -1, 1),
-    confidence: clamp(0.35 + (Math.min(signalCount, 4) * 0.1), 0, 0.75),
-  };
-}
-
-function scoreTranscriptEmotionalValence(content: string): number | null {
-  const normalized = normalizeForSimilarity(content);
-  if (!normalized) return null;
-
-  const tokens = tokenizeForSimilarity(normalized);
-  let score = 0;
-  let hits = 0;
-
-  for (const token of tokens) {
-    if (POSITIVE_EMOTION_HINTS.has(token)) {
-      score += 1;
-      hits++;
-    } else if (NEGATIVE_EMOTION_HINTS.has(token)) {
-      score -= 1;
-      hits++;
-    }
-  }
-
-  if (hits === 0) return null;
-  return clamp(score / Math.max(2, hits), -1, 1);
-}
-
-function compareAcceptedFactCandidates(left: AcceptedFactCandidate, right: AcceptedFactCandidate): number {
-  if (right.valueScore !== left.valueScore) return right.valueScore - left.valueScore;
-  if (right.fact.importance !== left.fact.importance) return right.fact.importance - left.fact.importance;
-  if (right.fact.confidence !== left.fact.confidence) return right.fact.confidence - left.fact.confidence;
-  if (right.novelty !== left.novelty) return right.novelty - left.novelty;
-  return left.index - right.index;
-}
-
-function computeNoveltyScore(text: string, existingTexts: string[]): number {
-  if (existingTexts.length === 0) return 1;
-
-  const normalized = normalizeForSimilarity(text);
-  if (!normalized) return 0;
-
-  const tokens = tokenizeForSimilarity(normalized);
-  let maxSimilarity = 0;
-
-  for (const existingText of existingTexts) {
-    const normalizedExisting = normalizeForSimilarity(existingText);
-    if (!normalizedExisting) continue;
-
-    if (normalizedExisting === normalized) return 0;
-
-    const containment = containmentSimilarity(normalized, normalizedExisting);
-    const jaccard = jaccardSimilarity(tokens, tokenizeForSimilarity(normalizedExisting));
-    maxSimilarity = Math.max(maxSimilarity, containment, jaccard);
-
-    if (maxSimilarity >= 1) break;
-  }
-
-  return clamp(1 - maxSimilarity, 0, 1);
-}
-
-function parseProfileSummary(response: string): string {
-  const summaryTag = response.match(/<summary>([\s\S]*?)<\/summary>/i);
-  if (summaryTag && summaryTag[1].trim().length > 0) {
-    return summaryTag[1].trim();
-  }
-
-  const profileTag = response.match(/<profile>([\s\S]*?)<\/profile>/i);
-  if (profileTag && profileTag[1].trim().length > 0) {
-    return profileTag[1]
-      .replace(/<\/?[^>]+>/g, ' ')
-      .trim();
-  }
-
-  return response.replace(/<\/?[^>]+>/g, ' ').trim();
-}
-
-function normalizeProfileSummary(summary: string): string {
-  const normalized = summary
-    .replace(/\r/g, '')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  if (!normalized) return '';
-
-  const paragraphs = normalized
-    .split(/\n\s*\n/g)
-    .map(paragraph => paragraph.replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
-  if (paragraphs.length === 0) return '';
-
-  return paragraphs.slice(0, 2).join('\n\n');
-}
-
-function computeProfileNovelty(summary: string, existingSummary: string): number {
-  if (!existingSummary.trim()) return 1;
-  return computeNoveltyScore(summary, [existingSummary]);
-}
-
-function normalizeForSimilarity(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function tokenizeForSimilarity(text: string): string[] {
-  return text
-    .split(/[^a-z0-9]+/)
-    .map(token => token.trim())
-    .filter(token => token.length >= 2);
-}
-
-function containmentSimilarity(left: string, right: string): number {
-  const hasContainment = left.includes(right) || right.includes(left);
-  if (!hasContainment) return 0;
-
-  const shorter = Math.min(left.length, right.length);
-  const longer = Math.max(left.length, right.length);
-  return 0.85 + 0.15 * (shorter / longer);
-}
-
-function jaccardSimilarity(left: string[], right: string[]): number {
-  if (left.length === 0 || right.length === 0) return 0;
-
-  const leftSet = new Set(left);
-  const rightSet = new Set(right);
-
-  let intersection = 0;
-  for (const token of leftSet) {
-    if (rightSet.has(token)) intersection++;
-  }
-
-  const union = leftSet.size + rightSet.size - intersection;
-  return union === 0 ? 0 : intersection / union;
-}
-
-function normalizeMaxWrites(value: number | undefined, fallback: number): number {
-  const candidate = Number.isFinite(value) ? Math.floor(value as number) : fallback;
-  if (!Number.isFinite(candidate)) return DEFAULT_MAX_WRITES;
-  return Math.max(0, candidate);
-}
-
-function applyChannelImportanceCaps(
-  fact: ExtractedFact,
-  channelVisibility: ChannelVisibility,
-): ExtractedFact {
-  if (fact.type === 'boundary') return fact;
-  if (channelVisibility !== 'public') return fact;
-  if (fact.importance <= 0.5) return fact;
-  return { ...fact, importance: 0.5 };
-}
-
-function buildExtractionSourceRef(
-  channelId: string,
-  entries: SessionEntry[],
-  channelVisibility: ChannelVisibility,
-): string {
-  const source = resolveExtractionSource(channelId);
-  const lineRange = resolveExtractionLineRange(entries);
-  // Prefix with channel id so channel-scoped queries can match extraction writes.
-  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}|visibility:${channelVisibility}|operation:extract`;
-}
-
-function resolveExtractionSource(channelId: string): string {
-  if (channelId.startsWith('shard:')) return channelId;
-  return 'session';
-}
-
-function resolveExtractionLineRange(entries: SessionEntry[]): string {
-  const ids = entries
-    .map(entry => entry.id)
-    .filter(id => Number.isFinite(id));
-  if (ids.length === 0) return 'unknown';
-  const start = Math.min(...ids);
-  const end = Math.max(...ids);
-  return start === end ? `${start}` : `${start}-${end}`;
-}
+export type {
+  MemoryExtractorConfig,
+  MemoryExtractorDrainOptions,
+} from './extraction/types.js';
 
 export const __test = {
   evaluateFactAcceptance,
@@ -1370,38 +423,3 @@ export const __test = {
     lastExtractionCount.clear();
   },
 };
-
-function parseFactBlock(block: string): ExtractedFact | null {
-  const text = extractTag(block, 'text');
-  if (!text) return null;
-
-  const typeStr = extractTag(block, 'type')?.trim().toLowerCase() as MemoryType | undefined;
-  if (!typeStr || !VALID_MEMORY_TYPES.includes(typeStr)) return null;
-
-  const importance = clamp(parseFloat(extractTag(block, 'importance') ?? '0.5'), 0, 1);
-  const emotionalValence = clamp(parseFloat(extractTag(block, 'emotional_valence') ?? '0'), -1, 1);
-  const confidence = clamp(parseFloat(extractTag(block, 'confidence') ?? '0.7'), 0, 1);
-
-  const tagsStr = extractTag(block, 'tags') ?? '';
-  const tags = tagsStr
-    .split(',')
-    .map(t => t.trim().toLowerCase())
-    .filter(Boolean);
-
-  const sensitivityStr = extractTag(block, 'sensitivity')?.trim().toLowerCase();
-  const sensitivity: SensitivityLevel = VALID_SENSITIVITY_LEVELS.includes(sensitivityStr as SensitivityLevel)
-    ? (sensitivityStr as SensitivityLevel)
-    : 'personal';  // safe default
-
-  return { text: text.trim(), type: typeStr, importance, emotionalValence, confidence, tags, sensitivity };
-}
-
-function extractTag(block: string, tag: string): string | null {
-  const match = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
-  return match ? match[1] : null;
-}
-
-function clamp(val: number, min: number, max: number): number {
-  if (isNaN(val)) return (min + max) / 2;
-  return Math.max(min, Math.min(max, val));
-}

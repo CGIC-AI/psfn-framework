@@ -1,0 +1,306 @@
+---
+title: "PSFN Substrate Framework — Architecture"
+---
+graph TB
+  %% ═══════════════════════════════════════════════
+  %% ENTRY POINTS
+  %% ═══════════════════════════════════════════════
+  subgraph Entry["Entry Points"]
+    direction LR
+    IDX["index.ts<br/><i>Single-process</i>"]
+    GWM["gateway-main.ts<br/><i>Host process</i>"]
+    AGM["agent-main.ts<br/><i>Container process</i>"]
+  end
+
+  %% ═══════════════════════════════════════════════
+  %% BOOTSTRAP LAYER
+  %% ═══════════════════════════════════════════════
+  subgraph Bootstrap["Bootstrap & Composition"]
+    COMP["composition.ts<br/><i>composeIdentity, composeAgentLoop,<br/>composeSessionRuntime, wireMemoryRuntime,<br/>wireShardAndThinkRuntime</i>"]
+    PARITY["parity.ts<br/><i>wirePromptRuntime, wireHeartbeatRuntime,<br/>wireSettingsRuntime, wireContactRuntime</i>"]
+  end
+
+  IDX --> RT
+  IDX --> COMP
+  GWM --> GWS
+  AGM --> GWC
+  AGM --> COMP
+  AGM --> PARITY
+  RT --> COMP
+  RT --> PARITY
+
+  %% ═══════════════════════════════════════════════
+  %% RUNTIME CORE
+  %% ═══════════════════════════════════════════════
+  subgraph Core["Layer 1 — Runtime Core"]
+    RT["SubstrateRuntime<br/><i>Lifecycle: init/start/stop</i>"]
+    EB["EventBus<br/><i>42 typed events</i>"]
+    CFG["SubstrateConfig<br/><i>types.ts — 50+ fields</i>"]
+    SETTINGS["EditableSettings<br/><i>settings.ts — atomic JSON persist</i>"]
+    LOG["Logger<br/><i>Winston — createComponentLogger()</i>"]
+  end
+
+  RT --> EB
+  RT --> CFG
+  RT --> SETTINGS
+
+  %% ═══════════════════════════════════════════════
+  %% GATEWAY / AGENT SPLIT
+  %% ═══════════════════════════════════════════════
+  subgraph Gateway["Gateway (Host-Side)"]
+    GWS["GatewayServer<br/><i>JSON-RPC 2.0 bidirectional</i>"]
+    POLICY["Policy Engine<br/><i>ALLOW / NEEDS_APPROVAL / DENY</i>"]
+    SSRF["URL Policy + SSRF Defense<br/><i>url-policy.ts</i>"]
+    SANITIZE["Content Sanitizer<br/><i>structural → pattern → tagging</i>"]
+    AUDIT["AuditStore<br/><i>SQLite audit log</i>"]
+    TRANSPORT["NdjsonConnection<br/><i>Unix socket transport</i>"]
+  end
+
+  GWS --> POLICY
+  GWS --> SSRF
+  GWS --> SANITIZE
+  GWS --> AUDIT
+  GWS --> TRANSPORT
+
+  subgraph AgentSide["Agent (Container-Side)"]
+    GWC["GatewayClient<br/><i>implements LLMProvider +<br/>EmbeddingService</i>"]
+  end
+
+  GWC <-->|"NDJSON Unix Socket<br/>/run/psfn/gateway.sock"| TRANSPORT
+
+  %% ═══════════════════════════════════════════════
+  %% AGENT SYSTEM
+  %% ═══════════════════════════════════════════════
+  subgraph AgentSystem["Agent System"]
+    SA["SubstrateAgent<br/><i>wraps pi-agent-core Agent</i>"]
+    BRIDGE["EventBridge<br/><i>Agent events → EventBus</i>"]
+    MSGS["AgentMessages<br/><i>convertToLlm() — compaction,<br/>systemNote, continuity</i>"]
+    STREAM["StreamAdapter<br/><i>createSubstrateStreamFn()<br/>resolveModel()</i>"]
+    CONTRACTS["Contracts<br/><i>LLMProvider, EmbeddingService,<br/>MemoryProvider, MemoryExtractor</i>"]
+  end
+
+  SA --> BRIDGE
+  SA --> MSGS
+  SA --> STREAM
+  SA --> CONTRACTS
+  BRIDGE --> EB
+  SA --> EB
+
+  %% ═══════════════════════════════════════════════
+  %% LLM LAYER
+  %% ═══════════════════════════════════════════════
+  subgraph LLM["LLM Layer"]
+    LLMC["LLMClient<br/><i>stream() + complete()</i>"]
+    MODELS["Model Roster<br/><i>ModelSlot, ModelPurpose,<br/>resolveModelSlot()</i>"]
+    TOKENS["Token Estimation<br/><i>estimateTokens() — chars/4</i>"]
+    DISC["ModelDiscovery<br/><i>LiteLLM + OpenRouter /v1/models</i>"]
+  end
+
+  LLMC --> MODELS
+  LLMC --> TOKENS
+  GWS --> LLMC
+
+  %% ═══════════════════════════════════════════════
+  %% REPL SANDBOX
+  %% ═══════════════════════════════════════════════
+  subgraph REPL["Layer 2 — REPL Sandbox"]
+    THINK["think tool<br/><i>RLM deep reasoning</i>"]
+    SANDBOX["node:vm Sandbox<br/><i>print, llm_query, memory_search,<br/>memory_count, session_messages, FINAL</i>"]
+    EVIDENCE["Evidence Tracking<br/><i>ThinkEvidence + ThinkStep</i>"]
+  end
+
+  THINK --> SANDBOX
+  SANDBOX --> EVIDENCE
+
+  %% ═══════════════════════════════════════════════
+  %% MEMORY SYSTEM
+  %% ═══════════════════════════════════════════════
+  subgraph Memory["Layer 3 — Memory System"]
+    MSTORE["MemoryStore<br/><i>SQLite + sqlite-vec<br/>6 memory types</i>"]
+    MRET["MemoryRetriever<br/><i>implements MemoryProvider<br/>composite scoring</i>"]
+    MEXT["MemoryExtractor<br/><i>LLM extraction → XML parse<br/>quality gates</i>"]
+    MWRITE["MemoryWriter<br/><i>dedup + contradiction logic</i>"]
+    DECAY["SalienceDecay<br/><i>exponential per-type half-lives</i>"]
+    EMBED["EmbeddingProvider<br/><i>Ollama — snowflake-arctic-embed2<br/>1024d</i>"]
+  end
+
+  MRET --> MSTORE
+  MRET --> EMBED
+  MEXT --> MWRITE
+  MWRITE --> MSTORE
+  MWRITE --> EMBED
+  DECAY --> MSTORE
+  SA -->|"memoryProvider"| MRET
+  SA -->|"memoryExtractor"| MEXT
+
+  %% ═══════════════════════════════════════════════
+  %% TRUST & PRIVACY
+  %% ═══════════════════════════════════════════════
+  subgraph Trust["Layer 4 — Trust & Privacy"]
+    TPOLICY["Trust Policy<br/><i>5-layer: operator → consent →<br/>trust → visibility → default</i>"]
+    CONTACT["ContactStore<br/><i>SQLite — identity linking,<br/>challenge/verify</i>"]
+    CHANVIS["Channel Visibility<br/><i>private / semi_private /<br/>public / broadcast</i>"]
+    PERSONA["Persona Adaptation<br/><i>honne / tatemae per trust tier</i>"]
+  end
+
+  TPOLICY --> CONTACT
+  TPOLICY --> CHANVIS
+  MRET -->|"trust-gated<br/>retrieval"| TPOLICY
+  SA -->|"contactStore"| CONTACT
+  SA --> PERSONA
+
+  %% ═══════════════════════════════════════════════
+  %% IDENTITY & PROMPTS
+  %% ═══════════════════════════════════════════════
+  subgraph Identity["Layer 5 — Identity & Prompts"]
+    CARD["Character Card Loader<br/><i>V2 spec JSON</i>"]
+    PLSTORE["PromptLayerStore<br/><i>JSON + JSONL history<br/>5 layer types</i>"]
+    PCOMPOSE["PromptComposer<br/><i>context-aware filtering,<br/>SHA-256 hash, fallback</i>"]
+    PREG["PromptRegistryStore<br/><i>keyed runtime prompts</i>"]
+  end
+
+  PCOMPOSE --> PLSTORE
+  SA -->|"promptComposer"| PCOMPOSE
+  MEXT --> PREG
+
+  %% ═══════════════════════════════════════════════
+  %% GIT SELF-MOD
+  %% ═══════════════════════════════════════════════
+  subgraph Git["Layer 6 — Git Self-Modification"]
+    GITOPS["GitOps / GatewayGitOps<br/><i>6 tools: status, diff,<br/>patch, commit, branch, PR</i>"]
+    GITAUDIT["JSONL Audit Log"]
+  end
+
+  GITOPS --> GITAUDIT
+
+  %% ═══════════════════════════════════════════════
+  %% SESSION SYSTEM
+  %% ═══════════════════════════════════════════════
+  subgraph Sessions["Session Layer (L0 Archive)"]
+    SSTORE["SessionStore<br/><i>per-channel JSONL files<br/>append-only = L0</i>"]
+    SMAN["SessionManager<br/><i>buildContext(), auto-compaction,<br/>token budget</i>"]
+    UCONT["UserContinuityStore<br/><i>per-user cross-channel JSONL</i>"]
+  end
+
+  SMAN --> SSTORE
+  SMAN --> UCONT
+  SA --> SMAN
+
+  %% ═══════════════════════════════════════════════
+  %% SHARDS
+  %% ═══════════════════════════════════════════════
+  subgraph Shards["Self-Spawning Shards"]
+    SMGR["ShardManager<br/><i>max 5 concurrent, depth=1<br/>channelId shard:&lt;uuid&gt;</i>"]
+    SHARD["Shard Instance<br/><i>ephemeral SubstrateAgent<br/>shared LLM/memory</i>"]
+  end
+
+  SMGR --> SHARD
+  SA -->|"spawn_shard tool"| SMGR
+
+  %% ═══════════════════════════════════════════════
+  %% CHANNEL ADAPTERS
+  %% ═══════════════════════════════════════════════
+  subgraph Channels["Layer 8 — Channel Adapters"]
+    DISCORD["DiscordAdapter<br/><i>discord.js — voice, steering,<br/>typing, backfill</i>"]
+    TELEGRAM["TelegramAdapter<br/><i>long-poll or webhook,<br/>media sends, allowlist</i>"]
+    API["ApiServer<br/><i>OpenAI-compatible REST<br/>SSE streaming, voice WS</i>"]
+    ADMIN["AdminServer<br/><i>htmx — Garden theme<br/>11 pages, SSE pulse</i>"]
+  end
+
+  DISCORD --> EB
+  TELEGRAM --> EB
+  API --> EB
+  API --> SA
+  ADMIN --> MSTORE
+  ADMIN --> SSTORE
+  ADMIN --> CONTACT
+
+  %% ═══════════════════════════════════════════════
+  %% SCHEDULER
+  %% ═══════════════════════════════════════════════
+  subgraph Sched["Layer 9 — Scheduler"]
+    SCHEDULER["Scheduler<br/><i>60s tick — every / one-shot</i>"]
+    HBEAT["HeartbeatPolicyStore<br/><i>4 reflection templates<br/>whisper, daily, emotional, goals</i>"]
+    SKILLS["SkillsRuntime<br/><i>SKILL.md discovery</i>"]
+  end
+
+  SCHEDULER --> EB
+  SCHEDULER --> DECAY
+  SCHEDULER --> HBEAT
+
+  %% ═══════════════════════════════════════════════
+  %% LIFECYCLE
+  %% ═══════════════════════════════════════════════
+  subgraph Lifecycle["Lifecycle & Notifications"]
+    LCNOTIFY["DiscordLifecycleNotifier<br/><i>pre-restart, ready, shutdown</i>"]
+    NTFY["ntfy Integration<br/><i>notify_operator tool</i>"]
+  end
+
+  LCNOTIFY --> DISCORD
+
+  %% ═══════════════════════════════════════════════
+  %% DEBUG
+  %% ═══════════════════════════════════════════════
+  subgraph Debug["Observability"]
+    TERMDBG["TerminalDebugObserver<br/><i>13 event subscriptions</i>"]
+  end
+
+  TERMDBG --> EB
+
+  %% ═══════════════════════════════════════════════
+  %% EXTERNAL DEPENDENCIES
+  %% ═══════════════════════════════════════════════
+  subgraph External["External Services"]
+    LITELLM[("LiteLLM Proxy<br/><i>→ OpenRouter</i>")]
+    OLLAMA[("Ollama<br/><i>snowflake-arctic-embed2</i>")]
+    DISCORDAPI[("Discord API")]
+    TELEGRAMAPI[("Telegram API")]
+    SQLITE[("SQLite + sqlite-vec<br/><i>memories, contacts, audit</i>")]
+    JSONL[("JSONL Files<br/><i>sessions, prompts, audit</i>")]
+  end
+
+  LLMC --> LITELLM
+  EMBED --> OLLAMA
+  DISCORD --> DISCORDAPI
+  TELEGRAM --> TELEGRAMAPI
+  MSTORE --> SQLITE
+  CONTACT --> SQLITE
+  SSTORE --> JSONL
+  PLSTORE --> JSONL
+
+  %% ═══════════════════════════════════════════════
+  %% TOOL REGISTRY (annotations)
+  %% ═══════════════════════════════════════════════
+  subgraph Tools["Agent Tool Registry"]
+    direction LR
+    CORE_TOOLS["<b>Core (11)</b><br/>think, spawn_shard,<br/>memory_write, memory_import_batch,<br/>contact_lookup, contact_list,<br/>self_restart, self_rebuild,<br/>load_tools, notify_operator,<br/>skill_list"]
+    EXT_TOOLS["<b>Extended (18)</b><br/>6× git, 4× prompt,<br/>3× heartbeat/schedule,<br/>contact_set_trust, contact_note,<br/>contact_set_channel_privacy,<br/>contact_link_identity, settings_get"]
+  end
+
+  SA --> CORE_TOOLS
+  SA -.->|"load_tools"| EXT_TOOLS
+
+  %% ═══════════════════════════════════════════════
+  %% STYLES
+  %% ═══════════════════════════════════════════════
+  classDef entry fill:#4a6fa5,stroke:#2d4a7a,color:#fff
+  classDef core fill:#5b8c5a,stroke:#3d6b3c,color:#fff
+  classDef gateway fill:#c17817,stroke:#8a5510,color:#fff
+  classDef agent fill:#7b68ae,stroke:#554d7a,color:#fff
+  classDef memory fill:#b85450,stroke:#8b3a37,color:#fff
+  classDef trust fill:#d4a574,stroke:#a07a50,color:#fff
+  classDef identity fill:#82b366,stroke:#5d8a47,color:#fff
+  classDef channel fill:#6c8ebf,stroke:#4a6a8f,color:#fff
+  classDef external fill:#666,stroke:#444,color:#fff
+  classDef tools fill:#9673a6,stroke:#6d5080,color:#fff
+
+  class IDX,GWM,AGM entry
+  class RT,EB,CFG,SETTINGS,LOG core
+  class GWS,POLICY,SSRF,SANITIZE,AUDIT,TRANSPORT gateway
+  class GWC,SA,BRIDGE,MSGS,STREAM,CONTRACTS agent
+  class MSTORE,MRET,MEXT,MWRITE,DECAY,EMBED memory
+  class TPOLICY,CONTACT,CHANVIS,PERSONA trust
+  class CARD,PLSTORE,PCOMPOSE,PREG identity
+  class DISCORD,TELEGRAM,API,ADMIN channel
+  class LITELLM,OLLAMA,DISCORDAPI,TELEGRAMAPI,SQLITE,JSONL external
+  class CORE_TOOLS,EXT_TOOLS tools

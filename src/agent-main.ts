@@ -644,6 +644,11 @@ async function main(): Promise<void> {
     gatewaySender,
     config.dataDir,
     heartbeatChannelId,
+    {
+      llmProvider: gateway,
+      sessionManager,
+      memoryWriter,
+    },
   );
 
   // ── Register reverse RPC handler for voice messages from gateway ──

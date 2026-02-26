@@ -14,6 +14,7 @@ import { DiscordAdapter } from './channels/discord/adapter.js';
 import { EventBus } from './event-bus.js';
 import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
+import { resolveAllowedReadPathsFromEnv } from './gateway/policy-config.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
@@ -95,7 +96,7 @@ async function main(): Promise<void> {
     discordAdapter: discord,
     policyConfig: {
       workspacePath,
-      allowedReadPaths: process.env.ALLOWED_READ_PATHS?.split(':'),
+      allowedReadPaths: resolveAllowedReadPathsFromEnv(process.env, workspacePath),
     },
     ntfy: ntfyBaseUrl && ntfyTopic
       ? {

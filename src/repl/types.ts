@@ -5,6 +5,9 @@ import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { EventBus } from '../event-bus.js';
+import type { CapabilityTier } from '../types.js';
+import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
+import type { ModuleRegistryMutation } from '../modules/types.js';
 
 export interface ThinkBudget {
   maxIterations: number;      // default 15
@@ -45,6 +48,9 @@ export interface REPLDeps {
   sessionManager: SessionManager | null;
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;
+  getCapabilityTier?: () => CapabilityTier;
+  moduleInstallConfirmationQueue?: ConfirmationQueue | null;
+  onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   config: REPLConfig;
 }
 

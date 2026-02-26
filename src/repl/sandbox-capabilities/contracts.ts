@@ -5,6 +5,9 @@ import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { TaskState, TaskType } from '../../scheduler/types.js';
 import type { EventBus } from '../../event-bus.js';
+import type { CapabilityTier } from '../../types.js';
+import type { ConfirmationQueue } from '../../capabilities/confirmation-queue.js';
+import type { ModuleRegistryMutation } from '../../modules/types.js';
 
 export interface GitStatusView {
   branch: string;
@@ -26,16 +29,7 @@ export interface GitCommitView {
   filesChanged: number;
 }
 
-export interface ModuleRecord {
-  id: string;
-  name: string;
-  source: string;
-  enabled: boolean;
-  installedAt: number;
-  updatedAt: number;
-  version: number;
-  lastError?: string;
-}
+export type { ModuleRecord } from '../../modules/types.js';
 
 export type GatewayREPLCapabilities = {
   webFetch?: (url: string, prompt?: string) => Promise<string>;
@@ -69,6 +63,9 @@ export interface SandboxDeps {
   sessionManager: SessionManager | null;
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;
+  getCapabilityTier?: () => CapabilityTier;
+  moduleInstallConfirmationQueue?: ConfirmationQueue | null;
+  onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
 }
 
 export interface SandboxBudgetRef {

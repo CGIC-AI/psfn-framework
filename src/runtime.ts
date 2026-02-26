@@ -65,6 +65,7 @@ import {
   createExternalCommunicationRateLimiterFromEnv,
 } from './capabilities/safeguards.js';
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
+import { ModuleLoader } from './modules/loader.js';
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -85,6 +86,7 @@ export class SubstrateRuntime implements Lifecycle {
   private shardManager!: ShardManager;
   private channelRegistry = new Map<string, ChannelAdapter>();
   private capabilityRuntime!: CapabilityRuntime;
+  private moduleLoader?: ModuleLoader;
   private adminServer?: AdminServer;
   private lifecycleNotifier?: LifecycleNotifier;
   private stopVoiceObservers?: () => void;
@@ -348,6 +350,10 @@ export class SubstrateRuntime implements Lifecycle {
       auditTrail: safeguardAuditTrail,
     });
     this.agentLoop.registerTool(createSpawnShardTool(this.shardManager));
+    this.moduleLoader = new ModuleLoader({
+      eventBus: this.eventBus,
+      registerTool: (tool, category) => this.agentLoop.registerTool(tool, category),
+    });
 
     // Think tool — RLM+REPL sandbox for deep reasoning
     const replConfig = buildReplConfig(this.config);
@@ -358,6 +364,11 @@ export class SubstrateRuntime implements Lifecycle {
       sessionManager: this.sessionManager,
       scheduler: this.scheduler,
       eventBus: this.eventBus,
+      getCapabilityTier: () => this.capabilityRuntime.getTier(),
+      moduleInstallConfirmationQueue: cardProposalQueue,
+      onModuleRegistryMutation: async (mutation) => {
+        await this.moduleLoader?.applyRegistryMutation(mutation);
+      },
       config: replConfig,
     }));
 
@@ -374,6 +385,10 @@ export class SubstrateRuntime implements Lifecycle {
       allowedPaths: ['src/', 'docs/', 'psfn/'],
     });
     log.info('Git self-modification tools enabled');
+
+    const moduleSummary = await this.moduleLoader.loadEnabledModules();
+    log.info('Runtime modules initialized', moduleSummary);
+
     const channelsConfig = loadRuntimeChannelsConfig(this.config.dataDir);
 
     // Discord adapter — setAgent enables steering (mid-stream message injection)
@@ -554,6 +569,7 @@ export class SubstrateRuntime implements Lifecycle {
       log.info('Wrote graceful shutdown markers', { channels: markedChannels });
     }
     if (this.adminServer) await this.adminServer.stop();
+    await this.moduleLoader?.shutdown();
     await this.stopChannels();
     this.db?.close();
     log.info('Stopped');

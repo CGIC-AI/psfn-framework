@@ -58,6 +58,9 @@ import {
   MEMORY_CONFIG,
   VALID_MEMORY_TYPES,
   VALID_SENSITIVITY_LEVELS,
+  estimateImportedMemoryCriticality,
+  inferImportedMemoryType,
+  initializeImportedMemorySalience,
   type MemoryType,
   type SensitivityLevel,
 } from '../../memory/types.js';
@@ -284,9 +287,14 @@ interface ParsedRawMemoryItem {
   type: MemoryType;
   importance: number;
   salience: number;
+  criticality: number;
   tags: string[];
+  provenanceRefs: string[];
   sensitivity: SensitivityLevel;
   contactId?: string;
+  extractedAt?: number;
+  lastAccessed?: number;
+  relationshipTypeHint?: RelationshipType;
 }
 
 function truncateDebugText(value: unknown, maxChars = MAX_DEBUG_TEXT_CHARS): string {
@@ -361,12 +369,6 @@ function normalizeSessionRole(value: unknown): 'user' | 'assistant' | 'system' {
   return 'user';
 }
 
-function normalizeMemoryType(value: unknown): MemoryType {
-  if (typeof value !== 'string') return 'semantic';
-  const normalized = value.trim().toLowerCase() as MemoryType;
-  return VALID_MEMORY_TYPES.includes(normalized) ? normalized : 'semantic';
-}
-
 function normalizeSensitivity(value: unknown): SensitivityLevel {
   if (typeof value !== 'string') return 'personal';
   const normalized = value.trim().toLowerCase();
@@ -401,6 +403,84 @@ function uniqueLowercase(values: readonly string[]): string[] {
     if (normalized.length > 0) out.add(normalized);
   }
   return [...out];
+}
+
+const RELATIONSHIP_TYPE_HINTS: ReadonlyArray<{ type: RelationshipType; hints: readonly string[] }> = [
+  { type: 'partner', hints: ['partner', 'spouse', 'wife', 'husband', 'boyfriend', 'girlfriend'] },
+  { type: 'family', hints: ['family', 'mother', 'father', 'sister', 'brother', 'parent', 'child'] },
+  { type: 'friend', hints: ['friend', 'bestie', 'buddy'] },
+  { type: 'acquaintance', hints: ['acquaintance', 'coworker', 'colleague', 'neighbor'] },
+  { type: 'ai_companion', hints: ['ai_companion', 'companion'] },
+];
+
+const RELATIONSHIP_STRENGTH: Record<RelationshipType, number> = {
+  stranger: 0,
+  acquaintance: 1,
+  friend: 2,
+  family: 3,
+  ai_companion: 3,
+  partner: 4,
+};
+
+function normalizeProvenanceRefs(values: readonly string[], fallback?: string): string[] {
+  const out = new Set<string>();
+  for (const raw of values) {
+    const normalized = raw.trim();
+    if (normalized.length > 0) out.add(normalized);
+  }
+  const normalizedFallback = fallback?.trim();
+  if (normalizedFallback && normalizedFallback.length > 0) {
+    out.add(normalizedFallback);
+  }
+  return [...out];
+}
+
+function parseProvenanceRefs(entry: Record<string, unknown>, fallbackRef: string): string[] {
+  const refs = [
+    ...toStringArray(entry.provenanceRefs),
+    ...toStringArray(entry.provenance),
+    ...toStringArray(entry.sources),
+  ];
+  const source = toNonEmptyString(entry.sourceRef)
+    ?? toNonEmptyString(entry.source)
+    ?? toNonEmptyString(entry.origin);
+  if (source) refs.push(source);
+  return normalizeProvenanceRefs(refs, fallbackRef);
+}
+
+function buildMemoryDedupKey(text: string, type: MemoryType, contactId?: string): string {
+  const normalizedText = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  const normalizedContact = contactId?.trim().toLowerCase() ?? '';
+  return `${type}|${normalizedContact}|${normalizedText}`;
+}
+
+function inferRelationshipTypeHint(input: {
+  explicitValue?: unknown;
+  text: string;
+  tags: readonly string[];
+  type: MemoryType;
+}): RelationshipType | undefined {
+  const explicit = toNonEmptyString(input.explicitValue)?.toLowerCase();
+  if (explicit && VALID_RELATIONSHIP_TYPES.includes(explicit as RelationshipType)) {
+    return explicit as RelationshipType;
+  }
+  if (input.type !== 'relational') return undefined;
+
+  const corpus = `${input.text.toLowerCase()} ${input.tags.join(' ')}`;
+  for (const entry of RELATIONSHIP_TYPE_HINTS) {
+    if (entry.hints.some(hint => corpus.includes(hint))) {
+      return entry.type;
+    }
+  }
+  return undefined;
+}
+
+function shouldPromoteRelationship(existing: RelationshipType, candidate: RelationshipType): boolean {
+  return RELATIONSHIP_STRENGTH[candidate] > RELATIONSHIP_STRENGTH[existing];
 }
 
 function normalizeCardFieldValue(card: CharacterCardV2, key: keyof CharacterCardV2['data']): string {
@@ -1023,10 +1103,15 @@ export class AdminHandlers {
         type: item.type,
         importance: item.importance,
         salience: item.salience,
+        criticality: item.criticality,
         mergeDecision: item.mergeDecision,
         mergeTargetId: item.mergeTargetId,
         existingSalience: item.existingSalience,
         proposedSalience: item.proposedSalience,
+        provenanceRefs: item.provenanceRefs,
+        relationshipTypeHint: item.relationshipTypeHint,
+        relationshipUpdatePlanned: item.relationshipUpdatePlanned,
+        relationshipUpdateApplied: item.relationshipUpdateApplied,
         status: item.status,
         error: item.error,
       })),
@@ -1150,7 +1235,7 @@ export class AdminHandlers {
     return chunks;
   }
 
-  private parseMemoryItemsFromPayload(payload: unknown): ParsedRawMemoryItem[] {
+  private parseMemoryItemsFromPayload(payload: unknown, sourcePath?: string): ParsedRawMemoryItem[] {
     let rows: unknown[] = [];
     if (Array.isArray(payload)) {
       rows = payload;
@@ -1172,28 +1257,86 @@ export class AdminHandlers {
         ?? toNonEmptyString(entry.summary);
       if (!text) continue;
 
+      const tags = uniqueLowercase(
+        toStringArray(entry.tags)
+          .concat(toStringArray(entry.keywords))
+          .concat(toStringArray(entry.labels)),
+      );
+      const type = inferImportedMemoryType({
+        text,
+        explicitType: entry.type ?? entry.memoryType,
+        tags,
+      });
       const importance = clampUnit(
         toNumber(entry.importance)
           ?? toNumber(entry.priority)
           ?? toNumber(entry.weight)
           ?? 0.5,
       );
-      const salience = clampUnit(toNumber(entry.salience) ?? importance, importance);
+      const now = Date.now();
+      const extractedAt = parseTimestamp(
+        entry.extractedAt
+          ?? entry.extracted_at
+          ?? entry.createdAt
+          ?? entry.created_at
+          ?? entry.timestamp
+          ?? entry.date,
+        now,
+      );
+      const lastAccessed = parseTimestamp(
+        entry.lastAccessed
+          ?? entry.last_accessed
+          ?? entry.updatedAt
+          ?? entry.updated_at
+          ?? entry.last_seen
+          ?? extractedAt,
+        extractedAt,
+      );
+      const salience = initializeImportedMemorySalience({
+        importance,
+        salience: toNumber(entry.salience) ?? undefined,
+        type,
+        tags,
+        text,
+        extractedAt,
+        lastAccessed,
+      });
+      const criticality = estimateImportedMemoryCriticality({
+        type,
+        importance,
+        tags,
+        text,
+      });
+      const fallbackRef = sourcePath
+        ? `legacy:${sourcePath}#memory-${items.length + 1}`
+        : `legacy:memory#${items.length + 1}`;
+      const provenanceRefs = parseProvenanceRefs(entry, fallbackRef);
+      const relationshipTypeHint = inferRelationshipTypeHint({
+        explicitValue: entry.relationshipType ?? entry.relationship_type,
+        text,
+        tags,
+        type,
+      });
 
       items.push({
         text,
-        type: normalizeMemoryType(entry.type ?? entry.memoryType),
+        type,
         importance,
         salience,
-        tags: uniqueLowercase(toStringArray(entry.tags)),
+        criticality,
+        tags,
+        provenanceRefs,
         sensitivity: normalizeSensitivity(entry.sensitivity),
         contactId: toNonEmptyString(entry.contactId) ?? toNonEmptyString(entry.contact_id) ?? undefined,
+        extractedAt,
+        lastAccessed,
+        relationshipTypeHint,
       });
     }
     return items;
   }
 
-  private parseLorebookItemsFromPayload(payload: unknown): ParsedRawMemoryItem[] {
+  private parseLorebookItemsFromPayload(payload: unknown, sourcePath?: string): ParsedRawMemoryItem[] {
     let rows: unknown[] = [];
     if (Array.isArray(payload)) {
       rows = payload;
@@ -1227,22 +1370,66 @@ export class AdminHandlers {
         .concat(toStringArray(entry.trigger_words))
         .slice(0, 6);
       const tags = uniqueLowercase(['lorebook', ...keywords]);
+      const type = inferImportedMemoryType({
+        text,
+        explicitType: entry.type ?? 'semantic',
+        tags,
+      });
       const importance = clampUnit(
         toNumber(entry.importance)
           ?? toNumber(entry.priority)
           ?? toNumber(entry.weight)
           ?? 0.55,
       );
-      const salience = clampUnit(toNumber(entry.salience) ?? importance, importance);
+      const now = Date.now();
+      const extractedAt = parseTimestamp(
+        entry.updatedAt
+          ?? entry.updated_at
+          ?? entry.createdAt
+          ?? entry.created_at
+          ?? entry.timestamp,
+        now,
+      );
+      const lastAccessed = extractedAt;
+      const salience = initializeImportedMemorySalience({
+        importance,
+        salience: toNumber(entry.salience) ?? undefined,
+        type,
+        tags,
+        text,
+        extractedAt,
+        lastAccessed,
+      });
+      const criticality = estimateImportedMemoryCriticality({
+        type,
+        importance,
+        tags,
+        text,
+      });
+      const fallbackRef = sourcePath
+        ? `legacy:${sourcePath}#lorebook-${items.length + 1}`
+        : `legacy:lorebook#${items.length + 1}`;
+      const provenanceRefs = parseProvenanceRefs(entry, fallbackRef);
+      const relationshipTypeHint = inferRelationshipTypeHint({
+        explicitValue: entry.relationshipType ?? entry.relationship_type,
+        text,
+        tags,
+        type,
+      });
 
       items.push({
         text,
-        type: normalizeMemoryType(entry.type ?? 'semantic'),
+        type,
         importance,
         salience,
+        criticality,
         tags,
+        provenanceRefs,
         sensitivity: normalizeSensitivity(entry.sensitivity),
         contactId: toNonEmptyString(entry.contactId) ?? toNonEmptyString(entry.contact_id) ?? undefined,
+        extractedAt,
+        lastAccessed,
+        relationshipTypeHint,
       });
     }
 
@@ -1255,15 +1442,22 @@ export class AdminHandlers {
   ): StagedIntakeMemoryMutation[] {
     const existingByText = new Map<string, ReturnType<MemoryStore['getAllActiveMemories']>[number]>();
     for (const memory of this.memoryStore.getAllActiveMemories()) {
-      const key = memory.text.trim().toLowerCase();
-      if (!key || existingByText.has(key)) continue;
+      const key = buildMemoryDedupKey(memory.text, memory.type, memory.contactId);
+      if (!key) continue;
+      const previous = existingByText.get(key);
+      if (previous && previous.salience >= memory.salience) continue;
       existingByText.set(key, memory);
     }
 
     return items.map((item, index) => {
-      const key = item.text.trim().toLowerCase();
+      const key = buildMemoryDedupKey(item.text, item.type, item.contactId);
       const existing = key ? existingByText.get(key) : undefined;
       const mergeDecision: IdentityIntakeMemoryItem['mergeDecision'] = existing ? 'merge' : 'create';
+      const proposedSalience = existing ? Math.max(existing.salience, item.salience) : item.salience;
+      const relationshipUpdatePlanned = this.resolveRelationshipUpdatePlan(
+        item.contactId,
+        item.relationshipTypeHint,
+      );
       return {
         id: `${source}-item-${index + 1}`,
         source,
@@ -1271,16 +1465,44 @@ export class AdminHandlers {
         type: item.type,
         importance: item.importance,
         salience: item.salience,
+        criticality: item.criticality,
         mergeDecision,
         mergeTargetId: existing?.id,
         existingSalience: existing?.salience,
-        proposedSalience: existing ? Math.max(existing.salience, item.salience) : item.salience,
+        proposedSalience,
         status: 'pending',
         tags: item.tags,
+        provenanceRefs: item.provenanceRefs,
         sensitivity: item.sensitivity,
         contactId: item.contactId,
+        extractedAt: item.extractedAt,
+        lastAccessed: item.lastAccessed,
+        relationshipTypeHint: item.relationshipTypeHint,
+        relationshipUpdatePlanned,
       };
     });
+  }
+
+  private resolveRelationshipUpdatePlan(
+    contactId: string | undefined,
+    candidate: RelationshipType | undefined,
+  ): RelationshipType | undefined {
+    if (!contactId || !candidate || !this.contactStore) return undefined;
+    const contact = this.contactStore.getById(contactId);
+    if (!contact) return undefined;
+    if (!shouldPromoteRelationship(contact.relationshipType, candidate)) return undefined;
+    return candidate;
+  }
+
+  private applyRelationshipUpdate(
+    contactId: string | undefined,
+    candidate: RelationshipType | undefined,
+  ): RelationshipType | undefined {
+    if (!contactId || !candidate || !this.contactStore) return undefined;
+    const planned = this.resolveRelationshipUpdatePlan(contactId, candidate);
+    if (!planned) return undefined;
+    const updated = this.contactStore.updateRelationshipType(contactId, planned);
+    return updated ? planned : undefined;
   }
 
   private recomputeStagedIntakeStatus(stage: StagedIdentityIntake): void {
@@ -1397,7 +1619,7 @@ export class AdminHandlers {
 
       if (lorebookPath) {
         const payload = this.parseJsonFileFromPath(lorebookPath, 'Lorebook');
-        const lorebookItems = this.parseLorebookItemsFromPayload(payload);
+        const lorebookItems = this.parseLorebookItemsFromPayload(payload, lorebookPath);
         if (lorebookItems.length === 0) {
           throw new Error(`Lorebook source "${lorebookPath}" produced no valid entries`);
         }
@@ -1411,7 +1633,7 @@ export class AdminHandlers {
 
       if (memoryPath) {
         const payload = this.parseJsonFileFromPath(memoryPath, 'Memory');
-        const memoryItems = this.parseMemoryItemsFromPayload(payload);
+        const memoryItems = this.parseMemoryItemsFromPayload(payload, memoryPath);
         if (memoryItems.length === 0) {
           throw new Error(`Memory source "${memoryPath}" produced no valid entries`);
         }
@@ -1547,6 +1769,7 @@ export class AdminHandlers {
     let committedChatChunks = 0;
     let committedChatMessages = 0;
     let committedMemoryItems = 0;
+    let committedRelationshipUpdates = 0;
     let failedCard = false;
     let failedChatChunks = 0;
     let failedMemoryItems = 0;
@@ -1616,19 +1839,27 @@ export class AdminHandlers {
           }
           const mergedSalience = Math.max(existing.salience, item.salience);
           const mergedTags = uniqueLowercase([...existing.tags, ...item.tags]);
+          const mergedProvenanceRefs = normalizeProvenanceRefs(
+            [...(existing.provenanceRefs ?? []), existing.sourceRef, ...(item.provenanceRefs ?? [])],
+          );
           this.memoryStore.updateMemory(existing.id, {
             salience: mergedSalience,
             tags: mergedTags,
+            provenanceRefs: mergedProvenanceRefs,
+            contactId: existing.contactId ?? item.contactId,
             lastAccessed: Date.now(),
             accessCount: existing.accessCount + 1,
           });
           item.proposedSalience = mergedSalience;
+          item.provenanceRefs = mergedProvenanceRefs;
         } else {
           if (!this.embeddingService) {
             throw new Error('Embedding service is not configured for new memory writes');
           }
           const embedding = await this.embeddingService.embed(item.text);
           const now = Date.now();
+          const sourceRef = item.provenanceRefs?.[0]
+            ?? `admin:intake:${stage.id}:${item.source}`;
           this.memoryStore.insertMemory({
             id: `intake-${randomUUID()}`,
             text: item.text,
@@ -1637,15 +1868,22 @@ export class AdminHandlers {
             confidence: 0.82,
             emotionalValence: 0,
             salience: item.salience,
-            sourceRef: `admin:intake:${stage.id}:${item.source}`,
-            extractedAt: now,
-            lastAccessed: now,
+            sourceRef,
+            extractedAt: item.extractedAt ?? now,
+            lastAccessed: item.lastAccessed ?? item.extractedAt ?? now,
             accessCount: 1,
             tags: item.tags,
+            provenanceRefs: normalizeProvenanceRefs(item.provenanceRefs ?? [], sourceRef),
             sensitivity: item.sensitivity,
             contactId: item.contactId,
           }, embedding);
         }
+        const relationshipApplied = this.applyRelationshipUpdate(
+          item.contactId,
+          item.relationshipTypeHint,
+        );
+        item.relationshipUpdateApplied = relationshipApplied;
+        if (relationshipApplied) committedRelationshipUpdates += 1;
         item.status = 'committed';
         item.error = undefined;
         committedMemoryItems += 1;
@@ -1667,6 +1905,7 @@ export class AdminHandlers {
         committedChatChunks > 0 ? `chatChunksCommitted=${committedChatChunks}` : null,
         committedChatMessages > 0 ? `chatMessagesCommitted=${committedChatMessages}` : null,
         committedMemoryItems > 0 ? `memoryItemsCommitted=${committedMemoryItems}` : null,
+        committedRelationshipUpdates > 0 ? `relationshipUpdates=${committedRelationshipUpdates}` : null,
         failedCard ? 'card=failed' : null,
         failedChatChunks > 0 ? `chatChunksFailed=${failedChatChunks}` : null,
         failedMemoryItems > 0 ? `memoryItemsFailed=${failedMemoryItems}` : null,
@@ -1692,6 +1931,7 @@ export class AdminHandlers {
     if (committedCard) summary.push('card committed');
     if (committedChatChunks > 0) summary.push(`${committedChatChunks} chat chunks committed`);
     if (committedMemoryItems > 0) summary.push(`${committedMemoryItems} memory items committed`);
+    if (committedRelationshipUpdates > 0) summary.push(`${committedRelationshipUpdates} relationship updates applied`);
     if (failedCard) summary.push('card failed');
     if (failedChatChunks > 0) summary.push(`${failedChatChunks} chat chunks failed`);
     if (failedMemoryItems > 0) summary.push(`${failedMemoryItems} memory items failed`);

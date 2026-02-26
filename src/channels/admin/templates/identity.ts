@@ -92,10 +92,15 @@ export interface IdentityIntakeMemoryItem {
   type: string;
   importance: number;
   salience: number;
+  criticality?: number;
   mergeDecision: 'create' | 'merge';
   mergeTargetId?: string;
   existingSalience?: number;
   proposedSalience?: number;
+  provenanceRefs?: string[];
+  relationshipTypeHint?: string;
+  relationshipUpdatePlanned?: string;
+  relationshipUpdateApplied?: string;
   status: IdentityIntakeItemStatus;
   error?: string;
 }
@@ -276,9 +281,21 @@ export function identityIntakeReviewFragment(
   const pendingMemoryItems = state.memoryItems.filter(item => item.status === 'pending');
   const committedMemoryItems = state.memoryItems.filter(item => item.status === 'committed');
   const memoryRows = state.memoryItems.map(item => {
-    const mergeDetails = item.mergeDecision === 'merge'
+    const mergeSummary = item.mergeDecision === 'merge'
       ? `Merge into ${escapeHtml(item.mergeTargetId ?? 'existing')} (${escapeFloat(item.existingSalience ?? 0)} -> ${escapeFloat(item.proposedSalience ?? item.salience)})`
       : 'Create new memory';
+    const salienceSummary = item.mergeDecision === 'merge'
+      ? `Merged salience ${escapeFloat(item.proposedSalience ?? item.salience)}`
+      : `Initialized salience ${escapeFloat(item.salience)} (criticality ${escapeFloat(item.criticality ?? 0)})`;
+    const provenanceSummary = `${item.provenanceRefs?.length ?? 0} provenance refs`;
+    const relationshipSummary = item.relationshipUpdateApplied
+      ? `Relationship applied: ${escapeHtml(item.relationshipUpdateApplied)}`
+      : item.relationshipUpdatePlanned
+        ? `Relationship planned: ${escapeHtml(item.relationshipUpdatePlanned)}`
+        : item.relationshipTypeHint
+          ? `Relationship signal: ${escapeHtml(item.relationshipTypeHint)}`
+          : 'No relationship update';
+    const mergeDetails = [mergeSummary, salienceSummary, provenanceSummary, relationshipSummary].join(' • ');
 
     return `
       <tr>

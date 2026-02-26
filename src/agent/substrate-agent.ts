@@ -1,6 +1,7 @@
 // ── SubstrateAgent ──
 // Wraps pi-agent-core's Agent class, replacing the manual streamWithToolLoop
-// in the old AgentLoop. pi-agent-core handles tool calling/execution/looping
+// from the legacy in-house loop implementation. pi-agent-core handles tool
+// calling/execution/looping
 // internally — we just configure it and subscribe to events for streaming.
 //
 // Provider interfaces (LLMProvider, EmbeddingService, MemoryProvider,

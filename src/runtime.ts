@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import type { SubstrateConfig, Lifecycle } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
-import { composeSystemPrompt } from './identity/loader.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
@@ -58,9 +57,10 @@ import { wireGitRuntime } from './git/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
+  composeIdentity,
   composeSessionRuntime,
   createEmbeddingProviderFromEnv,
-  composeAgentLoop,
+  composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
@@ -255,12 +255,11 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('SQLite integrity check passed');
 
     // Load identity
+    const { card, systemPrompt } = composeIdentity(this.config);
     const cardVersionStore = new CharacterCardVersionStore(
       this.config.characterCardPath,
       join(this.config.dataDir, 'character-card-history.jsonl'),
     );
-    const card = cardVersionStore.getCurrent().card;
-    const systemPrompt = composeSystemPrompt(card);
     log.info(`Loaded character: ${card.data.name}`);
     const promptRegistry = wireStaticPromptRegistry(this.config.dataDir);
     const cardProposalQueue = new ConfirmationQueue();
@@ -310,7 +309,7 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Agent loop
-    this.agentLoop = composeAgentLoop({
+    this.agentLoop = composeSubstrateAgent({
       eventBus: this.eventBus,
       llmProvider: this.llmClient,
       sessionManager: this.sessionManager,

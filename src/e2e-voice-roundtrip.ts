@@ -20,7 +20,7 @@ import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
 import { LLMClient } from './llm/client.js';
-import { composeAgentLoop, composeIdentity, composeSessionRuntime } from './bootstrap/composition.js';
+import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from './bootstrap/composition.js';
 import { ElevenLabsTtsClient } from './voice/elevenlabs.js';
 import { DeepgramSttClient } from './voice/deepgram.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
@@ -375,7 +375,7 @@ async function main(): Promise<void> {
   const llmClient = new LLMClient(config);
   const { systemPrompt } = composeIdentity(config);
   const { sessionManager } = composeSessionRuntime({ config });
-  const agentLoop = composeAgentLoop({
+  const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: llmClient,
     sessionManager,

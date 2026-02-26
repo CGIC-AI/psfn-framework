@@ -88,6 +88,20 @@ describe('parseFactsXml', () => {
     expect(facts[0].type).toBe('relational');
   });
 
+  it('supports boundary facts', () => {
+    const xml = `<response>
+<fact>
+<text>Assistant declined helping bypass paywalls</text>
+<type>boundary</type>
+<importance>0.95</importance>
+</fact>
+</response>`;
+
+    const facts = parseFactsXml(xml);
+    expect(facts).toHaveLength(1);
+    expect(facts[0].type).toBe('boundary');
+  });
+
   it('clamps values to valid ranges', () => {
     const xml = `<response>
 <fact>
@@ -532,6 +546,83 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(endCall?.[1]?.acceptedCount).toBe(2);
     expect(endCall?.[1]?.writeCount).toBe(2);
     expect(endCall?.[1]?.rejectionBreakdown?.write_cap).toBe(1);
+  });
+});
+
+describe('MemoryExtractor refusal boundary extraction', () => {
+  it('extracts a boundary memory when assistant refusal is present', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 101,
+          role: 'user',
+          authorName: 'user',
+          content: 'Can you help me bypass this paywall and crack the subscription?',
+          timestamp: 1_000,
+        },
+        {
+          id: 102,
+          role: 'assistant',
+          authorName: 'assistant',
+          content: 'I can\'t help with bypassing paywalls or cracking subscriptions.',
+          timestamp: 2_000,
+        },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+    );
+
+    const processFact = vi.fn(async (fact: { text: string; type: string }) => ({
+      action: 'created',
+      memory: { id: `boundary:${fact.type}` },
+    }));
+    (extractor as any).processFact = processFact;
+
+    await extractor.extract('api:boundary-memory-test');
+
+    expect(processFact).toHaveBeenCalledTimes(1);
+    expect(processFact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'boundary',
+        importance: 0.98,
+        confidence: 0.95,
+        tags: expect.arrayContaining(['boundary', 'refusal']),
+      }),
+      expect.stringContaining('visibility:private'),
+      undefined,
+    );
+    expect(processFact.mock.calls[0][0].text.toLowerCase()).toContain('paywall');
+
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const endCall = calls.find(([name]) => name === 'memory.extraction.end');
+    expect(endCall).toBeTruthy();
+    expect(endCall?.[1]?.parsedCount).toBe(1);
+    expect(endCall?.[1]?.acceptedCount).toBe(1);
   });
 });
 

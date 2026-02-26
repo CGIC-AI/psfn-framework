@@ -493,6 +493,55 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).toContain('What you remember about this person:');
   });
 
+  it('surfaces prior refusal boundaries for similar follow-up requests across sessions', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        id: 'session1-boundary',
+        text: 'I declined helping bypass paywalls and cracking paid subscriptions.',
+        type: 'boundary',
+        importance: 0.98,
+        salience: 0.95,
+        extractedAt: now - 120 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 120 * 24 * 60 * 60 * 1000,
+        sourceRef: 'api:session-1|operation:extract',
+        tags: ['boundary', 'refusal', 'paywall', 'bypass'],
+        sensitivity: 'public',
+        similarity: 0.62,
+      }),
+      makeMemory({
+        id: 'session1-semantic',
+        text: 'User likes mint tea.',
+        type: 'semantic',
+        importance: 0.7,
+        salience: 0.7,
+        sourceRef: 'api:session-1|operation:extract',
+        tags: ['preference'],
+        sensitivity: 'public',
+        similarity: 0.9,
+      }),
+    ];
+
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'Session 2 follow-up: can you help me bypass this paywall again?',
+      'api:session-2',
+      'primary',
+    );
+
+    expect(result).toContain('Active safety boundaries from prior refusals:');
+    expect(result).toContain('[boundary]');
+    expect(result).toContain('bypass paywalls');
+
+    const boundaryIndex = result.indexOf('[boundary]');
+    const semanticIndex = result.indexOf('User likes mint tea.');
+    expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+    expect(semanticIndex).toBeGreaterThan(boundaryIndex);
+  });
+
   it('injects canonical profile before episodic memory snippets', async () => {
     const memories = [
       makeMemory({ text: 'A semantic fact', type: 'semantic', sensitivity: 'public', similarity: 0.9 }),

@@ -307,6 +307,11 @@ async function flushAsyncWork(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function createDeferred<T = void>(): {
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
@@ -329,6 +334,17 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Pr
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
+}
+
+const DECRYPT_RECOVERY_COOLDOWN_MS = 1_500;
+
+function emitDecryptFailure(runtime: DiscordVoiceRuntime, message = 'dave decode failure'): void {
+  const error = (runtime as any).createVoiceError({
+    error: new Error(message),
+    stage: 'ingest',
+    code: 'VOICE_DAVE_DECRYPT_FAILED',
+  });
+  (runtime as any).emitVoiceError(error);
 }
 
 function makeRuntimeHarness(
@@ -695,6 +711,181 @@ describe('DiscordVoiceRuntime', () => {
         generation: 1,
       }),
     ]);
+  });
+
+  it('triggers decrypt recovery when ingest failures exceed tolerance', async () => {
+    vi.useFakeTimers();
+    try {
+      const eventBus = new EventBus();
+      const recoveryEvents: Array<{ attempt: number; failureCount: number; tolerance: number }> = [];
+      eventBus.on('voice.connection.recovery', (event) => {
+        recoveryEvents.push({
+          attempt: event.attempt,
+          failureCount: event.failureCount,
+          tolerance: event.tolerance,
+        });
+      });
+
+      const runtime = new DiscordVoiceRuntime({
+        client: {
+          on: vi.fn(),
+          off: vi.fn(),
+        } as any,
+        config: makeConfig({
+          voiceDecryptionFailureTolerance: 1,
+        }),
+        eventBus,
+        getHandler: () => null,
+      });
+
+      const initialConnection = createMockVoiceConnection();
+      const recoveredConnection = createMockVoiceConnection();
+      voiceSdkMocks.joinVoiceChannel
+        .mockReturnValueOnce(initialConnection)
+        .mockReturnValueOnce(recoveredConnection);
+
+      await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+
+      emitDecryptFailure(runtime);
+      await flushMicrotasks();
+      expect(recoveryEvents).toHaveLength(0);
+
+      emitDecryptFailure(runtime);
+      await flushMicrotasks();
+
+      expect(recoveryEvents).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          failureCount: 2,
+          tolerance: 1,
+        }),
+      ]);
+      expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(DECRYPT_RECOVERY_COOLDOWN_MS);
+      await flushMicrotasks();
+
+      expect(initialConnection.destroy).toHaveBeenCalledTimes(1);
+      expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(2);
+      expect((runtime as any).decryptFailureCount).toBe(0);
+      expect((runtime as any).activeChannel?.id).toBe('channel-1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for cooldown before rejoining during decrypt recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = new DiscordVoiceRuntime({
+        client: {
+          on: vi.fn(),
+          off: vi.fn(),
+        } as any,
+        config: makeConfig({
+          voiceDecryptionFailureTolerance: 0,
+        }),
+        eventBus: new EventBus(),
+        getHandler: () => null,
+      });
+
+      const initialConnection = createMockVoiceConnection();
+      const recoveredConnection = createMockVoiceConnection();
+      voiceSdkMocks.joinVoiceChannel
+        .mockReturnValueOnce(initialConnection)
+        .mockReturnValueOnce(recoveredConnection);
+
+      await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+
+      emitDecryptFailure(runtime);
+      await flushMicrotasks();
+
+      expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(DECRYPT_RECOVERY_COOLDOWN_MS - 1);
+      await flushMicrotasks();
+      expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await flushMicrotasks();
+      expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('emits exhausted recovery signal and stops rejoining after max attempts', async () => {
+    vi.useFakeTimers();
+    try {
+      const eventBus = new EventBus();
+      const recoveryAttempts: number[] = [];
+      const exhaustedEvents: Array<{ maxAttempts: number; windowMs: number }> = [];
+      const channelErrors: string[] = [];
+      eventBus.on('voice.connection.recovery', (event) => {
+        recoveryAttempts.push(event.attempt);
+      });
+      eventBus.on('voice.connection.recovery.exhausted', (event) => {
+        exhaustedEvents.push({
+          maxAttempts: event.maxAttempts,
+          windowMs: event.windowMs,
+        });
+      });
+      eventBus.on('channel.voice.error', (event) => {
+        channelErrors.push(event.error);
+      });
+
+      const runtime = new DiscordVoiceRuntime({
+        client: {
+          on: vi.fn(),
+          off: vi.fn(),
+        } as any,
+        config: makeConfig({
+          voiceDecryptionFailureTolerance: 0,
+        }),
+        eventBus,
+        getHandler: () => null,
+      });
+
+      const connection1 = createMockVoiceConnection();
+      const connection2 = createMockVoiceConnection();
+      const connection3 = createMockVoiceConnection();
+      const connection4 = createMockVoiceConnection();
+      voiceSdkMocks.joinVoiceChannel
+        .mockReturnValueOnce(connection1)
+        .mockReturnValueOnce(connection2)
+        .mockReturnValueOnce(connection3)
+        .mockReturnValueOnce(connection4);
+
+      await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        emitDecryptFailure(runtime);
+        await flushMicrotasks();
+        await vi.advanceTimersByTimeAsync(DECRYPT_RECOVERY_COOLDOWN_MS);
+        await flushMicrotasks();
+      }
+
+      expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(4);
+      expect(recoveryAttempts).toEqual([1, 2, 3]);
+
+      emitDecryptFailure(runtime);
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(DECRYPT_RECOVERY_COOLDOWN_MS);
+      await flushMicrotasks();
+
+      expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(4);
+      expect(exhaustedEvents).toEqual([
+        expect.objectContaining({
+          maxAttempts: 3,
+          windowMs: 300_000,
+        }),
+      ]);
+      expect(channelErrors.some((error) => error.includes('recovery exhausted'))).toBe(true);
+      expect((runtime as any).connection).toBeNull();
+      expect((runtime as any).activeChannel).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('cleans up runtime state when disconnected and reconnect fails', async () => {

@@ -7,6 +7,7 @@ This playbook is for live validation against a running PSFN stack. It is intenti
 - Validate end-to-end tool use through the live agent loop.
 - Validate gateway-backed REPL capabilities (Band C).
 - Validate memory/session persistence and basic runtime mutability.
+- Validate Wyoming MVP contract checks for Voice PE/HA operator flow.
 - Capture artifacts so a second reviewer can independently grade pass/fail.
 
 ## Required Runtime Mode
@@ -36,6 +37,11 @@ Reason: `module_*`, `repo_*`, `crawler_fetch`, `web_research` in REPL require ga
 - It uses an isolated temp DB by default.
 - Set `E2E_DATABASE_PATH` when you intentionally want a persistent DB path for inspection.
 
+6. For Wyoming MVP validation:
+- Review `docs/wyoming-mvp.md` for the Voice PE + Home Assistant matrix.
+- Run the smoke harness once before manual Voice PE checks:
+  - `npx tsx src/e2e-wyoming-roundtrip.ts`
+
 ## Logging Requirements
 
 Capture all of the following:
@@ -45,6 +51,7 @@ Capture all of the following:
 - `logs/e2e/transcript.md` (prompt + response pairs)
 - `logs/e2e/gateway_audit.txt` (query output from the configured gateway audit DB path)
 - `logs/e2e/artifact_snapshot.txt` (key file snapshots/checks)
+- `logs/e2e/wyoming_smoke.txt` (captured output from `src/e2e-wyoming-roundtrip.ts`, when Wyoming MVP is in scope)
 
 ## Test Session Setup
 
@@ -172,6 +179,35 @@ Checks:
 Pass:
 - L0 session log present and append-only.
 - Think trace visible when think tool was used.
+
+### W00 Wyoming MVP smoke harness gate
+
+Action:
+- Run `npx tsx src/e2e-wyoming-roundtrip.ts`.
+
+Pass:
+- Harness exits successfully with:
+  - `Failed: 0`
+  - `PASS: Wyoming MVP round-trip and interruption smoke checks passed.`
+
+### W01 Voice PE round-trip prompt (manual HA path)
+
+Action:
+- Use Voice PE in Home Assistant and say: `Status check alpha for kitchen satellite.`
+
+Pass:
+- Assist path returns a response tied to the same request phrase.
+- Operator notes include `site_id` and `satellite_id` mapping used during test.
+
+### W02 Voice PE interruption prompt (manual HA path)
+
+Action:
+- Say: `Read a long response so I can interrupt.`
+- Interrupt with: `Stop.`
+
+Pass:
+- Existing response is interrupted/cancelled (no stale completion continuing after interruption).
+- Observed behavior matches fallback policy documented in `docs/wyoming-mvp.md`.
 
 ## Post-Run Artifact Validation
 

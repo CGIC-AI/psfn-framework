@@ -1139,7 +1139,8 @@ function buildExtractionSourceRef(
 ): string {
   const source = resolveExtractionSource(channelId);
   const lineRange = resolveExtractionLineRange(entries);
-  return `source:${source}|session:${channelId}|lines:${lineRange}|visibility:${channelVisibility}|operation:extract`;
+  // Prefix with channel id so channel-scoped queries can match extraction writes.
+  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}|visibility:${channelVisibility}|operation:extract`;
 }
 
 function resolveExtractionSource(channelId: string): string {

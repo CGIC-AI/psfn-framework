@@ -131,6 +131,17 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       undefined,
       options.promptRegistry ?? null,
     );
+  options.sessionManager.setPreCompactionExtractionHandler(async ({
+    channelId,
+    entries,
+    canonicalContactId,
+  }) => {
+    await memoryExtractor.queueCompactionExtraction(
+      channelId,
+      entries,
+      canonicalContactId,
+    );
+  });
   options.agentLoop.memoryExtractor = memoryExtractor;
   return memoryExtractor;
 }

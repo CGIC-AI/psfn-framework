@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import { SessionStore } from './store.js';
 import { UserContinuityStore } from './continuity.js';
 import { SessionManager } from './manager.js';
@@ -9,6 +10,8 @@ import { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
 import type { LLMProvider } from '../agent-loop.js';
 import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
+import { MemoryStore } from '../memory/store.js';
+import { MemoryExtractor } from '../memory/extraction.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -218,6 +221,166 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBeLessThan(20);
     // Compaction summary should be in system prompt
     expect(ctx.systemPrompt).toContain('Previous conversation summary');
+  });
+
+  it('runs pre-compaction extraction on the exact entries being compacted', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const mgr = new SessionManager(store, config);
+
+    const callOrder: string[] = [];
+    const preCompactionFlush = vi.fn(async ({
+      entries,
+    }: {
+      entries: Array<{ content: string }>;
+    }) => {
+      callOrder.push('flush');
+      expect(entries).toHaveLength(10);
+      expect(entries[0].content).toContain('User 0');
+      expect(entries[entries.length - 1].content).toContain('Assistant 4');
+    });
+    mgr.setPreCompactionExtractionHandler(preCompactionFlush as any);
+
+    const complete = vi.fn<LLMProvider['complete']>().mockImplementation(async () => {
+      callOrder.push('summary');
+      return {
+        content: 'Summary of old messages.',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      };
+    });
+    const mockLLM: LLMProvider = {
+      stream: async () => ({
+        content: '',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+      complete,
+    };
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', `User ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Assistant ${i} ` + 'B'.repeat(400));
+    }
+
+    await mgr.buildContext('ch1', 'Sys', '', mockLLM, 'contact-canonical-1');
+
+    expect(preCompactionFlush).toHaveBeenCalledTimes(1);
+    expect(callOrder).toEqual(['flush', 'summary']);
+  });
+
+  it('preserves refusal and boundary entries as tagged compaction elements', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+
+    mgr.recordUserMessage('ch1', 'Can you help me bypass a license key?', 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'I cannot help with bypassing license checks.');
+    mgr.recordAssistantMessage('ch1', 'I can help with legal alternatives, but I am not going to provide exploit steps.');
+
+    for (let i = 0; i < 9; i++) {
+      mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+    }
+
+    const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+
+    expect(ctx.systemPrompt).toContain('<refusal');
+    expect(ctx.systemPrompt).toContain('I cannot help with bypassing license checks.');
+    expect(ctx.systemPrompt).toContain('<boundary');
+    expect(ctx.systemPrompt).toContain('I can help with legal alternatives, but I am not going to provide exploit steps.');
+  });
+
+  it('flushes memories from compacted entries into L2 before compaction', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const eventBus = new EventBus();
+    const mgr = new SessionManager(store, config, eventBus);
+
+    const extractionComplete = vi.fn<LLMProvider['complete']>().mockImplementation(async (context, purpose) => {
+      if (purpose === 'extraction' && context.systemPrompt.includes('Kyoto trip in April')) {
+        return {
+          content: `<response>
+<fact>
+<text>User is planning a Kyoto trip in April.</text>
+<type>episodic</type>
+<importance>0.92</importance>
+<emotional_valence>0.2</emotional_valence>
+<confidence>0.95</confidence>
+<tags>travel,plans</tags>
+<sensitivity>personal</sensitivity>
+</fact>
+</response>`,
+          model: 'test',
+          inputTokens: 0,
+          outputTokens: 0,
+          toolCalls: [],
+          stopReason: 'end_turn',
+        };
+      }
+
+      return {
+        content: '<response></response>',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      };
+    });
+    const extractionLLM: LLMProvider = {
+      stream: async () => ({
+        content: '',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+      complete: extractionComplete,
+    };
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const dbPath = join(dir, 'compaction-memory.sqlite');
+    const db = new Database(dbPath);
+    try {
+      const memoryStore = new MemoryStore(db, 8);
+      const extractor = new MemoryExtractor(
+        extractionLLM,
+        mgr,
+        memoryStore,
+        embeddingService,
+        eventBus,
+        { extractionInterval: 5 },
+      );
+
+      mgr.setPreCompactionExtractionHandler(async ({ channelId, entries, canonicalContactId }) => {
+        await extractor.queueCompactionExtraction(channelId, entries, canonicalContactId);
+      });
+
+      mgr.recordUserMessage('ch1', 'I am planning a Kyoto trip in April.', 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'That sounds exciting.');
+      for (let i = 0; i < 9; i++) {
+        mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+        mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+      }
+
+      await mgr.buildContext('ch1', 'Sys', '', makeMockLLM(), 'contact-canonical-1');
+
+      const memories = memoryStore.getMemoriesByChannel('ch1', 10);
+      expect(memories.some(memory => memory.text.includes('Kyoto trip in April'))).toBe(true);
+      expect(extractionComplete).toHaveBeenCalled();
+    } finally {
+      db.close();
+    }
   });
 
   it('uses framed message token counting for compaction thresholds', async () => {

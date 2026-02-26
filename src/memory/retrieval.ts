@@ -17,6 +17,7 @@ import {
   evaluateMemoryPolicy,
   type ChannelMeta,
 } from '../trust/policy.js';
+import { computeBoundarySimilarityBoost, isBoundaryMemory } from './boundary-log.js';
 import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('Retrieval');
 
@@ -166,7 +167,7 @@ export class MemoryRetriever implements MemoryProvider {
       const scored: ScoredMemory[] = memories
         .map(memory => ({
           memory,
-          score: computeRetrievalScore(memory),
+          score: computeRetrievalScore(memory, contextText),
         }))
         .filter(s => s.score > 0)
         .sort((a, b) => b.score - a.score);
@@ -273,17 +274,23 @@ export class MemoryRetriever implements MemoryProvider {
   }
 }
 
-function computeRetrievalScore(memory: PurrMemory & { similarity: number }): number {
+function computeRetrievalScore(memory: PurrMemory & { similarity: number }, contextText: string): number {
   const ageDays = (Date.now() - memory.extractedAt) / (1000 * 60 * 60 * 24);
   const recencyBoost = 1 / (1 + ageDays / 30);
   const emotionalWeight = 1 + Math.abs(memory.emotionalValence) * 0.5;
+  const typePriorityBoost = isBoundaryMemory(memory) ? 1.6 : 1;
+  const boundarySimilarityBoost = isBoundaryMemory(memory)
+    ? computeBoundarySimilarityBoost(contextText, memory)
+    : 1;
 
   return (
     memory.similarity *
     recencyBoost *
     emotionalWeight *
     memory.importance *
-    memory.salience
+    memory.salience *
+    typePriorityBoost *
+    boundarySimilarityBoost
   );
 }
 
@@ -323,6 +330,27 @@ function renderPromptBlock(
 }
 
 function formatMemoriesForPrompt(scored: ScoredMemory[]): string {
+  const boundaryMemories = scored.filter(item => isBoundaryMemory(item.memory));
+  const nonBoundaryMemories = scored.filter(item => !isBoundaryMemory(item.memory));
+  const sections: string[] = [];
+
+  if (boundaryMemories.length > 0) {
+    sections.push(renderMemorySection(
+      'Active safety boundaries from prior refusals:',
+      boundaryMemories,
+    ));
+  }
+  if (nonBoundaryMemories.length > 0) {
+    sections.push(renderMemorySection(
+      'What you remember about this person:',
+      nonBoundaryMemories,
+    ));
+  }
+
+  return sections.join('\n\n');
+}
+
+function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
   const lines = scored.map(s => {
     const m = s.memory;
     const valence =
@@ -331,5 +359,5 @@ function formatMemoriesForPrompt(scored: ScoredMemory[]): string {
     return `- [${m.type}] ${m.text}${valence}`;
   });
 
-  return `What you remember about this person:\n${lines.join('\n')}`;
+  return `${heading}\n${lines.join('\n')}`;
 }

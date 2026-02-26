@@ -19,6 +19,7 @@ import {
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import { classifyChannel } from '../trust/policy.js';
 import type { ChannelVisibility } from '../trust/types.js';
+import { extractBoundaryFactsFromEntries } from './boundary-log.js';
 const log = createComponentLogger('Extraction');
 
 // Track last extraction per channel
@@ -450,9 +451,19 @@ export class MemoryExtractor {
         'extraction',
       );
 
-      // Parse XML response
-      const facts = parseFactsXml(response.content)
+      // Parse XML response + synthesize refusal-boundary memories directly from transcript.
+      const parsedFacts = parseFactsXml(response.content);
+      const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
+      const facts = [...parsedFacts, ...inferredBoundaryFacts]
         .map(fact => applyChannelImportanceCaps(fact, channelVisibility));
+
+      if (inferredBoundaryFacts.length > 0 && this.isTelemetryEnabled()) {
+        log.info('Detected refusal-boundary facts from conversation transcript', {
+          channelId,
+          triggerReason,
+          inferredCount: inferredBoundaryFacts.length,
+        });
+      }
       if (!this.acceptingExtractions) {
         log.debug('Skipping fact writes while extractor is stopping', {
           channelId,
@@ -1004,7 +1015,8 @@ function isLowSignalFact(text: string): boolean {
 }
 
 function computeFactValueScore(fact: ExtractedFact, novelty: number): number {
-  return clamp(fact.importance, 0, 1) * clamp(fact.confidence, 0, 1) * clamp(novelty, 0, 1);
+  const typeBoost = fact.type === 'boundary' ? 1.6 : 1;
+  return clamp(fact.importance, 0, 1) * clamp(fact.confidence, 0, 1) * clamp(novelty, 0, 1) * typeBoost;
 }
 
 function compareAcceptedFactCandidates(left: AcceptedFactCandidate, right: AcceptedFactCandidate): number {
@@ -1127,6 +1139,7 @@ function applyChannelImportanceCaps(
   fact: ExtractedFact,
   channelVisibility: ChannelVisibility,
 ): ExtractedFact {
+  if (fact.type === 'boundary') return fact;
   if (channelVisibility !== 'public') return fact;
   if (fact.importance <= 0.5) return fact;
   return { ...fact, importance: 0.5 };

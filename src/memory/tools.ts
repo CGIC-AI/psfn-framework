@@ -44,7 +44,7 @@ export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
       type: Type.Unsafe<MemoryType>({
         type: 'string',
         enum: [...VALID_MEMORY_TYPES],
-        description: 'Memory type: episodic (events), semantic (facts), emotional (feelings), procedural (patterns), reflection (meta)',
+        description: 'Memory type: episodic (events), semantic (facts), emotional (feelings), procedural (patterns), boundary (refusal/safety constraints), reflection (meta)',
       }),
       importance: Type.Optional(
         Type.Number({ description: '0-1, how significant (default 0.5). 0.8+ for core identity facts.' }),

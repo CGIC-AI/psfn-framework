@@ -3,7 +3,14 @@ import type { SensitivityLevel, ConsentFlags } from '../trust/types.js';
 export type { SensitivityLevel, ConsentFlags };
 export { VALID_SENSITIVITY_LEVELS } from '../trust/types.js';
 
-export type MemoryType = 'episodic' | 'semantic' | 'emotional' | 'procedural' | 'reflection' | 'relational';
+export type MemoryType =
+  | 'episodic'
+  | 'semantic'
+  | 'emotional'
+  | 'procedural'
+  | 'boundary'
+  | 'reflection'
+  | 'relational';
 export type MemoryRetentionClass = 'standard' | 'durable';
 
 export const DURABLE_RETENTION_TAG = 'durable';
@@ -28,7 +35,7 @@ const DURABLE_RETENTION_TAG_SET = new Set<string>([
 const AUTO_DURABLE_RELATIONAL_TAG_HINT_SET = new Set<string>(AUTO_DURABLE_RELATIONAL_TAG_HINTS);
 
 export const VALID_MEMORY_TYPES: MemoryType[] = [
-  'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational',
+  'episodic', 'semantic', 'emotional', 'procedural', 'boundary', 'reflection', 'relational',
 ];
 
 export interface PurrMemory {
@@ -79,6 +86,7 @@ export const DECAY_HALFLIFE: Record<MemoryType, number> = {
   semantic:   30 * 24 * 60 * 60 * 1000,
   emotional:  14 * 24 * 60 * 60 * 1000,
   procedural: 90 * 24 * 60 * 60 * 1000,
+  boundary:   120 * 24 * 60 * 60 * 1000,
   reflection: 60 * 24 * 60 * 60 * 1000,
   relational: 60 * 24 * 60 * 60 * 1000,
 };
@@ -89,6 +97,7 @@ export const DEDUP_THRESHOLD: Record<MemoryType, number> = {
   semantic:   0.90,
   emotional:  0.88,
   procedural: 0.97,
+  boundary:   0.96,
   reflection: 0.85,
   relational: 0.90,
 };

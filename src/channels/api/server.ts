@@ -453,33 +453,38 @@ export class ApiServer implements ChannelAdapter {
   private async evaluateSubsystemHealth(
     subsystem: ApiHealthSubsystem,
   ): Promise<ApiHealthSubsystemStatus> {
+    const startedAt = Date.now();
     const check = this.healthChecks[subsystem];
     if (!check) {
-      return {
+      return this.normalizeSubsystemHealth({
         status: 'degraded',
         detail: 'Health check not configured',
-      };
+      }, 0);
     }
 
     try {
       const result = await Promise.resolve(check());
-      return this.normalizeSubsystemHealth(result);
+      return this.normalizeSubsystemHealth(result, Date.now() - startedAt);
     } catch (error) {
-      return {
+      return this.normalizeSubsystemHealth({
         status: 'degraded',
         detail: error instanceof Error ? error.message : String(error),
-      };
+      }, Date.now() - startedAt);
     }
   }
 
   private normalizeSubsystemHealth(
     result: ApiHealthSubsystemStatus,
+    checkLatencyMs: number,
   ): ApiHealthSubsystemStatus {
     const detail = result.detail?.trim();
     return {
       status: result.status === 'healthy' ? 'healthy' : 'degraded',
       ...(detail ? { detail } : {}),
-      ...(result.meta ? { meta: result.meta } : {}),
+      meta: {
+        ...(result.meta ?? {}),
+        checkLatencyMs: Math.max(0, Math.round(checkLatencyMs)),
+      },
     };
   }
 

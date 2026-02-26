@@ -16,6 +16,11 @@ import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from './security/policy-constants.js';
 import { ApiServer } from './channels/api/server.js';
+import {
+  CachedActiveHealthProbe,
+  resolveActiveHealthProbeConfig,
+  toActiveProbeMeta,
+} from './channels/api/active-health-probe.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { loadSettings, applySettings } from './settings.js';
@@ -357,6 +362,9 @@ async function main(): Promise<void> {
     apiPort,
   });
   if (apiPort) {
+    const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
+    const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
+    const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
     apiServer = new ApiServer({
       port: apiPort,
       host: apiHost,
@@ -381,32 +389,105 @@ async function main(): Promise<void> {
             },
           };
         },
-        llm: () => ({
-          status: config.primaryModel && config.primaryProvider
-            ? 'healthy'
-            : 'degraded',
-          ...(config.primaryModel && config.primaryProvider
-            ? {}
-            : { detail: 'Primary model/provider is not configured' }),
-          meta: {
-            provider: config.primaryProvider,
-            model: config.primaryModel,
-          },
-        }),
+        llm: async () => {
+          const configured = Boolean(config.primaryModel && config.primaryProvider);
+          const baseMeta = {
+            provider: config.primaryProvider ?? null,
+            model: config.primaryModel ?? null,
+            ...toActiveProbeMeta(activeProbeConfig),
+          };
+
+          if (!configured) {
+            return {
+              status: 'degraded',
+              detail: 'Primary model/provider is not configured',
+              meta: baseMeta,
+            };
+          }
+
+          if (!activeProbeConfig.enabled) {
+            return {
+              status: 'healthy',
+              meta: baseMeta,
+            };
+          }
+
+          const probeResult = await llmActiveProbe.run(async (signal) => {
+            await gateway.complete(
+              {
+                systemPrompt: 'You are a health check. Respond with exactly: OK',
+                messages: [{ role: 'user', content: 'health probe' }],
+              },
+              'reasoning',
+              { signal },
+            );
+          });
+          const meta = {
+            ...baseMeta,
+            ...toActiveProbeMeta(activeProbeConfig, probeResult),
+          };
+
+          if (!probeResult.ok) {
+            return {
+              status: 'degraded',
+              detail: probeResult.reason ?? 'LLM connectivity probe failed',
+              meta,
+            };
+          }
+
+          return {
+            status: 'healthy',
+            meta,
+          };
+        },
         discord: () => ({
           status: 'degraded',
           detail: 'Discord transport runs outside the agent container',
         }),
-        embeddings: () => {
+        embeddings: async () => {
+          const baseMeta = {
+            dims: gateway.dims,
+            ...toActiveProbeMeta(activeProbeConfig),
+          };
           if (!Number.isFinite(gateway.dims) || gateway.dims <= 0) {
             return {
               status: 'degraded',
               detail: 'Embedding dimensions are invalid',
+              meta: baseMeta,
             };
           }
+
+          if (!activeProbeConfig.enabled) {
+            return {
+              status: 'healthy',
+              meta: baseMeta,
+            };
+          }
+
+          const probeResult = await embeddingsActiveProbe.run(async (signal) => {
+            const vector = await gateway.embed('health probe', { signal });
+            if (vector.length !== gateway.dims) {
+              throw new Error(
+                `Embedding probe dimension mismatch: expected ${gateway.dims}, got ${vector.length}`,
+              );
+            }
+          });
+          const meta = {
+            ...baseMeta,
+            ...toActiveProbeMeta(activeProbeConfig, probeResult),
+          };
+
+          if (!probeResult.ok) {
+            return {
+              status: 'degraded',
+              detail: probeResult.reason ?? 'Embeddings connectivity probe failed',
+              meta,
+            };
+          }
+
           return {
             status: 'healthy',
-            meta: { dims: gateway.dims },
+            meta,
           };
         },
         scheduler: () => {

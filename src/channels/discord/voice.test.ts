@@ -194,6 +194,21 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   };
 }
 
+function createMockTtsConnector(id: string): {
+  id: string;
+  synthesizeStream: ReturnType<typeof vi.fn>;
+  synthesizeBuffer: ReturnType<typeof vi.fn>;
+} {
+  return {
+    id,
+    synthesizeStream: vi.fn(async () => ({
+      audio: makeAudioStream(),
+      cancel: vi.fn(async () => {}),
+    })),
+    synthesizeBuffer: vi.fn(async () => Buffer.from([9, 9, 9])),
+  };
+}
+
 async function* makeTranscriptStream(): AsyncGenerator<{
   type: 'partial' | 'final';
   text: string;
@@ -390,13 +405,17 @@ function makeRuntimeHarness(
 
 describe('DiscordVoiceRuntime', () => {
   beforeEach(() => {
-    connectorMocks.createStreamingSttConnector.mockClear();
-    connectorMocks.createStreamingTtsConnector.mockClear();
+    connectorMocks.createStreamingSttConnector.mockReset();
+    connectorMocks.createStreamingSttConnector.mockImplementation(() => connectorMocks.sttConnector);
+    connectorMocks.createStreamingTtsConnector.mockReset();
+    connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
     connectorMocks.sttConnector.startStream.mockReset();
     connectorMocks.ttsConnector.synthesizeStream.mockReset();
     connectorMocks.ttsConnector.synthesizeBuffer.mockReset();
 
     reliabilityMocks.runWithVoiceStageBudget.mockClear();
+    reliabilityMocks.buildFallbackOrder.mockClear();
+    reliabilityMocks.selectFallbackCandidate.mockClear();
     securityMocks.validatePcmAudio.mockReset();
     securityMocks.validateTranscriptText.mockReset();
     securityMocks.validateTranscriptText.mockImplementation((text: string) => text.trim());
@@ -476,6 +495,75 @@ describe('DiscordVoiceRuntime', () => {
       daveEncryption: true,
       decryptionFailureTolerance: 24,
     }));
+  });
+
+  it('builds TTS connectors from configured provider-specific settings', () => {
+    const echoConnector = createMockTtsConnector('echo');
+    const elevenLabsConnector = createMockTtsConnector('elevenlabs');
+    connectorMocks.createStreamingTtsConnector.mockImplementation((provider: string) => {
+      return provider === 'echo' ? echoConnector : elevenLabsConnector;
+    });
+
+    new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig({
+        ttsProvider: 'echo',
+        echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
+        echoTtsVoice: 'echo-voice-1',
+        echoTtsPreset: 'normal',
+        echoTtsModel: 'echo-v1',
+      }),
+      eventBus: new EventBus(),
+      getHandler: () => null,
+    });
+
+    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenNthCalledWith(1, 'echo', {
+      url: 'http://127.0.0.1:5050/v1/audio/speech',
+      voice: 'echo-voice-1',
+      preset: 'normal',
+      model: 'echo-v1',
+    });
+    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenNthCalledWith(2, 'elevenlabs', {
+      apiKey: 'elevenlabs-key',
+      voiceId: 'voice-id',
+      modelId: undefined,
+    });
+  });
+
+  it('seeds fallback order from configured provider and preserves deterministic connector selection', async () => {
+    const echoConnector = createMockTtsConnector('echo');
+    const elevenLabsConnector = createMockTtsConnector('elevenlabs');
+    connectorMocks.createStreamingTtsConnector.mockImplementation((provider: string) => {
+      return provider === 'echo' ? echoConnector : elevenLabsConnector;
+    });
+
+    const runtime = new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig({
+        ttsProvider: 'echo',
+        echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
+        echoTtsVoice: 'echo-voice-1',
+        echoTtsPreset: 'normal',
+      }),
+      eventBus: new EventBus(),
+      getHandler: () => null,
+    });
+    (runtime as any).player = {
+      play: vi.fn(),
+      stop: vi.fn(),
+    };
+
+    await (runtime as any).speakText('hello world');
+
+    expect(reliabilityMocks.buildFallbackOrder).toHaveBeenCalledWith('echo', ['echo', 'elevenlabs']);
+    expect(echoConnector.synthesizeStream).toHaveBeenCalledTimes(1);
+    expect(elevenLabsConnector.synthesizeStream).not.toHaveBeenCalled();
   });
 
   it('emits partial transcript events and uses streaming TTS playback', async () => {

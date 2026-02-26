@@ -783,7 +783,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).not.toContain('{{user}}');
   });
 
-  it('injects formatted skill XML into runtime context when skills runtime is wired', async () => {
+  it('injects formatted skills index into runtime context when skills runtime is wired', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
@@ -794,14 +794,15 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
     agent.skillsRuntime = {
-      getPromptXml: vi.fn().mockReturnValue('<skills><skill name=\"conversation\" /></skills>'),
+      getPromptXml: vi.fn().mockReturnValue('<skills_index><skill name=\"conversation\" /></skills_index>'),
     } as any;
 
     await agent.handleMessage(makeMessage());
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
-    expect(buildCall[1]).toContain('[Skills]');
-    expect(buildCall[1]).toContain('<skills>');
+    expect(buildCall[1]).toContain('[Skills Index]');
+    expect(buildCall[1]).toContain('skill_view(name)');
+    expect(buildCall[1]).toContain('<skills_index>');
     expect(buildCall[1]).toContain('conversation');
   });
 

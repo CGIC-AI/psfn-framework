@@ -9,6 +9,10 @@ export interface SkillRequirementSpec {
 export interface SkillFrontmatter {
   name: string;
   description: string;
+  category?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  version?: number;
   always: boolean;
   requires: SkillRequirementSpec;
   raw: Record<string, unknown>;
@@ -33,6 +37,10 @@ export interface SkillEntry {
   id: string;
   name: string;
   description: string;
+  category?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  version?: number;
   always: boolean;
   requires: SkillRequirementSpec;
   content: string;
@@ -92,4 +100,9 @@ export interface SkillSnapshot {
   includedSkills: SkillEntry[];
   promptXml: string;
   skipped: SkillSkipRecord[];
+}
+
+export interface SkillLookupResult {
+  entry: SkillEntry;
+  eligible: SkillEligibilityResult;
 }

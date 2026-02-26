@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { wireSkillsRuntime } from './runtime-wiring.js';
 
 describe('skills runtime wiring', () => {
-  it('attaches skills runtime and registers skill_list tool', () => {
+  it('attaches skills runtime and registers all skill tools', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-wire-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'config');
@@ -35,9 +35,11 @@ describe('skills runtime wiring', () => {
       });
 
       expect(runtime).toBe(target.skillsRuntime);
-      expect(registerTool).toHaveBeenCalledTimes(1);
-      const tool = registerTool.mock.calls[0]?.[0];
-      expect(tool?.name).toBe('skill_list');
+      expect(registerTool).toHaveBeenCalledTimes(4);
+      const names = registerTool.mock.calls
+        .map(call => call[0]?.name)
+        .sort();
+      expect(names).toEqual(['skill_create', 'skill_list', 'skill_update', 'skill_view']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

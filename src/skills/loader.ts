@@ -54,6 +54,22 @@ function readString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function readInteger(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (/^-?\d+$/.test(trimmed)) {
+      return Number.parseInt(trimmed, 10);
+    }
+  }
+
+  return undefined;
+}
+
 function readStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
     return uniqStrings(value.filter((entry): entry is string => typeof entry === 'string'));
@@ -79,12 +95,47 @@ function pickFirstString(
   return undefined;
 }
 
+function pickFirstInteger(
+  record: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = readInteger(record[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function readIsoTimestamp(
+  value: unknown,
+  field: string,
+  sourcePath: string,
+): string | undefined {
+  const text = readString(value);
+  if (!text) return undefined;
+  const parsed = Date.parse(text);
+  if (Number.isNaN(parsed)) {
+    throw new Error(`Invalid skill frontmatter at ${sourcePath}: ${field} must be ISO-8601 timestamp`);
+  }
+  return new Date(parsed).toISOString();
+}
+
 function parseScalar(raw: string): unknown {
   const value = raw.trim();
   if (!value) return '';
 
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith('\'') && value.endsWith('\''))) {
-    return value.slice(1, -1);
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+
+  if (value.startsWith('\'') && value.endsWith('\'')) {
+    return value
+      .slice(1, -1)
+      .replace(/''/g, '\'');
   }
 
   if (value === 'true') return true;
@@ -278,6 +329,21 @@ function normalizeFrontmatter(raw: Record<string, unknown>, sourcePath: string):
     throw new Error(`Invalid skill frontmatter at ${sourcePath}: missing description`);
   }
 
+  const category = pickFirstString(raw, ['category']) ?? pickFirstString(metadata, ['category']);
+  const version = pickFirstInteger(raw, ['version']) ?? pickFirstInteger(metadata, ['version']);
+  if (version !== undefined && (!Number.isInteger(version) || version < 1)) {
+    throw new Error(`Invalid skill frontmatter at ${sourcePath}: version must be a positive integer`);
+  }
+
+  const createdAt = readIsoTimestamp(raw.createdAt, 'createdAt', sourcePath)
+    ?? readIsoTimestamp(raw.created, 'created', sourcePath)
+    ?? readIsoTimestamp(metadata.createdAt, 'metadata.createdAt', sourcePath)
+    ?? readIsoTimestamp(metadata.created, 'metadata.created', sourcePath);
+  const updatedAt = readIsoTimestamp(raw.updatedAt, 'updatedAt', sourcePath)
+    ?? readIsoTimestamp(raw.updated, 'updated', sourcePath)
+    ?? readIsoTimestamp(metadata.updatedAt, 'metadata.updatedAt', sourcePath)
+    ?? readIsoTimestamp(metadata.updated, 'metadata.updated', sourcePath);
+
   const always = readBoolean(raw.always) ?? readBoolean(metadata.always) ?? false;
 
   const binaries = uniqStrings([
@@ -303,6 +369,10 @@ function normalizeFrontmatter(raw: Record<string, unknown>, sourcePath: string):
   return {
     name,
     description,
+    category,
+    createdAt,
+    updatedAt,
+    version,
     always,
     requires: {
       binaries,
@@ -442,6 +512,10 @@ export function loadSkillEntries(files: SkillFileCandidate[]): {
         id: `${parsed.frontmatter.name}@${file.relativePath}`,
         name: parsed.frontmatter.name,
         description: parsed.frontmatter.description,
+        category: parsed.frontmatter.category,
+        createdAt: parsed.frontmatter.createdAt,
+        updatedAt: parsed.frontmatter.updatedAt,
+        version: parsed.frontmatter.version,
         always: parsed.frontmatter.always,
         requires: parsed.frontmatter.requires,
         content: parsed.body,

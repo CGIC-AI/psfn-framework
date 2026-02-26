@@ -28,9 +28,9 @@ function makeEntry(
 }
 
 describe('skills formatter', () => {
-  it('formats XML with always skills prioritized and max count enforced', () => {
+  it('formats compact index with always skills prioritized and max count enforced', () => {
     const first = makeEntry('conversation', { always: true });
-    const second = makeEntry('memory-management', { always: true });
+    const second = makeEntry('memory-management', { always: true, category: 'memory', version: 3 });
     const third = makeEntry('git-ops');
 
     const formatted = formatSkillsForPrompt(
@@ -41,11 +41,14 @@ describe('skills formatter', () => {
     expect(formatted.included.map(skill => skill.name)).toEqual(['conversation', 'memory-management']);
     expect(formatted.excluded).toHaveLength(1);
     expect(formatted.excluded[0]?.reason).toContain('maxLoadedSkills');
-    expect(formatted.xml).toContain('<skills>');
+    expect(formatted.xml).toContain('<skills_index>');
+    expect(formatted.xml).toContain('category="memory"');
+    expect(formatted.xml).toContain('version="3"');
     expect(formatted.xml).toContain('conversation');
+    expect(formatted.xml).not.toContain('Detailed instructions for');
   });
 
-  it('excludes skills when XML would exceed max char budget', () => {
+  it('excludes skills when index would exceed max char budget', () => {
     const formatted = formatSkillsForPrompt(
       [makeEntry('memory-management')],
       { maxSkills: 32, maxChars: 64 },

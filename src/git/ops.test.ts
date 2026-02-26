@@ -11,14 +11,16 @@ vi.mock('node:fs', () => ({
   writeFileSync: vi.fn(),
   appendFileSync: vi.fn(),
   mkdirSync: vi.fn(),
+  readFileSync: vi.fn(),
 }));
 
 import { execSync } from 'node:child_process';
-import { writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 
 const mockedExecSync = vi.mocked(execSync);
 const mockedWriteFileSync = vi.mocked(writeFileSync);
 const mockedAppendFileSync = vi.mocked(appendFileSync);
+const mockedReadFileSync = vi.mocked(readFileSync);
 
 function createGitOps(overrides?: Partial<GitOpsConfig>): GitOps {
   return new GitOps({
@@ -26,14 +28,24 @@ function createGitOps(overrides?: Partial<GitOpsConfig>): GitOps {
     allowedPaths: [...REPO_ALLOWED_PATHS],
     protectedBranches: ['main', 'master'],
     auditLogPath: 'data/repo-audit.jsonl',
+    auditRotation: {
+      maxSizeBytes: 10 * 1024 * 1024,
+      maxAgeMs: 30 * 24 * 60 * 60 * 1000,
+      maxCount: 50_000,
+    },
     execTimeoutMs: 30_000,
     ...overrides,
   });
 }
 
+function auditLine(timestamp: string, operation: string): string {
+  return JSON.stringify({ timestamp, operation, args: {} });
+}
+
 describe('GitOps', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedReadFileSync.mockReturnValue('');
   });
 
   // ── status() ──
@@ -370,6 +382,103 @@ describe('GitOps', () => {
       const entry = JSON.parse(data.trim());
       expect(entry.operation).toBe('createBranch');
       expect(entry.timestamp).toBeTruthy();
+    });
+
+    it('prunes oldest entries when maxCount is exceeded', () => {
+      mockedExecSync.mockReturnValue('');
+      mockedReadFileSync.mockReturnValue([
+        auditLine('2026-01-01T00:00:00.000Z', 'one'),
+        auditLine('2026-01-01T00:01:00.000Z', 'two'),
+        auditLine('2026-01-01T00:02:00.000Z', 'three'),
+      ].join('\n') + '\n');
+
+      const ops = createGitOps({
+        auditRotation: {
+          maxCount: 2,
+          maxAgeMs: 365 * 24 * 60 * 60 * 1000,
+          maxSizeBytes: 10_000,
+        },
+      });
+      ops.createBranch('feature/rotation-count');
+
+      expect(mockedWriteFileSync).toHaveBeenCalledWith(
+        '/repo/data/repo-audit.jsonl',
+        [
+          auditLine('2026-01-01T00:01:00.000Z', 'two'),
+          auditLine('2026-01-01T00:02:00.000Z', 'three'),
+        ].join('\n') + '\n',
+        'utf-8',
+      );
+    });
+
+    it('prunes entries older than maxAgeMs', () => {
+      mockedExecSync.mockReturnValue('');
+      mockedReadFileSync.mockReturnValue([
+        auditLine('2026-01-01T00:00:00.000Z', 'old'),
+        auditLine('2026-01-01T00:10:00.000Z', 'fresh'),
+      ].join('\n') + '\n');
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-01-01T00:10:30.000Z'));
+
+      try {
+        const ops = createGitOps({
+          auditRotation: {
+            maxCount: 100,
+            maxAgeMs: 45_000,
+            maxSizeBytes: 10_000,
+          },
+        });
+        ops.createBranch('feature/rotation-age');
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      expect(mockedWriteFileSync).toHaveBeenCalledWith(
+        '/repo/data/repo-audit.jsonl',
+        auditLine('2026-01-01T00:10:00.000Z', 'fresh') + '\n',
+        'utf-8',
+      );
+    });
+
+    it('prunes oldest entries when maxSizeBytes is exceeded', () => {
+      mockedExecSync.mockReturnValue('');
+      mockedReadFileSync.mockReturnValue([
+        JSON.stringify({
+          timestamp: '2026-01-01T00:00:00.000Z',
+          operation: 'small',
+          args: { note: 'a'.repeat(150) },
+        }),
+        JSON.stringify({
+          timestamp: '2026-01-01T00:01:00.000Z',
+          operation: 'large',
+          args: { note: 'b'.repeat(150) },
+        }),
+      ].join('\n') + '\n');
+
+      const ops = createGitOps({
+        auditRotation: {
+          maxCount: 100,
+          maxAgeMs: 365 * 24 * 60 * 60 * 1000,
+          maxSizeBytes: 260,
+        },
+      });
+      ops.createBranch('feature/rotation-size');
+
+      expect(mockedWriteFileSync).toHaveBeenCalledTimes(1);
+      const rewritten = mockedWriteFileSync.mock.calls[0][1] as string;
+      expect(rewritten).toContain('"operation":"large"');
+      expect(rewritten).not.toContain('"operation":"small"');
+    });
+
+    it('rejects invalid auditRotation values', () => {
+      expect(() => createGitOps({
+        auditRotation: { maxCount: 0, maxAgeMs: 1, maxSizeBytes: 1 },
+      })).toThrow('auditRotation.maxCount');
+      expect(() => createGitOps({
+        auditRotation: { maxCount: 1, maxAgeMs: 0, maxSizeBytes: 1 },
+      })).toThrow('auditRotation.maxAgeMs');
+      expect(() => createGitOps({
+        auditRotation: { maxCount: 1, maxAgeMs: 1, maxSizeBytes: 0 },
+      })).toThrow('auditRotation.maxSizeBytes');
     });
   });
 

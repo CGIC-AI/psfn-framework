@@ -12,10 +12,12 @@ import {
   type WyomingFrame,
   type WyomingInfoData,
   type WyomingRuntimeErrorCode,
+  type WyomingServiceInfo,
   type WyomingTransportSession,
   cloneInfoData,
   normalizeSessionId,
 } from './protocol.js';
+import type { WyomingServiceRegistry } from './services/index.js';
 
 const log = createComponentLogger('WyomingRuntime');
 const DEFAULT_MAX_CONCURRENT_SESSIONS = 128;
@@ -51,6 +53,7 @@ export type WyomingUnhandledEventResult =
 export interface WyomingRuntimeOptions {
   info: WyomingInfoData | (() => WyomingInfoData);
   emitFrame: (transportSession: WyomingTransportSession, frame: WyomingFrame) => void | Promise<void>;
+  serviceRegistry?: WyomingServiceRegistry;
   onSessionStart?: (
     session: WyomingRuntimeSessionSnapshot,
     frame: WyomingFrame,
@@ -83,9 +86,48 @@ function toSessionSnapshot(state: WyomingRuntimeSessionState): WyomingRuntimeSes
   };
 }
 
+function mergeServiceInfo(
+  infoServices: WyomingServiceInfo[],
+  registryServices: WyomingServiceInfo[],
+): WyomingServiceInfo[] {
+  const merged = new Map<string, WyomingServiceInfo>();
+
+  for (const service of infoServices) {
+    merged.set(service.name, {
+      ...service,
+      supports: service.supports ? [...service.supports] : undefined,
+    });
+  }
+
+  for (const service of registryServices) {
+    const existing = merged.get(service.name);
+    if (!existing) {
+      merged.set(service.name, {
+        ...service,
+        supports: service.supports ? [...service.supports] : undefined,
+      });
+      continue;
+    }
+
+    const supports = new Set<string>([
+      ...(existing.supports ?? []),
+      ...(service.supports ?? []),
+    ]);
+
+    merged.set(service.name, {
+      ...existing,
+      ...service,
+      supports: supports.size > 0 ? [...supports] : undefined,
+    });
+  }
+
+  return [...merged.values()];
+}
+
 export class WyomingRuntime {
   private readonly sessions = new Map<string, WyomingRuntimeSessionState>();
   private readonly emitFrame: WyomingRuntimeOptions['emitFrame'];
+  private readonly serviceRegistry?: WyomingServiceRegistry;
   private readonly onSessionStart: WyomingRuntimeOptions['onSessionStart'];
   private readonly onSessionEnd: WyomingRuntimeOptions['onSessionEnd'];
   private readonly onUnhandledEvent: WyomingRuntimeOptions['onUnhandledEvent'];
@@ -95,6 +137,7 @@ export class WyomingRuntime {
 
   constructor(options: WyomingRuntimeOptions) {
     this.emitFrame = options.emitFrame;
+    this.serviceRegistry = options.serviceRegistry;
     this.onSessionStart = options.onSessionStart;
     this.onSessionEnd = options.onSessionEnd;
     this.onUnhandledEvent = options.onUnhandledEvent;
@@ -137,6 +180,7 @@ export class WyomingRuntime {
   async stop(): Promise<void> {
     const states = [...this.sessions.values()];
     for (const state of states) {
+      await this.safeOnServiceSessionClosed(state, 'runtime.stop');
       await this.safeOnSessionEnd(state, 'runtime.stop');
       this.sessions.delete(state.key);
     }
@@ -145,6 +189,7 @@ export class WyomingRuntime {
   async closeConnection(connectionId: string, reason = 'transport.closed'): Promise<void> {
     const states = [...this.sessions.values()].filter((state) => state.connectionId === connectionId);
     for (const state of states) {
+      await this.safeOnServiceSessionClosed(state, reason);
       await this.safeOnSessionEnd(state, reason);
       this.sessions.delete(state.key);
     }
@@ -160,6 +205,9 @@ export class WyomingRuntime {
 
   private async handleDescribe(transportSession: WyomingTransportSession): Promise<void> {
     const info = cloneInfoData(this.infoProvider());
+    if (this.serviceRegistry) {
+      info.services = mergeServiceInfo(info.services, this.serviceRegistry.services);
+    }
     await this.emit(transportSession, {
       type: WYOMING_EVENT_INFO,
       data: info,
@@ -226,6 +274,7 @@ export class WyomingRuntime {
     const state = this.requireState(transportSession.connectionId, sessionId);
 
     try {
+      await this.safeOnServiceSessionClosed(state, 'session.end');
       if (this.onSessionEnd) {
         await Promise.resolve(this.onSessionEnd(toSessionSnapshot(state), 'session.end'));
       }
@@ -250,6 +299,26 @@ export class WyomingRuntime {
 
     if (state) {
       state.lastSeenAtMs = this.now();
+    }
+
+    if (this.serviceRegistry) {
+      const serviceResult = await this.serviceRegistry.dispatch({
+        transportSession,
+        frame,
+        sessionId,
+        session: state ? toSessionSnapshot(state) : undefined,
+      });
+      if (serviceResult) {
+        if (Array.isArray(serviceResult)) {
+          for (const outbound of serviceResult) {
+            await this.emit(transportSession, outbound);
+          }
+          return;
+        }
+
+        await this.emit(transportSession, serviceResult);
+        return;
+      }
     }
 
     if (!this.onUnhandledEvent) {
@@ -307,6 +376,30 @@ export class WyomingRuntime {
       await Promise.resolve(this.onSessionEnd(toSessionSnapshot(state), reason));
     } catch (error) {
       log.warn('Wyoming onSessionEnd hook failed', {
+        sessionId: state.sessionId,
+        connectionId: state.connectionId,
+        reason,
+        error: String(error),
+      });
+    }
+  }
+
+  private async safeOnServiceSessionClosed(
+    state: WyomingRuntimeSessionState,
+    reason: string,
+  ): Promise<void> {
+    if (!this.serviceRegistry) {
+      return;
+    }
+
+    try {
+      await this.serviceRegistry.closeSession({
+        connectionId: state.connectionId,
+        sessionId: state.sessionId,
+        reason,
+      });
+    } catch (error) {
+      log.warn('Wyoming service cleanup hook failed', {
         sessionId: state.sessionId,
         connectionId: state.connectionId,
         reason,

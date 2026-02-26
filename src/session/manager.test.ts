@@ -96,6 +96,77 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Memory block');
   });
 
+  it('loads verified session history without unverified tags', async () => {
+    const config = makeConfig();
+    const keyring = {
+      activeVersion: 'v1',
+      keys: { v1: 'trusted-integrity-key' },
+    };
+
+    const writer = new SessionStore(dir, { integrityKeyring: keyring });
+    writer.append({
+      channelId: 'dm:verified',
+      role: 'user',
+      content: 'Verified history line',
+      authorId: 'u1',
+      authorName: 'User',
+      timestamp: Date.now(),
+    });
+
+    const reader = new SessionStore(dir, { integrityKeyring: keyring });
+    const mgr = new SessionManager(reader, config);
+
+    const ctx = await mgr.buildContext('dm:verified', 'Sys', '', undefined, undefined, { isDirectMessage: true });
+    expect(ctx.messages).toHaveLength(1);
+    expect(ctx.messages[0].content).toContain('Verified history line');
+    expect(ctx.messages[0].content).not.toContain('<unverified_history>');
+  });
+
+  it('wraps failed integrity history in unverified_history tags', async () => {
+    const config = makeConfig();
+    const signerKeyring = {
+      activeVersion: 'v1',
+      keys: { v1: 'signing-key' },
+    };
+    const mismatchedKeyring = {
+      activeVersion: 'v1',
+      keys: { v1: 'different-verifier-key' },
+    };
+
+    const writer = new SessionStore(dir, { integrityKeyring: signerKeyring });
+    writer.append({
+      channelId: 'dm:tampered',
+      role: 'user',
+      content: 'This line should fail verification',
+      authorId: 'u1',
+      authorName: 'User',
+      timestamp: Date.now(),
+    });
+
+    const reader = new SessionStore(dir, { integrityKeyring: mismatchedKeyring });
+    const mgr = new SessionManager(reader, config);
+
+    const ctx = await mgr.buildContext('dm:tampered', 'Sys', '', undefined, undefined, { isDirectMessage: true });
+    expect(ctx.messages).toHaveLength(1);
+    expect(ctx.messages[0].content).toContain('<unverified_history>');
+    expect(ctx.messages[0].content).toContain('This line should fail verification');
+  });
+
+  it('wraps public channel history in untrusted_context tags', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+
+    mgr.recordUserMessage('twitter:room', 'Public user message', 'u1', 'User', false);
+    mgr.recordAssistantMessage('twitter:room', 'Public assistant reply', 'u1', false);
+
+    const ctx = await mgr.buildContext('twitter:room', 'Sys', '', undefined, undefined, { isDirectMessage: false });
+    expect(ctx.messages).toHaveLength(2);
+    expect(ctx.messages[0].content).toContain('<untrusted_context source="public">');
+    expect(ctx.messages[0].content).toContain('Public user message');
+    expect(ctx.messages[1].content).toContain('<untrusted_context source="public">');
+    expect(ctx.messages[1].content).toContain('Public assistant reply');
+  });
+
   it('uses context-budgeted history when hard override is unset', async () => {
     const budgetConfig = makeConfig({
       sessionMessageLimit: undefined,

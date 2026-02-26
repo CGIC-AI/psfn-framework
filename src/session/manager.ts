@@ -7,6 +7,7 @@ import type { EventBus } from '../event-bus.js';
 import { countMessageTokens, countTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../logger.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
+import type { ChannelVisibility } from '../trust/types.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
@@ -340,6 +341,26 @@ function appendCompactionTagBlock(summary: string, tagBlock: string): string {
   return `${trimmedSummary}\n\n${tagBlock}`;
 }
 
+function parseChannelVisibility(value?: string): ChannelVisibility | undefined {
+  switch (value) {
+    case 'private':
+    case 'semi_private':
+    case 'public':
+    case 'broadcast':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function isUntrustedVisibility(visibility: ChannelVisibility): boolean {
+  return visibility === 'public' || visibility === 'broadcast';
+}
+
+function wrapUntrustedContext(content: string, source: 'public' = 'public'): string {
+  return `<untrusted_context source="${source}">\n${content}\n</untrusted_context>`;
+}
+
 export class SessionManager {
   private store: SessionStore;
   private config: SubstrateConfig;
@@ -369,6 +390,8 @@ export class SessionManager {
     isDirectMessage?: boolean,
     continuityUserId?: string,
   ): void {
+    const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
+    const channelVisibility = classifyChannel(channelId, meta);
     this.store.append({
       channelId,
       role: 'user',
@@ -376,12 +399,12 @@ export class SessionManager {
       authorId,
       authorName,
       timestamp: Date.now(),
+      channelVisibility,
     });
 
     // Also append to user continuity store (with origin metadata)
     const continuityKey = continuityUserId ?? authorId;
     if (this.continuityStore && continuityKey) {
-      const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
       this.continuityStore.append(continuityKey, {
         channelId,
         role: 'user',
@@ -390,7 +413,7 @@ export class SessionManager {
         authorName,
         timestamp: Date.now(),
         originChannelId: channelId,
-        channelVisibility: classifyChannel(channelId, meta),
+        channelVisibility,
       });
     }
   }
@@ -402,24 +425,26 @@ export class SessionManager {
     isDirectMessage?: boolean,
     continuityUserId?: string,
   ): void {
+    const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
+    const channelVisibility = classifyChannel(channelId, meta);
     this.store.append({
       channelId,
       role: 'assistant',
       content,
       timestamp: Date.now(),
+      channelVisibility,
     });
 
     // Also append to user continuity store (with origin metadata)
     const continuityKey = continuityUserId ?? forUserId;
     if (this.continuityStore && continuityKey) {
-      const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
       this.continuityStore.append(continuityKey, {
         channelId,
         role: 'assistant',
         content,
         timestamp: Date.now(),
         originChannelId: channelId,
-        channelVisibility: classifyChannel(channelId, meta),
+        channelVisibility,
       });
     }
   }
@@ -433,6 +458,7 @@ export class SessionManager {
     channelMeta?: ChannelMeta,
     continuityFallbackUserIds: string[] = [],
   ): Promise<LLMContext> {
+    const channelVisibility = classifyChannel(channelId, channelMeta);
     const historyBudget = resolveSessionHistoryBudget(this.config);
     let recent = this.store.getRecent(channelId, historyBudget.estimatedCount);
     if (historyBudget.mode === 'budget') {
@@ -447,7 +473,7 @@ export class SessionManager {
       const tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
 
       const systemTokens = countTokens(systemPrompt) + countTokens(memoriesBlock);
-      const messageTokens = countMessageTokens(this.entriesToMessages(recent));
+      const messageTokens = countMessageTokens(this.entriesToMessages(recent, channelVisibility, false));
       const totalTokens = systemTokens + messageTokens;
 
       if (totalTokens > tokenBudget) {
@@ -524,7 +550,7 @@ export class SessionManager {
           const compactionSummary = appendCompactionTagBlock(summaryResponse.content, preservedTagBlock);
           const coveredUpTo = toCompact[toCompact.length - 1].id;
           this.store.insertCompaction(channelId, compactionSummary, coveredUpTo);
-          const keepTokens = countMessageTokens(this.entriesToMessages(toKeep));
+          const keepTokens = countMessageTokens(this.entriesToMessages(toKeep, channelVisibility, false));
           const summaryTokens = countTokens(compactionSummary);
           tokensAfter = systemTokens + keepTokens + summaryTokens;
 
@@ -593,7 +619,13 @@ export class SessionManager {
           .map(e => {
             const origin = e.originChannelId ? ` [from ${e.originChannelId}]` : '';
             const speaker = e.role === 'user' ? (e.authorName ?? 'User') : 'PSFN';
-            return `${speaker}${origin}: ${e.content}`;
+            const rawContent = `${speaker}${origin}: ${e.content}`;
+            const originVisibility = parseChannelVisibility(e.channelVisibility)
+              ?? classifyChannel(e.originChannelId ?? e.channelId);
+            if (!isUntrustedVisibility(originVisibility)) {
+              return rawContent;
+            }
+            return wrapUntrustedContext(rawContent);
           })
           .join('\n');
         fullSystem += '\n\n[Recent activity from other channels]\n' + continuityBlock;
@@ -601,7 +633,7 @@ export class SessionManager {
     }
 
     // Convert session entries to LLM messages
-    const messages = this.entriesToMessages(recent);
+    const messages = this.entriesToMessages(recent, channelVisibility);
 
     return {
       systemPrompt: fullSystem,
@@ -697,13 +729,23 @@ export class SessionManager {
     return this.store.count(channelId);
   }
 
-  private entriesToMessages(entries: SessionEntry[]): ContextMessage[] {
+  private entriesToMessages(
+    entries: SessionEntry[],
+    defaultVisibility: ChannelVisibility,
+    includeTrustTags: boolean = true,
+  ): ContextMessage[] {
     const messages: ContextMessage[] = [];
 
     for (const entry of entries) {
       // System notes are included as user-role messages with a marker
       const role: 'user' | 'assistant' = entry.role === 'system' ? 'user' : entry.role as 'user' | 'assistant';
-      const content = entry.role === 'system' ? `[System note] ${entry.content}` : entry.content;
+      let content = entry.role === 'system' ? `[System note] ${entry.content}` : entry.content;
+      if (includeTrustTags) {
+        const visibility = parseChannelVisibility(entry.channelVisibility) ?? defaultVisibility;
+        if (isUntrustedVisibility(visibility)) {
+          content = wrapUntrustedContext(content);
+        }
+      }
 
       // Merge consecutive same-role messages
       const last = messages[messages.length - 1];

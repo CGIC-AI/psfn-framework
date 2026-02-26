@@ -202,6 +202,8 @@ export interface SubstrateConfig {
   voiceTargetGuildId?: string;
   voiceTargetUserId?: string;
   voiceReadyCueText?: string;
+  voiceDaveEncryption?: boolean;
+  voiceDecryptionFailureTolerance?: number;
   deepgramApiKey?: string;
   deepgramModel?: string;
   elevenLabsApiKey?: string;
@@ -309,6 +311,12 @@ export function loadConfig(): SubstrateConfig {
     MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
     MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
   );
+  const voiceDaveEncryption = parseOptionalBooleanEnv(process.env.DISCORD_VOICE_DAVE_ENCRYPTION) ?? true;
+  const voiceDecryptionFailureTolerance = parseIntegerEnv(
+    process.env.DISCORD_VOICE_DECRYPTION_FAILURE_TOLERANCE,
+    24,
+    0,
+  );
 
   return {
     primaryModel,
@@ -368,6 +376,8 @@ export function loadConfig(): SubstrateConfig {
     voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
     voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
+    voiceDaveEncryption,
+    voiceDecryptionFailureTolerance,
     deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
     deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? '',

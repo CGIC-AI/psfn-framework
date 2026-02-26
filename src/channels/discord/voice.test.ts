@@ -344,6 +344,92 @@ describe('DiscordVoiceRuntime', () => {
     voiceSdkMocks.joinVoiceChannel.mockReset();
   });
 
+  it('passes configured DAVE join options to @discordjs/voice', async () => {
+    const connection = {
+      subscribe: vi.fn(),
+      destroy: vi.fn(),
+      receiver: {
+        speaking: {
+          on: vi.fn(),
+          off: vi.fn(),
+        },
+      },
+    };
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
+
+    const runtime = new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig({
+        voiceDaveEncryption: false,
+        voiceDecryptionFailureTolerance: 9,
+      }),
+      eventBus: new EventBus(),
+      getHandler: () => null,
+    });
+
+    const voiceChannel = {
+      id: 'channel-1',
+      guild: {
+        id: 'guild-1',
+        voiceAdapterCreator: vi.fn(),
+      },
+      members: new Map(),
+    } as any;
+
+    await (runtime as any).joinChannel(voiceChannel);
+
+    expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledWith(expect.objectContaining({
+      daveEncryption: false,
+      decryptionFailureTolerance: 9,
+    }));
+  });
+
+  it('uses default DAVE join options when config values are not set', async () => {
+    const connection = {
+      subscribe: vi.fn(),
+      destroy: vi.fn(),
+      receiver: {
+        speaking: {
+          on: vi.fn(),
+          off: vi.fn(),
+        },
+      },
+    };
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
+
+    const runtime = new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig({
+        voiceDaveEncryption: undefined,
+        voiceDecryptionFailureTolerance: undefined,
+      }),
+      eventBus: new EventBus(),
+      getHandler: () => null,
+    });
+
+    const voiceChannel = {
+      id: 'channel-1',
+      guild: {
+        id: 'guild-1',
+        voiceAdapterCreator: vi.fn(),
+      },
+      members: new Map(),
+    } as any;
+
+    await (runtime as any).joinChannel(voiceChannel);
+
+    expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledWith(expect.objectContaining({
+      daveEncryption: true,
+      decryptionFailureTolerance: 24,
+    }));
+  });
+
   it('emits partial transcript events and uses streaming TTS playback', async () => {
     connectorMocks.sttConnector.startStream.mockResolvedValue({
       transcripts: makeTranscriptStream(),

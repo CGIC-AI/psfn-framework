@@ -2,7 +2,15 @@ import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../../agent/contracts.js';
 import type { ChannelOutboundDock } from '../../channels/types.js';
 import type { GitOperations } from '../../git/ops.js';
-import type { UrlPolicyConfig } from '../url-policy.js';
+import type {
+  ConfirmationQueueEntry,
+  ConfirmationResolveParams,
+  ConfirmationResolveResult,
+  NotifyNtfyParams,
+  NotifyNtfyResult,
+} from '../protocol.js';
+import type { SessionHmacKeyring } from '../../session/journal-utils.js';
+import type { PolicyConfig } from '../policy.js';
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -10,8 +18,13 @@ export interface GatewayMethodRuntime {
   embeddingService: EmbeddingService;
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
-  policyConfig: { urlPolicy?: UrlPolicyConfig };
+  policyConfig: PolicyConfig;
+  workspacePath: string;
+  sessionHmacKeyring: SessionHmacKeyring | null;
   notifyAll(method: string, params: unknown): void;
+  listPendingConfirmations(): ConfirmationQueueEntry[];
+  resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
+  sendNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
   nextStreamRequestId(): string;
   audited<P, R>(
     method: string,
@@ -24,6 +37,7 @@ export interface GatewayMethodRuntime {
     paramsSummary: (params: P) => Record<string, unknown>,
     approvalAction: string,
     approvalScope: (params: P) => string,
+    approvalReason?: (params: P) => string,
   ): (params: P) => Promise<R>;
 }
 
@@ -36,4 +50,5 @@ export interface AuditedMethodDescriptor<P, R> {
 export interface GatedMethodDescriptor<P, R> extends AuditedMethodDescriptor<P, R> {
   approvalAction: string;
   approvalScope: (params: P) => string;
+  approvalReason?: (params: P) => string;
 }

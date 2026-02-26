@@ -17,6 +17,7 @@ import type { NdjsonConnection } from './transport.js';
 import { createSocketClient } from './transport.js';
 import { createComponentLogger } from '../logger.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
+import { registerReverseGatewayMethods } from './reverse-methods.js';
 const log = createComponentLogger('GatewayClient');
 import type { JournalIntegrityVerificationResult } from '../session/journal-utils.js';
 import type { SessionIntegrityProvider } from '../session/store.js';
@@ -32,7 +33,6 @@ import type {
   FsListResult,
   DiscordMessageNotification,
   LLMChunkNotification,
-  VoiceHandleMessageParams,
   VoiceHandleMessageResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
@@ -495,30 +495,14 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     if (this.reverseMethodsRegistered) return;
     this.reverseMethodsRegistered = true;
 
-    const handleMessageMethod = async (params: VoiceHandleMessageParams) =>
-      this.dispatchHandleMessage(params.message);
-    this.rpcInstance.addMethod('voice.handleMessage', handleMessageMethod);
-    this.rpcInstance.addMethod('discord.handleMessage', handleMessageMethod);
-
-    const voiceStreamStartMethod = async (params: VoiceStreamStartParams) =>
-      this.handleVoiceStreamStart(params);
-    this.rpcInstance.addMethod('voice.stream.start', voiceStreamStartMethod);
-    this.rpcInstance.addMethod('discord.voice.start', voiceStreamStartMethod);
-
-    const voiceStreamChunkMethod = async (params: VoiceStreamChunkParams) =>
-      this.handleVoiceStreamChunk(params);
-    this.rpcInstance.addMethod('voice.stream.chunk', voiceStreamChunkMethod);
-    this.rpcInstance.addMethod('discord.voice.chunk', voiceStreamChunkMethod);
-
-    const voiceStreamEndMethod = async (params: VoiceStreamEndParams) =>
-      this.handleVoiceStreamEnd(params);
-    this.rpcInstance.addMethod('voice.stream.end', voiceStreamEndMethod);
-    this.rpcInstance.addMethod('discord.voice.end', voiceStreamEndMethod);
-
-    const voiceStreamCancelMethod = async (params: VoiceStreamCancelParams) =>
-      this.handleVoiceStreamCancel(params);
-    this.rpcInstance.addMethod('voice.stream.cancel', voiceStreamCancelMethod);
-    this.rpcInstance.addMethod('discord.voice.cancel', voiceStreamCancelMethod);
+    registerReverseGatewayMethods({
+      target: this.rpcInstance,
+      dispatchHandleMessage: (message) => this.dispatchHandleMessage(message),
+      handleVoiceStreamStart: (params) => this.handleVoiceStreamStart(params),
+      handleVoiceStreamChunk: (params) => this.handleVoiceStreamChunk(params),
+      handleVoiceStreamEnd: (params) => this.handleVoiceStreamEnd(params),
+      handleVoiceStreamCancel: (params) => this.handleVoiceStreamCancel(params),
+    });
   }
 
   private async dispatchHandleMessage(message: RpcSubstrateMessage): Promise<VoiceHandleMessageResult> {

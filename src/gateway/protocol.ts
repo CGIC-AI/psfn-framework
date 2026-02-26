@@ -7,6 +7,8 @@ import type {
   SubstrateMessage,
   ToolSchema,
 } from '../types.js';
+import type { JournalEntry } from '../session/types.js';
+import type { JournalIntegrityVerificationResult } from '../session/journal-utils.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -69,6 +71,22 @@ export interface NotifyNtfyParams {
   priority?: number;
   topic?: string;
 }
+
+export interface SessionHmacSignParams {
+  entry: JournalEntry;
+  previousHmac: string | null;
+}
+
+export interface SessionHmacSignResult {
+  entry: JournalEntry;
+}
+
+export interface SessionHmacVerifyParams {
+  entry: JournalEntry;
+  previousHmac: string | null;
+}
+
+export type SessionHmacVerifyResult = JournalIntegrityVerificationResult;
 
 export type ConfirmationDecision = 'approve' | 'deny' | 'modify';
 
@@ -184,6 +202,8 @@ export interface GatewayMethods {
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
+  'session.hmac.sign': [SessionHmacSignParams, SessionHmacSignResult];
+  'session.hmac.verify': [SessionHmacVerifyParams, SessionHmacVerifyResult];
 }
 
 export interface GatewayNotifications {

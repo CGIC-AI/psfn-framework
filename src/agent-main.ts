@@ -135,6 +135,7 @@ async function main(): Promise<void> {
     eventBus,
     enableContinuity: true,
     promptRegistry,
+    sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });
   const { sessionStore, sessionManager } = sessionComposition;
 

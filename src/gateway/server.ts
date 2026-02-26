@@ -37,6 +37,10 @@ import {
   type ConfirmationListResult,
   type ConfirmationResolveParams,
   type ConfirmationResolveResult,
+  type SessionHmacSignParams,
+  type SessionHmacSignResult,
+  type SessionHmacVerifyParams,
+  type SessionHmacVerifyResult,
 } from './protocol.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 
@@ -44,7 +48,12 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, normalize, dirname } from 'node:path';
 import { realpathSync } from 'node:fs';
 import type { AuditStore } from './audit.js';
-import { buildSessionHmacKeyring, type SessionHmacKeyring } from '../session/journal-utils.js';
+import {
+  buildSessionHmacKeyring,
+  signJournalEntry,
+  verifyJournalEntryIntegrity,
+  type SessionHmacKeyring,
+} from '../session/journal-utils.js';
 import { createComponentLogger } from '../logger.js';
 import {
   ConfirmationQueue,
@@ -499,6 +508,43 @@ export class GatewayServer {
       (p) => ({
         id: p.id,
         decision: p.decision,
+      }),
+    ));
+
+    target.addMethod('session.hmac.sign', this.audited('session.hmac.sign',
+      async (params: SessionHmacSignParams): Promise<SessionHmacSignResult> => {
+        if (!this.sessionHmacKeyring) {
+          throw new JSONRPCErrorException(
+            'Gateway session HMAC keyring is not configured',
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
+        return {
+          entry: signJournalEntry(params.entry, this.sessionHmacKeyring, params.previousHmac),
+        };
+      },
+      (p) => ({
+        type: p.entry.type,
+        channelId: p.entry.channelId,
+        id: p.entry.id,
+      }),
+    ));
+
+    target.addMethod('session.hmac.verify', this.audited('session.hmac.verify',
+      async (params: SessionHmacVerifyParams): Promise<SessionHmacVerifyResult> => {
+        if (!this.sessionHmacKeyring) {
+          throw new JSONRPCErrorException(
+            'Gateway session HMAC keyring is not configured',
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
+        return verifyJournalEntryIntegrity(params.entry, this.sessionHmacKeyring, params.previousHmac);
+      },
+      (p) => ({
+        type: p.entry.type,
+        channelId: p.entry.channelId,
+        id: p.entry.id,
+        keyVersion: p.entry._hmacKeyVersion,
       }),
     ));
 

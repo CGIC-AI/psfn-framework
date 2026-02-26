@@ -11,9 +11,12 @@ import type { SessionEntry, CompactionSummary, JournalEntry } from './types.js';
 import { createComponentLogger } from '../logger.js';
 import {
   appendJournalEntry,
+  buildExtractionMarkerJournalEntry,
+  buildGracefulShutdownMarkerJournalEntry,
   buildCompactionJournalEntry,
   buildMessageJournalEntry,
   journalToCompactionSummary,
+  journalToMarkerEntry,
   journalToSessionEntry,
   quarantineSidecarPath,
   readJournalFile,
@@ -30,6 +33,8 @@ interface ChannelCache {
   compactions: CompactionSummary[];
   nextId: number;
   lastHmac: string | null;
+  lastExtractionCoveredUpTo: number;
+  lastJournalEntry: JournalEntry | null;
   resolvedPath: string; // actual file path used (may be legacy format)
 }
 
@@ -50,6 +55,12 @@ interface SessionFileSeed {
 
 export interface SessionStoreOptions {
   integrityKeyring?: SessionHmacKeyring | null;
+}
+
+export interface CrashRecoveryExtractionCandidate {
+  channelId: string;
+  unextractedEntries: SessionEntry[];
+  lastExtractionCoveredUpTo: number;
 }
 
 const CHANNEL_INDEX_FILENAME = '_channel_index.json';
@@ -169,6 +180,8 @@ export class SessionStore {
       compactions: [],
       nextId: 1,
       lastHmac: null,
+      lastExtractionCoveredUpTo: 0,
+      lastJournalEntry: null,
       resolvedPath: filePath,
     };
 
@@ -182,6 +195,8 @@ export class SessionStore {
     for (const rawEntry of entries) {
       const entry = this.verifyAndNormalizeEntry(rawEntry, previousHmac);
       previousHmac = typeof rawEntry._hmac === 'string' ? rawEntry._hmac : previousHmac;
+      this.applyJournalState(cache, entry);
+
       const message = journalToSessionEntry(entry);
       if (message) {
         cache.entries.push(message);
@@ -367,6 +382,8 @@ export class SessionStore {
       compactions: [],
       nextId: 1,
       lastHmac: null,
+      lastExtractionCoveredUpTo: 0,
+      lastJournalEntry: null,
       resolvedPath: newPath,
     };
     this.channels.set(channelId, cache);
@@ -392,6 +409,37 @@ export class SessionStore {
     }
   }
 
+  private primeChannelCaches(): void {
+    for (const channelId of this.channelIndex.keys()) {
+      this.getOrLoadChannel(channelId);
+    }
+    this.primeChannelsFromDisk();
+  }
+
+  private isGracefulShutdownEntry(entry: JournalEntry | null): boolean {
+    const marker = entry ? journalToMarkerEntry(entry) : null;
+    return marker?.marker === 'graceful_shutdown';
+  }
+
+  private applyJournalState(cache: ChannelCache, entry: JournalEntry): void {
+    cache.lastJournalEntry = entry;
+
+    const marker = journalToMarkerEntry(entry);
+    if (marker?.marker === 'extraction' && typeof marker.coveredUpTo === 'number') {
+      cache.lastExtractionCoveredUpTo = Math.max(cache.lastExtractionCoveredUpTo, marker.coveredUpTo);
+    }
+  }
+
+  private writeJournalEntry(cache: ChannelCache, journal: JournalEntry): void {
+    let signed = journal;
+    if (this.integrityKeyring) {
+      signed = signJournalEntry(signed, this.integrityKeyring, cache.lastHmac);
+      cache.lastHmac = signed._hmac ?? cache.lastHmac;
+    }
+    appendJournalEntry(cache.resolvedPath, signed);
+    this.applyJournalState(cache, signed);
+  }
+
   append(entry: Omit<SessionEntry, 'id'>): number {
     const cache = this.ensureChannelForWrite(entry.channelId, {
       timestamp: entry.timestamp,
@@ -403,12 +451,8 @@ export class SessionStore {
     const full: SessionEntry = { ...entry, id };
     cache.entries.push(full);
 
-    let journal: JournalEntry = buildMessageJournalEntry(id, entry);
-    if (this.integrityKeyring) {
-      journal = signJournalEntry(journal, this.integrityKeyring, cache.lastHmac);
-      cache.lastHmac = journal._hmac ?? cache.lastHmac;
-    }
-    appendJournalEntry(cache.resolvedPath, journal);
+    const journal = buildMessageJournalEntry(id, entry);
+    this.writeJournalEntry(cache, journal);
 
     return id;
   }
@@ -444,13 +488,7 @@ export class SessionStore {
   }
 
   listChannels(): Array<{ channelId: string; messageCount: number }> {
-    // Load indexed channels first.
-    for (const channelId of this.channelIndex.keys()) {
-      this.getOrLoadChannel(channelId);
-    }
-
-    // Discover channels from on-disk JSONL files (covers legacy + unknown filenames).
-    this.primeChannelsFromDisk();
+    this.primeChannelCaches();
 
     return [...this.channels.entries()].map(([channelId, cache]) => ({
       channelId,
@@ -469,11 +507,70 @@ export class SessionStore {
 
     cache.compactions.push({ id, channelId, summary, coveredUpTo, createdAt: now });
 
-    let journal: JournalEntry = buildCompactionJournalEntry(id, channelId, summary, coveredUpTo, now);
-    if (this.integrityKeyring) {
-      journal = signJournalEntry(journal, this.integrityKeyring, cache.lastHmac);
-      cache.lastHmac = journal._hmac ?? cache.lastHmac;
+    const journal = buildCompactionJournalEntry(id, channelId, summary, coveredUpTo, now);
+    this.writeJournalEntry(cache, journal);
+  }
+
+  insertExtractionMarker(channelId: string, coveredUpTo: number, timestamp = Date.now()): void {
+    if (!Number.isFinite(coveredUpTo)) return;
+    const cache = this.getOrLoadChannel(channelId);
+    if (!cache) return;
+
+    const markerCoveredUpTo = Math.max(0, Math.floor(coveredUpTo));
+    const id = cache.nextId++;
+    const journal = buildExtractionMarkerJournalEntry(id, channelId, markerCoveredUpTo, timestamp);
+    this.writeJournalEntry(cache, journal);
+  }
+
+  markGracefulShutdownForActiveChannels(timestamp = Date.now()): string[] {
+    const marked: string[] = [];
+
+    for (const [channelId, cache] of this.channels.entries()) {
+      if (!cache.lastJournalEntry) continue;
+      if (this.isGracefulShutdownEntry(cache.lastJournalEntry)) continue;
+
+      const id = cache.nextId++;
+      const journal = buildGracefulShutdownMarkerJournalEntry(id, channelId, timestamp);
+      this.writeJournalEntry(cache, journal);
+      marked.push(channelId);
     }
-    appendJournalEntry(cache.resolvedPath, journal);
+
+    return marked;
+  }
+
+  getUncleanShutdownChannels(): string[] {
+    this.primeChannelCaches();
+    const channels: string[] = [];
+
+    for (const [channelId, cache] of this.channels.entries()) {
+      if (!cache.lastJournalEntry) continue;
+      if (this.isGracefulShutdownEntry(cache.lastJournalEntry)) continue;
+      channels.push(channelId);
+    }
+
+    return channels;
+  }
+
+  getCrashRecoveryExtractionCandidates(): CrashRecoveryExtractionCandidate[] {
+    this.primeChannelCaches();
+    const candidates: CrashRecoveryExtractionCandidate[] = [];
+
+    for (const [channelId, cache] of this.channels.entries()) {
+      if (!cache.lastJournalEntry) continue;
+      if (this.isGracefulShutdownEntry(cache.lastJournalEntry)) continue;
+
+      const unextractedEntries = cache.entries.filter(
+        entry => entry.id > cache.lastExtractionCoveredUpTo,
+      );
+      if (unextractedEntries.length === 0) continue;
+
+      candidates.push({
+        channelId,
+        unextractedEntries: [...unextractedEntries],
+        lastExtractionCoveredUpTo: cache.lastExtractionCoveredUpTo,
+      });
+    }
+
+    return candidates;
   }
 }

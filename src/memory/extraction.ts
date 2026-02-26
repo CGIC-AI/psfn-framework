@@ -1,5 +1,7 @@
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { SessionManager } from '../session/manager.js';
+import type { SessionStore } from '../session/store.js';
+import type { SessionEntry } from '../session/types.js';
 import type { EventBus } from '../event-bus.js';
 import type { MemoryStore } from './store.js';
 import type { ExtractedFact, MemoryType, SensitivityLevel } from './types.js';
@@ -39,7 +41,12 @@ export interface MemoryExtractorDrainOptions {
   timeoutMs?: number;
 }
 
-type ExtractionTriggerReason = 'manual' | 'interval' | 'context_threshold' | 'interval_and_threshold';
+type ExtractionTriggerReason =
+  | 'manual'
+  | 'interval'
+  | 'context_threshold'
+  | 'interval_and_threshold'
+  | 'crash_recovery';
 type ExtractionRejectionReason =
   | 'low_importance'
   | 'low_confidence'
@@ -64,6 +71,7 @@ interface ExtractionEndTelemetry {
   channelId: string;
   count: number;
   triggerReason: ExtractionTriggerReason;
+  coveredUpToMessageId?: number;
   parsedCount: number;
   acceptedCount: number;
   rejectedCount: number;
@@ -110,6 +118,7 @@ const DEFAULT_PROFILE_MIN_CONFIDENCE = 0.7;
 const DEFAULT_PROFILE_MIN_NOVELTY = 0.12;
 const DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT = 16;
 const DEFAULT_PROFILE_MIN_SOURCE_MEMORIES = 2;
+const RECOVERY_CONTEXT_MESSAGE_LIMIT = 50;
 const RELATIONSHIP_SIGNAL_HINTS = new Set([
   'partner',
   'spouse',
@@ -176,6 +185,7 @@ export class MemoryExtractor {
   private maxWrites: number;
   private telemetryEnabled: boolean;
   private promptRegistry: PromptRegistryStore | null;
+  private sessionStore: SessionStore | null;
   private acceptingExtractions = true;
   private inFlightExtractions = new Set<Promise<void>>();
   private inFlightByChannel = new Map<string, Promise<void>>();
@@ -190,6 +200,7 @@ export class MemoryExtractor {
     eventBus: EventBus,
     config?: MemoryExtractorConfig | SubstrateConfig,
     promptRegistry?: PromptRegistryStore | null,
+    sessionStore?: SessionStore | null,
   ) {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
@@ -216,6 +227,27 @@ export class MemoryExtractor {
       this.telemetryEnabled = extractorConfig?.telemetryEnabled ?? true;
     }
     this.promptRegistry = promptRegistry ?? null;
+    this.sessionStore = sessionStore ?? null;
+  }
+
+  async queueRetroactiveExtraction(
+    channelId: string,
+    recoveredEntries: SessionEntry[],
+    canonicalContactId?: string,
+  ): Promise<void> {
+    if (recoveredEntries.length === 0) return;
+    if (!this.acceptingExtractions) {
+      log.debug('Skipping crash recovery extraction while extractor is draining', { channelId });
+      return;
+    }
+
+    const orderedEntries = [...recoveredEntries].sort((left, right) => left.id - right.id);
+    await this.trackExtraction(
+      channelId,
+      'crash_recovery',
+      canonicalContactId,
+      orderedEntries,
+    );
   }
 
   async maybeExtract(channelId: string, canonicalContactId?: string): Promise<void> {
@@ -326,6 +358,7 @@ export class MemoryExtractor {
     channelId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId?: string,
+    recoveredEntries?: SessionEntry[],
   ): Promise<void> {
     const existing = this.inFlightByChannel.get(channelId);
     if (existing) {
@@ -333,7 +366,12 @@ export class MemoryExtractor {
       return existing;
     }
 
-    const promise = this.runExtraction(channelId, triggerReason, canonicalContactId);
+    const promise = this.runExtraction(
+      channelId,
+      triggerReason,
+      canonicalContactId,
+      recoveredEntries,
+    );
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(channelId, promise);
     promise.finally(() => {
@@ -349,15 +387,20 @@ export class MemoryExtractor {
     channelId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId?: string,
+    recoveredEntries?: SessionEntry[],
   ): Promise<void> {
     await this.emitExtractionStart(channelId, triggerReason);
 
     try {
-      // Get recent messages for context
-      const recentEntries = this.sessionManager.getRecentMessages(channelId, 10);
+      // For crash recovery, force extraction over recovered un-extracted entries.
+      const recentEntries = (recoveredEntries && recoveredEntries.length > 0
+        ? recoveredEntries
+        : this.sessionManager.getRecentMessages(channelId, 10)
+      ).slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
       const recentMessages = recentEntries
         .map(e => `${e.authorName ?? e.role}: ${e.content}`)
         .join('\n');
+      const coveredUpToMessageId = this.resolveCoveredUpToMessageId(channelId, recentEntries);
 
       // Get existing memories for dedup context
       const existing = this.memoryStore.getMemoriesByChannel(channelId, 30);
@@ -514,6 +557,7 @@ export class MemoryExtractor {
         channelId,
         count: acceptedCount,
         triggerReason,
+        coveredUpToMessageId: coveredUpToMessageId ?? undefined,
         parsedCount: facts.length,
         acceptedCount,
         rejectedCount,
@@ -526,6 +570,7 @@ export class MemoryExtractor {
       if (this.isTelemetryEnabled()) {
         log.info('Extraction completed', { ...telemetry, maxWrites });
       }
+      this.recordExtractionMarker(channelId, coveredUpToMessageId);
       await this.emitExtractionEnd(telemetry);
       this.maybeRefreshContactProfile(
         channelId,
@@ -817,6 +862,36 @@ export class MemoryExtractor {
     return this.runtimeConfig?.memoryExtractionTelemetryEnabled ?? this.telemetryEnabled;
   }
 
+  private resolveCoveredUpToMessageId(channelId: string, entries: SessionEntry[]): number | null {
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const candidate = entries[index]?.id;
+      if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+        return candidate;
+      }
+    }
+
+    const latestEntry = this.sessionManager.getRecentMessages(channelId, 1)[0];
+    if (typeof latestEntry?.id === 'number' && Number.isFinite(latestEntry.id)) {
+      return latestEntry.id;
+    }
+    return null;
+  }
+
+  private recordExtractionMarker(channelId: string, coveredUpToMessageId: number | null): void {
+    if (!this.sessionStore) return;
+    if (coveredUpToMessageId === null) return;
+
+    try {
+      this.sessionStore.insertExtractionMarker(channelId, coveredUpToMessageId);
+    } catch (error) {
+      log.warn('Failed to persist extraction marker', {
+        channelId,
+        coveredUpToMessageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async emitExtractionStart(channelId: string, triggerReason: ExtractionTriggerReason): Promise<void> {
     if (!this.isTelemetryEnabled()) {
       await this.eventBus.emit('memory.extraction.start', { channelId });
@@ -1026,6 +1101,9 @@ export const __test = {
   evaluateFactAcceptance,
   computeNoveltyScore,
   computeProfileNovelty,
+  resetLastExtractionCount: () => {
+    lastExtractionCount.clear();
+  },
 };
 
 function parseFactBlock(block: string): ExtractedFact | null {

@@ -239,6 +239,63 @@ describe('UserContinuityStore', () => {
     expect(store.count('unknown-user')).toBe(0);
   });
 
+  it('returns active channels ordered by recency', () => {
+    store.append('user1', {
+      channelId: 'api:one',
+      role: 'user',
+      content: 'first',
+      timestamp: 1_000,
+      originChannelId: 'api:one',
+      channelVisibility: 'private',
+    });
+    store.append('user1', {
+      channelId: 'api:two',
+      role: 'assistant',
+      content: 'second',
+      timestamp: 2_000,
+      originChannelId: 'api:two',
+      channelVisibility: 'private',
+    });
+
+    const channels = store.getActiveChannels('user1', { nowMs: 2_500, withinMs: 5_000 });
+    expect(channels.map(channel => channel.channelId)).toEqual(['api:two', 'api:one']);
+    expect(channels[0].channelVisibility).toBe('private');
+  });
+
+  it('filters active channels by recency window and excluded channel id', () => {
+    store.append('user1', {
+      channelId: 'api:old',
+      role: 'user',
+      content: 'old',
+      timestamp: 1_000,
+      originChannelId: 'api:old',
+      channelVisibility: 'private',
+    });
+    store.append('user1', {
+      channelId: 'api:current',
+      role: 'user',
+      content: 'current',
+      timestamp: 10_000,
+      originChannelId: 'api:current',
+      channelVisibility: 'private',
+    });
+    store.append('user1', {
+      channelId: 'api:target',
+      role: 'assistant',
+      content: 'target',
+      timestamp: 10_500,
+      originChannelId: 'api:target',
+      channelVisibility: 'private',
+    });
+
+    const channels = store.getActiveChannels('user1', {
+      nowMs: 11_000,
+      withinMs: 3_000,
+      excludeChannelId: 'api:current',
+    });
+    expect(channels.map(channel => channel.channelId)).toEqual(['api:target']);
+  });
+
   describe('visibility filtering', () => {
     it('private channels share continuity with other private channels', () => {
       store.append('user1', {

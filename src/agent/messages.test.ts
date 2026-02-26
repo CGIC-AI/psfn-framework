@@ -8,10 +8,12 @@ import {
   isCompactionMessage,
   isSystemNoteMessage,
   isContinuityMessage,
+  isMirrorMessage,
   isCustomMessage,
   type CompactionMessage,
   type SystemNoteMessage,
   type ContinuityMessage,
+  type MirrorMessage,
 } from './messages.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 
@@ -44,6 +46,17 @@ function makeContinuity(content: string): ContinuityMessage {
   return { role: 'custom', type: 'continuity', content, originChannelId: 'ch1', timestamp: NOW };
 }
 
+function makeMirror(content: string): MirrorMessage {
+  return {
+    role: 'custom',
+    type: 'mirror',
+    content,
+    originChannelId: 'api:other',
+    sourceRole: 'assistant',
+    timestamp: NOW,
+  };
+}
+
 describe('type guards', () => {
   it('isCompactionMessage', () => {
     expect(isCompactionMessage(makeCompaction('test'))).toBe(true);
@@ -61,10 +74,16 @@ describe('type guards', () => {
     expect(isContinuityMessage(makeUser('test'))).toBe(false);
   });
 
+  it('isMirrorMessage', () => {
+    expect(isMirrorMessage(makeMirror('test'))).toBe(true);
+    expect(isMirrorMessage(makeUser('test'))).toBe(false);
+  });
+
   it('isCustomMessage', () => {
     expect(isCustomMessage(makeCompaction('test'))).toBe(true);
     expect(isCustomMessage(makeSystemNote('test'))).toBe(true);
     expect(isCustomMessage(makeContinuity('test'))).toBe(true);
+    expect(isCustomMessage(makeMirror('test'))).toBe(true);
     expect(isCustomMessage(makeUser('test'))).toBe(false);
     expect(isCustomMessage(makeAssistant('test'))).toBe(false);
   });
@@ -114,14 +133,27 @@ describe('convertToLlm', () => {
       makeCompaction('Earlier context summary'),
       makeUser('hello'),
       makeSystemNote('config changed'),
+      makeMirror('Mirror content should be compact'),
       makeAssistant('hi'),
     ];
     const result = convertToLlm(messages);
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(5);
     expect((result[0] as UserMessage).content).toContain('[Previous conversation summary]');
     expect((result[1] as UserMessage).content).toBe('hello');
     expect((result[2] as UserMessage).content).toContain('[System note]');
-    expect(result[3].role).toBe('assistant');
+    expect((result[3] as UserMessage).content).toContain('[Mirror note from api:other]');
+    expect(result[4].role).toBe('assistant');
+  });
+
+  it('renders mirror entries as compact system notes', () => {
+    const long = 'x'.repeat(400);
+    const result = convertToLlm([makeMirror(long)]);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('user');
+    const text = (result[0] as UserMessage).content;
+    expect(text).toContain('[Mirror note from api:other]');
+    expect(text.length).toBeLessThan(long.length);
+    expect(text.endsWith('...')).toBe(true);
   });
 
   it('handles empty message array', () => {
@@ -161,6 +193,27 @@ describe('sessionEntryToMessage', () => {
     const msg = sessionEntryToMessage(entry);
     expect(isSystemNoteMessage(msg)).toBe(true);
     expect((msg as SystemNoteMessage).content).toBe('self-check complete');
+  });
+
+  it('converts mirrored system entry to MirrorMessage', () => {
+    const entry: SessionEntry = {
+      id: 4,
+      channelId: 'api:target',
+      role: 'system',
+      content: 'PSFN [from api:origin]: hi',
+      timestamp: NOW,
+      metadata: JSON.stringify({
+        type: 'mirror',
+        sourceChannelId: 'api:origin',
+        sourceRole: 'assistant',
+      }),
+      originChannelId: 'api:origin',
+    };
+    const msg = sessionEntryToMessage(entry);
+    expect(isMirrorMessage(msg)).toBe(true);
+    const mirror = msg as MirrorMessage;
+    expect(mirror.originChannelId).toBe('api:origin');
+    expect(mirror.sourceRole).toBe('assistant');
   });
 });
 

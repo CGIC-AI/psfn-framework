@@ -7,8 +7,13 @@ import type { SessionSearchHit } from './search-index.js';
 import type { EventBus } from '../event-bus.js';
 import { countMessageTokens, countTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../logger.js';
-import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
-import type { ChannelVisibility } from '../trust/types.js';
+import {
+  classifyChannel,
+  evaluateMemoryPolicy,
+  visibilitiesShareContinuity,
+  type ChannelMeta,
+} from '../trust/policy.js';
+import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../trust/types.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
@@ -25,6 +30,24 @@ const log = createComponentLogger('SessionManager');
 
 /** Default number of cross-channel continuity messages to include in context. */
 const DEFAULT_CONTINUITY_CONTEXT_LIMIT = 10;
+const DEFAULT_SESSION_MIRROR_MAX_CHARS = 220;
+const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 30 * 60 * 1000;
+
+interface SessionMessageRecordOptions {
+  trustLevel?: TrustLevel;
+  mirror?: boolean;
+}
+
+interface MirrorEntryMetadata {
+  type: 'mirror';
+  sourceChannelId: string;
+  sourceRole: 'user' | 'assistant';
+  sourceAuthorName?: string;
+  sourceVisibility: ChannelVisibility;
+  trustLevel: TrustLevel;
+  mirroredAt: number;
+  truncated: boolean;
+}
 
 interface RetryConfig {
   maxRetries: number;
@@ -369,6 +392,65 @@ function wrapUntrustedContext(content: string, source: 'public' = 'public'): str
   return `<untrusted_context source="${source}">\n${content}\n</untrusted_context>`;
 }
 
+function normalizeMirrorText(content: string, maxChars: number): { text: string; truncated: boolean } {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (!normalized) return { text: '', truncated: false };
+  if (normalized.length <= maxChars) return { text: normalized, truncated: false };
+  return { text: `${normalized.slice(0, Math.max(1, maxChars - 3))}...`, truncated: true };
+}
+
+function visibilityToMirrorSensitivity(visibility: ChannelVisibility): SensitivityLevel {
+  switch (visibility) {
+    case 'private':
+      return 'confidential';
+    case 'semi_private':
+      return 'personal';
+    case 'public':
+    case 'broadcast':
+      return 'public';
+  }
+}
+
+function parseMirrorMetadata(value?: string): MirrorEntryMetadata | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<MirrorEntryMetadata>;
+    if (parsed.type !== 'mirror') return null;
+    if (parsed.sourceRole !== 'user' && parsed.sourceRole !== 'assistant') return null;
+    if (
+      parsed.sourceVisibility !== 'private'
+      && parsed.sourceVisibility !== 'semi_private'
+      && parsed.sourceVisibility !== 'public'
+      && parsed.sourceVisibility !== 'broadcast'
+    ) {
+      return null;
+    }
+    if (
+      parsed.trustLevel !== 'primary'
+      && parsed.trustLevel !== 'trusted'
+      && parsed.trustLevel !== 'regular'
+      && parsed.trustLevel !== 'public'
+    ) {
+      return null;
+    }
+    if (typeof parsed.sourceChannelId !== 'string' || !parsed.sourceChannelId.trim()) return null;
+    if (typeof parsed.mirroredAt !== 'number' || !Number.isFinite(parsed.mirroredAt)) return null;
+
+    return {
+      type: 'mirror',
+      sourceChannelId: parsed.sourceChannelId,
+      sourceRole: parsed.sourceRole,
+      sourceAuthorName: typeof parsed.sourceAuthorName === 'string' ? parsed.sourceAuthorName : undefined,
+      sourceVisibility: parsed.sourceVisibility,
+      trustLevel: parsed.trustLevel,
+      mirroredAt: parsed.mirroredAt,
+      truncated: parsed.truncated === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export class SessionManager {
   private store: SessionStore;
   private config: SubstrateConfig;
@@ -397,16 +479,18 @@ export class SessionManager {
     authorName: string,
     isDirectMessage?: boolean,
     continuityUserId?: string,
+    options: SessionMessageRecordOptions = {},
   ): void {
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
     const channelVisibility = classifyChannel(channelId, meta);
+    const timestamp = Date.now();
     this.store.append({
       channelId,
       role: 'user',
       content,
       authorId,
       authorName,
-      timestamp: Date.now(),
+      timestamp,
       channelVisibility,
     });
 
@@ -419,11 +503,23 @@ export class SessionManager {
         content,
         authorId,
         authorName,
-        timestamp: Date.now(),
+        timestamp,
         originChannelId: channelId,
         channelVisibility,
       });
     }
+
+    this.mirrorMessageToActiveSessions({
+      continuityKey,
+      sourceChannelId: channelId,
+      sourceVisibility: channelVisibility,
+      sourceRole: 'user',
+      sourceAuthorName: authorName,
+      content,
+      trustLevel: options.trustLevel ?? 'regular',
+      timestamp,
+      mirrorEnabled: options.mirror !== false,
+    });
   }
 
   recordAssistantMessage(
@@ -432,14 +528,16 @@ export class SessionManager {
     forUserId?: string,
     isDirectMessage?: boolean,
     continuityUserId?: string,
+    options: SessionMessageRecordOptions = {},
   ): void {
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
     const channelVisibility = classifyChannel(channelId, meta);
+    const timestamp = Date.now();
     this.store.append({
       channelId,
       role: 'assistant',
       content,
-      timestamp: Date.now(),
+      timestamp,
       channelVisibility,
     });
 
@@ -450,11 +548,125 @@ export class SessionManager {
         channelId,
         role: 'assistant',
         content,
-        timestamp: Date.now(),
+        timestamp,
         originChannelId: channelId,
         channelVisibility,
       });
     }
+
+    this.mirrorMessageToActiveSessions({
+      continuityKey,
+      sourceChannelId: channelId,
+      sourceVisibility: channelVisibility,
+      sourceRole: 'assistant',
+      content,
+      trustLevel: options.trustLevel ?? 'regular',
+      timestamp,
+      mirrorEnabled: options.mirror !== false,
+    });
+  }
+
+  private mirrorMessageToActiveSessions(params: {
+    continuityKey?: string;
+    sourceChannelId: string;
+    sourceVisibility: ChannelVisibility;
+    sourceRole: 'user' | 'assistant';
+    sourceAuthorName?: string;
+    content: string;
+    trustLevel: TrustLevel;
+    timestamp: number;
+    mirrorEnabled: boolean;
+  }): void {
+    if (!params.mirrorEnabled) return;
+    if (!this.continuityStore || !params.continuityKey) return;
+    if (!this.isSessionMirroringEnabledForChannel(params.sourceChannelId)) return;
+    if (!this.isSessionMirroringGloballyEnabled()) return;
+
+    const maxChars = Math.max(32, this.config.sessionMirrorMaxChars ?? DEFAULT_SESSION_MIRROR_MAX_CHARS);
+    const normalized = normalizeMirrorText(params.content, maxChars);
+    if (!normalized.text) return;
+
+    const activeWindowMs = Math.max(
+      1_000,
+      this.config.sessionMirrorActiveWindowMs ?? DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS,
+    );
+    const targets = this.continuityStore.getActiveChannels(params.continuityKey, {
+      excludeChannelId: params.sourceChannelId,
+      withinMs: activeWindowMs,
+      nowMs: params.timestamp,
+    });
+    if (targets.length === 0) return;
+
+    const sourceSensitivity = visibilityToMirrorSensitivity(params.sourceVisibility);
+    const sourceSpeaker = params.sourceRole === 'assistant'
+      ? 'PSFN'
+      : (params.sourceAuthorName ?? 'User');
+
+    for (const target of targets) {
+      if (!this.isSessionMirroringEnabledForChannel(target.channelId)) continue;
+      if (!visibilitiesShareContinuity(params.sourceVisibility, target.channelVisibility)) continue;
+
+      const policy = evaluateMemoryPolicy({
+        trustLevel: params.trustLevel,
+        channelVisibility: target.channelVisibility,
+        memorySensitivity: sourceSensitivity,
+      });
+      if (policy.decision !== 'allow') continue;
+
+      const mirrorMetadata: MirrorEntryMetadata = {
+        type: 'mirror',
+        sourceChannelId: params.sourceChannelId,
+        sourceRole: params.sourceRole,
+        sourceAuthorName: params.sourceRole === 'user' ? sourceSpeaker : undefined,
+        sourceVisibility: params.sourceVisibility,
+        trustLevel: params.trustLevel,
+        mirroredAt: params.timestamp,
+        truncated: normalized.truncated,
+      };
+
+      this.store.append({
+        channelId: target.channelId,
+        role: 'system',
+        content: `${sourceSpeaker} [from ${params.sourceChannelId}]: ${normalized.text}`,
+        authorId: 'session-mirror',
+        authorName: 'Session Mirror',
+        timestamp: params.timestamp,
+        metadata: JSON.stringify(mirrorMetadata),
+        originChannelId: params.sourceChannelId,
+        channelVisibility: target.channelVisibility,
+      });
+    }
+  }
+
+  private isSessionMirroringGloballyEnabled(): boolean {
+    return this.config.sessionMirrorEnabled !== false;
+  }
+
+  private isSessionMirroringEnabledForChannel(channelId: string): boolean {
+    const overrides = this.config.sessionMirrorChannelOverrides;
+    if (!overrides) return true;
+
+    const exact = overrides[channelId];
+    if (typeof exact === 'boolean') return exact;
+
+    const separatorIdx = channelId.indexOf(':');
+    if (separatorIdx > 0) {
+      const prefix = channelId.slice(0, separatorIdx);
+      const prefixMatch = overrides[prefix];
+      if (typeof prefixMatch === 'boolean') return prefixMatch;
+    } else if (/^\d{6,}$/.test(channelId)) {
+      const discordMatch = overrides.discord;
+      if (typeof discordMatch === 'boolean') return discordMatch;
+    }
+
+    for (const [pattern, value] of Object.entries(overrides)) {
+      if (!pattern.endsWith('*')) continue;
+      const candidatePrefix = pattern.slice(0, -1);
+      if (candidatePrefix.length === 0) continue;
+      if (channelId.startsWith(candidatePrefix)) return value;
+    }
+
+    return true;
   }
 
   async buildContext(
@@ -753,7 +965,15 @@ export class SessionManager {
     for (const entry of entries) {
       // System notes are included as user-role messages with a marker
       const role: 'user' | 'assistant' = entry.role === 'system' ? 'user' : entry.role as 'user' | 'assistant';
-      let content = entry.role === 'system' ? `[System note] ${entry.content}` : entry.content;
+      let content = entry.content;
+      if (entry.role === 'system') {
+        const mirror = parseMirrorMetadata(entry.metadata);
+        if (mirror) {
+          content = `[Mirror note from ${mirror.sourceChannelId}] ${entry.content}`;
+        } else {
+          content = `[System note] ${entry.content}`;
+        }
+      }
       if (includeTrustTags) {
         const visibility = parseChannelVisibility(entry.channelVisibility) ?? defaultVisibility;
         if (isUntrustedVisibility(visibility)) {

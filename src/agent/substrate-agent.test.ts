@@ -452,6 +452,8 @@ describe('SubstrateAgent.handleMessage', () => {
       'user-1',
       'TestUser',
       undefined,
+      undefined,
+      { trustLevel: 'regular' },
     );
   });
 
@@ -470,6 +472,8 @@ describe('SubstrateAgent.handleMessage', () => {
       'Mock response from PSFN',
       'user-1',
       undefined,
+      undefined,
+      { trustLevel: 'regular' },
     );
   });
 
@@ -505,6 +509,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'TestUser',
       undefined,
       'contact-canonical-1',
+      { trustLevel: 'trusted' },
     );
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
@@ -517,6 +522,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'api-user-1',
       undefined,
       'contact-canonical-1',
+      { trustLevel: 'trusted' },
     );
   });
 
@@ -902,6 +908,8 @@ describe('SubstrateAgent.handleMessage', () => {
       'user-1',
       'TestUser',
       true,
+      undefined,
+      { trustLevel: 'regular' },
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[5]).toEqual({ isDirectMessage: true });
@@ -974,6 +982,8 @@ describe('SubstrateAgent steering + follow-up', () => {
       'user-1',
       'TestUser',
       undefined,
+      undefined,
+      { trustLevel: 'regular' },
     );
     expect(followUpSpy).toHaveBeenCalled();
 

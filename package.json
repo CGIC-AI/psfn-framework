@@ -19,6 +19,7 @@
     "proxy:down": "docker compose -f proxy/docker-compose.yml down",
     "proxy:logs": "docker compose -f proxy/docker-compose.yml logs -f",
     "test": "vitest run",
+    "test:privacy": "vitest run src/__tests__/privacy/privacy-regression.test.ts",
     "test:watch": "vitest",
     "chat": "tsx src/chat-cli.ts",
     "session:repair": "tsx src/session-repair.ts",

@@ -7,7 +7,7 @@ import {
 import type {
   WyomingServiceAdapter,
   WyomingServiceSessionClosedRequest,
-} from './index.js';
+} from './contracts.js';
 
 export const WYOMING_HANDLE_EVENT_TYPES = [
   'handle',

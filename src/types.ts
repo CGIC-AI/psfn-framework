@@ -4,6 +4,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from './context-budget.js';
+import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 
 // ── Channel-agnostic message types ──
@@ -136,10 +137,7 @@ export interface ToolCall {
 
 // ── Model roster ──
 
-export interface ModelContextBudgetConfig {
-  sessionHistoryMinTokens?: number;
-  memoryRetrievalMinTokens?: number;
-}
+export type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 
 export interface ModelSlot {
   model: string;

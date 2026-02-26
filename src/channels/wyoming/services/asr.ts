@@ -10,7 +10,7 @@ import type {
 import type {
   WyomingServiceAdapter,
   WyomingServiceSessionClosedRequest,
-} from './index.js';
+} from './contracts.js';
 
 export const WYOMING_ASR_EVENT_TYPES = [
   'transcribe',

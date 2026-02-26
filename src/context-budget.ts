@@ -1,8 +1,8 @@
-import type { ModelSlot } from './types.js';
+import type { ContextBudgetModelSlotLike } from './context-budget-contracts.js';
 
 export interface ContextBudgetConfigLike {
   defaultContextWindow: number;
-  modelRoster: Partial<Record<'chat', ModelSlot>>;
+  modelRoster: Partial<Record<'chat', ContextBudgetModelSlotLike>>;
   sessionMessageLimit?: number;
   memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;

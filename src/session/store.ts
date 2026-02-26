@@ -15,6 +15,7 @@ import {
   buildMessageJournalEntry,
   journalToCompactionSummary,
   journalToSessionEntry,
+  quarantineSidecarPath,
   readJournalFile,
 } from './journal-utils.js';
 
@@ -85,6 +86,7 @@ export class SessionStore {
   private channels: Map<string, ChannelCache> = new Map();
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
+  private quarantineWarningKeysByPath: Map<string, string> = new Map();
 
   constructor(sessionsDir: string) {
     this.sessionsDir = sessionsDir;
@@ -92,6 +94,7 @@ export class SessionStore {
     mkdirSync(sessionsDir, { recursive: true });
     this.loadChannelIndex();
     this.migrateLegacyFilenames();
+    this.reportQuarantineWarningsOnStartup();
   }
 
   private encodedFilePath(channelId: string): string {
@@ -149,7 +152,7 @@ export class SessionStore {
     this.saveChannelIndex();
   }
 
-  private loadChannelFromPath(_channelId: string, filePath: string): ChannelCache {
+  private loadChannelFromPath(channelId: string, filePath: string): ChannelCache {
     const cache: ChannelCache = {
       entries: [],
       compactions: [],
@@ -159,7 +162,10 @@ export class SessionStore {
 
     if (!existsSync(filePath)) return cache;
 
-    const { entries, maxId } = readJournalFile(filePath);
+    const { entries, maxId, quarantined } = readJournalFile(filePath);
+    if (quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(channelId, filePath, quarantined.length, entries.length);
+    }
     for (const entry of entries) {
       const message = journalToSessionEntry(entry);
       if (message) {
@@ -185,10 +191,9 @@ export class SessionStore {
 
   private readFirstJournalEntry(filePath: string): JournalEntry | null {
     try {
-      const raw = readFileSync(filePath, 'utf-8');
-      const firstLine = raw.split('\n').find(l => l.length > 0);
-      if (!firstLine) return null;
-      const entry = JSON.parse(firstLine) as JournalEntry;
+      const { entries } = readJournalFile(filePath, { persistQuarantine: false });
+      const entry = entries[0];
+      if (!entry) return null;
       if (!entry.channelId || typeof entry.channelId !== 'string') return null;
       return entry;
     } catch (err) {
@@ -276,6 +281,39 @@ export class SessionStore {
       renameSync(oldPath, newPath);
       this.upsertChannelIndex(channelId, basename(newPath));
     }
+  }
+
+  private reportQuarantineWarningsOnStartup(): void {
+    const files = readdirSync(this.sessionsDir)
+      .filter(f => f.endsWith('.jsonl'))
+      .filter(f => !f.startsWith('user_'));
+
+    for (const filename of files) {
+      const filePath = join(this.sessionsDir, filename);
+      const { entries, quarantined } = readJournalFile(filePath);
+      if (quarantined.length === 0) continue;
+      const channelId = entries[0]?.channelId ?? filename;
+      this.warnAboutQuarantinedEntries(channelId, filePath, quarantined.length, entries.length);
+    }
+  }
+
+  private warnAboutQuarantinedEntries(
+    channelId: string,
+    filePath: string,
+    quarantinedCount: number,
+    loadedCount: number,
+  ): void {
+    const warningKey = `${quarantinedCount}:${loadedCount}`;
+    if (this.quarantineWarningKeysByPath.get(filePath) === warningKey) return;
+    this.quarantineWarningKeysByPath.set(filePath, warningKey);
+
+    log.warn(
+      `Channel ${channelId}: ${quarantinedCount} quarantined entries, ${loadedCount} entries loaded successfully`,
+      {
+        path: filePath,
+        quarantinePath: quarantineSidecarPath(filePath),
+      },
+    );
   }
 
   private ensureChannelForWrite(channelId: string, seed: SessionFileSeed): ChannelCache {

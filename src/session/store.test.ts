@@ -297,6 +297,53 @@ describe('SessionStore', () => {
     expect(found!.messageCount).toBe(1);
   });
 
+  it('loads valid entries around malformed lines and writes a quarantine sidecar', () => {
+    const channelId = 'api:recover-test';
+    const filename = 'api-recover-test.jsonl';
+    const filePath = join(dir, filename);
+
+    const raw = [
+      JSON.stringify({
+        type: 'message',
+        id: 1,
+        channelId,
+        role: 'user',
+        content: 'before',
+        timestamp: 1000,
+      }),
+      '{bad',
+      JSON.stringify({
+        type: 'message',
+        id: 3,
+        channelId,
+        role: 'assistant',
+        content: 'after',
+        timestamp: 3000,
+      }),
+      '',
+    ].join('\n');
+
+    writeFileSync(filePath, raw, 'utf-8');
+
+    const reloaded = new SessionStore(dir);
+    const entries = reloaded.getRecent(channelId, 10);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].content).toBe('before');
+    expect(entries[1].content).toBe('after');
+
+    const sessionFiles = readdirSync(dir).filter(f => f.endsWith('.jsonl'));
+    expect(sessionFiles).toHaveLength(1);
+    const quarantinePath = join(dir, sessionFiles[0] + '.quarantine');
+    expect(existsSync(quarantinePath)).toBe(true);
+    const quarantine = readFileSync(quarantinePath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { lineNumber: number; raw: string });
+
+    expect(quarantine).toHaveLength(1);
+    expect(quarantine[0]).toMatchObject({ lineNumber: 2, raw: '{bad' });
+  });
+
   it('handles malformed journal files without throwing during channel discovery', () => {
     writeFileSync(join(dir, 'broken-session.jsonl'), '{oops\n');
 

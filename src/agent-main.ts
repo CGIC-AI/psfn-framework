@@ -69,6 +69,8 @@ const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
+const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
+const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
 
 function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -78,6 +80,39 @@ function parsePositiveIntEnv(value: string | undefined, fallback: number): numbe
 
 function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
+}
+
+async function enforceNetworkIsolationOnStartup(): Promise<void> {
+  const requireIsolation = isExplicitTrue(process.env.REQUIRE_NETWORK_ISOLATION);
+  const timeoutMs = parsePositiveIntEnv(
+    process.env.NETWORK_ISOLATION_PROBE_TIMEOUT_MS,
+    NETWORK_ISOLATION_PROBE_TIMEOUT_MS,
+  );
+  const probeResult = await fetch(NETWORK_ISOLATION_PROBE_URL, {
+    method: 'HEAD',
+    cache: 'no-store',
+    redirect: 'manual',
+    signal: AbortSignal.timeout(timeoutMs),
+  }).then(
+    (response) => ({ reachable: true as const, status: response.status }),
+    () => ({ reachable: false as const, status: null }),
+  );
+
+  if (!probeResult.reachable) {
+    return;
+  }
+
+  const error = new Error(
+    `Outbound network access is reachable from the agent container ` +
+    `(probe=${NETWORK_ISOLATION_PROBE_URL}, status=${probeResult.status}).`,
+  );
+  log.error(`CRITICAL: ${error.message}`, {
+    requireNetworkIsolation: requireIsolation,
+  });
+
+  if (requireIsolation) {
+    throw error;
+  }
 }
 
 async function main(): Promise<void> {
@@ -108,6 +143,7 @@ async function main(): Promise<void> {
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
 
   log.info('Initializing...');
+  await enforceNetworkIsolationOnStartup();
 
   // ── Connect to gateway ──
 

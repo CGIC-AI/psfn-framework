@@ -16,6 +16,7 @@ import { ShardManager } from '../../shards/manager.js';
 import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore, EXTRACTION_PROMPT_KEY } from '../../identity/prompt-registry.js';
+import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { LLMProvider } from '../../agent-loop.js';
@@ -253,6 +254,7 @@ describe('AdminServer', () => {
   let shardManager: ShardManager;
   let promptStore: PromptLayerStore;
   let promptRegistry: PromptRegistryStore;
+  let cardVersionStore: CharacterCardVersionStore;
   let server: AdminServer;
   let port: number;
   let skillsRuntimeInvalidate: ReturnType<typeof vi.fn>;
@@ -263,6 +265,8 @@ describe('AdminServer', () => {
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-test-'));
     testConfig.dataDir = tempDir;
+    testConfig.characterCardPath = join(tempDir, 'character.json');
+    writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');
     const sessionsDir = join(tempDir, 'sessions');
     mkdirSync(sessionsDir, { recursive: true });
 
@@ -281,6 +285,10 @@ describe('AdminServer', () => {
     promptRegistry = new PromptRegistryStore(
       join(tempDir, 'prompt-registry.json'),
       join(tempDir, 'prompt-registry-history.jsonl'),
+    );
+    cardVersionStore = new CharacterCardVersionStore(
+      testConfig.characterCardPath,
+      join(tempDir, 'character-card-history.jsonl'),
     );
     scheduler.register({
       id: 'test-task',
@@ -366,6 +374,7 @@ describe('AdminServer', () => {
       embeddingService: null,
       promptStore,
       promptRegistry,
+      cardVersionStore,
       skillsRuntime: {
         getSnapshot: () => testSkillSnapshot,
         invalidate: skillsRuntimeInvalidate,
@@ -825,6 +834,8 @@ describe('AdminServer', () => {
       expect(res.body).toContain('TestBot');
       expect(res.body).toContain('tester');
       expect(res.body).toContain('hx-post="/api/identity/import"');
+      expect(res.body).toContain('Character Card Versioning');
+      expect(res.body).toContain('Card Version History');
     });
 
     it('shows runtime config without secrets', async () => {
@@ -868,6 +879,7 @@ describe('AdminServer', () => {
       expect(saved.spec).toBe('chara_card_v2');
       expect(saved.data.name).toBe('ImportedBot');
       expect(saved.data.personality).toBe('Imported personality');
+      expect(cardVersionStore.getHistory()).toHaveLength(1);
 
       const identity = await request(port, 'GET', '/identity');
       expect(identity.status).toBe(200);
@@ -884,6 +896,38 @@ describe('AdminServer', () => {
       expect(res.status).toBe(200);
       expect(res.body).toContain('form-error');
       expect(res.body).toContain('Import failed');
+    });
+
+    it('renders side-by-side diff for a selected card history version', async () => {
+      cardVersionStore.updateData({ personality: 'Version 2 personality' }, 'admin');
+      cardVersionStore.updateData({ personality: 'Version 3 personality' }, 'admin');
+
+      const body = new URLSearchParams({ version: '1' }).toString();
+      const res = await request(port, 'POST', '/api/identity/card/diff', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Character Card Diff');
+      expect(res.body).toContain('Friendly and helpful');
+      expect(res.body).toContain('Version 2 personality');
+      expect(res.body).toContain('Previous');
+      expect(res.body).toContain('Next');
+    });
+
+    it('rolls back card content via identity rollback endpoint', async () => {
+      cardVersionStore.updateData({ personality: 'Version 2 personality' }, 'admin');
+      cardVersionStore.updateData({ personality: 'Version 3 personality' }, 'admin');
+      expect(cardVersionStore.getCurrent().card.data.personality).toBe('Version 3 personality');
+
+      const body = new URLSearchParams({ version: '1' }).toString();
+      const res = await request(port, 'POST', '/api/identity/card/rollback', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Rolled back to version 1');
+      expect(cardVersionStore.getCurrent().card.data.personality).toBe('Friendly and helpful');
     });
   });
 

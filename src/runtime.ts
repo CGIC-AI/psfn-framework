@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path';
 import type { SubstrateConfig, Lifecycle } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
-import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
+import { composeSystemPrompt } from './identity/loader.js';
+import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
 import { SessionManager } from './session/manager.js';
@@ -48,6 +49,7 @@ import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
   wirePromptRuntime,
+  wireCharacterCardRuntime,
   wireStaticPromptRegistry,
   buildReplConfig,
   wireHeartbeatRuntime,
@@ -62,6 +64,7 @@ import {
   createLifecycleRestartSafeguardFromEnv,
   createExternalCommunicationRateLimiterFromEnv,
 } from './capabilities/safeguards.js';
+import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -188,10 +191,15 @@ export class SubstrateRuntime implements Lifecycle {
     this.db.pragma('foreign_keys = ON');
 
     // Load identity
-    const card = loadCharacterCard(this.config.characterCardPath);
+    const cardVersionStore = new CharacterCardVersionStore(
+      this.config.characterCardPath,
+      join(this.config.dataDir, 'character-card-history.jsonl'),
+    );
+    const card = cardVersionStore.getCurrent().card;
     const systemPrompt = composeSystemPrompt(card);
     log.info(`Loaded character: ${card.data.name}`);
     const promptRegistry = wireStaticPromptRegistry(this.config.dataDir);
+    const cardProposalQueue = new ConfirmationQueue();
 
     // Initialize core components
     this.llmClient = new LLMClient(this.config);
@@ -263,6 +271,10 @@ export class SubstrateRuntime implements Lifecycle {
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
       },
     );
+    wireCharacterCardRuntime(this.agentLoop, cardVersionStore, {
+      getCapabilityTier: () => this.capabilityRuntime.getTier(),
+      confirmationQueue: cardProposalQueue,
+    });
 
     // Contact store + tools — trust-gated privacy system
     const contactStore = wireContactRuntime(
@@ -489,6 +501,11 @@ export class SubstrateRuntime implements Lifecycle {
         promptStore,
         promptRegistry,
         skillsRuntime,
+        cardVersionStore,
+        confirmationQueueApi: {
+          listConfirmationQueue: async () => ({ entries: cardProposalQueue.listPending() }),
+          resolveConfirmationQueue: (params) => cardProposalQueue.resolve(params),
+        },
       });
       await this.adminServer.init();
       log.info(`Admin GUI configured on port ${adminPort}`);

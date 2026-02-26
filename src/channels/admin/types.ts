@@ -12,6 +12,7 @@ import type { SubstrateConfig } from '../../types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import type { SkillsRuntime } from '../../skills/runtime.js';
 import type {
   ConfirmationListResult,
@@ -41,6 +42,7 @@ export interface AdminServerConfig {
   modelDiscovery?: ModelDiscovery | null;
   promptStore?: PromptLayerStore | null;
   promptRegistry?: PromptRegistryStore | null;
+  cardVersionStore?: CharacterCardVersionStore | null;
   skillsRuntime?: SkillsRuntime | null;
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
 }

@@ -46,6 +46,7 @@ type ExtractionTriggerReason =
   | 'interval'
   | 'context_threshold'
   | 'interval_and_threshold'
+  | 'pre_compaction'
   | 'crash_recovery';
 type ExtractionRejectionReason =
   | 'low_importance'
@@ -245,6 +246,26 @@ export class MemoryExtractor {
     await this.trackExtraction(
       channelId,
       'crash_recovery',
+      canonicalContactId,
+      orderedEntries,
+    );
+  }
+
+  async queueCompactionExtraction(
+    channelId: string,
+    compactedEntries: SessionEntry[],
+    canonicalContactId?: string,
+  ): Promise<void> {
+    if (compactedEntries.length === 0) return;
+    if (!this.acceptingExtractions) {
+      log.debug('Skipping pre-compaction extraction while extractor is draining', { channelId });
+      return;
+    }
+
+    const orderedEntries = [...compactedEntries].sort((left, right) => left.id - right.id);
+    await this.trackExtraction(
+      channelId,
+      'pre_compaction',
       canonicalContactId,
       orderedEntries,
     );

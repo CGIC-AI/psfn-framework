@@ -688,6 +688,50 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 });
 
 describe('MemoryExtractor crash recovery markers', () => {
+  it('queues pre-compaction extraction over provided compacted entries', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([]),
+      getMessageCount: vi.fn().mockReturnValue(0),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+    );
+
+    await extractor.queueCompactionExtraction('api:compaction-flush', [
+      { id: 11, channelId: 'api:compaction-flush', role: 'user', content: 'User plans a Kyoto trip', timestamp: 1_000 },
+      { id: 12, channelId: 'api:compaction-flush', role: 'assistant', content: 'Noted and saved', timestamp: 2_000 },
+    ]);
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    const prompt = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt as string;
+    expect(prompt).toContain('User plans a Kyoto trip');
+    expect(prompt).toContain('Noted and saved');
+
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const startCall = calls.find(([name]) => name === 'memory.extraction.start');
+    expect(startCall?.[1]?.triggerReason).toBe('pre_compaction');
+  });
+
   it('writes an extraction marker after a successful extraction run', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-extraction-marker-'));
     tempDirs.push(dir);

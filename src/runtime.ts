@@ -263,6 +263,17 @@ export class SubstrateRuntime implements Lifecycle {
       this.sessionStore,
     );
     this.agentLoop.memoryExtractor = this.memoryExtractor;
+    this.sessionManager.setPreCompactionExtractionHandler(async ({
+      channelId,
+      entries,
+      canonicalContactId,
+    }) => {
+      await this.memoryExtractor.queueCompactionExtraction(
+        channelId,
+        entries,
+        canonicalContactId,
+      );
+    });
 
     this.salienceDecay = new SalienceDecay(this.memoryStore);
 

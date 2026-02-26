@@ -29,6 +29,42 @@ interface RetryCallbacks {
   onRetry?: (params: { attempt: number; delayMs: number; error: Error }) => Promise<void> | void;
 }
 
+export interface PreCompactionExtractionContext {
+  channelId: string;
+  entries: SessionEntry[];
+  canonicalContactId?: string;
+}
+
+export type PreCompactionExtractionHandler = (
+  context: PreCompactionExtractionContext,
+) => Promise<void>;
+
+type CompactionPreservedTag = 'refusal' | 'boundary';
+
+interface TaggedCompactionEntry {
+  tag: CompactionPreservedTag;
+  messageId: number;
+  speaker: string;
+  content: string;
+}
+
+const REFUSAL_PATTERNS = [
+  /\b(i|we)\s+(can(?:not|'t)|won't|will not|must not)\s+(help|assist|provide|share|comply|do)\b/i,
+  /\b(i|we)\s+(refuse|decline)\b/i,
+  /\b(i|we)\s+(am|are|'m)\s+unable\s+to\b/i,
+];
+
+const BOUNDARY_PATTERNS = [
+  /\bboundar(?:y|ies)\b/i,
+  /\b(not comfortable|too personal|too private)\b/i,
+  /\bplease\s+(do not|don't)\b/i,
+  /\blet'?s\s+keep\b/i,
+  /\bi(?:'m| am)\s+not\s+going\s+to\b/i,
+];
+
+const MAX_PRESERVED_COMPACTION_TAGS = 8;
+const MAX_PRESERVED_TAG_CONTENT_CHARS = 240;
+
 async function withRetry<T>(
   task: () => Promise<T>,
   config: RetryConfig,
@@ -81,11 +117,80 @@ function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBudget: nu
   return selected.reverse();
 }
 
+function classifyCompactionTag(content: string): CompactionPreservedTag | null {
+  if (!content) return null;
+  if (REFUSAL_PATTERNS.some(pattern => pattern.test(content))) return 'refusal';
+  if (BOUNDARY_PATTERNS.some(pattern => pattern.test(content))) return 'boundary';
+  return null;
+}
+
+function normalizeTaggedContent(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= MAX_PRESERVED_TAG_CONTENT_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_PRESERVED_TAG_CONTENT_CHARS - 3)}...`;
+}
+
+function escapeTaggedValue(content: string): string {
+  return content
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+function buildCompactionBoundaryTagBlock(entries: SessionEntry[]): string {
+  const preserved: TaggedCompactionEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.role === 'user') continue;
+
+    const normalizedContent = normalizeTaggedContent(entry.content);
+    if (!normalizedContent) continue;
+
+    const tag = classifyCompactionTag(normalizedContent);
+    if (!tag) continue;
+
+    const dedupeKey = `${tag}:${normalizedContent.toLowerCase()}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    preserved.push({
+      tag,
+      messageId: entry.id,
+      speaker: entry.authorName ?? entry.role,
+      content: normalizedContent,
+    });
+  }
+
+  if (preserved.length === 0) return '';
+
+  const taggedLines = preserved
+    .slice(-MAX_PRESERVED_COMPACTION_TAGS)
+    .map((entry) => (
+      `<${entry.tag} message_id="${entry.messageId}" speaker="${escapeTaggedValue(entry.speaker)}">`
+      + `${escapeTaggedValue(entry.content)}</${entry.tag}>`
+    ));
+
+  return ['[Preserved refusal and boundary entries]', ...taggedLines].join('\n');
+}
+
+function appendCompactionTagBlock(summary: string, tagBlock: string): string {
+  const trimmedSummary = summary.trim();
+  if (!tagBlock) return trimmedSummary;
+  if (!trimmedSummary) return tagBlock;
+  return `${trimmedSummary}\n\n${tagBlock}`;
+}
+
 export class SessionManager {
   private store: SessionStore;
   private config: SubstrateConfig;
   private eventBus: EventBus | null;
   private promptRegistry: PromptRegistryStore | null;
+  private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   continuityStore: UserContinuityStore | null = null;
 
   constructor(
@@ -98,6 +203,7 @@ export class SessionManager {
     this.config = config;
     this.eventBus = eventBus ?? null;
     this.promptRegistry = promptRegistry ?? null;
+    this.preCompactionExtractionHandler = null;
   }
 
   recordUserMessage(
@@ -190,6 +296,15 @@ export class SessionManager {
       const totalTokens = systemTokens + messageTokens;
 
       if (totalTokens > tokenBudget) {
+        // Compact oldest 50% of messages
+        const splitPoint = Math.ceil(recent.length / 2);
+        const toCompact = recent.slice(0, splitPoint);
+        const toKeep = recent.slice(splitPoint);
+        const compactText = toCompact
+          .map(e => `${e.authorName ?? e.role}: ${e.content}`)
+          .join('\n');
+        const preservedTagBlock = buildCompactionBoundaryTagBlock(toCompact);
+
         log.info('Auto-compacting session', { channelId, totalTokens, budget: tokenBudget });
         await this.eventBus?.emit('agent.compaction.start', {
           channelId,
@@ -198,14 +313,20 @@ export class SessionManager {
           tokenBudget,
         });
 
-        // Compact oldest 50% of messages
-        const splitPoint = Math.ceil(recent.length / 2);
-        const toCompact = recent.slice(0, splitPoint);
-        const toKeep = recent.slice(splitPoint);
-
-        const compactText = toCompact
-          .map(e => `${e.authorName ?? e.role}: ${e.content}`)
-          .join('\n');
+        if (toCompact.length > 0 && this.preCompactionExtractionHandler) {
+          try {
+            await this.preCompactionExtractionHandler({
+              channelId,
+              entries: [...toCompact],
+              canonicalContactId: userId,
+            });
+          } catch (error) {
+            log.warn('Pre-compaction extraction flush failed', {
+              channelId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
 
         let tokensAfter = totalTokens;
         let sawRetry = false;
@@ -241,10 +362,11 @@ export class SessionManager {
           );
 
           // Store compaction summary
+          const compactionSummary = appendCompactionTagBlock(summaryResponse.content, preservedTagBlock);
           const coveredUpTo = toCompact[toCompact.length - 1].id;
-          this.store.insertCompaction(channelId, summaryResponse.content, coveredUpTo);
+          this.store.insertCompaction(channelId, compactionSummary, coveredUpTo);
           const keepTokens = countMessageTokens(this.entriesToMessages(toKeep));
-          const summaryTokens = countTokens(summaryResponse.content);
+          const summaryTokens = countTokens(compactionSummary);
           tokensAfter = systemTokens + keepTokens + summaryTokens;
 
           // Use only the kept (recent) messages going forward
@@ -393,6 +515,10 @@ export class SessionManager {
       authorName: 'System',
       timestamp: Date.now(),
     });
+  }
+
+  setPreCompactionExtractionHandler(handler: PreCompactionExtractionHandler | null): void {
+    this.preCompactionExtractionHandler = handler;
   }
 
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {

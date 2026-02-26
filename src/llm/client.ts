@@ -23,10 +23,23 @@ import {
 } from './conversion.js';
 import { createComponentLogger } from '../logger.js';
 import { FallbackRunner } from './fallback.js';
-import type { RoutingCandidate, RoutingPurpose } from './routing.js';
-import { resolveRoutingCandidates } from './routing.js';
+import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
+import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
 
 const log = createComponentLogger('LLMClient');
+
+export class SensitiveImportRoutePolicyError extends Error {
+  readonly code = 'sensitive_import_route_rejected';
+  readonly audit: ImportPolicyAuditRecord;
+  readonly reason: string;
+
+  constructor(audit: ImportPolicyAuditRecord, reason: string) {
+    super(`Sensitive import route rejected by strict policy: ${reason}`);
+    this.name = 'SensitiveImportRoutePolicyError';
+    this.audit = audit;
+    this.reason = reason;
+  }
+}
 
 export class LLMClient {
   private config: SubstrateConfig;
@@ -39,21 +52,69 @@ export class LLMClient {
     this.fallbackRunner = new FallbackRunner();
   }
 
-  private getModelAndKey(provider: string, modelId: string, maxTokens?: number): { model: Model<any>; apiKey: string | undefined } {
+  private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
+    const modelId = candidate.model;
+
+    if (candidate.requestBaseUrl) {
+      const apiKey = candidate.requestApiKeyEnv
+        ? process.env[candidate.requestApiKeyEnv] ?? undefined
+        : undefined;
+      return {
+        model: createModel(candidate.requestBaseUrl, modelId, candidate.maxTokens),
+        apiKey,
+      };
+    }
+
     if (this.litellmBaseUrl) {
       return {
-        model: createModel(this.litellmBaseUrl, modelId, maxTokens),
+        model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens),
         apiKey: process.env.LITELLM_API_KEY ?? undefined,
       };
     }
-    const model = getModel(provider as any, modelId as any);
+    const model = getModel(candidate.provider as any, modelId as any);
     if (!model) {
-      throw new Error(`Unknown model "${modelId}" for provider "${provider}". Set LITELLM_BASE_URL or check PRIMARY_MODEL / EXTRACTION_MODEL in .env`);
+      throw new Error(`Unknown model "${modelId}" for provider "${candidate.provider}". Set LITELLM_BASE_URL or check PRIMARY_MODEL / EXTRACTION_MODEL in .env`);
     }
     return {
       model,
-      apiKey: getEnvApiKey(provider) ?? undefined,
+      apiKey: getEnvApiKey(candidate.provider) ?? undefined,
     };
+  }
+
+  private buildRequestOptions(
+    candidate: RoutingCandidate,
+    apiKey: string | undefined,
+    extra: { signal?: AbortSignal } = {},
+  ): Record<string, unknown> {
+    const requestOptions: Record<string, unknown> = {
+      apiKey,
+      maxTokens: candidate.maxTokens,
+      ...(extra.signal ? { signal: extra.signal } : {}),
+    };
+
+    if (candidate.provider === 'openrouter') {
+      if (candidate.openRouterZdrOnly) {
+        requestOptions.zdr = true;
+      }
+      if (candidate.openRouterProviderOrder && candidate.openRouterProviderOrder.length > 0) {
+        requestOptions.provider = { order: [...candidate.openRouterProviderOrder] };
+      }
+    }
+
+    return requestOptions;
+  }
+
+  private enforceImportRoutingPolicy(purpose: RoutingPurpose, candidate: RoutingCandidate): void {
+    const evaluation = evaluateImportPolicy(this.config, purpose, candidate);
+    if (evaluation.allowed) return;
+
+    const reason = evaluation.reason ?? 'policy_rejected';
+    log.warn('Sensitive import route rejected by strict policy', {
+      reason,
+      ...evaluation.audit,
+    });
+
+    throw new SensitiveImportRoutePolicyError(evaluation.audit, reason);
   }
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
@@ -63,17 +124,14 @@ export class LLMClient {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
         'chat',
         async (candidateTarget) => {
-          const { model, apiKey } = this.getModelAndKey(
-            candidateTarget.provider,
-            candidateTarget.model,
-            candidateTarget.maxTokens,
-          );
+          const { model, apiKey } = this.getModelAndKey(candidateTarget);
+          const requestOptions = this.buildRequestOptions(candidateTarget, apiKey);
 
           return withRetry(async () => {
             const eventStream = streamSimple(
               model,
               piContext,
-              { apiKey, maxTokens: candidateTarget.maxTokens },
+              requestOptions as any,
             );
 
             let content = '';
@@ -203,22 +261,17 @@ export class LLMClient {
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
       async (candidateTarget) => {
-        const { model, apiKey } = this.getModelAndKey(
-          candidateTarget.provider,
-          candidateTarget.model,
-          candidateTarget.maxTokens,
-        );
+        const { model, apiKey } = this.getModelAndKey(candidateTarget);
+        const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
+          signal: options.signal,
+        });
 
         const request = async () => {
           try {
             return await completeSimple(
               model,
               piContext,
-              {
-                apiKey,
-                maxTokens: candidateTarget.maxTokens,
-                ...(options.signal ? { signal: options.signal } : {}),
-              } as any,
+              requestOptions as any,
             );
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
@@ -276,6 +329,9 @@ export class LLMClient {
     if (purpose === 'reasoning') {
       return 'reasoning';
     }
+    if (purpose === 'import_processing') {
+      return 'import_processing';
+    }
     if (purpose === 'background') {
       return 'background';
     }
@@ -287,7 +343,10 @@ export class LLMClient {
     execute: (candidate: RoutingCandidate, attempt: number) => Promise<T>,
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
     const candidates = resolveRoutingCandidates(this.config, purpose);
-    return this.fallbackRunner.run(purpose, candidates, execute);
+    return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
+      this.enforceImportRoutingPolicy(purpose, candidate);
+      return execute(candidate, attempt);
+    });
   }
 }
 

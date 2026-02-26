@@ -166,4 +166,5 @@ export interface EnvInfo {
   litellmBaseUrl: string;
   litellmApiKey: string;
   ollamaUrl: string;
+  importProcessingLocalApiKey: string;
 }

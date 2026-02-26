@@ -38,7 +38,7 @@ export function createContactSetTrustTool(contactStore: ContactStore): AgentTool
         };
       }
 
-      const success = contactStore.setTrustLevel(contactId, trustLevel);
+      const success = contactStore.setTrustLevel(contactId, trustLevel, 'agent:tool:contact_set_trust');
       if (!success) {
         return {
           content: [{ type: 'text', text: `Contact ${contactId} not found or is the primary user (cannot change primary trust level)` }] satisfies TextContent[],
@@ -71,7 +71,7 @@ export function createContactNoteTool(contactStore: ContactStore): AgentTool<any
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const { contactId, notes } = params;
 
-      const success = contactStore.updateNotes(contactId, notes);
+      const success = contactStore.updateNotes(contactId, notes, 'agent:tool:contact_note');
       if (!success) {
         return {
           content: [{ type: 'text', text: `Contact ${contactId} not found` }] satisfies TextContent[],

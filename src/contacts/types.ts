@@ -97,6 +97,25 @@ export type ContactIdentityLinkVerificationResult =
   | { status: 'identity_conflict'; verification: ContactIdentityLinkVerification }
   | { status: 'contact_not_found' };
 
+export type ContactMutationAuditField = 'trust_level' | 'notes';
+
+export interface ContactMutationAuditEntry {
+  id: number;
+  contactId: string;
+  actor: string;
+  field: ContactMutationAuditField;
+  oldValue: string | null;
+  newValue: string | null;
+  timestamp: string;
+}
+
+export interface ContactMutationAuditQuery {
+  contactId?: string;
+  actor?: string;
+  field?: ContactMutationAuditField;
+  limit?: number;
+}
+
 export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
   'private',
   'semi_private',

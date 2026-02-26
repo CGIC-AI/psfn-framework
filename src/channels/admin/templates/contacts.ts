@@ -5,6 +5,8 @@ import {
   type Contact,
   type ContactChannelLink,
   type ContactIdentityLinkVerification,
+  type ContactMutationAuditEntry,
+  type ContactMutationAuditQuery,
 } from '../../../contacts/types.js';
 import type { ContactProfileArtifact } from '../../../memory/store.js';
 import type { TrustLevel } from '../../../trust/types.js';
@@ -203,31 +205,125 @@ function linkVerificationPanel(verifications: ContactIdentityLinkVerification[])
   </div>`;
 }
 
+function mutationFieldLabel(field: string): string {
+  switch (field) {
+    case 'trust_level':
+      return 'trust';
+    case 'notes':
+      return 'notes';
+    default:
+      return field;
+  }
+}
+
+function mutationValueLabel(value: string | null): string {
+  if (value === null || value.length === 0) return '<em>empty</em>';
+  return `<code>${escapeHtml(value)}</code>`;
+}
+
+function mutationAuditPanel(
+  entries: ContactMutationAuditEntry[],
+  query: ContactMutationAuditQuery = {},
+): string {
+  const limit = Number.isFinite(query.limit) ? Math.max(1, Math.min(Math.floor(query.limit ?? 25), 200)) : 25;
+  const field = query.field ?? '';
+  const contactId = query.contactId ?? '';
+  const actor = query.actor ?? '';
+
+  return `<div class="card" style="margin-bottom:0.9rem">
+    <h3 style="margin-top:0">Trust + note mutation audit</h3>
+    <div class="crm-notes">Persistent audit trail for trust level and contact note mutations.</div>
+    <form
+      hx-get="/api/contacts/mutations"
+      hx-target="#contact-mutation-audit-list"
+      hx-swap="innerHTML"
+      style="margin-top:0.65rem"
+    >
+      <div class="form-row" style="grid-template-columns:1.5fr 1.5fr 1fr auto auto;align-items:end">
+        <div class="form-group" style="margin-bottom:0">
+          <label for="mutation-contact-id">Contact ID</label>
+          <input id="mutation-contact-id" type="text" name="contactId" value="${escapeHtml(contactId)}" placeholder="optional contact id">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="mutation-actor">Actor</label>
+          <input id="mutation-actor" type="text" name="actor" value="${escapeHtml(actor)}" placeholder="optional actor">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="mutation-field">Field</label>
+          <select id="mutation-field" name="field">
+            <option value=""${field === '' ? ' selected' : ''}>all</option>
+            <option value="trust_level"${field === 'trust_level' ? ' selected' : ''}>trust_level</option>
+            <option value="notes"${field === 'notes' ? ' selected' : ''}>notes</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="mutation-limit">Limit</label>
+          <input id="mutation-limit" type="number" name="limit" min="1" max="200" value="${limit}">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <button type="submit" class="btn" style="font-size:0.8rem">Query</button>
+        </div>
+      </div>
+    </form>
+    <div id="contact-mutation-audit-list" style="margin-top:0.65rem">
+      ${contactMutationAuditFragment(entries)}
+    </div>
+  </div>`;
+}
+
+export function contactMutationAuditFragment(entries: ContactMutationAuditEntry[]): string {
+  if (entries.length === 0) {
+    return '<div class="crm-notes">No trust/note mutations found.</div>';
+  }
+
+  const rows = entries.map((entry) => `
+    <tr>
+      <td><code>${escapeHtml(entry.contactId)}</code></td>
+      <td>${escapeHtml(mutationFieldLabel(entry.field))}</td>
+      <td><code>${escapeHtml(entry.actor)}</code></td>
+      <td>${mutationValueLabel(entry.oldValue)}</td>
+      <td>${mutationValueLabel(entry.newValue)}</td>
+      <td>${escapeHtml(formatLastSeen(entry.timestamp))}</td>
+    </tr>
+  `).join('');
+
+  return `<table>
+    <thead>
+      <tr>
+        <th>Contact</th><th>Field</th><th>Actor</th><th>Old value</th><th>New value</th><th>Timestamp</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
 export function contactsPage(
   contacts: Contact[],
   profilesByContactId: ReadonlyMap<string, ContactProfileArtifact> = new Map(),
   relatedChannelsByContactId: ReadonlyMap<string, RelatedConversationChannel[]> = new Map(),
   verifications: ContactIdentityLinkVerification[] = [],
+  mutationAudits: ContactMutationAuditEntry[] = [],
+  mutationAuditQuery: ContactMutationAuditQuery = {},
 ): string {
-  if (contacts.length === 0) {
-    return '<div class="empty">No visitors have been seen in the garden yet</div>';
-  }
-
-  const rows = contacts.map(c => contactRow(
-    c,
-    profilesByContactId.get(c.id),
-    relatedChannelsByContactId.get(c.id) ?? [],
-  )).join('');
-  return `
-    ${linkVerificationPanel(verifications)}
-    <div class="card">
+  const contactTable = contacts.length === 0
+    ? '<div class="empty">No visitors have been seen in the garden yet</div>'
+    : `<div class="card">
       <table>
         <thead><tr>
           <th>Person</th><th>Linked Identities + Channels</th><th>Relationship + Profile</th><th>Activity</th><th></th>
         </tr></thead>
-        <tbody id="contacts-list">${rows}</tbody>
+        <tbody id="contacts-list">${contacts.map(c => contactRow(
+          c,
+          profilesByContactId.get(c.id),
+          relatedChannelsByContactId.get(c.id) ?? [],
+        )).join('')}</tbody>
       </table>
     </div>`;
+
+  return `
+    ${linkVerificationPanel(verifications)}
+    ${mutationAuditPanel(mutationAudits, mutationAuditQuery)}
+    ${contactTable}`;
 }
 
 export function contactRow(

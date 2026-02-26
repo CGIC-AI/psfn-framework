@@ -408,6 +408,14 @@ export class AdminServer implements Lifecycle {
       },
       {
         method: 'GET',
+        match: exactPath('/api/contacts/mutations'),
+        handle: (req, res) => {
+          const url = new URL(req.url ?? '/api/contacts/mutations', `http://${req.headers.host ?? 'localhost'}`);
+          this.sendFragment(res, this.handlers.contactMutationAuditFragment(url.searchParams));
+        },
+      },
+      {
+        method: 'GET',
         match: wrappedParamPath('/api/contacts/', '/edit', 'contactId'),
         handle: (_req, res, { contactId }) => this.sendFragment(res, this.handlers.contactEditFormFragment(contactId)),
       },

@@ -55,6 +55,15 @@ interface ResolvedAuthorContext {
   continuityFallbackKeys: string[];
 }
 
+interface ProactiveMemoryProvider extends MemoryProvider {
+  retrieveProactiveRecall?: (
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
+  ) => Promise<string>;
+}
+
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
 
 // ── SubstrateAgent ──
@@ -363,8 +372,9 @@ export class SubstrateAgent {
 
       // Retrieve relevant memories (empty string if no memory provider)
       const memoryStageStart = Date.now();
-      const memoriesBlock = this.memoryProvider
-        ? await this.memoryProvider.retrieve(
+      const memoryProvider = this.memoryProvider as ProactiveMemoryProvider | null;
+      const memoriesBlock = memoryProvider
+        ? await memoryProvider.retrieve(
           message.content,
           message.channelId,
           trustLevel,
@@ -372,10 +382,32 @@ export class SubstrateAgent {
           authorContext.canonicalContactKey,
         )
         : '';
+      let proactiveRecallBlock = '';
+      if (memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function') {
+        try {
+          proactiveRecallBlock = await memoryProvider.retrieveProactiveRecall(
+            message.channelId,
+            trustLevel,
+            { isDirectMessage: message.isDirectMessage },
+            authorContext.canonicalContactKey,
+          );
+        } catch (error) {
+          log.debug('Proactive recall skipped due to provider error', {
+            channelId: message.channelId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      const memoryContextBlock = [memoriesBlock, proactiveRecallBlock]
+        .map(section => section.trim())
+        .filter(section => section.length > 0)
+        .join('\n\n');
       this.emitTurnStage(message, startTime, 'memory', {
         durationMs: Date.now() - memoryStageStart,
-        hasMemoryProvider: this.memoryProvider != null,
-        memoryChars: memoriesBlock.length,
+        hasMemoryProvider: memoryProvider != null,
+        memoryChars: memoryContextBlock.length,
+        proactiveRecallChars: proactiveRecallBlock.length,
+        proactiveRecallIncluded: proactiveRecallBlock.length > 0,
       });
 
       // Compose system prompt: layered stack if available, else static
@@ -419,7 +451,7 @@ export class SubstrateAgent {
       const context = await this.sessionManager.buildContext(
         message.channelId,
         fullPrompt,
-        memoriesBlock,
+        memoryContextBlock,
         this.llmClient,
         authorContext.canonicalContactKey ?? message.authorId,
         { isDirectMessage: message.isDirectMessage },

@@ -542,6 +542,35 @@ describe('SubstrateAgent.handleMessage', () => {
     );
   });
 
+  it('appends spontaneous recall when memory provider supports proactive retrieval', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const mockMemory = {
+      retrieve: vi.fn<any>().mockResolvedValue('Relevant memories here'),
+      retrieveProactiveRecall: vi.fn<any>().mockResolvedValue(
+        'Spontaneous recall:\n- [emotional] User felt proud after the release (+)',
+      ),
+    };
+
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+    agent.memoryProvider = mockMemory as unknown as MemoryProvider;
+
+    await agent.handleMessage(makeMessage());
+
+    expect(mockMemory.retrieveProactiveRecall).toHaveBeenCalledWith(
+      'test-channel',
+      'regular',
+      { isDirectMessage: undefined },
+      undefined,
+    );
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[2]).toContain('Relevant memories here');
+    expect(buildCall[2]).toContain('Spontaneous recall:');
+    expect(buildCall[2]).toContain('User felt proud after the release');
+  });
+
   it('uses primary trust for internal channels', async () => {
     const config = makeConfig();
     const mockMemory: MemoryProvider = {

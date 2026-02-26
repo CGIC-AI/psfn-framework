@@ -4,7 +4,7 @@ import type { PurrMemory } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
-import type { TrustLevel } from '../trust/types.js';
+import type { TrustLevel, ChannelVisibility } from '../trust/types.js';
 import { countTokens } from '../llm/tokens.js';
 import type { ContextBudgetConfigLike } from '../context-budget.js';
 import {
@@ -19,6 +19,7 @@ import {
 } from '../trust/policy.js';
 import { computeBoundarySimilarityBoost, isBoundaryMemory } from './boundary-log.js';
 import { createComponentLogger } from '../logger.js';
+import type { ContactStore } from '../contacts/store.js';
 const log = createComponentLogger('Retrieval');
 
 interface ScoredMemory {
@@ -41,6 +42,16 @@ interface RetrievalTelemetry {
   retrievalTokenBudget: number;
   retrievalLimitMode: 'budget' | 'hard_limit';
   profileIncluded?: boolean;
+  emotionalSnapshotIncluded?: boolean;
+  emotionalContinuityCount?: number;
+}
+
+interface EmotionalSnapshot {
+  baselineValence: number;
+  moodValence: number;
+  moodDrift: number;
+  moodSamples: number;
+  lastMoodUpdateEpochMs?: number;
 }
 
 export interface MemoryRetrieverConfig {
@@ -62,6 +73,7 @@ export class MemoryRetriever implements MemoryProvider {
   private fallbackBudgetConfig: ContextBudgetConfigLike | null;
   private retrievalThreshold: number;
   private eventBus?: EventBus;
+  private contactStore: ContactStore | null;
   private telemetryEnabled: boolean;
 
   constructor(
@@ -69,6 +81,7 @@ export class MemoryRetriever implements MemoryProvider {
     embeddingService: EmbeddingService,
     config?: MemoryRetrieverConfig | SubstrateConfig,
     eventBus?: EventBus,
+    contactStore?: ContactStore | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -94,6 +107,7 @@ export class MemoryRetriever implements MemoryProvider {
       this.retrievalThreshold = retrieverConfig?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
       this.telemetryEnabled = retrieverConfig?.telemetryEnabled ?? true;
     }
+    this.contactStore = contactStore ?? null;
   }
 
   private resolveRetrievalBudget(): ReturnType<typeof resolveMemoryRetrievalBudget> {
@@ -135,16 +149,36 @@ export class MemoryRetriever implements MemoryProvider {
       retrievalTokenBudget: budget.tokenBudget,
       retrievalLimitMode: budget.mode,
       profileIncluded: false,
+      emotionalSnapshotIncluded: false,
+      emotionalContinuityCount: 0,
     };
     const profile = canonicalContactId
       ? this.memoryStore.getContactProfile(canonicalContactId)
       : undefined;
     telemetry.profileIncluded = !!profile;
+    const emotionalSnapshot = canonicalContactId
+      ? this.resolveEmotionalSnapshot(canonicalContactId)
+      : undefined;
+    telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
+
+    const emptySelectedIds = new Set<string>();
+    const fallbackEmotionalContinuity = canonicalContactId
+      ? this.collectEmotionalContinuityMemories(
+        canonicalContactId,
+        effectiveTrust,
+        channelVisibility,
+        emptySelectedIds,
+      )
+      : [];
+    telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
 
     if (!contextText.trim()) {
       telemetry.reason = 'empty_input';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile);
+      return renderPromptBlock(profile, [], {
+        emotionalSnapshot,
+        emotionalContinuityMemories: fallbackEmotionalContinuity,
+      });
     }
 
     try {
@@ -161,7 +195,10 @@ export class MemoryRetriever implements MemoryProvider {
       if (memories.length === 0) {
         telemetry.reason = 'no_candidates';
         await this.emitRetrievalTelemetry(telemetry);
-        return renderPromptBlock(profile);
+        return renderPromptBlock(profile, [], {
+          emotionalSnapshot,
+          emotionalContinuityMemories: fallbackEmotionalContinuity,
+        });
       }
 
       const scored: ScoredMemory[] = memories
@@ -180,7 +217,10 @@ export class MemoryRetriever implements MemoryProvider {
       if (ranked.length === 0) {
         telemetry.reason = 'score_filtered';
         await this.emitRetrievalTelemetry(telemetry);
-        return renderPromptBlock(profile);
+        return renderPromptBlock(profile, [], {
+          emotionalSnapshot,
+          emotionalContinuityMemories: fallbackEmotionalContinuity,
+        });
       }
 
       // Trust-gated filtering: apply trust level + channel visibility restrictions
@@ -210,7 +250,10 @@ export class MemoryRetriever implements MemoryProvider {
       if (filtered.length === 0) {
         telemetry.reason = 'trust_filtered';
         await this.emitRetrievalTelemetry(telemetry);
-        return renderPromptBlock(profile);
+        return renderPromptBlock(profile, [], {
+          emotionalSnapshot,
+          emotionalContinuityMemories: fallbackEmotionalContinuity,
+        });
       }
 
       const selected = budget.mode === 'hard_limit'
@@ -218,6 +261,16 @@ export class MemoryRetriever implements MemoryProvider {
         : selectWithinTokenBudget(filtered, budget.tokenBudget);
 
       telemetry.returnedCount = selected.length;
+      const selectedIds = new Set(selected.map(item => item.memory.id));
+      const emotionalContinuityMemories = canonicalContactId
+        ? this.collectEmotionalContinuityMemories(
+          canonicalContactId,
+          effectiveTrust,
+          channelVisibility,
+          selectedIds,
+        )
+        : [];
+      telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
 
       // Update access stats (fire-and-forget)
       for (const s of selected) {
@@ -232,13 +285,91 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.count = selected.length;
       telemetry.reason = 'ok';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, selected);
+      return renderPromptBlock(profile, selected, {
+        emotionalSnapshot,
+        emotionalContinuityMemories,
+      });
     } catch (err) {
       log.error('Retrieval error', { error: String(err) });
       telemetry.reason = 'error';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile);
+      return renderPromptBlock(profile, [], {
+        emotionalSnapshot,
+        emotionalContinuityMemories: fallbackEmotionalContinuity,
+      });
     }
+  }
+
+  private resolveEmotionalSnapshot(contactId: string): EmotionalSnapshot | undefined {
+    if (!this.contactStore) return undefined;
+
+    const snapshotStore = this.contactStore as ContactStore & {
+      getEmotionalSnapshot?: (id: string) => EmotionalSnapshot | undefined;
+    };
+    if (typeof snapshotStore.getEmotionalSnapshot === 'function') {
+      return snapshotStore.getEmotionalSnapshot(contactId);
+    }
+
+    const contact = this.contactStore.getById(contactId);
+    if (!contact?.emotionalBaseline) return undefined;
+
+    const baselineRaw = contact.emotionalBaseline;
+    const baselineValence = clamp(baselineRaw.valenceBaseline ?? baselineRaw.moodBaseline ?? 0, -1, 1);
+    const moodValence = clamp(baselineRaw.moodValence ?? baselineRaw.sessionMoodValence ?? baselineValence, -1, 1);
+    const moodDrift = Number.isFinite(baselineRaw.moodDrift)
+      ? clamp(baselineRaw.moodDrift, -1, 1)
+      : clamp(moodValence - baselineValence, -1, 1);
+    const moodSamples = Number.isFinite(baselineRaw.moodSamples)
+      ? Math.max(0, Math.floor(baselineRaw.moodSamples))
+      : 0;
+    const lastMoodUpdateEpochMs = Number.isFinite(baselineRaw.lastMoodUpdateEpochMs)
+      ? Math.max(0, Math.floor(baselineRaw.lastMoodUpdateEpochMs))
+      : undefined;
+
+    if (
+      moodSamples === 0
+      && Math.abs(baselineValence) < 1e-6
+      && Math.abs(moodValence) < 1e-6
+      && lastMoodUpdateEpochMs === undefined
+    ) {
+      return undefined;
+    }
+
+    return {
+      baselineValence,
+      moodValence,
+      moodDrift,
+      moodSamples,
+      lastMoodUpdateEpochMs,
+    };
+  }
+
+  private collectEmotionalContinuityMemories(
+    canonicalContactId: string,
+    trustLevel: TrustLevel,
+    channelVisibility: ChannelVisibility,
+    selectedIds: ReadonlySet<string>,
+  ): PurrMemory[] {
+    const source = this.memoryStore.getMemoriesByContact(canonicalContactId, 12);
+    if (source.length === 0) return [];
+
+    const allowed = getAllowedSensitivities(trustLevel, channelVisibility);
+
+    return source
+      .filter(memory => memory.type === 'emotional')
+      .filter(memory => !selectedIds.has(memory.id))
+      .filter((memory) => {
+        if (!allowed.includes(memory.sensitivity)) return false;
+        const policy = evaluateMemoryPolicy({
+          trustLevel,
+          channelVisibility,
+          memorySensitivity: memory.sensitivity,
+          consentFlags: memory.consentFlags,
+        });
+        return policy.decision === 'allow';
+      })
+      .sort((left, right) => right.extractedAt - left.extractedAt)
+      .slice(0, 3);
   }
 
   private isTelemetryEnabled(): boolean {
@@ -318,15 +449,66 @@ function selectWithinTokenBudget(scored: ScoredMemory[], tokenBudget: number): S
 function renderPromptBlock(
   profile: ContactProfileArtifact | undefined,
   scored: ScoredMemory[] = [],
+  options?: {
+    emotionalSnapshot?: EmotionalSnapshot;
+    emotionalContinuityMemories?: PurrMemory[];
+  },
 ): string {
   const sections: string[] = [];
   if (profile && profile.summary.trim().length > 0) {
     sections.push(`Core profile for this person:\n${profile.summary.trim()}`);
   }
+  if (options?.emotionalSnapshot) {
+    sections.push(renderEmotionalSnapshot(options.emotionalSnapshot));
+  }
+  if ((options?.emotionalContinuityMemories?.length ?? 0) > 0) {
+    sections.push(renderEmotionalContinuityMemories(options?.emotionalContinuityMemories ?? []));
+  }
   if (scored.length > 0) {
     sections.push(formatMemoriesForPrompt(scored));
   }
   return sections.join('\n\n');
+}
+
+function renderEmotionalSnapshot(snapshot: EmotionalSnapshot): string {
+  const moodDrift = snapshot.moodDrift >= 0
+    ? `+${snapshot.moodDrift.toFixed(2)}`
+    : snapshot.moodDrift.toFixed(2);
+  const ageMs = snapshot.lastMoodUpdateEpochMs !== undefined
+    ? Math.max(0, Date.now() - snapshot.lastMoodUpdateEpochMs)
+    : null;
+  const freshness = ageMs === null
+    ? 'unknown'
+    : ageMs <= (6 * 60 * 60 * 1000)
+      ? 'active-session'
+      : 'historical';
+
+  return [
+    'Emotional continuity snapshot:',
+    `- Baseline tone: ${describeValence(snapshot.baselineValence)} (${snapshot.baselineValence.toFixed(2)})`,
+    `- Current mood drift: ${describeValence(snapshot.moodValence)} (${snapshot.moodValence.toFixed(2)}), drift ${moodDrift}`,
+    `- Learned signals: ${snapshot.moodSamples}, freshness: ${freshness}`,
+  ].join('\n');
+}
+
+function describeValence(valence: number): string {
+  if (valence >= 0.55) return 'strongly positive';
+  if (valence >= 0.2) return 'positive';
+  if (valence <= -0.55) return 'strongly negative';
+  if (valence <= -0.2) return 'negative';
+  return 'neutral';
+}
+
+function renderEmotionalContinuityMemories(memories: PurrMemory[]): string {
+  const lines = memories.map(memory => {
+    const marker = memory.emotionalValence >= 0.25
+      ? ' (+)'
+      : memory.emotionalValence <= -0.25
+        ? ' (-)'
+        : '';
+    return `- [emotional] ${memory.text}${marker}`;
+  });
+  return `Cross-session emotional continuity:\n${lines.join('\n')}`;
 }
 
 function formatMemoriesForPrompt(scored: ScoredMemory[]): string {
@@ -360,4 +542,9 @@ function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
   });
 
   return `${heading}\n${lines.join('\n')}`;
+}
+
+function clamp(val: number, min: number, max: number): number {
+  if (!Number.isFinite(val)) return (min + max) / 2;
+  return Math.max(min, Math.min(max, val));
 }

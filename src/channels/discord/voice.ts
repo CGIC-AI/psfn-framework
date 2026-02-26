@@ -65,6 +65,8 @@ export class DiscordVoiceRuntime {
   private readonly enabled: boolean;
   private readonly targetGuildId: string;
   private readonly targetUserId: string;
+  private readonly daveEncryption: boolean;
+  private readonly decryptionFailureTolerance: number;
   private readonly sttConnector?: StreamingSttConnector;
   private readonly ttsConnectors: StreamingTtsConnector[];
   private readonly reliabilityBudgets: VoiceReliabilityBudgets;
@@ -88,6 +90,14 @@ export class DiscordVoiceRuntime {
 
     this.targetGuildId = config.voiceTargetGuildId ?? '';
     this.targetUserId = config.voiceTargetUserId ?? '';
+    this.daveEncryption = config.voiceDaveEncryption ?? true;
+    const configuredDecryptionTolerance = config.voiceDecryptionFailureTolerance;
+    this.decryptionFailureTolerance = (
+      typeof configuredDecryptionTolerance === 'number'
+      && Number.isFinite(configuredDecryptionTolerance)
+    )
+      ? Math.max(0, Math.floor(configuredDecryptionTolerance))
+      : 24;
 
     const voiceEnabled = config.voiceEnabled === true;
     const deepgramApiKey = config.deepgramApiKey ?? '';
@@ -184,6 +194,8 @@ export class DiscordVoiceRuntime {
       adapterCreator: channel.guild.voiceAdapterCreator,
       selfDeaf: false,
       selfMute: false,
+      daveEncryption: this.daveEncryption,
+      decryptionFailureTolerance: this.decryptionFailureTolerance,
     });
 
     await entersState(connection, VoiceConnectionStatus.Ready, 20_000);

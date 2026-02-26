@@ -25,11 +25,24 @@ const log = createComponentLogger('UserContinuity');
 
 /** Default cap for continuity entries per user. */
 const DEFAULT_CONTINUITY_LIMIT = 20;
+const DEFAULT_ACTIVE_CHANNEL_WINDOW_MS = 30 * 60 * 1000;
 
 interface UserCache {
   entries: SessionEntry[];
   nextId: number;
   filePath: string;
+}
+
+export interface ActiveContinuityChannel {
+  channelId: string;
+  channelVisibility: ChannelVisibility;
+  lastTimestamp: number;
+}
+
+export interface ActiveChannelQuery {
+  excludeChannelId?: string;
+  withinMs?: number;
+  nowMs?: number;
 }
 
 export class UserContinuityStore {
@@ -130,6 +143,44 @@ export class UserContinuityStore {
   /** Get total message count for a user's continuity thread. */
   count(userId: string): number {
     return this.ensureUser(userId).entries.length;
+  }
+
+  /**
+   * Return active channels seen for a user within a recent time window.
+   * Used by session mirroring to fan out lightweight mirror notes.
+   */
+  getActiveChannels(
+    userId: string,
+    query: ActiveChannelQuery = {},
+  ): ActiveContinuityChannel[] {
+    const cache = this.ensureUser(userId);
+    if (cache.entries.length === 0) return [];
+
+    const nowMs = query.nowMs ?? Date.now();
+    const withinMs = Math.max(0, query.withinMs ?? DEFAULT_ACTIVE_CHANNEL_WINDOW_MS);
+    const byChannel = new Map<string, ActiveContinuityChannel>();
+
+    for (const entry of cache.entries) {
+      const channelId = entry.originChannelId ?? entry.channelId;
+      if (query.excludeChannelId && channelId === query.excludeChannelId) continue;
+      if (withinMs > 0 && nowMs - entry.timestamp > withinMs) continue;
+
+      const channelVisibility = parseChannelVisibility(entry.channelVisibility) ?? classifyChannel(channelId);
+      const existing = byChannel.get(channelId);
+      if (!existing || existing.lastTimestamp < entry.timestamp) {
+        byChannel.set(channelId, {
+          channelId,
+          channelVisibility,
+          lastTimestamp: entry.timestamp,
+        });
+      }
+    }
+
+    return [...byChannel.values()].sort((left, right) => {
+      const timestampDelta = right.lastTimestamp - left.lastTimestamp;
+      if (timestampDelta !== 0) return timestampDelta;
+      return left.channelId.localeCompare(right.channelId);
+    });
   }
 }
 

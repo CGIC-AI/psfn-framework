@@ -32,6 +32,25 @@ export interface ContinuityMessage {
   timestamp: number;
 }
 
+export interface MirrorMessage {
+  role: 'custom';
+  type: 'mirror';
+  content: string;
+  originChannelId: string;
+  sourceRole: 'user' | 'assistant';
+  sourceAuthorName?: string;
+  timestamp: number;
+}
+
+interface MirrorSessionMetadata {
+  type: 'mirror';
+  sourceChannelId?: string;
+  sourceRole?: 'user' | 'assistant';
+  sourceAuthorName?: string;
+}
+
+const MAX_MIRROR_RENDER_CHARS = 180;
+
 // ── Declaration merging ──
 
 declare module '@mariozechner/pi-agent-core' {
@@ -39,6 +58,7 @@ declare module '@mariozechner/pi-agent-core' {
     compaction: CompactionMessage;
     systemNote: SystemNoteMessage;
     continuity: ContinuityMessage;
+    mirror: MirrorMessage;
   }
 }
 
@@ -56,6 +76,10 @@ export function isContinuityMessage(m: AgentMessage): m is ContinuityMessage {
   return (m as any).role === 'custom' && (m as any).type === 'continuity';
 }
 
+export function isMirrorMessage(m: AgentMessage): m is MirrorMessage {
+  return (m as any).role === 'custom' && (m as any).type === 'mirror';
+}
+
 export function isCustomMessage(m: AgentMessage): boolean {
   return (m as any).role === 'custom';
 }
@@ -69,6 +93,7 @@ export function isCustomMessage(m: AgentMessage): boolean {
  * Custom messages are converted:
  * - compaction → user message with summary prefix
  * - systemNote → user message with [System note] prefix
+ * - mirror → compact user-side mirror note
  * - continuity → filtered out (injected into system prompt instead)
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
@@ -91,6 +116,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       // Continuity messages are injected into system prompt, not as individual messages.
       // Skip in LLM conversion.
       continue;
+    } else if (isMirrorMessage(msg)) {
+      const speaker = msg.sourceRole === 'assistant'
+        ? 'Purrsephone'
+        : (msg.sourceAuthorName ?? 'User');
+      result.push({
+        role: 'user',
+        content: `[Mirror note from ${msg.originChannelId}] ${speaker}: ${compactMirrorText(msg.content)}`,
+        timestamp: msg.timestamp,
+      } satisfies UserMessage);
     } else {
       // Standard pi-ai Message — pass through
       result.push(msg as Message);
@@ -110,6 +144,19 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
   const ts = entry.timestamp;
 
   if (entry.role === 'system') {
+    const mirrorMetadata = parseMirrorSessionMetadata(entry.metadata);
+    if (mirrorMetadata) {
+      return {
+        role: 'custom',
+        type: 'mirror',
+        content: entry.content,
+        originChannelId: mirrorMetadata.sourceChannelId ?? entry.originChannelId ?? entry.channelId,
+        sourceRole: mirrorMetadata.sourceRole ?? 'assistant',
+        sourceAuthorName: mirrorMetadata.sourceAuthorName,
+        timestamp: ts,
+      } satisfies MirrorMessage;
+    }
+
     return {
       role: 'custom',
       type: 'systemNote',
@@ -150,4 +197,29 @@ export function compactionToMessage(summary: CompactionSummary): CompactionMessa
     coveredUpTo: summary.coveredUpTo,
     timestamp: summary.createdAt,
   };
+}
+
+function compactMirrorText(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= MAX_MIRROR_RENDER_CHARS) return normalized;
+  return `${normalized.slice(0, MAX_MIRROR_RENDER_CHARS - 3)}...`;
+}
+
+function parseMirrorSessionMetadata(metadata?: string): MirrorSessionMetadata | null {
+  if (!metadata) return null;
+
+  try {
+    const parsed = JSON.parse(metadata) as Partial<MirrorSessionMetadata>;
+    if (parsed.type !== 'mirror') return null;
+    if (
+      parsed.sourceRole !== undefined
+      && parsed.sourceRole !== 'user'
+      && parsed.sourceRole !== 'assistant'
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
 }

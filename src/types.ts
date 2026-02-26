@@ -171,6 +171,10 @@ export interface SubstrateConfig {
   extractionThresholdPct: number;
   compactionThresholdPct: number;
   compactionEmotionalSalienceThresholdPct?: number;
+  sessionMirrorEnabled?: boolean;
+  sessionMirrorMaxChars?: number;
+  sessionMirrorActiveWindowMs?: number;
+  sessionMirrorChannelOverrides?: Record<string, boolean>;
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
@@ -286,6 +290,10 @@ export function loadConfig(): SubstrateConfig {
   const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
   const capabilityTier = parseCapabilityTierEnv(process.env.CAPABILITY_TIER, 'nursery');
   const shardToolsets = parseShardToolsetEnv(process.env);
+  const sessionMirrorEnabled = parseOptionalBooleanEnv(process.env.SESSION_MIRROR_ENABLED);
+  const sessionMirrorMaxChars = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_MAX_CHARS, 32);
+  const sessionMirrorActiveWindowMs = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS, 1_000);
+  const sessionMirrorChannelOverrides = parseBooleanMapEnv(process.env.SESSION_MIRROR_CHANNEL_OVERRIDES);
   const sessionMessageLimit = parseOptionalIntegerEnv(process.env.SESSION_MESSAGE_LIMIT, 1);
   const memoryRetrievalLimit = parseOptionalIntegerEnv(process.env.MEMORY_RETRIEVAL_LIMIT, 1);
   const sessionHistoryBudgetPct = parseBoundedIntegerEnv(
@@ -329,6 +337,10 @@ export function loadConfig(): SubstrateConfig {
       0,
       100,
     ),
+    ...(sessionMirrorEnabled !== undefined ? { sessionMirrorEnabled } : {}),
+    ...(sessionMirrorMaxChars !== undefined ? { sessionMirrorMaxChars } : {}),
+    ...(sessionMirrorActiveWindowMs !== undefined ? { sessionMirrorActiveWindowMs } : {}),
+    ...(sessionMirrorChannelOverrides ? { sessionMirrorChannelOverrides } : {}),
     memoryExtractionMinImportance,
     memoryExtractionMinConfidence,
     memoryExtractionMinNovelty,
@@ -383,6 +395,18 @@ function parseOptionalIntegerEnv(value: string | undefined, min: number): number
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return undefined;
   return parsed >= min ? parsed : undefined;
+}
+
+function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') {
+    return false;
+  }
+  return undefined;
 }
 
 function parseBoundedIntegerEnv(
@@ -441,6 +465,21 @@ function parseStringListEnv(value: string | undefined): string[] {
       .map(item => item.trim())
       .filter(Boolean),
   )];
+}
+
+function parseBooleanMapEnv(value: string | undefined): Record<string, boolean> | undefined {
+  if (typeof value !== 'string') return undefined;
+
+  const parsed: Record<string, boolean> = {};
+  for (const item of value.split(',')) {
+    const [rawKey, rawValue] = item.split('=');
+    const key = rawKey?.trim();
+    const boolValue = parseOptionalBooleanEnv(rawValue?.trim());
+    if (!key || boolValue === undefined) continue;
+    parsed[key] = boolValue;
+  }
+
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
 }
 
 // ── Lifecycle ──

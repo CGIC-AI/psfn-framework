@@ -238,11 +238,11 @@ export type RpcSubstrateMessage = Omit<SubstrateMessage, 'timestamp'> & {
   timestamp: string | Date;
 };
 
-export interface DiscordHandleMessageParams {
+export interface VoiceHandleMessageParams {
   message: RpcSubstrateMessage;
 }
 
-export interface DiscordHandleMessageResult {
+export interface VoiceHandleMessageResult {
   content: string;
   channelId: string;
   model: string;
@@ -263,21 +263,21 @@ export interface VoiceStreamFrameBase {
   metadata?: VoiceStreamMetadata;
 }
 
-export interface DiscordVoiceStreamStartParams extends VoiceStreamFrameBase {
+export interface VoiceStreamStartParams extends VoiceStreamFrameBase {
   message: RpcSubstrateMessage;
 }
 
-export interface DiscordVoiceStreamChunkParams extends VoiceStreamFrameBase {
+export interface VoiceStreamChunkParams extends VoiceStreamFrameBase {
   text: string;
 }
 
-export interface DiscordVoiceStreamEndParams extends VoiceStreamFrameBase {}
+export interface VoiceStreamEndParams extends VoiceStreamFrameBase {}
 
-export interface DiscordVoiceStreamCancelParams extends VoiceStreamFrameBase {
+export interface VoiceStreamCancelParams extends VoiceStreamFrameBase {
   reason?: string;
 }
 
-export interface DiscordVoiceStreamAckResult {
+export interface VoiceStreamAckResult {
   correlationId: string;
   streamId: string;
   sequence: number;
@@ -286,19 +286,35 @@ export interface DiscordVoiceStreamAckResult {
   droppedChunks?: number;
 }
 
-export interface DiscordVoiceStreamCancelResult {
+export interface VoiceStreamCancelResult {
   correlationId: string;
   streamId: string;
   cancelled: boolean;
 }
 
-export interface DiscordVoiceStreamEndResult extends DiscordHandleMessageResult {
+export interface VoiceStreamEndResult extends VoiceHandleMessageResult {
   correlationId: string;
   streamId: string;
   droppedChunks: number;
 }
 
+// Backward-compatible aliases for Discord-specific reverse RPC naming.
+export type DiscordHandleMessageParams = VoiceHandleMessageParams;
+export type DiscordHandleMessageResult = VoiceHandleMessageResult;
+export type DiscordVoiceStreamStartParams = VoiceStreamStartParams;
+export type DiscordVoiceStreamChunkParams = VoiceStreamChunkParams;
+export type DiscordVoiceStreamEndParams = VoiceStreamEndParams;
+export type DiscordVoiceStreamCancelParams = VoiceStreamCancelParams;
+export type DiscordVoiceStreamAckResult = VoiceStreamAckResult;
+export type DiscordVoiceStreamCancelResult = VoiceStreamCancelResult;
+export type DiscordVoiceStreamEndResult = VoiceStreamEndResult;
+
 export interface AgentMethods {
+  'voice.handleMessage': [VoiceHandleMessageParams, VoiceHandleMessageResult];
+  'voice.stream.start': [VoiceStreamStartParams, VoiceStreamAckResult];
+  'voice.stream.chunk': [VoiceStreamChunkParams, VoiceStreamAckResult];
+  'voice.stream.end': [VoiceStreamEndParams, VoiceStreamEndResult];
+  'voice.stream.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
   'discord.handleMessage': [DiscordHandleMessageParams, DiscordHandleMessageResult];
   'discord.voice.start': [DiscordVoiceStreamStartParams, DiscordVoiceStreamAckResult];
   'discord.voice.chunk': [DiscordVoiceStreamChunkParams, DiscordVoiceStreamAckResult];

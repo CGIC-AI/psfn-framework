@@ -1,8 +1,10 @@
 import type { EventName } from '../../event-bus.js';
 import type { TaskState } from '../../scheduler/types.js';
 import type { ThinkEvidence } from '../types.js';
+import type { SandboxBudgetRef } from './contracts.js';
 
 export const BUDGET_EXCEEDED_MESSAGE = '[Budget exceeded: max sub-queries reached]';
+export const TOOL_CALL_BUDGET_EXCEEDED_MESSAGE = '[Budget exceeded: max tool calls reached]';
 
 export const REPL_EVENT_ALLOWLIST: ReadonlySet<EventName> = new Set([
   'schedule.tick',
@@ -93,6 +95,27 @@ export function addEvidence(
 
 export function toTrimmedString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+export function consumeToolCallBudget(budgetRef?: SandboxBudgetRef): boolean {
+  if (!budgetRef || budgetRef.maxToolCalls === undefined) {
+    return true;
+  }
+
+  const max = Number.isFinite(budgetRef.maxToolCalls)
+    ? Math.max(1, Math.floor(budgetRef.maxToolCalls))
+    : 1;
+  const used = Number.isFinite(budgetRef.toolCalls)
+    ? Math.max(0, Math.floor(budgetRef.toolCalls ?? 0))
+    : 0;
+
+  if (used >= max) {
+    budgetRef.toolCalls = used;
+    return false;
+  }
+
+  budgetRef.toolCalls = used + 1;
+  return true;
 }
 
 export function splitCsvTags(tags?: string): string[] | undefined {

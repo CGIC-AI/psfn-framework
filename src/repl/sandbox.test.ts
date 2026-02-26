@@ -308,6 +308,78 @@ describe('REPLSandbox', () => {
     expect((llm as any).webFetch).toHaveBeenCalledTimes(3);
   });
 
+  it('read_file/write_file/list_files/web_fetch helpers call gateway RPC capabilities', async () => {
+    const llm = {
+      ...mockLLM(),
+      fsRead: vi.fn(async (path: string) => `read:${path}`),
+      fsWrite: vi.fn(async () => {}),
+      fsList: vi.fn(async () => ['src/a.ts', 'src/b.ts']),
+      webFetch: vi.fn(async (url: string) => `fetched:${url}`),
+    } as unknown as LLMProvider;
+    const sandbox = new REPLSandbox(nullDeps(llm));
+
+    const result = await sandbox.execute(
+      [
+        'const content = await read_file("/app/workspace/a.txt"); print(content);',
+        'const write = await write_file("/app/workspace/out.txt", "hello"); print(write.ok);',
+        'const listed = await list_files("src/**/*.ts", 10);',
+        'print(Array.isArray(listed), listed.length);',
+        'const page = await web_fetch("https://example.com"); print(page);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('read:/app/workspace/a.txt');
+    expect(result.output).toContain('true');
+    expect(result.output).toContain('true 2');
+    expect(result.output).toContain('fetched:https://example.com');
+    expect((llm as any).fsRead).toHaveBeenCalledWith('/app/workspace/a.txt');
+    expect((llm as any).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');
+    expect((llm as any).fsList).toHaveBeenCalledWith('src/**/*.ts', 10);
+    expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com', undefined);
+  });
+
+  it('enforces max tool calls across read_file/write_file/list_files/web_fetch', async () => {
+    const llm = {
+      ...mockLLM(),
+      fsRead: vi.fn(async (path: string) => `read:${path}`),
+      fsWrite: vi.fn(async () => {}),
+      fsList: vi.fn(async () => ['one.ts']),
+      webFetch: vi.fn(async () => 'web'),
+    } as unknown as LLMProvider;
+    const budgetRef: SandboxBudgetRef = {
+      subQueries: 0,
+      maxSubQueries: 10,
+      toolCalls: 0,
+      maxToolCalls: 2,
+    };
+    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const result = await sandbox.execute(
+      [
+        'const a = await read_file("a.txt");',
+        'const b = await web_fetch("https://example.com");',
+        'const c = await list_files("src/**/*.ts");',
+        'const d = await write_file("out.txt", "hello");',
+        'print(a);',
+        'print(b);',
+        'print(c.error);',
+        'print(d.ok, d.error);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('read:a.txt');
+    expect(result.output).toContain('web');
+    expect(result.output).toContain('max tool calls reached');
+    expect((llm as any).fsRead).toHaveBeenCalledTimes(1);
+    expect((llm as any).webFetch).toHaveBeenCalledTimes(1);
+    expect((llm as any).fsList).not.toHaveBeenCalled();
+    expect((llm as any).fsWrite).not.toHaveBeenCalled();
+    expect(budgetRef.toolCalls).toBe(2);
+  });
+
   it('crawler_fetch surfaces TLS diagnostics from gateway errors', async () => {
     const fetchError = Object.assign(new Error('Fetch TLS failure: fetch failed'), {
       code: -32003,
@@ -573,6 +645,10 @@ describe('REPLSandbox', () => {
     expect(locals.repo_diff).toBeUndefined();
     expect(locals.repo_apply_patch).toBeUndefined();
     expect(locals.repo_commit).toBeUndefined();
+    expect(locals.read_file).toBeUndefined();
+    expect(locals.write_file).toBeUndefined();
+    expect(locals.list_files).toBeUndefined();
+    expect(locals.web_fetch).toBeUndefined();
     expect(locals.crawler_fetch).toBeUndefined();
     expect(locals.web_research).toBeUndefined();
   });

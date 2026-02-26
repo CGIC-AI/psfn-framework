@@ -59,6 +59,11 @@ export interface FsWriteParams {
   content: string;
 }
 
+export interface FsListParams {
+  glob?: string;
+  maxEntries?: number;
+}
+
 export interface ApprovalRequestParams {
   action: string;
   scope: string;
@@ -165,6 +170,10 @@ export interface FsWriteResult {
   success: boolean;
 }
 
+export interface FsListResult {
+  paths: string[];
+}
+
 export interface ApprovalResult {
   granted: boolean;
   capabilityToken?: string;
@@ -198,6 +207,7 @@ export interface GatewayMethods {
   'web.fetch': [WebFetchParams, WebFetchResult];
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];
+  'fs.list': [FsListParams, FsListResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];

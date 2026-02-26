@@ -29,6 +29,7 @@ import type {
   WebFetchResult,
   FsReadResult,
   FsWriteResult,
+  FsListResult,
   DiscordMessageNotification,
   LLMChunkNotification,
   DiscordHandleMessageParams,
@@ -365,6 +366,14 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   async fsWrite(path: string, content: string): Promise<void> {
     await this.rpcInstance.request('fs.write', { path, content }) as FsWriteResult;
+  }
+
+  async fsList(glob = '**/*', maxEntries = 200): Promise<string[]> {
+    const result = await this.rpcInstance.request('fs.list', {
+      glob,
+      maxEntries,
+    }) as FsListResult;
+    return result.paths;
   }
 
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {

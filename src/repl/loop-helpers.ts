@@ -31,6 +31,7 @@ export function createBudgetStatus(): BudgetStatus {
     totalTokens: 0,
     wallTimeMs: 0,
     subQueries: 0,
+    toolCalls: 0,
     sessionCostUsd: 0,
     dayCostUsd: 0,
     warnings: [],
@@ -42,9 +43,11 @@ export function updateBudgetRuntime(
   status: BudgetStatus,
   startTime: number,
   subQueries: number,
+  toolCalls = 0,
 ): void {
   status.wallTimeMs = Date.now() - startTime;
   status.subQueries = subQueries;
+  status.toolCalls = toolCalls;
 }
 
 export function updateBudgetProgress(
@@ -54,10 +57,11 @@ export function updateBudgetProgress(
   totalOutputTokens: number,
   startTime: number,
   subQueries: number,
+  toolCalls = 0,
 ): void {
   status.iterations = iteration;
   status.totalTokens = totalInputTokens + totalOutputTokens;
-  updateBudgetRuntime(status, startTime, subQueries);
+  updateBudgetRuntime(status, startTime, subQueries, toolCalls);
 }
 
 export function checkBudget(status: BudgetStatus, budget: ThinkBudget): void {
@@ -69,6 +73,8 @@ export function checkBudget(status: BudgetStatus, budget: ThinkBudget): void {
     status.exceeded = 'wall time';
   } else if (budget.maxSubQueries && status.subQueries >= budget.maxSubQueries) {
     status.exceeded = 'sub-query limit';
+  } else if (budget.maxToolCalls && status.toolCalls >= budget.maxToolCalls) {
+    status.exceeded = 'tool-call limit';
   }
 }
 

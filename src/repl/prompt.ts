@@ -59,8 +59,14 @@ Variables persist across iterations. When you have the answer, call FINAL().
 - \`await repo_apply_patch(filePath, content)\` — Apply constrained patch content to allowlisted paths
 - \`await repo_commit(message, intent?, scope?)\` — Create structured self-modification commit
 
+### File + Web Tools
+- \`await read_file(path)\` — Read file content through gateway fs policy checks
+- \`await write_file(path, content)\` — Write file content through gateway fs policy checks
+- \`await list_files(glob?, maxEntries?)\` — List workspace-relative files via gateway glob policy
+- \`await web_fetch(url, prompt?)\` — Guarded web fetch via gateway SSRF defenses
+
 ### Research
-- \`await crawler_fetch(url, prompt?)\` — Guarded web fetch via gateway SSRF defenses
+- \`await crawler_fetch(url, prompt?)\` — Alias of \`web_fetch\` (kept for compatibility)
 - \`await web_research(query, maxUrls?)\` — Discover and fetch a small URL set for a research question
 
 ### Text analysis

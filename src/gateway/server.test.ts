@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { GatewayServer, resolveGatewaySessionHmacKeyring, type GatewayServerOptions } from './server.js';
@@ -286,6 +286,36 @@ describe('GatewayServer', () => {
       expect(response.error.code).toBe(GatewayErrors.PROVIDER_ERROR);
       expect(response.error.message).toContain('keyring');
     });
+  });
+
+  it('serves fs.list results from workspace-scoped globbing', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-list-'));
+    const nestedDir = join(workspace, 'nested');
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(join(workspace, 'alpha.txt'), 'alpha');
+    writeFileSync(join(nestedDir, 'beta.txt'), 'beta');
+    writeFileSync(join(workspace, 'gamma.md'), 'gamma');
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+        },
+      });
+
+      const listed = await invokeRpc(conn, 950, 'fs.list', {
+        glob: '**/*.txt',
+        maxEntries: 10,
+      });
+
+      expect(listed.result.paths).toEqual([
+        'alpha.txt',
+        'nested/beta.txt',
+      ]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   describe('confirmation queue', () => {

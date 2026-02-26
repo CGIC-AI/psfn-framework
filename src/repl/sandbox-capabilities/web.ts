@@ -1,8 +1,14 @@
 import type { ThinkEvidence } from '../types.js';
-import type { GatewayREPLCapabilities } from './contracts.js';
-import { addEvidence, normalizeErrorMessage } from './common.js';
+import type { GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
+import {
+  addEvidence,
+  consumeToolCallBudget,
+  normalizeErrorMessage,
+  TOOL_CALL_BUDGET_EXCEEDED_MESSAGE,
+} from './common.js';
 
 export interface WebCapabilities {
+  web_fetch: (url: string, prompt?: string) => Promise<string>;
   crawler_fetch: (url: string, prompt?: string) => Promise<string>;
   web_research: (query: string, maxUrls?: number) => Promise<Array<{ url: string; content: string }>>;
 }
@@ -10,11 +16,16 @@ export interface WebCapabilities {
 interface CreateWebCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
   pushEvidence: (entry: ThinkEvidence) => void;
+  budgetRef?: SandboxBudgetRef;
   llm_query_json: (prompt: string, maxRetries?: number) => Promise<unknown>;
 }
 
 export function createWebCapabilities(options: CreateWebCapabilitiesOptions): WebCapabilities {
-  const crawler_fetch = async (url: string, prompt?: string): Promise<string> => {
+  const web_fetch = async (url: string, prompt?: string): Promise<string> => {
+    if (!consumeToolCallBudget(options.budgetRef)) {
+      return `[Web fetch error: ${TOOL_CALL_BUDGET_EXCEEDED_MESSAGE}]`;
+    }
+
     if (typeof options.gatewayCaps.webFetch !== 'function') {
       return '[Web fetch unavailable: requires gateway web.fetch policy and audit path]';
     }
@@ -36,6 +47,8 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
       return `[Web fetch error: ${normalizeErrorMessage(err)}]`;
     }
   };
+
+  const crawler_fetch = web_fetch;
 
   const web_research = async (
     query: string,
@@ -68,6 +81,7 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
   };
 
   return {
+    web_fetch,
     crawler_fetch,
     web_research,
   };

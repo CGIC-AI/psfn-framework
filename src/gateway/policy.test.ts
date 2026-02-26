@@ -111,6 +111,13 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('allows fs.list with workspace-relative glob', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxEntries: 50 } },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
   it('allows fs.read of workspace root', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: '/app/workspace' } },
@@ -139,6 +146,18 @@ describe('evaluatePolicy', () => {
       { method: 'fs.read', params: { path: '/app/workspace/../../../etc/passwd' } },
       policyConfig,
     )).toBe('NEEDS_APPROVAL');
+  });
+
+  it('denies fs.list traversal and absolute glob patterns', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: '../secrets/**' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: '/etc/*' } },
+      policyConfig,
+    )).toBe('DENY');
   });
 
   // ── Allowed read paths ──

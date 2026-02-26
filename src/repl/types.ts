@@ -14,12 +14,14 @@ export interface ThinkBudget {
   maxTokens?: number;         // total input+output tokens, default 100_000
   maxWallTimeMs?: number;     // total elapsed, default 120_000 (2 min)
   maxSubQueries?: number;     // llm_query calls, default 20
+  maxToolCalls?: number;      // sandbox tool calls (file/web helpers), default 50
 }
 
 export interface TierThinkBudget {
   maxIterations: number;
   maxWallTimeMs: number;
   maxSubQueries: number;
+  maxToolCalls: number;
   memoryCeilingMb: number;
 }
 
@@ -40,6 +42,7 @@ export interface BudgetStatus {
   totalTokens: number;
   wallTimeMs: number;
   subQueries: number;
+  toolCalls: number;
   sessionCostUsd: number;
   dayCostUsd: number;
   warnings: string[];
@@ -60,18 +63,21 @@ export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
     maxIterations: 5,
     maxWallTimeMs: 30_000,
     maxSubQueries: 10,
+    maxToolCalls: 25,
     memoryCeilingMb: 128,
   },
   apprentice: {
     maxIterations: 10,
     maxWallTimeMs: 60_000,
     maxSubQueries: 15,
+    maxToolCalls: 40,
     memoryCeilingMb: 192,
   },
   autonomous: {
     maxIterations: 15,
     maxWallTimeMs: 120_000,
     maxSubQueries: 20,
+    maxToolCalls: 50,
     memoryCeilingMb: 256,
   },
 };
@@ -82,6 +88,7 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
     maxTokens: 100_000,
     maxWallTimeMs: 120_000,
     maxSubQueries: 20,
+    maxToolCalls: 50,
   },
   tierBudgets: DEFAULT_REPL_TIER_BUDGETS,
   rateLimit: {

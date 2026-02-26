@@ -10,6 +10,7 @@
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
+import { createHash } from 'node:crypto';
 import type { AssistantMessage, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
@@ -28,6 +29,7 @@ import type { TrustLevel } from '../trust/types.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
+import type { ComposeContext, ComposeSplitResult } from '../identity/prompt-types.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
@@ -65,11 +67,24 @@ interface ProactiveMemoryProvider extends MemoryProvider {
   ) => Promise<string>;
 }
 
+interface PromptSections {
+  staticPrefix: string;
+  dynamicSuffix: string;
+  staticHash: string;
+}
+
+interface FrozenPromptPrefix {
+  renderedPrefix: string;
+  staticHash: string;
+  settingsHash: string;
+}
+
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
 const SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS = 240;
 const SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS = 1_600;
+const PROMPT_HASH_LENGTH = 16;
 
 // ── SubstrateAgent ──
 
@@ -90,6 +105,7 @@ export class SubstrateAgent {
   private channelRegistry = new Map<string, ChannelPromptDock>();
   private capabilityRuntime: CapabilityRuntime | null = null;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
+  private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -159,15 +175,21 @@ export class SubstrateAgent {
     const existingHooks = this.config.runtimeHooks ?? {};
     const priorRefreshModels = existingHooks.refreshModels;
     const priorRefreshCapabilities = existingHooks.refreshCapabilities;
+    const priorInvalidatePromptPrefixCache = existingHooks.invalidatePromptPrefixCache;
     this.config.runtimeHooks = {
       ...existingHooks,
       refreshModels: () => {
         priorRefreshModels?.();
         this.refreshRuntimeModels();
+        this.invalidatePromptPrefixCache('runtime.refreshModels');
       },
       refreshCapabilities: () => {
         priorRefreshCapabilities?.();
         this.refreshCapabilityRuntime();
+      },
+      invalidatePromptPrefixCache: () => {
+        priorInvalidatePromptPrefixCache?.();
+        this.invalidatePromptPrefixCache('runtime.invalidatePromptPrefixCache');
       },
     };
   }
@@ -268,6 +290,7 @@ export class SubstrateAgent {
 
   setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {
     this.channelRegistry = new Map(registry);
+    this.invalidatePromptPrefixCache('channel-registry-updated');
   }
 
   setCapabilityRuntime(runtime: CapabilityRuntime | null): void {
@@ -419,18 +442,10 @@ export class SubstrateAgent {
         scratchpadIncluded: scratchpadBlock.length > 0,
       });
 
-      // Compose system prompt: layered stack if available, else static
+      // Compose system prompt as static prefix + dynamic suffix.
       const channelType = this.resolveChannelType(message);
       const taskKind = this.resolveTaskKind(message);
-      const basePrompt = this.promptComposer
-        ? this.promptComposer.compose({ channelType, taskKind }).text
-        : this.systemPrompt;
-
-      // Persona adaptation based on trust level (appended post-compose)
-      const personaHint = this.getPersonaAdaptation(trustLevel);
-      const adaptedPrompt = personaHint
-        ? basePrompt + '\n\n' + personaHint
-        : basePrompt;
+      const promptSections = this.composePromptSections({ channelType, taskKind });
 
       const runtimeNow = new Date();
       const templateVariables = this.buildPromptTemplateVariables(
@@ -440,7 +455,26 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         runtimeNow,
       );
-      const runtimePrompt = injectPromptRuntimeTokens(adaptedPrompt, {
+      const staticCacheKey = this.buildPromptPrefixCacheKey(
+        message,
+        channelType,
+        authorContext.canonicalContactKey,
+      );
+      const staticSettingsHash = this.buildStaticPromptSettingsHash(templateVariables);
+      const staticPrefix = this.resolveStaticPromptPrefix({
+        cacheKey: staticCacheKey,
+        staticPrefixTemplate: promptSections.staticPrefix,
+        staticHash: promptSections.staticHash,
+        settingsHash: staticSettingsHash,
+        now: runtimeNow,
+        variables: templateVariables,
+      });
+      const personaHint = this.getPersonaAdaptation(trustLevel);
+      const dynamicSuffixTemplate = [promptSections.dynamicSuffix, personaHint]
+        .map(section => section?.trim() ?? '')
+        .filter(section => section.length > 0)
+        .join('\n\n');
+      const dynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
         now: runtimeNow,
         variables: templateVariables,
       });
@@ -453,7 +487,7 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         runtimeNow,
       );
-      const fullPrompt = [runtimePrompt, runtimeContext, scratchpadBlock]
+      const fullPrompt = [staticPrefix, dynamicSuffix, runtimeContext, scratchpadBlock]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
@@ -607,6 +641,91 @@ export class SubstrateAgent {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  private composePromptSections(ctx: ComposeContext): PromptSections {
+    if (!this.promptComposer) {
+      return {
+        staticPrefix: this.systemPrompt,
+        dynamicSuffix: '',
+        staticHash: this.hashPromptText(this.systemPrompt),
+      };
+    }
+
+    const splitComposer = this.promptComposer as PromptComposer & {
+      composeSplit?: (composeContext?: ComposeContext) => ComposeSplitResult;
+    };
+    if (typeof splitComposer.composeSplit === 'function') {
+      const split = splitComposer.composeSplit(ctx);
+      return {
+        staticPrefix: split.staticPrefix,
+        dynamicSuffix: split.dynamicSuffix,
+        staticHash: split.staticHash,
+      };
+    }
+
+    const composed = this.promptComposer.compose(ctx);
+    return {
+      staticPrefix: composed.text,
+      dynamicSuffix: '',
+      staticHash: composed.hash,
+    };
+  }
+
+  private buildPromptPrefixCacheKey(
+    message: SubstrateMessage,
+    channelType: string | undefined,
+    canonicalContactKey: string | undefined,
+  ): string {
+    return [
+      message.channelId,
+      channelType ?? 'unknown',
+      canonicalContactKey ?? message.authorId,
+    ].join('::');
+  }
+
+  private buildStaticPromptSettingsHash(templateVariables: Record<string, string>): string {
+    const stableEntries = Object.entries(templateVariables)
+      .filter(([key]) => key !== 'now_iso')
+      .sort(([left], [right]) => left.localeCompare(right));
+    return this.hashPromptText(JSON.stringify(stableEntries));
+  }
+
+  private resolveStaticPromptPrefix(params: {
+    cacheKey: string;
+    staticPrefixTemplate: string;
+    staticHash: string;
+    settingsHash: string;
+    now: Date;
+    variables: Record<string, string>;
+  }): string {
+    const cached = this.frozenPromptPrefixCache.get(params.cacheKey);
+    if (cached && cached.staticHash === params.staticHash && cached.settingsHash === params.settingsHash) {
+      return cached.renderedPrefix;
+    }
+
+    const renderedPrefix = injectPromptRuntimeTokens(params.staticPrefixTemplate, {
+      now: params.now,
+      variables: params.variables,
+    });
+    this.frozenPromptPrefixCache.set(params.cacheKey, {
+      renderedPrefix,
+      staticHash: params.staticHash,
+      settingsHash: params.settingsHash,
+    });
+    return renderedPrefix;
+  }
+
+  private invalidatePromptPrefixCache(reason: string): void {
+    if (this.frozenPromptPrefixCache.size === 0) return;
+    this.frozenPromptPrefixCache.clear();
+    log.info('Invalidated static prompt-prefix cache', {
+      reason,
+    });
+  }
+
+  private hashPromptText(text: string): string {
+    return createHash('sha256').update(text).digest('hex').slice(0, PROMPT_HASH_LENGTH);
   }
 
   private recordUserMessage(

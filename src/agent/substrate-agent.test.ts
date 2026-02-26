@@ -789,6 +789,145 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).not.toContain('{{user}}');
   });
 
+  it('freezes static prompt prefix per session while dynamic suffix updates each turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const config = makeConfig();
+      const sessionManager = makeMockSessionManager();
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        sessionManager,
+        'Fallback system prompt',
+        config,
+        { characterName: 'Purrsephone' },
+      );
+      const composeSplit = vi.fn().mockReturnValue({
+        staticPrefix: '[STATIC] {{user}} @ {{now_iso}}',
+        dynamicSuffix: '[DYNAMIC] {{now_iso}}',
+        staticHash: 'static-v1',
+        dynamicHash: 'dynamic-v1',
+        staticLayerIds: ['layer-static'],
+        dynamicLayerIds: ['layer-dynamic'],
+        text: '[STATIC] {{user}} @ {{now_iso}}\n\n[DYNAMIC] {{now_iso}}',
+        hash: 'full-v1',
+        layerCount: 2,
+        layerIds: ['layer-static', 'layer-dynamic'],
+      });
+      agent.promptComposer = { composeSplit } as any;
+
+      vi.setSystemTime(new Date('2026-02-26T00:00:00.000Z'));
+      await agent.handleMessage(makeMessage({ id: 'msg-static-1', authorName: 'Vega' }));
+
+      vi.setSystemTime(new Date('2026-02-26T00:10:00.000Z'));
+      await agent.handleMessage(makeMessage({ id: 'msg-static-2', authorName: 'Vega' }));
+
+      const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+      const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+
+      expect(firstPrompt).toContain('[STATIC] Vega @ 2026-02-26T00:00:00.000Z');
+      expect(firstPrompt).toContain('[DYNAMIC] 2026-02-26T00:00:00.000Z');
+      expect(secondPrompt).toContain('[STATIC] Vega @ 2026-02-26T00:00:00.000Z');
+      expect(secondPrompt).toContain('[DYNAMIC] 2026-02-26T00:10:00.000Z');
+      expect(secondPrompt).not.toContain('[STATIC] Vega @ 2026-02-26T00:10:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('invalidates frozen static prefix when static composition hash changes', async () => {
+    vi.useFakeTimers();
+    try {
+      const config = makeConfig();
+      const sessionManager = makeMockSessionManager();
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        sessionManager,
+        'Fallback system prompt',
+        config,
+      );
+      const composeSplit = vi.fn()
+        .mockReturnValueOnce({
+          staticPrefix: '[STATIC-v1] {{now_iso}}',
+          dynamicSuffix: '',
+          staticHash: 'static-v1',
+          dynamicHash: 'dynamic-v1',
+          staticLayerIds: ['layer-static'],
+          dynamicLayerIds: [],
+          text: '[STATIC-v1] {{now_iso}}',
+          hash: 'full-v1',
+          layerCount: 1,
+          layerIds: ['layer-static'],
+        })
+        .mockReturnValueOnce({
+          staticPrefix: '[STATIC-v2] {{now_iso}}',
+          dynamicSuffix: '',
+          staticHash: 'static-v2',
+          dynamicHash: 'dynamic-v1',
+          staticLayerIds: ['layer-static'],
+          dynamicLayerIds: [],
+          text: '[STATIC-v2] {{now_iso}}',
+          hash: 'full-v2',
+          layerCount: 1,
+          layerIds: ['layer-static'],
+        });
+      agent.promptComposer = { composeSplit } as any;
+
+      vi.setSystemTime(new Date('2026-02-26T01:00:00.000Z'));
+      await agent.handleMessage(makeMessage({ id: 'msg-hash-1' }));
+
+      vi.setSystemTime(new Date('2026-02-26T01:05:00.000Z'));
+      await agent.handleMessage(makeMessage({ id: 'msg-hash-2' }));
+
+      const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+      expect(secondPrompt).toContain('[STATIC-v2] 2026-02-26T01:05:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('invalidates frozen static prefix when static settings signature changes', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Fallback system prompt',
+      config,
+    );
+    const composeSplit = vi.fn().mockReturnValue({
+      staticPrefix: '[STATIC] {{user}}',
+      dynamicSuffix: '',
+      staticHash: 'static-v1',
+      dynamicHash: 'dynamic-v1',
+      staticLayerIds: ['layer-static'],
+      dynamicLayerIds: [],
+      text: '[STATIC] {{user}}',
+      hash: 'full-v1',
+      layerCount: 1,
+      layerIds: ['layer-static'],
+    });
+    agent.promptComposer = { composeSplit } as any;
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-settings-1',
+      authorId: 'same-user',
+      authorName: 'Vega',
+    }));
+    await agent.handleMessage(makeMessage({
+      id: 'msg-settings-2',
+      authorId: 'same-user',
+      authorName: 'Nyx',
+    }));
+
+    const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    expect(firstPrompt).toContain('[STATIC] Vega');
+    expect(secondPrompt).toContain('[STATIC] Nyx');
+  });
+
   it('injects formatted skills index into runtime context when skills runtime is wired', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

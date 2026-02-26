@@ -165,6 +165,12 @@ const CHAT_DEBUG_EVENTS: ChatDebugEventName[] = [
   'system.error',
 ];
 
+const AGENT_IDENTITY_EDIT_TOOLS = new Set([
+  'prompt_layer_update',
+  'prompt_layer_toggle',
+  'character_card_update',
+]);
+
 const MAX_DEBUG_TEXT_CHARS = 280;
 const MAX_DEBUG_MESSAGE_CHARS = 220;
 const MAX_DEBUG_DETAILS = 6;
@@ -330,6 +336,21 @@ export class AdminHandlers {
           durationMs !== null ? `durationMs=${durationMs}` : null,
         ],
       );
+
+      if (AGENT_IDENTITY_EDIT_TOOLS.has(toolLabel)) {
+        this.appendAuditTimelineEntry(
+          'identity_edit',
+          decision,
+          isError
+            ? `Purrsephone attempted identity edit via "${toolLabel}" in ${channelLabel}, but it failed.`
+            : `Purrsephone edited identity via "${toolLabel}" in ${channelLabel}.`,
+          [
+            `callId=${toolCallId}`,
+            shardId ? `shard=${shardId}` : null,
+            durationMs !== null ? `durationMs=${durationMs}` : null,
+          ],
+        );
+      }
     });
 
     this.eventBus.on('memory.extraction.end', (event) => {
@@ -392,6 +413,19 @@ export class AdminHandlers {
       narrative,
       details: detailText || undefined,
     });
+  }
+
+  private injectPromptEditSystemNote(note: string): void {
+    const targetChannels = [...new Set(
+      this.sessionStore
+        .listChannels()
+        .map(channel => channel.channelId)
+        .filter(channelId => !channelId.startsWith('internal:') && !channelId.startsWith('shard:')),
+    )];
+
+    for (const channelId of targetChannels) {
+      this.sessionManager.appendSystemNote(channelId, note);
+    }
   }
 
   // ── Login ──
@@ -1835,12 +1869,21 @@ export class AdminHandlers {
       return tpl.settingsFormResult(false, resolvedMetadata.error);
     }
     try {
-      const layer = this.promptStore.update(layerId, resolved.content, 'admin', resolvedMetadata.metadata);
+      const layer = this.promptStore.update(
+        layerId,
+        resolved.content,
+        'admin',
+        resolvedMetadata.metadata,
+        'Admin prompt-layer edit via Garden UI',
+      );
       this.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
         `Purrsephone edited ${layer.type} prompt layer "${layer.name}".`,
         [`layerId=${layer.id}`, `version=${layer.version}`],
+      );
+      this.injectPromptEditSystemNote(
+        `Admin updated ${layer.type} prompt layer "${layer.name}" (v${layer.version}).`,
       );
       return tpl.settingsFormResult(true, `Updated "${layer.name}" to v${layer.version}`);
     } catch (err) {
@@ -1906,6 +1949,11 @@ export class AdminHandlers {
         `Purrsephone toggled prompt layer "${layer?.name ?? layerId}".`,
         [layer ? `enabled=${layer.enabled}` : null],
       );
+      if (layer) {
+        this.injectPromptEditSystemNote(
+          `Admin toggled ${layer.type} prompt layer "${layer.name}" (${layer.enabled ? 'enabled' : 'disabled'}).`,
+        );
+      }
       // Return the full updated list for htmx swap
       const layers = this.promptStore.getAll();
       return tpl.promptLayersFragment(layers);
@@ -1939,6 +1987,9 @@ export class AdminHandlers {
         'allowed',
         `Purrsephone rolled prompt layer "${layer.name}" back to v${version}.`,
         [`layerId=${layer.id}`, `version=${layer.version}`],
+      );
+      this.injectPromptEditSystemNote(
+        `Admin rolled back ${layer.type} prompt layer "${layer.name}" using v${version} content (now v${layer.version}).`,
       );
       return tpl.settingsFormResult(true, `Rolled back "${layer.name}" to content from v${version}`);
     } catch (err) {

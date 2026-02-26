@@ -39,6 +39,12 @@ function normalizePromptIdentifier(identifier: string | undefined): string | und
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function normalizeReason(reason: string | undefined): string | undefined {
+  if (reason == null) return undefined;
+  const trimmed = reason.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function validatePromptRole(role: unknown): PromptLayerRole | undefined {
   if (role == null) return undefined;
   if (typeof role !== 'string' || !PROMPT_LAYER_ROLES.includes(role as PromptLayerRole)) {
@@ -224,7 +230,13 @@ export class PromptLayerStore {
     return layer;
   }
 
-  update(id: string, content: string, updatedBy: string, metadata: PromptLayerMetadataUpdate = {}): PromptLayer {
+  update(
+    id: string,
+    content: string,
+    updatedBy: string,
+    metadata: PromptLayerMetadataUpdate = {},
+    reason?: string,
+  ): PromptLayer {
     const layer = this.layers.find(l => l.id === id);
     if (!layer) throw new Error(`Prompt layer not found: ${id}`);
 
@@ -235,6 +247,7 @@ export class PromptLayerStore {
     const identifier = hasIdentifier ? normalizePromptIdentifier(metadata.identifier) : undefined;
     const role = hasRole ? validatePromptRole(metadata.role) : undefined;
     const promptOrder = hasPromptOrder ? validatePromptOrder(metadata.promptOrder) : undefined;
+    const normalizedReason = normalizeReason(reason);
 
     // Record history before modifying
     this.appendHistory({
@@ -245,6 +258,7 @@ export class PromptLayerStore {
       newContent: content,
       newChecksum: contentChecksum(content),
       updatedBy,
+      ...(normalizedReason ? { reason: normalizedReason } : {}),
       timestamp: new Date().toISOString(),
       version: layer.version,
     });
@@ -314,7 +328,13 @@ export class PromptLayerStore {
   rollback(layerId: string, version: number): PromptLayer {
     const entry = this.findHistoryEntry(layerId, version);
     if (!entry) throw new Error(`No history entry for layer ${layerId} version ${version}`);
-    return this.update(layerId, entry.previousContent, 'admin:rollback');
+    return this.update(
+      layerId,
+      entry.previousContent,
+      'admin:rollback',
+      {},
+      `Rollback to version ${version}`,
+    );
   }
 
   /** Seed from character card if store is empty */

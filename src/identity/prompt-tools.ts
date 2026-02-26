@@ -5,6 +5,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { PromptLayerStore } from './prompt-store.js';
+import type { PromptLayer, PromptHistoryEntry } from './prompt-types.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { withCapabilityRequirement } from '../capabilities/requirements.js';
 import {
@@ -13,7 +14,19 @@ import {
 import type { CapabilityTier } from '../types.js';
 import { textResult } from '../tools/results.js';
 
-function resolvePromptLayerById(store: PromptLayerStore, layerId: string) {
+const DEFAULT_DIFF_LINE_LIMIT = 160;
+const MAX_DIFF_LINE_LIMIT = 1_000;
+const DEFAULT_CHANGELOG_LIMIT = 20;
+const MAX_CHANGELOG_LIMIT = 200;
+
+interface PromptLineDiffSummary {
+  added: number;
+  removed: number;
+  lines: string[];
+  hiddenLineCount: number;
+}
+
+function resolvePromptLayerById(store: PromptLayerStore, layerId: string): PromptLayer | null {
   const normalized = layerId.trim();
   if (!normalized) return null;
   const layers = store.getAll();
@@ -26,6 +39,106 @@ function resolvePromptLayerWriteCapability(store: PromptLayerStore, layerId: str
   if (layer.type === 'base') return 'identity.write.base';
   if (layer.type === 'operator') return 'identity.write.operator';
   return 'identity.write.runtime';
+}
+
+function normalizeReason(reason: string | undefined): string | undefined {
+  if (reason == null) return undefined;
+  const trimmed = reason.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeOptionalBoundedInteger(
+  raw: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
+  const normalized = Math.floor(raw);
+  if (normalized < min || normalized > max) return fallback;
+  return normalized;
+}
+
+function countLineChanges(previousContent: string, nextContent: string): { added: number; removed: number } {
+  const previousLines = previousContent.split('\n');
+  const nextLines = nextContent.split('\n');
+  const max = Math.max(previousLines.length, nextLines.length);
+  let added = 0;
+  let removed = 0;
+
+  for (let index = 0; index < max; index += 1) {
+    const previous = previousLines[index];
+    const next = nextLines[index];
+    if (previous === next) continue;
+    if (previous !== undefined) removed += 1;
+    if (next !== undefined) added += 1;
+  }
+
+  return { added, removed };
+}
+
+function buildPromptLineDiff(
+  previousContent: string,
+  nextContent: string,
+  maxLines: number,
+): PromptLineDiffSummary {
+  const previousLines = previousContent.split('\n');
+  const nextLines = nextContent.split('\n');
+  const max = Math.max(previousLines.length, nextLines.length);
+
+  const fullLines: string[] = [];
+  let added = 0;
+  let removed = 0;
+
+  for (let index = 0; index < max; index += 1) {
+    const previous = previousLines[index];
+    const next = nextLines[index];
+    if (previous === next) continue;
+    if (previous !== undefined) {
+      removed += 1;
+      fullLines.push(`- ${previous}`);
+    }
+    if (next !== undefined) {
+      added += 1;
+      fullLines.push(`+ ${next}`);
+    }
+  }
+
+  if (fullLines.length <= maxLines) {
+    return {
+      added,
+      removed,
+      lines: fullLines,
+      hiddenLineCount: 0,
+    };
+  }
+
+  return {
+    added,
+    removed,
+    lines: fullLines.slice(0, maxLines),
+    hiddenLineCount: fullLines.length - maxLines,
+  };
+}
+
+function resolveHistoricalPromptVersion(
+  layer: PromptLayer,
+  history: PromptHistoryEntry[],
+  version: number,
+): { content: string; checksum: string } | null {
+  if (version === layer.version) {
+    return {
+      content: layer.content,
+      checksum: layer.checksum,
+    };
+  }
+
+  const entry = history.find(item => item.version === version);
+  if (!entry) return null;
+  return {
+    content: entry.previousContent,
+    checksum: entry.previousChecksum,
+  };
 }
 
 export function createPromptLayerListTool(store: PromptLayerStore): AgentTool<any> {
@@ -90,6 +203,161 @@ export function createPromptLayerGetTool(store: PromptLayerStore): AgentTool<any
   };
 }
 
+export function createIdentityDiffTool(store: PromptLayerStore): AgentTool<any> {
+  return withCapabilityRequirement({
+    name: 'identity_diff',
+    description:
+      'Compare a prompt layer\'s current version to any historical version and return a textual diff summary.',
+    label: 'identity_diff',
+    parameters: Type.Object({
+      layer_id: Type.String({ description: 'Prompt layer ID (or prefix) to diff.' }),
+      version: Type.Number({ description: 'Historical version to compare against.', minimum: 1 }),
+      max_diff_lines: Type.Optional(Type.Number({
+        description: `Max changed lines to display (default ${DEFAULT_DIFF_LINE_LIMIT}, max ${MAX_DIFF_LINE_LIMIT}).`,
+        minimum: 1,
+      })),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        layer_id: string;
+        version: number;
+        max_diff_lines?: number;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<Record<string, never>>> => {
+      const layer = resolvePromptLayerById(store, params.layer_id);
+      if (!layer) return textResult(`Layer not found: ${params.layer_id}`);
+
+      const requestedVersion = Math.floor(params.version);
+      if (!Number.isInteger(requestedVersion) || requestedVersion <= 0) {
+        return textResult('version must be a positive integer.');
+      }
+      if (requestedVersion > layer.version) {
+        return textResult(`Version ${requestedVersion} is newer than current version ${layer.version}.`);
+      }
+
+      const history = store.getLayerHistory(layer.id);
+      const baseline = resolveHistoricalPromptVersion(layer, history, requestedVersion);
+      if (!baseline) {
+        return textResult(`No prompt history entry found for version ${requestedVersion}.`);
+      }
+
+      const maxDiffLines = normalizeOptionalBoundedInteger(
+        params.max_diff_lines,
+        DEFAULT_DIFF_LINE_LIMIT,
+        1,
+        MAX_DIFF_LINE_LIMIT,
+      );
+      const diff = buildPromptLineDiff(baseline.content, layer.content, maxDiffLines);
+
+      const lines = [
+        `Identity diff for ${layer.type}/${layer.name} (${layer.id.slice(0, 8)})`,
+        `Compared versions: v${requestedVersion} -> v${layer.version}`,
+        `Checksums: ${baseline.checksum} -> ${layer.checksum}`,
+        `Changed lines: +${diff.added} / -${diff.removed}`,
+      ];
+
+      if (requestedVersion === layer.version) {
+        lines.push('No changes: requested version is the current version.');
+        return textResult(lines.join('\n'));
+      }
+
+      if (diff.lines.length === 0) {
+        lines.push('No textual changes between these versions (metadata-only update).');
+        return textResult(lines.join('\n'));
+      }
+
+      lines.push('', '--- Diff ---', ...diff.lines);
+      if (diff.hiddenLineCount > 0) {
+        lines.push(`... ${diff.hiddenLineCount} more changed line(s) omitted.`);
+      }
+      return textResult(lines.join('\n'));
+    },
+  }, 'identity.read');
+}
+
+export function createIdentityChangelogTool(store: PromptLayerStore): AgentTool<any> {
+  return withCapabilityRequirement({
+    name: 'identity_changelog',
+    description:
+      'Generate a changelog of prompt-layer identity modifications with who changed what, when, and why.',
+    label: 'identity_changelog',
+    parameters: Type.Object({
+      layer_id: Type.Optional(Type.String({ description: 'Optional prompt layer ID (or prefix) filter.' })),
+      limit: Type.Optional(Type.Number({
+        description: `Maximum number of changelog entries (default ${DEFAULT_CHANGELOG_LIMIT}, max ${MAX_CHANGELOG_LIMIT}).`,
+        minimum: 1,
+      })),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        layer_id?: string;
+        limit?: number;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<Record<string, never>>> => {
+      const limit = normalizeOptionalBoundedInteger(
+        params.limit,
+        DEFAULT_CHANGELOG_LIMIT,
+        1,
+        MAX_CHANGELOG_LIMIT,
+      );
+
+      const layerFilter = typeof params.layer_id === 'string' && params.layer_id.trim().length > 0
+        ? resolvePromptLayerById(store, params.layer_id)
+        : null;
+      if (params.layer_id && !layerFilter) {
+        return textResult(`Layer not found: ${params.layer_id}`);
+      }
+
+      const history = layerFilter
+        ? store.getLayerHistory(layerFilter.id)
+        : store.getHistory();
+      if (history.length === 0) {
+        return textResult('No prompt changes recorded yet.');
+      }
+
+      const layerTypeById = new Map(store.getAll().map(layer => [layer.id, layer.type]));
+      const sorted = [...history].sort((left, right) => {
+        const timeDelta = new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime();
+        if (timeDelta !== 0) return timeDelta;
+        return right.version - left.version;
+      });
+
+      const selected = sorted.slice(0, limit);
+      const heading = layerFilter
+        ? `Identity changelog for ${layerFilter.type}/${layerFilter.name} (${layerFilter.id.slice(0, 8)})`
+        : 'Identity changelog for all prompt layers';
+
+      const lines = selected.map(entry => {
+        const lineDelta = countLineChanges(entry.previousContent, entry.newContent);
+        const layerType = layerTypeById.get(entry.layerId) ?? 'unknown';
+        const reason = entry.reason ?? 'unspecified';
+        const deltaSummary = (lineDelta.added === 0 && lineDelta.removed === 0)
+          ? 'metadata-only'
+          : `+${lineDelta.added}/-${lineDelta.removed} lines`;
+        return [
+          `- ${entry.timestamp}`,
+          `${layerType}/${entry.layerName}`,
+          `v${entry.version}->v${entry.version + 1}`,
+          `by ${entry.updatedBy}`,
+          `what: ${deltaSummary}`,
+          `why: ${reason}`,
+        ].join(' | ');
+      });
+
+      const hiddenCount = sorted.length - selected.length;
+      if (hiddenCount > 0) {
+        lines.push(`... ${hiddenCount} older change(s) omitted.`);
+      }
+
+      return textResult([heading, ...lines].join('\n'));
+    },
+  }, 'identity.read');
+}
+
 export interface PromptLayerUpdateToolOptions {
   identityCoolingOff?: IdentityCoolingOffManager;
   getCapabilityTier?: () => CapabilityTier;
@@ -111,6 +379,7 @@ export function createPromptLayerUpdateTool(
     parameters: Type.Object({
       layer_id: Type.Optional(Type.String({ description: 'ID of the prompt layer to update (prefix match OK).' })),
       content: Type.Optional(Type.String({ description: 'New content for the layer.' })),
+      reason: Type.Optional(Type.String({ description: 'Short rationale for the identity edit.' })),
       action: Type.Optional(
         Type.Union([
           Type.Literal('update'),
@@ -125,6 +394,7 @@ export function createPromptLayerUpdateTool(
       params: {
         layer_id?: string;
         content?: string;
+        reason?: string;
         action?: 'update' | 'commit' | 'cancel';
         stage_id?: string;
       },
@@ -180,7 +450,14 @@ export function createPromptLayerUpdateTool(
         const layer = store.getById(committed.stage.layerId);
         if (!layer) return textResult(`Layer not found: ${committed.stage.layerId}`);
 
-        const updated = store.update(layer.id, committed.stage.nextContent, 'agent');
+        const reason = normalizeReason(params.reason) ?? 'Committed staged prompt-layer update via prompt_layer_update';
+        const updated = store.update(
+          layer.id,
+          committed.stage.nextContent,
+          'agent',
+          {},
+          reason,
+        );
         return textResult(
           `Committed staged update for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
         );
@@ -216,7 +493,8 @@ export function createPromptLayerUpdateTool(
         );
       }
 
-      const updated = store.update(layer.id, content, 'agent');
+      const reason = normalizeReason(params.reason) ?? 'Prompt layer updated via prompt_layer_update';
+      const updated = store.update(layer.id, content, 'agent', {}, reason);
       return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
     },
   };

@@ -1437,6 +1437,35 @@ describe('AdminServer', () => {
       expect(updated?.promptOrder).toBe(3);
     });
 
+    it('injects session system notes when admin updates prompt layers', async () => {
+      const layer = promptStore.getAll()[0];
+      if (!layer) throw new Error('Expected seeded prompt layer');
+      sessionManager.recordUserMessage(
+        'discord:identity-note',
+        'hello',
+        'user-1',
+        'User One',
+      );
+
+      const body = new URLSearchParams({
+        layerId: layer.id,
+        content: 'Admin updated prompt body',
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/prompts/update', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+
+      const notes = sessionManager
+        .getRecentMessages('discord:identity-note', 20)
+        .filter(entry => entry.role === 'system')
+        .map(entry => entry.content);
+
+      expect(notes.some(note => note.includes('Admin updated'))).toBe(true);
+      expect(notes.some(note => note.includes(layer.name))).toBe(true);
+    });
+
     it('rejects invalid role metadata updates', async () => {
       const layer = promptStore.getAll()[0];
       if (!layer) throw new Error('Expected seeded prompt layer');
@@ -1690,6 +1719,26 @@ describe('AdminServer', () => {
       expect(res.body).toContain('data-action-type="memory_mutation"');
       expect(res.body).toContain('memory_search');
       expect(res.body).toContain('edited');
+    });
+
+    it('records identity_edit notifications when agent runs identity mutation tools', async () => {
+      await eventBus.emit('agent.tool.start', {
+        channelId: 'identity-channel',
+        toolCallId: 'identity-tool-1',
+        toolName: 'prompt_layer_update',
+      });
+      await eventBus.emit('agent.tool.end', {
+        channelId: 'identity-channel',
+        toolCallId: 'identity-tool-1',
+        toolName: 'prompt_layer_update',
+        isError: false,
+      });
+
+      const res = await request(port, 'GET', '/events?timeRange=all');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('data-action-type="identity_edit"');
+      expect(res.body).toContain('prompt_layer_update');
+      expect(res.body).toContain('identity-channel');
     });
 
     it('filters audit timeline by decision, action type, and time range', async () => {

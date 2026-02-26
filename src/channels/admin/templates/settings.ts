@@ -10,11 +10,17 @@ import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM,
+  MEMORY_RETRIEVAL_MAX_ITEMS,
+  MEMORY_RETRIEVAL_MIN_ITEMS,
+  MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT,
   resolveMemoryRetrievalBudget,
   resolveSessionHistoryBudget,
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
   SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE,
+  SESSION_HISTORY_MAX_MESSAGES,
+  SESSION_HISTORY_MIN_MESSAGES,
+  SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT,
 } from '../../../context-budget.js';
 import { escapeHtml } from './shared.js';
 
@@ -40,8 +46,12 @@ interface CatalogRowView {
   provider: string;
   defaultMaxTokens: string;
   defaultContextWindow: string;
+  defaultSessionHistoryMinTokens: string;
+  defaultMemoryRetrievalMinTokens: string;
   overrideMaxTokens: string;
   overrideContextWindow: string;
+  overrideSessionHistoryMinTokens: string;
+  overrideMemoryRetrievalMinTokens: string;
 }
 
 export interface SettingsConfigEditors {
@@ -60,6 +70,48 @@ function toTextNumber(value: unknown): string {
   return typeof value === 'number' && Number.isFinite(value)
     ? String(Math.trunc(value))
     : '';
+}
+
+function formatInteger(value: number): string {
+  return Math.trunc(value).toLocaleString('en-US');
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function estimateCountFromBudget(
+  tokenBudget: number,
+  tokensPerItem: number,
+  minCount: number,
+  maxCount: number,
+): number {
+  const rough = Math.floor(tokenBudget / Math.max(1, tokensPerItem));
+  return clamp(rough, minCount, maxCount);
+}
+
+function formatBudgetPreviewText(options: {
+  hardLimit?: number;
+  estimatedCount: number;
+  tokenBudget: number;
+  contextWindow: number;
+  tokensPerItem: number;
+  minCount: number;
+  maxCount: number;
+  noun: 'messages' | 'memories';
+}): string {
+  const budgetEstimatedCount = estimateCountFromBudget(
+    options.tokenBudget,
+    options.tokensPerItem,
+    options.minCount,
+    options.maxCount,
+  );
+
+  if (options.hardLimit !== undefined) {
+    return `Hard override active: ${formatInteger(options.hardLimit)} ${options.noun}. Budget preview: ~${formatInteger(budgetEstimatedCount)} ${options.noun} (${formatInteger(options.tokenBudget)} tokens of ${formatInteger(options.contextWindow)}).`;
+  }
+
+  return `Auto budget: ~${formatInteger(options.estimatedCount)} ${options.noun} (${formatInteger(options.tokenBudget)} tokens of ${formatInteger(options.contextWindow)}).`;
 }
 
 function buildCatalogRows(config: SubstrateConfig): CatalogRowView[] {
@@ -95,8 +147,12 @@ function buildCatalogRows(config: SubstrateConfig): CatalogRowView[] {
     provider: entry.provider,
     defaultMaxTokens: toTextNumber(entry.defaults?.maxTokens),
     defaultContextWindow: toTextNumber(entry.defaults?.contextWindow),
+    defaultSessionHistoryMinTokens: toTextNumber(entry.defaults?.contextBudget?.sessionHistoryMinTokens),
+    defaultMemoryRetrievalMinTokens: toTextNumber(entry.defaults?.contextBudget?.memoryRetrievalMinTokens),
     overrideMaxTokens: toTextNumber(entry.overrides?.maxTokens),
     overrideContextWindow: toTextNumber(entry.overrides?.contextWindow),
+    overrideSessionHistoryMinTokens: toTextNumber(entry.overrides?.contextBudget?.sessionHistoryMinTokens),
+    overrideMemoryRetrievalMinTokens: toTextNumber(entry.overrides?.contextBudget?.memoryRetrievalMinTokens),
   }));
 }
 
@@ -133,7 +189,13 @@ function renderCatalogRow(row: CatalogRowView): string {
       <td><input type="number" data-default-context-window value="${escapeHtml(row.defaultContextWindow)}" min="1" placeholder="metadata"></td>
       <td><input type="number" data-override-max-tokens value="${escapeHtml(row.overrideMaxTokens)}" min="1" placeholder="optional"></td>
       <td><input type="number" data-override-context-window value="${escapeHtml(row.overrideContextWindow)}" min="1" placeholder="optional"></td>
-      <td><button type="button" class="btn" data-remove-slot style="font-size:0.8rem">Remove</button></td>
+      <td>
+        <button type="button" class="btn" data-remove-slot style="font-size:0.8rem">Remove</button>
+        <input type="hidden" data-default-session-min-tokens value="${escapeHtml(row.defaultSessionHistoryMinTokens)}">
+        <input type="hidden" data-default-memory-min-tokens value="${escapeHtml(row.defaultMemoryRetrievalMinTokens)}">
+        <input type="hidden" data-override-session-min-tokens value="${escapeHtml(row.overrideSessionHistoryMinTokens)}">
+        <input type="hidden" data-override-memory-min-tokens value="${escapeHtml(row.overrideMemoryRetrievalMinTokens)}">
+      </td>
     </tr>`;
 }
 
@@ -197,6 +259,26 @@ export function settingsPage(
   const roleAssignments = buildRoleAssignments(config);
   const sessionBudget = resolveSessionHistoryBudget(config);
   const retrievalBudget = resolveMemoryRetrievalBudget(config);
+  const sessionBudgetPreviewText = formatBudgetPreviewText({
+    hardLimit: sessionBudget.hardLimit,
+    estimatedCount: sessionBudget.estimatedCount,
+    tokenBudget: sessionBudget.tokenBudget,
+    contextWindow: sessionBudget.contextWindow,
+    tokensPerItem: SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE,
+    minCount: SESSION_HISTORY_MIN_MESSAGES,
+    maxCount: SESSION_HISTORY_MAX_MESSAGES,
+    noun: 'messages',
+  });
+  const retrievalBudgetPreviewText = formatBudgetPreviewText({
+    hardLimit: retrievalBudget.hardLimit,
+    estimatedCount: retrievalBudget.estimatedCount,
+    tokenBudget: retrievalBudget.tokenBudget,
+    contextWindow: retrievalBudget.contextWindow,
+    tokensPerItem: MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM,
+    minCount: MEMORY_RETRIEVAL_MIN_ITEMS,
+    maxCount: MEMORY_RETRIEVAL_MAX_ITEMS,
+    noun: 'memories',
+  });
   const retryMaxAttempts = config.retryMaxAttempts ?? 3;
   const retryBaseDelayMs = config.retryBaseDelayMs ?? 2000;
 
@@ -308,7 +390,7 @@ export function settingsPage(
           <div class="form-group">
             <label>Retrieval Budget % (${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min}-${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max})</label>
             <input type="number" name="memoryRetrievalBudgetPct" value="${retrievalBudget.budgetPct}" min="${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min}" max="${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max}">
-            <p class="note" style="margin:0.4rem 0 0 0" data-memory-budget-preview></p>
+            <p class="note" style="margin:0.4rem 0 0 0" data-memory-budget-preview>${escapeHtml(retrievalBudgetPreviewText)}</p>
           </div>
           <div class="form-group">
             <label>Retrieval Hard Override (optional, 1-50)</label>
@@ -331,7 +413,7 @@ export function settingsPage(
           <div class="form-group">
             <label>History Budget % (${SESSION_HISTORY_BUDGET_PCT_RANGE.min}-${SESSION_HISTORY_BUDGET_PCT_RANGE.max})</label>
             <input type="number" name="sessionHistoryBudgetPct" value="${sessionBudget.budgetPct}" min="${SESSION_HISTORY_BUDGET_PCT_RANGE.min}" max="${SESSION_HISTORY_BUDGET_PCT_RANGE.max}">
-            <p class="note" style="margin:0.4rem 0 0 0" data-session-budget-preview></p>
+            <p class="note" style="margin:0.4rem 0 0 0" data-session-budget-preview>${escapeHtml(sessionBudgetPreviewText)}</p>
           </div>
           <div class="form-group">
             <label>Message Hard Override (optional, 5-200)</label>
@@ -442,7 +524,13 @@ export function settingsPage(
         <td><input type="number" data-default-context-window min="1" placeholder="metadata"></td>
         <td><input type="number" data-override-max-tokens min="1" placeholder="optional"></td>
         <td><input type="number" data-override-context-window min="1" placeholder="optional"></td>
-        <td><button type="button" class="btn" data-remove-slot style="font-size:0.8rem">Remove</button></td>
+        <td>
+          <button type="button" class="btn" data-remove-slot style="font-size:0.8rem">Remove</button>
+          <input type="hidden" data-default-session-min-tokens value="">
+          <input type="hidden" data-default-memory-min-tokens value="">
+          <input type="hidden" data-override-session-min-tokens value="">
+          <input type="hidden" data-override-memory-min-tokens value="">
+        </td>
       </tr>
     </template>
     <template data-purpose-template>
@@ -501,10 +589,16 @@ export function settingsPage(
         const DEFAULT_CONTEXT_WINDOW = ${config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow};
         const DEFAULT_SESSION_BUDGET_PCT = ${config.sessionHistoryBudgetPct ?? SESSION_HISTORY_BUDGET_PCT_DEFAULT};
         const DEFAULT_MEMORY_BUDGET_PCT = ${config.memoryRetrievalBudgetPct ?? MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT};
+        const DEFAULT_SESSION_MIN_TOKEN_FLOOR = ${config.modelRoster.chat?.contextBudget?.sessionHistoryMinTokens ?? SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT};
+        const DEFAULT_MEMORY_MIN_TOKEN_FLOOR = ${config.modelRoster.chat?.contextBudget?.memoryRetrievalMinTokens ?? MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT};
         const SESSION_BUDGET_RANGE = { min: ${SESSION_HISTORY_BUDGET_PCT_RANGE.min}, max: ${SESSION_HISTORY_BUDGET_PCT_RANGE.max} };
         const MEMORY_BUDGET_RANGE = { min: ${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min}, max: ${MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max} };
         const SESSION_TOKENS_PER_MESSAGE = ${SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE};
         const MEMORY_TOKENS_PER_ITEM = ${MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM};
+        const SESSION_MIN_COUNT = ${SESSION_HISTORY_MIN_MESSAGES};
+        const SESSION_MAX_COUNT = ${SESSION_HISTORY_MAX_MESSAGES};
+        const MEMORY_MIN_COUNT = ${MEMORY_RETRIEVAL_MIN_ITEMS};
+        const MEMORY_MAX_COUNT = ${MEMORY_RETRIEVAL_MAX_ITEMS};
 
         const toPositiveInt = (raw) => {
           const parsed = Number.parseInt(String(raw || '').trim(), 10);
@@ -513,6 +607,12 @@ export function settingsPage(
         };
 
         const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+        const resolveTokenFloor = (value, fallback, contextWindow) => clamp(
+          toPositiveInt(value) ?? fallback,
+          1,
+          Math.max(1, contextWindow),
+        );
 
         const formatInt = (value) => Number(value).toLocaleString('en-US');
 
@@ -593,13 +693,29 @@ export function settingsPage(
 
             const defaultMaxTokens = toPositiveInt(getInputValue(row, '[data-default-max-tokens]'));
             const defaultContextWindow = toPositiveInt(getInputValue(row, '[data-default-context-window]'));
+            const defaultSessionMinTokens = toPositiveInt(getInputValue(row, '[data-default-session-min-tokens]'));
+            const defaultMemoryMinTokens = toPositiveInt(getInputValue(row, '[data-default-memory-min-tokens]'));
             const overrideMaxTokens = toPositiveInt(getInputValue(row, '[data-override-max-tokens]'));
             const overrideContextWindow = toPositiveInt(getInputValue(row, '[data-override-context-window]'));
+            const overrideSessionMinTokens = toPositiveInt(getInputValue(row, '[data-override-session-min-tokens]'));
+            const overrideMemoryMinTokens = toPositiveInt(getInputValue(row, '[data-override-memory-min-tokens]'));
 
             if (defaultMaxTokens !== undefined) defaults.maxTokens = defaultMaxTokens;
             if (defaultContextWindow !== undefined) defaults.contextWindow = defaultContextWindow;
+            if (defaultSessionMinTokens !== undefined || defaultMemoryMinTokens !== undefined) {
+              defaults.contextBudget = {
+                ...(defaultSessionMinTokens !== undefined ? { sessionHistoryMinTokens: defaultSessionMinTokens } : {}),
+                ...(defaultMemoryMinTokens !== undefined ? { memoryRetrievalMinTokens: defaultMemoryMinTokens } : {}),
+              };
+            }
             if (overrideMaxTokens !== undefined) overrides.maxTokens = overrideMaxTokens;
             if (overrideContextWindow !== undefined) overrides.contextWindow = overrideContextWindow;
+            if (overrideSessionMinTokens !== undefined || overrideMemoryMinTokens !== undefined) {
+              overrides.contextBudget = {
+                ...(overrideSessionMinTokens !== undefined ? { sessionHistoryMinTokens: overrideSessionMinTokens } : {}),
+                ...(overrideMemoryMinTokens !== undefined ? { memoryRetrievalMinTokens: overrideMemoryMinTokens } : {}),
+              };
+            }
 
             catalog[slotKey] = {
               model,
@@ -639,9 +755,29 @@ export function settingsPage(
           return DEFAULT_CONTEXT_WINDOW;
         };
 
+        const resolveChatContextFloors = (catalog, assignments, contextWindow) => {
+          const chatSlot = resolvePurposeSlot(catalog, assignments, 'chat', 'primary');
+          return {
+            sessionHistoryMinTokens: resolveTokenFloor(
+              chatSlot?.overrides?.contextBudget?.sessionHistoryMinTokens
+                ?? chatSlot?.defaults?.contextBudget?.sessionHistoryMinTokens,
+              DEFAULT_SESSION_MIN_TOKEN_FLOOR,
+              contextWindow,
+            ),
+            memoryRetrievalMinTokens: resolveTokenFloor(
+              chatSlot?.overrides?.contextBudget?.memoryRetrievalMinTokens
+                ?? chatSlot?.defaults?.contextBudget?.memoryRetrievalMinTokens,
+              DEFAULT_MEMORY_MIN_TOKEN_FLOOR,
+              contextWindow,
+            ),
+          };
+        };
+
         const formatBudgetPreview = (params) => {
-          const tokenBudget = Math.max(1, Math.floor(params.contextWindow * (params.pct / 100)));
-          const estimatedCount = Math.max(params.minCount, Math.floor(tokenBudget / params.tokensPerItem));
+          const pctBudget = Math.floor(params.contextWindow * (params.pct / 100));
+          const tokenBudget = Math.max(params.minTokenFloor, pctBudget);
+          const roughCount = Math.floor(tokenBudget / Math.max(1, params.tokensPerItem));
+          const estimatedCount = clamp(roughCount, params.minCount, params.maxCount);
           return {
             tokenBudget,
             estimatedCount,
@@ -678,6 +814,7 @@ export function settingsPage(
           const catalog = buildCatalog();
           const assignments = buildAssignments();
           const contextWindow = resolveChatContextWindow(catalog, assignments);
+          const contextFloors = resolveChatContextFloors(catalog, assignments, contextWindow);
 
           const sessionPct = clamp(
             toPositiveInt(sessionBudgetInput?.value) ?? DEFAULT_SESSION_BUDGET_PCT,
@@ -693,14 +830,18 @@ export function settingsPage(
           const sessionBudgetData = formatBudgetPreview({
             contextWindow,
             pct: sessionPct,
+            minTokenFloor: contextFloors.sessionHistoryMinTokens,
             tokensPerItem: SESSION_TOKENS_PER_MESSAGE,
-            minCount: 5,
+            minCount: SESSION_MIN_COUNT,
+            maxCount: SESSION_MAX_COUNT,
           });
           const memoryBudgetData = formatBudgetPreview({
             contextWindow,
             pct: memoryPct,
+            minTokenFloor: contextFloors.memoryRetrievalMinTokens,
             tokensPerItem: MEMORY_TOKENS_PER_ITEM,
-            minCount: 1,
+            minCount: MEMORY_MIN_COUNT,
+            maxCount: MEMORY_MAX_COUNT,
           });
 
           if (sessionBudgetPreview) {

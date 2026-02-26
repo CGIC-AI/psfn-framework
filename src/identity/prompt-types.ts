@@ -55,6 +55,15 @@ export interface ComposeResult {
   autoHealedPromptIdentifiers?: string[];
 }
 
+export interface ComposeSplitResult extends ComposeResult {
+  staticPrefix: string;
+  dynamicSuffix: string;
+  staticHash: string;
+  dynamicHash: string;
+  staticLayerIds: string[];
+  dynamicLayerIds: string[];
+}
+
 export interface PromptHistoryEntry {
   layerId: string;
   layerName: string;

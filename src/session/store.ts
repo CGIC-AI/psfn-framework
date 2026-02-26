@@ -23,6 +23,7 @@ import {
   signJournalEntry,
   verifyJournalEntryIntegrity,
   wrapUnverifiedHistory,
+  type JournalIntegrityVerificationResult,
   type SessionHmacKeyring,
 } from './journal-utils.js';
 
@@ -54,7 +55,21 @@ interface SessionFileSeed {
 }
 
 export interface SessionStoreOptions {
+  integrityProvider?: SessionIntegrityProvider | null;
   integrityKeyring?: SessionHmacKeyring | null;
+}
+
+export interface SessionIntegrityProvider {
+  sign(entry: JournalEntry, previousHmac: string | null): JournalEntry;
+  verify(entry: JournalEntry, previousHmac: string | null): JournalIntegrityVerificationResult;
+}
+
+function createKeyringIntegrityProvider(keyring: SessionHmacKeyring | null): SessionIntegrityProvider | null {
+  if (!keyring) return null;
+  return {
+    sign: (entry, previousHmac) => signJournalEntry(entry, keyring, previousHmac),
+    verify: (entry, previousHmac) => verifyJournalEntryIntegrity(entry, keyring, previousHmac),
+  };
 }
 
 export interface CrashRecoveryExtractionCandidate {
@@ -107,12 +122,15 @@ export class SessionStore {
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
-  private integrityKeyring: SessionHmacKeyring | null;
+  private integrityProvider: SessionIntegrityProvider | null;
+  private integritySignFailureLogged = false;
+  private integrityVerifyFailureLogged = false;
 
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
     this.channelIndexPath = join(sessionsDir, CHANNEL_INDEX_FILENAME);
-    this.integrityKeyring = options.integrityKeyring ?? null;
+    this.integrityProvider = options.integrityProvider
+      ?? createKeyringIntegrityProvider(options.integrityKeyring ?? null);
     mkdirSync(sessionsDir, { recursive: true });
     this.loadChannelIndex();
     this.migrateLegacyFilenames();
@@ -215,9 +233,21 @@ export class SessionStore {
   }
 
   private verifyAndNormalizeEntry(entry: JournalEntry, previousHmac: string | null): JournalEntry {
-    if (!this.integrityKeyring) return entry;
+    if (!this.integrityProvider) return entry;
 
-    const verification = verifyJournalEntryIntegrity(entry, this.integrityKeyring, previousHmac);
+    let verification: JournalIntegrityVerificationResult;
+    try {
+      verification = this.integrityProvider.verify(entry, previousHmac);
+    } catch (error) {
+      if (!this.integrityVerifyFailureLogged) {
+        this.integrityVerifyFailureLogged = true;
+        log.warn('Session integrity verification unavailable; loading entry without verification', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return entry;
+    }
+
     if (verification.verified) {
       return entry;
     }
@@ -432,9 +462,18 @@ export class SessionStore {
 
   private writeJournalEntry(cache: ChannelCache, journal: JournalEntry): void {
     let signed = journal;
-    if (this.integrityKeyring) {
-      signed = signJournalEntry(signed, this.integrityKeyring, cache.lastHmac);
-      cache.lastHmac = signed._hmac ?? cache.lastHmac;
+    if (this.integrityProvider) {
+      try {
+        signed = this.integrityProvider.sign(signed, cache.lastHmac);
+        cache.lastHmac = signed._hmac ?? cache.lastHmac;
+      } catch (error) {
+        if (!this.integritySignFailureLogged) {
+          this.integritySignFailureLogged = true;
+          log.warn('Session integrity signing unavailable; writing unsigned journal entry', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
     appendJournalEntry(cache.resolvedPath, signed);
     this.applyJournalState(cache, signed);

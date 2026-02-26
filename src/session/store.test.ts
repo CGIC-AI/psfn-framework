@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSy
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
-import { buildSessionHmacKeyring } from './journal-utils.js';
+import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity } from './journal-utils.js';
 
 describe('SessionStore', () => {
   let dir: string;
@@ -547,6 +547,56 @@ describe('SessionStore', () => {
     expect(entries[1].content).toBe('second');
     expect(entries[0].content).not.toContain('<unverified_history>');
     expect(entries[1].content).not.toContain('<unverified_history>');
+  });
+
+  it('supports RPC-style integrity providers without direct keyring injection', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:provider-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const provider = {
+      sign: (entry: Parameters<typeof signJournalEntry>[0], previousHmac: string | null) => signJournalEntry(
+        entry,
+        keyring!,
+        previousHmac,
+      ),
+      verify: (entry: Parameters<typeof verifyJournalEntryIntegrity>[0], previousHmac: string | null) => verifyJournalEntryIntegrity(
+        entry,
+        keyring!,
+        previousHmac,
+      ),
+    };
+
+    const providerStore = new SessionStore(dir, { integrityProvider: provider });
+    providerStore.append({
+      channelId: 'api:provider',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1000,
+    });
+    providerStore.append({
+      channelId: 'api:provider',
+      role: 'assistant',
+      content: 'world',
+      timestamp: 2000,
+    });
+
+    const file = readdirSync(dir).find(f => f.endsWith('.jsonl') && !f.startsWith('user_'));
+    expect(file).toBeDefined();
+    const lines = readFileSync(join(dir, file!), 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as { _hmac?: string; _hmacKeyVersion?: string });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]._hmac).toMatch(/^[a-f0-9]{64}$/i);
+    expect(lines[1]._hmac).toMatch(/^[a-f0-9]{64}$/i);
+    expect(lines[0]._hmacKeyVersion).toBe('v1');
+    expect(lines[1]._hmacKeyVersion).toBe('v1');
+
+    const reloaded = new SessionStore(dir, { integrityProvider: provider });
+    const entries = reloaded.getRecent('api:provider', 10);
+    expect(entries.map(entry => entry.content)).toEqual(['hello', 'world']);
   });
 });
 

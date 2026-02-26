@@ -1,7 +1,23 @@
-import type { SensitivityLevel, ConsentFlags } from '../trust/types.js';
+import type {
+  SensitivityLevel,
+  ConsentFlags,
+  ConsentRedactionBehavior,
+  MemoryRedactionOperation,
+} from '../trust/types.js';
 // Re-export for convenience
-export type { SensitivityLevel, ConsentFlags };
-export { VALID_SENSITIVITY_LEVELS } from '../trust/types.js';
+export type {
+  SensitivityLevel,
+  ConsentFlags,
+  ConsentRedactionBehavior,
+  MemoryRedactionOperation,
+};
+export {
+  VALID_SENSITIVITY_LEVELS,
+  VALID_CONSENT_REDACTION_BEHAVIORS,
+  VALID_MEMORY_REDACTION_OPERATIONS,
+  normalizeConsentFlags,
+  resolveConsentRedactionBehavior,
+} from '../trust/types.js';
 
 export type MemoryType =
   | 'episodic'

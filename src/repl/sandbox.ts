@@ -126,6 +126,7 @@ export class REPLSandbox {
       memory_write: memory.memory_write,
       memory_upsert: memory.memory_upsert,
       memory_import_batch: memory.memory_import_batch,
+      memory_redact: memory.memory_redact,
       memory_get_by_id: memory.memory_get_by_id,
       session_messages: memory.session_messages,
       session_search: memory.session_search,

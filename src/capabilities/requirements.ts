@@ -23,6 +23,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   identity_changelog: 'identity.read',
   identity_diff: 'identity.read',
   memory_import_batch: 'memory.write',
+  memory_redact: 'memory.delete',
   memory_delete: 'memory.delete',
   undo_memory_delete: 'memory.delete',
   memory_write: 'memory.write',

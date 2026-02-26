@@ -397,6 +397,7 @@ export class ShardManager {
     if (
       toolName !== 'memory_write'
       && toolName !== 'memory_import_batch'
+      && toolName !== 'memory_redact'
     ) {
       return params;
     }

@@ -566,6 +566,15 @@ describe('REPLSandbox', () => {
     expect(result.output).toBe('error');
   });
 
+  it('memory_redact returns error when no memory system', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    const result = await sandbox.execute(
+      'const r = await memory_redact("mem-1", "auto"); print(r.operation);',
+      5000, 8192,
+    );
+    expect(result.output).toBe('error');
+  });
+
   it('memory_upsert returns error for invalid type', async () => {
     const embedding = new Float32Array([1, 0, 0]);
     const embeddingService = {
@@ -592,6 +601,60 @@ describe('REPLSandbox', () => {
       5000, 8192,
     );
     expect(result.output).toBe('error');
+  });
+
+  it('memory_redact can abstract sensitive memory through the API path', async () => {
+    const embedding = new Float32Array([1, 0, 0]);
+    const embeddingService = {
+      embed: vi.fn(async () => embedding),
+      embedBatch: vi.fn(),
+      dims: 3,
+    } as unknown as EmbeddingService;
+
+    const now = Date.now();
+    const memoryStore = {
+      searchByEmbedding: vi.fn(() => []),
+      insertMemory: vi.fn(),
+      getAllActiveMemories: vi.fn(() => []),
+      getById: vi.fn(() => ({
+        id: 'mem-1',
+        text: 'V missed meds Tuesday at 9am after a long shift.',
+        type: 'episodic',
+        importance: 0.8,
+        confidence: 0.9,
+        emotionalValence: -0.2,
+        salience: 0.8,
+        sourceRef: 'source:test',
+        extractedAt: now,
+        lastAccessed: now,
+        accessCount: 1,
+        tags: ['health'],
+        sensitivity: 'confidential',
+        consentFlags: { deleteOnRequest: true, allowAbstraction: true },
+      })),
+      softDeleteMemory: vi.fn(() => ({
+        deleteId: 'del-1',
+        memoryId: 'mem-1',
+      })),
+      recordAbstractionLink: vi.fn(() => ({
+        id: 'link-1',
+      })),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    const result = await sandbox.execute(
+      'const r = await memory_redact("mem-1", "auto", "consent request"); print(r.operation); print(Boolean(r.abstractedId)); print(Boolean(r.provenanceRef));',
+      5000, 8192,
+    );
+
+    expect(result.output).toContain('abstracted');
+    expect(result.output).toContain('true');
   });
 
   it('session_append_note returns false when no session manager', async () => {
@@ -628,6 +691,7 @@ describe('REPLSandbox', () => {
     const sandbox = new REPLSandbox(nullDeps());
     const locals = sandbox.getLocals();
     expect(locals.memory_upsert).toBeUndefined();
+    expect(locals.memory_redact).toBeUndefined();
     expect(locals.session_append_note).toBeUndefined();
     expect(locals.schedule_list).toBeUndefined();
     expect(locals.schedule_add_every).toBeUndefined();

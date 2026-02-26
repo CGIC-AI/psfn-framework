@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, vi } from 'vitest';
-import type { EmbeddingService } from '../../agent-loop.js';
+import type { EmbeddingService } from '../../agent/contracts.js';
 import { MemoryRetriever } from '../../memory/retrieval.js';
 import type { MemoryStore } from '../../memory/store.js';
 import type { PurrMemory } from '../../memory/types.js';

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRetriever } from './retrieval.js';
 import type { MemoryStore } from './store.js';
-import type { EmbeddingService } from '../agent-loop.js';
+import type { EmbeddingService } from '../agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';

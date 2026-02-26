@@ -8,7 +8,7 @@ import { UserContinuityStore } from './continuity.js';
 import { SessionManager } from './manager.js';
 import { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
-import type { LLMProvider } from '../agent-loop.js';
+import type { LLMProvider } from '../agent/contracts.js';
 import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryExtractor } from '../memory/extraction.js';

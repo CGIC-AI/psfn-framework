@@ -1,5 +1,5 @@
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
-import type { LLMProvider, EmbeddingService } from '../../agent-loop.js';
+import type { LLMProvider, EmbeddingService } from '../../agent/contracts.js';
 import type { ChannelOutboundDock } from '../../channels/types.js';
 import type { GitOperations } from '../../git/ops.js';
 import type { UrlPolicyConfig } from '../url-policy.js';

@@ -1,6 +1,6 @@
 // ── REPL Sandbox Types ──
 
-import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
+import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { Scheduler } from '../scheduler/scheduler.js';

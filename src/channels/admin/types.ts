@@ -6,7 +6,7 @@ import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { ShardManager } from '../../shards/manager.js';
 import type { EventBus } from '../../event-bus.js';
-import type { EmbeddingService } from '../../agent-loop.js';
+import type { EmbeddingService } from '../../agent/contracts.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';

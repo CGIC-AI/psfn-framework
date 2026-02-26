@@ -4,8 +4,8 @@
 // internally — we just configure it and subscribe to events for streaming.
 //
 // Provider interfaces (LLMProvider, EmbeddingService, MemoryProvider,
-// MemoryExtractor) are re-exported here so that all existing consumers
-// can import them unchanged via the agent-loop.ts re-export shim.
+// MemoryExtractor) are re-exported here for callers that import contracts
+// from the SubstrateAgent module.
 
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';

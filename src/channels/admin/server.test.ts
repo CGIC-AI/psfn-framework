@@ -20,7 +20,7 @@ import { PromptRegistryStore, EXTRACTION_PROMPT_KEY } from '../../identity/promp
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
-import type { EmbeddingService, LLMProvider } from '../../agent-loop.js';
+import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
 import type { SkillSnapshot } from '../../skills/types.js';
 import type { AdminChatBootstrapResponse } from './chat/index.js';
 import { classifyChannel } from '../../trust/policy.js';

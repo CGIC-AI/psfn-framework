@@ -29,14 +29,19 @@ function sortSkillsForPrompt(entries: SkillEntry[]): SkillEntry[] {
 }
 
 function renderSkillNode(entry: SkillEntry): string {
-  const header = `  <skill name="${escapeXmlAttribute(entry.name)}" source="${escapeXmlAttribute(entry.source)}" path="${escapeXmlAttribute(entry.relativePath)}" always="${entry.always ? 'true' : 'false'}">`;
-  const description = `    <description>${escapeXmlText(entry.description)}</description>`;
-  const instructions = entry.content.trim().length > 0
-    ? `    <instructions>${escapeXmlText(entry.content.trim())}</instructions>`
-    : '';
+  const attributes = [
+    `name="${escapeXmlAttribute(entry.name)}"`,
+    `source="${escapeXmlAttribute(entry.source)}"`,
+    `path="${escapeXmlAttribute(entry.relativePath)}"`,
+    `always="${entry.always ? 'true' : 'false'}"`,
+    ...(entry.category ? [`category="${escapeXmlAttribute(entry.category)}"`] : []),
+    ...(entry.version !== undefined ? [`version="${entry.version}"`] : []),
+  ];
+  const header = `  <skill ${attributes.join(' ')}>`;
+  const description = `    <summary>${escapeXmlText(entry.description)}</summary>`;
   const footer = '  </skill>';
 
-  return [header, description, instructions, footer]
+  return [header, description, footer]
     .filter(Boolean)
     .join('\n');
 }
@@ -73,7 +78,7 @@ export function formatSkillsForPrompt(
 
     const candidateNode = renderSkillNode(entry);
     const candidateNodes = [...skillNodes, candidateNode];
-    const candidateXml = ['<skills>', ...candidateNodes, '</skills>'].join('\n');
+    const candidateXml = ['<skills_index>', ...candidateNodes, '</skills_index>'].join('\n');
     if (candidateXml.length > maxChars) {
       excluded.push({
         kind: 'budget',
@@ -99,7 +104,7 @@ export function formatSkillsForPrompt(
     };
   }
 
-  const xml = ['<skills>', ...skillNodes, '</skills>'].join('\n');
+  const xml = ['<skills_index>', ...skillNodes, '</skills_index>'].join('\n');
   return {
     xml,
     included,

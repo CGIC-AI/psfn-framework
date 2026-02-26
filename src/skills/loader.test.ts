@@ -57,6 +57,26 @@ describe('skills loader', () => {
     expect(parsed.body).toContain('Use git tools safely.');
   });
 
+  it('parses optional category/version/timestamps from frontmatter', () => {
+    const parsed = parseSkillDocument([
+      '---',
+      'name: incident-runbook',
+      'description: Incident triage flow',
+      'category: ops',
+      'version: 4',
+      'created: "2026-02-25T10:00:00.000Z"',
+      'updated: "2026-02-26T11:00:00.000Z"',
+      '---',
+      '# Incident',
+      'Escalate quickly.',
+    ].join('\n'), 'data/skills/ops/incident-runbook/SKILL.md');
+
+    expect(parsed.frontmatter.category).toBe('ops');
+    expect(parsed.frontmatter.version).toBe(4);
+    expect(parsed.frontmatter.createdAt).toBe('2026-02-25T10:00:00.000Z');
+    expect(parsed.frontmatter.updatedAt).toBe('2026-02-26T11:00:00.000Z');
+  });
+
   it('resolves precedence directories with defaults first and extras appended', () => {
     const directories = resolveSkillDirectories(
       makeConfig({

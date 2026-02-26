@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { relative, resolve, sep } from 'node:path';
 import {
   loadSkillsConfig,
   type SkillsRuntimeConfig,
@@ -12,7 +13,11 @@ import {
   resolveSkillDirectories,
   scanSkillFiles,
 } from './loader.js';
+import { SkillStore } from './store.js';
 import type {
+  SkillDirectorySpec,
+  SkillEvaluation,
+  SkillLookupResult,
   SkillSnapshot,
 } from './types.js';
 
@@ -27,18 +32,28 @@ export interface SkillsRuntimeOptions {
 interface SkillSnapshotCache {
   signature: string;
   snapshot: SkillSnapshot;
+  evaluations: SkillEvaluation[];
+  byName: Map<string, SkillEvaluation>;
 }
 
 function hashSignature(payload: string): string {
   return createHash('sha1').update(payload).digest('hex');
 }
 
+function toPosix(path: string): string {
+  return path.split(sep).join('/');
+}
+
 export class SkillsRuntime {
   private options: SkillsRuntimeOptions;
+  private store: SkillStore;
   private cache: SkillSnapshotCache | null = null;
 
   constructor(options: SkillsRuntimeOptions) {
     this.options = options;
+    this.store = new SkillStore(options.dataDir, {
+      repoRoot: options.repoRoot,
+    });
   }
 
   invalidate(): void {
@@ -50,9 +65,33 @@ export class SkillsRuntime {
   }
 
   getSnapshot(): SkillSnapshot {
+    return this.getOrCreateCache().snapshot;
+  }
+
+  listSkillEvaluations(): SkillEvaluation[] {
+    return [...this.getOrCreateCache().evaluations];
+  }
+
+  findSkill(name: string): SkillLookupResult | null {
+    const normalized = name.trim().toLowerCase();
+    if (!normalized) return null;
+    const match = this.getOrCreateCache().byName.get(normalized);
+    if (!match) return null;
+    return {
+      entry: match.entry,
+      eligible: match.eligibility,
+    };
+  }
+
+  getStore(): SkillStore {
+    return this.store;
+  }
+
+  private getOrCreateCache(): SkillSnapshotCache {
     const runtimeConfig = this.loadRuntimeConfig();
     const repoRoot = this.options.repoRoot ?? process.cwd();
-    const directories = resolveSkillDirectories(runtimeConfig, repoRoot);
+    const configuredDirectories = resolveSkillDirectories(runtimeConfig, repoRoot);
+    const directories = this.mergeManagedDirectory(configuredDirectories, repoRoot);
     const files = scanSkillFiles(directories);
 
     const signaturePayload = JSON.stringify({
@@ -74,7 +113,7 @@ export class SkillsRuntime {
     const signature = hashSignature(signaturePayload);
 
     if (this.cache && this.cache.signature === signature) {
-      return this.cache.snapshot;
+      return this.cache;
     }
 
     const parsed = loadSkillEntries(files);
@@ -111,17 +150,58 @@ export class SkillsRuntime {
       ],
     };
 
+    const byName = new Map<string, SkillEvaluation>();
+    for (const evaluation of eligibility.evaluations) {
+      byName.set(evaluation.entry.name.toLowerCase(), evaluation);
+    }
+
     this.cache = {
       signature,
       snapshot,
+      evaluations: eligibility.evaluations,
+      byName,
     };
 
-    return snapshot;
+    return this.cache;
   }
 
   private loadRuntimeConfig(): SkillsRuntimeConfig {
     return loadSkillsConfig(this.options.dataDir, {
       seedDir: this.options.seedDir,
     });
+  }
+
+  private mergeManagedDirectory(
+    configured: SkillDirectorySpec[],
+    repoRoot: string,
+  ): SkillDirectorySpec[] {
+    const managedRoot = this.store.getManagedRootDir();
+    const relativePath = toPosix(relative(repoRoot, managedRoot));
+    const displayPath = relativePath && !relativePath.startsWith('..')
+      ? relativePath
+      : toPosix(managedRoot);
+
+    const ordered: SkillDirectorySpec[] = [
+      {
+        absolutePath: managedRoot,
+        relativePath: displayPath,
+        source: 'custom',
+        precedence: 0,
+      },
+      ...configured,
+    ];
+
+    const deduped = new Map<string, SkillDirectorySpec>();
+    for (const directory of ordered) {
+      const key = resolve(directory.absolutePath);
+      if (!deduped.has(key)) {
+        deduped.set(key, directory);
+      }
+    }
+
+    return [...deduped.values()].map((directory, index) => ({
+      ...directory,
+      precedence: index,
+    }));
   }
 }

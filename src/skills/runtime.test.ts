@@ -58,7 +58,9 @@ describe('skills runtime', () => {
       expect(snapshotThree).not.toBe(snapshotOne);
       expect(snapshotThree.signature).not.toBe(snapshotOne.signature);
       expect(snapshotThree.includedSkills[0]?.description).toBe('second description');
-      expect(snapshotThree.promptXml).toContain('Memory v2');
+      expect(snapshotThree.promptXml).toContain('<skills_index>');
+      expect(snapshotThree.promptXml).toContain('second description');
+      expect(snapshotThree.promptXml).not.toContain('Memory v2');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

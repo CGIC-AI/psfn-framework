@@ -115,4 +115,30 @@ describe('EventBus', () => {
       confidence: 0.8,
     }));
   });
+
+  it('supports Wyoming policy telemetry events', async () => {
+    const bus = new EventBus();
+    const handler = vi.fn();
+
+    bus.on('wyoming.policy.violation', handler);
+    await bus.emit('wyoming.policy.violation', {
+      connectionId: 'conn-1',
+      scope: 'runtime',
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'session exceeded rate limit',
+      sessionId: 's-1',
+      eventType: 'audio.chunk',
+      limit: 120,
+      observed: 121,
+      action: 'error_frame',
+      timestampMs: 123,
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: 'conn-1',
+      code: 'RATE_LIMIT_EXCEEDED',
+      scope: 'runtime',
+    }));
+  });
 });

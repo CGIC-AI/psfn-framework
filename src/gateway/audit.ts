@@ -20,6 +20,16 @@ export interface AuditRotationConfig {
   maxCount: number;
 }
 
+export interface AuditSummaryEntry {
+  method: string;
+  decision: PolicyDecision;
+  params?: Record<string, unknown>;
+  durationMs?: number;
+  error?: string;
+}
+
+export type AuditSummaryHook = (entry: AuditSummaryEntry) => void;
+
 const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
   maxSizeBytes: 10 * 1024 * 1024,
   maxAgeMs: 30 * 24 * 60 * 60 * 1000,
@@ -111,6 +121,18 @@ export class AuditStore {
 
   complete(id: number, durationMs: number, error?: string): void {
     this.updateDurationStmt.run(durationMs, error ?? null, id);
+  }
+
+  recordSummary(entry: AuditSummaryEntry): number {
+    const id = this.log(entry.method, entry.decision, entry.params);
+    this.complete(id, normalizeDurationMs(entry.durationMs), entry.error);
+    return id;
+  }
+
+  createSummaryHook(): AuditSummaryHook {
+    return (entry) => {
+      this.recordSummary(entry);
+    };
   }
 
   private static readonly SELECT_COLS = `
@@ -210,6 +232,12 @@ function resolveRotationConfig(overrides?: Partial<AuditRotationConfig>): AuditR
     maxAgeMs: positiveInteger('maxAgeMs', resolved.maxAgeMs),
     maxCount: positiveInteger('maxCount', resolved.maxCount),
   };
+}
+
+function normalizeDurationMs(value: number | undefined): number {
+  if (value === undefined) return 0;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.trunc(value));
 }
 
 function positiveInteger(name: string, value: number): number {

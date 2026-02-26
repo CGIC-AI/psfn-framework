@@ -48,6 +48,14 @@ export const WYOMING_EVENT_ACK = 'ack' as const;
 export const WYOMING_EVENT_SESSION_START = 'session.start' as const;
 export const WYOMING_EVENT_SESSION_END = 'session.end' as const;
 
+export interface WyomingPolicyViolationDetail {
+  scope: 'runtime' | 'transport' | 'codec';
+  sessionId?: string;
+  eventType?: string;
+  limit?: number;
+  observed?: number;
+}
+
 export type WyomingCodecErrorCode =
   | 'HEADER_TOO_LARGE'
   | 'FRAME_TOO_LARGE'
@@ -58,11 +66,13 @@ export type WyomingCodecErrorCode =
 
 export class WyomingCodecError extends Error {
   readonly code: WyomingCodecErrorCode;
+  readonly detail?: WyomingPolicyViolationDetail;
 
-  constructor(code: WyomingCodecErrorCode, message: string) {
+  constructor(code: WyomingCodecErrorCode, message: string, detail?: WyomingPolicyViolationDetail) {
     super(message);
     this.name = 'WyomingCodecError';
     this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -72,16 +82,19 @@ export type WyomingRuntimeErrorCode =
   | 'SESSION_ALREADY_EXISTS'
   | 'SESSION_NOT_FOUND'
   | 'SESSION_LIMIT_REACHED'
+  | 'RATE_LIMIT_EXCEEDED'
   | 'UNHANDLED_EVENT'
   | 'INTERNAL_RUNTIME_ERROR';
 
 export class WyomingRuntimeError extends Error {
   readonly code: WyomingRuntimeErrorCode;
+  readonly detail?: WyomingPolicyViolationDetail;
 
-  constructor(code: WyomingRuntimeErrorCode, message: string) {
+  constructor(code: WyomingRuntimeErrorCode, message: string, detail?: WyomingPolicyViolationDetail) {
     super(message);
     this.name = 'WyomingRuntimeError';
     this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -90,22 +103,26 @@ export type WyomingServerCloseReason =
   | 'client_disconnect'
   | 'decode_error'
   | 'runtime_error'
+  | 'rate_limited'
   | 'backpressure'
   | 'shutdown';
 
 export type WyomingServerErrorCode =
   | 'SERVER_NOT_RUNNING'
   | 'SESSION_NOT_FOUND'
+  | 'READ_RATE_LIMIT_EXCEEDED'
   | 'WRITE_QUEUE_OVERFLOW'
   | 'SOCKET_CLOSED';
 
 export class WyomingServerError extends Error {
   readonly code: WyomingServerErrorCode;
+  readonly detail?: WyomingPolicyViolationDetail;
 
-  constructor(code: WyomingServerErrorCode, message: string) {
+  constructor(code: WyomingServerErrorCode, message: string, detail?: WyomingPolicyViolationDetail) {
     super(message);
     this.name = 'WyomingServerError';
     this.code = code;
+    this.detail = detail;
   }
 }
 

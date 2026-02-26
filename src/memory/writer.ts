@@ -16,6 +16,7 @@ import {
   DURABLE_RETENTION_TAG,
   MEMORY_CONFIG,
   VALID_MEMORY_TYPES,
+  getSensitivityWriteThreshold,
   inferMemoryRetentionClass,
   isDurableMemory,
   normalizeMemoryTags,
@@ -53,6 +54,44 @@ export interface BatchImportResult {
   superseded: number;
   errors: number;
   results: WriteResult[];
+}
+
+export type MemoryWritePolicyReason =
+  | 'default_allow'
+  | 'consent_deny_override'
+  | 'salience_below_threshold'
+  | 'novelty_below_threshold';
+
+export class MemoryWritePolicyError extends Error {
+  readonly reason: Exclude<MemoryWritePolicyReason, 'default_allow' | 'consent_deny_override'>;
+  readonly sensitivity: SensitivityLevel;
+  readonly salience: number;
+  readonly novelty: number;
+  readonly minSalience: number;
+  readonly minNovelty: number;
+
+  constructor(input: {
+    reason: Exclude<MemoryWritePolicyReason, 'default_allow' | 'consent_deny_override'>;
+    sensitivity: SensitivityLevel;
+    salience: number;
+    novelty: number;
+    minSalience: number;
+    minNovelty: number;
+  }) {
+    const thresholdLabel = input.reason === 'salience_below_threshold' ? 'salience' : 'novelty';
+    super(
+      `Sensitive memory write rejected: ${thresholdLabel} below threshold for ${input.sensitivity} `
+      + `(salience=${input.salience.toFixed(2)} min=${input.minSalience.toFixed(2)}, `
+      + `novelty=${input.novelty.toFixed(2)} min=${input.minNovelty.toFixed(2)})`,
+    );
+    this.name = 'MemoryWritePolicyError';
+    this.reason = input.reason;
+    this.sensitivity = input.sensitivity;
+    this.salience = input.salience;
+    this.novelty = input.novelty;
+    this.minSalience = input.minSalience;
+    this.minNovelty = input.minNovelty;
+  }
 }
 
 function applyRetentionSemantics(input: {
@@ -120,6 +159,109 @@ function mergeProvenanceRefs(
     if (normalized.length > 0) out.add(normalized);
   }
   return [...out];
+}
+
+function normalizeConsentFlags(flags: ConsentFlags | undefined): ConsentFlags | undefined {
+  if (!flags) return undefined;
+  const normalized: ConsentFlags = {};
+  if (flags.allowRecall !== undefined) normalized.allowRecall = flags.allowRecall;
+  if (flags.allowAbstraction !== undefined) normalized.allowAbstraction = flags.allowAbstraction;
+  if (flags.deleteOnRequest !== undefined) normalized.deleteOnRequest = flags.deleteOnRequest;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function mergeConsentFlags(
+  existing: ConsentFlags | undefined,
+  incoming: ConsentFlags | undefined,
+): ConsentFlags | undefined {
+  const left = normalizeConsentFlags(existing);
+  const right = normalizeConsentFlags(incoming);
+  if (!left && !right) return undefined;
+
+  const merged: ConsentFlags = {};
+
+  const recallValues = [left?.allowRecall, right?.allowRecall];
+  if (recallValues.includes(false)) {
+    merged.allowRecall = false;
+  } else if (recallValues.includes(true)) {
+    merged.allowRecall = true;
+  }
+
+  const abstractionValues = [left?.allowAbstraction, right?.allowAbstraction];
+  if (abstractionValues.includes(false)) {
+    merged.allowAbstraction = false;
+  } else if (abstractionValues.includes(true)) {
+    merged.allowAbstraction = true;
+  }
+
+  const deleteValues = [left?.deleteOnRequest, right?.deleteOnRequest];
+  if (deleteValues.includes(true)) {
+    merged.deleteOnRequest = true;
+  } else if (deleteValues.includes(false)) {
+    merged.deleteOnRequest = false;
+  }
+
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function consentFlagsEqual(left: ConsentFlags | undefined, right: ConsentFlags | undefined): boolean {
+  const a = normalizeConsentFlags(left);
+  const b = normalizeConsentFlags(right);
+  return (
+    a?.allowRecall === b?.allowRecall
+    && a?.allowAbstraction === b?.allowAbstraction
+    && a?.deleteOnRequest === b?.deleteOnRequest
+  );
+}
+
+function computeNoveltyFromSimilarities(similarities: readonly number[]): number {
+  if (similarities.length === 0) return 1;
+  const maxSimilarity = similarities.reduce((max, value) => Math.max(max, clampUnit(value, 0)), 0);
+  return clampUnit(1 - maxSimilarity, 1);
+}
+
+function evaluateSensitivityWritePolicy(input: {
+  sensitivity: SensitivityLevel;
+  salience: number;
+  novelty: number;
+  consentFlags?: ConsentFlags;
+}): {
+  accepted: boolean;
+  reason: MemoryWritePolicyReason;
+  minSalience: number;
+  minNovelty: number;
+} {
+  const threshold = getSensitivityWriteThreshold(input.sensitivity);
+  if (input.consentFlags?.allowRecall === false) {
+    return {
+      accepted: true,
+      reason: 'consent_deny_override',
+      minSalience: threshold.minSalience,
+      minNovelty: threshold.minNovelty,
+    };
+  }
+  if (input.salience < threshold.minSalience) {
+    return {
+      accepted: false,
+      reason: 'salience_below_threshold',
+      minSalience: threshold.minSalience,
+      minNovelty: threshold.minNovelty,
+    };
+  }
+  if (input.novelty < threshold.minNovelty) {
+    return {
+      accepted: false,
+      reason: 'novelty_below_threshold',
+      minSalience: threshold.minSalience,
+      minNovelty: threshold.minNovelty,
+    };
+  }
+  return {
+    accepted: true,
+    reason: 'default_allow',
+    minSalience: threshold.minSalience,
+    minNovelty: threshold.minNovelty,
+  };
 }
 
 export class MemoryWriter {
@@ -192,6 +334,7 @@ export class MemoryWriter {
         salience: number;
         tags?: string[];
         provenanceRefs?: string[];
+        consentFlags?: ConsentFlags;
       } = {
         lastAccessed: Date.now(),
         accessCount: existing.accessCount + 1,
@@ -218,13 +361,27 @@ export class MemoryWriter {
         updates.provenanceRefs = mergedProvenanceRefs;
       }
 
+      const mergedConsentFlags = mergeConsentFlags(existing.consentFlags, consentFlags);
+      if (!consentFlagsEqual(existing.consentFlags, mergedConsentFlags)) {
+        updates.consentFlags = mergedConsentFlags;
+      }
+
       // If this write is durable, upgrade duplicate memory tags so durability survives persistence.
       if (retention.retentionClass === 'durable' && !isDurableMemory(existing)) {
         updates.tags = normalizeMemoryTags([...(updates.tags ?? existing.tags), DURABLE_RETENTION_TAG]);
       }
 
       this.memoryStore.updateMemory(existing.id, updates);
-      log.debug('Deduplicated memory', { existingId: existing.id, text: text.slice(0, 60) });
+      log.debug('Deduplicated memory', {
+        existingId: existing.id,
+        text: text.slice(0, 60),
+        rationale: {
+          action: 'accepted',
+          reason: 'exact_duplicate',
+          sensitivity,
+          preservedConsentDeny: mergedConsentFlags?.allowRecall === false,
+        },
+      });
       return {
         action: 'deduplicated',
         memory: {
@@ -234,6 +391,7 @@ export class MemoryWriter {
           salience: updates.salience,
           tags: updates.tags ?? existing.tags,
           provenanceRefs: updates.provenanceRefs ?? existingProvenanceRefs,
+          consentFlags: updates.consentFlags ?? existing.consentFlags,
           retentionClass: retention.retentionClass ?? existing.retentionClass,
         },
         existingId: existing.id,
@@ -252,6 +410,45 @@ export class MemoryWriter {
     const sameContactBroader = contactId
       ? sameTypeBroader.filter(b => b.contactId === contactId)
       : sameTypeBroader;
+    const novelty = computeNoveltyFromSimilarities(sameContactBroader.map(memory => memory.similarity));
+    const writePolicy = evaluateSensitivityWritePolicy({
+      sensitivity,
+      salience: targetSalience,
+      novelty,
+      consentFlags,
+    });
+    if (!writePolicy.accepted) {
+      log.info('Rejected memory write by sensitivity policy', {
+        type,
+        sensitivity,
+        salience: targetSalience,
+        novelty,
+        minSalience: writePolicy.minSalience,
+        minNovelty: writePolicy.minNovelty,
+        reason: writePolicy.reason,
+        text: text.slice(0, 60),
+      });
+      throw new MemoryWritePolicyError({
+        reason: writePolicy.reason,
+        sensitivity,
+        salience: targetSalience,
+        novelty,
+        minSalience: writePolicy.minSalience,
+        minNovelty: writePolicy.minNovelty,
+      });
+    }
+
+    log.debug('Accepted memory write by sensitivity policy', {
+      type,
+      sensitivity,
+      salience: targetSalience,
+      novelty,
+      minSalience: writePolicy.minSalience,
+      minNovelty: writePolicy.minNovelty,
+      reason: writePolicy.reason,
+      text: text.slice(0, 60),
+    });
+
     for (const old of sameContactBroader) {
       if (confidence > old.confidence) {
         this.memoryStore.updateMemory(old.id, {
@@ -345,6 +542,49 @@ export class MemoryWriter {
         || s.contactId === contactId
       )
     ));
+    const mergedIncomingConsentFlags = sameType.reduce<ConsentFlags | undefined>(
+      (merged, old) => mergeConsentFlags(merged, old.consentFlags),
+      consentFlags,
+    );
+    const novelty = computeNoveltyFromSimilarities(sameType.map(memory => memory.similarity));
+    const writePolicy = evaluateSensitivityWritePolicy({
+      sensitivity,
+      salience: targetSalience,
+      novelty,
+      consentFlags: mergedIncomingConsentFlags,
+    });
+    if (!writePolicy.accepted) {
+      log.info('Rejected memory upsert by sensitivity policy', {
+        type,
+        sensitivity,
+        salience: targetSalience,
+        novelty,
+        minSalience: writePolicy.minSalience,
+        minNovelty: writePolicy.minNovelty,
+        reason: writePolicy.reason,
+        text: text.slice(0, 60),
+      });
+      throw new MemoryWritePolicyError({
+        reason: writePolicy.reason,
+        sensitivity,
+        salience: targetSalience,
+        novelty,
+        minSalience: writePolicy.minSalience,
+        minNovelty: writePolicy.minNovelty,
+      });
+    }
+
+    log.debug('Accepted memory upsert by sensitivity policy', {
+      type,
+      sensitivity,
+      salience: targetSalience,
+      novelty,
+      minSalience: writePolicy.minSalience,
+      minNovelty: writePolicy.minNovelty,
+      reason: writePolicy.reason,
+      text: text.slice(0, 60),
+    });
+
     for (const old of sameType) {
       this.memoryStore.updateMemory(old.id, { supersededBy: uuidv4() });
       didSupersede = true;
@@ -369,7 +609,7 @@ export class MemoryWriter {
       provenanceRefs: normalizedProvenanceRefs,
       retentionClass: retention.retentionClass,
       sensitivity,
-      consentFlags,
+      consentFlags: mergedIncomingConsentFlags,
       contactId,
     };
 
@@ -412,6 +652,18 @@ export class MemoryWriter {
         }
       } catch (err) {
         errors++;
+        if (err instanceof MemoryWritePolicyError) {
+          log.info('Rejected memory during batch import by sensitivity policy', {
+            reason: err.reason,
+            sensitivity: err.sensitivity,
+            salience: err.salience,
+            novelty: err.novelty,
+            minSalience: err.minSalience,
+            minNovelty: err.minNovelty,
+            text: record.text?.slice(0, 60),
+          });
+          continue;
+        }
         log.error('Error importing memory', { error: String(err), text: record.text?.slice(0, 60) });
       }
     }

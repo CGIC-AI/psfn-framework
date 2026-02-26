@@ -5,7 +5,7 @@ import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
 import { createStreamingSttConnector } from '../../voice/connectors/stt/index.js';
-import { createStreamingTtsConnector } from '../../voice/connectors/tts/index.js';
+import { createStreamingTtsConnector, type StreamingTtsProvider } from '../../voice/connectors/tts/index.js';
 import {
   resolveVoiceReliabilityBudgets,
   runWithVoiceStageBudget,
@@ -33,6 +33,10 @@ import type {
 const log = createComponentLogger('ApiVoiceRuntime');
 
 const DEFAULT_CHANNEL_PREFIX = 'api-voice';
+const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
+const DEFAULT_ECHO_TTS_URL = 'http://220.158.196.150:8001';
+const DEFAULT_ECHO_TTS_VOICE = '11labs-Allison';
+const DEFAULT_ECHO_TTS_PRESET = 'Independent-High-Speaker-CFG';
 
 interface ApiVoiceWebSocketRuntimeConfig {
   agentLoop: AgentLoop;
@@ -125,11 +129,40 @@ function deriveChannelId(
 }
 
 function hasVoiceConnectorConfig(config: SubstrateConfig): boolean {
-  return Boolean(
-    config.deepgramApiKey
-      && config.elevenLabsApiKey
-      && config.elevenLabsVoiceId,
-  );
+  if (!config.deepgramApiKey) {
+    return false;
+  }
+
+  const ttsProvider = resolveTtsProvider(config);
+  if (ttsProvider === 'echo') {
+    return true;
+  }
+
+  return Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId);
+}
+
+function resolveTtsProvider(config: SubstrateConfig): StreamingTtsProvider {
+  return config.ttsProvider === 'echo' ? 'echo' : DEFAULT_TTS_PROVIDER;
+}
+
+function createVoiceTtsConnector(config: SubstrateConfig) {
+  const ttsProvider = resolveTtsProvider(config);
+
+  if (ttsProvider === 'echo') {
+    const model = config.echoTtsModel;
+    return createStreamingTtsConnector('echo', {
+      url: config.echoTtsUrl ?? DEFAULT_ECHO_TTS_URL,
+      voice: config.echoTtsVoice ?? DEFAULT_ECHO_TTS_VOICE,
+      preset: config.echoTtsPreset ?? DEFAULT_ECHO_TTS_PRESET,
+      ...(model ? { model } : {}),
+    });
+  }
+
+  return createStreamingTtsConnector('elevenlabs', {
+    apiKey: config.elevenLabsApiKey ?? '',
+    voiceId: config.elevenLabsVoiceId ?? '',
+    modelId: config.elevenLabsModelId,
+  });
 }
 
 function toCloseReason(
@@ -264,7 +297,13 @@ export function createApiVoiceWebSocketRuntime(
   options: ApiVoiceWebSocketRuntimeConfig,
 ): VoiceWebSocketRuntime | undefined {
   if (!hasVoiceConnectorConfig(options.config)) {
-    log.warn('API voice websocket runtime disabled: missing STT/TTS provider credentials');
+    const ttsProvider = resolveTtsProvider(options.config);
+    log.warn('API voice websocket runtime disabled: missing STT/TTS provider credentials', {
+      ttsProvider,
+      hasDeepgramApiKey: Boolean(options.config.deepgramApiKey),
+      hasElevenLabsApiKey: Boolean(options.config.elevenLabsApiKey),
+      hasElevenLabsVoiceId: Boolean(options.config.elevenLabsVoiceId),
+    });
     return undefined;
   }
 
@@ -279,11 +318,7 @@ export function createApiVoiceWebSocketRuntime(
     model: options.config.deepgramModel,
   });
 
-  const tts = createStreamingTtsConnector('elevenlabs', {
-    apiKey: options.config.elevenLabsApiKey ?? '',
-    voiceId: options.config.elevenLabsVoiceId ?? '',
-    modelId: options.config.elevenLabsModelId,
-  });
+  const tts = createVoiceTtsConnector(options.config);
 
   const runtime = new WebSocketVoiceRuntime({
     stt,

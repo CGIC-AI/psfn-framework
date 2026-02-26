@@ -443,6 +443,22 @@ export class AdminServer implements Lifecycle {
       },
       {
         method: 'GET',
+        match: exactPath('/api/settings/capabilities'),
+        handle: (_req, res) => sendText(res, 200, this.handlers.capabilitiesConfigJson(), {
+          'Content-Type': 'application/json',
+        }),
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/settings/capabilities'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.updateCapabilitiesConfig(body));
+          });
+        },
+      },
+      {
+        method: 'GET',
         match: exactPath('/api/models'),
         handle: (_req, res) => {
           this.handlers.modelListJson().then(

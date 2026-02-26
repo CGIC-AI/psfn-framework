@@ -7,10 +7,10 @@ This project uses **bd** (beads) for issue tracking. Please run `bd onboard` bef
 ## Quick Reference
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
+bd ready --json              # Find available work
+bd show <id> --json          # View issue details
+bd update <id> --status in_progress --json  # Claim work
+bd close <id> --reason "Completed" --json   # Complete work
 bd sync               # Sync with git
 ```
 
@@ -68,12 +68,12 @@ bd close bd-42 --reason "Completed" --json
 
 ### Workflow for AI Agents
 
-1. **Check ready work**: `bd ready` shows unblocked issues
-2. **Claim your task**: `bd update <id> --status in_progress`
+1. **Check ready work**: `bd ready --json` shows unblocked issues
+2. **Claim your task**: `bd update <id> --status in_progress --json`
 3. **Work on it**: Implement, test, document
 4. **Discover new work?** Create linked issue:
-   - `bd create "Found bug" -p 1 --deps discovered-from:<parent-id>`
-5. **Complete**: `bd close <id> --reason "Done"`
+   - `bd create "Found bug" -p 1 --deps discovered-from:<parent-id> --json`
+5. **Complete**: `bd close <id> --reason "Done" --json`
 6. **Commit together**: Always commit the `.beads/issues.jsonl` file together with the code changes so issue state stays in sync with code state
 
 ### Writing Self-Contained Issues

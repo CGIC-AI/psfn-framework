@@ -36,7 +36,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks
 
 ### Channels
-- **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + ElevenLabs TTS)
+- **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
 - **WebSocket voice runtime** — transport primitives for browser/app clients using `voice-wire-v1` session frames
 - **OpenAI-Compatible API** — `/v1/chat/completions` with SSE streaming for WebUI integration
 - **Admin GUI (admin UI)** — htmx-powered management panel: memory browser, session viewer, contacts, scheduler, settings, prompt editor, model discovery
@@ -140,9 +140,21 @@ DISCORD_VOICE_ENABLED=true
 DISCORD_VOICE_GUILD_ID=...
 DISCORD_VOICE_USER_ID=...
 DEEPGRAM_API_KEY=...
+TTS_PROVIDER=elevenlabs           # or: echo
+
+# ElevenLabs path
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=YOUR_VOICE_ID
+ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
+
+# Echo path (provider-pluggable streaming TTS)
+ECHO_TTS_URL=http://220.158.196.150:8001
+ECHO_TTS_VOICE=11labs-Allison
+ECHO_TTS_PRESET=Independent-High-Speaker-CFG
+# ECHO_TTS_MODEL=echo-v1
 ```
+
+`TTS_PROVIDER` defaults to `elevenlabs`. When using the API voice websocket runtime with `TTS_PROVIDER=echo`, the Echo defaults are: `http://220.158.196.150:8001`, `11labs-Allison`, `Independent-High-Speaker-CFG`.
 
 **Voice (WebSocket runtime transport):**
 

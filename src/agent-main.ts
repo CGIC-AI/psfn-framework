@@ -61,7 +61,7 @@ import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
   composeIdentity,
   composeSessionRuntime,
-  composeAgentLoop,
+  composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
@@ -302,7 +302,7 @@ async function main(): Promise<void> {
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
-  const agentLoop = composeAgentLoop({
+  const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: gateway,
     sessionManager,

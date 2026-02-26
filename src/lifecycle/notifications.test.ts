@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -8,6 +8,16 @@ import {
   writeLastActiveChannel,
 } from './notifications.js';
 import type { MessageSender } from './notifications.js';
+
+async function waitForFile(path: string, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  while (!existsSync(path)) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`Timed out waiting for file: ${path}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
 
 describe('DiscordLifecycleNotifier', () => {
   let tempDir: string;
@@ -24,7 +34,8 @@ describe('DiscordLifecycleNotifier', () => {
     };
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 25));
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -160,7 +171,8 @@ describe('Last-active channel tracking', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'lastactive-test-'));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 25));
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -196,9 +208,11 @@ describe('Last-active channel tracking', () => {
     expect(result).toBe('real-channel');
   });
 
-  it('stores timestamp with channel', () => {
+  it('stores timestamp with channel', async () => {
     writeLastActiveChannel(tempDir, 'timestamped-channel');
-    const raw = readFileSync(join(tempDir, 'last_active_channel.json'), 'utf-8');
+    const lastActivePath = join(tempDir, 'last_active_channel.json');
+    await waitForFile(lastActivePath);
+    const raw = readFileSync(lastActivePath, 'utf-8');
     const data = JSON.parse(raw);
     expect(data.timestamp).toBeGreaterThan(0);
     expect(data.channelId).toBe('timestamped-channel');

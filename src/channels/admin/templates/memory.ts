@@ -6,6 +6,14 @@ interface MemoryContactView {
   displayName: string;
 }
 
+interface MemoryListPaginationView {
+  limit: number;
+  offset: number;
+  total: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+}
+
 function isRelationalMemory(m: PurrMemory): boolean {
   return m.type === 'relational' || m.type === 'emotional';
 }
@@ -83,12 +91,42 @@ function memoryProvenanceDetail(m: PurrMemory): string {
 export function memoryListPage(
   memories: PurrMemory[],
   contactById: ReadonlyMap<string, MemoryContactView> = new Map(),
+  pagination: MemoryListPaginationView = {
+    limit: 50,
+    offset: 0,
+    total: memories.length,
+    hasPrevious: false,
+    hasNext: false,
+  },
 ): string {
   const searchForm = `
     <form class="search-form" hx-post="/api/memory/search" hx-target="#memory-results" hx-swap="innerHTML">
       <input type="text" name="query" placeholder="Search memories..." required>
       <button type="submit">Search</button>
     </form>`;
+  const start = pagination.total > 0 ? pagination.offset + 1 : 0;
+  const end = pagination.offset + memories.length;
+  const previousOffset = Math.max(0, pagination.offset - pagination.limit);
+  const nextOffset = pagination.offset + pagination.limit;
+  const paginationControls = `
+    <div class="search-form" style="margin-top:0.75rem;align-items:center;gap:0.75rem;flex-wrap:wrap">
+      <form method="get" action="/memory" style="display:flex;gap:0.5rem;align-items:center">
+        <label for="memory-limit">Limit</label>
+        <input id="memory-limit" type="number" name="limit" min="1" max="200" value="${pagination.limit}" style="max-width:6rem">
+        <input type="hidden" name="offset" value="0">
+        <button type="submit">Apply</button>
+      </form>
+      <div class="crm-notes">Showing ${start}-${end} of ${pagination.total}</div>
+      <div style="display:flex;gap:0.5rem">
+        ${pagination.hasPrevious
+    ? `<a class="btn" href="/memory?limit=${pagination.limit}&offset=${previousOffset}">&larr; Newer</a>`
+    : '<span class="btn" style="pointer-events:none;opacity:0.5">&larr; Newer</span>'}
+        ${pagination.hasNext
+    ? `<a class="btn" href="/memory?limit=${pagination.limit}&offset=${nextOffset}">Older &rarr;</a>`
+    : '<span class="btn" style="pointer-events:none;opacity:0.5">Older &rarr;</span>'}
+      </div>
+    </div>
+  `;
 
   const tableBody = memories.length > 0
     ? memories.map(m => memoryRow(m, m.contactId ? contactById.get(m.contactId) : undefined)).join('')
@@ -96,6 +134,7 @@ export function memoryListPage(
 
   return `
     ${searchForm}
+    ${paginationControls}
     <div class="card">
       <table>
         <thead><tr>

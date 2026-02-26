@@ -540,6 +540,59 @@ describe('AdminServer', () => {
       expect(res.body).toContain('semantic');
     });
 
+    it('supports limit/offset pagination on admin memory list fragments', async () => {
+      const now = Date.now();
+      memoryStore.insertMemory({
+        id: 'memory-old',
+        text: 'Old memory',
+        type: 'semantic',
+        importance: 0.5,
+        confidence: 0.7,
+        emotionalValence: 0,
+        salience: 0.4,
+        sourceRef: 'test:old',
+        extractedAt: now - 3_000,
+        lastAccessed: now - 3_000,
+        accessCount: 1,
+        tags: [],
+      }, new Float32Array([0.1, 0.2, 0.3]));
+      memoryStore.insertMemory({
+        id: 'memory-mid',
+        text: 'Middle memory',
+        type: 'semantic',
+        importance: 0.5,
+        confidence: 0.7,
+        emotionalValence: 0,
+        salience: 0.5,
+        sourceRef: 'test:mid',
+        extractedAt: now - 2_000,
+        lastAccessed: now - 2_000,
+        accessCount: 1,
+        tags: [],
+      }, new Float32Array([0.2, 0.3, 0.4]));
+      memoryStore.insertMemory({
+        id: 'memory-new',
+        text: 'Newest memory',
+        type: 'semantic',
+        importance: 0.5,
+        confidence: 0.7,
+        emotionalValence: 0,
+        salience: 0.6,
+        sourceRef: 'test:new',
+        extractedAt: now - 1_000,
+        lastAccessed: now - 1_000,
+        accessCount: 1,
+        tags: [],
+      }, new Float32Array([0.3, 0.4, 0.5]));
+
+      const res = await request(port, 'GET', '/api/memory/list?limit=1&offset=1');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Middle memory');
+      expect(res.body).not.toContain('Newest memory');
+      expect(res.body).not.toContain('Old memory');
+    });
+
     it('returns memory detail page', async () => {
       memoryStore.insertMemory({
         id: 'test-detail-1',

@@ -10,12 +10,12 @@ import {
 } from './heartbeat-tools.js';
 import { EventBus } from '../event-bus.js';
 import { Scheduler } from './scheduler.js';
-import type { AgentLoop } from '../agent-loop.js';
+import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 
 // ── Mocks ──
 
-function mockAgentLoop(): AgentLoop {
+function mockAgentLoop(): SubstrateAgent {
   return {
     handleMessage: vi.fn().mockResolvedValue({
       content: 'test response',
@@ -23,7 +23,7 @@ function mockAgentLoop(): AgentLoop {
       metadata: {},
     }),
     registerTool: vi.fn(),
-  } as unknown as AgentLoop;
+  } as unknown as SubstrateAgent;
 }
 
 function mockSender(): MessageSender {
@@ -267,7 +267,7 @@ describe('heartbeat_update_policy', () => {
 
 describe('schedule_task', () => {
   let scheduler: Scheduler;
-  let agentLoop: AgentLoop;
+  let agentLoop: SubstrateAgent;
   let sender: MessageSender;
 
   beforeEach(() => {

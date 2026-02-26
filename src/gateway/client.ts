@@ -4,7 +4,7 @@
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
-import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
+import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type {
   AgentResponse,
   CompletionPurpose,

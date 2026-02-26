@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../agent-loop.js';
+import type { LLMProvider } from '../../agent/contracts.js';
 import type { ThinkEvidence } from '../types.js';
 import type { SandboxBudgetRef } from './contracts.js';
 import { addEvidence, BUDGET_EXCEEDED_MESSAGE } from './common.js';

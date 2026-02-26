@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { EventBus } from '../../event-bus.js';
 import { ContactStore } from '../../contacts/store.js';
 import { ApiServer } from './server.js';
-import type { AgentLoop } from '../../agent-loop.js';
+import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../types.js';
 import type { ApiServerHealthChecks } from './types.js';
@@ -188,7 +188,7 @@ function createDeferred<T>() {
 
 // ── Mocks ──
 
-function createMockAgentLoop(eventBus: EventBus): AgentLoop {
+function createMockAgentLoop(eventBus: EventBus): SubstrateAgent {
   return {
     handleMessage: vi.fn(async (msg) => {
       // Emit stream deltas for streaming tests
@@ -200,7 +200,7 @@ function createMockAgentLoop(eventBus: EventBus): AgentLoop {
         metadata: { model: 'test-model', inputTokens: 10, outputTokens: 5, durationMs: 42 },
       } satisfies AgentResponse;
     }),
-  } as unknown as AgentLoop;
+  } as unknown as SubstrateAgent;
 }
 
 function createMockSessionManager(): SessionManager {
@@ -678,7 +678,7 @@ describe('ApiServer', () => {
       const deferred = createDeferred<AgentResponse>();
       const mockAgent = {
         handleMessage: vi.fn(async () => deferred.promise),
-      } as unknown as AgentLoop;
+      } as unknown as SubstrateAgent;
 
       await server.stop();
       server = new ApiServer({
@@ -728,7 +728,7 @@ describe('ApiServer', () => {
             metadata: { model: 'test', inputTokens: 2, outputTokens: 2, durationMs: 2 },
           })),
         abort: abortSpy,
-      } as unknown as AgentLoop;
+      } as unknown as SubstrateAgent;
 
       await server.stop();
       server = new ApiServer({
@@ -776,7 +776,7 @@ describe('ApiServer', () => {
         handleMessage: vi.fn(async () => {
           throw new Error('Agent is already processing a prompt');
         }),
-      } as unknown as AgentLoop;
+      } as unknown as SubstrateAgent;
 
       await server.stop();
       server = new ApiServer({
@@ -810,7 +810,7 @@ describe('ApiServer', () => {
             metadata: { model: 'test', inputTokens: 2, outputTokens: 3, durationMs: 5 },
           })),
         abort: abortSpy,
-      } as unknown as AgentLoop;
+      } as unknown as SubstrateAgent;
 
       await server.stop();
       server = new ApiServer({

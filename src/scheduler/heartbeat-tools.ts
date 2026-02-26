@@ -11,7 +11,7 @@ import type {
   ReflectionDeliberationConfig,
 } from './heartbeat-policy.js';
 import type { Scheduler } from './scheduler.js';
-import type { AgentLoop } from '../agent-loop.js';
+import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import { textResultWithError as textResult } from '../tools/results.js';
 
@@ -262,7 +262,7 @@ export function createHeartbeatUpdatePolicyTool(
 
 export function createScheduleTaskTool(
   scheduler: Scheduler,
-  agentLoop: AgentLoop,
+  agentLoop: SubstrateAgent,
   sender: MessageSender,
   heartbeatChannelId?: string,
 ): AgentTool<any> {

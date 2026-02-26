@@ -1,5 +1,5 @@
 // ── ShardManager ──
-// Spawns ephemeral AgentLoop instances for parallel task execution.
+// Spawns ephemeral SubstrateAgent instances for parallel task execution.
 // Shards share parent's heavy resources (LLM, DB, memory) but get isolated channelIds.
 
 import { randomUUID } from 'node:crypto';
@@ -12,8 +12,8 @@ import type {
   WyomingRoutingMetadata,
 } from '../types.js';
 import type { EventBus } from '../event-bus.js';
-import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent-loop.js';
-import { AgentLoop } from '../agent-loop.js';
+import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent/contracts.js';
+import { SubstrateAgent } from '../agent/substrate-agent.js';
 import { normalizeCapabilityTier } from '../capabilities/tiers.js';
 import type { SessionStore } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
@@ -209,7 +209,7 @@ export class ShardManager {
 
       const systemPrompt = shardConfig.systemPrompt ?? this.deps.parentSystemPrompt;
 
-      const agentLoop = new AgentLoop(
+      const agentLoop = new SubstrateAgent(
         this.deps.eventBus,
         this.deps.llmProvider,
         sessionManager,

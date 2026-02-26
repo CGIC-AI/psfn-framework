@@ -1,5 +1,5 @@
 // ── think tool ──
-// Registered on the parent AgentLoop. Runs an ephemeral RLM loop for deep reasoning.
+// Registered on the parent SubstrateAgent. Runs an ephemeral RLM loop for deep reasoning.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';

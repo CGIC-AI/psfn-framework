@@ -1,5 +1,5 @@
 import type { ContextMessage, LLMContext, SubstrateConfig } from '../types.js';
-import type { LLMProvider } from '../agent-loop.js';
+import type { LLMProvider } from '../agent/contracts.js';
 import type {
   SessionStore,
   LegacyChatImportRequest,

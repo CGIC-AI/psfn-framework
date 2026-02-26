@@ -9,7 +9,7 @@ import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
 import { LLMClient } from './llm/client.js';
-import { AgentLoop } from './agent-loop.js';
+import type { SubstrateAgent } from './agent/substrate-agent.js';
 import { MemoryStore } from './memory/store.js';
 import { SalienceDecay } from './memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
@@ -37,7 +37,7 @@ function makeMessage(content: string): SubstrateMessage {
   };
 }
 
-async function talk(agentLoop: AgentLoop, content: string): Promise<string> {
+async function talk(agentLoop: SubstrateAgent, content: string): Promise<string> {
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`Claude: ${content}`);
   console.log(`${'─'.repeat(60)}`);

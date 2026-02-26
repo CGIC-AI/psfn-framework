@@ -10,7 +10,7 @@ import { LLMClient } from './llm/client.js';
 import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
 import { SessionManager } from './session/manager.js';
 import { UserContinuityStore } from './session/continuity.js';
-import { AgentLoop } from './agent-loop.js';
+import { SubstrateAgent } from './agent/substrate-agent.js';
 import { DiscordAdapter } from './channels/discord/adapter.js';
 import { TelegramAdapter } from './channels/telegram/adapter.js';
 import { MemoryStore } from './memory/store.js';
@@ -93,7 +93,7 @@ export class SubstrateRuntime implements Lifecycle {
   private sessionStore!: SessionStore;
   private sessionManager!: SessionManager;
   private memoryExtractor!: MemoryExtractor;
-  private agentLoop!: AgentLoop;
+  private agentLoop!: SubstrateAgent;
   private discord!: DiscordAdapter;
   private memoryStore!: MemoryStore;
   private salienceDecay!: SalienceDecay;
@@ -280,7 +280,7 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Agent loop
-    this.agentLoop = new AgentLoop(
+    this.agentLoop = new SubstrateAgent(
       this.eventBus,
       this.llmClient,
       this.sessionManager,

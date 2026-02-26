@@ -195,6 +195,29 @@ export interface EventMap {
     timestampMs?: number;
   };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent };
+  'module.install': {
+    id: string;
+    name: string;
+    version: number;
+    source: 'startup' | 'install' | 'update' | 'enable';
+  };
+  'module.uninstall': {
+    id: string;
+    name: string;
+    reason: 'disable' | 'reload' | 'shutdown';
+  };
+  'module.error': {
+    id: string;
+    name: string;
+    stage: 'activate' | 'deactivate';
+    error: string;
+  };
+  'module.health': {
+    id: string;
+    name: string;
+    ok: boolean;
+    details?: string;
+  };
   'system.init': Record<string, never>;
   'system.ready': Record<string, never>;
   'system.shutdown': Record<string, never>;

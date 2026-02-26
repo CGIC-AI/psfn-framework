@@ -83,6 +83,9 @@ export class REPLSandbox {
     const modules = createModuleCapabilities({
       gatewayCaps,
       pushEvidence,
+      getCapabilityTier: this.deps.getCapabilityTier,
+      confirmationQueue: this.deps.moduleInstallConfirmationQueue,
+      onModuleRegistryMutation: this.deps.onModuleRegistryMutation,
     });
 
     const repo = createRepoCapabilities({

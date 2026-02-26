@@ -1,4 +1,8 @@
 import { MODULE_REGISTRY_PATH } from '../../security/policy-constants.js';
+import type { ConfirmationQueue } from '../../capabilities/confirmation-queue.js';
+import type { CapabilityTier } from '../../types.js';
+import { isModuleRecord } from '../../modules/registry.js';
+import type { ModuleRegistryMutation } from '../../modules/types.js';
 import type { ThinkEvidence } from '../types.js';
 import type { GatewayREPLCapabilities, ModuleRecord } from './contracts.js';
 import { addEvidence, toErrorMessage, toTrimmedString } from './common.js';
@@ -7,6 +11,8 @@ interface ModuleMutationResult {
   ok: boolean;
   id?: string;
   version?: number;
+  queued?: boolean;
+  confirmationId?: string;
   error?: string;
 }
 
@@ -23,24 +29,44 @@ export interface ModuleCapabilities {
 interface CreateModuleCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
   pushEvidence: (entry: ThinkEvidence) => void;
+  getCapabilityTier?: () => CapabilityTier;
+  confirmationQueue?: ConfirmationQueue | null;
+  onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
 }
 
-function isModuleRecord(value: unknown): value is ModuleRecord {
-  if (!value || typeof value !== 'object') {
-    return false;
+interface NormalizedInstallInput {
+  name: string;
+  source: string;
+}
+
+function normalizeInstallInput(name: string, source: string): NormalizedInstallInput | { error: string } {
+  const normalizedName = toTrimmedString(name).toLowerCase();
+  if (!/^[a-z0-9._-]{2,64}$/.test(normalizedName)) {
+    return { error: 'name must match ^[a-z0-9._-]{2,64}$' };
   }
 
-  const candidate = value as Partial<ModuleRecord>;
-  return typeof candidate.id === 'string'
-    && typeof candidate.name === 'string'
-    && typeof candidate.source === 'string'
-    && typeof candidate.enabled === 'boolean'
-    && typeof candidate.installedAt === 'number'
-    && typeof candidate.updatedAt === 'number'
-    && typeof candidate.version === 'number';
+  if (typeof source !== 'string' || source.trim().length === 0) {
+    return { error: 'source is required' };
+  }
+
+  if (source.length > 100_000) {
+    return { error: 'source too large (max 100000 chars)' };
+  }
+
+  return {
+    name: normalizedName,
+    source,
+  };
+}
+
+function proposalReason(tier: CapabilityTier): string {
+  return `Module install proposed by ${tier} tier`;
 }
 
 export function createModuleCapabilities(options: CreateModuleCapabilitiesOptions): ModuleCapabilities {
+  const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
+  const confirmationQueue = options.confirmationQueue ?? null;
+
   const loadModuleRegistry = async (): Promise<ModuleRecord[]> => {
     if (typeof options.gatewayCaps.fsRead !== 'function') {
       throw new Error('module ops require gateway fs policy (fsRead unavailable)');
@@ -69,11 +95,91 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
     await options.gatewayCaps.fsWrite(MODULE_REGISTRY_PATH, JSON.stringify(records, null, 2));
   };
 
+  const notifyMutation = async (
+    action: ModuleRegistryMutation['action'],
+    next: ModuleRecord,
+    previous: ModuleRecord | null,
+  ): Promise<void> => {
+    if (!options.onModuleRegistryMutation) {
+      return;
+    }
+    await options.onModuleRegistryMutation({
+      action,
+      next: { ...next },
+      previous: previous ? { ...previous } : null,
+    });
+  };
+
   const module_list = async (): Promise<Array<Omit<ModuleRecord, 'source'>>> => {
     const items = await loadModuleRegistry();
     return items
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .map(({ source: _source, ...rest }) => rest);
+  };
+
+  const applyInstallMutation = async (
+    name: string,
+    source: string,
+    enable = false,
+    recordEvidence = true,
+  ): Promise<ModuleMutationResult> => {
+    const normalizedInput = normalizeInstallInput(name, source);
+    if ('error' in normalizedInput) {
+      return { ok: false, error: normalizedInput.error };
+    }
+
+    const now = Date.now();
+    const items = await loadModuleRegistry();
+    const existing = items.find(item => item.name === normalizedInput.name);
+
+    if (existing) {
+      const previous = { ...existing };
+      existing.source = normalizedInput.source;
+      existing.enabled = Boolean(enable);
+      existing.updatedAt = now;
+      existing.version += 1;
+      await saveModuleRegistry(items);
+
+      await notifyMutation('update', existing, previous);
+
+      if (recordEvidence) {
+        addEvidence(options.pushEvidence, {
+          source: 'module',
+          query: normalizedInput.name,
+          snippet: `updated module v${existing.version}`,
+          resultCount: 1,
+          timestamp: now,
+        });
+      }
+
+      return { ok: true, id: existing.id, version: existing.version };
+    }
+
+    const created: ModuleRecord = {
+      id: `mod-${now}-${Math.random().toString(36).slice(2, 8)}`,
+      name: normalizedInput.name,
+      source: normalizedInput.source,
+      enabled: Boolean(enable),
+      installedAt: now,
+      updatedAt: now,
+      version: 1,
+    };
+    items.push(created);
+    await saveModuleRegistry(items);
+
+    await notifyMutation('install', created, null);
+
+    if (recordEvidence) {
+      addEvidence(options.pushEvidence, {
+        source: 'module',
+        query: normalizedInput.name,
+        snippet: 'installed module v1',
+        resultCount: 1,
+        timestamp: now,
+      });
+    }
+
+    return { ok: true, id: created.id, version: created.version };
   };
 
   const module_install = async (
@@ -82,60 +188,69 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
     enable = false,
   ): Promise<ModuleMutationResult> => {
     try {
-      const normalizedName = toTrimmedString(name).toLowerCase();
-      if (!/^[a-z0-9._-]{2,64}$/.test(normalizedName)) {
-        return { ok: false, error: 'name must match ^[a-z0-9._-]{2,64}$' };
-      }
-      if (typeof source !== 'string' || source.trim().length === 0) {
-        return { ok: false, error: 'source is required' };
-      }
-      if (source.length > 100_000) {
-        return { ok: false, error: 'source too large (max 100000 chars)' };
+      const tier = getCapabilityTier();
+      if (tier === 'nursery') {
+        return {
+          ok: false,
+          error: 'module_install is disabled for nursery tier',
+        };
       }
 
-      const now = Date.now();
-      const items = await loadModuleRegistry();
-      const existing = items.find(item => item.name === normalizedName);
+      if (tier === 'apprentice') {
+        if (!confirmationQueue) {
+          return {
+            ok: false,
+            error: 'module_install in apprentice tier requires confirmation queue support',
+          };
+        }
 
-      if (existing) {
-        existing.source = source;
-        existing.enabled = Boolean(enable);
-        existing.updatedAt = now;
-        existing.version += 1;
-        await saveModuleRegistry(items);
+        const normalizedInput = normalizeInstallInput(name, source);
+        if ('error' in normalizedInput) {
+          return { ok: false, error: normalizedInput.error };
+        }
 
-        addEvidence(options.pushEvidence, {
-          source: 'module',
-          query: normalizedName,
-          snippet: `updated module v${existing.version}`,
-          resultCount: 1,
-          timestamp: now,
-        });
+        const entry = confirmationQueue.enqueue(
+          {
+            method: 'module.install',
+            action: 'install',
+            scope: normalizedInput.name,
+            params: {
+              name: normalizedInput.name,
+              source: normalizedInput.source,
+              enable: Boolean(enable),
+            },
+            companionReason: proposalReason(tier),
+          },
+          async (approvedParams: Record<string, unknown>) => {
+            const approvedName = typeof approvedParams.name === 'string'
+              ? approvedParams.name
+              : normalizedInput.name;
+            const approvedSource = typeof approvedParams.source === 'string'
+              ? approvedParams.source
+              : normalizedInput.source;
+            const approvedEnable = typeof approvedParams.enable === 'boolean'
+              ? approvedParams.enable
+              : Boolean(enable);
+            const result = await applyInstallMutation(
+              approvedName,
+              approvedSource,
+              approvedEnable,
+              false,
+            );
+            if (!result.ok) {
+              throw new Error(result.error || 'module installation failed');
+            }
+          },
+        );
 
-        return { ok: true, id: existing.id, version: existing.version };
+        return {
+          ok: true,
+          queued: true,
+          confirmationId: entry.id,
+        };
       }
 
-      const created: ModuleRecord = {
-        id: `mod-${now}-${Math.random().toString(36).slice(2, 8)}`,
-        name: normalizedName,
-        source,
-        enabled: Boolean(enable),
-        installedAt: now,
-        updatedAt: now,
-        version: 1,
-      };
-      items.push(created);
-      await saveModuleRegistry(items);
-
-      addEvidence(options.pushEvidence, {
-        source: 'module',
-        query: normalizedName,
-        snippet: 'installed module v1',
-        resultCount: 1,
-        timestamp: now,
-      });
-
-      return { ok: true, id: created.id, version: created.version };
+      return await applyInstallMutation(name, source, enable, true);
     } catch (err) {
       return { ok: false, error: toErrorMessage(err) };
     }
@@ -153,10 +268,12 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
         return { ok: false, error: 'module not found' };
       }
 
+      const previous = { ...target };
       target.enabled = enabled;
       target.updatedAt = Date.now();
       target.version += 1;
       await saveModuleRegistry(items);
+      await notifyMutation(enabled ? 'enable' : 'disable', target, previous);
 
       addEvidence(options.pushEvidence, {
         source: 'module',

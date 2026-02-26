@@ -134,6 +134,9 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     sessionManager: deps.sessionManager,
     scheduler: deps.scheduler,
     eventBus: deps.eventBus,
+    getCapabilityTier: deps.getCapabilityTier,
+    moduleInstallConfirmationQueue: deps.moduleInstallConfirmationQueue,
+    onModuleRegistryMutation: deps.onModuleRegistryMutation,
   }, budgetRef);
 
   // Gather context metadata for system prompt

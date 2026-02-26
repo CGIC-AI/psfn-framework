@@ -32,21 +32,21 @@ import type {
   FsListResult,
   DiscordMessageNotification,
   LLMChunkNotification,
-  DiscordHandleMessageParams,
-  DiscordHandleMessageResult,
+  VoiceHandleMessageParams,
+  VoiceHandleMessageResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
   ConfirmationListResult,
   ConfirmationResolveParams,
   ConfirmationResolveResult,
   RpcSubstrateMessage,
-  DiscordVoiceStreamStartParams,
-  DiscordVoiceStreamChunkParams,
-  DiscordVoiceStreamEndParams,
-  DiscordVoiceStreamCancelParams,
-  DiscordVoiceStreamAckResult,
-  DiscordVoiceStreamEndResult,
-  DiscordVoiceStreamCancelResult,
+  VoiceStreamStartParams,
+  VoiceStreamChunkParams,
+  VoiceStreamEndParams,
+  VoiceStreamCancelParams,
+  VoiceStreamAckResult,
+  VoiceStreamEndResult,
+  VoiceStreamCancelResult,
   SessionHmacSignResult,
   SessionHmacVerifyResult,
 } from './protocol.js';
@@ -494,31 +494,35 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     if (this.reverseMethodsRegistered) return;
     this.reverseMethodsRegistered = true;
 
-    this.rpcInstance.addMethod(
-      'discord.handleMessage',
-      async (params: DiscordHandleMessageParams) => this.dispatchHandleMessage(params.message),
-    );
-    this.rpcInstance.addMethod(
-      'discord.voice.start',
-      async (params: DiscordVoiceStreamStartParams) => this.handleVoiceStreamStart(params),
-    );
-    this.rpcInstance.addMethod(
-      'discord.voice.chunk',
-      async (params: DiscordVoiceStreamChunkParams) => this.handleVoiceStreamChunk(params),
-    );
-    this.rpcInstance.addMethod(
-      'discord.voice.end',
-      async (params: DiscordVoiceStreamEndParams) => this.handleVoiceStreamEnd(params),
-    );
-    this.rpcInstance.addMethod(
-      'discord.voice.cancel',
-      async (params: DiscordVoiceStreamCancelParams) => this.handleVoiceStreamCancel(params),
-    );
+    const handleMessageMethod = async (params: VoiceHandleMessageParams) =>
+      this.dispatchHandleMessage(params.message);
+    this.rpcInstance.addMethod('voice.handleMessage', handleMessageMethod);
+    this.rpcInstance.addMethod('discord.handleMessage', handleMessageMethod);
+
+    const voiceStreamStartMethod = async (params: VoiceStreamStartParams) =>
+      this.handleVoiceStreamStart(params);
+    this.rpcInstance.addMethod('voice.stream.start', voiceStreamStartMethod);
+    this.rpcInstance.addMethod('discord.voice.start', voiceStreamStartMethod);
+
+    const voiceStreamChunkMethod = async (params: VoiceStreamChunkParams) =>
+      this.handleVoiceStreamChunk(params);
+    this.rpcInstance.addMethod('voice.stream.chunk', voiceStreamChunkMethod);
+    this.rpcInstance.addMethod('discord.voice.chunk', voiceStreamChunkMethod);
+
+    const voiceStreamEndMethod = async (params: VoiceStreamEndParams) =>
+      this.handleVoiceStreamEnd(params);
+    this.rpcInstance.addMethod('voice.stream.end', voiceStreamEndMethod);
+    this.rpcInstance.addMethod('discord.voice.end', voiceStreamEndMethod);
+
+    const voiceStreamCancelMethod = async (params: VoiceStreamCancelParams) =>
+      this.handleVoiceStreamCancel(params);
+    this.rpcInstance.addMethod('voice.stream.cancel', voiceStreamCancelMethod);
+    this.rpcInstance.addMethod('discord.voice.cancel', voiceStreamCancelMethod);
   }
 
-  private async dispatchHandleMessage(message: RpcSubstrateMessage): Promise<DiscordHandleMessageResult> {
+  private async dispatchHandleMessage(message: RpcSubstrateMessage): Promise<VoiceHandleMessageResult> {
     if (!this.handleMessageHandler) {
-      throw new Error('No discord.handleMessage handler registered');
+      throw new Error('No voice.handleMessage handler registered');
     }
 
     const substrateMessage = this.deserializeMessage(message);
@@ -528,10 +532,10 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       channelId: response.channelId,
       model: response.metadata.model,
       durationMs: response.metadata.durationMs,
-    } satisfies DiscordHandleMessageResult;
+    } satisfies VoiceHandleMessageResult;
   }
 
-  private handleVoiceStreamStart(params: DiscordVoiceStreamStartParams): DiscordVoiceStreamAckResult {
+  private handleVoiceStreamStart(params: VoiceStreamStartParams): VoiceStreamAckResult {
     const key = this.voiceStreamKey(params.correlationId, params.streamId);
     if (this.voiceStreams.has(key)) {
       throw this.rpcError('Voice stream already exists', GatewayErrors.VOICE_STREAM_SEQUENCE);
@@ -555,7 +559,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     return this.streamAck(state, params.sequence, true);
   }
 
-  private handleVoiceStreamChunk(params: DiscordVoiceStreamChunkParams): DiscordVoiceStreamAckResult {
+  private handleVoiceStreamChunk(params: VoiceStreamChunkParams): VoiceStreamAckResult {
     const state = this.requireVoiceStream(params.correlationId, params.streamId);
     this.assertSequence(state, params.sequence);
     if (state.cancelled) {
@@ -581,8 +585,8 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   }
 
   private async handleVoiceStreamEnd(
-    params: DiscordVoiceStreamEndParams,
-  ): Promise<DiscordVoiceStreamEndResult> {
+    params: VoiceStreamEndParams,
+  ): Promise<VoiceStreamEndResult> {
     const key = this.voiceStreamKey(params.correlationId, params.streamId);
     const state = this.requireVoiceStream(params.correlationId, params.streamId);
     if (state.cancelled) {
@@ -610,8 +614,8 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   }
 
   private async handleVoiceStreamCancel(
-    params: DiscordVoiceStreamCancelParams,
-  ): Promise<DiscordVoiceStreamCancelResult> {
+    params: VoiceStreamCancelParams,
+  ): Promise<VoiceStreamCancelResult> {
     const key = this.voiceStreamKey(params.correlationId, params.streamId);
     const state = this.voiceStreams.get(key);
     if (!state) {
@@ -637,7 +641,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     state: VoiceStreamState,
     sequence: number,
     accepted: boolean,
-  ): DiscordVoiceStreamAckResult {
+  ): VoiceStreamAckResult {
     return {
       correlationId: state.correlationId,
       streamId: state.streamId,

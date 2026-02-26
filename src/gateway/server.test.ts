@@ -466,7 +466,7 @@ describe('GatewayServer', () => {
       const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
         methods.push(msg.method);
-        if (msg.method === 'discord.voice.start' || msg.method === 'discord.voice.chunk') {
+        if (msg.method === 'voice.stream.start' || msg.method === 'voice.stream.chunk') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -480,7 +480,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'discord.voice.end') {
+        if (msg.method === 'voice.stream.end') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -508,17 +508,17 @@ describe('GatewayServer', () => {
         model: 'voice-model',
         durationMs: 321,
       });
-      expect(methods[0]).toBe('discord.voice.start');
-      expect(methods[methods.length - 1]).toBe('discord.voice.end');
-      expect(methods.filter(m => m === 'discord.voice.chunk').length).toBeGreaterThan(1);
+      expect(methods[0]).toBe('voice.stream.start');
+      expect(methods[methods.length - 1]).toBe('voice.stream.end');
+      expect(methods.filter(m => m === 'voice.stream.chunk').length).toBeGreaterThan(1);
     });
 
-    it('falls back to discord.handleMessage when voice stream RPC is unavailable', async () => {
+    it('falls back to legacy discord.voice.* stream methods when generic stream methods are unavailable', async () => {
       const methods: string[] = [];
       const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
         methods.push(msg.method);
-        if (msg.method === 'discord.voice.start') {
+        if (msg.method === 'voice.stream.start') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -526,31 +526,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'discord.handleMessage') {
-          emit({
-            jsonrpc: '2.0',
-            id: msg.id,
-            result: {
-              content: 'legacy response',
-              channelId: 'discord-voice:123',
-              model: 'legacy-model',
-              durationMs: 111,
-            },
-          });
-        }
-      });
-
-      const result = await server.requestAgentVoiceStream(makeVoiceMessage('legacy please'));
-      expect(result.content).toBe('legacy response');
-      expect(methods).toEqual(['discord.voice.start', 'discord.handleMessage']);
-    });
-
-    it('sends cancel when stream fails mid-flight', async () => {
-      const methods: string[] = [];
-      const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
-        if (!msg.id || typeof msg.method !== 'string') return;
-        methods.push(msg.method);
-        if (msg.method === 'discord.voice.start') {
+        if (msg.method === 'discord.voice.start' || msg.method === 'discord.voice.chunk') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -564,7 +540,95 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'discord.voice.chunk') {
+        if (msg.method === 'discord.voice.end') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              content: 'legacy stream response',
+              channelId: 'discord-voice:123',
+              model: 'legacy-model',
+              durationMs: 111,
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              droppedChunks: 0,
+            },
+          });
+        }
+      });
+
+      const result = await server.requestAgentVoiceStream(makeVoiceMessage('legacy please'));
+      expect(result.content).toBe('legacy stream response');
+      expect(methods[0]).toBe('voice.stream.start');
+      expect(methods).toContain('discord.voice.start');
+      expect(methods).toContain('discord.voice.end');
+    });
+
+    it('falls back to discord.handleMessage when stream and generic handle methods are unavailable', async () => {
+      const methods: string[] = [];
+      const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
+        if (!msg.id || typeof msg.method !== 'string') return;
+        methods.push(msg.method);
+        if (msg.method === 'voice.stream.start' || msg.method === 'discord.voice.start') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            error: { code: -32601, message: 'Method not found' },
+          });
+          return;
+        }
+        if (msg.method === 'voice.handleMessage') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            error: { code: -32601, message: 'Method not found' },
+          });
+          return;
+        }
+        if (msg.method === 'discord.handleMessage') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              content: 'legacy handle response',
+              channelId: 'discord-voice:123',
+              model: 'legacy-model',
+              durationMs: 111,
+            },
+          });
+        }
+      });
+
+      const result = await server.requestAgentVoiceStream(makeVoiceMessage('legacy handle please'));
+      expect(result.content).toBe('legacy handle response');
+      expect(methods).toEqual([
+        'voice.stream.start',
+        'discord.voice.start',
+        'voice.handleMessage',
+        'discord.handleMessage',
+      ]);
+    });
+
+    it('sends cancel when stream fails mid-flight', async () => {
+      const methods: string[] = [];
+      const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
+        if (!msg.id || typeof msg.method !== 'string') return;
+        methods.push(msg.method);
+        if (msg.method === 'voice.stream.start') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              sequence: msg.params.sequence,
+              accepted: true,
+              queueDepth: 0,
+            },
+          });
+          return;
+        }
+        if (msg.method === 'voice.stream.chunk') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -572,7 +636,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'discord.voice.cancel') {
+        if (msg.method === 'voice.stream.cancel') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -588,7 +652,7 @@ describe('GatewayServer', () => {
       await expect(
         server.requestAgentVoiceStream(makeVoiceMessage('fail me please'), { chunkSize: 4 }),
       ).rejects.toBeTruthy();
-      expect(methods).toContain('discord.voice.cancel');
+      expect(methods).toContain('voice.stream.cancel');
     });
 
     it('applies drop_newest queue policy for chunk backpressure', async () => {
@@ -596,7 +660,7 @@ describe('GatewayServer', () => {
       let endDroppedChunks = -1;
       const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
-        if (msg.method === 'discord.voice.start') {
+        if (msg.method === 'voice.stream.start') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -610,7 +674,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'discord.voice.chunk') {
+        if (msg.method === 'voice.stream.chunk') {
           chunkPayloads.push(msg.params.text);
           emit({
             jsonrpc: '2.0',
@@ -625,7 +689,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'discord.voice.end') {
+        if (msg.method === 'voice.stream.end') {
           endDroppedChunks = msg.params.metadata?.droppedChunks ?? -1;
           emit({
             jsonrpc: '2.0',

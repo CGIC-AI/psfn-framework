@@ -70,6 +70,38 @@ export interface NotifyNtfyParams {
   topic?: string;
 }
 
+export type ConfirmationDecision = 'approve' | 'deny' | 'modify';
+
+export interface ConfirmationQueueEntry {
+  id: string;
+  method: string;
+  action: string;
+  scope: string;
+  params: Record<string, unknown>;
+  companionReason: string;
+  requestedAt: number;
+  expiresAt: number;
+}
+
+export type ConfirmationListParams = Record<string, never>;
+
+export interface ConfirmationListResult {
+  entries: ConfirmationQueueEntry[];
+}
+
+export interface ConfirmationResolveParams {
+  id: string;
+  decision: ConfirmationDecision;
+  modifiedParams?: Record<string, unknown>;
+}
+
+export interface ConfirmationResolveResult {
+  id: string;
+  status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
+  message: string;
+  executed: boolean;
+}
+
 // ── Result types (gateway → agent) ──
 
 export interface LLMChatResult {
@@ -150,6 +182,8 @@ export interface GatewayMethods {
   'fs.write': [FsWriteParams, FsWriteResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
+  'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
+  'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
 }
 
 export interface GatewayNotifications {

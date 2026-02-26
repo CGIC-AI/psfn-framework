@@ -31,6 +31,9 @@ import type {
   DiscordHandleMessageResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
+  ConfirmationListResult,
+  ConfirmationResolveParams,
+  ConfirmationResolveResult,
   RpcSubstrateMessage,
   DiscordVoiceStreamStartParams,
   DiscordVoiceStreamChunkParams,
@@ -237,6 +240,14 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
     return await this.rpcInstance.request('notify.ntfy', params) as NotifyNtfyResult;
+  }
+
+  async listConfirmationQueue(): Promise<ConfirmationListResult> {
+    return await this.rpcInstance.request('confirmation.list', {}) as ConfirmationListResult;
+  }
+
+  async resolveConfirmationQueue(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult> {
+    return await this.rpcInstance.request('confirmation.resolve', params) as ConfirmationResolveResult;
   }
 
   // ── Notification handlers ──

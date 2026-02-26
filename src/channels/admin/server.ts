@@ -100,6 +100,7 @@ export class AdminServer implements Lifecycle {
       promptStore: config.promptStore,
       promptRegistry: config.promptRegistry,
       skillsRuntime: config.skillsRuntime,
+      confirmationQueueApi: config.confirmationQueueApi,
       apiBaseUrl: config.apiBaseUrl,
     });
     this.routes = this.buildRoutes();
@@ -263,6 +264,16 @@ export class AdminServer implements Lifecycle {
       { method: 'GET', match: exactPath('/shards'), handle: (_req, res) => this.sendHtml(res, this.handlers.shardsPage()) },
       { method: 'GET', match: exactPath('/contacts'), handle: (_req, res) => this.sendHtml(res, this.handlers.contactsPage()) },
       { method: 'GET', match: exactPath('/chat'), handle: (_req, res) => this.sendHtml(res, this.handlers.chatPage()) },
+      {
+        method: 'GET',
+        match: exactPath('/confirmations'),
+        handle: (_req, res) => {
+          this.handlers.confirmationsPage().then(
+            (html) => this.sendHtml(res, html),
+            (err) => this.send500('Confirmations page error', err, res),
+          );
+        },
+      },
       { method: 'GET', match: exactPath('/identity'), handle: (_req, res) => this.sendHtml(res, this.handlers.identityPage()) },
       {
         method: 'POST',
@@ -346,6 +357,28 @@ export class AdminServer implements Lifecycle {
                 error: error instanceof Error ? error.message : String(error),
               });
             }
+          });
+        },
+      },
+      {
+        method: 'GET',
+        match: exactPath('/api/confirmations/list'),
+        handle: (_req, res) => {
+          this.handlers.confirmationsListFragment().then(
+            (html) => this.sendFragment(res, html),
+            (err) => this.send500('Confirmation queue list error', err, res),
+          );
+        },
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/confirmations/resolve'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.handlers.resolveConfirmation(body).then(
+              (html) => this.sendFragment(res, html),
+              (err) => this.send500('Confirmation queue resolve error', err, res),
+            );
           });
         },
       },

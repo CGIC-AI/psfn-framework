@@ -16,6 +16,7 @@ import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
+import { CapabilityRuntime } from './capabilities/runtime.js';
 import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 
@@ -23,6 +24,7 @@ const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
+const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -45,6 +47,12 @@ async function main(): Promise<void> {
   const ntfyToken = process.env.NTFY_TOKEN?.trim() || undefined;
   const ntfyTimeoutMs = parsePositiveIntEnv(process.env.NTFY_TIMEOUT_MS, DEFAULT_NTFY_TIMEOUT_MS);
   const ntfyDebounceMs = parsePositiveIntEnv(process.env.NTFY_DEBOUNCE_MS, DEFAULT_NTFY_DEBOUNCE_MS);
+  const confirmationExpiryMs = parsePositiveIntEnv(
+    process.env.CONFIRMATION_EXPIRY_MS,
+    DEFAULT_CONFIRMATION_EXPIRY_MS,
+  );
+  const confirmationOperatorDiscordChannelId = process.env.CONFIRMATION_OPERATOR_DISCORD_CHANNEL_ID?.trim() || undefined;
+  const confirmationNtfyTopic = process.env.CONFIRMATION_NTFY_TOPIC?.trim() || undefined;
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
@@ -64,6 +72,10 @@ async function main(): Promise<void> {
   });
 
   const discord = new DiscordAdapter(config, eventBus);
+  const capabilityRuntime = new CapabilityRuntime({
+    dataDir: config.dataDir,
+    envTier: config.capabilityTier,
+  });
 
   // ── Audit database (separate from agent's runtime DB) ──
 
@@ -94,6 +106,12 @@ async function main(): Promise<void> {
         debounceWindowMs: ntfyDebounceMs,
       }
       : undefined,
+    confirmation: {
+      expiryMs: confirmationExpiryMs,
+      operatorDiscordChannelId: confirmationOperatorDiscordChannelId,
+      ntfyTopic: confirmationNtfyTopic,
+    },
+    capabilityTierProvider: () => capabilityRuntime.getTier(),
     auditStore,
   });
 

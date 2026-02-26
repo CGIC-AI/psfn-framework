@@ -13,6 +13,16 @@ import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { SkillsRuntime } from '../../skills/runtime.js';
+import type {
+  ConfirmationListResult,
+  ConfirmationResolveParams,
+  ConfirmationResolveResult,
+} from '../../gateway/protocol.js';
+
+export interface ConfirmationQueueAdminApi {
+  listConfirmationQueue(): Promise<ConfirmationListResult>;
+  resolveConfirmationQueue(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
+}
 
 export interface AdminServerConfig {
   port: number;
@@ -32,6 +42,7 @@ export interface AdminServerConfig {
   promptStore?: PromptLayerStore | null;
   promptRegistry?: PromptRegistryStore | null;
   skillsRuntime?: SkillsRuntime | null;
+  confirmationQueueApi?: ConfirmationQueueAdminApi | null;
 }
 
 export interface DashboardStats {

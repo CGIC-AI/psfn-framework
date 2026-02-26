@@ -83,6 +83,15 @@ describe('resolveModel', () => {
     expect(model.id).toBe('z-ai/glm-5');
   });
 
+  it('falls back to chat model when background purpose is unconfigured', () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({ modelRoster: {
+      chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+    } });
+    const model = resolveModel(config, 'background');
+    expect(model.id).toBe('z-ai/glm-5');
+  });
+
   it('throws when no model available for purpose', () => {
     const config = makeConfig({ modelRoster: {} });
     expect(() => resolveModel(config, 'chat')).toThrow(/No model configured/);

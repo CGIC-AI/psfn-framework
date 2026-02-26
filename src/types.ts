@@ -136,7 +136,7 @@ export interface ModelCatalogEntry {
 export type ModelRoleAssignments = Record<string, string>;
 
 export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext';
-export type CompletionPurpose = 'extraction' | 'summary' | 'reasoning';
+export type CompletionPurpose = 'background' | 'extraction' | 'summary' | 'reasoning';
 
 export interface RuntimeConfigHooks {
   refreshModels?: () => void;

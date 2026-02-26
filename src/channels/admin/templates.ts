@@ -17,7 +17,7 @@ export { settingsPage, settingsFormResult } from './templates/settings.js';
 export { skillsPage } from './templates/skills.js';
 export { primerPage } from './templates/primer.js';
 export { confirmationsPage, confirmationQueueFragment } from './templates/confirmations.js';
-export { contactsPage, contactRow, contactEditForm } from './templates/contacts.js';
+export { contactsPage, contactRow, contactEditForm, contactMutationAuditFragment } from './templates/contacts.js';
 export { chatPage } from './templates/chat.js';
 export { eventsPage, eventItem } from './templates/events.js';
 export {

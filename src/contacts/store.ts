@@ -14,6 +14,9 @@ import type {
   ContactIdentityLinkVerificationInput,
   ContactIdentityLinkVerificationResult,
   ContactIdentityLinkVerificationState,
+  ContactMutationAuditEntry,
+  ContactMutationAuditField,
+  ContactMutationAuditQuery,
   ChannelPrivacyLevel,
   RelationshipType,
 } from './types.js';
@@ -70,6 +73,16 @@ interface ContactIdentityVerificationRow {
   updated_at: string;
   verified_at: string | null;
   failure_reason: string | null;
+}
+
+interface ContactMutationAuditRow {
+  id: number;
+  contact_id: string;
+  actor: string;
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  timestamp: string;
 }
 
 export class ContactStore {
@@ -136,6 +149,17 @@ export class ContactStore {
         FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS contact_mutation_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contact_id TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        field TEXT NOT NULL,
+        old_value TEXT,
+        new_value TEXT,
+        timestamp TEXT NOT NULL,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);
       CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);
       CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);
@@ -155,6 +179,12 @@ export class ContactStore {
           target_user_id,
           nonce
         );
+      CREATE INDEX IF NOT EXISTS idx_contact_mutation_audit_contact
+        ON contact_mutation_audit(contact_id, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_contact_mutation_audit_field
+        ON contact_mutation_audit(field, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_contact_mutation_audit_actor
+        ON contact_mutation_audit(actor, timestamp DESC);
     `);
 
     this.ensureNicknameColumn();
@@ -298,6 +328,64 @@ export class ContactStore {
       verifiedAt: row.verified_at ?? undefined,
       failureReason: row.failure_reason ?? undefined,
     };
+  }
+
+  private normalizeMutationAuditField(value: string): ContactMutationAuditField | undefined {
+    switch (value) {
+      case 'trust_level':
+      case 'notes':
+        return value;
+      default:
+        return undefined;
+    }
+  }
+
+  private toMutationAuditEntry(row: ContactMutationAuditRow): ContactMutationAuditEntry | undefined {
+    const field = this.normalizeMutationAuditField(row.field);
+    if (!field) return undefined;
+
+    return {
+      id: row.id,
+      contactId: row.contact_id,
+      actor: row.actor,
+      field,
+      oldValue: row.old_value,
+      newValue: row.new_value,
+      timestamp: row.timestamp,
+    };
+  }
+
+  private normalizeAuditActor(actor: string | undefined): string {
+    const trimmed = actor?.trim();
+    if (!trimmed) return 'system:unknown';
+    return trimmed.slice(0, 120);
+  }
+
+  private appendMutationAuditEntry(
+    contactId: string,
+    field: ContactMutationAuditField,
+    oldValue: string | null,
+    newValue: string | null,
+    actor?: string,
+  ): void {
+    this.db.prepare(`
+      INSERT INTO contact_mutation_audit (
+        contact_id,
+        actor,
+        field,
+        old_value,
+        new_value,
+        timestamp
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      contactId,
+      this.normalizeAuditActor(actor),
+      field,
+      oldValue,
+      newValue,
+      new Date().toISOString(),
+    );
   }
 
   private collectUpsertIdentities(partial: Partial<Contact>): ContactChannelLink[] {
@@ -955,7 +1043,7 @@ export class ContactStore {
    * Update a contact's trust level.
    * Returns false if not found or if attempting to change primary user.
    */
-  setTrustLevel(id: string, trustLevel: TrustLevel): boolean {
+  setTrustLevel(id: string, trustLevel: TrustLevel, actor?: string): boolean {
     const contact = this.getById(id);
     if (!contact) return false;
 
@@ -964,7 +1052,10 @@ export class ContactStore {
       return false;
     }
 
+    if (contact.trustLevel === trustLevel) return true;
+
     this.db.prepare('UPDATE contacts SET trust_level = ? WHERE id = ?').run(trustLevel, id);
+    this.appendMutationAuditEntry(id, 'trust_level', contact.trustLevel, trustLevel, actor);
     log.debug('Updated trust level', { id, trustLevel });
     return true;
   }
@@ -1103,11 +1194,15 @@ export class ContactStore {
   }
 
   /** Update a contact's notes. Returns false if not found. */
-  updateNotes(id: string, notes: string): boolean {
+  updateNotes(id: string, notes: string, actor?: string): boolean {
     const contact = this.getById(id);
     if (!contact) return false;
 
+    const previousNotes = contact.notes ?? null;
+    if (previousNotes === notes) return true;
+
     this.db.prepare('UPDATE contacts SET notes = ? WHERE id = ?').run(notes, id);
+    this.appendMutationAuditEntry(id, 'notes', previousNotes, notes, actor);
     return true;
   }
 
@@ -1426,6 +1521,46 @@ export class ContactStore {
     `).all(normalizedLimit) as ContactIdentityVerificationRow[];
 
     return rows.map(row => this.toIdentityLinkVerification(row));
+  }
+
+  listMutationAuditEntries(query: ContactMutationAuditQuery = {}): ContactMutationAuditEntry[] {
+    const normalizedLimit = Number.isFinite(query.limit)
+      ? Math.max(1, Math.min(Math.floor(query.limit ?? 25), 200))
+      : 25;
+    const contactId = query.contactId?.trim();
+    const actor = query.actor?.trim();
+
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (contactId) {
+      clauses.push('contact_id = ?');
+      params.push(contactId);
+    }
+
+    if (actor) {
+      clauses.push('actor = ?');
+      params.push(actor);
+    }
+
+    if (query.field) {
+      clauses.push('field = ?');
+      params.push(query.field);
+    }
+
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.db.prepare(`
+      SELECT id, contact_id, actor, field, old_value, new_value, timestamp
+      FROM contact_mutation_audit
+      ${whereClause}
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ?
+    `).all(...params, normalizedLimit) as ContactMutationAuditRow[];
+
+    return rows.flatMap((row) => {
+      const mapped = this.toMutationAuditEntry(row);
+      return mapped ? [mapped] : [];
+    });
   }
 
   /**

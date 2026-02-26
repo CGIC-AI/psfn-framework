@@ -2054,6 +2054,47 @@ describe('AdminServer with contacts', () => {
     expect(res.body).toContain(contact.id);
   });
 
+  it('shows trust and note mutation audit panel on contacts page', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Audit Contact',
+      trustLevel: 'regular',
+      relationshipType: 'stranger',
+    });
+    expect(contactStore.setTrustLevel(contact.id, 'trusted', 'admin:gui')).toBe(true);
+    expect(contactStore.updateNotes(contact.id, 'Updated through admin', 'admin:gui')).toBe(true);
+
+    const res = await request(port, 'GET', '/contacts');
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Trust + note mutation audit');
+    expect(res.body).toContain('hx-get="/api/contacts/mutations"');
+    expect(res.body).toContain(contact.id);
+    expect(res.body).toContain('admin:gui');
+    expect(res.body).toContain('Updated through admin');
+  });
+
+  it('returns filtered contact mutation audit fragment via API', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Filtered Audit Contact',
+      trustLevel: 'regular',
+      relationshipType: 'stranger',
+    });
+    expect(contactStore.setTrustLevel(contact.id, 'trusted', 'admin:gui')).toBe(true);
+    expect(contactStore.updateNotes(contact.id, 'Agent note', 'agent:tool:contact_note')).toBe(true);
+
+    const res = await request(
+      port,
+      'GET',
+      `/api/contacts/mutations?field=trust_level&actor=${encodeURIComponent('admin:gui')}&limit=5`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('<table>');
+    expect(res.body).toContain(contact.id);
+    expect(res.body).toContain('admin:gui');
+    expect(res.body).toContain('trusted');
+    expect(res.body).not.toContain('Agent note');
+  });
+
   it('renders relational memory contact links and sensitivity cues', async () => {
     const contact = contactStore.upsert({
       displayName: 'Memory Contact',

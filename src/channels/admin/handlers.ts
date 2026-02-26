@@ -35,6 +35,9 @@ import type {
   RelationshipType,
   ChannelPrivacyLevel,
   ContactIdentityLinkVerification,
+  ContactMutationAuditEntry,
+  ContactMutationAuditField,
+  ContactMutationAuditQuery,
 } from '../../contacts/types.js';
 import type { SkillsRuntime } from '../../skills/runtime.js';
 import { TRUST_LEVELS } from '../../trust/types.js';
@@ -1157,6 +1160,43 @@ export class AdminHandlers {
     return updated.id === contact.id;
   }
 
+  private normalizeContactMutationAuditField(value: string | null): ContactMutationAuditField | undefined {
+    const trimmed = value?.trim();
+    switch (trimmed) {
+      case 'trust_level':
+      case 'notes':
+        return trimmed;
+      default:
+        return undefined;
+    }
+  }
+
+  private parseContactMutationAuditQuery(params?: URLSearchParams): ContactMutationAuditQuery {
+    const rawLimit = params?.get('limit');
+    const parsedLimit = rawLimit ? Number.parseInt(rawLimit, 10) : Number.NaN;
+    const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(parsedLimit, 200)) : 25;
+
+    const contactId = params?.get('contactId')?.trim() || undefined;
+    const actor = params?.get('actor')?.trim() || undefined;
+    const field = this.normalizeContactMutationAuditField(params?.get('field') ?? null);
+
+    return {
+      contactId,
+      actor,
+      field,
+      limit,
+    };
+  }
+
+  private listContactMutationAuditEntries(query: ContactMutationAuditQuery): ContactMutationAuditEntry[] {
+    if (!this.contactStore) return [];
+    const storeWithAuditList = this.contactStore as ContactStore & {
+      listMutationAuditEntries?: (auditQuery?: ContactMutationAuditQuery) => ContactMutationAuditEntry[];
+    };
+    if (typeof storeWithAuditList.listMutationAuditEntries !== 'function') return [];
+    return storeWithAuditList.listMutationAuditEntries(query);
+  }
+
   contactsPage(): string {
     if (!this.contactStore) {
       return tpl.layout('Garden Visitors', '<div class="empty">Contact store not available</div>', 'contacts');
@@ -1172,7 +1212,26 @@ export class AdminHandlers {
     const verifications = typeof maybeVerificationLister.listIdentityLinkVerifications === 'function'
       ? maybeVerificationLister.listIdentityLinkVerifications(20)
       : [];
-    return tpl.layout('Garden Visitors', tpl.contactsPage(contacts, profileMap, relatedChannelMap, verifications), 'contacts');
+    const mutationAuditQuery = this.parseContactMutationAuditQuery();
+    const mutationAudits = this.listContactMutationAuditEntries(mutationAuditQuery);
+    return tpl.layout(
+      'Garden Visitors',
+      tpl.contactsPage(
+        contacts,
+        profileMap,
+        relatedChannelMap,
+        verifications,
+        mutationAudits,
+        mutationAuditQuery,
+      ),
+      'contacts',
+    );
+  }
+
+  contactMutationAuditFragment(params?: URLSearchParams): string {
+    const query = this.parseContactMutationAuditQuery(params);
+    const entries = this.listContactMutationAuditEntries(query);
+    return tpl.contactMutationAuditFragment(entries);
   }
 
   contactsListFragment(): string {
@@ -1275,7 +1334,7 @@ export class AdminHandlers {
     }
 
     if (trustLevel && trustLevel !== contact.trustLevel) {
-      const updatedTrust = this.contactStore.setTrustLevel(contactId, trustLevel);
+      const updatedTrust = this.contactStore.setTrustLevel(contactId, trustLevel, 'admin:gui');
       if (!updatedTrust) {
         return tpl.settingsFormResult(false, 'Unable to update trust level for this contact');
       }
@@ -1289,7 +1348,7 @@ export class AdminHandlers {
     }
 
     if (notes !== null) {
-      this.contactStore.updateNotes(contactId, notes);
+      this.contactStore.updateNotes(contactId, notes, 'admin:gui');
     }
 
     for (const update of channelPrivacyUpdates) {

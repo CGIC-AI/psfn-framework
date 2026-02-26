@@ -403,9 +403,9 @@ describe('admin templates', () => {
     const html = handlers.handleContactUpdate(contact.id, body);
 
     expect(updateIdentityProfile).toHaveBeenCalledWith(contact.id, 'Carol Danvers', 'Captain');
-    expect(mockContactStore.setTrustLevel).toHaveBeenCalledWith(contact.id, 'trusted');
+    expect(mockContactStore.setTrustLevel).toHaveBeenCalledWith(contact.id, 'trusted', 'admin:gui');
     expect(mockContactStore.updateRelationshipType).toHaveBeenCalledWith(contact.id, 'friend');
-    expect(mockContactStore.updateNotes).toHaveBeenCalledWith(contact.id, 'Reliable operator');
+    expect(mockContactStore.updateNotes).toHaveBeenCalledWith(contact.id, 'Reliable operator', 'admin:gui');
     expect(mockContactStore.setChannelPrivacy).toHaveBeenCalledWith(
       contact.id,
       'discord',
@@ -489,6 +489,64 @@ describe('admin templates', () => {
     expect(html).toContain('No Op');
     expect(html).not.toContain('To link a new channel, both channel and channel user ID are required');
     expect(mockContactStore.linkChannelIdentity).not.toHaveBeenCalled();
+  });
+
+  it('renders trust/note mutation audit panel and query fragment', () => {
+    const contact = {
+      id: 'contact-audit',
+      displayName: 'Audit Person',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      firstSeen: '2024-01-01T00:00:00.000Z',
+      lastSeen: '2024-01-02T00:00:00.000Z',
+      notes: 'prefers details',
+    } as Contact;
+
+    const listMutationAuditEntries = vi.fn(() => ([{
+      id: 1,
+      contactId: contact.id,
+      actor: 'admin:gui',
+      field: 'trust_level',
+      oldValue: 'regular',
+      newValue: 'trusted',
+      timestamp: '2024-01-03T00:00:00.000Z',
+    }]));
+
+    const handlers = new AdminHandlers({
+      memoryStore: {
+        listContactProfiles: vi.fn(() => []),
+        getContactProfile: vi.fn(() => undefined),
+      } as unknown as MemoryStore,
+      sessionStore: {
+        listChannels: vi.fn(() => []),
+        getLastEntry: vi.fn(() => undefined),
+      } as unknown as SessionStore,
+      sessionManager: {} as SessionManager,
+      scheduler: { taskCount: 0 } as Scheduler,
+      shardManager: {} as ShardManager,
+      eventBus: new EventBus(),
+      embeddingService: null,
+      characterCard: {} as CharacterCardV2,
+      config: { dataDir: '/tmp' } as SubstrateConfig,
+      contactStore: {
+        listAll: vi.fn(() => [contact]),
+        listMutationAuditEntries,
+      } as unknown as ContactStore,
+    });
+
+    const page = handlers.contactsPage();
+    expect(page).toContain('Trust + note mutation audit');
+    expect(page).toContain('hx-get="/api/contacts/mutations"');
+    expect(page).toContain('admin:gui');
+    expect(page).toContain('Old value');
+    expect(page).toContain('New value');
+
+    const fragment = handlers.contactMutationAuditFragment(new URLSearchParams('field=notes&limit=5'));
+    expect(fragment).toContain('<table>');
+    expect(listMutationAuditEntries).toHaveBeenCalledWith(expect.objectContaining({
+      field: 'notes',
+      limit: 5,
+    }));
   });
 
   it('prefers persisted contact conversation channels in contacts list rendering', () => {

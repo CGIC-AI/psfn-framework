@@ -261,6 +261,30 @@ describe('settings', () => {
       expect(config.retryBaseDelayMs).toBe(4000);
     });
 
+    it('applies import-processing routing controls', () => {
+      const config = makeConfig({
+        openRouterProviderOrder: ['openai'],
+        importProcessingRouteMode: 'background',
+        importProcessingStrictPolicy: false,
+        importProcessingLocalEndpointUrl: 'http://localhost:11434/v1',
+        importProcessingLocalModel: 'llama3.2:latest',
+      });
+
+      applySettings(config, {
+        openRouterProviderOrder: ['parasail', 'openai'],
+        importProcessingRouteMode: 'openrouter_zdr',
+        importProcessingStrictPolicy: true,
+        importProcessingLocalEndpointUrl: 'http://localhost:8080/v1',
+        importProcessingLocalModel: 'custom/model',
+      });
+
+      expect(config.openRouterProviderOrder).toEqual(['parasail', 'openai']);
+      expect(config.importProcessingRouteMode).toBe('openrouter_zdr');
+      expect(config.importProcessingStrictPolicy).toBe(true);
+      expect(config.importProcessingLocalEndpointUrl).toBe('http://localhost:8080/v1');
+      expect(config.importProcessingLocalModel).toBe('custom/model');
+    });
+
     it('keeps chat model roster synchronized with primary settings', () => {
       const config = makeConfig();
       applySettings(config, {
@@ -476,6 +500,34 @@ describe('settings', () => {
       expect(settings.extractionModel).toBe('deepseek/deepseek-v3.2');
     });
 
+    it('parses import-processing routing controls', () => {
+      const params = new URLSearchParams({
+        importProcessingRouteMode: 'openrouter_zdr',
+        importProcessingStrictPolicy: 'true',
+        openRouterProviderOrder: 'parasail, openai, parasail',
+        importProcessingLocalEndpointUrl: 'http://localhost:11434/v1',
+        importProcessingLocalModel: 'llama3.2:latest',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.importProcessingRouteMode).toBe('openrouter_zdr');
+      expect(settings.importProcessingStrictPolicy).toBe(true);
+      expect(settings.openRouterProviderOrder).toEqual(['parasail', 'openai']);
+      expect(settings.importProcessingLocalEndpointUrl).toBe('http://localhost:11434/v1');
+      expect(settings.importProcessingLocalModel).toBe('llama3.2:latest');
+    });
+
+    it('requires local endpoint fields when local import route mode is selected', () => {
+      const params = new URLSearchParams({
+        importProcessingRouteMode: 'local_endpoint',
+        importProcessingStrictPolicy: 'false',
+      });
+      const [, errors] = parseSettingsForm(params);
+      expect(errors).toContain('importProcessingLocalEndpointUrl is required when importProcessingRouteMode=local_endpoint');
+      expect(errors).toContain('importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint');
+    });
+
     it('rejects assignment references to unknown slots', () => {
       const params = new URLSearchParams({
         modelCatalogJson: JSON.stringify({
@@ -541,6 +593,11 @@ describe('settings', () => {
       expect(snapshot.thinkMaxWallTimeMs).toBeNull();
       expect(snapshot.thinkMaxSubQueries).toBeNull();
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
+      expect(snapshot.openRouterProviderOrder).toEqual([]);
+      expect(snapshot.importProcessingRouteMode).toBe('background');
+      expect(snapshot.importProcessingStrictPolicy).toBe(false);
+      expect(snapshot.importProcessingLocalEndpointUrl).toBeNull();
+      expect(snapshot.importProcessingLocalModel).toBeNull();
     });
 
     it('resolves budget percentages and nullable hard overrides', () => {

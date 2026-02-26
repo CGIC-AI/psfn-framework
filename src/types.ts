@@ -136,7 +136,14 @@ export interface ModelCatalogEntry {
 export type ModelRoleAssignments = Record<string, string>;
 
 export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext';
-export type CompletionPurpose = 'background' | 'extraction' | 'summary' | 'reasoning';
+export type CompletionPurpose = 'background' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
+export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
+
+export const IMPORT_PROCESSING_ROUTE_MODES: readonly ImportProcessingRouteMode[] = [
+  'background',
+  'openrouter_zdr',
+  'local_endpoint',
+];
 
 export interface RuntimeConfigHooks {
   refreshModels?: () => void;
@@ -214,6 +221,11 @@ export interface SubstrateConfig {
   thinkMaxSubQueries?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
+  openRouterProviderOrder?: string[];
+  importProcessingRouteMode?: ImportProcessingRouteMode;
+  importProcessingStrictPolicy?: boolean;
+  importProcessingLocalEndpointUrl?: string;
+  importProcessingLocalModel?: string;
 }
 
 export function loadConfig(): SubstrateConfig {
@@ -254,6 +266,7 @@ export function loadConfig(): SubstrateConfig {
     summary: 'primary',
     reasoning: 'primary',
     longContext: 'primary',
+    import_processing: 'extraction',
   };
   const memoryExtractionMinImportance = parseNumberEnv(
     process.env.MEMORY_EXTRACTION_MIN_IMPORTANCE,
@@ -291,6 +304,14 @@ export function loadConfig(): SubstrateConfig {
   const profileSynthesisMinSourceMemories = parseInt(process.env.PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES ?? '2', 10);
   const retryMaxAttempts = parseInt(process.env.RETRY_MAX_ATTEMPTS ?? '3', 10);
   const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
+  const openRouterProviderOrder = parseStringListEnv(process.env.OPENROUTER_PROVIDER_ORDER);
+  const importProcessingRouteMode = parseImportProcessingRouteMode(
+    process.env.IMPORT_PROCESSING_ROUTE_MODE,
+    'background',
+  );
+  const importProcessingStrictPolicy = parseOptionalBooleanEnv(process.env.IMPORT_PROCESSING_STRICT_POLICY) ?? false;
+  const importProcessingLocalEndpointUrl = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_ENDPOINT_URL);
+  const importProcessingLocalModel = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_MODEL);
   const capabilityTier = parseCapabilityTierEnv(process.env.CAPABILITY_TIER, 'nursery');
   const shardToolsets = parseShardToolsetEnv(process.env);
   const sessionMirrorEnabled = parseOptionalBooleanEnv(process.env.SESSION_MIRROR_ENABLED);
@@ -385,6 +406,11 @@ export function loadConfig(): SubstrateConfig {
     elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
     retryMaxAttempts,
     retryBaseDelayMs,
+    ...(openRouterProviderOrder.length > 0 ? { openRouterProviderOrder } : {}),
+    importProcessingRouteMode,
+    importProcessingStrictPolicy,
+    ...(importProcessingLocalEndpointUrl ? { importProcessingLocalEndpointUrl } : {}),
+    ...(importProcessingLocalModel ? { importProcessingLocalModel } : {}),
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
   };
@@ -429,6 +455,24 @@ function parseBoundedIntegerEnv(
   const parsed = Number.parseInt(value ?? '', 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
+}
+
+function parseOptionalStringEnv(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseImportProcessingRouteMode(
+  value: string | undefined,
+  fallback: ImportProcessingRouteMode,
+): ImportProcessingRouteMode {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === 'background' || trimmed === 'openrouter_zdr' || trimmed === 'local_endpoint') {
+    return trimmed;
+  }
+  return fallback;
 }
 
 function parseCapabilityTierEnv(

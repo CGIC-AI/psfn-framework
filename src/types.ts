@@ -100,22 +100,30 @@ export interface ToolCall {
 
 // ── Model roster ──
 
+export interface ModelContextBudgetConfig {
+  sessionHistoryMinTokens?: number;
+  memoryRetrievalMinTokens?: number;
+}
+
 export interface ModelSlot {
   model: string;
   provider: string;
   maxTokens: number;
   contextWindow?: number;
+  contextBudget?: ModelContextBudgetConfig;
 }
 
 export interface ModelSlotDefaults {
   maxTokens?: number;
   contextWindow?: number;
+  contextBudget?: ModelContextBudgetConfig;
   description?: string;
 }
 
 export interface ModelSlotOverrides {
   maxTokens?: number;
   contextWindow?: number;
+  contextBudget?: ModelContextBudgetConfig;
 }
 
 export interface ModelCatalogEntry {

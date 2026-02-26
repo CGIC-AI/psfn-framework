@@ -1,0 +1,65 @@
+import { describe, expect, it, vi } from 'vitest';
+import { ElevenLabsStreamingTtsConnector } from './elevenlabs-stream.js';
+import {
+  createStreamingTtsConnector,
+  registerStreamingTtsConnectorFactory,
+  type EchoStreamingTtsConfig,
+} from './index.js';
+import type { StreamingTtsConnector, TtsAudioChunk } from './types.js';
+
+function createStubConnector(id: string): StreamingTtsConnector {
+  return {
+    id,
+    synthesizeStream: vi.fn(async () => ({
+      audio: (async function* emptyAudio(): AsyncGenerator<TtsAudioChunk> {})(),
+      cancel: async (): Promise<void> => {},
+    })),
+    synthesizeBuffer: vi.fn(async () => Buffer.alloc(0)),
+  };
+}
+
+describe('createStreamingTtsConnector', () => {
+  it('creates the ElevenLabs connector for provider "elevenlabs"', () => {
+    const connector = createStreamingTtsConnector('elevenlabs', {
+      apiKey: 'test-key',
+      voiceId: 'test-voice',
+    });
+
+    expect(connector).toBeInstanceOf(ElevenLabsStreamingTtsConnector);
+    expect(connector.id).toBe('elevenlabs');
+  });
+
+  it('dispatches to a registered factory for provider "echo"', () => {
+    const connector = createStubConnector('echo-test');
+    const factory = vi.fn((config: EchoStreamingTtsConfig) => {
+      expect(config).toMatchObject({
+        url: 'http://127.0.0.1:5050/v1/audio/speech',
+        voice: 'echo-voice-1',
+        preset: 'normal',
+        model: 'echo-v1',
+      });
+      return connector;
+    });
+    const restoreFactory = registerStreamingTtsConnectorFactory('echo', factory);
+
+    try {
+      const result = createStreamingTtsConnector('echo', {
+        url: 'http://127.0.0.1:5050/v1/audio/speech',
+        voice: 'echo-voice-1',
+        preset: 'normal',
+        model: 'echo-v1',
+      });
+
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(result).toBe(connector);
+    } finally {
+      restoreFactory();
+    }
+  });
+
+  it('throws a deterministic error for invalid providers', () => {
+    expect(() => createStreamingTtsConnector('invalid-provider' as never, {} as never)).toThrow(
+      'Unsupported streaming TTS provider: invalid-provider',
+    );
+  });
+});

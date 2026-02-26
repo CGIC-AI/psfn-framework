@@ -8,7 +8,7 @@ import { dirname } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { LLMClient } from './llm/client.js';
-import { EmbeddingProvider } from './memory/embedding.js';
+import { createEmbeddingProviderFromEnv } from './memory/embedding.js';
 import { DiscordAdapter } from './channels/discord/adapter.js';
 import { EventBus } from './event-bus.js';
 import { GatewayServer } from './gateway/server.js';
@@ -126,11 +126,7 @@ async function main(): Promise<void> {
 
   const llmClient = new LLMClient(config);
 
-  const embeddingProvider = new EmbeddingProvider({
-    ollamaUrl: process.env.OLLAMA_URL,
-    model: process.env.EMBEDDING_MODEL,
-    dims: process.env.EMBEDDING_DIMS ? parseInt(process.env.EMBEDDING_DIMS, 10) : undefined,
-  });
+  const embeddingProvider = createEmbeddingProviderFromEnv(process.env);
 
   const discord = new DiscordAdapter(config, eventBus);
   const capabilityRuntime = new CapabilityRuntime({

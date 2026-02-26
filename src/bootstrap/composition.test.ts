@@ -295,6 +295,12 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('wireShardAndThinkRuntime({');
   });
 
+  it('routes gateway embedding bootstrap through env provider factory', () => {
+    const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+    expect(source).toContain('createEmbeddingProviderFromEnv(process.env)');
+    expect(source).not.toContain('new EmbeddingProvider(');
+  });
+
   it('avoids duplicating composition-owned constructor wiring', () => {
     const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
     expect(source).not.toContain('new SessionStore(');

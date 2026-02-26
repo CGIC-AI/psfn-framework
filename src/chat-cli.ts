@@ -101,7 +101,7 @@ async function main(): Promise<void> {
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});
 
-  console.log(`[CLI] Ready — ${embeddingProvider.dims}d embeddings via Ollama`);
+  console.log(`[CLI] Ready — ${embeddingProvider.dims}d embeddings via ${embeddingProvider.kind}`);
   console.log('[CLI] Type your message, or /quit to exit, /memories to list stored memories\n');
 
   // REPL

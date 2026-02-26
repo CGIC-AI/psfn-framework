@@ -311,6 +311,8 @@ export class SubstrateRuntime implements Lifecycle {
       this.memoryStore,
       embeddingProvider,
       this.config,
+      this.eventBus,
+      contactStore,
     );
 
     this.memoryExtractor = new MemoryExtractor(
@@ -322,6 +324,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.config,
       promptRegistry,
       this.sessionStore,
+      contactStore,
     );
     this.agentLoop.memoryExtractor = this.memoryExtractor;
     this.sessionManager.setPreCompactionExtractionHandler(async ({

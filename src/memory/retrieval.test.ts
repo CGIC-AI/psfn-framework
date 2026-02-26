@@ -40,6 +40,7 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     searchByEmbedding: vi.fn().mockReturnValue(memories),
     updateMemory: vi.fn(),
     getContactProfile: vi.fn().mockReturnValue(undefined),
+    getMemoriesByContact: vi.fn().mockReturnValue([]),
   } as unknown as MemoryStore;
 }
 
@@ -597,6 +598,79 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).toContain('Core profile for this person:');
     expect(result).toContain('Vega prefers concise responses');
     expect(result).not.toContain('What you remember about this person:');
+  });
+
+  it('injects emotional continuity snapshot when contact mood metadata is available', async () => {
+    const memories = [
+      makeMemory({ text: 'A semantic fact', type: 'semantic', sensitivity: 'public', similarity: 0.9 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const contactStore = {
+      getEmotionalSnapshot: vi.fn().mockReturnValue({
+        baselineValence: 0.22,
+        moodValence: 0.37,
+        moodDrift: 0.15,
+        moodSamples: 6,
+        lastMoodUpdateEpochMs: Date.now(),
+      }),
+      getById: vi.fn(),
+    } as any;
+
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      { retrievalLimit: 20 },
+      undefined,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'test query',
+      'api:test',
+      'primary',
+      undefined,
+      'contact-1',
+    );
+
+    expect(result).toContain('Emotional continuity snapshot:');
+    expect(result).toContain('drift +0.15');
+  });
+
+  it('surfaces cross-session emotional memories for canonical contacts', async () => {
+    const store = makeMockStore([]);
+    (store.getMemoriesByContact as ReturnType<typeof vi.fn>).mockReturnValue([
+      makeMemory({
+        id: 'emo-1',
+        text: 'User felt relieved after finishing the deadline sprint.',
+        type: 'emotional',
+        emotionalValence: 0.6,
+        sensitivity: 'public',
+        similarity: 0.2,
+      }),
+      makeMemory({
+        id: 'sem-1',
+        text: 'User likes black coffee.',
+        type: 'semantic',
+        emotionalValence: 0,
+        sensitivity: 'public',
+        similarity: 0.2,
+      }),
+    ]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'how have things been lately?',
+      'api:test',
+      'primary',
+      undefined,
+      'contact-1',
+    );
+
+    expect(result).toContain('Cross-session emotional continuity:');
+    expect(result).toContain('User felt relieved after finishing the deadline sprint.');
+    expect(result).not.toContain('User likes black coffee.');
   });
 
   it('emits structured retrieval telemetry event when event bus is provided', async () => {

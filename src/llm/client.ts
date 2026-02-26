@@ -1,9 +1,9 @@
 import {
-  getModel,
   streamSimple,
   completeSimple,
   getEnvApiKey,
   type Model,
+  type SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
 import type {
   CompletionPurpose,
@@ -25,8 +25,14 @@ import { createComponentLogger } from '../logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
+import { resolveRegisteredModel } from './models.js';
 
 const log = createComponentLogger('LLMClient');
+
+interface LLMRequestOptions extends SimpleStreamOptions {
+  zdr?: boolean;
+  provider?: { order: string[] };
+}
 
 export class SensitiveImportRoutePolicyError extends Error {
   readonly code = 'sensitive_import_route_rejected';
@@ -71,7 +77,7 @@ export class LLMClient {
         apiKey: process.env.LITELLM_API_KEY ?? undefined,
       };
     }
-    const model = getModel(candidate.provider as any, modelId as any);
+    const model = resolveRegisteredModel(candidate.provider, modelId);
     if (!model) {
       throw new Error(`Unknown model "${modelId}" for provider "${candidate.provider}". Set LITELLM_BASE_URL or check PRIMARY_MODEL / EXTRACTION_MODEL in .env`);
     }
@@ -85,8 +91,8 @@ export class LLMClient {
     candidate: RoutingCandidate,
     apiKey: string | undefined,
     extra: { signal?: AbortSignal } = {},
-  ): Record<string, unknown> {
-    const requestOptions: Record<string, unknown> = {
+  ): LLMRequestOptions {
+    const requestOptions: LLMRequestOptions = {
       apiKey,
       maxTokens: candidate.maxTokens,
       ...(extra.signal ? { signal: extra.signal } : {}),
@@ -131,7 +137,7 @@ export class LLMClient {
             const eventStream = streamSimple(
               model,
               piContext,
-              requestOptions as any,
+              requestOptions,
             );
 
             let content = '';
@@ -271,7 +277,7 @@ export class LLMClient {
             return await completeSimple(
               model,
               piContext,
-              requestOptions as any,
+              requestOptions,
             );
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));

@@ -4,18 +4,10 @@ import type {
   AssistantMessage,
   Tool as PiTool,
   Context as PiContext,
+  TextContent as TextBlock,
+  ThinkingContent as ThinkingBlock,
 } from '@mariozechner/pi-ai';
 import type { ContextMessage, LLMContext, ToolSchema } from '../types.js';
-
-interface TextBlock {
-  type: 'text';
-  text: string;
-}
-
-interface ThinkingBlock {
-  type: 'thinking';
-  thinking: string;
-}
 
 interface GenericBlock {
   type?: unknown;

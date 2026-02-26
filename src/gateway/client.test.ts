@@ -535,3 +535,91 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect((messages[0] as any).content).toBe('test notification');
   });
 });
+
+describe('GatewayClient session integrity RPC', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('calls session.hmac.sign and returns signed entry', async () => {
+    const signPromise = client.sessionHmacSign({
+      type: 'message',
+      id: 1,
+      channelId: 'api:test',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+    }, null);
+
+    const req = conn.sent[0] as { id: number; method: string };
+    expect(req.method).toBe('session.hmac.sign');
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: req.id,
+      result: {
+        entry: {
+          type: 'message',
+          id: 1,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'hello',
+          timestamp: 1_000,
+          _hmac: 'a'.repeat(64),
+          _hmacKeyVersion: 'v1',
+        },
+      },
+    });
+
+    const signed = await signPromise;
+    expect(signed._hmac).toBe('a'.repeat(64));
+    expect(signed._hmacKeyVersion).toBe('v1');
+  });
+
+  it('calls session.hmac.verify and returns verification result', async () => {
+    const verifyPromise = client.sessionHmacVerify({
+      type: 'message',
+      id: 1,
+      channelId: 'api:test',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+      _hmac: 'a'.repeat(64),
+      _hmacKeyVersion: 'v1',
+    }, null);
+
+    const req = conn.sent[0] as { id: number; method: string };
+    expect(req.method).toBe('session.hmac.verify');
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: req.id,
+      result: {
+        verified: true,
+        observedHmac: 'a'.repeat(64),
+      },
+    });
+
+    const verification = await verifyPromise;
+    expect(verification).toEqual({
+      verified: true,
+      observedHmac: 'a'.repeat(64),
+    });
+  });
+
+  it('fails to create sync session integrity bridge without socket path', () => {
+    const provider = client.createSessionIntegrityProvider();
+    expect(() => provider.sign({
+      type: 'message',
+      id: 1,
+      channelId: 'api:test',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+    }, null)).toThrow('requires a gateway socket path');
+  });
+});

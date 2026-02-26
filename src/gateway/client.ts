@@ -3,6 +3,7 @@
 // so it can be used as a drop-in replacement for direct clients.
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
+import { Worker } from 'node:worker_threads';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type {
   AgentResponse,
@@ -17,6 +18,9 @@ import { createSocketClient } from './transport.js';
 import { createComponentLogger } from '../logger.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 const log = createComponentLogger('GatewayClient');
+import type { JournalIntegrityVerificationResult } from '../session/journal-utils.js';
+import type { SessionIntegrityProvider } from '../session/store.js';
+import type { JournalEntry } from '../session/types.js';
 import type {
   LLMChatResult,
   LLMCompleteResult,
@@ -42,15 +46,111 @@ import type {
   DiscordVoiceStreamAckResult,
   DiscordVoiceStreamEndResult,
   DiscordVoiceStreamCancelResult,
+  SessionHmacSignResult,
+  SessionHmacVerifyResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
+const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
+const SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES = 64 * 1024;
+
+const SESSION_INTEGRITY_WORKER_SOURCE = `
+const net = require('node:net');
+const { parentPort } = require('node:worker_threads');
+
+if (!parentPort) {
+  throw new Error('Session integrity worker requires a parent port');
+}
+
+function writeResponse(stateBuffer, payloadBuffer, payload) {
+  const state = new Int32Array(stateBuffer);
+  const view = new Uint8Array(payloadBuffer);
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8');
+  const max = view.length;
+  const size = Math.min(max, encoded.length);
+  view.fill(0);
+  view.set(encoded.subarray(0, size), 0);
+  Atomics.store(state, 1, size);
+  Atomics.store(state, 0, 1);
+  Atomics.notify(state, 0);
+}
+
+function requestRpc(socketPath, method, params, id, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection(socketPath);
+    let settled = false;
+    let buffer = '';
+    const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\\n';
+
+    const finish = (kind, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (kind === 'resolve') resolve(value);
+      else reject(value);
+    };
+
+    const timer = setTimeout(() => {
+      finish('reject', new Error('Session integrity RPC timed out'));
+    }, timeoutMs);
+
+    socket.on('connect', () => {
+      socket.write(request);
+    });
+
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      while (true) {
+        const newline = buffer.indexOf('\\n');
+        if (newline < 0) break;
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (message && message.id === id) {
+          finish('resolve', message);
+          return;
+        }
+      }
+    });
+
+    socket.on('error', (error) => finish('reject', error));
+    socket.on('close', () => {
+      if (!settled) {
+        finish('reject', new Error('Session integrity RPC connection closed before response'));
+      }
+    });
+  });
+}
+
+parentPort.on('message', async (job) => {
+  const { stateBuffer, payloadBuffer, socketPath, method, params, requestId, timeoutMs } = job || {};
+  if (!stateBuffer || !payloadBuffer || !socketPath || !method) {
+    return;
+  }
+  try {
+    const response = await requestRpc(socketPath, method, params, requestId, timeoutMs);
+    writeResponse(stateBuffer, payloadBuffer, { ok: true, response });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    writeResponse(stateBuffer, payloadBuffer, { ok: false, error: message });
+  }
+});
+`;
 
 export interface GatewayClientOptions {
   voiceStreamQueueSize?: number;
   voiceStreamOverflowPolicy?: QueueOverflowPolicy;
+  sessionIntegritySocketPath?: string;
+  sessionIntegrityRpcTimeoutMs?: number;
 }
 
 interface VoiceStreamState {
@@ -76,15 +176,26 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   private voiceStreams = new Map<string, VoiceStreamState>();
   private readonly voiceStreamQueueSize: number;
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
+  private readonly sessionIntegritySocketPath: string | null;
+  private readonly sessionIntegrityRpcTimeoutMs: number;
+  private sessionIntegrityWorker: Worker | null = null;
+  private sessionIntegrityRequestCounter = 0;
 
   constructor(conn: NdjsonConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
     this.embeddingDims = embeddingDims;
     this.voiceStreamQueueSize = options.voiceStreamQueueSize ?? DEFAULT_VOICE_STREAM_QUEUE_SIZE;
     this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
+    this.sessionIntegritySocketPath = options.sessionIntegritySocketPath ?? null;
+    this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
 
     if (!Number.isInteger(this.voiceStreamQueueSize) || this.voiceStreamQueueSize <= 0) {
       throw new Error(`voiceStreamQueueSize must be a positive integer, got ${this.voiceStreamQueueSize}`);
+    }
+    if (!Number.isInteger(this.sessionIntegrityRpcTimeoutMs) || this.sessionIntegrityRpcTimeoutMs <= 0) {
+      throw new Error(
+        `sessionIntegrityRpcTimeoutMs must be a positive integer, got ${this.sessionIntegrityRpcTimeoutMs}`,
+      );
     }
 
     // Create bidirectional RPC instance (client sends requests to gateway,
@@ -121,7 +232,10 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     options: GatewayClientOptions = {},
   ): Promise<GatewayClient> {
     const conn = await createSocketClient({ socketPath });
-    return new GatewayClient(conn, embeddingDims, options);
+    return new GatewayClient(conn, embeddingDims, {
+      ...options,
+      sessionIntegritySocketPath: options.sessionIntegritySocketPath ?? socketPath,
+    });
   }
 
   // ── LLMProvider interface ──
@@ -248,6 +362,43 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   async resolveConfirmationQueue(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult> {
     return await this.rpcInstance.request('confirmation.resolve', params) as ConfirmationResolveResult;
+  }
+
+  async sessionHmacSign(entry: JournalEntry, previousHmac: string | null): Promise<JournalEntry> {
+    const result = await this.rpcInstance.request('session.hmac.sign', {
+      entry,
+      previousHmac,
+    }) as SessionHmacSignResult;
+    return result.entry;
+  }
+
+  async sessionHmacVerify(
+    entry: JournalEntry,
+    previousHmac: string | null,
+  ): Promise<JournalIntegrityVerificationResult> {
+    return await this.rpcInstance.request('session.hmac.verify', {
+      entry,
+      previousHmac,
+    }) as SessionHmacVerifyResult;
+  }
+
+  createSessionIntegrityProvider(): SessionIntegrityProvider {
+    return {
+      sign: (entry, previousHmac) => {
+        const result = this.requestSessionIntegritySync<SessionHmacSignResult>('session.hmac.sign', {
+          entry,
+          previousHmac,
+        });
+        return result.entry;
+      },
+      verify: (entry, previousHmac) => this.requestSessionIntegritySync<SessionHmacVerifyResult>(
+        'session.hmac.verify',
+        {
+          entry,
+          previousHmac,
+        },
+      ),
+    };
   }
 
   // ── Notification handlers ──
@@ -510,10 +661,81 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     }
   }
 
+  private ensureSessionIntegrityWorker(): Worker {
+    if (this.sessionIntegrityWorker) return this.sessionIntegrityWorker;
+    if (!this.sessionIntegritySocketPath) {
+      throw new Error('Session integrity provider requires a gateway socket path');
+    }
+
+    const worker = new Worker(SESSION_INTEGRITY_WORKER_SOURCE, { eval: true });
+    worker.on('error', (error) => {
+      log.error('Session integrity worker error', { error: error.message });
+    });
+    this.sessionIntegrityWorker = worker;
+    return worker;
+  }
+
+  private requestSessionIntegritySync<T>(
+    method: 'session.hmac.sign' | 'session.hmac.verify',
+    params: Record<string, unknown>,
+  ): T {
+    const worker = this.ensureSessionIntegrityWorker();
+    const stateBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const payloadBuffer = new SharedArrayBuffer(SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES);
+    const state = new Int32Array(stateBuffer);
+    const requestId = ++this.sessionIntegrityRequestCounter;
+
+    worker.postMessage({
+      stateBuffer,
+      payloadBuffer,
+      socketPath: this.sessionIntegritySocketPath,
+      method,
+      params,
+      requestId,
+      timeoutMs: this.sessionIntegrityRpcTimeoutMs,
+    });
+
+    const wait = Atomics.wait(state, 0, 0, this.sessionIntegrityRpcTimeoutMs + 250);
+    if (wait === 'timed-out') {
+      throw new Error(`Session integrity RPC timed out for ${method}`);
+    }
+
+    const payloadSize = Atomics.load(state, 1);
+    if (!Number.isInteger(payloadSize) || payloadSize <= 0 || payloadSize > SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES) {
+      throw new Error('Session integrity RPC returned an invalid payload');
+    }
+
+    const raw = Buffer.from(new Uint8Array(payloadBuffer, 0, payloadSize)).toString('utf8');
+    const parsed = JSON.parse(raw) as {
+      ok: boolean;
+      response?: { result?: unknown; error?: { code: number; message: string } };
+      error?: string;
+    };
+
+    if (!parsed.ok) {
+      throw new Error(parsed.error ?? `Session integrity RPC failed for ${method}`);
+    }
+
+    const rpcResponse = parsed.response;
+    if (!rpcResponse) {
+      throw new Error(`Session integrity RPC missing response for ${method}`);
+    }
+
+    if (rpcResponse.error) {
+      throw new JSONRPCErrorException(rpcResponse.error.message, rpcResponse.error.code);
+    }
+
+    return rpcResponse.result as T;
+  }
+
   // ── Lifecycle ──
 
   destroy(): void {
     this.voiceStreams.clear();
+    if (this.sessionIntegrityWorker) {
+      void this.sessionIntegrityWorker.terminate();
+      this.sessionIntegrityWorker = null;
+    }
     this.conn.destroy();
   }
 }

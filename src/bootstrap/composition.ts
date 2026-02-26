@@ -4,7 +4,7 @@
 import { join } from 'node:path';
 import type { SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
-import { SessionStore } from '../session/store.js';
+import { SessionStore, type SessionIntegrityProvider } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
 import { UserContinuityStore } from '../session/continuity.js';
 import { EmbeddingProvider } from '../memory/embedding.js';
@@ -34,11 +34,14 @@ export interface SessionCompositionOptions {
   sessionsDir?: string;
   enableContinuity?: boolean;
   promptRegistry?: PromptRegistryStore | null;
+  sessionIntegrityProvider?: SessionIntegrityProvider | null;
 }
 
 export function composeSessionRuntime(options: SessionCompositionOptions): SessionComposition {
   const sessionsDir = options.sessionsDir ?? join(options.config.dataDir, 'sessions');
-  const sessionStore = new SessionStore(sessionsDir);
+  const sessionStore = new SessionStore(sessionsDir, {
+    integrityProvider: options.sessionIntegrityProvider ?? null,
+  });
   const sessionManager = new SessionManager(
     sessionStore,
     options.config,

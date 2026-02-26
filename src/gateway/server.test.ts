@@ -234,6 +234,60 @@ describe('GatewayServer', () => {
     });
   });
 
+  describe('session.hmac RPC', () => {
+    it('signs and verifies entries using the gateway keyring', async () => {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        sessionHmacKeyring: {
+          activeVersion: 'v1',
+          keys: { v1: 'integration-secret' },
+        },
+      });
+
+      const signResponse = await invokeRpc(conn, 900, 'session.hmac.sign', {
+        entry: {
+          type: 'message',
+          id: 1,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'hello',
+          timestamp: 1_000,
+        },
+        previousHmac: null,
+      });
+
+      expect(signResponse.result.entry._hmac).toMatch(/^[a-f0-9]{64}$/i);
+      expect(signResponse.result.entry._hmacKeyVersion).toBe('v1');
+
+      const verifyResponse = await invokeRpc(conn, 901, 'session.hmac.verify', {
+        entry: signResponse.result.entry,
+        previousHmac: null,
+      });
+      expect(verifyResponse.result).toMatchObject({
+        verified: true,
+      });
+    });
+
+    it('returns provider error when keyring is unavailable', async () => {
+      const { conn } = await setupServerConnection(createMinimalOptions());
+      const response = await invokeRpc(conn, 902, 'session.hmac.sign', {
+        entry: {
+          type: 'message',
+          id: 1,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'hello',
+          timestamp: 1_000,
+        },
+        previousHmac: null,
+      });
+
+      expect(response.error).toBeDefined();
+      expect(response.error.code).toBe(GatewayErrors.PROVIDER_ERROR);
+      expect(response.error.message).toContain('keyring');
+    });
+  });
+
   describe('confirmation queue', () => {
     let tempDir: string;
 

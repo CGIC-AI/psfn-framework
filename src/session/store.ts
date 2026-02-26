@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   mkdirSync,
   readFileSync,
   existsSync,
@@ -6,6 +7,7 @@ import {
   writeFileSync,
   renameSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry, JournalMarkerType } from './types.js';
 import { createComponentLogger } from '../logger.js';
@@ -18,12 +20,15 @@ import {
   journalToCompactionSummary,
   journalToMarkerEntry,
   journalToSessionEntry,
+  parseLegacyChatSource,
   quarantineSidecarPath,
   readJournalFile,
   readJournalFirstEntry,
   readJournalTailEntries,
   scanJournalFileMetadata,
   signJournalEntry,
+  type LegacyChatSourceFormat,
+  type LegacyChatSourceRecord,
   verifyJournalEntryIntegrity,
   wrapUnverifiedHistory,
   type JournalIntegrityVerificationResult,
@@ -94,8 +99,54 @@ export interface CrashRecoveryExtractionCandidate {
   lastExtractionCoveredUpTo: number;
 }
 
+export interface LegacyChatImportRequest {
+  channelId: string;
+  sourcePath: string;
+  defaultAuthorId?: string;
+  defaultAuthorName?: string;
+  defaultChannelVisibility?: string;
+  resumeFromManifest?: boolean;
+  metadataTag?: string;
+}
+
+export interface LegacyChatImportRange {
+  sourceStartIndex: number;
+  sourceEndIndex: number;
+  firstEntryId: number;
+  lastEntryId: number;
+  messageCount: number;
+}
+
+export interface LegacyChatImportManifest {
+  schemaVersion: number;
+  importId: string;
+  channelId: string;
+  sourcePath: string;
+  sourceHash: string;
+  sourceFormat: LegacyChatSourceFormat;
+  importedAt: number;
+  resumedFromSourceIndex: number;
+  nextSourceIndex: number;
+  sourceRecordCount: number;
+  importedRecordCount: number;
+  skippedRecordCount: number;
+  entryRanges: LegacyChatImportRange[];
+}
+
+export interface LegacyChatImportResult {
+  manifest: LegacyChatImportManifest;
+  importedEntryIds: number[];
+}
+
+export interface LegacyChatImportManifestFilter {
+  channelId?: string;
+  sourcePath?: string;
+}
+
 const CHANNEL_INDEX_FILENAME = '_channel_index.json';
 const CHANNEL_INDEX_VERSION = 2;
+const IMPORT_MANIFEST_FILENAME = '_import_manifest.jsonl';
+const IMPORT_MANIFEST_SCHEMA_VERSION = 1;
 const READABLE_SESSION_FILENAME = /^\d{8}_[a-z0-9-]+_[a-z0-9-]+_\d{6}\.jsonl$/;
 
 /** Sanitize a channelId into a safe filename component using strict allowlist. */
@@ -159,6 +210,107 @@ function normalizeOptionalMarker(value: unknown): JournalMarkerType | undefined 
   return undefined;
 }
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  return normalized;
+}
+
+function normalizeOptionalRange(value: unknown): LegacyChatImportRange | null {
+  if (!value || typeof value !== 'object') return null;
+  const row = value as Record<string, unknown>;
+  const sourceStartIndex = normalizeOptionalNonNegativeNumber(row.sourceStartIndex);
+  const sourceEndIndex = normalizeOptionalNonNegativeNumber(row.sourceEndIndex);
+  const firstEntryId = normalizeOptionalNonNegativeNumber(row.firstEntryId);
+  const lastEntryId = normalizeOptionalNonNegativeNumber(row.lastEntryId);
+  const messageCount = normalizeOptionalNonNegativeNumber(row.messageCount);
+  if (
+    sourceStartIndex === undefined
+    || sourceEndIndex === undefined
+    || firstEntryId === undefined
+    || lastEntryId === undefined
+    || messageCount === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    sourceStartIndex,
+    sourceEndIndex,
+    firstEntryId,
+    lastEntryId,
+    messageCount,
+  };
+}
+
+function parseImportManifestLine(line: string): LegacyChatImportManifest | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const row = parsed as Record<string, unknown>;
+
+    const schemaVersion = normalizeOptionalNonNegativeNumber(row.schemaVersion);
+    const channelId = normalizeOptionalString(row.channelId);
+    const sourcePath = normalizeOptionalString(row.sourcePath);
+    const sourceHash = normalizeOptionalString(row.sourceHash);
+    const sourceFormat = row.sourceFormat;
+    const importId = normalizeOptionalString(row.importId);
+    const importedAt = normalizeOptionalNonNegativeNumber(row.importedAt);
+    const resumedFromSourceIndex = normalizeOptionalNonNegativeNumber(row.resumedFromSourceIndex);
+    const nextSourceIndex = normalizeOptionalNonNegativeNumber(row.nextSourceIndex);
+    const sourceRecordCount = normalizeOptionalNonNegativeNumber(row.sourceRecordCount);
+    const importedRecordCount = normalizeOptionalNonNegativeNumber(row.importedRecordCount);
+    const skippedRecordCount = normalizeOptionalNonNegativeNumber(row.skippedRecordCount);
+
+    if (
+      schemaVersion === undefined
+      || !channelId
+      || !sourcePath
+      || !sourceHash
+      || !importId
+      || importedAt === undefined
+      || resumedFromSourceIndex === undefined
+      || nextSourceIndex === undefined
+      || sourceRecordCount === undefined
+      || importedRecordCount === undefined
+      || skippedRecordCount === undefined
+    ) {
+      return null;
+    }
+
+    if (sourceFormat !== 'jsonl' && sourceFormat !== 'json-array' && sourceFormat !== 'json-messages') {
+      return null;
+    }
+
+    const rangesRaw = Array.isArray(row.entryRanges) ? row.entryRanges : [];
+    const entryRanges = rangesRaw
+      .map(candidate => normalizeOptionalRange(candidate))
+      .filter((candidate): candidate is LegacyChatImportRange => candidate !== null);
+
+    return {
+      schemaVersion,
+      importId,
+      channelId,
+      sourcePath,
+      sourceHash,
+      sourceFormat,
+      importedAt,
+      resumedFromSourceIndex,
+      nextSourceIndex,
+      sourceRecordCount,
+      importedRecordCount,
+      skippedRecordCount,
+      entryRanges,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function channelIndexEntryEquals(left: ChannelIndexEntry | undefined, right: ChannelIndexEntry): boolean {
   if (!left) return false;
   return left.filename === right.filename
@@ -176,6 +328,7 @@ export class SessionStore {
   private channels: Map<string, ChannelCache> = new Map();
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
+  private importManifestPath: string;
   private searchIndex: SessionSearchIndex | null = null;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
   private integrityProvider: SessionIntegrityProvider | null;
@@ -186,6 +339,7 @@ export class SessionStore {
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
     this.channelIndexPath = join(sessionsDir, CHANNEL_INDEX_FILENAME);
+    this.importManifestPath = join(sessionsDir, IMPORT_MANIFEST_FILENAME);
     this.integrityProvider = options.integrityProvider
       ?? createKeyringIntegrityProvider(options.integrityKeyring ?? null);
     mkdirSync(sessionsDir, { recursive: true });
@@ -209,6 +363,72 @@ export class SessionStore {
 
   private encodedFilePath(channelId: string): string {
     return join(this.sessionsDir, sanitizeChannelId(channelId) + '.jsonl');
+  }
+
+  private isSessionJournalFilename(filename: string): boolean {
+    return filename.endsWith('.jsonl')
+      && !filename.startsWith('user_')
+      && filename !== IMPORT_MANIFEST_FILENAME;
+  }
+
+  private parseImportedMetadataValue(value: string): unknown {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+
+  private buildLegacyImportMetadata(params: {
+    importId: string;
+    sourcePath: string;
+    sourceHash: string;
+    sourceIndex: number;
+    sourceTimestamp: number;
+    metadataTag?: string;
+    sourceMetadata?: string;
+  }): string {
+    const metadata: Record<string, unknown> = {
+      type: 'legacy_import',
+      importId: params.importId,
+      sourcePath: params.sourcePath,
+      sourceHash: params.sourceHash,
+      sourceIndex: params.sourceIndex,
+      sourceTimestamp: params.sourceTimestamp,
+    };
+
+    if (params.metadataTag) {
+      metadata.tag = params.metadataTag;
+    }
+    if (params.sourceMetadata) {
+      metadata.sourceMetadata = this.parseImportedMetadataValue(params.sourceMetadata);
+    }
+
+    return JSON.stringify(metadata);
+  }
+
+  private appendImportManifest(manifest: LegacyChatImportManifest): void {
+    appendFileSync(this.importManifestPath, JSON.stringify(manifest) + '\n', 'utf-8');
+  }
+
+  private readImportManifests(): LegacyChatImportManifest[] {
+    if (!existsSync(this.importManifestPath)) return [];
+    const raw = readFileSync(this.importManifestPath, 'utf-8');
+    return raw
+      .split('\n')
+      .map(line => parseImportManifestLine(line))
+      .filter((manifest): manifest is LegacyChatImportManifest => manifest !== null);
+  }
+
+  private resolveLegacyImportResumeIndex(channelId: string, sourcePath: string): number {
+    let nextSourceIndex = 0;
+    const manifests = this.readImportManifests();
+    for (const manifest of manifests) {
+      if (manifest.channelId !== channelId) continue;
+      if (manifest.sourcePath !== sourcePath) continue;
+      nextSourceIndex = Math.max(nextSourceIndex, manifest.nextSourceIndex);
+    }
+    return nextSourceIndex;
   }
 
   /** Legacy sanitization (pre-%XX encoding): : → -, / → _ */
@@ -583,8 +803,7 @@ export class SessionStore {
 
   private migrateLegacyFilenames(): void {
     const files = readdirSync(this.sessionsDir)
-      .filter(f => f.endsWith('.jsonl'))
-      .filter(f => !f.startsWith('user_'));
+      .filter(f => this.isSessionJournalFilename(f));
 
     for (const filename of files) {
       if (READABLE_SESSION_FILENAME.test(filename)) continue;
@@ -619,8 +838,7 @@ export class SessionStore {
 
   private primeChannelIndexFromDisk(): void {
     const files = readdirSync(this.sessionsDir)
-      .filter(f => f.endsWith('.jsonl'))
-      .filter(f => !f.startsWith('user_'));
+      .filter(f => this.isSessionJournalFilename(f));
 
     for (const filename of files) {
       const filePath = join(this.sessionsDir, filename);
@@ -812,6 +1030,133 @@ export class SessionStore {
 
     if (messages.length <= limit) return messages;
     return messages.slice(-limit);
+  }
+
+  listLegacyImportManifests(filters: LegacyChatImportManifestFilter = {}): LegacyChatImportManifest[] {
+    return this.readImportManifests().filter((manifest) => {
+      if (filters.channelId && manifest.channelId !== filters.channelId) return false;
+      if (filters.sourcePath && manifest.sourcePath !== filters.sourcePath) return false;
+      return true;
+    });
+  }
+
+  importLegacyChatFromFile(request: LegacyChatImportRequest): LegacyChatImportResult {
+    const raw = readFileSync(request.sourcePath, 'utf-8');
+    const parsedSource = parseLegacyChatSource(raw);
+    const importId = randomUUID();
+    const importedAt = Date.now();
+    const importableCount = parsedSource.records.length;
+    const resumedFromSourceIndex = request.resumeFromManifest === false
+      ? 0
+      : this.resolveLegacyImportResumeIndex(request.channelId, request.sourcePath);
+
+    const importedEntryIds: number[] = [];
+    const entryRanges: LegacyChatImportRange[] = [];
+
+    let importedRecordCount = 0;
+    let skippedRecordCount = 0;
+    let lastImportedSourceIndex = resumedFromSourceIndex;
+    for (const sourceRecord of parsedSource.records) {
+      if (sourceRecord.sourceIndex < resumedFromSourceIndex) continue;
+
+      const importedEntry = this.appendImportedLegacyRecord({
+        request,
+        source: sourceRecord,
+        importId,
+        sourceHash: parsedSource.sourceHash,
+      });
+      if (!importedEntry) {
+        skippedRecordCount += 1;
+        continue;
+      }
+
+      importedEntryIds.push(importedEntry.id);
+      importedRecordCount += 1;
+      lastImportedSourceIndex = Math.max(lastImportedSourceIndex, sourceRecord.sourceIndex + 1);
+
+      const previousRange = entryRanges[entryRanges.length - 1];
+      const canExtend = previousRange
+        && sourceRecord.sourceIndex === previousRange.sourceEndIndex + 1
+        && importedEntry.id === previousRange.lastEntryId + 1;
+      if (canExtend) {
+        previousRange.sourceEndIndex = sourceRecord.sourceIndex;
+        previousRange.lastEntryId = importedEntry.id;
+        previousRange.messageCount += 1;
+      } else {
+        entryRanges.push({
+          sourceStartIndex: sourceRecord.sourceIndex,
+          sourceEndIndex: sourceRecord.sourceIndex,
+          firstEntryId: importedEntry.id,
+          lastEntryId: importedEntry.id,
+          messageCount: 1,
+        });
+      }
+    }
+
+    const remainingAfterResume = Math.max(0, importableCount - resumedFromSourceIndex);
+    if (importedRecordCount + skippedRecordCount < remainingAfterResume) {
+      skippedRecordCount += remainingAfterResume - importedRecordCount - skippedRecordCount;
+    }
+
+    const nextSourceIndex = importedRecordCount > 0
+      ? lastImportedSourceIndex
+      : resumedFromSourceIndex;
+
+    const manifest: LegacyChatImportManifest = {
+      schemaVersion: IMPORT_MANIFEST_SCHEMA_VERSION,
+      importId,
+      channelId: request.channelId,
+      sourcePath: request.sourcePath,
+      sourceHash: parsedSource.sourceHash,
+      sourceFormat: parsedSource.format,
+      importedAt,
+      resumedFromSourceIndex,
+      nextSourceIndex,
+      sourceRecordCount: importableCount,
+      importedRecordCount,
+      skippedRecordCount,
+      entryRanges,
+    };
+    this.appendImportManifest(manifest);
+
+    return {
+      manifest,
+      importedEntryIds,
+    };
+  }
+
+  private appendImportedLegacyRecord(params: {
+    request: LegacyChatImportRequest;
+    source: LegacyChatSourceRecord;
+    importId: string;
+    sourceHash: string;
+  }): { id: number } | null {
+    const source = params.source;
+    if (!source.content || source.timestamp <= 0) {
+      return null;
+    }
+
+    const id = this.append({
+      channelId: params.request.channelId,
+      role: source.role,
+      content: source.content,
+      timestamp: source.timestamp,
+      authorId: source.authorId ?? params.request.defaultAuthorId,
+      authorName: source.authorName ?? params.request.defaultAuthorName,
+      channelVisibility: source.channelVisibility ?? params.request.defaultChannelVisibility,
+      originChannelId: source.originChannelId,
+      metadata: this.buildLegacyImportMetadata({
+        importId: params.importId,
+        sourcePath: params.request.sourcePath,
+        sourceHash: params.sourceHash,
+        sourceIndex: source.sourceIndex,
+        sourceTimestamp: source.timestamp,
+        metadataTag: params.request.metadataTag,
+        sourceMetadata: source.metadata,
+      }),
+    });
+
+    return { id };
   }
 
   append(entry: Omit<SessionEntry, 'id'>): number {

@@ -341,7 +341,8 @@ describe('SessionManager', () => {
     });
     mgr.setPreCompactionExtractionHandler(preCompactionFlush as any);
 
-    const complete = vi.fn<LLMProvider['complete']>().mockImplementation(async () => {
+    const complete = vi.fn<LLMProvider['complete']>().mockImplementation(async (_context, purpose) => {
+      expect(purpose).toBe('background');
       callOrder.push('summary');
       return {
         content: 'Summary of old messages.',
@@ -486,7 +487,7 @@ describe('SessionManager', () => {
     let flushCompleted = false;
 
     const extractionComplete = vi.fn<LLMProvider['complete']>().mockImplementation(async (context, purpose) => {
-      if (purpose === 'extraction' && context.systemPrompt.includes('Kyoto trip in April')) {
+      if (purpose === 'background' && context.systemPrompt.includes('Kyoto trip in April')) {
         await new Promise(resolve => setTimeout(resolve, 10));
         return {
           content: `<response>
@@ -618,6 +619,7 @@ describe('SessionManager', () => {
     await mgr.buildContext('ch1', 'S', '', mockLLM);
 
     expect(mockLLM.complete).toHaveBeenCalledTimes(1);
+    expect(mockLLM.complete).toHaveBeenCalledWith(expect.anything(), 'background');
   });
 
   it('skips compaction when no llmProvider given', async () => {

@@ -381,6 +381,7 @@ describe('MemoryExtractor telemetry payloads', () => {
     await extractor.maybeExtract('api:threshold-tokens-callsite');
 
     expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.anything(), 'background');
     const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
     const startCall = calls.find(([name]) => name === 'memory.extraction.start');
     expect(startCall?.[1]?.triggerReason).toBe('context_threshold');
@@ -432,6 +433,7 @@ describe('MemoryExtractor telemetry payloads', () => {
     const firstCall = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
     expect(firstCall.systemPrompt).not.toContain('{{current_datetime}}');
     expect(firstCall.systemPrompt).toMatch(/Extraction run at \d{4}-\d{2}-\d{2}T/);
+    expect((llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe('background');
   });
 
   it('caps writes by ranked value and reports write_cap rejections', async () => {
@@ -828,6 +830,9 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     await extractor.maybeExtract('api:profile-test', 'contact-canonical-1');
     await extractor.drain({ timeoutMs: 2_000 });
 
+    const completePurposes = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls
+      .map(([, purpose]) => purpose);
+    expect(completePurposes).toEqual(['background', 'background']);
     expect(memoryStore.getMemoriesByContact).toHaveBeenCalledWith('contact-canonical-1', 16);
     expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'contact-canonical-1',

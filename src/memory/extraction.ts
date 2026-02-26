@@ -488,7 +488,7 @@ export class MemoryExtractor {
           systemPrompt: prompt,
           messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
         },
-        'extraction',
+        'background',
       );
 
       // Parse XML response + synthesize refusal-boundary memories directly from transcript.
@@ -854,7 +854,7 @@ export class MemoryExtractor {
         systemPrompt: prompt,
         messages: [{ role: 'user', content: 'Synthesize the stable contact profile now.' }],
       },
-      'summary',
+      'background',
     );
 
     const summary = normalizeProfileSummary(parseProfileSummary(response.content));

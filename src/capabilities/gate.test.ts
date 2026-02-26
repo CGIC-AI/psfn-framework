@@ -83,6 +83,24 @@ describe('capability tool gating', () => {
     expect((denied.content[0] as any).text).toContain('lifecycle.restart');
   });
 
+  it('gates memory_delete by memory.delete capability token', async () => {
+    const memoryDelete = createTool('memory_delete');
+    const nurseryGated = gateToolWithCapabilities(
+      memoryDelete.tool,
+      () => accessForTier('nursery'),
+    );
+    const denied = await nurseryGated.execute('call-1', {});
+    expect(memoryDelete.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('memory.delete');
+
+    const apprenticeGated = gateToolWithCapabilities(
+      memoryDelete.tool,
+      () => accessForTier('apprentice'),
+    );
+    await apprenticeGated.execute('call-2', {});
+    expect(memoryDelete.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('grants autonomous tier access for locked tools', async () => {
     const restart = createTool('self_restart');
     const restartGated = gateToolWithCapabilities(

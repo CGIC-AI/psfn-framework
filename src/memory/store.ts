@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import * as sqliteVec from 'sqlite-vec';
 import type { PurrMemory, SensitivityLevel, ConsentFlags } from './types.js';
 
@@ -19,6 +20,20 @@ interface MemoryRow {
   sensitivity: string | null;
   consent_flags: string | null;
   contact_id: string | null;
+  deleted_at: number | null;
+  deleted_by: string | null;
+  delete_reason: string | null;
+}
+
+interface MemoryDeleteVersionRow {
+  delete_id: string;
+  memory_id: string;
+  snapshot_json: string;
+  deleted_at: number;
+  deleted_by: string | null;
+  delete_reason: string | null;
+  restored_at: number | null;
+  restored_by: string | null;
 }
 
 interface ContactProfileRow {
@@ -37,6 +52,51 @@ export interface ContactProfileArtifact {
   confidenceScore: number;
   noveltyScore: number;
   updatedAt: number;
+}
+
+export interface MemoryDeleteVersion {
+  deleteId: string;
+  memoryId: string;
+  snapshot: PurrMemory;
+  deletedAt: number;
+  deletedBy: string;
+  deleteReason?: string;
+  restoredAt?: number;
+  restoredBy?: string;
+}
+
+function mapMemoryDeleteVersionRow(row: MemoryDeleteVersionRow): MemoryDeleteVersion {
+  let snapshot: PurrMemory;
+  try {
+    snapshot = JSON.parse(row.snapshot_json) as PurrMemory;
+  } catch {
+    snapshot = {
+      id: row.memory_id,
+      text: '',
+      type: 'semantic',
+      importance: 0.5,
+      confidence: 0.7,
+      emotionalValence: 0,
+      salience: 0.5,
+      sourceRef: 'snapshot:corrupt',
+      extractedAt: row.deleted_at,
+      lastAccessed: row.deleted_at,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'personal',
+    };
+  }
+
+  return {
+    deleteId: row.delete_id,
+    memoryId: row.memory_id,
+    snapshot,
+    deletedAt: row.deleted_at,
+    deletedBy: row.deleted_by ?? 'unknown',
+    deleteReason: row.delete_reason ?? undefined,
+    restoredAt: row.restored_at ?? undefined,
+    restoredBy: row.restored_by ?? undefined,
+  };
 }
 
 function mapMemoryRow(row: MemoryRow): PurrMemory {
@@ -70,6 +130,9 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
     sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
     consentFlags,
     contactId: row.contact_id ?? undefined,
+    deletedAt: row.deleted_at ?? undefined,
+    deletedBy: row.deleted_by ?? undefined,
+    deleteReason: row.delete_reason ?? undefined,
   };
 }
 
@@ -105,7 +168,10 @@ export class MemoryStore {
         access_count INTEGER NOT NULL DEFAULT 1,
         superseded_by TEXT,
         tags TEXT NOT NULL DEFAULT '[]',
-        contact_id TEXT
+        contact_id TEXT,
+        deleted_at INTEGER,
+        deleted_by TEXT,
+        delete_reason TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_l2_type ON l2_memories(type);
       CREATE INDEX IF NOT EXISTS idx_l2_salience ON l2_memories(salience);
@@ -119,6 +185,19 @@ export class MemoryStore {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_contact_profiles_updated_at ON contact_profiles(updated_at);
+
+      CREATE TABLE IF NOT EXISTS l2_memory_delete_versions (
+        delete_id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        deleted_by TEXT,
+        delete_reason TEXT,
+        restored_at INTEGER,
+        restored_by TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_memory ON l2_memory_delete_versions(memory_id);
+      CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_active ON l2_memory_delete_versions(restored_at, deleted_at);
 
       CREATE VIRTUAL TABLE IF NOT EXISTS l2_memory_embeddings USING vec0(
         memory_id TEXT PRIMARY KEY,
@@ -152,6 +231,34 @@ export class MemoryStore {
     if (this.hasColumn('l2_memories', 'contact_id')) {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id)`);
     }
+
+    // Add soft-delete columns for reversible destructive operations
+    try {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN deleted_at INTEGER`);
+    } catch { /* column already exists */ }
+    try {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN deleted_by TEXT`);
+    } catch { /* column already exists */ }
+    try {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN delete_reason TEXT`);
+    } catch { /* column already exists */ }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_deleted_at ON l2_memories(deleted_at)`);
+
+    // Create delete-version snapshots table if missing (idempotent).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS l2_memory_delete_versions (
+        delete_id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        deleted_by TEXT,
+        delete_reason TEXT,
+        restored_at INTEGER,
+        restored_by TEXT
+      );
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_memory ON l2_memory_delete_versions(memory_id)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_active ON l2_memory_delete_versions(restored_at, deleted_at)`);
   }
 
   // ── L2 Memories ──
@@ -160,8 +267,8 @@ export class MemoryStore {
     const insertMem = this.db.prepare(`
       INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence,
         salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
-        sensitivity, consent_flags, contact_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sensitivity, consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = this.db.prepare(`
@@ -187,6 +294,9 @@ export class MemoryStore {
         memory.sensitivity ?? 'personal',
         JSON.stringify(memory.consentFlags ?? {}),
         memory.contactId ?? null,
+        memory.deletedAt ?? null,
+        memory.deletedBy ?? null,
+        memory.deleteReason ?? null,
       );
       insertVec.run(memory.id, Buffer.from(embedding.buffer));
     });
@@ -208,6 +318,7 @@ export class MemoryStore {
       WHERE v.embedding MATCH ?
         AND k = ?
         AND m.superseded_by IS NULL
+        AND m.deleted_at IS NULL
       ORDER BY v.distance ASC
     `);
 
@@ -225,7 +336,7 @@ export class MemoryStore {
       .slice(0, limit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'tags' | 'contactId'>>): void {
+  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'tags' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -257,6 +368,18 @@ export class MemoryStore {
       setClauses.push('contact_id = ?');
       values.push(updates.contactId);
     }
+    if (updates.deletedAt !== undefined) {
+      setClauses.push('deleted_at = ?');
+      values.push(updates.deletedAt);
+    }
+    if (updates.deletedBy !== undefined) {
+      setClauses.push('deleted_by = ?');
+      values.push(updates.deletedBy);
+    }
+    if (updates.deleteReason !== undefined) {
+      setClauses.push('delete_reason = ?');
+      values.push(updates.deleteReason);
+    }
 
     if (setClauses.length === 0) return;
 
@@ -269,7 +392,7 @@ export class MemoryStore {
 
   getAllActiveMemories(): PurrMemory[] {
     const stmt = this.db.prepare(`
-      SELECT * FROM l2_memories WHERE superseded_by IS NULL
+      SELECT * FROM l2_memories WHERE superseded_by IS NULL AND deleted_at IS NULL
     `);
     const rows = stmt.all() as MemoryRow[];
     return rows.map(mapMemoryRow);
@@ -281,10 +404,135 @@ export class MemoryStore {
     return row ? mapMemoryRow(row) : undefined;
   }
 
+  softDeleteMemory(
+    id: string,
+    options: {
+      deletedBy?: string;
+      reason?: string;
+      deletedAt?: number;
+      deleteId?: string;
+    } = {},
+  ): MemoryDeleteVersion | null {
+    const deleteId = options.deleteId ?? randomUUID();
+    const deletedAt = options.deletedAt ?? Date.now();
+    const deletedBy = options.deletedBy?.trim() || 'agent';
+    const reason = options.reason?.trim();
+
+    const selectStmt = this.db.prepare(`
+      SELECT * FROM l2_memories
+      WHERE id = ? AND deleted_at IS NULL
+      LIMIT 1
+    `);
+    const insertVersion = this.db.prepare(`
+      INSERT INTO l2_memory_delete_versions (
+        delete_id,
+        memory_id,
+        snapshot_json,
+        deleted_at,
+        deleted_by,
+        delete_reason
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const updateStmt = this.db.prepare(`
+      UPDATE l2_memories
+      SET deleted_at = ?, deleted_by = ?, delete_reason = ?
+      WHERE id = ? AND deleted_at IS NULL
+    `);
+
+    const transaction = this.db.transaction(() => {
+      const row = selectStmt.get(id) as MemoryRow | undefined;
+      if (!row) return null;
+
+      const snapshot = mapMemoryRow(row);
+      insertVersion.run(
+        deleteId,
+        id,
+        JSON.stringify(snapshot),
+        deletedAt,
+        deletedBy,
+        reason ?? null,
+      );
+      const result = updateStmt.run(
+        deletedAt,
+        deletedBy,
+        reason ?? null,
+        id,
+      );
+      if (result.changes === 0) return null;
+
+      return {
+        deleteId,
+        memoryId: id,
+        snapshot,
+        deletedAt,
+        deletedBy,
+        deleteReason: reason,
+      } satisfies MemoryDeleteVersion;
+    });
+
+    return transaction();
+  }
+
+  undoSoftDelete(
+    deleteId: string,
+    options: {
+      restoredBy?: string;
+      restoredAt?: number;
+    } = {},
+  ): MemoryDeleteVersion | null {
+    const restoredAt = options.restoredAt ?? Date.now();
+    const restoredBy = options.restoredBy?.trim() || 'agent';
+
+    const selectStmt = this.db.prepare(`
+      SELECT * FROM l2_memory_delete_versions
+      WHERE delete_id = ? AND restored_at IS NULL
+      LIMIT 1
+    `);
+    const restoreMemoryStmt = this.db.prepare(`
+      UPDATE l2_memories
+      SET deleted_at = NULL, deleted_by = NULL, delete_reason = NULL
+      WHERE id = ?
+    `);
+    const restoreVersionStmt = this.db.prepare(`
+      UPDATE l2_memory_delete_versions
+      SET restored_at = ?, restored_by = ?
+      WHERE delete_id = ? AND restored_at IS NULL
+    `);
+
+    const transaction = this.db.transaction(() => {
+      const versionRow = selectStmt.get(deleteId) as MemoryDeleteVersionRow | undefined;
+      if (!versionRow) return null;
+
+      restoreMemoryStmt.run(versionRow.memory_id);
+      const versionResult = restoreVersionStmt.run(restoredAt, restoredBy, deleteId);
+      if (versionResult.changes === 0) return null;
+
+      return {
+        ...mapMemoryDeleteVersionRow(versionRow),
+        restoredAt,
+        restoredBy,
+      } satisfies MemoryDeleteVersion;
+    });
+
+    return transaction();
+  }
+
+  getDeleteVersion(deleteId: string): MemoryDeleteVersion | undefined {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM l2_memory_delete_versions
+      WHERE delete_id = ?
+      LIMIT 1
+    `).get(deleteId) as MemoryDeleteVersionRow | undefined;
+    if (!row) return undefined;
+    return mapMemoryDeleteVersionRow(row);
+  }
+
   getStats(): { total: number; byType: Record<string, number>; avgSalience: number } {
     const rows = this.db.prepare(`
       SELECT type, COUNT(*) as count, AVG(salience) as avg_sal
-      FROM l2_memories WHERE superseded_by IS NULL GROUP BY type
+      FROM l2_memories WHERE superseded_by IS NULL AND deleted_at IS NULL GROUP BY type
     `).all() as Array<{ type: string; count: number; avg_sal: number }>;
 
     const byType: Record<string, number> = {};
@@ -301,7 +549,7 @@ export class MemoryStore {
   getMemoriesByChannel(channelId: string, limit: number): PurrMemory[] {
     const stmt = this.db.prepare(`
       SELECT * FROM l2_memories
-      WHERE source_ref LIKE ? AND superseded_by IS NULL
+      WHERE source_ref LIKE ? AND superseded_by IS NULL AND deleted_at IS NULL
       ORDER BY extracted_at DESC
       LIMIT ?
     `);
@@ -312,7 +560,7 @@ export class MemoryStore {
   getMemoriesByContact(contactId: string, limit: number): PurrMemory[] {
     const stmt = this.db.prepare(`
       SELECT * FROM l2_memories
-      WHERE contact_id = ? AND superseded_by IS NULL
+      WHERE contact_id = ? AND superseded_by IS NULL AND deleted_at IS NULL
       ORDER BY salience DESC, extracted_at DESC
       LIMIT ?
     `);

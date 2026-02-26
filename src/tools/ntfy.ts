@@ -1,6 +1,10 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { NotifyNtfyParams, NotifyNtfyResult } from '../gateway/protocol.js';
+import type {
+  ExternalCommunicationChannel,
+  ExternalCommunicationRateLimiter,
+} from '../capabilities/safeguards.js';
 import { textResult, textResultWithError } from './results.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
@@ -141,7 +145,17 @@ export function createHttpNtfyNotifierFromEnv(env: NodeJS.ProcessEnv = process.e
   });
 }
 
-export function createNotifyOperatorTool(notifier: NtfyNotifier): AgentTool<any> {
+export interface NotifyOperatorToolOptions {
+  rateLimiter?: ExternalCommunicationRateLimiter;
+  defaultChannel?: ExternalCommunicationChannel;
+}
+
+export function createNotifyOperatorTool(
+  notifier: NtfyNotifier,
+  options: NotifyOperatorToolOptions = {},
+): AgentTool<any> {
+  const defaultChannel = options.defaultChannel ?? 'discord';
+
   return {
     name: 'notify_operator',
     label: 'notify_operator',
@@ -170,6 +184,13 @@ export function createNotifyOperatorTool(notifier: NtfyNotifier): AgentTool<any>
           description: 'Optional topic override; defaults to configured NTFY_TOPIC.',
         }),
       ),
+      channel: Type.Optional(
+        Type.Unsafe<ExternalCommunicationChannel>({
+          type: 'string',
+          enum: ['discord', 'email'],
+          description: 'External channel budget to charge against (discord/email). Default: discord.',
+        }),
+      ),
     }),
     execute: async (
       _toolCallId: string,
@@ -178,6 +199,7 @@ export function createNotifyOperatorTool(notifier: NtfyNotifier): AgentTool<any>
         title?: string;
         priority?: number;
         topic?: string;
+        channel?: ExternalCommunicationChannel;
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
@@ -185,13 +207,29 @@ export function createNotifyOperatorTool(notifier: NtfyNotifier): AgentTool<any>
       if (!message) {
         return textResultWithError('notify_operator: failure (message is required).', true);
       }
+      const channel = params.channel ?? defaultChannel;
+      const topic = params.topic?.trim();
+
+      if (options.rateLimiter) {
+        const rate = options.rateLimiter.evaluate({
+          channel,
+          scope: topic || 'default-topic',
+        });
+        if (!rate.allowed) {
+          const retrySeconds = Math.max(1, Math.ceil((rate.retryAfterMs ?? 0) / 1000));
+          return textResultWithError(
+            `notify_operator: blocked (rate limit for ${channel} reached: ${rate.used}/${rate.limit} in the last hour; retry in ${retrySeconds}s).`,
+            true,
+          );
+        }
+      }
 
       try {
         const result = await notifier.notify({
           message,
           title: params.title?.trim(),
           priority: params.priority,
-          topic: params.topic?.trim(),
+          topic,
         });
 
         if (result.status === 'debounced') {

@@ -5,6 +5,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
+import type { MemoryStore } from './store.js';
 import type { MemoryType, SensitivityLevel } from './types.js';
 import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
 
@@ -223,6 +224,121 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
         const msg = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: 'text', text: `Error importing memories: ${msg}` }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+    },
+  };
+}
+
+export function createMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<any> {
+  return {
+    name: 'memory_delete',
+    description:
+      'Soft-delete a memory with a version snapshot checkpoint. ' +
+      'Returns a delete_id that can be used with undo_memory_delete.',
+    label: 'memory_delete',
+    parameters: Type.Object({
+      memory_id: Type.String({ description: 'Memory ID to soft-delete.' }),
+      reason: Type.Optional(
+        Type.String({ description: 'Reason for deletion (logged in safeguard audit/version snapshot).' }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        memory_id: string;
+        reason?: string;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const memoryId = params.memory_id?.trim();
+      if (!memoryId) {
+        return {
+          content: [{ type: 'text', text: 'Error: memory_id is required' }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+
+      try {
+        const deleted = memoryStore.softDeleteMemory(memoryId, {
+          deletedBy: 'tool:memory_delete',
+          reason: params.reason?.trim(),
+        });
+        if (!deleted) {
+          return {
+            content: [{ type: 'text', text: `Memory not found or already deleted: ${memoryId}` }] satisfies TextContent[],
+            details: { isError: true },
+          };
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text:
+              `Memory soft-deleted (id: ${deleted.memoryId}, delete_id: ${deleted.deleteId}). ` +
+              'Use undo_memory_delete with delete_id to restore.',
+          }] satisfies TextContent[],
+          details: {},
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: 'text', text: `Error deleting memory: ${msg}` }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+    },
+  };
+}
+
+export function createUndoMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<any> {
+  return {
+    name: 'undo_memory_delete',
+    description:
+      'Undo a prior memory_delete operation using its delete_id. ' +
+      'Restores the soft-deleted memory from its checkpoint.',
+    label: 'undo_memory_delete',
+    parameters: Type.Object({
+      delete_id: Type.String({ description: 'Delete checkpoint id returned by memory_delete.' }),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        delete_id: string;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const deleteId = params.delete_id?.trim();
+      if (!deleteId) {
+        return {
+          content: [{ type: 'text', text: 'Error: delete_id is required' }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+
+      try {
+        const restored = memoryStore.undoSoftDelete(deleteId, {
+          restoredBy: 'tool:undo_memory_delete',
+        });
+        if (!restored) {
+          return {
+            content: [{ type: 'text', text: `Delete checkpoint not found or already restored: ${deleteId}` }] satisfies TextContent[],
+            details: { isError: true },
+          };
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: `Memory restored (id: ${restored.memoryId}, delete_id: ${restored.deleteId}).`,
+          }] satisfies TextContent[],
+          details: {},
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: 'text', text: `Error restoring memory: ${msg}` }] satisfies TextContent[],
           details: { isError: true },
         };
       }

@@ -4,3 +4,4 @@ export * from './requirements.js';
 export * from './gate.js';
 export * from './runtime.js';
 export * from './confirmation-queue.js';
+export * from './safeguards.js';

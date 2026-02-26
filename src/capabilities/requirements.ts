@@ -21,6 +21,8 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   heartbeat_get_policy: 'identity.read',
   heartbeat_update_policy: 'identity.write.runtime',
   memory_import_batch: 'memory.write',
+  memory_delete: 'memory.delete',
+  undo_memory_delete: 'memory.delete',
   memory_write: 'memory.write',
   notify_operator: 'external.web',
   prompt_layer_get: 'identity.read',

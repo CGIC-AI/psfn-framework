@@ -27,12 +27,12 @@ import {
   type PolicyDecision,
   type LLMChunkNotification,
   type RpcSubstrateMessage,
-  type DiscordHandleMessageResult,
-  type DiscordVoiceStreamStartParams,
-  type DiscordVoiceStreamChunkParams,
-  type DiscordVoiceStreamEndParams,
-  type DiscordVoiceStreamCancelParams,
-  type DiscordVoiceStreamEndResult,
+  type VoiceHandleMessageResult,
+  type VoiceStreamStartParams,
+  type VoiceStreamChunkParams,
+  type VoiceStreamEndParams,
+  type VoiceStreamCancelParams,
+  type VoiceStreamEndResult,
   type VoiceStreamMetadata,
   type ConfirmationListParams,
   type ConfirmationListResult,
@@ -259,6 +259,30 @@ const DEFAULT_VOICE_CHUNK_SIZE = 120;
 const DEFAULT_VOICE_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
 const DEFAULT_CONFIRMATION_NOTIFICATION_PRIORITY = 4;
+
+interface ReverseVoiceRpcMethods {
+  handleMessage: string;
+  start: string;
+  chunk: string;
+  end: string;
+  cancel: string;
+}
+
+const PRIMARY_REVERSE_VOICE_RPC_METHODS: ReverseVoiceRpcMethods = {
+  handleMessage: 'voice.handleMessage',
+  start: 'voice.stream.start',
+  chunk: 'voice.stream.chunk',
+  end: 'voice.stream.end',
+  cancel: 'voice.stream.cancel',
+};
+
+const LEGACY_REVERSE_VOICE_RPC_METHODS: ReverseVoiceRpcMethods = {
+  handleMessage: 'discord.handleMessage',
+  start: 'discord.voice.start',
+  chunk: 'discord.voice.chunk',
+  end: 'discord.voice.end',
+  cancel: 'discord.voice.cancel',
+};
 
 export interface VoiceStreamRequestOptions {
   timeoutMs?: number;
@@ -839,7 +863,7 @@ export class GatewayServer {
   async requestAgentVoiceStream(
     message: SubstrateMessage,
     options: VoiceStreamRequestOptions = {},
-  ): Promise<DiscordHandleMessageResult> {
+  ): Promise<VoiceHandleMessageResult> {
     const client = this.rpcClients.values().next().value as JSONRPCServerAndClient | undefined;
     if (!client) {
       throw new Error('No agent connected');
@@ -892,13 +916,15 @@ export class GatewayServer {
       ]);
     };
 
+    let reverseVoiceMethods = PRIMARY_REVERSE_VOICE_RPC_METHODS;
+
     const sendCancel = async (sequence: number, reason: string): Promise<void> => {
-      const cancelPayload: DiscordVoiceStreamCancelParams = {
+      const cancelPayload: VoiceStreamCancelParams = {
         ...baseFrame,
         sequence,
         reason,
       };
-      await invokeWithTimeout(() => client.request('discord.voice.cancel', cancelPayload))
+      await invokeWithTimeout(() => client.request(reverseVoiceMethods.cancel, cancelPayload))
         .catch(() => undefined);
     };
 
@@ -907,19 +933,28 @@ export class GatewayServer {
       ...message,
       content: '',
     });
-    const startParams: DiscordVoiceStreamStartParams = {
+    const startParams: VoiceStreamStartParams = {
       ...baseFrame,
       sequence,
       message: serializedMessage,
     };
 
     try {
-      await invokeWithTimeout(() => client.request('discord.voice.start', startParams));
+      await invokeWithTimeout(() => client.request(reverseVoiceMethods.start, startParams));
     } catch (error) {
       if (this.isMethodNotFoundError(error)) {
-        return this.requestAgentViaLegacyPath(client, serializedMessage, timeoutMs);
+        reverseVoiceMethods = LEGACY_REVERSE_VOICE_RPC_METHODS;
+        try {
+          await invokeWithTimeout(() => client.request(reverseVoiceMethods.start, startParams));
+        } catch (legacyError) {
+          if (this.isMethodNotFoundError(legacyError)) {
+            return this.requestAgentViaHandlePath(client, serializedMessage, timeoutMs);
+          }
+          throw legacyError;
+        }
+      } else {
+        throw error;
       }
-      throw error;
     }
 
     let cancelled = false;
@@ -936,14 +971,14 @@ export class GatewayServer {
         if (text === undefined) break;
 
         sequence += 1;
-        const chunkParams: DiscordVoiceStreamChunkParams = {
+        const chunkParams: VoiceStreamChunkParams = {
           ...baseFrame,
           sequence,
           text,
         };
 
         const ack = await invokeWithTimeout(() =>
-          client.request('discord.voice.chunk', chunkParams) as Promise<{
+          client.request(reverseVoiceMethods.chunk, chunkParams) as Promise<{
             accepted: boolean;
             droppedChunks?: number;
           }>,
@@ -957,7 +992,7 @@ export class GatewayServer {
       }
 
       sequence += 1;
-      const endParams: DiscordVoiceStreamEndParams = {
+      const endParams: VoiceStreamEndParams = {
         ...baseFrame,
         sequence,
         metadata: {
@@ -967,7 +1002,7 @@ export class GatewayServer {
       };
 
       const streamResult = await invokeWithTimeout(() =>
-        client.request('discord.voice.end', endParams) as Promise<DiscordVoiceStreamEndResult>,
+        client.request(reverseVoiceMethods.end, endParams) as Promise<VoiceStreamEndResult>,
       );
 
       return {
@@ -1157,19 +1192,29 @@ export class GatewayServer {
     return candidate.code === -32601 || candidate.message === 'Method not found';
   }
 
-  private async requestAgentViaLegacyPath(
+  private async requestAgentViaHandlePath(
     client: JSONRPCServerAndClient,
     message: RpcSubstrateMessage,
     timeoutMs: number,
-  ): Promise<DiscordHandleMessageResult> {
-    const result = await Promise.race([
-      client.request('discord.handleMessage', { message }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Agent legacy voice request timed out')), timeoutMs),
-      ),
-    ]);
+  ): Promise<VoiceHandleMessageResult> {
+    const invokeHandle = async (method: string): Promise<VoiceHandleMessageResult> => {
+      const result = await Promise.race([
+        client.request(method, { message }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Agent voice handle request timed out')), timeoutMs),
+        ),
+      ]);
+      return result as VoiceHandleMessageResult;
+    };
 
-    return result as DiscordHandleMessageResult;
+    try {
+      return await invokeHandle(PRIMARY_REVERSE_VOICE_RPC_METHODS.handleMessage);
+    } catch (error) {
+      if (!this.isMethodNotFoundError(error)) {
+        throw error;
+      }
+      return await invokeHandle(LEGACY_REVERSE_VOICE_RPC_METHODS.handleMessage);
+    }
   }
 
   async stop(): Promise<void> {

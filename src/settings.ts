@@ -4,6 +4,7 @@
 
 import { join } from 'node:path';
 import type {
+  ImportProcessingRouteMode,
   ModelCatalogEntry,
   ModelContextBudgetConfig,
   ModelPurpose,
@@ -29,6 +30,11 @@ const SETTINGS_SEED_FILE = 'settings.seed.json';
 const PRIMARY_MODEL_SLOT_KEY = 'primary';
 const EXTRACTION_MODEL_SLOT_KEY = 'extraction';
 const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'reasoning', 'longContext'];
+const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
+  'background',
+  'openrouter_zdr',
+  'local_endpoint',
+]);
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -39,6 +45,7 @@ export const DEFAULT_MODEL_ROLE_ASSIGNMENTS: Readonly<ModelRoleAssignments> = {
   summary: PRIMARY_MODEL_SLOT_KEY,
   reasoning: PRIMARY_MODEL_SLOT_KEY,
   longContext: PRIMARY_MODEL_SLOT_KEY,
+  import_processing: EXTRACTION_MODEL_SLOT_KEY,
 };
 
 export interface EditableSettings {
@@ -82,6 +89,11 @@ export interface EditableSettings {
   thinkMaxSubQueries?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
+  openRouterProviderOrder?: string[];
+  importProcessingRouteMode?: ImportProcessingRouteMode;
+  importProcessingStrictPolicy?: boolean;
+  importProcessingLocalEndpointUrl?: string;
+  importProcessingLocalModel?: string;
 }
 
 export const RUNTIME_SETTINGS_KEYS = [
@@ -107,10 +119,15 @@ export const RUNTIME_SETTINGS_KEYS = [
   'thinkMaxSubQueries',
   'retryMaxAttempts',
   'retryBaseDelayMs',
+  'openRouterProviderOrder',
+  'importProcessingRouteMode',
+  'importProcessingStrictPolicy',
+  'importProcessingLocalEndpointUrl',
+  'importProcessingLocalModel',
 ] as const;
 
 export type RuntimeSettingKey = typeof RUNTIME_SETTINGS_KEYS[number];
-export type RuntimeSettingValue = string | number | boolean | null;
+export type RuntimeSettingValue = string | number | boolean | null | string[];
 export type RuntimeSettingsSnapshot = Record<RuntimeSettingKey, RuntimeSettingValue>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -149,6 +166,30 @@ function toNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function toStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const cleaned = [...new Set(value
+    .map(entry => typeof entry === 'string' ? entry.trim() : '')
+    .filter(Boolean))];
+  return cleaned;
+}
+
+function toBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
+  return undefined;
+}
+
+function toImportProcessingRouteMode(value: unknown): ImportProcessingRouteMode | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!IMPORT_PROCESSING_ROUTE_MODE_VALUES.has(trimmed as ImportProcessingRouteMode)) return undefined;
+  return trimmed as ImportProcessingRouteMode;
 }
 
 function sanitizeModelContextBudget(value: unknown): ModelContextBudgetConfig | undefined {
@@ -416,6 +457,32 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     delete normalized.compactionEmotionalSalienceThresholdPct;
   }
 
+  if ('openRouterProviderOrder' in settings) {
+    normalized.openRouterProviderOrder = toStringList(settings.openRouterProviderOrder) ?? [];
+  }
+
+  if ('importProcessingRouteMode' in settings) {
+    normalized.importProcessingRouteMode = toImportProcessingRouteMode(settings.importProcessingRouteMode);
+  }
+
+  if ('importProcessingStrictPolicy' in settings) {
+    normalized.importProcessingStrictPolicy = toBoolean(settings.importProcessingStrictPolicy) ?? false;
+  }
+
+  if ('importProcessingLocalEndpointUrl' in settings) {
+    normalized.importProcessingLocalEndpointUrl =
+      typeof settings.importProcessingLocalEndpointUrl === 'string'
+        ? settings.importProcessingLocalEndpointUrl.trim()
+        : '';
+  }
+
+  if ('importProcessingLocalModel' in settings) {
+    normalized.importProcessingLocalModel =
+      typeof settings.importProcessingLocalModel === 'string'
+        ? settings.importProcessingLocalModel.trim()
+        : '';
+  }
+
   return normalized;
 }
 
@@ -480,6 +547,7 @@ export function normalizeEditableSettings(
   if (catalog[EXTRACTION_MODEL_SLOT_KEY]) {
     assignments.background ??= EXTRACTION_MODEL_SLOT_KEY;
     assignments.extraction ??= assignments.background;
+    assignments.import_processing ??= assignments.background;
   }
 
   for (const [purpose, slotKey] of Object.entries(assignments)) {
@@ -625,6 +693,11 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     thinkMaxSubQueries: config.thinkMaxSubQueries ?? null,
     retryMaxAttempts: config.retryMaxAttempts ?? null,
     retryBaseDelayMs: config.retryBaseDelayMs ?? null,
+    openRouterProviderOrder: config.openRouterProviderOrder ?? [],
+    importProcessingRouteMode: config.importProcessingRouteMode ?? 'background',
+    importProcessingStrictPolicy: config.importProcessingStrictPolicy ?? false,
+    importProcessingLocalEndpointUrl: config.importProcessingLocalEndpointUrl ?? null,
+    importProcessingLocalModel: config.importProcessingLocalModel ?? null,
   };
 }
 
@@ -679,6 +752,25 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (settings.thinkMaxSubQueries !== undefined) config.thinkMaxSubQueries = settings.thinkMaxSubQueries;
   if (settings.retryMaxAttempts !== undefined) config.retryMaxAttempts = settings.retryMaxAttempts;
   if (settings.retryBaseDelayMs !== undefined) config.retryBaseDelayMs = settings.retryBaseDelayMs;
+  if ('openRouterProviderOrder' in settings) {
+    config.openRouterProviderOrder = settings.openRouterProviderOrder && settings.openRouterProviderOrder.length > 0
+      ? [...settings.openRouterProviderOrder]
+      : undefined;
+  }
+  if ('importProcessingRouteMode' in settings) {
+    config.importProcessingRouteMode = settings.importProcessingRouteMode ?? 'background';
+  }
+  if ('importProcessingStrictPolicy' in settings) {
+    config.importProcessingStrictPolicy = settings.importProcessingStrictPolicy ?? false;
+  }
+  if ('importProcessingLocalEndpointUrl' in settings) {
+    const trimmed = settings.importProcessingLocalEndpointUrl?.trim() ?? '';
+    config.importProcessingLocalEndpointUrl = trimmed || undefined;
+  }
+  if ('importProcessingLocalModel' in settings) {
+    const trimmed = settings.importProcessingLocalModel?.trim() ?? '';
+    config.importProcessingLocalModel = trimmed || undefined;
+  }
 
   const shouldSyncModels = hasModelSettings(settings)
     || config.modelCatalog !== undefined
@@ -747,6 +839,57 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const extractionProvider = params.get('extractionProvider')?.trim();
   if (extractionProvider) settings.extractionProvider = extractionProvider;
 
+  const openRouterProviderOrderRaw = params.get('openRouterProviderOrder');
+  if (openRouterProviderOrderRaw !== null) {
+    settings.openRouterProviderOrder = [...new Set(
+      openRouterProviderOrderRaw
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean),
+    )];
+  }
+
+  const importProcessingRouteModeRaw = params.get('importProcessingRouteMode');
+  if (importProcessingRouteModeRaw !== null) {
+    const mode = toImportProcessingRouteMode(importProcessingRouteModeRaw);
+    if (!mode) {
+      errors.push('importProcessingRouteMode must be one of: background, openrouter_zdr, local_endpoint');
+    } else {
+      settings.importProcessingRouteMode = mode;
+    }
+  }
+
+  const importProcessingStrictPolicyRaw = params.get('importProcessingStrictPolicy');
+  if (importProcessingStrictPolicyRaw !== null) {
+    const strictPolicy = toBoolean(importProcessingStrictPolicyRaw);
+    if (strictPolicy === undefined) {
+      errors.push('importProcessingStrictPolicy must be true or false');
+    } else {
+      settings.importProcessingStrictPolicy = strictPolicy;
+    }
+  }
+
+  const importProcessingLocalEndpointUrlRaw = params.get('importProcessingLocalEndpointUrl');
+  if (importProcessingLocalEndpointUrlRaw !== null) {
+    const endpointUrl = importProcessingLocalEndpointUrlRaw.trim();
+    settings.importProcessingLocalEndpointUrl = endpointUrl;
+    if (endpointUrl) {
+      try {
+        const parsed = new URL(endpointUrl);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          errors.push('importProcessingLocalEndpointUrl must use http or https');
+        }
+      } catch {
+        errors.push('importProcessingLocalEndpointUrl must be a valid URL');
+      }
+    }
+  }
+
+  const importProcessingLocalModelRaw = params.get('importProcessingLocalModel');
+  if (importProcessingLocalModelRaw !== null) {
+    settings.importProcessingLocalModel = importProcessingLocalModelRaw.trim();
+  }
+
   // Numeric fields
   for (const [field, range] of Object.entries(SETTINGS_VALIDATION)) {
     const raw = params.get(field);
@@ -802,6 +945,15 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
       if (!settings.modelCatalog[slotKey]) {
         errors.push(`purpose "${purpose}" references unknown model slot "${slotKey}"`);
       }
+    }
+  }
+
+  if (settings.importProcessingRouteMode === 'local_endpoint') {
+    if (!settings.importProcessingLocalEndpointUrl) {
+      errors.push('importProcessingLocalEndpointUrl is required when importProcessingRouteMode=local_endpoint');
+    }
+    if (!settings.importProcessingLocalModel) {
+      errors.push('importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint');
     }
   }
 

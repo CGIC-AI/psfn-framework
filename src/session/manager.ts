@@ -15,6 +15,10 @@ import {
   resolveSessionHistoryBudget,
   SESSION_HISTORY_MIN_MESSAGES,
 } from '../context-budget.js';
+import {
+  buildCompactionSourceBlock,
+  buildCompactionSourceHashTag,
+} from './compaction-audit.js';
 
 const log = createComponentLogger('SessionManager');
 
@@ -334,11 +338,14 @@ function buildCompactionPreservedTagBlock(
   return ['[Preserved refusal, boundary, and emotional entries]', ...taggedLines].join('\n');
 }
 
-function appendCompactionTagBlock(summary: string, tagBlock: string): string {
+function appendCompactionMetadataBlocks(summary: string, blocks: string[]): string {
   const trimmedSummary = summary.trim();
-  if (!tagBlock) return trimmedSummary;
-  if (!trimmedSummary) return tagBlock;
-  return `${trimmedSummary}\n\n${tagBlock}`;
+  const normalizedBlocks = blocks
+    .map(block => block.trim())
+    .filter(block => block.length > 0);
+  if (normalizedBlocks.length === 0) return trimmedSummary;
+  if (!trimmedSummary) return normalizedBlocks.join('\n\n');
+  return `${trimmedSummary}\n\n${normalizedBlocks.join('\n\n')}`;
 }
 
 function parseChannelVisibility(value?: string): ChannelVisibility | undefined {
@@ -481,9 +488,8 @@ export class SessionManager {
         const splitPoint = Math.ceil(recent.length / 2);
         const toCompact = recent.slice(0, splitPoint);
         const toKeep = recent.slice(splitPoint);
-        const compactText = toCompact
-          .map(e => `${e.authorName ?? e.role}: ${e.content}`)
-          .join('\n');
+        const compactText = buildCompactionSourceBlock(toCompact);
+        const sourceHashTag = buildCompactionSourceHashTag(toCompact);
         const emotionalSalienceThreshold = resolveEmotionalSalienceThreshold(this.config);
         const preservedTagBlock = buildCompactionPreservedTagBlock(
           toCompact,
@@ -547,7 +553,10 @@ export class SessionManager {
           );
 
           // Store compaction summary
-          const compactionSummary = appendCompactionTagBlock(summaryResponse.content, preservedTagBlock);
+          const compactionSummary = appendCompactionMetadataBlocks(summaryResponse.content, [
+            sourceHashTag,
+            preservedTagBlock,
+          ]);
           const coveredUpTo = toCompact[toCompact.length - 1].id;
           this.store.insertCompaction(channelId, compactionSummary, coveredUpTo);
           const keepTokens = countMessageTokens(this.entriesToMessages(toKeep, channelVisibility, false));

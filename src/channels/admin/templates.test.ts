@@ -26,6 +26,7 @@ import {
   promptLayersFragment,
   promptDetailPage,
   sessionListPage,
+  sessionMessagesPage,
 } from './templates.js';
 
 describe('admin templates', () => {
@@ -130,6 +131,31 @@ describe('admin templates', () => {
     expect(html).toContain('Contact:');
     expect(html).toContain('/contacts#contact-row-contact-1');
     expect(html).toContain('/api/contacts/contact-1/edit');
+  });
+
+  it('renders compaction audit cards on the session messages page', () => {
+    const html = sessionMessagesPage(
+      'api:session-42',
+      [],
+      [{
+        id: 9,
+        createdAt: 1_700_000_000_000,
+        coveredUpTo: 44,
+        summary: 'Summary body',
+        sourceHash: 'a'.repeat(64),
+        sourceFirstMessageId: 12,
+        sourceLastMessageId: 44,
+        sourceMessageCount: 33,
+        verification: 'verified',
+        verificationDetail: 'Verified against JSONL source block.',
+      }],
+    );
+
+    expect(html).toContain('Compaction audit');
+    expect(html).toContain('Click a summary to inspect source material hash metadata');
+    expect(html).toContain('Summary #9');
+    expect(html).toContain('Verified against JSONL source block.');
+    expect(html).toContain('a'.repeat(64));
   });
 
   it('renders relational memory contact links and sensitivity cues', () => {

@@ -796,6 +796,17 @@ export class SessionStore {
     return entries[entries.length - 1];
   }
 
+  getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
+    if (!Number.isFinite(startId) || !Number.isFinite(endId)) return [];
+    const normalizedStart = Math.max(0, Math.floor(Math.min(startId, endId)));
+    const normalizedEnd = Math.max(0, Math.floor(Math.max(startId, endId)));
+    if (normalizedEnd < normalizedStart) return [];
+
+    const cache = this.ensureChannelFullyLoaded(channelId);
+    if (!cache) return [];
+    return cache.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd);
+  }
+
   getRecentDiscordMessageIds(channelId: string, limit: number): Set<string> {
     const entries = this.getRecent(channelId, limit);
     const ids = entries

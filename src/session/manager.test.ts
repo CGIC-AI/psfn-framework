@@ -13,6 +13,11 @@ import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/
 import { MemoryStore } from '../memory/store.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
+import {
+  buildCompactionSourceBlock,
+  computeCompactionSourceSha256,
+  parseCompactionSourceHashTag,
+} from './compaction-audit.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
@@ -293,6 +298,30 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBeLessThan(20);
     // Compaction summary should be in system prompt
     expect(ctx.systemPrompt).toContain('Previous conversation summary');
+  });
+
+  it('records source block SHA-256 metadata for each compaction summary', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', `User ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Assistant ${i} ` + 'B'.repeat(400));
+    }
+
+    await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+
+    const summaries = store.getCompactionSummaries('ch1');
+    expect(summaries).toHaveLength(1);
+    const metadata = parseCompactionSourceHashTag(summaries[0].summary);
+    expect(metadata).not.toBeNull();
+    if (!metadata) return;
+
+    const sourceEntries = store.getEntriesInRange('ch1', metadata.firstMessageId, metadata.lastMessageId);
+    expect(sourceEntries).toHaveLength(metadata.messageCount);
+    const computedHash = computeCompactionSourceSha256(buildCompactionSourceBlock(sourceEntries));
+    expect(computedHash).toBe(metadata.sha256);
   });
 
   it('runs pre-compaction extraction on the exact entries being compacted', async () => {

@@ -141,6 +141,7 @@ export type CompletionPurpose = 'background' | 'extraction' | 'summary' | 'reaso
 export interface RuntimeConfigHooks {
   refreshModels?: () => void;
   refreshCapabilities?: () => void;
+  invalidatePromptPrefixCache?: () => void;
 }
 
 // ── Configuration ──

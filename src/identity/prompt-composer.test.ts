@@ -168,6 +168,60 @@ describe('PromptComposer', () => {
 
       expect(hash1).not.toBe(hash2);
     });
+
+    it('returns split output with static prefix first and compose parity', () => {
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
+      const channel = store.create({
+        type: 'channel',
+        name: 'Discord',
+        content: 'DISCORD',
+        channelType: 'discord_text',
+      });
+      const task = store.create({
+        type: 'task',
+        name: 'Heartbeat',
+        content: 'HEARTBEAT',
+        taskKind: 'heartbeat',
+      });
+
+      const split = composer.composeSplit({ channelType: 'discord_text', taskKind: 'heartbeat' });
+
+      expect(split.staticPrefix).toBe('BASE\n\nDISCORD');
+      expect(split.dynamicSuffix).toBe('RUNTIME\n\nHEARTBEAT');
+      expect(split.text).toBe('BASE\n\nDISCORD\n\nRUNTIME\n\nHEARTBEAT');
+      expect(split.staticLayerIds).toEqual([base.id, channel.id]);
+      expect(split.dynamicLayerIds).toEqual([runtime.id, task.id]);
+
+      const composed = composer.compose({ channelType: 'discord_text', taskKind: 'heartbeat' });
+      expect(composed.text).toBe(split.text);
+      expect(composed.hash).toBe(split.hash);
+    });
+
+    it('keeps static hash stable when only dynamic layers change', () => {
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME-A' });
+
+      const before = composer.composeSplit();
+      store.update(runtime.id, 'RUNTIME-B', 'test');
+      const after = composer.composeSplit();
+
+      expect(before.staticHash).toBe(after.staticHash);
+      expect(before.dynamicHash).not.toBe(after.dynamicHash);
+      expect(before.staticLayerIds).toEqual([base.id]);
+      expect(after.staticLayerIds).toEqual([base.id]);
+    });
+
+    it('invalidates static hash when a static layer changes', () => {
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE-A' });
+      store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
+
+      const before = composer.composeSplit();
+      store.update(base.id, 'BASE-B', 'test');
+      const after = composer.composeSplit();
+
+      expect(before.staticHash).not.toBe(after.staticHash);
+    });
   });
 
   describe('fallback to lastKnownGood', () => {

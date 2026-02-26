@@ -3,7 +3,7 @@
 
 import * as net from 'node:net';
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
-import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
+import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { ChannelOutboundDock } from '../channels/types.js';
 import {
   parseWyomingShardRoutingConfigEnv,

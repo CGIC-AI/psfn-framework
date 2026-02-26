@@ -8,7 +8,7 @@ import { EventBus } from '../event-bus.js';
 import { SessionStore } from '../session/store.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createSpawnShardTool } from './tools.js';
-import type { LLMProvider, MemoryProvider } from '../agent-loop.js';
+import type { LLMProvider, MemoryProvider } from '../agent/contracts.js';
 import type { SubstrateConfig, LLMResponse } from '../types.js';
 
 // ── Mock pi-agent-core Agent ──

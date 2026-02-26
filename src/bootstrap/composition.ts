@@ -8,7 +8,7 @@ import { SessionStore, type SessionIntegrityProvider } from '../session/store.js
 import { SessionManager } from '../session/manager.js';
 import { UserContinuityStore } from '../session/continuity.js';
 import { EmbeddingProvider } from '../memory/embedding.js';
-import { AgentLoop } from '../agent-loop.js';
+import { SubstrateAgent } from '../agent/substrate-agent.js';
 import { MemoryRetriever } from '../memory/retrieval.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import type { MemoryStore } from '../memory/store.js';
@@ -93,8 +93,8 @@ export interface AgentLoopCompositionOptions {
   config: SubstrateConfig;
 }
 
-export function composeAgentLoop(options: AgentLoopCompositionOptions): AgentLoop {
-  return new AgentLoop(
+export function composeAgentLoop(options: AgentLoopCompositionOptions): SubstrateAgent {
+  return new SubstrateAgent(
     options.eventBus,
     options.llmProvider,
     options.sessionManager,
@@ -105,7 +105,7 @@ export function composeAgentLoop(options: AgentLoopCompositionOptions): AgentLoo
 }
 
 export interface MemoryRuntimeOptions {
-  agentLoop: AgentLoop;
+  agentLoop: SubstrateAgent;
   llmProvider: LLMProvider;
   sessionManager: SessionManager;
   memoryStore: MemoryStore;
@@ -172,7 +172,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 }
 
 export interface ToolRuntimeOptions {
-  agentLoop: AgentLoop;
+  agentLoop: SubstrateAgent;
   eventBus: EventBus;
   llmProvider: LLMProvider;
   sessionStore: SessionStore;

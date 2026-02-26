@@ -1,4 +1,4 @@
-import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
+import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { SessionManager } from '../session/manager.js';
 import type { SessionStore } from '../session/store.js';
 import type { SessionEntry } from '../session/types.js';

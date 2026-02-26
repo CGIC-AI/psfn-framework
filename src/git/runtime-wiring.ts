@@ -1,5 +1,5 @@
 // ── Git Runtime Wiring ──
-// Instantiates GitOps and registers all 6 git tools on a target (AgentLoop).
+// Instantiates GitOps and registers all 6 git tools on a target (SubstrateAgent).
 
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { GitOps, type GitOpsConfig, type GitOperations } from './ops.js';

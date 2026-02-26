@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentLoop } from '../../agent-loop.js';
+import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../event-bus.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
@@ -63,7 +63,7 @@ function createTestOptions(configOverrides: Partial<SubstrateConfig> = {}) {
   return {
     agentLoop: {
       handleMessage: vi.fn(),
-    } as unknown as AgentLoop,
+    } as unknown as SubstrateAgent,
     eventBus: {
       emit: vi.fn(async () => {}),
     } as unknown as EventBus,

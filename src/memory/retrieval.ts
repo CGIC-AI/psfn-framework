@@ -1,4 +1,4 @@
-import type { MemoryProvider, EmbeddingService } from '../agent-loop.js';
+import type { MemoryProvider, EmbeddingService } from '../agent/contracts.js';
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
 import type { PurrMemory, MemoryPrivacyRiskBreakdown } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';

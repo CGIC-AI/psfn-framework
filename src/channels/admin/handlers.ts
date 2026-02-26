@@ -13,7 +13,7 @@ import type { CompactionSummary } from '../../session/types.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { ShardManager } from '../../shards/manager.js';
 import type { EventBus, EventName, EventMap } from '../../event-bus.js';
-import type { EmbeddingService } from '../../agent-loop.js';
+import type { EmbeddingService } from '../../agent/contracts.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type {

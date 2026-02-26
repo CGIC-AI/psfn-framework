@@ -9,7 +9,7 @@ import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { SubstrateMessage } from '../../types.js';
 import type { ContactStore } from '../../contacts/store.js';
-import type { AgentLoop } from '../../agent-loop.js';
+import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import type {
@@ -89,7 +89,7 @@ const telemetryIngestSchema = Type.Object({
 }, { additionalProperties: false });
 
 type TelemetryIngestInput = Static<typeof telemetryIngestSchema>;
-type AgentTurnResult = Awaited<ReturnType<AgentLoop['handleMessage']>>;
+type AgentTurnResult = Awaited<ReturnType<SubstrateAgent['handleMessage']>>;
 
 interface PendingTurn {
   channelId: string;
@@ -114,7 +114,7 @@ interface IdentityClaimHeaders {
 export interface ApiServerConfig {
   port: number;
   host?: string;
-  agentLoop: AgentLoop;
+  agentLoop: SubstrateAgent;
   eventBus: EventBus;
   sessionManager: SessionManager;
   contactStore?: ContactStore;
@@ -150,7 +150,7 @@ export class ApiServer implements ChannelAdapter {
   private server: Server;
   private port: number;
   private host: string;
-  private agentLoop: AgentLoop;
+  private agentLoop: SubstrateAgent;
   private eventBus: EventBus;
   private sessionManager: SessionManager;
   private contactStore: ContactStore | null;

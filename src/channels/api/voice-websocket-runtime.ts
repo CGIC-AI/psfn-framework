@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
-import type { AgentLoop } from '../../agent-loop.js';
+import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
@@ -39,7 +39,7 @@ const DEFAULT_ECHO_TTS_VOICE = '11labs-Allison';
 const DEFAULT_ECHO_TTS_PRESET = 'Independent-High-Speaker-CFG';
 
 interface ApiVoiceWebSocketRuntimeConfig {
-  agentLoop: AgentLoop;
+  agentLoop: SubstrateAgent;
   eventBus: EventBus;
   config: SubstrateConfig;
   channelPrefix?: string;
@@ -181,7 +181,7 @@ function toCloseReason(
 }
 
 async function runAssistantTurn(params: {
-  agentLoop: AgentLoop;
+  agentLoop: SubstrateAgent;
   eventBus: EventBus;
   request: IncomingMessage;
   transportSession: WebSocketVoiceSession;

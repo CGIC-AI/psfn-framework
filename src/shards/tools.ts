@@ -1,5 +1,5 @@
 // ── spawn_shard tool ──
-// Registered on parent AgentLoop only. Shards don't get this tool (no recursion).
+// Registered on parent SubstrateAgent only. Shards don't get this tool (no recursion).
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';

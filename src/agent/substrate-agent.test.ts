@@ -232,20 +232,6 @@ describe('SubstrateAgent.registerTool', () => {
   });
 });
 
-describe('SubstrateAgent re-export compatibility', () => {
-  it('is importable as AgentLoop from agent-loop.ts', async () => {
-    const mod = await import('../agent-loop.js');
-    expect(mod.AgentLoop).toBe(mod.SubstrateAgent);
-    expect(mod.SubstrateAgent).toBeDefined();
-  });
-
-  it('exports provider interfaces from agent-loop.ts', async () => {
-    // These are type-only exports, so we just verify the module loads
-    const mod = await import('../agent-loop.js');
-    expect(mod.SubstrateAgent).toBeDefined();
-  });
-});
-
 describe('SubstrateAgent persona adaptation', () => {
   beforeEach(() => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';

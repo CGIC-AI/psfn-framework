@@ -8,6 +8,7 @@ import type { CapabilityTier } from '../types.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
 import { resolveTierCapabilityTokens } from '../capabilities/tiers.js';
+import { IdentityCoolingOffManager } from '../capabilities/safeguards.js';
 import { PromptLayerStore } from './prompt-store.js';
 import {
   createPromptLayerListTool,
@@ -166,6 +167,72 @@ describe('Prompt Layer Tools', () => {
         expect(store.getById(layer.id)?.content).toBe(`modified-${tier}`);
         expect(store.getById(layer.id)?.updatedBy).toBe('agent');
       }
+    });
+
+    it('stages base updates with cooling-off in apprentice tier when safeguard is configured', async () => {
+      let now = 1_000;
+      const manager = new IdentityCoolingOffManager({
+        now: () => now,
+        defaultCooldownMs: 5_000,
+        idFactory: () => 'stage-1',
+      });
+      const layer = store.create({ type: 'base', name: 'Base', content: 'original' });
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store, {
+          identityCoolingOff: manager,
+          getCapabilityTier: () => 'apprentice',
+        }),
+        () => accessForTier('apprentice'),
+      );
+
+      const staged = await tool.execute('stage', {
+        layer_id: layer.id,
+        content: 'staged-change',
+      });
+      expect(resultText(staged)).toContain('Staged base-layer update');
+      expect(store.getById(layer.id)?.content).toBe('original');
+
+      const tooSoon = await tool.execute('commit-early', {
+        action: 'commit',
+        stage_id: 'stage-1',
+      });
+      expect(resultText(tooSoon)).toContain('cooling off');
+      expect(store.getById(layer.id)?.content).toBe('original');
+
+      now = 6_100;
+      const committed = await tool.execute('commit-ready', {
+        action: 'commit',
+        stage_id: 'stage-1',
+      });
+      expect(resultText(committed)).toContain('Committed staged update');
+      expect(store.getById(layer.id)?.content).toBe('staged-change');
+    });
+
+    it('allows cancelling staged base updates before commit', async () => {
+      let sequence = 0;
+      const manager = new IdentityCoolingOffManager({
+        defaultCooldownMs: 5_000,
+        idFactory: () => `stage-${++sequence}`,
+      });
+      const layer = store.create({ type: 'base', name: 'Base', content: 'original' });
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store, {
+          identityCoolingOff: manager,
+          getCapabilityTier: () => 'apprentice',
+        }),
+        () => accessForTier('apprentice'),
+      );
+
+      await tool.execute('stage', {
+        layer_id: layer.id,
+        content: 'staged-change',
+      });
+      const cancelled = await tool.execute('cancel', {
+        action: 'cancel',
+        stage_id: 'stage-1',
+      });
+      expect(resultText(cancelled)).toContain('Cancelled staged base-layer update');
+      expect(store.getById(layer.id)?.content).toBe('original');
     });
 
     it('denies operator layer updates in nursery tier', async () => {

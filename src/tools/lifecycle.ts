@@ -6,8 +6,22 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
 import { createComponentLogger } from '../logger.js';
+import type { CapabilityTier } from '../types.js';
+import type { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
 
 const log = createComponentLogger('LifecycleTools');
+
+interface LifecycleToolOptions {
+  restartSafeguard?: LifecycleRestartSafeguard;
+  getCapabilityTier?: () => CapabilityTier;
+}
+
+function blockResult(message: string): AgentToolResult<{ isError?: boolean }> {
+  return {
+    content: [{ type: 'text', text: message }] satisfies TextContent[],
+    details: { isError: true },
+  };
+}
 
 /**
  * Create the self_restart tool.
@@ -19,6 +33,7 @@ const log = createComponentLogger('LifecycleTools');
 export function createRestartTool(
   notifier: LifecycleNotifier,
   stopFn: () => Promise<void>,
+  options: LifecycleToolOptions = {},
 ): AgentTool<any> {
   return {
     name: 'self_restart',
@@ -28,18 +43,33 @@ export function createRestartTool(
       'Use when you need a fresh start or after configuration changes.',
     label: 'self_restart',
     parameters: Type.Object({
-      reason: Type.Optional(
-        Type.String({ description: 'Optional reason for restarting (shown in Discord notification)' }),
-      ),
+      reason: Type.String({
+        minLength: 1,
+        description: 'Reason for restarting (required, logged to safeguard audit trail).',
+      }),
     }),
     execute: async (
       _toolCallId: string,
-      params: { reason?: string },
+      params: { reason: string },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const reason = params.reason ?? undefined;
+      const reason = params.reason?.trim();
+      if (!reason) {
+        return blockResult('Restart blocked: reason is required.');
+      }
+      const tier = options.getCapabilityTier?.() ?? 'autonomous';
+      if (options.restartSafeguard) {
+        const decision = options.restartSafeguard.evaluate({
+          toolName: 'self_restart',
+          reason,
+          tier,
+        });
+        if (!decision.allowed) {
+          return blockResult(decision.reason);
+        }
+      }
 
-      log.info('Self-restart requested', { reason });
+      log.info('Self-restart requested', { reason, tier });
 
       // Send pre-restart notification — must complete before we exit
       await notifier.notifyPreRestart(reason);
@@ -70,6 +100,7 @@ export function createRestartTool(
 export function createRebuildTool(
   notifier: LifecycleNotifier,
   stopFn: () => Promise<void>,
+  options: LifecycleToolOptions = {},
 ): AgentTool<any> {
   return {
     name: 'self_rebuild',
@@ -78,19 +109,34 @@ export function createRebuildTool(
       'Use after code changes that need recompilation.',
     label: 'self_rebuild',
     parameters: Type.Object({
-      reason: Type.Optional(
-        Type.String({ description: 'Optional reason for rebuilding (shown in Discord notification)' }),
-      ),
+      reason: Type.String({
+        minLength: 1,
+        description: 'Reason for rebuilding (required, logged to safeguard audit trail).',
+      }),
     }),
     execute: async (
       _toolCallId: string,
-      params: { reason?: string },
+      params: { reason: string },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const reason = params.reason ?? undefined;
-      const fullReason = reason ? `rebuild: ${reason}` : 'rebuild';
+      const reason = params.reason?.trim();
+      if (!reason) {
+        return blockResult('Rebuild blocked: reason is required.');
+      }
+      const tier = options.getCapabilityTier?.() ?? 'autonomous';
+      if (options.restartSafeguard) {
+        const decision = options.restartSafeguard.evaluate({
+          toolName: 'self_rebuild',
+          reason,
+          tier,
+        });
+        if (!decision.allowed) {
+          return blockResult(decision.reason);
+        }
+      }
+      const fullReason = `rebuild: ${reason}`;
 
-      log.info('Self-rebuild requested', { reason });
+      log.info('Self-rebuild requested', { reason, tier });
 
       // Send pre-restart notification
       await notifier.notifyPreRestart(fullReason);

@@ -38,6 +38,7 @@ import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities
 import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
+import { tagToolWithReversibility } from '../capabilities/safeguards.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -115,7 +116,7 @@ export class SubstrateAgent {
     this.bridge = createEventBridge(this.agent, eventBus);
 
     // Register the load_tools meta-tool as a core tool
-    this.coreTools.push(this.createLoadToolsTool());
+    this.coreTools.push(tagToolWithReversibility(this.createLoadToolsTool()));
 
     // Eagerly try to resolve the model, but don't throw if it fails
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
@@ -235,10 +236,11 @@ export class SubstrateAgent {
   }
 
   registerTool(tool: AgentTool<any>, category: 'core' | 'extended' = 'core'): void {
+    const taggedTool = tagToolWithReversibility(tool);
     if (category === 'core') {
-      this.coreTools.push(tool);
+      this.coreTools.push(taggedTool);
     } else {
-      this.extendedTools.push(tool);
+      this.extendedTools.push(taggedTool);
     }
   }
 

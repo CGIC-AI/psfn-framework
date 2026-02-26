@@ -23,7 +23,12 @@ import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { MemoryWriter } from './memory/writer.js';
-import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
+import {
+  createMemoryWriteTool,
+  createMemoryImportTool,
+  createMemoryDeleteTool,
+  createUndoMemoryDeleteTool,
+} from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
@@ -49,6 +54,12 @@ import {
 } from './bootstrap/parity.js';
 import { resolveAdminChatApiBaseUrl } from './channels/admin/chat/api-base-url.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
+import {
+  createSafeguardAuditTrail,
+  createIdentityCoolingOffManagerFromEnv,
+  createLifecycleRestartSafeguardFromEnv,
+  createExternalCommunicationRateLimiterFromEnv,
+} from './capabilities/safeguards.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -140,6 +151,16 @@ async function main(): Promise<void> {
     config,
   });
   agentLoop.setCapabilityRuntime(capabilityRuntime);
+  const safeguardAuditTrail = createSafeguardAuditTrail(config.dataDir);
+  const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
+    auditTrail: safeguardAuditTrail,
+  });
+  const lifecycleRestartSafeguard = createLifecycleRestartSafeguardFromEnv(process.env, {
+    auditTrail: safeguardAuditTrail,
+  });
+  const externalRateLimiter = createExternalCommunicationRateLimiterFromEnv(process.env, {
+    auditTrail: safeguardAuditTrail,
+  });
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
     dataDir: config.dataDir,
@@ -148,7 +169,10 @@ async function main(): Promise<void> {
   });
 
   // Prompt stack — layered, editable system prompt
-  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, systemPrompt);
+  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, systemPrompt, {
+    identityCoolingOff,
+    getCapabilityTier: () => capabilityRuntime.getTier(),
+  });
   wireSettingsRuntime(agentLoop, config);
 
   // Contact store + tools — trust-gated privacy system
@@ -211,6 +235,8 @@ async function main(): Promise<void> {
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
   agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
   agentLoop.registerTool(createMemoryImportTool(memoryWriter));
+  agentLoop.registerTool(createMemoryDeleteTool(memoryStore));
+  agentLoop.registerTool(createUndoMemoryDeleteTool(memoryStore));
 
   // Git tools — self-modification via gateway-hosted git ops
   registerGitTools(agentLoop, new GatewayGitOps(gateway));
@@ -325,9 +351,29 @@ async function main(): Promise<void> {
     log.info('Stopped');
   };
 
-  agentLoop.registerTool(createRestartTool(lifecycleNotifier, stopFn));
-  agentLoop.registerTool(createRebuildTool(lifecycleNotifier, stopFn));
-  agentLoop.registerTool(createNotifyOperatorTool(createGatewayNtfyNotifier(gateway)));
+  agentLoop.registerTool(createRestartTool(
+    lifecycleNotifier,
+    stopFn,
+    {
+      restartSafeguard: lifecycleRestartSafeguard,
+      getCapabilityTier: () => capabilityRuntime.getTier(),
+    },
+  ));
+  agentLoop.registerTool(createRebuildTool(
+    lifecycleNotifier,
+    stopFn,
+    {
+      restartSafeguard: lifecycleRestartSafeguard,
+      getCapabilityTier: () => capabilityRuntime.getTier(),
+    },
+  ));
+  agentLoop.registerTool(createNotifyOperatorTool(
+    createGatewayNtfyNotifier(gateway),
+    {
+      rateLimiter: externalRateLimiter,
+      defaultChannel: 'discord',
+    },
+  ));
 
   // Heartbeat reflections — policy-driven multi-template reflection system
   wireHeartbeatRuntime(

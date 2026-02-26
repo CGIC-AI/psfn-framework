@@ -100,6 +100,51 @@ describe('MemoryStore', () => {
       expect(results).toHaveLength(0);
     });
 
+    it('soft-deletes memory with a checkpoint snapshot and excludes it from active queries', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(makeMemory('m1', 'Delete me'), emb);
+
+      const deleted = store.softDeleteMemory('m1', {
+        deletedBy: 'test',
+        reason: 'cleanup',
+        deleteId: 'del-1',
+      });
+      expect(deleted).toBeDefined();
+      expect(deleted?.deleteId).toBe('del-1');
+      expect(deleted?.snapshot.id).toBe('m1');
+
+      const active = store.getAllActiveMemories();
+      expect(active).toHaveLength(0);
+      const search = store.searchByEmbedding(emb, 0.5, 10);
+      expect(search).toHaveLength(0);
+
+      const version = store.getDeleteVersion('del-1');
+      expect(version?.memoryId).toBe('m1');
+      expect(version?.deleteReason).toBe('cleanup');
+      expect(version?.snapshot.text).toBe('Delete me');
+    });
+
+    it('undoes soft-delete via delete checkpoint id', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(makeMemory('m1', 'Restore me'), emb);
+      const deleted = store.softDeleteMemory('m1', {
+        deletedBy: 'test',
+        deleteId: 'del-restore',
+      });
+      expect(deleted?.deleteId).toBe('del-restore');
+
+      const restored = store.undoSoftDelete('del-restore', {
+        restoredBy: 'test:undo',
+      });
+      expect(restored).toBeDefined();
+      expect(restored?.restoredBy).toBe('test:undo');
+
+      const active = store.getAllActiveMemories();
+      expect(active).toHaveLength(1);
+      expect(active[0].id).toBe('m1');
+      expect(store.undoSoftDelete('del-restore')).toBeNull();
+    });
+
     it('stores and retrieves sensitivity field', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(

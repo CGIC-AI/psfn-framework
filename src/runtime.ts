@@ -36,7 +36,12 @@ import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
 import { MemoryWriter } from './memory/writer.js';
-import { createMemoryWriteTool, createMemoryImportTool } from './memory/tools.js';
+import {
+  createMemoryWriteTool,
+  createMemoryImportTool,
+  createMemoryDeleteTool,
+  createUndoMemoryDeleteTool,
+} from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
@@ -51,6 +56,12 @@ import { attachVoiceObservers } from './voice/observers/index.js';
 import { loadRuntimeChannelsConfig } from './channels/config.js';
 import { resolveAdminChatApiBaseUrl } from './channels/admin/chat/api-base-url.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
+import {
+  createSafeguardAuditTrail,
+  createIdentityCoolingOffManagerFromEnv,
+  createLifecycleRestartSafeguardFromEnv,
+  createExternalCommunicationRateLimiterFromEnv,
+} from './capabilities/safeguards.js';
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -225,6 +236,16 @@ export class SubstrateRuntime implements Lifecycle {
       { characterName: card.data.name },
     );
     this.agentLoop.setCapabilityRuntime(this.capabilityRuntime);
+    const safeguardAuditTrail = createSafeguardAuditTrail(this.config.dataDir);
+    const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
+      auditTrail: safeguardAuditTrail,
+    });
+    const lifecycleRestartSafeguard = createLifecycleRestartSafeguardFromEnv(process.env, {
+      auditTrail: safeguardAuditTrail,
+    });
+    const externalRateLimiter = createExternalCommunicationRateLimiterFromEnv(process.env, {
+      auditTrail: safeguardAuditTrail,
+    });
 
     const skillsRuntime = wireSkillsRuntime(this.agentLoop, {
       dataDir: this.config.dataDir,
@@ -237,6 +258,10 @@ export class SubstrateRuntime implements Lifecycle {
       this.agentLoop,
       this.config.dataDir,
       systemPrompt,
+      {
+        identityCoolingOff,
+        getCapabilityTier: () => this.capabilityRuntime.getTier(),
+      },
     );
 
     // Contact store + tools — trust-gated privacy system
@@ -326,6 +351,8 @@ export class SubstrateRuntime implements Lifecycle {
     const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
     this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
+    this.agentLoop.registerTool(createMemoryDeleteTool(this.memoryStore));
+    this.agentLoop.registerTool(createUndoMemoryDeleteTool(this.memoryStore));
 
     // Git tools — self-modification via git
     wireGitRuntime(this.agentLoop, {
@@ -372,12 +399,26 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.registerTool(createRestartTool(
       this.lifecycleNotifier,
       () => this.stop(),
+      {
+        restartSafeguard: lifecycleRestartSafeguard,
+        getCapabilityTier: () => this.capabilityRuntime.getTier(),
+      },
     ));
     this.agentLoop.registerTool(createRebuildTool(
       this.lifecycleNotifier,
       () => this.stop(),
+      {
+        restartSafeguard: lifecycleRestartSafeguard,
+        getCapabilityTier: () => this.capabilityRuntime.getTier(),
+      },
     ));
-    this.agentLoop.registerTool(createNotifyOperatorTool(createHttpNtfyNotifierFromEnv()));
+    this.agentLoop.registerTool(createNotifyOperatorTool(
+      createHttpNtfyNotifierFromEnv(),
+      {
+        rateLimiter: externalRateLimiter,
+        defaultChannel: 'discord',
+      },
+    ));
 
     // Heartbeat reflections — policy-driven multi-template reflection system
     wireHeartbeatRuntime(

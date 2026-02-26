@@ -22,12 +22,17 @@ import type {
   OutboundContext,
 } from '../types.js';
 import type {
+  ApiHealthResponse,
+  ApiHealthSubsystem,
+  ApiHealthSubsystemStatus,
+  ApiServerHealthChecks,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatCompletionChunk,
   TelemetryIngestRequest,
   TelemetryIngestResponse,
 } from './types.js';
+import { API_HEALTH_SUBSYSTEMS } from './types.js';
 import { createComponentLogger } from '../../logger.js';
 import { hasBearerToken } from '../http/auth.js';
 import {
@@ -119,6 +124,7 @@ export interface ApiServerConfig {
   voiceWebSocketPath?: string;
   voiceWebSocketRuntime?: VoiceWebSocketRuntime;
   voiceWebSocketHooks?: VoiceWebSocketRuntimeHooks;
+  healthChecks?: ApiServerHealthChecks;
 }
 
 export class ApiServer implements ChannelAdapter {
@@ -154,6 +160,7 @@ export class ApiServer implements ChannelAdapter {
   private seenTelemetryNonces = new Map<string, number>();
   private inFlightByChannel = new Map<string, symbol>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
+  private healthChecks: ApiServerHealthChecks;
 
   constructor(config: ApiServerConfig) {
     this.port = config.port;
@@ -165,6 +172,7 @@ export class ApiServer implements ChannelAdapter {
     this.apiKey = config.apiKey;
     this.modelName = config.modelName ?? 'psfn';
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
+    this.healthChecks = config.healthChecks ?? {};
     this.voiceWebSocket = new ApiVoiceWebSocketAdapter({
       apiKey: this.apiKey,
       path: config.voiceWebSocketPath,
@@ -385,6 +393,8 @@ export class ApiServer implements ChannelAdapter {
 
     if (req.method === 'GET' && path === '/v1/models') {
       this.handleModels(res);
+    } else if (req.method === 'GET' && path === '/health') {
+      void this.handleHealth(res);
     } else if (req.method === 'POST' && path === '/v1/chat/completions') {
       void this.handleChatCompletions(req, res);
     } else if (isTelemetryIngest) {
@@ -413,6 +423,64 @@ export class ApiServer implements ChannelAdapter {
       }],
     };
     sendJson(res, 200, body);
+  }
+
+  private async handleHealth(res: ServerResponse): Promise<void> {
+    const subsystemEntries = await Promise.all(
+      API_HEALTH_SUBSYSTEMS.map(async (subsystem) => {
+        const status = await this.evaluateSubsystemHealth(subsystem);
+        return [subsystem, status] as const;
+      }),
+    );
+
+    const subsystems = Object.fromEntries(subsystemEntries) as ApiHealthResponse['subsystems'];
+    const status: ApiHealthResponse['status'] = API_HEALTH_SUBSYSTEMS.every(
+      (subsystem) => subsystems[subsystem].status === 'healthy',
+    )
+      ? 'healthy'
+      : 'degraded';
+
+    const body: ApiHealthResponse = {
+      status,
+      checkedAt: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      subsystems,
+    };
+
+    sendJson(res, status === 'healthy' ? 200 : 503, body);
+  }
+
+  private async evaluateSubsystemHealth(
+    subsystem: ApiHealthSubsystem,
+  ): Promise<ApiHealthSubsystemStatus> {
+    const check = this.healthChecks[subsystem];
+    if (!check) {
+      return {
+        status: 'degraded',
+        detail: 'Health check not configured',
+      };
+    }
+
+    try {
+      const result = await Promise.resolve(check());
+      return this.normalizeSubsystemHealth(result);
+    } catch (error) {
+      return {
+        status: 'degraded',
+        detail: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private normalizeSubsystemHealth(
+    result: ApiHealthSubsystemStatus,
+  ): ApiHealthSubsystemStatus {
+    const detail = result.detail?.trim();
+    return {
+      status: result.status === 'healthy' ? 'healthy' : 'degraded',
+      ...(detail ? { detail } : {}),
+      ...(result.meta ? { meta: result.meta } : {}),
+    };
   }
 
   private async handleChatCompletions(req: IncomingMessage, res: ServerResponse): Promise<void> {

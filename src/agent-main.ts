@@ -283,6 +283,61 @@ async function main(): Promise<void> {
         process.env.API_REQUEST_TIMEOUT_MS,
         DEFAULT_API_REQUEST_TIMEOUT_MS,
       ),
+      healthChecks: {
+        memory: () => {
+          const stats = memoryStore.getStats();
+          return {
+            status: 'healthy',
+            meta: {
+              total: stats.total,
+              avgSalience: Number(stats.avgSalience.toFixed(4)),
+            },
+          };
+        },
+        llm: () => ({
+          status: config.primaryModel && config.primaryProvider
+            ? 'healthy'
+            : 'degraded',
+          ...(config.primaryModel && config.primaryProvider
+            ? {}
+            : { detail: 'Primary model/provider is not configured' }),
+          meta: {
+            provider: config.primaryProvider,
+            model: config.primaryModel,
+          },
+        }),
+        discord: () => ({
+          status: 'degraded',
+          detail: 'Discord transport runs outside the agent container',
+        }),
+        embeddings: () => {
+          if (!Number.isFinite(gateway.dims) || gateway.dims <= 0) {
+            return {
+              status: 'degraded',
+              detail: 'Embedding dimensions are invalid',
+            };
+          }
+          return {
+            status: 'healthy',
+            meta: { dims: gateway.dims },
+          };
+        },
+        scheduler: () => {
+          const taskCount = scheduler.taskCount;
+          const hasHeartbeatTask = Boolean(scheduler.getTask('heartbeat'));
+          if (!hasHeartbeatTask) {
+            return {
+              status: 'degraded',
+              detail: 'Heartbeat task is not registered',
+              meta: { taskCount },
+            };
+          }
+          return {
+            status: 'healthy',
+            meta: { taskCount },
+          };
+        },
+      },
     });
     await apiServer.init();
     await apiServer.start();

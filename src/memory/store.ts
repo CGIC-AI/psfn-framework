@@ -433,6 +433,11 @@ export class MemoryStore {
     transaction();
   }
 
+  runInTransaction<T>(handler: () => T): T {
+    const transaction = this.db.transaction(handler);
+    return transaction();
+  }
+
   searchByEmbedding(
     embedding: Float32Array,
     threshold: number,
@@ -533,6 +538,34 @@ export class MemoryStore {
     `);
     const rows = stmt.all() as MemoryRow[];
     return rows.map(mapMemoryRow);
+  }
+
+  listActiveMemories(
+    options: {
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): PurrMemory[] {
+    const limit = this.normalizeListLimit(options.limit ?? 50, 50, 1, 500);
+    const offset = this.normalizeListOffset(options.offset ?? 0);
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM l2_memories
+      WHERE superseded_by IS NULL AND deleted_at IS NULL
+      ORDER BY extracted_at DESC
+      LIMIT ?
+      OFFSET ?
+    `).all(limit, offset) as MemoryRow[];
+    return rows.map(mapMemoryRow);
+  }
+
+  countActiveMemories(): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) as count
+      FROM l2_memories
+      WHERE superseded_by IS NULL AND deleted_at IS NULL
+    `).get() as { count: number };
+    return row.count;
   }
 
   getById(id: string): PurrMemory | undefined {
@@ -980,5 +1013,20 @@ export class MemoryStore {
   private normalizeScratchpadLimit(limit: number): number {
     if (!Number.isFinite(limit)) return SCRATCHPAD_MAX_ENTRIES;
     return Math.max(1, Math.min(SCRATCHPAD_MAX_ENTRIES, Math.floor(limit)));
+  }
+
+  private normalizeListLimit(
+    limit: number,
+    fallback: number,
+    min: number,
+    max: number,
+  ): number {
+    if (!Number.isFinite(limit)) return fallback;
+    return Math.max(min, Math.min(max, Math.floor(limit)));
+  }
+
+  private normalizeListOffset(offset: number): number {
+    if (!Number.isFinite(offset)) return 0;
+    return Math.max(0, Math.floor(offset));
   }
 }

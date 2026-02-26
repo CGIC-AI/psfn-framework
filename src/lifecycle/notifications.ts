@@ -2,7 +2,8 @@
 // Sends Discord messages on pre-restart, ready, and shutdown events.
 // Uses the configured heartbeat channel or last-active channel.
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 
@@ -37,8 +38,43 @@ export interface LastActiveData {
   timestamp: number;
 }
 
+interface PendingLastActiveWrite {
+  latest: LastActiveData;
+  dirty: boolean;
+  writing: boolean;
+}
+
+const pendingLastActiveWrites = new Map<string, PendingLastActiveWrite>();
+
+async function flushLastActiveWrite(path: string, state: PendingLastActiveWrite): Promise<void> {
+  while (state.dirty) {
+    state.dirty = false;
+    const snapshot = state.latest;
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, JSON.stringify(snapshot) + '\n', 'utf-8');
+    } catch (err) {
+      log.error('Failed to write last active channel', { error: String(err) });
+    }
+  }
+
+  state.writing = false;
+  if (!state.dirty) {
+    pendingLastActiveWrites.delete(path);
+    return;
+  }
+
+  state.writing = true;
+  void flushLastActiveWrite(path, state);
+}
+
 export function readLastActiveChannel(dataDir: string): string | null {
   const path = join(dataDir, LAST_ACTIVE_FILE);
+  const pending = pendingLastActiveWrites.get(path);
+  if (pending?.latest.channelId) {
+    return pending.latest.channelId;
+  }
+
   try {
     const raw = readFileSync(path, 'utf-8');
     const data = JSON.parse(raw) as LastActiveData;
@@ -57,12 +93,19 @@ export function writeLastActiveChannel(dataDir: string, channelId: string): void
     return;
   }
   const path = join(dataDir, LAST_ACTIVE_FILE);
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    const data: LastActiveData = { channelId, timestamp: Date.now() };
-    writeFileSync(path, JSON.stringify(data) + '\n', 'utf-8');
-  } catch (err) {
-    log.error('Failed to write last active channel', { error: String(err) });
+
+  const state = pendingLastActiveWrites.get(path) ?? {
+    latest: { channelId, timestamp: Date.now() },
+    dirty: false,
+    writing: false,
+  };
+  state.latest = { channelId, timestamp: Date.now() };
+  state.dirty = true;
+  pendingLastActiveWrites.set(path, state);
+
+  if (!state.writing) {
+    state.writing = true;
+    void flushLastActiveWrite(path, state);
   }
 }
 

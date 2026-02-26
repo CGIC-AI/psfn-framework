@@ -715,7 +715,7 @@ describe('MemoryWriter', () => {
   });
 
   describe('importBatch()', () => {
-    it('processes multiple records sequentially', async () => {
+    it('uses batch embeddings while processing records sequentially', async () => {
       const records: MemoryWriteOptions[] = [
         { text: 'Fact one', type: 'semantic', importance: 0.7 },
         { text: 'Event two', type: 'episodic', importance: 0.5 },
@@ -730,8 +730,9 @@ describe('MemoryWriter', () => {
       expect(result.errors).toBe(0);
       expect(result.results).toHaveLength(3);
 
-      // Each record should have been embedded and inserted
-      expect(embeddings.embed).toHaveBeenCalledTimes(3);
+      expect(embeddings.embedBatch).toHaveBeenCalledTimes(1);
+      expect(embeddings.embedBatch).toHaveBeenCalledWith(records.map(record => record.text));
+      expect(embeddings.embed).not.toHaveBeenCalled();
       expect(store.insertMemory).toHaveBeenCalledTimes(3);
     });
 
@@ -767,19 +768,13 @@ describe('MemoryWriter', () => {
     });
 
     it('counts errors without stopping the batch', async () => {
-      // First record: success
-      store.searchByEmbedding.mockReturnValueOnce([]);
-      store.searchByEmbedding.mockReturnValueOnce([]);
-
-      // Second record: embed throws
-      (embeddings.embed as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce(makeEmbedding()) // first record succeeds
-        .mockRejectedValueOnce(new Error('embedding failed')) // second record fails
-        .mockResolvedValueOnce(makeEmbedding()); // third record succeeds
-
-      // Third record: success
-      store.searchByEmbedding.mockReturnValueOnce([]);
-      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.searchByEmbedding.mockReturnValue([]);
+      store.insertMemory
+        .mockImplementationOnce(() => undefined)
+        .mockImplementationOnce(() => {
+          throw new Error('insert failed');
+        })
+        .mockImplementationOnce(() => undefined);
 
       const records: MemoryWriteOptions[] = [
         { text: 'Good memory', type: 'semantic' },
@@ -792,6 +787,22 @@ describe('MemoryWriter', () => {
       expect(result.written).toBe(2);
       expect(result.errors).toBe(1);
       expect(result.results).toHaveLength(2); // Only successful results
+    });
+
+    it('falls back to per-record embeddings when batch embedding fails', async () => {
+      (embeddings.embedBatch as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('batch unavailable'));
+
+      const records: MemoryWriteOptions[] = [
+        { text: 'Fallback one', type: 'semantic' },
+        { text: 'Fallback two', type: 'semantic' },
+      ];
+
+      const result = await writer.importBatch(records);
+
+      expect(result.written).toBe(2);
+      expect(result.errors).toBe(0);
+      expect(embeddings.embed).toHaveBeenCalledTimes(2);
     });
 
     it('handles empty batch', async () => {

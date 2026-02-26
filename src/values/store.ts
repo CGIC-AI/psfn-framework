@@ -12,6 +12,7 @@ export interface ValuesJournalEntry {
   prompt: string;
   reflection: string;
   createdAt: string;
+  deliberation?: ValuesDeliberationMetadata;
 }
 
 export interface ValuesJournalAppendInput {
@@ -20,10 +21,72 @@ export interface ValuesJournalAppendInput {
   prompt: string;
   reflection: string;
   createdAt?: string;
+  deliberation?: ValuesDeliberationMetadata;
 }
 
 interface ValuesJournalListOptions {
   limit?: number;
+}
+
+export interface ValuesDeliberationMetadata {
+  sessionId: string;
+  stopReason: string;
+  rounds: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  durationMs: number;
+}
+
+function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const candidate = raw as Partial<ValuesDeliberationMetadata>;
+
+  if (typeof candidate.sessionId !== 'string' || candidate.sessionId.trim().length === 0) return undefined;
+  if (typeof candidate.stopReason !== 'string' || candidate.stopReason.trim().length === 0) return undefined;
+  if (typeof candidate.rounds !== 'number' || !Number.isFinite(candidate.rounds) || candidate.rounds < 0) {
+    return undefined;
+  }
+  if (
+    typeof candidate.totalInputTokens !== 'number'
+    || !Number.isFinite(candidate.totalInputTokens)
+    || candidate.totalInputTokens < 0
+  ) {
+    return undefined;
+  }
+  if (
+    typeof candidate.totalOutputTokens !== 'number'
+    || !Number.isFinite(candidate.totalOutputTokens)
+    || candidate.totalOutputTokens < 0
+  ) {
+    return undefined;
+  }
+  if (typeof candidate.totalTokens !== 'number' || !Number.isFinite(candidate.totalTokens) || candidate.totalTokens < 0) {
+    return undefined;
+  }
+  if (
+    typeof candidate.estimatedCostUsd !== 'number'
+    || !Number.isFinite(candidate.estimatedCostUsd)
+    || candidate.estimatedCostUsd < 0
+  ) {
+    return undefined;
+  }
+  if (typeof candidate.durationMs !== 'number' || !Number.isFinite(candidate.durationMs) || candidate.durationMs < 0) {
+    return undefined;
+  }
+
+  return {
+    sessionId: candidate.sessionId,
+    stopReason: candidate.stopReason,
+    rounds: Math.floor(candidate.rounds),
+    totalInputTokens: candidate.totalInputTokens,
+    totalOutputTokens: candidate.totalOutputTokens,
+    totalTokens: candidate.totalTokens,
+    estimatedCostUsd: candidate.estimatedCostUsd,
+    durationMs: candidate.durationMs,
+  };
 }
 
 function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
@@ -50,6 +113,7 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
   const id = typeof entry.id === 'string' && entry.id.trim().length > 0
     ? entry.id
     : `values-${entry.version}`;
+  const deliberation = normalizeDeliberationMetadata(entry.deliberation);
 
   return {
     id,
@@ -59,6 +123,7 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
     prompt: entry.prompt,
     reflection: entry.reflection,
     createdAt: entry.createdAt,
+    ...(deliberation ? { deliberation } : {}),
   };
 }
 
@@ -89,6 +154,7 @@ export class ValuesJournalStore {
       prompt,
       reflection,
       createdAt: input.createdAt ?? new Date().toISOString(),
+      ...(input.deliberation ? { deliberation: input.deliberation } : {}),
     };
 
     mkdirSync(dirname(this.filePath), { recursive: true });

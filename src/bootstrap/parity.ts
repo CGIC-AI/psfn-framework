@@ -8,10 +8,13 @@ import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
+import type { LLMProvider } from '../agent/contracts.js';
 import { createSettingsGetTool } from '../settings-tools.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
+import { runDeliberation } from '../llm/deliberation.js';
+import type { DeliberationResult } from '../llm/deliberation.js';
 import {
   createCharacterCardUpdateTool,
   type CharacterCardUpdateToolOptions,
@@ -32,7 +35,11 @@ import {
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from '../scheduler/heartbeat-tools.js';
+import type { ReflectionTemplate } from '../scheduler/heartbeat-policy.js';
+import type { SessionManager } from '../session/manager.js';
+import type { MemoryWriter } from '../memory/writer.js';
 import { ValuesJournalStore } from '../values/store.js';
+import type { ValuesDeliberationMetadata } from '../values/store.js';
 
 const log = createComponentLogger('SharedWiring');
 
@@ -46,6 +53,12 @@ interface HeartbeatAgent {
     content: string;
     timestamp: Date;
   }): Promise<{ content: string }>;
+}
+
+interface HeartbeatRuntimeOptions {
+  llmProvider?: LLMProvider;
+  sessionManager?: Pick<SessionManager, 'recordAssistantMessage' | 'appendSystemNote'>;
+  memoryWriter?: Pick<MemoryWriter, 'write'>;
 }
 
 export interface PromptRuntimeTarget {
@@ -145,10 +158,117 @@ export function wireHeartbeatRuntime(
   sender: MessageSender,
   dataDir: string,
   heartbeatChannelId?: string,
+  runtimeOptions: HeartbeatRuntimeOptions = {},
 ): void {
   const store = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
   const valuesJournal = new ValuesJournalStore(join(dataDir, 'values.jsonl'));
   const policy = store.load();
+
+  const toDeliberationMetadata = (
+    result: DeliberationResult,
+  ): ValuesDeliberationMetadata => ({
+    sessionId: result.sessionId,
+    stopReason: result.stopReason,
+    rounds: result.rounds.length,
+    totalInputTokens: result.totalInputTokens,
+    totalOutputTokens: result.totalOutputTokens,
+    totalTokens: result.totalTokens,
+    estimatedCostUsd: result.estimatedCostUsd,
+    durationMs: result.durationMs,
+  });
+
+  const persistDeliberationJournalEntry = (
+    reflectionChannelId: string,
+    reflection: string,
+    metadata: ValuesDeliberationMetadata,
+  ): void => {
+    if (!runtimeOptions.sessionManager) return;
+    runtimeOptions.sessionManager.recordAssistantMessage(
+      reflectionChannelId,
+      reflection,
+      undefined,
+      false,
+      undefined,
+      {
+        trustLevel: 'trusted',
+        mirror: false,
+      },
+    );
+    runtimeOptions.sessionManager.appendSystemNote(
+      reflectionChannelId,
+      `[Deliberation metadata] ${JSON.stringify(metadata)}`,
+    );
+  };
+
+  const persistDeliberationMemory = async (
+    template: ReflectionTemplate,
+    reflection: string,
+    metadata: ValuesDeliberationMetadata,
+  ): Promise<void> => {
+    if (!runtimeOptions.memoryWriter) return;
+    await runtimeOptions.memoryWriter.write({
+      text: reflection,
+      type: 'reflection',
+      importance: 0.72,
+      confidence: 0.78,
+      emotionalValence: 0,
+      sourceRef:
+        `source:heartbeat|template:${template.id}|mode:deliberation`
+        + `|session:${metadata.sessionId}|tokens:${metadata.totalTokens}`
+        + `|cost_usd:${metadata.estimatedCostUsd.toFixed(6)}`,
+      tags: [
+        'heartbeat',
+        'reflection',
+        'deliberation',
+        template.id,
+        `stop:${metadata.stopReason}`,
+      ],
+    });
+  };
+
+  const shouldUseDeliberation = (template: ReflectionTemplate): boolean => {
+    if (template.mode !== 'deliberation') return false;
+    return Boolean(runtimeOptions.llmProvider);
+  };
+
+  const runTemplateDeliberation = async (
+    template: ReflectionTemplate,
+  ): Promise<{ reflection: string; metadata: ValuesDeliberationMetadata }> => {
+    const llmProvider = runtimeOptions.llmProvider;
+    if (!llmProvider) {
+      throw new Error('Deliberation mode requested without llmProvider');
+    }
+    const result = await runDeliberation(
+      llmProvider,
+      template.prompt,
+      {
+        ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
+        caps: {
+          ...(template.deliberation?.maxRounds !== undefined
+            ? { maxRounds: template.deliberation.maxRounds }
+            : {}),
+          ...(template.deliberation?.maxTotalTokens !== undefined
+            ? { maxTotalTokens: template.deliberation.maxTotalTokens }
+            : {}),
+          ...(template.deliberation?.maxWallTimeMs !== undefined
+            ? { maxWallTimeMs: template.deliberation.maxWallTimeMs }
+            : {}),
+        },
+        cost: {
+          ...(template.deliberation?.inputUsdPerMillionTokens !== undefined
+            ? { inputUsdPerMillionTokens: template.deliberation.inputUsdPerMillionTokens }
+            : {}),
+          ...(template.deliberation?.outputUsdPerMillionTokens !== undefined
+            ? { outputUsdPerMillionTokens: template.deliberation.outputUsdPerMillionTokens }
+            : {}),
+        },
+      },
+    );
+    return {
+      reflection: result.output,
+      metadata: toDeliberationMetadata(result),
+    };
+  };
 
   // Create sync function that re-registers all reflection tasks
   const syncReflectionTasks = (): void => {
@@ -171,26 +291,56 @@ export function wireHeartbeatRuntime(
           intervalMs: template.intervalMs,
           handler: async () => {
             try {
-              const response = await agentLoop.handleMessage({
-                id: `reflection-${template.id}-${Date.now()}`,
-                channelId: `internal:reflection:${template.id}`,
-                channelType: 'terminal',
-                authorId: 'scheduler',
-                authorName: template.name,
-                content: template.prompt,
-                timestamp: new Date(),
-              });
+              const reflectionChannelId = `internal:reflection:${template.id}`;
+              let reflectionText = '';
+              let deliberationMetadata: ValuesDeliberationMetadata | undefined;
+
+              if (shouldUseDeliberation(template)) {
+                const deliberationResult = await runTemplateDeliberation(template);
+                reflectionText = deliberationResult.reflection;
+                deliberationMetadata = deliberationResult.metadata;
+                try {
+                  persistDeliberationJournalEntry(
+                    reflectionChannelId,
+                    reflectionText,
+                    deliberationMetadata,
+                  );
+                } catch (error) {
+                  log.warn(`Reflection "${template.id}" journal persistence skipped`, {
+                    error: String(error),
+                  });
+                }
+                try {
+                  await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
+                } catch (error) {
+                  log.warn(`Reflection "${template.id}" memory persistence skipped`, {
+                    error: String(error),
+                  });
+                }
+              } else {
+                const response = await agentLoop.handleMessage({
+                  id: `reflection-${template.id}-${Date.now()}`,
+                  channelId: reflectionChannelId,
+                  channelType: 'terminal',
+                  authorId: 'scheduler',
+                  authorName: template.name,
+                  content: template.prompt,
+                  timestamp: new Date(),
+                });
+                reflectionText = response.content;
+              }
 
               if (template.id === 'values-reflection') {
                 valuesJournal.append({
                   templateId: template.id,
                   templateName: template.name,
                   prompt: template.prompt,
-                  reflection: response.content,
+                  reflection: reflectionText,
+                  ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
                 });
               }
               if (template.sendToDiscord && heartbeatChannelId) {
-                await sender.send(heartbeatChannelId, response.content);
+                await sender.send(heartbeatChannelId, reflectionText);
               }
             } catch (err) {
               log.error(`Reflection "${template.id}" error`, { error: String(err) });

@@ -1613,6 +1613,14 @@ describe('AdminServer', () => {
             privatePrefixes: ['custom:'],
             broadcastPrefixes: ['social:'],
             defaultVisibility: 'public',
+            visibilityOverrides: {
+              exact: {
+                'custom:exact-room': 'broadcast',
+              },
+              prefix: {
+                'custom:': 'private',
+              },
+            },
           },
         }),
       }).toString();
@@ -1624,10 +1632,24 @@ describe('AdminServer', () => {
       expect(res.body).toContain('trust-policy.json saved');
 
       const saved = JSON.parse(readFileSync(join(tempDir, 'trust-policy.json'), 'utf-8')) as {
-        channelClassification: { privatePrefixes: string[]; defaultVisibility: string };
+        channelClassification: {
+          privatePrefixes: string[];
+          defaultVisibility: string;
+          visibilityOverrides: {
+            exact: Record<string, string>;
+            prefix: Record<string, string>;
+          };
+        };
       };
       expect(saved.channelClassification.privatePrefixes).toEqual(['custom:']);
       expect(saved.channelClassification.defaultVisibility).toBe('public');
+      expect(saved.channelClassification.visibilityOverrides.exact).toEqual({
+        'custom:exact-room': 'broadcast',
+      });
+      expect(saved.channelClassification.visibilityOverrides.prefix).toEqual({
+        'custom:': 'private',
+      });
+      expect(classifyChannel('custom:exact-room')).toBe('broadcast');
       expect(classifyChannel('custom:123')).toBe('private');
       expect(classifyChannel('unknown:123')).toBe('public');
     });

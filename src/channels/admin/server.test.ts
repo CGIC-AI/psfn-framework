@@ -1557,8 +1557,126 @@ describe('AdminServer', () => {
     it('returns events page', async () => {
       const res = await request(port, 'GET', '/events');
       expect(res.status).toBe(200);
-      expect(res.body).toContain('Garden Pulse');
-      expect(res.body).toContain('sse-connect');
+      expect(res.body).toContain('Audit Timeline');
+      expect(res.body).toContain('name="actionType"');
+      expect(res.body).toContain('name="decision"');
+      expect(res.body).toContain('name="timeRange"');
+    });
+
+    it('shows unified audit timeline entries for tool, identity, external, and memory actions', async () => {
+      const layer = promptStore.getAll()[0];
+      if (!layer) throw new Error('Expected seeded prompt layer');
+
+      await eventBus.emit('agent.tool.start', {
+        channelId: 'timeline-ch',
+        toolCallId: 'timeline-tool-1',
+        toolName: 'memory_search',
+      });
+      await eventBus.emit('agent.tool.end', {
+        channelId: 'timeline-ch',
+        toolCallId: 'timeline-tool-1',
+        toolName: 'memory_search',
+        isError: false,
+      });
+      await eventBus.emit('memory.extraction.end', {
+        channelId: 'timeline-ch',
+        count: 1,
+        acceptedCount: 1,
+        rejectedCount: 0,
+        writeCount: 1,
+      });
+      await eventBus.emit('message.sent', {
+        response: {
+          content: 'sent',
+          channelId: 'discord:timeline',
+          metadata: {
+            model: 'test-model',
+            inputTokens: 12,
+            outputTokens: 4,
+            durationMs: 40,
+          },
+        },
+      });
+
+      const updateBody = new URLSearchParams({
+        layerId: layer.id,
+        content: 'Updated prompt layer body',
+      }).toString();
+      await request(port, 'POST', '/api/prompts/update', updateBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      const res = await request(port, 'GET', '/events?timeRange=all');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('data-action-type="tool_invocation"');
+      expect(res.body).toContain('data-action-type="identity_edit"');
+      expect(res.body).toContain('data-action-type="external_action"');
+      expect(res.body).toContain('data-action-type="memory_mutation"');
+      expect(res.body).toContain('memory_search');
+      expect(res.body).toContain('edited');
+    });
+
+    it('filters audit timeline by decision, action type, and time range', async () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(1_700_000_000_000);
+        await eventBus.emit('agent.tool.start', {
+          channelId: 'timeline-ch',
+          toolCallId: 'timeline-tool-old',
+          toolName: 'old_tool',
+        });
+        await eventBus.emit('agent.tool.end', {
+          channelId: 'timeline-ch',
+          toolCallId: 'timeline-tool-old',
+          toolName: 'old_tool',
+          isError: false,
+        });
+
+        nowSpy.mockReturnValue(1_700_000_000_000 + (2 * 60 * 60 * 1_000));
+        await eventBus.emit('agent.tool.start', {
+          channelId: 'timeline-ch',
+          toolCallId: 'timeline-tool-denied',
+          toolName: 'write_file',
+        });
+        await eventBus.emit('agent.tool.end', {
+          channelId: 'timeline-ch',
+          toolCallId: 'timeline-tool-denied',
+          toolName: 'write_file',
+          isError: true,
+        });
+        await eventBus.emit('agent.tool.start', {
+          channelId: 'timeline-ch',
+          toolCallId: 'timeline-tool-allowed',
+          toolName: 'list_dir',
+        });
+        await eventBus.emit('agent.tool.end', {
+          channelId: 'timeline-ch',
+          toolCallId: 'timeline-tool-allowed',
+          toolName: 'list_dir',
+          isError: false,
+        });
+        nowSpy.mockReturnValue(1_700_000_000_000 + (2 * 60 * 60 * 1_000));
+
+        const filtered = await request(
+          port,
+          'GET',
+          '/events?actionType=tool_invocation&decision=denied&timeRange=1h',
+        );
+        expect(filtered.status).toBe(200);
+        expect(filtered.body).toContain('write_file');
+        expect(filtered.body).not.toContain('list_dir');
+        expect(filtered.body).not.toContain('old_tool');
+
+        const allTime = await request(
+          port,
+          'GET',
+          '/events?actionType=tool_invocation&decision=all&timeRange=all',
+        );
+        expect(allTime.status).toBe(200);
+        expect(allTime.body).toContain('old_tool');
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     it('SSE endpoint returns correct headers', async () => {

@@ -14,6 +14,7 @@ import type { ConfirmationQueueEntry } from '../../gateway/protocol.js';
 import { EventBus } from '../../event-bus.js';
 import { AdminHandlers } from './handlers.js';
 import {
+  auditTimelinePage,
   confirmationQueueFragment,
   contactEditForm,
   contactRow,
@@ -60,6 +61,33 @@ describe('admin templates', () => {
     expect(fragment).toContain('name="decision" value="modify"');
     expect(fragment).toContain('name="modifiedParamsJson"');
     expect(fragment).toContain('/api/confirmations/resolve');
+  });
+
+  it('renders audit timeline page with filters and narrative entries', () => {
+    const html = auditTimelinePage({
+      entries: [
+        {
+          id: 'audit-1',
+          timestamp: 1_700_000_000_000,
+          actionType: 'identity_edit',
+          decision: 'allowed',
+          narrative: 'PSFN edited runtime prompt layer.',
+          details: 'layerId=runtime-main',
+        },
+      ],
+      filters: {
+        actionType: 'all',
+        decision: 'all',
+        timeRange: '24h',
+      },
+    });
+
+    expect(html).toContain('Unified timeline');
+    expect(html).toContain('name="actionType"');
+    expect(html).toContain('name="decision"');
+    expect(html).toContain('name="timeRange"');
+    expect(html).toContain('PSFN edited runtime prompt layer');
+    expect(html).toContain('data-action-type="identity_edit"');
   });
 
   it('escapes login errors', () => {

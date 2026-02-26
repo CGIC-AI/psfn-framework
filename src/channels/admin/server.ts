@@ -314,7 +314,14 @@ export class AdminServer implements Lifecycle {
         },
       },
       { method: 'GET', match: exactPath('/skills'), handle: (_req, res) => this.sendHtml(res, this.handlers.skillsPage()) },
-      { method: 'GET', match: exactPath('/events'), handle: (_req, res) => this.sendHtml(res, this.handlers.eventsPageHtml()) },
+      {
+        method: 'GET',
+        match: exactPath('/events'),
+        handle: (req, res) => {
+          const url = new URL(req.url ?? '/events', `http://${req.headers.host ?? 'localhost'}`);
+          this.sendHtml(res, this.handlers.eventsPageHtml(url.searchParams));
+        },
+      },
       { method: 'GET', match: exactPath('/primer'), handle: (_req, res) => this.sendHtml(res, this.handlers.primerPage()) },
       {
         method: 'GET',

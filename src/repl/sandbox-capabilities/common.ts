@@ -2,6 +2,7 @@ import type { EventName } from '../../event-bus.js';
 import type { TaskState } from '../../scheduler/types.js';
 import type { ThinkEvidence } from '../types.js';
 import type { SandboxBudgetRef } from './contracts.js';
+import { toErrorMessage as baseToErrorMessage } from '../../utils/errors.js';
 
 export const BUDGET_EXCEEDED_MESSAGE = '[Budget exceeded: max sub-queries reached]';
 export const TOOL_CALL_BUDGET_EXCEEDED_MESSAGE = '[Budget exceeded: max tool calls reached]';
@@ -39,7 +40,7 @@ export function parseRunAt(value: number | string | Date): number | null {
 }
 
 export function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return baseToErrorMessage(err);
 }
 
 export function normalizeErrorMessage(err: unknown): string {

@@ -130,6 +130,7 @@ import type {
   IdentityIntakeSourceSummary,
 } from './templates/identity.js';
 import * as tpl from './templates.js';
+import { toErrorMessage } from '../../utils/errors.js';
 
 interface ContactIdentityLinkView {
   channel: string;
@@ -1192,14 +1193,14 @@ export class AdminHandlers {
     try {
       raw = readFileSync(path, 'utf-8');
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       throw new Error(`Unable to read ${label} file "${path}": ${message}`);
     }
 
     try {
       return JSON.parse(raw);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       throw new Error(`${label} file "${path}" is not valid JSON: ${message}`);
     }
   }
@@ -1726,7 +1727,7 @@ export class AdminHandlers {
         message: `Staged intake bundle ${stage.id}. Review proposed changes, then approve/reject/commit selected.`,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       this.appendAuditTimelineEntry(
         'identity_edit',
         'denied',
@@ -1884,7 +1885,7 @@ export class AdminHandlers {
           committedChatMessages += rows.length;
         } catch (error) {
           chunk.status = 'failed';
-          chunk.error = error instanceof Error ? error.message : String(error);
+          chunk.error = toErrorMessage(error);
           failedChatChunks += 1;
         }
       }
@@ -1950,7 +1951,7 @@ export class AdminHandlers {
         committedMemoryItems += 1;
       } catch (error) {
         item.status = 'failed';
-        item.error = error instanceof Error ? error.message : String(error);
+        item.error = toErrorMessage(error);
         failedMemoryItems += 1;
       }
     }
@@ -2069,7 +2070,7 @@ export class AdminHandlers {
         errors: result.errors,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       return {
         attempted: seeds.length,
         written: 0,
@@ -2130,7 +2131,7 @@ export class AdminHandlers {
             persistExtractedCharacterAssets(imported.assets, assetRootDir);
             persistedAssetCount = imported.assets.length;
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = toErrorMessage(error);
             warnings.push(`Extracted media assets were not persisted: ${message}`);
           }
         }
@@ -2190,7 +2191,7 @@ export class AdminHandlers {
           + warningSuffix,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       this.appendAuditTimelineEntry(
         'identity_edit',
         'denied',
@@ -2236,7 +2237,7 @@ export class AdminHandlers {
         `Rolled back to version ${version}. Current version is v${snapshot.version}.`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       this.appendAuditTimelineEntry(
         'identity_edit',
         'denied',
@@ -2325,7 +2326,7 @@ export class AdminHandlers {
   }
 
   private formatConfigError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
+    return toErrorMessage(error);
   }
 
   async settingsPage(): Promise<string> {
@@ -2379,7 +2380,7 @@ export class AdminHandlers {
           { defaultContextWindow: this.config.defaultContextWindow },
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = toErrorMessage(error);
         return tpl.settingsFormResult(false, `Settings saved but models config write failed: ${message}`);
       }
     }
@@ -2402,7 +2403,7 @@ export class AdminHandlers {
         this.config.capabilityTier = saved.tier;
         this.config.runtimeHooks?.refreshCapabilities?.();
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = toErrorMessage(error);
         return tpl.settingsFormResult(false, `Settings saved but capability tier update failed: ${message}`);
       }
     }
@@ -2620,7 +2621,7 @@ export class AdminHandlers {
     try {
       result = await this.confirmationQueueApi.resolveConfirmationQueue(resolveParams);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       this.appendAuditTimelineEntry(
         'external_action',
         'denied',
@@ -2674,7 +2675,7 @@ export class AdminHandlers {
         isError,
       });
     } catch (error) {
-      const details = error instanceof Error ? error.message : String(error);
+      const details = toErrorMessage(error);
       return tpl.confirmationQueueFragment({
         entries: [],
         available: true,

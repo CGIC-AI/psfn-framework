@@ -23,6 +23,7 @@ import type {
 import { CHANNEL_PRIVACY_LEVELS } from './types.js';
 import type { TrustLevel } from '../trust/types.js';
 import { createComponentLogger } from '../logger.js';
+import { hasColumn } from '../persistence/sqlite-utils.js';
 
 const log = createComponentLogger('ContactStore');
 const LEGACY_DISCORD_CHANNEL = 'discord';
@@ -204,20 +205,14 @@ export class ContactStore {
     return row?.name === tableName;
   }
 
-  private hasColumn(tableName: string, columnName: string): boolean {
-    const rows = this.db.prepare(`PRAGMA table_info(${tableName})`)
-      .all() as Array<{ name: string }>;
-    return rows.some(row => row.name === columnName);
-  }
-
   private ensureChannelPrivacyColumn(): void {
-    if (!this.hasColumn('contact_channel_ids', 'privacy_level')) {
+    if (!hasColumn(this.db, 'contact_channel_ids', 'privacy_level')) {
       this.db.exec("ALTER TABLE contact_channel_ids ADD COLUMN privacy_level TEXT NOT NULL DEFAULT 'semi_private'");
     }
   }
 
   private ensureNicknameColumn(): void {
-    if (!this.hasColumn('contacts', 'nickname')) {
+    if (!hasColumn(this.db, 'contacts', 'nickname')) {
       this.db.exec('ALTER TABLE contacts ADD COLUMN nickname TEXT');
     }
   }
@@ -1184,12 +1179,12 @@ export class ContactStore {
       this.mergeChannelIdentityRows(sourceId, targetId);
       this.mergeChannelActivityRows(sourceId, targetId);
 
-      if (this.hasTable('l2_memories') && this.hasColumn('l2_memories', 'contact_id')) {
+      if (this.hasTable('l2_memories') && hasColumn(this.db, 'l2_memories', 'contact_id')) {
         this.db.prepare('UPDATE l2_memories SET contact_id = ? WHERE contact_id = ?')
           .run(targetId, sourceId);
       }
 
-      if (this.hasTable('contact_profiles') && this.hasColumn('contact_profiles', 'contact_id')) {
+      if (this.hasTable('contact_profiles') && hasColumn(this.db, 'contact_profiles', 'contact_id')) {
         const targetProfileExists = this.db.prepare(`
           SELECT 1 AS exists_flag
           FROM contact_profiles

@@ -3,6 +3,7 @@ import {
   loadOrSeedJson,
   writeJsonAtomic,
 } from './load-or-seed.js';
+import { isRecord, normalizeStringArray } from '../utils/types.js';
 
 export const SKILLS_FILE_NAME = 'skills.json';
 export const SKILLS_SEED_FILE_NAME = 'skills.seed.json';
@@ -18,28 +19,6 @@ export interface SkillsRuntimeConfig {
 
 interface SkillsRuntimeLoadOptions {
   seedDir?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function normalizeStringArray(value: unknown, field: string): string[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Invalid skills config: ${field} must be an array`);
-  }
-
-  const unique = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== 'string') {
-      throw new Error(`Invalid skills config: ${field} items must be strings`);
-    }
-    const trimmed = item.trim();
-    if (!trimmed) continue;
-    unique.add(trimmed);
-  }
-
-  return [...unique];
 }
 
 function normalizePositiveInteger(value: unknown, field: string, min: number, max: number): number {
@@ -63,11 +42,11 @@ function validateSkillsConfig(raw: unknown, sourcePath: string): SkillsRuntimeCo
 
   return {
     enabled: raw.enabled,
-    directories: normalizeStringArray(raw.directories, 'directories'),
-    extraDirectories: normalizeStringArray(raw.extraDirectories, 'extraDirectories'),
+    directories: normalizeStringArray(raw.directories, 'directories', { errorPrefix: 'Invalid skills config' }),
+    extraDirectories: normalizeStringArray(raw.extraDirectories, 'extraDirectories', { errorPrefix: 'Invalid skills config' }),
     maxLoadedSkills: normalizePositiveInteger(raw.maxLoadedSkills, 'maxLoadedSkills', 1, 512),
     maxSkillChars: normalizePositiveInteger(raw.maxSkillChars, 'maxSkillChars', 256, 1_000_000),
-    disabledSkills: normalizeStringArray(raw.disabledSkills, 'disabledSkills'),
+    disabledSkills: normalizeStringArray(raw.disabledSkills, 'disabledSkills', { errorPrefix: 'Invalid skills config' }),
   };
 }
 

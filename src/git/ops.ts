@@ -3,10 +3,12 @@
 // All write operations audit-logged, path-validated, and branch-protected.
 
 import { execSync } from 'node:child_process';
-import { writeFileSync, appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve, relative, normalize, dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { REPO_ALLOWED_PATHS } from '../security/policy-constants.js';
+import { appendJsonLine } from '../persistence/jsonl.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const log = createComponentLogger('GitOps');
 
@@ -227,7 +229,7 @@ export class GitOps implements GitOperations {
       });
       return url;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = toErrorMessage(err);
       this.appendAudit({
         timestamp: new Date().toISOString(),
         operation: 'openPR',
@@ -298,8 +300,7 @@ export class GitOps implements GitOperations {
   private appendAudit(entry: AuditEntry): void {
     try {
       const fullPath = resolve(this.config.repoRoot, this.config.auditLogPath);
-      mkdirSync(dirname(fullPath), { recursive: true });
-      appendFileSync(fullPath, JSON.stringify(entry) + '\n', 'utf-8');
+      appendJsonLine(fullPath, entry);
       this.rotateAuditLog(fullPath);
     } catch (err) {
       log.error('Failed to write audit log', { error: String(err) });

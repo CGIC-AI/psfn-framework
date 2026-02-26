@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { isRecord } from '../utils/types.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
@@ -59,10 +61,6 @@ type ConfirmationExecutor = (
 interface PendingEntry {
   entry: ConfirmationQueueEntry;
   execute: ConfirmationExecutor;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function cloneRecord(input: Record<string, unknown>): Record<string, unknown> {
@@ -194,7 +192,7 @@ export class ConfirmationQueue {
       return {
         id: request.id,
         status: 'failed',
-        message: error instanceof Error ? error.message : String(error),
+        message: toErrorMessage(error),
         executed: false,
       };
     }

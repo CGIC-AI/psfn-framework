@@ -12,13 +12,14 @@ import {
   VALID_MEMORY_REDACTION_OPERATIONS,
 } from './types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
 const SCRATCHPAD_MAX_LIMIT = 64;
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return toErrorMessage(error);
 }
 
 function clamp(val: number, min: number, max: number): number {

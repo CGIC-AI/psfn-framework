@@ -31,6 +31,7 @@ import {
   type VoiceWireInboundFrame,
   type WebSocketVoiceConnection,
 } from './voice/transports/websocket/types.js';
+import { toErrorMessage } from './utils/errors.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
@@ -493,6 +494,6 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error('\nFAIL: Voice round-trip harness failed.');
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(toErrorMessage(error));
   process.exit(1);
 });

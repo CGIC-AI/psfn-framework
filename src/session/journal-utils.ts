@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import type { CompactionSummary, JournalEntry, JournalMarkerType, SessionEntry } from './types.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export interface QuarantinedJournalEntry {
   lineNumber: number;
@@ -322,7 +323,7 @@ export function parseJournalText(raw: string): ReadJournalResult {
     } catch (error) {
       quarantined.push({
         lineNumber: i + 1,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
         raw: line,
       });
     }
@@ -558,7 +559,7 @@ export function scanJournalFileMetadata(
     } catch (error) {
       quarantined.push({
         lineNumber,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
         raw: line,
       });
       return false;
@@ -626,7 +627,7 @@ export function readJournalTailEntries(
     } catch (error) {
       quarantined.push({
         lineNumber: -1,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
         raw: line,
       });
       return false;

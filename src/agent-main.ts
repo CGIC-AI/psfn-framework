@@ -2,10 +2,8 @@
 // Runs inside a --network=none container. Connects to gateway via Unix socket.
 // Run: npm run agent
 
-import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { loadConfig } from './types.js';
 import type {
   SubstrateConfig,
@@ -39,6 +37,8 @@ import {
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
+import { initDatabase } from './persistence/sqlite-utils.js';
+import { parsePositiveIntEnv } from './utils/env.js';
 import { MemoryWriter } from './memory/writer.js';
 import {
   createMemoryWriteTool,
@@ -84,6 +84,7 @@ import {
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
+import { toErrorMessage } from './utils/errors.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -97,12 +98,6 @@ interface WyomingDelegationDecision {
   delegate: boolean;
   reason: string;
   routing?: WyomingRoutingMetadata;
-}
-
-function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function isExplicitTrue(value: string | undefined): boolean {
@@ -254,10 +249,7 @@ async function main(): Promise<void> {
 
   // ── Local SQLite database (sessions + memory) ──
 
-  mkdirSync(dirname(config.databasePath), { recursive: true });
-  const db = new Database(config.databasePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const db = initDatabase(config.databasePath);
   runDatabaseIntegrityCheck(db);
   log.info('SQLite integrity check passed');
 
@@ -779,7 +771,7 @@ async function main(): Promise<void> {
           },
         };
       } catch (error) {
-        const delegationError = error instanceof Error ? error.message : String(error);
+        const delegationError = toErrorMessage(error);
         safeguardAuditTrail.append('wyoming.routing.fallback', {
           channelId: message.channelId,
           messageId: message.id,

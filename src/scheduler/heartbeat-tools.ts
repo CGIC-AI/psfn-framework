@@ -14,6 +14,7 @@ import type { Scheduler } from './scheduler.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 // ── Helpers ──
 
@@ -27,7 +28,7 @@ function formatMs(ms: number): string {
 const MAX_SCHEDULED_TASKS = 50;
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return toErrorMessage(error);
 }
 
 function formatDeliberation(config?: ReflectionDeliberationConfig): string {

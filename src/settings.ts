@@ -22,6 +22,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from './context-budget.js';
 import { loadOrSeedJson, writeJsonAtomic } from './config/load-or-seed.js';
+import { isRecord } from './utils/types.js';
 
 const log = createComponentLogger('Settings');
 
@@ -129,10 +130,6 @@ export const RUNTIME_SETTINGS_KEYS = [
 export type RuntimeSettingKey = typeof RUNTIME_SETTINGS_KEYS[number];
 export type RuntimeSettingValue = string | number | boolean | null | string[];
 export type RuntimeSettingsSnapshot = Record<RuntimeSettingKey, RuntimeSettingValue>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function toPositiveInteger(value: unknown): number | undefined {
   if (typeof value === 'number') {

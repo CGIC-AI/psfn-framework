@@ -8,6 +8,7 @@
 
 import { setTimeout as delay } from 'node:timers/promises';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
+import { toErrorMessage } from './utils/errors.js';
 import {
   WYOMING_EVENT_DESCRIBE,
   WYOMING_EVENT_INFO,
@@ -301,6 +302,6 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error('\nFAIL: Wyoming MVP smoke harness failed.');
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(toErrorMessage(error));
   process.exit(1);
 });

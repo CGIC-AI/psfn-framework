@@ -11,6 +11,7 @@ import type {
   SandboxBudgetRef,
   SandboxDeps,
 } from './sandbox-capabilities/contracts.js';
+import { toErrorMessage } from '../utils/errors.js';
 import {
   createLLMCapabilities,
   createMemoryCapabilities,
@@ -288,7 +289,7 @@ export class REPLSandbox {
         return { output, error: null, finalAnswer: err.answer, variablesChanged };
       }
 
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = toErrorMessage(err);
       const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);
       const variablesChanged = this.diffVars(before);
       return { output, error: errorMsg, finalAnswer: null, variablesChanged };

@@ -18,6 +18,7 @@ import { normalizeCapabilityTier } from '../capabilities/tiers.js';
 import type { SessionStore } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
 import type { ShardConfig, ShardResult } from './types.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
@@ -154,7 +155,7 @@ export class ShardManager {
       });
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       this.auditTrail?.append('wyoming.shard.delegate.end', {
         shardId,
         status: 'failed',
@@ -279,7 +280,7 @@ export class ShardManager {
       });
       return result;
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = toErrorMessage(error);
       this.auditTrail?.append('shard.spawn.end', {
         shardId,
         status: 'failed',

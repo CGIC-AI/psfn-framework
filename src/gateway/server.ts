@@ -68,6 +68,7 @@ import {
   type ConfirmationQueueEntry,
 } from '../capabilities/confirmation-queue.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
+import { toErrorMessage } from '../utils/errors.js';
 const log = createComponentLogger('Gateway');
 
 // ── Policy Engine ──
@@ -370,7 +371,7 @@ export class GatewayServer {
         this.auditComplete(auditId, startTime);
         return result;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = toErrorMessage(err);
         this.auditComplete(auditId, startTime, msg);
         throw err;
       }
@@ -433,7 +434,7 @@ export class GatewayServer {
         this.auditComplete(auditId, startTime);
         return result;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = toErrorMessage(err);
         this.auditComplete(auditId, startTime, msg);
         throw err;
       }
@@ -490,7 +491,7 @@ export class GatewayServer {
       this.auditComplete(queuedAuditId, queuedStart);
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       this.auditComplete(queuedAuditId, queuedStart, message);
       throw error;
     }
@@ -1221,7 +1222,7 @@ export class GatewayServer {
         log.warn('Failed to send confirmation alert via Discord', {
           confirmationId: entry.id,
           channelId: operatorChannelId,
-          error: error instanceof Error ? error.message : String(error),
+          error: toErrorMessage(error),
         });
       }
     }
@@ -1238,7 +1239,7 @@ export class GatewayServer {
       } catch (error) {
         log.warn('Failed to send confirmation alert via ntfy', {
           confirmationId: entry.id,
-          error: error instanceof Error ? error.message : String(error),
+          error: toErrorMessage(error),
         });
       }
     }

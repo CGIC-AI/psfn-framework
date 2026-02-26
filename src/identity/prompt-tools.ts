@@ -13,6 +13,7 @@ import {
 } from '../capabilities/safeguards.js';
 import type { CapabilityTier } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_DIFF_LINE_LIMIT = 160;
 const MAX_DIFF_LINE_LIMIT = 1_000;
@@ -27,7 +28,7 @@ interface PromptLineDiffSummary {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return toErrorMessage(error);
 }
 
 function resolvePromptLayerById(store: PromptLayerStore, layerId: string): PromptLayer | null {

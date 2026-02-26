@@ -1,11 +1,9 @@
 import {
   mkdirSync,
   readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { writeJsonAtomic as writeJsonAtomicFile } from '../utils/fs.js';
 
 export type JsonValidator<T> = (value: unknown, sourcePath: string) => T;
 
@@ -34,19 +32,7 @@ function parseJsonFile(path: string): unknown {
 
 export function writeJsonAtomic(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
-  const tmpPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-
-  try {
-    writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
-    renameSync(tmpPath, path);
-  } catch (error) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // Best-effort cleanup only.
-    }
-    throw error;
-  }
+  writeJsonAtomicFile(path, value);
 }
 
 export function loadOrSeedJson<T>(options: LoadOrSeedJsonOptions<T>): T {

@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../logger.js';
+import { toErrorMessage } from '../utils/errors.js';
+import { isRecord } from '../utils/types.js';
 
 const log = createComponentLogger('ChannelConfig');
 
@@ -48,10 +50,6 @@ const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
     path: DEFAULT_TELEGRAM_WEBHOOK_PATH,
   },
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function interpolateEnvTokens(value: unknown, env: NodeJS.ProcessEnv): unknown {
   if (typeof value === 'string') {
@@ -148,7 +146,7 @@ function loadRawChannelsConfig(dataDir: string): Record<string, unknown> {
   } catch (error) {
     log.warn('Failed to parse channels config JSON, using defaults', {
       filePath,
-      error: error instanceof Error ? error.message : String(error),
+      error: toErrorMessage(error),
     });
     return {};
   }

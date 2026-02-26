@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { ContactStore } from './store.js';
 import {
@@ -60,6 +60,7 @@ describe('contact tools', () => {
 
       expect(resultText(result)).toContain('Invalid trust level');
       expect(resultText(result)).toContain('superadmin');
+      expect(result.details?.isError).toBe(true);
     });
 
     it('returns error for contact not found', async () => {
@@ -71,6 +72,7 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('not found');
+      expect(result.details?.isError).toBe(true);
     });
 
     it('returns error when trying to change primary user trust level', async () => {
@@ -88,6 +90,24 @@ describe('contact tools', () => {
       expect(resultText(result)).toContain('not found or is the primary user');
       // Trust level should remain 'primary'
       expect(store.getById(primary.id)!.trustLevel).toBe('primary');
+      expect(result.details?.isError).toBe(true);
+    });
+
+    it('returns canonical error when setTrustLevel throws', async () => {
+      const contact = store.upsert({ displayName: 'Throwy' });
+      vi.spyOn(store, 'setTrustLevel').mockImplementation(() => {
+        throw new Error('store unavailable');
+      });
+      const tool = createContactSetTrustTool(store);
+
+      const result = await tool.execute('call-4b', {
+        contactId: contact.id,
+        trustLevel: 'trusted',
+      });
+
+      expect(resultText(result)).toContain('contact_set_trust failed');
+      expect(resultText(result)).toContain('store unavailable');
+      expect(result.details?.isError).toBe(true);
     });
   });
 
@@ -125,6 +145,7 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('not found');
+      expect(result.details?.isError).toBe(true);
     });
   });
 
@@ -183,6 +204,7 @@ describe('contact tools', () => {
       const result = await tool.execute('call-9', { contactId: 'unknown-id' });
 
       expect(resultText(result)).toContain('No contact found');
+      expect(result.details?.isError).toBe(true);
     });
 
     it('does not include Notes line when notes are empty', async () => {
@@ -274,6 +296,24 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('already linked to a different contact');
+      expect(result.details?.isError).toBe(true);
+    });
+
+    it('treats already-linked identity as idempotent success', async () => {
+      const contact = store.upsert({
+        displayName: 'Idempotent',
+        channelIdentities: [{ channel: 'api', userId: 'existing-api' }],
+      });
+      const tool = createContactLinkIdentityTool(store);
+
+      const result = await tool.execute('call-16', {
+        contactId: contact.id,
+        channel: 'api',
+        channelUserId: 'existing-api',
+      });
+
+      expect(resultText(result)).toContain('already linked');
+      expect(result.details?.isError).toBeUndefined();
     });
   });
 });

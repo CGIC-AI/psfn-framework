@@ -3,11 +3,15 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { TextContent } from '@mariozechner/pi-ai';
 import type { ContactStore } from './store.js';
 import type { TrustLevel } from '../trust/types.js';
 import { TRUST_LEVELS } from '../trust/types.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel } from './types.js';
+import { textResult, textResultWithError } from '../tools/results.js';
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function createContactSetTrustTool(contactStore: ContactStore): AgentTool<any> {
   return {
@@ -29,26 +33,27 @@ export function createContactSetTrustTool(contactStore: ContactStore): AgentTool
       params: { contactId: string; trustLevel: TrustLevel },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const { contactId, trustLevel } = params;
+      try {
+        const { contactId, trustLevel } = params;
 
-      if (!(TRUST_LEVELS as readonly string[]).includes(trustLevel)) {
-        return {
-          content: [{ type: 'text', text: `Invalid trust level: ${trustLevel}. Must be one of: ${TRUST_LEVELS.join(', ')}` }] satisfies TextContent[],
-          details: {},
-        };
-      }
+        if (!(TRUST_LEVELS as readonly string[]).includes(trustLevel)) {
+          return textResultWithError(
+            `Invalid trust level: ${trustLevel}. Must be one of: ${TRUST_LEVELS.join(', ')}`,
+            true,
+          );
+        }
 
-      const success = contactStore.setTrustLevel(contactId, trustLevel, 'agent:tool:contact_set_trust');
-      if (!success) {
-        return {
-          content: [{ type: 'text', text: `Contact ${contactId} not found or is the primary user (cannot change primary trust level)` }] satisfies TextContent[],
-          details: {},
-        };
+        const success = contactStore.setTrustLevel(contactId, trustLevel, 'agent:tool:contact_set_trust');
+        if (!success) {
+          return textResultWithError(
+            `Contact ${contactId} not found or is the primary user (cannot change primary trust level)`,
+            true,
+          );
+        }
+        return textResult(`Trust level for ${contactId} set to ${trustLevel}`);
+      } catch (error) {
+        return textResultWithError(`contact_set_trust failed: ${errorMessage(error)}`, true);
       }
-      return {
-        content: [{ type: 'text', text: `Trust level for ${contactId} set to ${trustLevel}` }] satisfies TextContent[],
-        details: {},
-      };
     },
   };
 }
@@ -69,19 +74,17 @@ export function createContactNoteTool(contactStore: ContactStore): AgentTool<any
       params: { contactId: string; notes: string },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const { contactId, notes } = params;
+      try {
+        const { contactId, notes } = params;
 
-      const success = contactStore.updateNotes(contactId, notes, 'agent:tool:contact_note');
-      if (!success) {
-        return {
-          content: [{ type: 'text', text: `Contact ${contactId} not found` }] satisfies TextContent[],
-          details: {},
-        };
+        const success = contactStore.updateNotes(contactId, notes, 'agent:tool:contact_note');
+        if (!success) {
+          return textResultWithError(`Contact ${contactId} not found`, true);
+        }
+        return textResult(`Notes updated for ${contactId}`);
+      } catch (error) {
+        return textResultWithError(`contact_note failed: ${errorMessage(error)}`, true);
       }
-      return {
-        content: [{ type: 'text', text: `Notes updated for ${contactId}` }] satisfies TextContent[],
-        details: {},
-      };
     },
   };
 }
@@ -112,39 +115,33 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStore): 
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      if (!(CHANNEL_PRIVACY_LEVELS as readonly string[]).includes(params.privacyLevel)) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Invalid channel privacy level: ${params.privacyLevel}. Must be one of: ${CHANNEL_PRIVACY_LEVELS.join(', ')}`,
-          }] satisfies TextContent[],
-          details: {},
-        };
-      }
+      try {
+        if (!(CHANNEL_PRIVACY_LEVELS as readonly string[]).includes(params.privacyLevel)) {
+          return textResultWithError(
+            `Invalid channel privacy level: ${params.privacyLevel}. Must be one of: ${CHANNEL_PRIVACY_LEVELS.join(', ')}`,
+            true,
+          );
+        }
 
-      const updated = contactStore.setChannelPrivacy(
-        params.contactId,
-        params.channel,
-        params.channelUserId,
-        params.privacyLevel,
-      );
-      if (!updated) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Channel link not found for ${params.contactId}: ${params.channel}:${params.channelUserId}`,
-          }] satisfies TextContent[],
-          details: {},
-        };
-      }
+        const updated = contactStore.setChannelPrivacy(
+          params.contactId,
+          params.channel,
+          params.channelUserId,
+          params.privacyLevel,
+        );
+        if (!updated) {
+          return textResultWithError(
+            `Channel link not found for ${params.contactId}: ${params.channel}:${params.channelUserId}`,
+            true,
+          );
+        }
 
-      return {
-        content: [{
-          type: 'text',
-          text: `Updated ${params.channel}:${params.channelUserId} privacy to ${params.privacyLevel} for ${params.contactId}`,
-        }] satisfies TextContent[],
-        details: {},
-      };
+        return textResult(
+          `Updated ${params.channel}:${params.channelUserId} privacy to ${params.privacyLevel} for ${params.contactId}`,
+        );
+      } catch (error) {
+        return textResultWithError(`contact_set_channel_privacy failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }
@@ -164,54 +161,50 @@ export function createContactLookupTool(contactStore: ContactStore): AgentTool<a
       params: { contactId: string },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const id = params.contactId;
+      try {
+        const id = params.contactId;
 
-      // Try canonical ID first, then Discord user ID.
-      let contact = contactStore.getById(id);
-      if (!contact) {
-        contact = contactStore.getByDiscordUserId(id);
-      }
-      if (!contact) {
-        const idx = id.indexOf(':');
-        if (idx > 0 && idx < id.length - 1) {
-          const channel = id.slice(0, idx).trim();
-          const channelUserId = id.slice(idx + 1).trim();
-          if (channel && channelUserId) {
-            contact = contactStore.getByChannelIdentity(channel, channelUserId);
+        // Try canonical ID first, then Discord user ID.
+        let contact = contactStore.getById(id);
+        if (!contact) {
+          contact = contactStore.getByDiscordUserId(id);
+        }
+        if (!contact) {
+          const idx = id.indexOf(':');
+          if (idx > 0 && idx < id.length - 1) {
+            const channel = id.slice(0, idx).trim();
+            const channelUserId = id.slice(idx + 1).trim();
+            if (channel && channelUserId) {
+              contact = contactStore.getByChannelIdentity(channel, channelUserId);
+            }
           }
         }
+
+        if (!contact) {
+          return textResultWithError(`No contact found for: ${id}`, true);
+        }
+
+        const identities = contact.channelIdentities
+          ?.map(identity => `${identity.channel}:${identity.userId}`)
+          .join(', ');
+        const channels = contact.channels
+          ?.map(channel => `${channel.channel}:${channel.userId}[${channel.privacyLevel}]`)
+          .join(', ');
+
+        return textResult(
+          `Canonical ID: ${contact.id}\n` +
+          `Contact: ${contact.displayName}\n` +
+          `Trust: ${contact.trustLevel}\n` +
+          `Relationship: ${contact.relationshipType}\n` +
+          (identities ? `Identities: ${identities}\n` : '') +
+          (channels ? `Channels: ${channels}\n` : '') +
+          `First seen: ${contact.firstSeen}\n` +
+          `Last seen: ${contact.lastSeen}` +
+          (contact.notes ? `\nNotes: ${contact.notes}` : ''),
+        );
+      } catch (error) {
+        return textResultWithError(`contact_lookup failed: ${errorMessage(error)}`, true);
       }
-
-      if (!contact) {
-        return {
-          content: [{ type: 'text', text: `No contact found for: ${id}` }] satisfies TextContent[],
-          details: {},
-        };
-      }
-
-      const identities = contact.channelIdentities
-        ?.map(identity => `${identity.channel}:${identity.userId}`)
-        .join(', ');
-      const channels = contact.channels
-        ?.map(channel => `${channel.channel}:${channel.userId}[${channel.privacyLevel}]`)
-        .join(', ');
-
-      return {
-        content: [{
-          type: 'text',
-          text:
-            `Canonical ID: ${contact.id}\n` +
-            `Contact: ${contact.displayName}\n` +
-            `Trust: ${contact.trustLevel}\n` +
-            `Relationship: ${contact.relationshipType}\n` +
-            (identities ? `Identities: ${identities}\n` : '') +
-            (channels ? `Channels: ${channels}\n` : '') +
-            `First seen: ${contact.firstSeen}\n` +
-            `Last seen: ${contact.lastSeen}` +
-            (contact.notes ? `\nNotes: ${contact.notes}` : ''),
-        }] satisfies TextContent[],
-        details: {},
-      };
     },
   };
 }
@@ -242,57 +235,37 @@ export function createContactLinkIdentityTool(contactStore: ContactStore): Agent
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      if (params.privacyLevel && !(CHANNEL_PRIVACY_LEVELS as readonly string[]).includes(params.privacyLevel)) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Invalid channel privacy level: ${params.privacyLevel}. Must be one of: ${CHANNEL_PRIVACY_LEVELS.join(', ')}`,
-          }] satisfies TextContent[],
-          details: {},
-        };
-      }
+      try {
+        if (params.privacyLevel && !(CHANNEL_PRIVACY_LEVELS as readonly string[]).includes(params.privacyLevel)) {
+          return textResultWithError(
+            `Invalid channel privacy level: ${params.privacyLevel}. Must be one of: ${CHANNEL_PRIVACY_LEVELS.join(', ')}`,
+            true,
+          );
+        }
 
-      const result = contactStore.linkChannelIdentity(
-        params.contactId,
-        params.channel,
-        params.channelUserId,
-        { privacyLevel: params.privacyLevel },
-      );
+        const result = contactStore.linkChannelIdentity(
+          params.contactId,
+          params.channel,
+          params.channelUserId,
+          { privacyLevel: params.privacyLevel },
+        );
 
-      switch (result) {
-        case 'linked':
-          return {
-            content: [{
-              type: 'text',
-              text: `Linked ${params.channel}:${params.channelUserId} to ${params.contactId}`,
-            }] satisfies TextContent[],
-            details: {},
-          };
-        case 'already_linked':
-          return {
-            content: [{
-              type: 'text',
-              text: `${params.channel}:${params.channelUserId} is already linked to ${params.contactId}`,
-            }] satisfies TextContent[],
-            details: {},
-          };
-        case 'contact_not_found':
-          return {
-            content: [{
-              type: 'text',
-              text: `Contact ${params.contactId} not found`,
-            }] satisfies TextContent[],
-            details: {},
-          };
-        case 'identity_conflict':
-        default:
-          return {
-            content: [{
-              type: 'text',
-              text: `${params.channel}:${params.channelUserId} is already linked to a different contact`,
-            }] satisfies TextContent[],
-            details: {},
-          };
+        switch (result) {
+          case 'linked':
+            return textResult(`Linked ${params.channel}:${params.channelUserId} to ${params.contactId}`);
+          case 'already_linked':
+            return textResult(`${params.channel}:${params.channelUserId} is already linked to ${params.contactId}`);
+          case 'contact_not_found':
+            return textResultWithError(`Contact ${params.contactId} not found`, true);
+          case 'identity_conflict':
+          default:
+            return textResultWithError(
+              `${params.channel}:${params.channelUserId} is already linked to a different contact`,
+              true,
+            );
+        }
+      } catch (error) {
+        return textResultWithError(`contact_link_identity failed: ${errorMessage(error)}`, true);
       }
     },
   };
@@ -309,24 +282,22 @@ export function createContactListTool(contactStore: ContactStore): AgentTool<any
       _params: Record<string, never>,
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const contacts = contactStore.listAll();
+      try {
+        const contacts = contactStore.listAll();
 
-      if (contacts.length === 0) {
-        return {
-          content: [{ type: 'text', text: 'No contacts in address book.' }] satisfies TextContent[],
-          details: {},
-        };
+        if (contacts.length === 0) {
+          return textResult('No contacts in address book.');
+        }
+
+        const lines = contacts.map(c =>
+          `- ${c.displayName} [${c.trustLevel}/${c.relationshipType}]` +
+          ((c.channels?.length ?? 0) > 0 ? ` channels=${c.channels!.length}` : '') +
+          (c.notes ? ` — ${c.notes}` : ''),
+        );
+        return textResult(`Contacts (${contacts.length}):\n${lines.join('\n')}`);
+      } catch (error) {
+        return textResultWithError(`contact_list failed: ${errorMessage(error)}`, true);
       }
-
-      const lines = contacts.map(c =>
-        `- ${c.displayName} [${c.trustLevel}/${c.relationshipType}]` +
-        ((c.channels?.length ?? 0) > 0 ? ` channels=${c.channels!.length}` : '') +
-        (c.notes ? ` — ${c.notes}` : ''),
-      );
-      return {
-        content: [{ type: 'text', text: `Contacts (${contacts.length}):\n${lines.join('\n')}` }] satisfies TextContent[],
-        details: {},
-      };
     },
   };
 }

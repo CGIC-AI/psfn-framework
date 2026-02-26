@@ -78,6 +78,21 @@ describe('Prompt Layer Tools', () => {
       expect(text).toContain('priority=5');
       expect(text).toContain('channel=discord_text');
     });
+
+    it('returns canonical error when store access throws', async () => {
+      const brokenStore = {
+        getAll: () => {
+          throw new Error('list failed');
+        },
+      } as unknown as PromptLayerStore;
+
+      const tool = createPromptLayerListTool(brokenStore);
+      const result = await tool.execute('broken-list', {});
+
+      expect(resultText(result)).toContain('prompt_layer_list failed');
+      expect(resultText(result)).toContain('list failed');
+      expect(result.details?.isError).toBe(true);
+    });
   });
 
   describe('prompt_layer_get', () => {
@@ -132,6 +147,7 @@ describe('Prompt Layer Tools', () => {
       const text = resultText(result);
 
       expect(text).toContain('Layer not found');
+      expect(result.details?.isError).toBe(true);
     });
   });
 
@@ -166,12 +182,14 @@ describe('Prompt Layer Tools', () => {
         version: 1,
       });
       expect(resultText(missingLayer)).toContain('Layer not found');
+      expect(missingLayer.details?.isError).toBe(true);
 
       const tooNew = await tool.execute('too-new', {
         layer_id: layer.id,
         version: 9,
       });
       expect(resultText(tooNew)).toContain('newer than current version');
+      expect(tooNew.details?.isError).toBe(true);
     });
   });
 
@@ -500,6 +518,7 @@ describe('Prompt Layer Tools', () => {
       const text = resultText(result);
 
       expect(text).toContain('Layer not found');
+      expect(result.details?.isError).toBe(true);
     });
   });
 });

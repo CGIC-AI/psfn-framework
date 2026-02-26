@@ -95,6 +95,51 @@ describe('character importer', () => {
     expect(result.card.data.name).toBe('Importer Test');
   });
 
+  it('maps character_book entries into semantic memory seed payloads', () => {
+    const sourcePath = join(tempDir, 'source-card-lorebook.json');
+    const v3 = toV3Card();
+    const v3WithBook = {
+      ...v3,
+      data: {
+        ...v3.data,
+        character_book: {
+          entries: [
+            {
+              name: 'Origin memory',
+              content: 'Purrsephone was first deployed as a voice companion.',
+              keys: ['origin', 'deployment'],
+              secondary_keys: ['history'],
+              enabled: true,
+              insertion_order: 1,
+              priority: 0.82,
+              id: 17,
+            },
+            {
+              content: 'This disabled entry should not be imported.',
+              keys: ['disabled'],
+              enabled: false,
+              insertion_order: 2,
+            },
+          ],
+        },
+      },
+    };
+    writeFileSync(sourcePath, JSON.stringify(v3WithBook), 'utf-8');
+
+    const result = importCharacterCardFromPath(sourcePath);
+    expect(result.memorySeeds).toHaveLength(1);
+    expect(result.memorySeeds[0]).toMatchObject({
+      text: 'Purrsephone was first deployed as a voice companion.',
+      type: 'semantic',
+      importance: 0.82,
+      tags: ['lorebook', 'character_book', 'origin', 'deployment', 'history'],
+      source: 'character_book',
+      sensitivity: 'personal',
+      entryName: 'Origin memory',
+      entryId: 17,
+    });
+  });
+
   it('writes imported cards to destination path as runtime v2 JSON', () => {
     const sourcePath = join(tempDir, 'source-write.json');
     writeFileSync(sourcePath, JSON.stringify(TEST_CARD_V2), 'utf-8');
@@ -107,5 +152,30 @@ describe('character importer', () => {
     expect(written.spec).toBe('chara_card_v2');
     expect(written.data.name).toBe('Importer Test');
     expect(written.data.personality).toBe('Friendly and pragmatic.');
+  });
+
+  it('persists extracted avatar assets into stable runtime paths with metadata links', () => {
+    const sourcePath = join(tempDir, 'source-avatar.png');
+    const destinationPath = join(tempDir, 'runtime', 'character.json');
+    const assetRootDir = join(tempDir, 'runtime-assets');
+    const pngResult = exportCard(
+      toV3Card(),
+      [{ name: 'icon-main', type: 'icon', ext: 'png', data: ONE_BY_ONE_PNG, isMain: true }],
+      { format: 'png' },
+    );
+    writeFileSync(sourcePath, pngResult.buffer);
+
+    const result = importCharacterCardToPath(sourcePath, destinationPath, { assetRootDir });
+    expect(result.assetMetadata).toHaveLength(1);
+    expect(result.primaryAsset).not.toBeNull();
+    expect(result.primaryAsset?.isMain).toBe(true);
+    expect(result.primaryAsset?.runtimePath).toContain(assetRootDir);
+    expect(result.primaryAsset?.runtimeRelativePath).toMatch(/^icon\//);
+
+    const runtimePath = result.primaryAsset?.runtimePath;
+    expect(runtimePath).toBeDefined();
+    if (!runtimePath) return;
+    const persistedAvatar = readFileSync(runtimePath);
+    expect(Buffer.compare(persistedAvatar, Buffer.from(result.assets[0].data))).toBe(0);
   });
 });

@@ -38,4 +38,7 @@ export interface JournalEntry {
   // compaction fields
   summary?: string;
   coveredUpTo?: number;
+  // integrity fields
+  _hmac?: string;
+  _hmacKeyVersion?: string;
 }

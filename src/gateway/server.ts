@@ -41,6 +41,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, normalize, dirname } from 'node:path';
 import { realpathSync } from 'node:fs';
 import type { AuditStore } from './audit.js';
+import { buildSessionHmacKeyring, type SessionHmacKeyring } from '../session/journal-utils.js';
 import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('Gateway');
 
@@ -58,6 +59,20 @@ export interface GatewayNtfyConfig {
   token?: string;
   timeoutMs: number;
   debounceWindowMs: number;
+}
+
+const GATEWAY_SESSION_HMAC_KEYS_ENV = 'GATEWAY_SESSION_HMAC_KEYS';
+const GATEWAY_SESSION_HMAC_KEY_ENV = 'GATEWAY_SESSION_HMAC_KEY';
+const GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV = 'GATEWAY_SESSION_HMAC_ACTIVE_VERSION';
+
+export function resolveGatewaySessionHmacKeyring(
+  env: NodeJS.ProcessEnv = process.env,
+): SessionHmacKeyring | null {
+  return buildSessionHmacKeyring({
+    serializedKeys: env[GATEWAY_SESSION_HMAC_KEYS_ENV],
+    singleKey: env[GATEWAY_SESSION_HMAC_KEY_ENV],
+    activeVersion: env[GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV],
+  });
 }
 
 /** Check whether a resolved path falls inside any of the allowed prefixes */
@@ -189,6 +204,7 @@ export interface GatewayServerOptions {
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: AuditStore;
+  sessionHmacKeyring?: SessionHmacKeyring | null;
 }
 
 const DEFAULT_AGENT_TIMEOUT_MS = 60_000;
@@ -212,11 +228,21 @@ export class GatewayServer {
   private connections = new Set<NdjsonConnection>();
   private rpcClients = new Map<NdjsonConnection, JSONRPCServerAndClient>();
   private options: GatewayServerOptions;
+  private sessionHmacKeyring: SessionHmacKeyring | null;
   private streamRequestCounter = 0;
   private ntfyRecentAlerts = new Map<string, number>();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
+    this.sessionHmacKeyring = options.sessionHmacKeyring === undefined
+      ? resolveGatewaySessionHmacKeyring(process.env)
+      : options.sessionHmacKeyring;
+    if (this.sessionHmacKeyring) {
+      log.info('Session HMAC keyring configured', {
+        activeVersion: this.sessionHmacKeyring.activeVersion,
+        versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
+      });
+    }
   }
 
   // Wrap a handler with audit timing — logs call, records duration/error on completion

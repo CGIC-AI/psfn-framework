@@ -9,6 +9,7 @@ import { ApiServer } from './server.js';
 import type { AgentLoop } from '../../agent-loop.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../types.js';
+import type { ApiServerHealthChecks } from './types.js';
 import type {
   VoiceWebSocketCloseReason,
   VoiceWebSocketRuntimeHooks,
@@ -240,6 +241,19 @@ function createVoiceHooksProbe(): {
   };
 }
 
+function createHealthyHealthChecks(
+  overrides: ApiServerHealthChecks = {},
+): ApiServerHealthChecks {
+  return {
+    memory: () => ({ status: 'healthy', meta: { total: 3 } }),
+    llm: () => ({ status: 'healthy', meta: { provider: 'test', model: 'test-model' } }),
+    discord: () => ({ status: 'healthy', meta: { accountId: 'discord-bot' } }),
+    embeddings: () => ({ status: 'healthy', meta: { dims: 1024 } }),
+    scheduler: () => ({ status: 'healthy', meta: { taskCount: 2 } }),
+    ...overrides,
+  };
+}
+
 // ── Tests ──
 
 describe('ApiServer', () => {
@@ -332,6 +346,63 @@ describe('ApiServer', () => {
       const res = await request(port, 'GET', '/v1/models');
       const body = JSON.parse(res.body);
       expect(body.data[0].id).toBe('custom-model');
+    });
+  });
+
+  describe('GET /health', () => {
+    it('returns structured healthy subsystem status', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        healthChecks: createHealthyHealthChecks(),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'GET', '/health');
+      expect(res.status).toBe(200);
+
+      const body = JSON.parse(res.body);
+      expect(body.status).toBe('healthy');
+      expect(typeof body.checkedAt).toBe('string');
+      expect(typeof body.uptimeSeconds).toBe('number');
+      expect(body.subsystems.memory.status).toBe('healthy');
+      expect(body.subsystems.llm.status).toBe('healthy');
+      expect(body.subsystems.discord.status).toBe('healthy');
+      expect(body.subsystems.embeddings.status).toBe('healthy');
+      expect(body.subsystems.scheduler.status).toBe('healthy');
+    });
+
+    it('returns degraded health when any subsystem check fails', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        healthChecks: createHealthyHealthChecks({
+          llm: () => {
+            throw new Error('LLM provider timeout');
+          },
+        }),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'GET', '/health');
+      expect(res.status).toBe(503);
+
+      const body = JSON.parse(res.body);
+      expect(body.status).toBe('degraded');
+      expect(body.subsystems.llm.status).toBe('degraded');
+      expect(body.subsystems.llm.detail).toContain('LLM provider timeout');
+      expect(body.subsystems.memory.status).toBe('healthy');
+      expect(body.subsystems.discord.status).toBe('healthy');
+      expect(body.subsystems.embeddings.status).toBe('healthy');
+      expect(body.subsystems.scheduler.status).toBe('healthy');
     });
   });
 

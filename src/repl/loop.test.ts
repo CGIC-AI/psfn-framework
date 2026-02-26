@@ -374,4 +374,121 @@ describe('runRLMLoop', () => {
     expect(result.steps[0].code.length).toBeGreaterThan(2000);
     expect(result.steps[0].output.length).toBeLessThanOrEqual(DEFAULT_REPL_CONFIG.outputTruncation + 80);
   });
+
+  it('applies tier-dependent iteration limits', async () => {
+    const makeTierDeps = (tier: 'nursery' | 'apprentice' | 'autonomous') => makeDeps(
+      sequentialLLM(Array(20).fill('```repl\nprint("still going");\n```')),
+      {
+        getCapabilityTier: () => tier,
+        config: makeConfig({
+          maxIterations: 50,
+          maxWallTimeMs: 500_000,
+          maxSubQueries: 100,
+        }),
+      },
+    );
+
+    const nursery = await runRLMLoop('tier nursery', makeTierDeps('nursery'));
+    const apprentice = await runRLMLoop('tier apprentice', makeTierDeps('apprentice'));
+    const autonomous = await runRLMLoop('tier autonomous', makeTierDeps('autonomous'));
+
+    expect(nursery.iterations).toBe(5);
+    expect(apprentice.iterations).toBe(10);
+    expect(autonomous.iterations).toBe(15);
+  });
+
+  it('enforces invocation rate limits across think calls', async () => {
+    const llm = sequentialLLM(['FINAL("first")', 'FINAL("second")']);
+    const cfg = makeConfig();
+    cfg.rateLimit = {
+      ...cfg.rateLimit,
+      maxInvocationsPerMinute: 1,
+      windowMs: 60_000,
+    };
+    const deps = makeDeps(llm, { config: cfg });
+
+    const first = await runRLMLoop('first', deps);
+    const second = await runRLMLoop('second', deps);
+
+    expect(first.budgetStatus.exceeded).toBeNull();
+    expect(second.budgetStatus.exceeded).toBe('invocation rate limit');
+    expect(second.answer).toContain('rate limit');
+  });
+
+  it('tracks cumulative session/day cost and enforces nursery daily cap', async () => {
+    const llm = sequentialLLM(['FINAL("first")', 'FINAL("blocked")']);
+    const cfg = makeConfig();
+    cfg.rateLimit = {
+      ...cfg.rateLimit,
+      maxInvocationsPerMinute: 20,
+    };
+    cfg.cost = {
+      ...cfg.cost,
+      inputUsdPerMillionTokens: 1000,
+      outputUsdPerMillionTokens: 1000,
+      nurseryDailyCapUsd: 0.01,
+    };
+    const deps = makeDeps(llm, {
+      config: cfg,
+      getCapabilityTier: () => 'nursery',
+    });
+
+    const first = await runRLMLoop('first', deps);
+    const second = await runRLMLoop('second', deps);
+
+    expect(first.budgetStatus.sessionCostUsd).toBeGreaterThan(0);
+    expect(first.budgetStatus.dayCostUsd).toBeGreaterThan(0);
+    expect(second.budgetStatus.exceeded).toBe('daily cost cap');
+    expect(second.answer).toContain('daily cost cap');
+  });
+
+  it('emits autonomous soft warning when daily cost crosses warning threshold', async () => {
+    const llm = sequentialLLM(['FINAL("done")']);
+    const cfg = makeConfig();
+    cfg.cost = {
+      ...cfg.cost,
+      inputUsdPerMillionTokens: 1000,
+      outputUsdPerMillionTokens: 1000,
+      autonomousDailyWarningUsd: 0.01,
+    };
+    cfg.rateLimit = {
+      ...cfg.rateLimit,
+      maxInvocationsPerMinute: 20,
+    };
+    const deps = makeDeps(llm, {
+      config: cfg,
+      getCapabilityTier: () => 'autonomous',
+    });
+
+    const result = await runRLMLoop('warn', deps);
+    expect(result.budgetStatus.exceeded).toBeNull();
+    expect(result.budgetStatus.warnings.length).toBe(1);
+    expect(result.budgetStatus.warnings[0]).toContain('Autonomous');
+  });
+
+  it('counts sandbox llm_query calls in session/day cost totals', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar r = await llm_query("sub"); print(r);\n```',
+      'sub-result',
+      'FINAL("done")',
+    ]);
+    const cfg = makeConfig();
+    cfg.rateLimit = {
+      ...cfg.rateLimit,
+      maxInvocationsPerMinute: 20,
+    };
+    cfg.cost = {
+      ...cfg.cost,
+      inputUsdPerMillionTokens: 1,
+      outputUsdPerMillionTokens: 1,
+      nurseryDailyCapUsd: 999,
+      autonomousDailyWarningUsd: 999,
+    };
+    const deps = makeDeps(llm, { config: cfg });
+
+    const result = await runRLMLoop('subquery-cost', deps);
+
+    expect(result.budgetStatus.sessionCostUsd).toBeCloseTo(0.00009, 8);
+    expect(result.budgetStatus.dayCostUsd).toBeCloseTo(0.00009, 8);
+  });
 });

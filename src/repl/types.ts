@@ -16,19 +16,65 @@ export interface ThinkBudget {
   maxSubQueries?: number;     // llm_query calls, default 20
 }
 
+export interface TierThinkBudget {
+  maxIterations: number;
+  maxWallTimeMs: number;
+  maxSubQueries: number;
+  memoryCeilingMb: number;
+}
+
+export interface ThinkRateLimitConfig {
+  maxInvocationsPerMinute: number;
+  windowMs: number;
+}
+
+export interface ThinkCostConfig {
+  inputUsdPerMillionTokens: number;
+  outputUsdPerMillionTokens: number;
+  nurseryDailyCapUsd: number;
+  autonomousDailyWarningUsd: number;
+}
+
 export interface BudgetStatus {
   iterations: number;
   totalTokens: number;
   wallTimeMs: number;
   subQueries: number;
+  sessionCostUsd: number;
+  dayCostUsd: number;
+  warnings: string[];
   exceeded: string | null;    // null = ok, string = reason for stop
 }
 
 export interface REPLConfig {
   budget: ThinkBudget;
+  tierBudgets: Record<'nursery' | 'apprentice' | 'autonomous', TierThinkBudget>;
+  rateLimit: ThinkRateLimitConfig;
+  cost: ThinkCostConfig;
   outputTruncation: number;
   executionTimeoutMs: number;
 }
+
+export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
+  nursery: {
+    maxIterations: 5,
+    maxWallTimeMs: 30_000,
+    maxSubQueries: 10,
+    memoryCeilingMb: 128,
+  },
+  apprentice: {
+    maxIterations: 10,
+    maxWallTimeMs: 60_000,
+    maxSubQueries: 15,
+    memoryCeilingMb: 192,
+  },
+  autonomous: {
+    maxIterations: 15,
+    maxWallTimeMs: 120_000,
+    maxSubQueries: 20,
+    memoryCeilingMb: 256,
+  },
+};
 
 export const DEFAULT_REPL_CONFIG: REPLConfig = {
   budget: {
@@ -36,6 +82,17 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
     maxTokens: 100_000,
     maxWallTimeMs: 120_000,
     maxSubQueries: 20,
+  },
+  tierBudgets: DEFAULT_REPL_TIER_BUDGETS,
+  rateLimit: {
+    maxInvocationsPerMinute: 5,
+    windowMs: 60_000,
+  },
+  cost: {
+    inputUsdPerMillionTokens: 2.0,
+    outputUsdPerMillionTokens: 8.0,
+    nurseryDailyCapUsd: 0.5,
+    autonomousDailyWarningUsd: 5.0,
   },
   outputTruncation: 8192,
   executionTimeoutMs: 5000,

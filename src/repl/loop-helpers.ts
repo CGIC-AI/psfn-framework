@@ -31,6 +31,9 @@ export function createBudgetStatus(): BudgetStatus {
     totalTokens: 0,
     wallTimeMs: 0,
     subQueries: 0,
+    sessionCostUsd: 0,
+    dayCostUsd: 0,
+    warnings: [],
     exceeded: null,
   };
 }

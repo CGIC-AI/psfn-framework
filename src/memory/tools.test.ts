@@ -4,6 +4,8 @@ import {
   createMemoryImportTool,
   createMemoryDeleteTool,
   createUndoMemoryDeleteTool,
+  createScratchpadReadTool,
+  createScratchpadWriteTool,
 } from './tools.js';
 import type { MemoryWriter, WriteResult, BatchImportResult } from './writer.js';
 import type { PurrMemory } from './types.js';
@@ -630,5 +632,126 @@ describe('memory_delete and undo_memory_delete tools', () => {
     const result = await tool.execute('call-5', { delete_id: 'unknown' });
     expect(resultText(result as any)).toContain('Delete checkpoint not found');
     expect((result.details as any).isError).toBe(true);
+  });
+});
+
+describe('scratchpad tools', () => {
+  function mockScratchpadStore(): {
+    listScratchpadEntries: ReturnType<typeof vi.fn>;
+    addScratchpadEntry: ReturnType<typeof vi.fn>;
+    replaceScratchpadEntry: ReturnType<typeof vi.fn>;
+    removeScratchpadEntry: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      listScratchpadEntries: vi.fn(),
+      addScratchpadEntry: vi.fn(),
+      replaceScratchpadEntry: vi.fn(),
+      removeScratchpadEntry: vi.fn(),
+    };
+  }
+
+  it('scratchpad_read returns empty-state message', async () => {
+    const store = mockScratchpadStore();
+    store.listScratchpadEntries.mockReturnValue([]);
+    const tool = createScratchpadReadTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-1', {});
+    expect(resultText(result as any)).toContain('Scratchpad is empty');
+    expect(store.listScratchpadEntries).toHaveBeenCalledWith(20);
+  });
+
+  it('scratchpad_read returns formatted notes with timestamps', async () => {
+    const store = mockScratchpadStore();
+    store.listScratchpadEntries.mockReturnValue([
+      {
+        id: 'sp-1',
+        content: 'Remember to check weekly backup integrity.',
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_100_000,
+      },
+    ]);
+    const tool = createScratchpadReadTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-2', { limit: 3 });
+    const text = resultText(result as any);
+    expect(text).toContain('Scratchpad entries (1)');
+    expect(text).toContain('sp-1');
+    expect(text).toContain('Remember to check weekly backup integrity.');
+    expect(store.listScratchpadEntries).toHaveBeenCalledWith(3);
+  });
+
+  it('scratchpad_write add creates a note', async () => {
+    const store = mockScratchpadStore();
+    store.addScratchpadEntry.mockReturnValue({
+      entry: {
+        id: 'sp-1',
+        content: 'Take a breath before responding',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      evictedIds: [],
+    });
+    const tool = createScratchpadWriteTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-3', {
+      operation: 'add',
+      content: 'Take a breath before responding',
+    });
+    expect(resultText(result as any)).toContain('Scratchpad entry added');
+    expect(store.addScratchpadEntry).toHaveBeenCalledWith('Take a breath before responding');
+  });
+
+  it('scratchpad_write replace updates existing note', async () => {
+    const store = mockScratchpadStore();
+    store.replaceScratchpadEntry.mockReturnValue({
+      id: 'sp-2',
+      content: 'Updated note',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    const tool = createScratchpadWriteTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-4', {
+      operation: 'replace',
+      id: 'sp-2',
+      content: 'Updated note',
+    });
+    expect(resultText(result as any)).toContain('Scratchpad entry replaced');
+    expect(store.replaceScratchpadEntry).toHaveBeenCalledWith('sp-2', 'Updated note');
+  });
+
+  it('scratchpad_write remove deletes note', async () => {
+    const store = mockScratchpadStore();
+    store.removeScratchpadEntry.mockReturnValue(true);
+    const tool = createScratchpadWriteTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-5', {
+      operation: 'remove',
+      id: 'sp-3',
+    });
+    expect(resultText(result as any)).toContain('Scratchpad entry removed');
+    expect(store.removeScratchpadEntry).toHaveBeenCalledWith('sp-3');
+  });
+
+  it('scratchpad_write validates required params per operation', async () => {
+    const store = mockScratchpadStore();
+    const tool = createScratchpadWriteTool(store as unknown as MemoryStore);
+
+    const missingAddContent = await tool.execute('call-6', { operation: 'add' });
+    expect(resultText(missingAddContent as any)).toContain('content is required for add');
+    expect((missingAddContent.details as any).isError).toBe(true);
+
+    const missingReplaceId = await tool.execute('call-7', {
+      operation: 'replace',
+      content: 'x',
+    });
+    expect(resultText(missingReplaceId as any)).toContain('id is required for replace');
+    expect((missingReplaceId.details as any).isError).toBe(true);
+
+    const missingRemoveId = await tool.execute('call-8', {
+      operation: 'remove',
+    });
+    expect(resultText(missingRemoveId as any)).toContain('id is required for remove');
+    expect((missingRemoveId.details as any).isError).toBe(true);
   });
 });

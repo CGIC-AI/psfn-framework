@@ -162,4 +162,24 @@ describe('capability tool gating', () => {
     await apprentice.execute('call-3', { layer: 'base' });
     expect(dynamic.executeSpy).toHaveBeenCalledTimes(2);
   });
+
+  it('gates scratchpad tools using static capability requirements', async () => {
+    const scratchpadRead = createTool('scratchpad_read');
+    const readGated = gateToolWithCapabilities(
+      scratchpadRead.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const readDenied = await readGated.execute('call-read', {});
+    expect(scratchpadRead.executeSpy).not.toHaveBeenCalled();
+    expect((readDenied.content[0] as any).text).toContain('identity.read');
+
+    const scratchpadWrite = createTool('scratchpad_write');
+    const writeGated = gateToolWithCapabilities(
+      scratchpadWrite.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const writeDenied = await writeGated.execute('call-write', {});
+    expect(scratchpadWrite.executeSpy).not.toHaveBeenCalled();
+    expect((writeDenied.content[0] as any).text).toContain('memory.write');
+  });
 });

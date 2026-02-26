@@ -54,6 +54,8 @@ import {
   createMemoryImportTool,
   createMemoryDeleteTool,
   createUndoMemoryDeleteTool,
+  createScratchpadReadTool,
+  createScratchpadWriteTool,
 } from './memory/tools.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
@@ -277,6 +279,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.config,
       { characterName: card.data.name },
     );
+    this.agentLoop.scratchpadProvider = this.memoryStore;
     this.agentLoop.setCapabilityRuntime(this.capabilityRuntime);
     const safeguardAuditTrail = createSafeguardAuditTrail(this.config.dataDir);
     const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
@@ -425,6 +428,8 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryDeleteTool(this.memoryStore));
     this.agentLoop.registerTool(createUndoMemoryDeleteTool(this.memoryStore));
+    this.agentLoop.registerTool(createScratchpadReadTool(this.memoryStore));
+    this.agentLoop.registerTool(createScratchpadWriteTool(this.memoryStore));
 
     // Git tools — self-modification via git
     wireGitRuntime(this.agentLoop, {

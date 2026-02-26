@@ -10,10 +10,17 @@ import type { MemoryType, SensitivityLevel } from './types.js';
 import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
+const SCRATCHPAD_DEFAULT_LIMIT = 20;
+const SCRATCHPAD_MAX_LIMIT = 64;
 
 function clamp(val: number, min: number, max: number): number {
   if (isNaN(val)) return (min + max) / 2;
   return Math.max(min, Math.min(max, val));
+}
+
+function clampInt(val: number, min: number, max: number): number {
+  if (!Number.isFinite(val)) return min;
+  return Math.max(min, Math.min(max, Math.floor(val)));
 }
 
 function extractInternalSource(params: Record<string, unknown>): string | null {
@@ -30,6 +37,20 @@ function buildToolSourceRef(
 ): string {
   if (!shardSource) return `source:tool:${toolName}|invocation:${toolCallId}`;
   return `source:${shardSource}|tool:${toolName}|invocation:${toolCallId}`;
+}
+
+function formatScratchpadList(
+  entries: Array<{ id: string; content: string; updatedAt: number }>,
+): string {
+  if (entries.length === 0) {
+    return 'Scratchpad is empty.';
+  }
+
+  const lines = [`Scratchpad entries (${entries.length}):`];
+  for (const entry of entries) {
+    lines.push(`- ${entry.id} [${new Date(entry.updatedAt).toISOString()}]: ${entry.content}`);
+  }
+  return lines.join('\n');
 }
 
 export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
@@ -359,6 +380,164 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<
         const msg = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: 'text', text: `Error restoring memory: ${msg}` }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+    },
+  };
+}
+
+export function createScratchpadReadTool(memoryStore: MemoryStore): AgentTool<any> {
+  return {
+    name: 'scratchpad_read',
+    description:
+      'List current scratchpad entries (short-lived working notes). ' +
+      'Use before replacing or removing notes so you can reference the right id.',
+    label: 'scratchpad_read',
+    parameters: Type.Object({
+      limit: Type.Optional(
+        Type.Number({ description: `Maximum notes to return (1-${SCRATCHPAD_MAX_LIMIT}, default ${SCRATCHPAD_DEFAULT_LIMIT}).` }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: { limit?: number },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const limit = params.limit === undefined
+          ? SCRATCHPAD_DEFAULT_LIMIT
+          : clampInt(params.limit, 1, SCRATCHPAD_MAX_LIMIT);
+        const entries = memoryStore.listScratchpadEntries(limit);
+        return {
+          content: [{ type: 'text', text: formatScratchpadList(entries) }] satisfies TextContent[],
+          details: {},
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: 'text', text: `Error reading scratchpad: ${msg}` }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+    },
+  };
+}
+
+type ScratchpadWriteOperation = 'add' | 'replace' | 'remove';
+const SCRATCHPAD_WRITE_OPERATIONS: ScratchpadWriteOperation[] = ['add', 'replace', 'remove'];
+
+export function createScratchpadWriteTool(memoryStore: MemoryStore): AgentTool<any> {
+  return {
+    name: 'scratchpad_write',
+    description:
+      'Mutate scratchpad notes with add/replace/remove operations. ' +
+      'Scratchpad is bounded and intended for short-lived working memory.',
+    label: 'scratchpad_write',
+    parameters: Type.Object({
+      operation: Type.Unsafe<ScratchpadWriteOperation>({
+        type: 'string',
+        enum: [...SCRATCHPAD_WRITE_OPERATIONS],
+        description: 'One of: add, replace, remove.',
+      }),
+      id: Type.Optional(
+        Type.String({ description: 'Required for replace/remove. Scratchpad entry id.' }),
+      ),
+      content: Type.Optional(
+        Type.String({ description: 'Required for add/replace. Scratchpad note text.' }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        operation: ScratchpadWriteOperation;
+        id?: string;
+        content?: string;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const operation = params.operation;
+      if (!SCRATCHPAD_WRITE_OPERATIONS.includes(operation)) {
+        return {
+          content: [{ type: 'text', text: `Error: invalid operation "${operation}"` }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+
+      try {
+        switch (operation) {
+          case 'add': {
+            const content = params.content?.trim();
+            if (!content) {
+              return {
+                content: [{ type: 'text', text: 'Error: content is required for add' }] satisfies TextContent[],
+                details: { isError: true },
+              };
+            }
+            const result = memoryStore.addScratchpadEntry(content);
+            const evictedSuffix = result.evictedIds.length > 0
+              ? ` Evicted oldest ids: ${result.evictedIds.join(', ')}`
+              : '';
+            return {
+              content: [{
+                type: 'text',
+                text: `Scratchpad entry added (id: ${result.entry.id}).${evictedSuffix}`,
+              }] satisfies TextContent[],
+              details: {},
+            };
+          }
+          case 'replace': {
+            const id = params.id?.trim();
+            const content = params.content?.trim();
+            if (!id) {
+              return {
+                content: [{ type: 'text', text: 'Error: id is required for replace' }] satisfies TextContent[],
+                details: { isError: true },
+              };
+            }
+            if (!content) {
+              return {
+                content: [{ type: 'text', text: 'Error: content is required for replace' }] satisfies TextContent[],
+                details: { isError: true },
+              };
+            }
+            const replaced = memoryStore.replaceScratchpadEntry(id, content);
+            if (!replaced) {
+              return {
+                content: [{ type: 'text', text: `Scratchpad entry not found: ${id}` }] satisfies TextContent[],
+                details: { isError: true },
+              };
+            }
+            return {
+              content: [{ type: 'text', text: `Scratchpad entry replaced (id: ${replaced.id}).` }] satisfies TextContent[],
+              details: {},
+            };
+          }
+          case 'remove': {
+            const id = params.id?.trim();
+            if (!id) {
+              return {
+                content: [{ type: 'text', text: 'Error: id is required for remove' }] satisfies TextContent[],
+                details: { isError: true },
+              };
+            }
+            const removed = memoryStore.removeScratchpadEntry(id);
+            if (!removed) {
+              return {
+                content: [{ type: 'text', text: `Scratchpad entry not found: ${id}` }] satisfies TextContent[],
+                details: { isError: true },
+              };
+            }
+            return {
+              content: [{ type: 'text', text: `Scratchpad entry removed (id: ${id}).` }] satisfies TextContent[],
+              details: {},
+            };
+          }
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: 'text', text: `Error writing scratchpad: ${msg}` }] satisfies TextContent[],
           details: { isError: true },
         };
       }

@@ -26,6 +26,8 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   memory_delete: 'memory.delete',
   undo_memory_delete: 'memory.delete',
   memory_write: 'memory.write',
+  scratchpad_read: 'identity.read',
+  scratchpad_write: 'memory.write',
   notify_operator: 'external.web',
   prompt_layer_get: 'identity.read',
   prompt_layer_list: 'identity.read',

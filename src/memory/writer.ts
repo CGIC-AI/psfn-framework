@@ -28,10 +28,12 @@ export interface MemoryWriteOptions {
   text: string;
   type: MemoryType;
   importance?: number;       // default 0.5
+  salience?: number;         // default to importance when omitted
   emotionalValence?: number; // default 0
   confidence?: number;       // default 0.8
   tags?: string[];
   sourceRef?: string;        // default 'tool:memory_write'
+  provenanceRefs?: string[];
   sensitivity?: SensitivityLevel;    // default 'personal'
   consentFlags?: ConsentFlags;       // default {}
   retentionClass?: MemoryRetentionClass;
@@ -85,6 +87,41 @@ function normalizeSourceRef(sourceRef: string | undefined, fallback: string): st
   return trimmed && trimmed.length > 0 ? trimmed : fallback;
 }
 
+function clampUnit(value: number, fallback = 0.5): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeProvenanceRefs(
+  refs: readonly string[] | undefined,
+  fallbackRef?: string,
+): string[] {
+  const out = new Set<string>();
+  for (const raw of refs ?? []) {
+    const normalized = raw.trim();
+    if (normalized.length > 0) out.add(normalized);
+  }
+  const fallback = fallbackRef?.trim();
+  if (fallback && fallback.length > 0) out.add(fallback);
+  return [...out];
+}
+
+function mergeProvenanceRefs(
+  existing: readonly string[] | undefined,
+  incoming: readonly string[] | undefined,
+): string[] {
+  const out = new Set<string>();
+  for (const ref of existing ?? []) {
+    const normalized = ref.trim();
+    if (normalized.length > 0) out.add(normalized);
+  }
+  for (const ref of incoming ?? []) {
+    const normalized = ref.trim();
+    if (normalized.length > 0) out.add(normalized);
+  }
+  return [...out];
+}
+
 export class MemoryWriter {
   constructor(
     private memoryStore: MemoryStore,
@@ -104,10 +141,12 @@ export class MemoryWriter {
       text,
       type,
       importance = 0.5,
+      salience,
       emotionalValence = 0,
       confidence = 0.8,
       tags = [],
       sourceRef,
+      provenanceRefs,
       sensitivity = 'personal',
       consentFlags,
       retentionClass,
@@ -125,6 +164,9 @@ export class MemoryWriter {
       tags,
       retentionClass,
     });
+    const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_write');
+    const incomingProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
+    const targetSalience = clampUnit(salience ?? importance, importance);
 
     const embedding = await this.embeddingService.embed(text);
 
@@ -149,15 +191,36 @@ export class MemoryWriter {
         accessCount: number;
         salience: number;
         tags?: string[];
+        provenanceRefs?: string[];
       } = {
         lastAccessed: Date.now(),
         accessCount: existing.accessCount + 1,
-        salience: Math.min(1, existing.salience + MEMORY_CONFIG.salienceBumpOnAccess),
+        salience: Math.min(
+          1,
+          Math.max(
+            existing.salience + MEMORY_CONFIG.salienceBumpOnAccess,
+            targetSalience,
+          ),
+        ),
       };
+
+      const mergedTags = normalizeMemoryTags([...existing.tags, ...retention.tags]);
+      if (mergedTags.length !== existing.tags.length || mergedTags.some((tag, idx) => tag !== existing.tags[idx])) {
+        updates.tags = mergedTags;
+      }
+
+      const existingProvenanceRefs = normalizeProvenanceRefs(existing.provenanceRefs, existing.sourceRef);
+      const mergedProvenanceRefs = mergeProvenanceRefs(existingProvenanceRefs, incomingProvenanceRefs);
+      if (
+        mergedProvenanceRefs.length !== existingProvenanceRefs.length
+        || mergedProvenanceRefs.some((ref, idx) => ref !== existingProvenanceRefs[idx])
+      ) {
+        updates.provenanceRefs = mergedProvenanceRefs;
+      }
 
       // If this write is durable, upgrade duplicate memory tags so durability survives persistence.
       if (retention.retentionClass === 'durable' && !isDurableMemory(existing)) {
-        updates.tags = normalizeMemoryTags([...existing.tags, ...retention.tags, DURABLE_RETENTION_TAG]);
+        updates.tags = normalizeMemoryTags([...(updates.tags ?? existing.tags), DURABLE_RETENTION_TAG]);
       }
 
       this.memoryStore.updateMemory(existing.id, updates);
@@ -170,6 +233,7 @@ export class MemoryWriter {
           accessCount: updates.accessCount,
           salience: updates.salience,
           tags: updates.tags ?? existing.tags,
+          provenanceRefs: updates.provenanceRefs ?? existingProvenanceRefs,
           retentionClass: retention.retentionClass ?? existing.retentionClass,
         },
         existingId: existing.id,
@@ -200,7 +264,6 @@ export class MemoryWriter {
 
     // 3. Insert new memory
     const now = Date.now();
-    const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_write');
     const memory: PurrMemory = {
       id: uuidv4(),
       text,
@@ -208,12 +271,13 @@ export class MemoryWriter {
       importance,
       confidence,
       emotionalValence,
-      salience: importance, // Initial salience = importance
+      salience: targetSalience,
       sourceRef: normalizedSourceRef,
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,
       tags: retention.tags,
+      provenanceRefs: incomingProvenanceRefs,
       retentionClass: retention.retentionClass,
       sensitivity,
       consentFlags,
@@ -239,10 +303,12 @@ export class MemoryWriter {
       text,
       type,
       importance = 0.5,
+      salience,
       emotionalValence = 0,
       confidence = 0.8,
       tags = [],
       sourceRef,
+      provenanceRefs,
       sensitivity = 'personal',
       consentFlags,
       retentionClass,
@@ -259,6 +325,9 @@ export class MemoryWriter {
       tags,
       retentionClass,
     });
+    const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_upsert');
+    const normalizedProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
+    const targetSalience = clampUnit(salience ?? importance, importance);
 
     const embedding = await this.embeddingService.embed(text);
 
@@ -284,7 +353,6 @@ export class MemoryWriter {
 
     // Always insert the new memory
     const now = Date.now();
-    const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_upsert');
     const memory: PurrMemory = {
       id: uuidv4(),
       text,
@@ -292,12 +360,13 @@ export class MemoryWriter {
       importance,
       confidence,
       emotionalValence,
-      salience: importance,
+      salience: targetSalience,
       sourceRef: normalizedSourceRef,
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,
       tags: retention.tags,
+      provenanceRefs: normalizedProvenanceRefs,
       retentionClass: retention.retentionClass,
       sensitivity,
       consentFlags,

@@ -20,6 +20,7 @@ interface MemoryRow {
   access_count: number;
   superseded_by: string | null;
   tags: string;
+  provenance_refs: string | null;
   sensitivity: string | null;
   consent_flags: string | null;
   contact_id: string | null;
@@ -123,11 +124,20 @@ function mapMemoryDeleteVersionRow(row: MemoryDeleteVersionRow): MemoryDeleteVer
 
 function mapMemoryRow(row: MemoryRow): PurrMemory {
   let tags: string[] = [];
+  let provenanceRefs: string[] = [];
   let consentFlags: ConsentFlags = {};
   try {
     tags = JSON.parse(row.tags) as string[];
   } catch {
     tags = [];
+  }
+  try {
+    const parsed = JSON.parse(row.provenance_refs ?? '[]');
+    provenanceRefs = Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : [];
+  } catch {
+    provenanceRefs = [];
   }
   try {
     consentFlags = JSON.parse(row.consent_flags ?? '{}') as ConsentFlags;
@@ -149,6 +159,7 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
     accessCount: row.access_count,
     supersededBy: row.superseded_by ?? undefined,
     tags,
+    provenanceRefs,
     sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
     consentFlags,
     contactId: row.contact_id ?? undefined,
@@ -199,6 +210,7 @@ export class MemoryStore {
         access_count INTEGER NOT NULL DEFAULT 1,
         superseded_by TEXT,
         tags TEXT NOT NULL DEFAULT '[]',
+        provenance_refs TEXT NOT NULL DEFAULT '[]',
         contact_id TEXT,
         deleted_at INTEGER,
         deleted_by TEXT,
@@ -271,6 +283,10 @@ export class MemoryStore {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id)`);
     }
 
+    if (!this.hasColumn('l2_memories', 'provenance_refs')) {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_refs TEXT NOT NULL DEFAULT '[]'`);
+    }
+
     // Add soft-delete columns for reversible destructive operations
     try {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN deleted_at INTEGER`);
@@ -316,8 +332,8 @@ export class MemoryStore {
     const insertMem = this.db.prepare(`
       INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence,
         salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
-        sensitivity, consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        provenance_refs, sensitivity, consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = this.db.prepare(`
@@ -340,6 +356,7 @@ export class MemoryStore {
         memory.accessCount,
         memory.supersededBy ?? null,
         JSON.stringify(memory.tags),
+        JSON.stringify(memory.provenanceRefs ?? []),
         memory.sensitivity ?? 'personal',
         JSON.stringify(memory.consentFlags ?? {}),
         memory.contactId ?? null,
@@ -385,7 +402,7 @@ export class MemoryStore {
       .slice(0, limit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'tags' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
+  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'tags' | 'provenanceRefs' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -412,6 +429,10 @@ export class MemoryStore {
     if (updates.tags !== undefined) {
       setClauses.push('tags = ?');
       values.push(JSON.stringify(updates.tags));
+    }
+    if (updates.provenanceRefs !== undefined) {
+      setClauses.push('provenance_refs = ?');
+      values.push(JSON.stringify(updates.provenanceRefs));
     }
     if (updates.contactId !== undefined) {
       setClauses.push('contact_id = ?');

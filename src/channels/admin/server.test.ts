@@ -2755,6 +2755,74 @@ describe('AdminServer with contacts', () => {
     expect(detailRes.body).toContain('Consent Flags');
   });
 
+  it('applies deterministic relationship promotions from imported relational memory signals', async () => {
+    const contact = contactStore.upsert({
+      displayName: 'Jordan',
+      trustLevel: 'regular',
+      relationshipType: 'stranger',
+    });
+
+    memoryStore.insertMemory({
+      id: 'relationship-merge-target',
+      text: 'Jordan and I are close.',
+      type: 'relational',
+      importance: 0.52,
+      confidence: 0.76,
+      emotionalValence: 0.2,
+      salience: 0.41,
+      sourceRef: 'seed:relationship',
+      provenanceRefs: ['seed:relationship'],
+      extractedAt: Date.now() - 10_000,
+      lastAccessed: Date.now() - 10_000,
+      accessCount: 1,
+      tags: ['relationship'],
+      sensitivity: 'personal',
+      contactId: contact.id,
+    }, new Float32Array([0.18, 0.34, 0.52]));
+
+    const memoryPath = join(tempDir, 'relationship-memory-import.json');
+    writeFileSync(memoryPath, JSON.stringify([
+      {
+        text: 'Jordan and I are close.',
+        importance: 0.93,
+        tags: ['partner', 'critical'],
+        contactId: contact.id,
+        sourceRef: 'legacy:relationship#1',
+      },
+    ]), 'utf-8');
+
+    const stageBody = new URLSearchParams({ memoryPath }).toString();
+    const stageRes = await request(port, 'POST', '/api/identity/intake/stage', stageBody, {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+    expect(stageRes.status).toBe(200);
+    expect(stageRes.body).toContain('Merge into relationship-merge-target');
+    expect(stageRes.body).toContain('Relationship planned: partner');
+
+    const stageIdMatch = stageRes.body.match(/name="stageId" value="([^"]+)"/);
+    const stageId = stageIdMatch?.[1] ?? '';
+    expect(stageId).toBeTruthy();
+
+    const commitBody = new URLSearchParams({
+      stageId,
+      decision: 'approve',
+      reason: 'Apply relational import',
+    }).toString();
+    const commitRes = await request(port, 'POST', '/api/identity/intake/commit', commitBody, {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+    expect(commitRes.status).toBe(200);
+    expect(commitRes.body).toContain('relationship updates applied');
+
+    const updatedContact = contactStore.getById(contact.id);
+    expect(updatedContact?.relationshipType).toBe('partner');
+
+    const mergedMemory = memoryStore.getById('relationship-merge-target');
+    expect(mergedMemory?.provenanceRefs).toEqual(
+      expect.arrayContaining(['seed:relationship', 'legacy:relationship#1']),
+    );
+  });
+
   it('returns contacts list fragment via API', async () => {
     contactStore.upsert({
       displayName: 'Bob Builder',

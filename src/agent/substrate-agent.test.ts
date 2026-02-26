@@ -26,6 +26,28 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   });
 });
 
+function mockAssistantResponse(text: string): void {
+  promptSpy.mockImplementationOnce(async function (this: Agent) {
+    this.appendMessage({
+      role: 'assistant',
+      content: [{ type: 'text' as const, text }],
+      api: '' as any,
+      provider: '' as any,
+      model: '',
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop' as any,
+      timestamp: Date.now(),
+    });
+  });
+}
+
 // ── Fixtures ──
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -74,6 +96,7 @@ function makeMockSessionManager(): SessionManager {
   return {
     recordUserMessage: vi.fn(),
     recordAssistantMessage: vi.fn(),
+    appendSystemNote: vi.fn(),
     buildContext: vi.fn<any>().mockResolvedValue({
       systemPrompt: 'You are PSFN.',
       messages: [
@@ -1052,6 +1075,135 @@ describe('SubstrateAgent.handleMessage', () => {
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[5]).toEqual({ isDirectMessage: true });
+  });
+
+  it('blocks risky broadcast drafts pending approval and skips sendable assistant record', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      config,
+    );
+    mockAssistantResponse('My private number is +1 (555) 123-4567.');
+
+    const approvalEvents: Array<{ channelId: string; signals: string[] }> = [];
+    eventBus.on('broadcast.approval.required', (event) => {
+      approvalEvents.push({ channelId: event.channelId, signals: event.signals });
+    });
+
+    const response = await agent.handleMessage(makeMessage({
+      channelId: 'twitter:timeline',
+      content: 'write a tweet',
+    }));
+
+    expect(response.content).toBe('');
+    expect(response.metadata.broadcastSafety).toMatchObject({
+      visibilityScope: 'public_only',
+      risky: true,
+      approvalRequired: true,
+      operatorApproval: false,
+    });
+    expect(response.metadata.broadcastSafety?.signals).toContain('private');
+    expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
+    expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
+      'twitter:timeline',
+      expect.stringContaining('held for approval'),
+    );
+    expect(approvalEvents).toEqual([
+      { channelId: 'twitter:timeline', signals: ['private'] },
+    ]);
+  });
+
+  it('allows risky broadcast drafts when explicit approval token is present', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      config,
+    );
+    const approvedText = 'My private number is +1 (555) 123-4567.';
+    mockAssistantResponse(approvedText);
+
+    const response = await agent.handleMessage(makeMessage({
+      channelId: 'twitter:timeline',
+      content: 'write a tweet',
+      routing: {
+        source: 'api',
+        broadcast: {
+          approvalToken: 'approve:operator-12345678',
+        },
+      },
+    }));
+
+    expect(response.content).toBe(approvedText);
+    expect(response.metadata.broadcastSafety).toMatchObject({
+      visibilityScope: 'approved_private_context',
+      risky: true,
+      approvalRequired: false,
+      operatorApproval: true,
+    });
+    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
+      'twitter:timeline',
+      approvedText,
+      'user-1',
+      undefined,
+      undefined,
+      { trustLevel: 'regular' },
+    );
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[5]).toEqual({
+      broadcastApprovalToken: 'approve:operator-12345678',
+    });
+  });
+
+  it('emits broadcast provenance with retrieval source refs for broadcast turns', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      config,
+    );
+
+    agent.memoryProvider = {
+      retrieve: vi.fn(async () => {
+        await eventBus.emit('memory.retrieval', {
+          channelId: 'twitter:timeline',
+          count: 1,
+          provenanceRefs: ['memory:alpha', 'memory:beta'],
+        });
+        return 'Public context block';
+      }),
+    };
+
+    let provenanceEvent: any = null;
+    eventBus.on('broadcast.provenance', (event) => { provenanceEvent = event; });
+
+    const response = await agent.handleMessage(makeMessage({
+      channelId: 'twitter:timeline',
+      content: 'share an update',
+    }));
+
+    expect(provenanceEvent).toMatchObject({
+      channelId: 'twitter:timeline',
+      visibilityScope: 'public_only',
+      provenanceRefs: ['memory:alpha', 'memory:beta'],
+    });
+    expect(response.metadata.broadcastSafety?.provenanceRefs).toEqual([
+      'memory:alpha',
+      'memory:beta',
+    ]);
   });
 
   it('refreshes resolved model on next turn after config drift', async () => {

@@ -688,6 +688,34 @@ export class AdminHandlers {
       );
     });
 
+    this.eventBus.on('broadcast.approval.required', (event) => {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'denied',
+        `Broadcast draft in ${event.channelId} was held for operator approval.`,
+        [
+          `scope=${event.visibilityScope}`,
+          `signals=${event.signals.join(',') || 'none'}`,
+          `draftLength=${event.draftLength}`,
+        ],
+      );
+    });
+
+    this.eventBus.on('broadcast.provenance', (event) => {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        event.risky && !event.operatorApproval ? 'denied' : 'allowed',
+        `Broadcast provenance logged for ${event.channelId}.`,
+        [
+          `scope=${event.visibilityScope}`,
+          `signals=${event.signals.join(',') || 'none'}`,
+          `provenanceRefs=${event.provenanceRefs.length}`,
+          `contextMessages=${event.contextMessageCount}`,
+          `memoryContextChars=${event.memoryContextChars}`,
+        ],
+      );
+    });
+
     this.eventBus.on('external.telemetry.ingested', ({ event }) => {
       this.appendAuditTimelineEntry(
         'external_action',

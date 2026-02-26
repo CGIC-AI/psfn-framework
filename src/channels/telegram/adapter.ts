@@ -599,13 +599,14 @@ export class TelegramAdapter implements ChannelAdapter {
     try {
       await this.eventBus.emit('message.received', { message: substrateMessage });
       const response = await this.handler(substrateMessage);
-      if (response.content.trim().length > 0) {
+      const hasText = response.content.trim().length > 0;
+      if (hasText) {
         await this.outbound.sendText(
           { channelId, replyToMessageId: replyToId ?? messageId, threadId },
           response.content,
         );
+        await this.eventBus.emit('message.sent', { response });
       }
-      await this.eventBus.emit('message.sent', { response });
     } catch (error) {
       log.error('Telegram message handling error', {
         channelId,

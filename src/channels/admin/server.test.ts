@@ -1011,6 +1011,82 @@ describe('AdminServer', () => {
       expect(res.body).toContain('Salience Floor');
     });
 
+    it('renders floored budget preview using selected chat slot context budget overrides', async () => {
+      const original = {
+        modelCatalog: testConfig.modelCatalog,
+        modelRoleAssignments: testConfig.modelRoleAssignments,
+        modelRoster: testConfig.modelRoster,
+        sessionMessageLimit: testConfig.sessionMessageLimit,
+        memoryRetrievalLimit: testConfig.memoryRetrievalLimit,
+      };
+
+      try {
+        testConfig.sessionMessageLimit = undefined;
+        testConfig.memoryRetrievalLimit = undefined;
+        testConfig.modelCatalog = {
+          compactChat: {
+            model: 'tiny-chat',
+            provider: 'test',
+            defaults: {
+              maxTokens: 4096,
+              contextWindow: 8000,
+              contextBudget: {
+                sessionHistoryMinTokens: 4500,
+                memoryRetrievalMinTokens: 1800,
+              },
+            },
+            overrides: {
+              maxTokens: 4096,
+              contextWindow: 8000,
+              contextBudget: {
+                sessionHistoryMinTokens: 4500,
+                memoryRetrievalMinTokens: 1800,
+              },
+            },
+          },
+          extraction: {
+            model: 'test-extract',
+            provider: 'test',
+            defaults: { maxTokens: 8192 },
+            overrides: { maxTokens: 8192 },
+          },
+        };
+        testConfig.modelRoleAssignments = {
+          chat: 'compactChat',
+          background: 'extraction',
+          extraction: 'extraction',
+          summary: 'compactChat',
+          reasoning: 'compactChat',
+          longContext: 'compactChat',
+        };
+        testConfig.modelRoster = {
+          chat: {
+            model: 'tiny-chat',
+            provider: 'test',
+            maxTokens: 4096,
+            contextWindow: 8000,
+            contextBudget: {
+              sessionHistoryMinTokens: 4500,
+              memoryRetrievalMinTokens: 1800,
+            },
+          },
+        };
+
+        const res = await request(port, 'GET', '/settings');
+        expect(res.status).toBe(200);
+        expect(res.body).toContain('Auto budget: ~17 messages (4,500 tokens of 8,000).');
+        expect(res.body).toContain('Auto budget: ~10 memories (1,800 tokens of 8,000).');
+        expect(res.body).toContain('data-override-session-min-tokens value="4500"');
+        expect(res.body).toContain('data-override-memory-min-tokens value="1800"');
+      } finally {
+        testConfig.modelCatalog = original.modelCatalog;
+        testConfig.modelRoleAssignments = original.modelRoleAssignments;
+        testConfig.modelRoster = original.modelRoster;
+        testConfig.sessionMessageLimit = original.sessionMessageLimit;
+        testConfig.memoryRetrievalLimit = original.memoryRetrievalLimit;
+      }
+    });
+
     it('masks secrets as not set when unset', async () => {
       const res = await request(port, 'GET', '/settings');
       expect(res.body).toContain('not set');

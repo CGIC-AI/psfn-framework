@@ -81,10 +81,25 @@ PRIMARY_PROVIDER=openrouter
 EXTRACTION_MODEL=deepseek/deepseek-v3.2
 EXTRACTION_PROVIDER=openrouter
 
-# Embeddings (local Ollama)
-OLLAMA_URL=http://localhost:11434
+# Embeddings (default: Ollama)
+# EMBEDDING_PROVIDER=ollama  # ollama|transformers|api
 EMBEDDING_MODEL=snowflake-arctic-embed2
 EMBEDDING_DIMS=1024
+OLLAMA_URL=http://localhost:11434
+
+# Transformers embedding provider
+# EMBEDDING_PROVIDER=transformers
+# TRANSFORMERS_EMBEDDING_URL=http://localhost:8080/embed
+# TRANSFORMERS_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+# TRANSFORMERS_EMBEDDING_DIMS=384
+# TRANSFORMERS_API_KEY=
+
+# OpenAI-compatible API embedding provider
+# EMBEDDING_PROVIDER=api
+# EMBEDDING_API_URL=https://api.openai.com/v1/embeddings
+# EMBEDDING_API_MODEL=text-embedding-3-small
+# EMBEDDING_API_DIMS=1536
+# EMBEDDING_API_KEY=
 
 # Data storage
 DATA_DIR=./data

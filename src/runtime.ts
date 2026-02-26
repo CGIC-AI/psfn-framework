@@ -399,7 +399,7 @@ export class SubstrateRuntime implements Lifecycle {
       await this.eventBus.emit('schedule.heartbeat', { timestamp: now, taskCount });
     });
 
-    log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via Ollama)`);
+    log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via ${embeddingProvider.kind})`);
 
     // Shard manager — allows PSFN to spawn parallel sub-agents
     this.moduleLoader = new ModuleLoader({

@@ -1,11 +1,52 @@
 import { MemoryWriter } from '../../memory/writer.js';
-import type { EmbeddingService } from '../../agent-loop.js';
+import type { EmbeddingService, LLMProvider } from '../../agent-loop.js';
 import type { MemoryStore } from '../../memory/store.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { MemoryType } from '../../memory/types.js';
 import { VALID_MEMORY_TYPES } from '../../memory/types.js';
+import { classifyChannel, getAllowedSensitivities } from '../../trust/policy.js';
+import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../trust/types.js';
 import type { ThinkEvidence } from '../types.js';
-import { addEvidence, splitCsvTags } from './common.js';
+import { addEvidence, splitCsvTags, toTrimmedString } from './common.js';
+
+const DEFAULT_SESSION_SEARCH_LIMIT = 8;
+const MAX_SESSION_SEARCH_LIMIT = 25;
+const SESSION_SEARCH_OVERSAMPLE_FACTOR = 4;
+const SESSION_SEARCH_MAX_SUMMARY_MATCHES = 10;
+const SESSION_SEARCH_MAX_SUMMARY_CONTEXT_CHARS = 4000;
+const SESSION_SEARCH_MAX_SNIPPET_CHARS = 220;
+
+const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = [
+  'You summarize keyword-search matches from archived chat transcripts.',
+  'Use only the provided snippets.',
+  'Name key topics and channel groupings.',
+  'If evidence is sparse or ambiguous, state that explicitly.',
+  'Keep the answer concise (3-5 sentences).',
+].join(' ');
+
+export interface SessionSearchOptions {
+  channelId?: string;
+  isDirectMessage?: boolean;
+  trustLevel?: TrustLevel;
+}
+
+export interface SessionSearchHitResult {
+  channelId: string;
+  messageId: number;
+  role: 'user' | 'assistant' | 'system';
+  timestamp: number;
+  channelVisibility: ChannelVisibility;
+  score: number;
+  snippet: string;
+}
+
+export interface SessionSearchResult {
+  query: string;
+  summary: string;
+  totalHits: number;
+  gatedOutCount: number;
+  hits: SessionSearchHitResult[];
+}
 
 export interface MemoryCapabilities {
   memory_search: (query: string, limit?: number) => Promise<Array<{ text: string; type: string; importance: number; similarity: number }>>;
@@ -28,11 +69,17 @@ export interface MemoryCapabilities {
     tags?: string,
   ) => Promise<{ action: string; id: string; superseded: boolean }>;
   session_messages: (channelId: string, limit?: number) => Array<{ role: string; content: string; timestamp: number }>;
+  session_search: (
+    query: string,
+    limit?: number,
+    options?: SessionSearchOptions,
+  ) => Promise<SessionSearchResult>;
   session_append_note: (channelId: string, note: string) => boolean;
   memory_get_by_id: (id: string) => Record<string, unknown> | null;
 }
 
 interface CreateMemoryCapabilitiesOptions {
+  llmProvider: LLMProvider;
   embeddingService: EmbeddingService | null;
   memoryStore: MemoryStore | null;
   sessionManager: SessionManager | null;
@@ -41,6 +88,124 @@ interface CreateMemoryCapabilitiesOptions {
 
 function nextReplInvocationId(): string {
   return `repl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeSessionSearchLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return DEFAULT_SESSION_SEARCH_LIMIT;
+  const normalized = Math.floor(limit);
+  if (normalized <= 0) return DEFAULT_SESSION_SEARCH_LIMIT;
+  return Math.min(normalized, MAX_SESSION_SEARCH_LIMIT);
+}
+
+function resolveTrustLevel(input?: TrustLevel): TrustLevel {
+  switch (input) {
+    case 'primary':
+    case 'trusted':
+    case 'regular':
+    case 'public':
+      return input;
+    default:
+      return 'regular';
+  }
+}
+
+function resolveChannelVisibility(input: string | undefined, channelId: string): ChannelVisibility {
+  switch (input) {
+    case 'private':
+    case 'semi_private':
+    case 'public':
+    case 'broadcast':
+      return input;
+    default:
+      return classifyChannel(channelId);
+  }
+}
+
+function visibilityToSensitivity(visibility: ChannelVisibility): SensitivityLevel {
+  switch (visibility) {
+    case 'private':
+      return 'confidential';
+    case 'semi_private':
+      return 'personal';
+    case 'public':
+    case 'broadcast':
+      return 'public';
+  }
+}
+
+function resolveViewerVisibility(options: SessionSearchOptions | undefined): ChannelVisibility {
+  if (options?.channelId) {
+    return classifyChannel(options.channelId, {
+      isDirectMessage: options.isDirectMessage,
+    });
+  }
+  // Fail-closed: unknown caller context is treated as public.
+  return 'public';
+}
+
+function truncateSnippet(content: string, maxChars = SESSION_SEARCH_MAX_SNIPPET_CHARS): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
+function fallbackSessionSearchSummary(query: string, hits: SessionSearchHitResult[]): string {
+  if (hits.length === 0) {
+    return `No transcript matches found for "${query}".`;
+  }
+
+  const channels = [...new Set(hits.map(hit => hit.channelId))];
+  return `Found ${hits.length} transcript matches for "${query}" across ${channels.length} channel(s): ${channels.join(', ')}.`;
+}
+
+function buildSessionSearchSummaryPayload(
+  query: string,
+  hits: SessionSearchHitResult[],
+): string {
+  const lines = [
+    `Search query: ${query}`,
+    '',
+    'Matched transcript snippets:',
+  ];
+
+  let budgetUsed = lines.join('\n').length;
+  for (const hit of hits.slice(0, SESSION_SEARCH_MAX_SUMMARY_MATCHES)) {
+    const timestampIso = new Date(hit.timestamp).toISOString();
+    const line = `- [${timestampIso}] channel=${hit.channelId} role=${hit.role} visibility=${hit.channelVisibility} score=${hit.score.toFixed(3)} snippet=${truncateSnippet(hit.snippet)}`;
+    if (budgetUsed + line.length > SESSION_SEARCH_MAX_SUMMARY_CONTEXT_CHARS) {
+      break;
+    }
+    lines.push(line);
+    budgetUsed += line.length + 1;
+  }
+
+  lines.push('');
+  lines.push('Summarize what these snippets indicate and highlight the most relevant channels.');
+  return lines.join('\n');
+}
+
+async function summarizeSessionSearch(
+  llmProvider: LLMProvider,
+  query: string,
+  hits: SessionSearchHitResult[],
+): Promise<string> {
+  const fallback = fallbackSessionSearchSummary(query, hits);
+  if (hits.length === 0) return fallback;
+
+  const payload = buildSessionSearchSummaryPayload(query, hits);
+  try {
+    const response = await llmProvider.complete(
+      {
+        systemPrompt: SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: payload }],
+      },
+      'summary',
+    );
+    const content = toTrimmedString(response.content);
+    return content || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOptions): MemoryCapabilities {
@@ -184,6 +349,76 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     }));
   };
 
+  const session_search = async (
+    query: string,
+    limit = DEFAULT_SESSION_SEARCH_LIMIT,
+    searchOptions?: SessionSearchOptions,
+  ): Promise<SessionSearchResult> => {
+    const normalizedQuery = toTrimmedString(query);
+    if (!normalizedQuery || !options.sessionManager) {
+      return {
+        query: normalizedQuery,
+        summary: normalizedQuery
+          ? `No transcript matches found for "${normalizedQuery}".`
+          : 'No transcript matches found.',
+        totalHits: 0,
+        gatedOutCount: 0,
+        hits: [],
+      };
+    }
+
+    const requestedLimit = normalizeSessionSearchLimit(limit);
+    const rawHits = options.sessionManager.searchTranscripts(
+      normalizedQuery,
+      requestedLimit * SESSION_SEARCH_OVERSAMPLE_FACTOR,
+    );
+    const trustLevel = resolveTrustLevel(searchOptions?.trustLevel);
+    const viewerVisibility = resolveViewerVisibility(searchOptions);
+    const allowedSensitivities = new Set(
+      getAllowedSensitivities(trustLevel, viewerVisibility),
+    );
+    const filteredHits = rawHits.filter(hit => {
+      const visibility = resolveChannelVisibility(hit.channelVisibility, hit.channelId);
+      return allowedSensitivities.has(visibilityToSensitivity(visibility));
+    });
+
+    const hits: SessionSearchHitResult[] = filteredHits
+      .slice(0, requestedLimit)
+      .map(hit => {
+        const visibility = resolveChannelVisibility(hit.channelVisibility, hit.channelId);
+        return {
+          channelId: hit.channelId,
+          messageId: hit.messageId,
+          role: hit.role,
+          timestamp: hit.timestamp,
+          channelVisibility: visibility,
+          score: hit.score,
+          snippet: truncateSnippet(hit.snippet || hit.content),
+        };
+      });
+
+    const summary = await summarizeSessionSearch(
+      options.llmProvider,
+      normalizedQuery,
+      hits,
+    );
+
+    addEvidence(options.pushEvidence, {
+      source: 'session_search',
+      query: normalizedQuery,
+      snippet: summary || hits[0]?.snippet || '',
+      resultCount: hits.length,
+    });
+
+    return {
+      query: normalizedQuery,
+      summary,
+      totalHits: rawHits.length,
+      gatedOutCount: Math.max(0, rawHits.length - filteredHits.length),
+      hits,
+    };
+  };
+
   const session_append_note = (channelId: string, note: string): boolean => {
     if (!options.sessionManager) {
       return false;
@@ -229,6 +464,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     memory_import_batch,
     memory_upsert,
     session_messages,
+    session_search,
     session_append_note,
     memory_get_by_id,
   };

@@ -1,10 +1,10 @@
 import type { MemoryProvider, EmbeddingService } from '../agent-loop.js';
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
-import type { PurrMemory } from './types.js';
-import { MEMORY_CONFIG } from './types.js';
+import type { PurrMemory, MemoryPrivacyRiskBreakdown } from './types.js';
+import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
 import type { SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
-import type { TrustLevel, ChannelVisibility } from '../trust/types.js';
+import type { TrustLevel, ChannelVisibility, SensitivityLevel } from '../trust/types.js';
 import { countTokens } from '../llm/tokens.js';
 import type { ContextBudgetConfigLike } from '../context-budget.js';
 import {
@@ -24,7 +24,29 @@ const log = createComponentLogger('Retrieval');
 
 interface ScoredMemory {
   memory: PurrMemory & { similarity: number };
+  baseScore: number;
+  privacyRisk: number;
+  privacyPenalty: number;
+  privacyBreakdown: MemoryPrivacyRiskBreakdown;
   score: number;
+}
+
+interface RetrievalDecisionDiagnostics {
+  candidateCount: number;
+  policyAllowedCount: number;
+  rejectedBySensitivity: number;
+  rejectedByPolicy: number;
+  rejectedByPolicyReason: Record<string, number>;
+  rejectedByScore: number;
+  selectedCount: number;
+  topSelected: Array<{
+    id: string;
+    score: number;
+    baseScore: number;
+    privacyRisk: number;
+    privacyPenalty: number;
+    sensitivity: SensitivityLevel;
+  }>;
 }
 
 interface RetrievalTelemetry {
@@ -41,6 +63,10 @@ interface RetrievalTelemetry {
   retrievalBudgetPct: number;
   retrievalTokenBudget: number;
   retrievalLimitMode: 'budget' | 'hard_limit';
+  policyAllowedCount?: number;
+  sensitivityRejectedCount?: number;
+  policyRejectedCount?: number;
+  scoreRejectedCount?: number;
   profileIncluded?: boolean;
   emotionalSnapshotIncluded?: boolean;
   emotionalContinuityCount?: number;
@@ -224,13 +250,65 @@ export class MemoryRetriever implements MemoryProvider {
         });
       }
 
-      const scored: ScoredMemory[] = memories
-        .map(memory => ({
-          memory,
-          score: computeRetrievalScore(memory, contextText),
-        }))
-        .filter(s => s.score > 0)
+      const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
+      const diagnostics: RetrievalDecisionDiagnostics = {
+        candidateCount: memories.length,
+        policyAllowedCount: 0,
+        rejectedBySensitivity: 0,
+        rejectedByPolicy: 0,
+        rejectedByPolicyReason: {},
+        rejectedByScore: 0,
+        selectedCount: 0,
+        topSelected: [],
+      };
+      const policyAllowed: Array<PurrMemory & { similarity: number }> = [];
+
+      for (const memory of memories) {
+        if (!allowed.includes(memory.sensitivity)) {
+          diagnostics.rejectedBySensitivity++;
+          continue;
+        }
+
+        const policy = evaluateMemoryPolicy({
+          trustLevel: effectiveTrust,
+          channelVisibility,
+          memorySensitivity: memory.sensitivity,
+          consentFlags: memory.consentFlags,
+        });
+        if (policy.decision !== 'allow') {
+          diagnostics.rejectedByPolicy++;
+          const reasonKey = `${policy.layer}:${policy.reason}`;
+          diagnostics.rejectedByPolicyReason[reasonKey] = (diagnostics.rejectedByPolicyReason[reasonKey] ?? 0) + 1;
+          continue;
+        }
+
+        policyAllowed.push(memory);
+      }
+      diagnostics.policyAllowedCount = policyAllowed.length;
+      telemetry.policyAllowedCount = diagnostics.policyAllowedCount;
+      telemetry.sensitivityRejectedCount = diagnostics.rejectedBySensitivity;
+      telemetry.policyRejectedCount = diagnostics.rejectedByPolicy;
+
+      if (policyAllowed.length === 0) {
+        telemetry.reason = 'trust_filtered';
+        await this.emitRetrievalTelemetry(telemetry);
+        log.debug('Retrieval decision rationale', {
+          trustLevel: effectiveTrust,
+          channelVisibility,
+          ...diagnostics,
+        });
+        return renderPromptBlock(profile, [], {
+          emotionalSnapshot,
+          emotionalContinuityMemories: fallbackEmotionalContinuity,
+        });
+      }
+
+      const scored = policyAllowed
+        .map(memory => ({ memory, ...computeRetrievalScore(memory, contextText) }))
+        .filter((candidate) => candidate.score > 0)
         .sort((a, b) => b.score - a.score);
+      diagnostics.rejectedByScore = policyAllowed.length - scored.length;
+      telemetry.scoreRejectedCount = diagnostics.rejectedByScore;
 
       const ranked = budget.mode === 'hard_limit'
         ? scored.slice(0, limit)
@@ -240,39 +318,11 @@ export class MemoryRetriever implements MemoryProvider {
       if (ranked.length === 0) {
         telemetry.reason = 'score_filtered';
         await this.emitRetrievalTelemetry(telemetry);
-        return renderPromptBlock(profile, [], {
-          emotionalSnapshot,
-          emotionalContinuityMemories: fallbackEmotionalContinuity,
-        });
-      }
-
-      // Trust-gated filtering: apply trust level + channel visibility restrictions
-      const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
-
-      const filtered = ranked.filter(s => {
-        // Quick check: is the sensitivity level allowed for this trust+visibility?
-        if (!allowed.includes(s.memory.sensitivity)) return false;
-
-        // Full policy evaluation (includes consent flags, operator approval, etc.)
-        const policy = evaluateMemoryPolicy({
+        log.debug('Retrieval decision rationale', {
           trustLevel: effectiveTrust,
           channelVisibility,
-          memorySensitivity: s.memory.sensitivity,
-          consentFlags: s.memory.consentFlags,
+          ...diagnostics,
         });
-        return policy.decision === 'allow';
-      });
-
-      log.debug('Trust filter applied', {
-        trustLevel: effectiveTrust,
-        channelVisibility,
-        before: ranked.length,
-        after: filtered.length,
-      });
-
-      if (filtered.length === 0) {
-        telemetry.reason = 'trust_filtered';
-        await this.emitRetrievalTelemetry(telemetry);
         return renderPromptBlock(profile, [], {
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
@@ -280,10 +330,24 @@ export class MemoryRetriever implements MemoryProvider {
       }
 
       const selected = budget.mode === 'hard_limit'
-        ? filtered.slice(0, limit)
-        : selectWithinTokenBudget(filtered, budget.tokenBudget);
+        ? ranked.slice(0, limit)
+        : selectWithinTokenBudget(ranked, budget.tokenBudget);
 
       telemetry.returnedCount = selected.length;
+      diagnostics.selectedCount = selected.length;
+      diagnostics.topSelected = selected.slice(0, 3).map((item) => ({
+        id: item.memory.id,
+        score: Number(item.score.toFixed(4)),
+        baseScore: Number(item.baseScore.toFixed(4)),
+        privacyRisk: Number(item.privacyRisk.toFixed(4)),
+        privacyPenalty: Number(item.privacyPenalty.toFixed(4)),
+        sensitivity: item.memory.sensitivity,
+      }));
+      log.debug('Retrieval decision rationale', {
+        trustLevel: effectiveTrust,
+        channelVisibility,
+        ...diagnostics,
+      });
       const selectedIds = new Set(selected.map(item => item.memory.id));
       const emotionalContinuityMemories = canonicalContactId
         ? this.collectEmotionalContinuityMemories(
@@ -503,7 +567,16 @@ export class MemoryRetriever implements MemoryProvider {
   }
 }
 
-function computeRetrievalScore(memory: PurrMemory & { similarity: number }, contextText: string): number {
+function computeRetrievalScore(
+  memory: PurrMemory & { similarity: number },
+  contextText: string,
+): {
+  score: number;
+  baseScore: number;
+  privacyRisk: number;
+  privacyPenalty: number;
+  privacyBreakdown: MemoryPrivacyRiskBreakdown;
+} {
   const ageDays = (Date.now() - memory.extractedAt) / (1000 * 60 * 60 * 24);
   const recencyBoost = 1 / (1 + ageDays / 30);
   const emotionalWeight = 1 + Math.abs(memory.emotionalValence) * 0.5;
@@ -511,8 +584,7 @@ function computeRetrievalScore(memory: PurrMemory & { similarity: number }, cont
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
     : 1;
-
-  return (
+  const baseScore = (
     memory.similarity *
     recencyBoost *
     emotionalWeight *
@@ -521,6 +593,16 @@ function computeRetrievalScore(memory: PurrMemory & { similarity: number }, cont
     typePriorityBoost *
     boundarySimilarityBoost
   );
+  const privacyEvaluation = evaluateMemoryPrivacyRisk(memory);
+  const privacyPenalty = baseScore * privacyEvaluation.risk * MEMORY_CONFIG.privacyRiskPenaltyWeight;
+  const score = Math.max(0, baseScore - privacyPenalty);
+  return {
+    score,
+    baseScore,
+    privacyRisk: privacyEvaluation.risk,
+    privacyPenalty,
+    privacyBreakdown: privacyEvaluation.breakdown,
+  };
 }
 
 function estimateMemoryPromptTokens(memory: PurrMemory): number {

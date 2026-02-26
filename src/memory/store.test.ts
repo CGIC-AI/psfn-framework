@@ -334,6 +334,19 @@ describe('MemoryStore', () => {
       expect(mem!.sensitivity).toBe('confidential');
     });
 
+    it('updateMemory can update consentFlags', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Changeable consent', { consentFlags: {} }),
+        emb,
+      );
+
+      store.updateMemory('m1', { consentFlags: { allowRecall: false, deleteOnRequest: true } });
+
+      const mem = store.getById('m1');
+      expect(mem!.consentFlags).toEqual({ allowRecall: false, deleteOnRequest: true });
+    });
+
     it('migration is idempotent (runs twice without error)', () => {
       // The constructor already ran migrateSchema once. Running it again
       // via a second MemoryStore on the same db should not throw.

@@ -13,6 +13,11 @@ import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
 import {
+  createCharacterCardUpdateTool,
+  type CharacterCardUpdateToolOptions,
+  type CharacterCardVersionStore,
+} from '../identity/card-versioning.js';
+import {
   createPromptLayerListTool,
   createPromptLayerGetTool,
   createPromptLayerUpdateTool,
@@ -45,6 +50,10 @@ export interface PromptRuntimeTarget {
   registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void;
 }
 
+export interface CharacterCardRuntimeTarget {
+  registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void;
+}
+
 /**
  * Wire prompt stack storage, composition, and tools.
  * Shared across runtime.ts and agent-main.ts to keep behavior in sync.
@@ -69,6 +78,16 @@ export function wirePromptRuntime(
 
   log.info(`Prompt stack enabled (${promptStore.count} layers)`);
   return promptStore;
+}
+
+export function wireCharacterCardRuntime(
+  target: CharacterCardRuntimeTarget,
+  cardStore: CharacterCardVersionStore,
+  options: CharacterCardUpdateToolOptions = {},
+): void {
+  target.registerTool(createCharacterCardUpdateTool(cardStore, options), 'extended');
+  const snapshot = cardStore.getCurrent();
+  log.info(`Character card tooling enabled (v${snapshot.version})`);
 }
 
 /**

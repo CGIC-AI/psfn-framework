@@ -1,0 +1,172 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { TextContent } from '@mariozechner/pi-ai';
+import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
+import { resolveTierCapabilityTokens } from '../capabilities/tiers.js';
+import type { CapabilityTier } from '../types.js';
+import type { CapabilityToken } from '../capabilities/tokens.js';
+import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
+import type { CharacterCardV2 } from './types.js';
+import {
+  CharacterCardVersionStore,
+  createCharacterCardUpdateTool,
+} from './card-versioning.js';
+
+function resultText(result: AgentToolResult<any>): string {
+  return result.content
+    .filter((c): c is TextContent => c.type === 'text')
+    .map(c => c.text)
+    .join('');
+}
+
+function accessForTier(
+  tier: CapabilityTier,
+  customTokens: CapabilityToken[] = [],
+): CapabilityAccess {
+  const granted = new Set(resolveTierCapabilityTokens(tier, customTokens));
+  return {
+    getTier: () => tier,
+    getGrantedTokens: () => granted,
+    has: (token) => granted.has(token),
+  };
+}
+
+const BASE_CARD: CharacterCardV2 = {
+  spec: 'chara_card_v2',
+  spec_version: '2.0',
+  data: {
+    name: 'TestBot',
+    description: 'A test character',
+    personality: 'Friendly and helpful',
+    scenario: 'Testing card changes',
+    first_mes: 'Hello there!',
+    mes_example: '{{user}}: hi\n{{char}}: hello!',
+    system_prompt: 'Be concise.',
+    post_history_instructions: 'Stay in character.',
+    tags: ['test'],
+    creator: 'tester',
+  },
+};
+
+describe('CharacterCardVersionStore', () => {
+  let tempDir: string;
+  let cardPath: string;
+  let historyPath: string;
+  let store: CharacterCardVersionStore;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'psfn-card-versioning-'));
+    cardPath = join(tempDir, 'character.json');
+    historyPath = join(tempDir, 'character-history.jsonl');
+    writeFileSync(cardPath, `${JSON.stringify(BASE_CARD, null, 2)}\n`, 'utf-8');
+    store = new CharacterCardVersionStore(cardPath, historyPath);
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('starts at version 1 and appends JSONL history entries on update', () => {
+    const initial = store.getCurrent();
+    expect(initial.version).toBe(1);
+
+    const updated = store.updateData({ personality: 'Calmer and more reflective' }, 'admin', 'Tune voice');
+    expect(updated.version).toBe(2);
+    expect(updated.card.data.personality).toBe('Calmer and more reflective');
+
+    const lines = readFileSync(historyPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+
+    const entry = JSON.parse(lines[0]) as {
+      version: number;
+      updatedBy: string;
+      reason?: string;
+      previousCard: CharacterCardV2;
+      newCard: CharacterCardV2;
+    };
+
+    expect(entry.version).toBe(1);
+    expect(entry.updatedBy).toBe('admin');
+    expect(entry.reason).toBe('Tune voice');
+    expect(entry.previousCard.data.personality).toBe('Friendly and helpful');
+    expect(entry.newCard.data.personality).toBe('Calmer and more reflective');
+  });
+
+  it('rolls back to any prior version from history', () => {
+    store.updateData({ personality: 'Version 2 personality' }, 'admin');
+    store.updateData({ personality: 'Version 3 personality' }, 'admin');
+
+    const rolledBack = store.rollback(1);
+    expect(rolledBack.card.data.personality).toBe('Friendly and helpful');
+    expect(rolledBack.version).toBe(4);
+
+    const persisted = JSON.parse(readFileSync(cardPath, 'utf-8')) as CharacterCardV2;
+    expect(persisted.data.personality).toBe('Friendly and helpful');
+  });
+});
+
+describe('character_card_update tool', () => {
+  let tempDir: string;
+  let cardPath: string;
+  let historyPath: string;
+  let store: CharacterCardVersionStore;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'psfn-card-tool-'));
+    cardPath = join(tempDir, 'character.json');
+    historyPath = join(tempDir, 'character-history.jsonl');
+    writeFileSync(cardPath, `${JSON.stringify(BASE_CARD, null, 2)}\n`, 'utf-8');
+    store = new CharacterCardVersionStore(cardPath, historyPath);
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('applies updates immediately in autonomous tier', async () => {
+    const tool = gateToolWithCapabilities(
+      createCharacterCardUpdateTool(store, {
+        getCapabilityTier: () => 'autonomous',
+      }),
+      () => accessForTier('autonomous'),
+    );
+
+    const result = await tool.execute('tool-call', {
+      personality: 'Autonomous personality update',
+      reason: 'Improve emotional nuance',
+    });
+    const text = resultText(result);
+
+    expect(text).toContain('Updated character card to v2');
+    expect(store.getCurrent().card.data.personality).toBe('Autonomous personality update');
+  });
+
+  it('queues updates for confirmation in nursery tier and applies after approval', async () => {
+    const queue = new ConfirmationQueue({ idFactory: () => 'card-1' });
+    const tool = gateToolWithCapabilities(
+      createCharacterCardUpdateTool(store, {
+        getCapabilityTier: () => 'nursery',
+        confirmationQueue: queue,
+      }),
+      () => accessForTier('nursery'),
+    );
+
+    const queued = await tool.execute('tool-call', {
+      personality: 'Queued personality update',
+      reason: 'Needs operator review',
+    });
+    expect(resultText(queued)).toContain('queued for confirmation');
+    expect(queue.listPending()).toHaveLength(1);
+    expect(store.getCurrent().card.data.personality).toBe('Friendly and helpful');
+
+    const resolved = await queue.resolve({
+      id: 'card-1',
+      decision: 'approve',
+    });
+    expect(resolved.status).toBe('approved');
+    expect(store.getCurrent().card.data.personality).toBe('Queued personality update');
+  });
+});

@@ -99,6 +99,7 @@ export class AdminServer implements Lifecycle {
       contactStore: config.contactStore,
       promptStore: config.promptStore,
       promptRegistry: config.promptRegistry,
+      cardVersionStore: config.cardVersionStore,
       skillsRuntime: config.skillsRuntime,
       confirmationQueueApi: config.confirmationQueueApi,
       apiBaseUrl: config.apiBaseUrl,
@@ -281,6 +282,24 @@ export class AdminServer implements Lifecycle {
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
             this.sendFragment(res, this.handlers.importIdentityCard(body));
+          });
+        },
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/identity/card/rollback'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.rollbackIdentityCard(body));
+          });
+        },
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/identity/card/diff'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.previewIdentityCardDiff(body));
           });
         },
       },

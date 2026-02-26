@@ -7,7 +7,12 @@ export { memoryListPage, memoryRow, memoryDetailPage } from './templates/memory.
 export { sessionListPage, sessionMessagesPage, messageCard } from './templates/sessions.js';
 export { schedulerPage, taskRow } from './templates/scheduler.js';
 export { shardsPage, shardCard } from './templates/shards.js';
-export { identityPage, identityImportResult } from './templates/identity.js';
+export {
+  identityPage,
+  identityImportResult,
+  identityCardVersionResult,
+  identityCardDiffFragment,
+} from './templates/identity.js';
 export { settingsPage, settingsFormResult } from './templates/settings.js';
 export { skillsPage } from './templates/skills.js';
 export { primerPage } from './templates/primer.js';

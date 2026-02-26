@@ -3,8 +3,9 @@
 // Run: npm run agent
 
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { createComponentLogger } from './logger.js';
@@ -47,6 +48,7 @@ import {
 } from './bootstrap/composition.js';
 import {
   wirePromptRuntime,
+  wireCharacterCardRuntime,
   wireStaticPromptRegistry,
   wireSettingsRuntime,
   buildReplConfig,
@@ -60,6 +62,8 @@ import {
   createLifecycleRestartSafeguardFromEnv,
   createExternalCommunicationRateLimiterFromEnv,
 } from './capabilities/safeguards.js';
+import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
+import { CharacterCardVersionStore } from './identity/card-versioning.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -125,6 +129,13 @@ async function main(): Promise<void> {
   // ── Load identity (mounted read-only in container) ──
 
   const { card, systemPrompt } = composeIdentity(config);
+  const cardVersionStore = new CharacterCardVersionStore(
+    config.characterCardPath,
+    join(config.dataDir, 'character-card-history.jsonl'),
+  );
+  const cardProposalQueue = new ConfirmationQueue({
+    idFactory: () => `card-${randomUUID()}`,
+  });
   log.info(`Loaded character: ${card.data.name}`);
   const promptRegistry = wireStaticPromptRegistry(config.dataDir);
 
@@ -173,6 +184,10 @@ async function main(): Promise<void> {
   const promptStore = wirePromptRuntime(agentLoop, config.dataDir, systemPrompt, {
     identityCoolingOff,
     getCapabilityTier: () => capabilityRuntime.getTier(),
+  });
+  wireCharacterCardRuntime(agentLoop, cardVersionStore, {
+    getCapabilityTier: () => capabilityRuntime.getTier(),
+    confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config);
 
@@ -286,6 +301,24 @@ async function main(): Promise<void> {
   if (adminPort) {
     const adminToken = process.env.ADMIN_TOKEN || undefined;
     const allowInsecureWithoutToken = isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE);
+    const confirmationQueueApi = {
+      listConfirmationQueue: async () => {
+        const [gatewayList, localEntries] = await Promise.all([
+          gateway.listConfirmationQueue(),
+          Promise.resolve(cardProposalQueue.listPending()),
+        ]);
+        return {
+          entries: [...localEntries, ...gatewayList.entries]
+            .sort((a, b) => a.requestedAt - b.requestedAt),
+        };
+      },
+      resolveConfirmationQueue: async (params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }) => {
+        if (cardProposalQueue.getPending(params.id)) {
+          return cardProposalQueue.resolve(params);
+        }
+        return gateway.resolveConfirmationQueue(params);
+      },
+    };
     adminServer = new AdminServer({
       port: adminPort,
       host: process.env.ADMIN_HOST || undefined,
@@ -306,10 +339,8 @@ async function main(): Promise<void> {
       promptStore,
       promptRegistry,
       skillsRuntime,
-      confirmationQueueApi: {
-        listConfirmationQueue: () => gateway.listConfirmationQueue(),
-        resolveConfirmationQueue: (params) => gateway.resolveConfirmationQueue(params),
-      },
+      confirmationQueueApi,
+      cardVersionStore,
     });
     await adminServer.init();
     await adminServer.start();

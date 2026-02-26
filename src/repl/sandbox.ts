@@ -22,6 +22,10 @@ import {
 
 export type { SandboxDeps, SandboxBudgetRef, ExecuteResult } from './sandbox-capabilities/contracts.js';
 
+export interface SandboxLimits {
+  memoryCeilingBytes?: number;
+}
+
 export class FinalAnswerSignal {
   readonly answer: string;
   constructor(answer: string) {
@@ -36,10 +40,12 @@ export class REPLSandbox {
   private budgetRef: SandboxBudgetRef | undefined;
   private builtinKeysSet: Set<string>;
   private currentEvidence: ThinkEvidence[] = [];
+  private memoryCeilingBytes: number | undefined;
 
-  constructor(deps: SandboxDeps, budgetRef?: SandboxBudgetRef) {
+  constructor(deps: SandboxDeps, budgetRef?: SandboxBudgetRef, limits?: SandboxLimits) {
     this.deps = deps;
     this.budgetRef = budgetRef;
+    this.memoryCeilingBytes = limits?.memoryCeilingBytes;
 
     const print = (...args: unknown[]) => {
       this.outputBuffer.push(args.map(value => {
@@ -200,6 +206,19 @@ export class REPLSandbox {
     return snap;
   }
 
+  private assertMemoryCeiling(): void {
+    if (!this.memoryCeilingBytes || this.memoryCeilingBytes <= 0) {
+      return;
+    }
+
+    const heapUsedBytes = process.memoryUsage().heapUsed;
+    if (heapUsedBytes > this.memoryCeilingBytes) {
+      const usedMb = (heapUsedBytes / (1024 * 1024)).toFixed(1);
+      const limitMb = (this.memoryCeilingBytes / (1024 * 1024)).toFixed(1);
+      throw new Error(`Sandbox memory ceiling exceeded (${usedMb}MB > ${limitMb}MB)`);
+    }
+  }
+
   async execute(code: string, timeoutMs: number, truncationLimit: number): Promise<ExecuteResult> {
     this.outputBuffer = [];
     const before = this.snapshotUserVars();
@@ -213,18 +232,36 @@ export class REPLSandbox {
     const wrapped = `(async () => {\n${transformed}\n})()`;
 
     try {
+      this.assertMemoryCeiling();
       const script = new vm.Script(wrapped, { filename: 'repl' });
       const promise = Promise.resolve(script.runInContext(this.context, { timeout: timeoutMs }));
       let timeoutHandle: NodeJS.Timeout | undefined;
+      let memoryGuardHandle: NodeJS.Timeout | undefined;
       const timeout = new Promise<never>((_resolve, reject) => {
         timeoutHandle = setTimeout(() => {
           reject(new Error(`Execution timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       });
+      const memoryGuard = new Promise<never>((_resolve, reject) => {
+        if (!this.memoryCeilingBytes || this.memoryCeilingBytes <= 0) return;
+        memoryGuardHandle = setInterval(() => {
+          try {
+            this.assertMemoryCeiling();
+          } catch (error) {
+            if (memoryGuardHandle) {
+              clearInterval(memoryGuardHandle);
+              memoryGuardHandle = undefined;
+            }
+            reject(error);
+          }
+        }, 20);
+      });
       try {
-        await Promise.race([promise, timeout]);
+        await Promise.race([promise, timeout, memoryGuard]);
+        this.assertMemoryCeiling();
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (memoryGuardHandle) clearInterval(memoryGuardHandle);
       }
 
       const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);

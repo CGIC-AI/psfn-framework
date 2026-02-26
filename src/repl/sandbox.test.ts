@@ -130,6 +130,16 @@ describe('REPLSandbox', () => {
     expect(result.output).toBe('');
   });
 
+  it('enforces configured memory ceiling (best effort)', async () => {
+    const sandbox = new REPLSandbox(
+      nullDeps(),
+      undefined,
+      { memoryCeilingBytes: 1 },
+    );
+    const result = await sandbox.execute('print("hello");', 5000, 8192);
+    expect(result.error).toContain('memory ceiling exceeded');
+  });
+
   it('llm_query calls llmProvider.complete', async () => {
     const llm = mockLLM('sub-answer');
     const sandbox = new REPLSandbox(nullDeps(llm));

@@ -395,16 +395,7 @@ describe('DiscordVoiceRuntime', () => {
   });
 
   it('passes configured DAVE join options to @discordjs/voice', async () => {
-    const connection = {
-      subscribe: vi.fn(),
-      destroy: vi.fn(),
-      receiver: {
-        speaking: {
-          on: vi.fn(),
-          off: vi.fn(),
-        },
-      },
-    };
+    const connection = createMockVoiceConnection();
     voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
 
     const runtime = new DiscordVoiceRuntime({
@@ -438,16 +429,7 @@ describe('DiscordVoiceRuntime', () => {
   });
 
   it('uses default DAVE join options when config values are not set', async () => {
-    const connection = {
-      subscribe: vi.fn(),
-      destroy: vi.fn(),
-      receiver: {
-        speaking: {
-          on: vi.fn(),
-          off: vi.fn(),
-        },
-      },
-    };
+    const connection = createMockVoiceConnection();
     voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
 
     const runtime = new DiscordVoiceRuntime({

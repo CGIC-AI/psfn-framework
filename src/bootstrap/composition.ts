@@ -18,11 +18,14 @@ import { createSpawnShardTool } from '../shards/tools.js';
 import { createThinkTool } from '../repl/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
+import type { CapabilityTier } from '../types.js';
 import { loadCharacterCard, composeSystemPrompt } from '../identity/loader.js';
 import type { CharacterCardV2 } from '../identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import type { ShardAuditTrail } from '../shards/manager.js';
+import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
+import type { ModuleRegistryMutation } from '../modules/types.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -181,6 +184,9 @@ export interface ToolRuntimeOptions {
   scheduler?: Scheduler | null;
   replConfig?: REPLConfig;
   shardAuditTrail?: ShardAuditTrail | null;
+  getCapabilityTier?: () => CapabilityTier;
+  moduleInstallConfirmationQueue?: ConfirmationQueue | null;
+  onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardManager {
@@ -204,6 +210,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     sessionManager: options.sessionManager,
     scheduler: options.scheduler ?? null,
     eventBus: options.eventBus,
+    getCapabilityTier: options.getCapabilityTier,
+    moduleInstallConfirmationQueue: options.moduleInstallConfirmationQueue,
+    onModuleRegistryMutation: options.onModuleRegistryMutation,
     config: options.replConfig ?? DEFAULT_REPL_CONFIG,
   }));
 

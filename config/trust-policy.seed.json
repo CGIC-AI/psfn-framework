@@ -14,6 +14,10 @@
   "channelClassification": {
     "privatePrefixes": ["api:", "sillytavern:", "openwebui:", "shard:", "internal:"],
     "broadcastPrefixes": ["twitter:", "social:"],
-    "defaultVisibility": "semi_private"
+    "defaultVisibility": "semi_private",
+    "visibilityOverrides": {
+      "exact": {},
+      "prefix": {}
+    }
   }
 }

@@ -572,7 +572,7 @@ export function settingsPage(
     ${renderJsonConfigEditor({
       title: 'Trust Policy JSON (trust-policy.json)',
       fileName: 'trust-policy.json',
-      description: 'Defines trust ceilings, visibility caps, and channel classification rules.',
+      description: 'Defines trust ceilings, visibility caps, channel classification rules, and visibility overrides (exact + prefix).',
       action: '/api/settings/trust-policy',
       resultId: 'trust-policy-config-result',
       config: configEditors.trustPolicy,

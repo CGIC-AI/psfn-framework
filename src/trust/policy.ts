@@ -79,11 +79,38 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
 
 // ── Channel classification ──
 
+function resolvePrefixVisibilityOverride(
+  channelId: string,
+  prefixOverrides: Record<string, ChannelVisibility>,
+): ChannelVisibility | undefined {
+  let bestMatch: { prefix: string; visibility: ChannelVisibility } | undefined;
+  for (const [prefix, visibility] of Object.entries(prefixOverrides)) {
+    if (!channelId.startsWith(prefix)) continue;
+    if (!bestMatch || prefix.length > bestMatch.prefix.length) {
+      bestMatch = { prefix, visibility };
+    }
+  }
+  return bestMatch?.visibility;
+}
+
 export function classifyChannel(
   channelId: string,
   meta?: ChannelMeta,
 ): ChannelVisibility {
   const trustPolicy = getRuntimeTrustPolicy();
+  const visibilityOverrides = trustPolicy.channelClassification.visibilityOverrides;
+
+  const exactOverride = Object.prototype.hasOwnProperty.call(visibilityOverrides.exact, channelId)
+    ? visibilityOverrides.exact[channelId]
+    : undefined;
+  if (exactOverride !== undefined) {
+    return exactOverride;
+  }
+
+  const prefixOverride = resolvePrefixVisibilityOverride(channelId, visibilityOverrides.prefix);
+  if (prefixOverride !== undefined) {
+    return prefixOverride;
+  }
 
   // Discord DMs explicitly flagged by adapter — private (honne)
   if (meta?.isDirectMessage) return 'private';

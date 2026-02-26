@@ -23,6 +23,10 @@ export interface TrustPolicyConfig {
     privatePrefixes: string[];
     broadcastPrefixes: string[];
     defaultVisibility: ChannelVisibility;
+    visibilityOverrides: {
+      exact: Record<string, ChannelVisibility>;
+      prefix: Record<string, ChannelVisibility>;
+    };
   };
 }
 
@@ -72,6 +76,24 @@ function uniqueStringList(value: unknown, field: string): string[] {
   return [...set];
 }
 
+function visibilityOverrideMap(value: unknown, field: string): Record<string, ChannelVisibility> {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid trust policy: ${field} must be an object`);
+  }
+
+  const out: Record<string, ChannelVisibility> = {};
+  for (const [rawKey, rawVisibility] of Object.entries(value)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    if (typeof rawVisibility !== 'string' || !VISIBILITY_LEVELS.includes(rawVisibility as ChannelVisibility)) {
+      throw new Error(`Invalid trust policy: ${field}.${rawKey} has unsupported visibility`);
+    }
+    out[key] = rawVisibility as ChannelVisibility;
+  }
+
+  return out;
+}
+
 function validateTrustPolicy(raw: unknown, sourcePath: string): TrustPolicyConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid trust policy at ${sourcePath}: expected object`);
@@ -104,6 +126,12 @@ function validateTrustPolicy(raw: unknown, sourcePath: string): TrustPolicyConfi
     throw new Error('Invalid trust policy: channelClassification.defaultVisibility is not supported');
   }
 
+  const visibilityOverridesRaw = raw.channelClassification.visibilityOverrides;
+  if (visibilityOverridesRaw !== undefined && !isRecord(visibilityOverridesRaw)) {
+    throw new Error('Invalid trust policy: channelClassification.visibilityOverrides must be an object');
+  }
+  const visibilityOverrides = visibilityOverridesRaw as Record<string, unknown> | undefined;
+
   return {
     trustCeiling,
     visibilityAllowed,
@@ -111,6 +139,16 @@ function validateTrustPolicy(raw: unknown, sourcePath: string): TrustPolicyConfi
       privatePrefixes: uniqueStringList(raw.channelClassification.privatePrefixes, 'channelClassification.privatePrefixes'),
       broadcastPrefixes: uniqueStringList(raw.channelClassification.broadcastPrefixes, 'channelClassification.broadcastPrefixes'),
       defaultVisibility: defaultVisibilityRaw as ChannelVisibility,
+      visibilityOverrides: {
+        exact: visibilityOverrideMap(
+          visibilityOverrides?.exact ?? {},
+          'channelClassification.visibilityOverrides.exact',
+        ),
+        prefix: visibilityOverrideMap(
+          visibilityOverrides?.prefix ?? {},
+          'channelClassification.visibilityOverrides.prefix',
+        ),
+      },
     },
   };
 }

@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { join, resolve } from 'node:path';
 import { runSessionRepairScan } from './session/repair.js';
 import { loadConfig } from './types.js';
+import { toErrorMessage } from './utils/errors.js';
 
 interface CliOptions {
   sessionsDir?: string;
@@ -76,7 +77,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = toErrorMessage(error);
   console.error(`Session repair failed: ${message}`);
   process.exit(1);
 });

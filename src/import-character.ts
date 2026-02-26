@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { loadConfig } from './types.js';
 import { importCharacterCardToPath } from './identity/importer.js';
+import { toErrorMessage } from './utils/errors.js';
 
 function usage(): void {
   console.error('Usage: npm run import-character <source-path>');
@@ -28,7 +29,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = toErrorMessage(error);
   console.error(`Import failed: ${message}`);
   process.exit(1);
 });

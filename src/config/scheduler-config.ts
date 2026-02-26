@@ -3,6 +3,7 @@ import {
   loadOrSeedJson,
   writeJsonAtomic,
 } from './load-or-seed.js';
+import { isRecord } from '../utils/types.js';
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';
 export const SCHEDULER_SEED_FILE_NAME = 'scheduler.seed.json';
@@ -15,10 +16,6 @@ export interface SchedulerRuntimeConfig {
 
 interface SchedulerRuntimeLoadOptions {
   seedDir?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function toInterval(value: unknown, field: string): number {

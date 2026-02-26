@@ -11,7 +11,6 @@ import 'dotenv/config';
 import { join } from 'node:path';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import Database from 'better-sqlite3';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
@@ -20,7 +19,7 @@ import { SessionStore } from './session/store.js';
 import { MemoryStore } from './memory/store.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { runRLMLoop } from './repl/loop.js';
-import { dirname } from 'node:path';
+import { initDatabase } from './persistence/sqlite-utils.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -77,10 +76,7 @@ async function main(): Promise<void> {
   // Use isolated database by default so extraction assertions are deterministic.
   // Override with E2E_DATABASE_PATH when you intentionally want to test against a shared DB.
   const databasePath = process.env.E2E_DATABASE_PATH ?? join(tempDir, 'e2e.sqlite');
-  mkdirSync(dirname(databasePath), { recursive: true });
-  const db = new Database(databasePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const db = initDatabase(databasePath);
 
   const eventBus = new EventBus();
 

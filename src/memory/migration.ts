@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { EmbeddingService } from '../agent/contracts.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 interface MemoryTextRow {
   id: string;
@@ -189,7 +190,7 @@ function createValidationErrorReport(
     meanReciprocalRank: null,
     meanTopSimilarity: null,
     details: [],
-    error: error instanceof Error ? error.message : String(error),
+    error: toErrorMessage(error),
   };
 }
 
@@ -375,7 +376,7 @@ export async function migrateMemoryEmbeddings(
             batchCount: batches.length,
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = toErrorMessage(error);
           processed += batch.length;
           failed += batch.length;
           for (const row of batch) {

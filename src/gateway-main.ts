@@ -3,7 +3,6 @@
 // Run: npm run gateway
 
 import 'dotenv/config';
-import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from './types.js';
@@ -20,6 +19,8 @@ import type { SubstrateMessage } from './types.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
+import { initDatabase } from './persistence/sqlite-utils.js';
+import { parsePositiveIntEnv } from './utils/env.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -92,12 +93,6 @@ function createDiscordReverseRpcVoiceModule(): GatewayVoiceModule {
   };
 }
 
-function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 async function main(): Promise<void> {
   const config = loadConfig();
   const savedSettings = loadSettings(config.dataDir);
@@ -146,9 +141,7 @@ async function main(): Promise<void> {
   // ── Audit database (separate from agent's runtime DB) ──
 
   const auditDbPath = process.env.AUDIT_DB_PATH ?? './data/gateway-audit.db';
-  mkdirSync(dirname(auditDbPath), { recursive: true });
-  const auditDb = new Database(auditDbPath);
-  auditDb.pragma('journal_mode = WAL');
+  const auditDb = initDatabase(auditDbPath, { foreignKeys: false });
   const auditStore = new AuditStore(auditDb);
   log.info(`Audit log: ${auditDbPath}`);
 

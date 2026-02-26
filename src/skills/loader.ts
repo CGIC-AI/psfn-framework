@@ -14,6 +14,8 @@ import {
   sep,
 } from 'node:path';
 import type { SkillsRuntimeConfig } from '../config/skills-config.js';
+import { toErrorMessage } from '../utils/errors.js';
+import { isRecord } from '../utils/types.js';
 import type {
   SkillDirectorySpec,
   SkillEntry,
@@ -32,10 +34,6 @@ function toPosix(path: string): string {
 
 function uniqStrings(values: string[]): string[] {
   return [...new Set(values.map(v => v.trim()).filter(Boolean))];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function readBoolean(value: unknown): boolean | undefined {
@@ -527,7 +525,7 @@ export function loadSkillEntries(files: SkillFileCandidate[]): {
         size: file.size,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       skipped.push({
         kind: 'parse_error',
         name: file.relativePath,

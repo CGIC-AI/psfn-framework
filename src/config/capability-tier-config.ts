@@ -7,6 +7,7 @@ import {
   loadOrSeedJson,
   writeJsonAtomic,
 } from './load-or-seed.js';
+import { isRecord } from '../utils/types.js';
 
 export const CAPABILITY_TIER_FILE_NAME = 'capability-tier.json';
 export const CAPABILITY_TIER_SEED_FILE_NAME = 'capability-tier.seed.json';
@@ -18,10 +19,6 @@ export interface CapabilityTierConfig {
 
 interface CapabilityTierLoadOptions {
   seedDir?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function validateCapabilityTierConfig(raw: unknown, sourcePath: string): CapabilityTierConfig {

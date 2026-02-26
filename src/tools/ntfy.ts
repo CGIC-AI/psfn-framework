@@ -6,6 +6,8 @@ import type {
   ExternalCommunicationRateLimiter,
 } from '../capabilities/safeguards.js';
 import { textResult, textResultWithError } from './results.js';
+import { parsePositiveIntEnv } from '../utils/env.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
@@ -115,12 +117,6 @@ class HttpNtfyNotifier implements NtfyNotifier {
     this.recentAlerts.set(fingerprint, now);
     return previous !== undefined && now - previous < this.debounceWindowMs;
   }
-}
-
-function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export function createGatewayNtfyNotifier(
@@ -242,7 +238,7 @@ export function createNotifyOperatorTool(
           `notify_operator: success (sent to topic "${result.topic}"${result.messageId ? `, id ${result.messageId}` : ''}).`,
         );
       } catch (error) {
-        const messageText = error instanceof Error ? error.message : String(error);
+        const messageText = toErrorMessage(error);
         return textResultWithError(`notify_operator: failure (${messageText}).`, true);
       }
     },

@@ -2,6 +2,10 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import * as sqliteVec from 'sqlite-vec';
 import {
+  hasColumn,
+  runInTransaction as runSqliteTransaction,
+} from '../persistence/sqlite-utils.js';
+import {
   normalizeConsentFlags,
   type PurrMemory,
   type SensitivityLevel,
@@ -306,12 +310,6 @@ export class MemoryStore {
     `);
   }
 
-  private hasColumn(tableName: string, columnName: string): boolean {
-    const rows = this.db.prepare(`PRAGMA table_info(${tableName})`)
-      .all() as Array<{ name: string }>;
-    return rows.some(row => row.name === columnName);
-  }
-
   private migrateSchema(): void {
     // Add sensitivity column (default 'personal' — safe default for existing data)
     try {
@@ -324,15 +322,15 @@ export class MemoryStore {
     } catch { /* column already exists */ }
 
     // Add contact_id column for canonical contact linking
-    if (!this.hasColumn('l2_memories', 'contact_id')) {
+    if (!hasColumn(this.db, 'l2_memories', 'contact_id')) {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN contact_id TEXT`);
     }
 
-    if (this.hasColumn('l2_memories', 'contact_id')) {
+    if (hasColumn(this.db, 'l2_memories', 'contact_id')) {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id)`);
     }
 
-    if (!this.hasColumn('l2_memories', 'provenance_refs')) {
+    if (!hasColumn(this.db, 'l2_memories', 'provenance_refs')) {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_refs TEXT NOT NULL DEFAULT '[]'`);
     }
 
@@ -434,8 +432,7 @@ export class MemoryStore {
   }
 
   runInTransaction<T>(handler: () => T): T {
-    const transaction = this.db.transaction(handler);
-    return transaction();
+    return runSqliteTransaction(this.db, handler);
   }
 
   searchByEmbedding(

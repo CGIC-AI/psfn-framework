@@ -6,8 +6,6 @@
 // Run: npx tsx src/e2e-walkthrough.ts
 
 import 'dotenv/config';
-import { mkdirSync } from 'node:fs';
-import Database from 'better-sqlite3';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
@@ -16,7 +14,6 @@ import type { SubstrateAgent } from './agent/substrate-agent.js';
 import { MemoryStore } from './memory/store.js';
 import { SalienceDecay } from './memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
-import { dirname } from 'node:path';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -25,6 +22,7 @@ import {
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
+import { initDatabase } from './persistence/sqlite-utils.js';
 
 const CHANNEL = 'walkthrough:orientation';
 
@@ -61,10 +59,7 @@ async function main(): Promise<void> {
   const eventBus = new EventBus();
 
   // Database
-  mkdirSync(dirname(config.databasePath), { recursive: true });
-  const db = new Database(config.databasePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const db = initDatabase(config.databasePath);
 
   // Identity
   const { card, systemPrompt } = composeIdentity(config);

@@ -1,6 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { createComponentLogger } from '../logger.js';
+import { appendJsonLine } from '../persistence/jsonl.js';
 
 const log = createComponentLogger('ValuesJournal');
 
@@ -157,8 +157,7 @@ export class ValuesJournalStore {
       ...(input.deliberation ? { deliberation: input.deliberation } : {}),
     };
 
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    appendFileSync(this.filePath, JSON.stringify(entry) + '\n', 'utf-8');
+    appendJsonLine(this.filePath, entry);
     return entry;
   }
 

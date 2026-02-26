@@ -1,8 +1,7 @@
-import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import type Database from 'better-sqlite3';
 import { classifyChannel } from '../trust/policy.js';
 import type { ChannelVisibility } from '../trust/types.js';
+import { initDatabase } from '../persistence/sqlite-utils.js';
 import type { SessionEntry } from './types.js';
 
 const DEFAULT_SEARCH_LIMIT = 10;
@@ -85,11 +84,7 @@ export class SessionSearchIndex {
   private readonly countChannelStmt: Database.Statement;
 
   constructor(databasePath: string) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.db = new Database(databasePath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
-    this.db.pragma('foreign_keys = ON');
+    this.db = initDatabase(databasePath, { synchronous: 'NORMAL' });
     this.createSchema();
     this.upsertStmt = this.db.prepare(`
       INSERT INTO session_messages_index (

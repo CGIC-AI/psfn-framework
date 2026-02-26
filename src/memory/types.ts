@@ -33,6 +33,33 @@ const DURABLE_RETENTION_TAG_SET = new Set<string>([
   ...CORE_DURABLE_MEMORY_TAGS,
 ]);
 const AUTO_DURABLE_RELATIONAL_TAG_HINT_SET = new Set<string>(AUTO_DURABLE_RELATIONAL_TAG_HINTS);
+const CRITICAL_MEMORY_TAG_HINTS = new Set<string>([
+  'critical',
+  'core',
+  'must_remember',
+  'safety',
+  'boundary',
+  'urgent',
+  'durable',
+  'core_profile',
+  'core_relationship',
+  'relationship_core',
+]);
+const MEMORY_TYPE_TAG_HINTS: Readonly<Record<MemoryType, readonly string[]>> = {
+  boundary: ['boundary', 'consent', 'limit', 'safety', 'refusal'],
+  emotional: ['emotion', 'feeling', 'mood', 'sentiment', 'affect'],
+  episodic: ['event', 'timeline', 'history', 'date', 'episode'],
+  procedural: ['routine', 'procedure', 'workflow', 'habit', 'howto'],
+  reflection: ['reflection', 'insight', 'lesson', 'meta'],
+  relational: ['relationship', 'partner', 'family', 'friend', 'contact'],
+  semantic: ['fact', 'profile', 'identity', 'preference', 'knowledge'],
+};
+const BOUNDARY_TEXT_HINT = /\b(boundary|limit|consent|do not|don't|cannot|can't|won't|must not)\b/i;
+const EMOTIONAL_TEXT_HINT = /\b(feel|feeling|felt|emotion|mood|happy|sad|angry|anxious|excited)\b/i;
+const PROCEDURAL_TEXT_HINT = /\b(always|usually|routine|process|step|workflow|procedure|habit)\b/i;
+const REFLECTION_TEXT_HINT = /\b(learned|insight|realized|reflection|meta|lesson)\b/i;
+const RELATIONAL_TEXT_HINT = /\b(partner|spouse|wife|husband|boyfriend|girlfriend|family|friend|sibling|parent|child)\b/i;
+const EPISODIC_TEXT_HINT = /\b(yesterday|today|last\s+\w+|ago|on\s+\d{4}-\d{2}-\d{2}|when\s+we)\b/i;
 
 export const VALID_MEMORY_TYPES: MemoryType[] = [
   'episodic', 'semantic', 'emotional', 'procedural', 'boundary', 'reflection', 'relational',
@@ -53,6 +80,7 @@ export interface PurrMemory {
   accessCount: number;
   supersededBy?: string;
   tags: string[];
+  provenanceRefs?: string[];
   retentionClass?: MemoryRetentionClass;
   sensitivity: SensitivityLevel;    // default 'personal'
   consentFlags?: ConsentFlags;      // default {}
@@ -122,6 +150,99 @@ export function normalizeMemoryTags(tags: readonly string[]): string[] {
     if (tag.length > 0) out.add(tag);
   }
   return Array.from(out);
+}
+
+function clampUnit(value: number, fallback = 0.5): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(1, value));
+}
+
+export function normalizeMemoryTypeValue(value: unknown): MemoryType | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase() as MemoryType;
+  return VALID_MEMORY_TYPES.includes(normalized) ? normalized : undefined;
+}
+
+export function inferImportedMemoryType(input: {
+  text: string;
+  explicitType?: unknown;
+  tags?: readonly string[];
+}): MemoryType {
+  const explicit = normalizeMemoryTypeValue(input.explicitType);
+  if (explicit) return explicit;
+
+  const normalizedTags = normalizeMemoryTags(input.tags ?? []);
+  const tagSet = new Set(normalizedTags);
+  const taggedType = VALID_MEMORY_TYPES.find(type => (
+    MEMORY_TYPE_TAG_HINTS[type].some(tag => tagSet.has(tag))
+  ));
+  if (taggedType) return taggedType;
+
+  const text = input.text.trim();
+  if (!text) return 'semantic';
+  if (BOUNDARY_TEXT_HINT.test(text)) return 'boundary';
+  if (RELATIONAL_TEXT_HINT.test(text)) return 'relational';
+  if (EMOTIONAL_TEXT_HINT.test(text)) return 'emotional';
+  if (PROCEDURAL_TEXT_HINT.test(text)) return 'procedural';
+  if (REFLECTION_TEXT_HINT.test(text)) return 'reflection';
+  if (EPISODIC_TEXT_HINT.test(text)) return 'episodic';
+  return 'semantic';
+}
+
+export function estimateImportedMemoryCriticality(input: {
+  type: MemoryType;
+  importance: number;
+  tags?: readonly string[];
+  text?: string;
+}): number {
+  const normalizedTags = normalizeMemoryTags(input.tags ?? []);
+  let score = 0;
+  if (input.type === 'boundary') score += 0.4;
+  if (input.type === 'relational') score += 0.2;
+  if (input.importance >= 0.85) score += 0.25;
+  if (normalizedTags.some(tag => CRITICAL_MEMORY_TAG_HINTS.has(tag))) score += 0.3;
+  if (input.text && BOUNDARY_TEXT_HINT.test(input.text)) score += 0.2;
+  return clampUnit(score, 0);
+}
+
+export function initializeImportedMemorySalience(input: {
+  importance?: number;
+  salience?: number;
+  type: MemoryType;
+  tags?: readonly string[];
+  text?: string;
+  extractedAt?: number;
+  lastAccessed?: number;
+  now?: number;
+}): number {
+  const importance = clampUnit(input.importance ?? 0.5, 0.5);
+  if (Number.isFinite(input.salience)) {
+    return clampUnit(input.salience ?? importance, importance);
+  }
+
+  const now = Number.isFinite(input.now) ? input.now as number : Date.now();
+  const recencyTimestamp = Number.isFinite(input.lastAccessed)
+    ? input.lastAccessed as number
+    : (Number.isFinite(input.extractedAt) ? input.extractedAt as number : now);
+  const ageMs = Math.max(0, now - recencyTimestamp);
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  const recencyWeight = 1 / (1 + ageDays / 28);
+  const criticality = estimateImportedMemoryCriticality({
+    type: input.type,
+    importance,
+    tags: input.tags,
+    text: input.text,
+  });
+
+  const recencyFloor = ageDays > 365 ? 0.18 : ageDays > 180 ? 0.28 : 0.38;
+  const importanceFloor = criticality >= 0.75 ? 0.72 : Math.max(recencyFloor, importance * 0.4);
+  const blendedScore = (
+    importance * 0.55
+    + recencyWeight * 0.3
+    + criticality * 0.15
+  );
+
+  return clampUnit(Math.max(importanceFloor, blendedScore), importanceFloor);
 }
 
 export function isDurableMemory(memory: Pick<PurrMemory, 'tags' | 'retentionClass'>): boolean {

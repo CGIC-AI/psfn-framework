@@ -209,6 +209,33 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).not.toHaveBeenCalled();
     });
 
+    it('merges provenance references when deduplicating', async () => {
+      const existing = makeExistingMemory({
+        type: 'semantic',
+        salience: 0.62,
+        sourceRef: 'seed:memory',
+        provenanceRefs: ['legacy:old#1'],
+      });
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+
+      const result = await writer.write({
+        text: 'An existing memory with new source',
+        type: 'semantic',
+        salience: 0.9,
+        sourceRef: 'legacy:new#2',
+        provenanceRefs: ['legacy:new#2'],
+      });
+
+      expect(result.action).toBe('deduplicated');
+      expect(store.updateMemory).toHaveBeenCalledWith('existing-001', expect.objectContaining({
+        salience: 0.9,
+        provenanceRefs: expect.arrayContaining(['legacy:old#1', 'seed:memory', 'legacy:new#2']),
+      }));
+      expect(result.memory.provenanceRefs).toEqual(
+        expect.arrayContaining(['legacy:old#1', 'seed:memory', 'legacy:new#2']),
+      );
+    });
+
     it('does not deduplicate across different canonical contacts', async () => {
       const existing = makeExistingMemory({
         type: 'semantic',

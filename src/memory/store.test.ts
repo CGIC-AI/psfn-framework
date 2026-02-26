@@ -242,6 +242,20 @@ describe('MemoryStore', () => {
       expect(mem?.contactId).toBe('contact-canonical-1');
     });
 
+    it('stores and retrieves provenance refs', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m-provenance', 'Imported provenance memory', {
+          sourceRef: 'legacy:source#0',
+          provenanceRefs: ['legacy:source#0', 'backup:archive#3'],
+        }),
+        emb,
+      );
+
+      const mem = store.getById('m-provenance');
+      expect(mem?.provenanceRefs).toEqual(['legacy:source#0', 'backup:archive#3']);
+    });
+
     it('getMemoriesByContact returns active memories for canonical contact', () => {
       const embA = makeEmbedding(1);
       const embB = makeEmbedding(2);
@@ -360,6 +374,7 @@ describe('MemoryStore', () => {
       const columns = legacyDb.prepare('PRAGMA table_info(l2_memories)')
         .all() as Array<{ name: string }>;
       expect(columns.some(column => column.name === 'contact_id')).toBe(true);
+      expect(columns.some(column => column.name === 'provenance_refs')).toBe(true);
 
       const emb = makeEmbedding(1);
       migratedStore.insertMemory(

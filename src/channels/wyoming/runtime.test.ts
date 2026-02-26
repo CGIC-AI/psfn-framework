@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WyomingRuntime } from './runtime.js';
 import type { WyomingFrame, WyomingTransportSession } from './protocol.js';
+import {
+  createWyomingHandleServiceAdapter,
+  createWyomingServiceRegistry,
+} from './services/index.js';
 
 function createTransportSession(connectionId: string): WyomingTransportSession {
   return {
@@ -254,6 +258,113 @@ describe('WyomingRuntime', () => {
           session_id: 'session-z',
         },
       },
+    ]);
+  });
+
+  it('routes service events through Wyoming service registry', async () => {
+    const emitted: WyomingFrame[] = [];
+    const handleMessage = vi.fn(async () => ({
+      content: 'handled response',
+      channelId: 'api:wyoming:unknown:conn-7',
+      metadata: {
+        model: 'model-a',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 20,
+      },
+    }));
+
+    const runtime = new WyomingRuntime({
+      info: {
+        name: 'psfn-wyoming',
+        version: '1.0.0',
+        services: [],
+      },
+      serviceRegistry: createWyomingServiceRegistry([
+        createWyomingHandleServiceAdapter({ handleMessage }),
+      ]),
+      emitFrame: async (_session, frame) => {
+        emitted.push(frame);
+      },
+    });
+
+    const transportSession = createTransportSession('conn-7');
+    await runtime.handleFrame(transportSession, {
+      type: 'session.start',
+      data: { session_id: 'session-service' },
+    });
+    emitted.length = 0;
+
+    await runtime.handleFrame(transportSession, {
+      type: 'transcript',
+      data: {
+        session_id: 'session-service',
+        text: 'hello',
+      },
+    });
+
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: 'handled',
+        data: expect.objectContaining({
+          session_id: 'session-service',
+          text: 'handled response',
+        }),
+      }),
+    ]);
+  });
+
+  it('returns deterministic not_supported errors for disabled service families', async () => {
+    const emitted: WyomingFrame[] = [];
+    const runtime = new WyomingRuntime({
+      info: {
+        name: 'psfn-wyoming',
+        version: '1.0.0',
+        services: [],
+      },
+      serviceRegistry: createWyomingServiceRegistry([
+        createWyomingHandleServiceAdapter({
+          handleMessage: vi.fn(async () => ({
+            content: 'noop',
+            channelId: 'api:wyoming:unknown:conn-8',
+            metadata: {
+              model: 'model-b',
+              inputTokens: 0,
+              outputTokens: 0,
+              durationMs: 1,
+            },
+          })),
+        }),
+      ]),
+      emitFrame: async (_session, frame) => {
+        emitted.push(frame);
+      },
+    });
+
+    const transportSession = createTransportSession('conn-8');
+    await runtime.handleFrame(transportSession, {
+      type: 'session.start',
+      data: { session_id: 'session-tts-disabled' },
+    });
+    emitted.length = 0;
+
+    await runtime.handleFrame(transportSession, {
+      type: 'synthesize',
+      data: {
+        session_id: 'session-tts-disabled',
+        text: 'hello world',
+      },
+    });
+
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          code: 'not_supported',
+          service: 'tts',
+        }),
+      }),
     ]);
   });
 });

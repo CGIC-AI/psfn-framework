@@ -39,6 +39,9 @@ const CAPTURE_SILENCE_MS = 1_200;
 const MIN_PCM_BYTES = 32_000;
 const STT_STREAM_CHUNK_BYTES = 3_840;
 const UNKNOWN_VOICE_ERROR_CODE = 'VOICE_PIPELINE_ERROR';
+const DECRYPT_RECOVERY_COOLDOWN_MS = 1_500;
+const DECRYPT_RECOVERY_MAX_REJOINS = 3;
+const DECRYPT_RECOVERY_WINDOW_MS = 5 * 60_000;
 
 type VoiceTurnErrorStage = 'ingest' | 'stt' | 'llm' | 'tts' | 'unknown';
 type VoiceTurnObservationKind = 'silence' | 'empty-transcript' | 'empty-response' | 'playback-error';
@@ -101,6 +104,10 @@ export class DiscordVoiceRuntime {
   private connectionGeneration = 0;
   private connectionStateListener: ((oldState: VoiceConnection['state'], newState: VoiceConnection['state']) => void) | null = null;
   private activeTurn: ActiveVoiceTurn | null = null;
+  private decryptFailureGeneration = 0;
+  private decryptFailureCount = 0;
+  private decryptRecoveryAttempts: number[] = [];
+  private decryptRecoveryInFlight = false;
 
   constructor({ client, config, eventBus, getHandler }: DiscordVoiceRuntimeConfig) {
     this.client = client;
@@ -243,6 +250,7 @@ export class DiscordVoiceRuntime {
 
     this.player = player;
     this.activeChannel = channel;
+    this.resetDecryptFailureTracking(generation);
 
     this.speakingListener = (userId: string) => {
       if (userId !== this.targetUserId || this.capturing || this.activeTurn) return;
@@ -294,6 +302,8 @@ export class DiscordVoiceRuntime {
     this.activeTurn = null;
     this.activeTurnId = null;
     this.capturing = false;
+    this.decryptFailureGeneration = 0;
+    this.decryptFailureCount = 0;
 
     if (prevChannel) {
       await this.eventBus.emit('channel.voice.end', {
@@ -988,6 +998,191 @@ export class DiscordVoiceRuntime {
         timestampMs: Date.now(),
       }).catch(() => undefined);
     }
+
+    this.trackDecryptFailure({
+      stage,
+      code,
+      errorText,
+    });
+  }
+
+  private resetDecryptFailureTracking(generation: number): void {
+    this.decryptFailureGeneration = generation;
+    this.decryptFailureCount = 0;
+  }
+
+  private trackDecryptFailure(params: {
+    stage: VoiceTurnErrorStage;
+    code: string;
+    errorText: string;
+  }): void {
+    if (!this.connection || !this.activeChannel || this.decryptRecoveryInFlight) {
+      return;
+    }
+
+    const { stage, code, errorText } = params;
+    if (!this.isRecoverableDecryptFailure(stage, code, errorText)) {
+      return;
+    }
+
+    const generation = this.connectionGeneration;
+    if (this.decryptFailureGeneration !== generation) {
+      this.resetDecryptFailureTracking(generation);
+    }
+
+    this.decryptFailureCount += 1;
+
+    log.warn('Voice decrypt/ingest failure detected', {
+      guildId: this.activeChannel.guild.id,
+      channelId: this.activeChannel.id,
+      userId: this.targetUserId,
+      generation,
+      failureCount: this.decryptFailureCount,
+      failureTolerance: this.decryptionFailureTolerance,
+      code,
+      error: errorText,
+    });
+
+    if (this.decryptFailureCount <= this.decryptionFailureTolerance) {
+      return;
+    }
+
+    const recoveryChannel = this.activeChannel;
+    if (!recoveryChannel) {
+      return;
+    }
+
+    void this.startDecryptRecovery({
+      channel: recoveryChannel,
+      generation,
+      failureCount: this.decryptFailureCount,
+    });
+  }
+
+  private isRecoverableDecryptFailure(stage: VoiceTurnErrorStage, code: string, errorText: string): boolean {
+    if (stage !== 'ingest') {
+      return false;
+    }
+
+    const normalized = `${code} ${errorText}`.toLowerCase();
+    if (normalized.includes('abort') || normalized.includes('cancel')) {
+      return false;
+    }
+
+    return ['decrypt', 'decode', 'opus', 'dave'].some((token) => normalized.includes(token));
+  }
+
+  private pruneDecryptRecoveryAttempts(nowMs: number): void {
+    this.decryptRecoveryAttempts = this.decryptRecoveryAttempts
+      .filter((attemptMs) => nowMs - attemptMs <= DECRYPT_RECOVERY_WINDOW_MS);
+  }
+
+  private async startDecryptRecovery(params: {
+    channel: VoiceBasedChannel;
+    generation: number;
+    failureCount: number;
+  }): Promise<void> {
+    const { channel, generation, failureCount } = params;
+    if (this.decryptRecoveryInFlight) {
+      return;
+    }
+
+    this.decryptRecoveryInFlight = true;
+
+    try {
+      const nowMs = Date.now();
+      this.pruneDecryptRecoveryAttempts(nowMs);
+
+      if (this.decryptRecoveryAttempts.length >= DECRYPT_RECOVERY_MAX_REJOINS) {
+        const exhaustedPayload = {
+          guildId: channel.guild.id,
+          channelId: channel.id,
+          userId: this.targetUserId,
+          generation,
+          failureCount,
+          tolerance: this.decryptionFailureTolerance,
+          maxAttempts: DECRYPT_RECOVERY_MAX_REJOINS,
+          windowMs: DECRYPT_RECOVERY_WINDOW_MS,
+          timestampMs: nowMs,
+        };
+        const errorText = (
+          `Voice decrypt recovery exhausted after ${DECRYPT_RECOVERY_MAX_REJOINS} rejoins ` +
+          `in ${Math.floor(DECRYPT_RECOVERY_WINDOW_MS / 1_000)} seconds`
+        );
+
+        await this.eventBus.emit('voice.connection.recovery.exhausted', exhaustedPayload);
+        await this.eventBus.emit('channel.voice.error', {
+          guildId: channel.guild.id,
+          channelId: channel.id,
+          userId: this.targetUserId,
+          error: errorText,
+        });
+
+        log.error('Voice decrypt recovery exhausted; operator intervention required', {
+          ...exhaustedPayload,
+          error: errorText,
+        });
+        await this.leaveChannel('decrypt-recovery-exhausted');
+        return;
+      }
+
+      const attempt = this.decryptRecoveryAttempts.length + 1;
+      this.decryptRecoveryAttempts.push(nowMs);
+
+      const recoveryPayload = {
+        guildId: channel.guild.id,
+        channelId: channel.id,
+        userId: this.targetUserId,
+        generation,
+        failureCount,
+        tolerance: this.decryptionFailureTolerance,
+        attempt,
+        maxAttempts: DECRYPT_RECOVERY_MAX_REJOINS,
+        windowMs: DECRYPT_RECOVERY_WINDOW_MS,
+        cooldownMs: DECRYPT_RECOVERY_COOLDOWN_MS,
+        timestampMs: nowMs,
+      };
+
+      await this.eventBus.emit('voice.connection.recovery', recoveryPayload);
+      log.warn('Recovering voice connection after repeated decrypt failures', recoveryPayload);
+
+      await this.leaveChannel('decrypt-recovery');
+      await this.wait(DECRYPT_RECOVERY_COOLDOWN_MS);
+
+      if (this.activeChannel) {
+        log.info('Skipping decrypt recovery rejoin because another channel is already active', {
+          ...recoveryPayload,
+          activeChannelId: this.activeChannel.id,
+        });
+        return;
+      }
+
+      await this.joinChannel(channel);
+      log.info('Voice connection recovered after decrypt failures', recoveryPayload);
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      log.error('Voice decrypt recovery failed', {
+        guildId: channel.guild.id,
+        channelId: channel.id,
+        userId: this.targetUserId,
+        generation,
+        error: errorText,
+      });
+      await this.eventBus.emit('channel.voice.error', {
+        guildId: channel.guild.id,
+        channelId: channel.id,
+        userId: this.targetUserId,
+        error: `Voice decrypt recovery failed: ${errorText}`,
+      });
+    } finally {
+      this.decryptRecoveryInFlight = false;
+    }
+  }
+
+  private async wait(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
   }
 
   private classifyTurnStatus(error: unknown): 'completed' | 'cancelled' | 'timeout' | 'error' {

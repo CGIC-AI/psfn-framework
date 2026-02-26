@@ -32,6 +32,12 @@ import { loadModelsConfig } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
+import { resolveBackupRuntimeConfig } from './backup/config.js';
+import { registerScheduledBackupTask } from './backup/service.js';
+import {
+  runDatabaseIntegrityCheck,
+  validateEmbeddingDimensions,
+} from './backup/startup-checks.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -176,6 +182,9 @@ export class SubstrateRuntime implements Lifecycle {
       dataDir: this.config.dataDir,
       seedDir: process.env.CONFIG_DIR,
     });
+    const backupConfig = resolveBackupRuntimeConfig({
+      dataDir: this.config.dataDir,
+    });
     this.config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
     this.capabilityRuntime = new CapabilityRuntime({
       dataDir: this.config.dataDir,
@@ -191,6 +200,8 @@ export class SubstrateRuntime implements Lifecycle {
     this.db = new Database(this.config.databasePath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
+    runDatabaseIntegrityCheck(this.db);
+    log.info('SQLite integrity check passed');
 
     // Load identity
     const cardVersionStore = new CharacterCardVersionStore(
@@ -205,7 +216,8 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Initialize core components
     this.llmClient = new LLMClient(this.config);
-    this.sessionStore = new SessionStore(join(this.config.dataDir, 'sessions'));
+    const sessionsDir = join(this.config.dataDir, 'sessions');
+    this.sessionStore = new SessionStore(sessionsDir);
     this.sessionManager = new SessionManager(
       this.sessionStore,
       this.config,
@@ -214,7 +226,7 @@ export class SubstrateRuntime implements Lifecycle {
     );
 
     // User continuity store — cross-channel context carryover
-    const continuityStore = new UserContinuityStore(join(this.config.dataDir, 'sessions'));
+    const continuityStore = new UserContinuityStore(sessionsDir);
     this.sessionManager.continuityStore = continuityStore;
     log.info('User continuity store enabled');
 
@@ -235,6 +247,16 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims);
+    const embeddingDimensionCheck = validateEmbeddingDimensions(
+      this.db,
+      embeddingProvider.dims,
+    );
+    if (embeddingDimensionCheck.status === 'mismatch') {
+      log.warn('Embedding dimension mismatch detected at startup', {
+        configuredDims: embeddingDimensionCheck.configuredDims,
+        storedDims: embeddingDimensionCheck.storedDims,
+      });
+    }
 
     // Agent loop
     this.agentLoop = new AgentLoop(
@@ -328,6 +350,18 @@ export class SubstrateRuntime implements Lifecycle {
       intervalMs: this.config.maintenanceIntervalMs,
       handler: () => this.salienceDecay.run(),
       state: 'idle',
+    });
+    registerScheduledBackupTask({
+      scheduler: this.scheduler,
+      db: this.db,
+      databasePath: this.config.databasePath,
+      sessionsDir,
+      config: backupConfig,
+    });
+    log.info('Scheduled backups enabled', {
+      intervalMs: backupConfig.intervalMs,
+      retentionCount: backupConfig.retentionCount,
+      backupRootDir: backupConfig.rootDir,
     });
     this.scheduler.registerHeartbeat(async () => {
       const now = Date.now();

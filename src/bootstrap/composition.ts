@@ -108,6 +108,7 @@ export interface MemoryRuntimeOptions {
   agentLoop: SubstrateAgent;
   llmProvider: LLMProvider;
   sessionManager: SessionManager;
+  sessionStore?: SessionStore | null;
   memoryStore: MemoryStore;
   embeddingService: EmbeddingService;
   eventBus: EventBus;
@@ -122,14 +123,14 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.memoryStore,
       options.embeddingService,
       options.config,
-      undefined,
+      options.eventBus,
       options.contactStore ?? null,
     )
     : new MemoryRetriever(
       options.memoryStore,
       options.embeddingService,
       undefined,
-      undefined,
+      options.eventBus,
       options.contactStore ?? null,
     );
 
@@ -142,7 +143,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.eventBus,
       options.config,
       options.promptRegistry ?? null,
-      undefined,
+      options.sessionStore ?? null,
       options.contactStore ?? null,
     )
     : new MemoryExtractor(
@@ -153,7 +154,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.eventBus,
       undefined,
       options.promptRegistry ?? null,
-      undefined,
+      options.sessionStore ?? null,
       options.contactStore ?? null,
     );
   options.sessionManager.setPreCompactionExtractionHandler(async ({

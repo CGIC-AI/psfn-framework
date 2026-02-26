@@ -9,19 +9,14 @@ import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
 import { SessionManager } from './session/manager.js';
-import { UserContinuityStore } from './session/continuity.js';
 import { SubstrateAgent } from './agent/substrate-agent.js';
 import { DiscordAdapter } from './channels/discord/adapter.js';
 import { TelegramAdapter } from './channels/telegram/adapter.js';
 import { MemoryStore } from './memory/store.js';
-import { EmbeddingProvider } from './memory/embedding.js';
-import { MemoryRetriever } from './memory/retrieval.js';
 import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { ShardManager } from './shards/manager.js';
-import { createSpawnShardTool } from './shards/tools.js';
-import { createThinkTool } from './repl/tools.js';
 import { ApiServer } from './channels/api/server.js';
 import {
   CachedActiveHealthProbe,
@@ -62,6 +57,13 @@ import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
+import {
+  composeSessionRuntime,
+  createEmbeddingProviderFromEnv,
+  composeAgentLoop,
+  wireMemoryRuntime,
+  wireShardAndThinkRuntime,
+} from './bootstrap/composition.js';
 import {
   wirePromptRuntime,
   wireCharacterCardRuntime,
@@ -234,18 +236,18 @@ export class SubstrateRuntime implements Lifecycle {
     // Initialize core components
     this.llmClient = new LLMClient(this.config);
     const sessionsDir = join(this.config.dataDir, 'sessions');
-    this.sessionStore = new SessionStore(sessionsDir);
-    this.sessionManager = new SessionManager(
-      this.sessionStore,
-      this.config,
-      this.eventBus,
+    const sessionComposition = composeSessionRuntime({
+      config: this.config,
+      eventBus: this.eventBus,
+      sessionsDir,
+      enableContinuity: true,
       promptRegistry,
-    );
-
-    // User continuity store — cross-channel context carryover
-    const continuityStore = new UserContinuityStore(sessionsDir);
-    this.sessionManager.continuityStore = continuityStore;
-    log.info('User continuity store enabled');
+    });
+    this.sessionStore = sessionComposition.sessionStore;
+    this.sessionManager = sessionComposition.sessionManager;
+    if (sessionComposition.continuityStore) {
+      log.info('User continuity store enabled');
+    }
 
     const uncleanChannels = this.sessionStore.getUncleanShutdownChannels();
     if (uncleanChannels.length > 0) {
@@ -257,11 +259,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.crashRecoveryQueue = this.sessionStore.getCrashRecoveryExtractionCandidates();
 
     // Embedding provider (Ollama local)
-    const embeddingProvider = new EmbeddingProvider({
-      ollamaUrl: process.env.OLLAMA_URL,
-      model: process.env.EMBEDDING_MODEL,
-      dims: process.env.EMBEDDING_DIMS ? parseInt(process.env.EMBEDDING_DIMS, 10) : undefined,
-    });
+    const embeddingProvider = createEmbeddingProviderFromEnv();
 
     this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims);
     const embeddingDimensionCheck = validateEmbeddingDimensions(
@@ -280,14 +278,14 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Agent loop
-    this.agentLoop = new SubstrateAgent(
-      this.eventBus,
-      this.llmClient,
-      this.sessionManager,
+    this.agentLoop = composeAgentLoop({
+      eventBus: this.eventBus,
+      llmProvider: this.llmClient,
+      sessionManager: this.sessionManager,
       systemPrompt,
-      this.config,
-      { characterName: card.data.name },
-    );
+      characterName: card.data.name,
+      config: this.config,
+    });
     this.agentLoop.scratchpadProvider = this.memoryStore;
     this.agentLoop.setCapabilityRuntime(this.capabilityRuntime);
     const safeguardAuditTrail = createSafeguardAuditTrail(this.config.dataDir);
@@ -329,36 +327,17 @@ export class SubstrateRuntime implements Lifecycle {
       process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID,
     );
 
-    this.agentLoop.memoryProvider = new MemoryRetriever(
-      this.memoryStore,
-      embeddingProvider,
-      this.config,
-      this.eventBus,
-      contactStore,
-    );
-
-    this.memoryExtractor = new MemoryExtractor(
-      this.llmClient,
-      this.sessionManager,
-      this.memoryStore,
-      embeddingProvider,
-      this.eventBus,
-      this.config,
+    this.memoryExtractor = wireMemoryRuntime({
+      agentLoop: this.agentLoop,
+      llmProvider: this.llmClient,
+      sessionManager: this.sessionManager,
+      sessionStore: this.sessionStore,
+      memoryStore: this.memoryStore,
+      embeddingService: embeddingProvider,
+      eventBus: this.eventBus,
+      config: this.config,
       promptRegistry,
-      this.sessionStore,
       contactStore,
-    );
-    this.agentLoop.memoryExtractor = this.memoryExtractor;
-    this.sessionManager.setPreCompactionExtractionHandler(async ({
-      channelId,
-      entries,
-      canonicalContactId,
-    }) => {
-      await this.memoryExtractor.queueCompactionExtraction(
-        channelId,
-        entries,
-        canonicalContactId,
-      );
     });
 
     this.salienceDecay = new SalienceDecay(this.memoryStore);
@@ -397,39 +376,31 @@ export class SubstrateRuntime implements Lifecycle {
     log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via Ollama)`);
 
     // Shard manager — allows Purrsephone to spawn parallel sub-agents
-    this.shardManager = new ShardManager({
-      eventBus: this.eventBus,
-      llmProvider: this.llmClient,
-      sessionStore: this.sessionStore,
-      embeddingService: embeddingProvider,
-      memoryProvider: this.agentLoop.memoryProvider,
-      config: this.config,
-      parentSystemPrompt: systemPrompt,
-      toolCatalogProvider: () => this.agentLoop.getToolCatalog(),
-      auditTrail: safeguardAuditTrail,
-    });
-    this.agentLoop.registerTool(createSpawnShardTool(this.shardManager));
     this.moduleLoader = new ModuleLoader({
       eventBus: this.eventBus,
       registerTool: (tool, category) => this.agentLoop.registerTool(tool, category),
     });
 
-    // Think tool — RLM+REPL sandbox for deep reasoning
     const replConfig = buildReplConfig(this.config);
-    this.agentLoop.registerTool(createThinkTool({
+    this.shardManager = wireShardAndThinkRuntime({
+      agentLoop: this.agentLoop,
+      eventBus: this.eventBus,
       llmProvider: this.llmClient,
       embeddingService: embeddingProvider,
+      sessionStore: this.sessionStore,
       memoryStore: this.memoryStore,
       sessionManager: this.sessionManager,
+      config: this.config,
+      parentSystemPrompt: systemPrompt,
       scheduler: this.scheduler,
-      eventBus: this.eventBus,
+      replConfig,
+      shardAuditTrail: safeguardAuditTrail,
       getCapabilityTier: () => this.capabilityRuntime.getTier(),
       moduleInstallConfirmationQueue: cardProposalQueue,
       onModuleRegistryMutation: async (mutation) => {
         await this.moduleLoader?.applyRegistryMutation(mutation);
       },
-      config: replConfig,
-    }));
+    });
 
     // Memory write/import tools — intentional memory creation
     const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);

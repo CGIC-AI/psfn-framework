@@ -8,6 +8,7 @@ const navItems = [
   { href: '/shards', label: 'Active Branches', id: 'shards' },
   { href: '/contacts', label: 'Garden Visitors', id: 'contacts' },
   { href: '/chat', label: 'Garden Chat', id: 'chat' },
+  { href: '/confirmations', label: 'Confirmations', id: 'confirmations' },
   { href: '/identity', label: 'Identity', id: 'identity' },
   { href: '/settings', label: 'Settings', id: 'settings' },
   { href: '/skills', label: 'Skills', id: 'skills' },

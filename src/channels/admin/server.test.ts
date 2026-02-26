@@ -23,6 +23,7 @@ import type { SkillSnapshot } from '../../skills/types.js';
 import type { AdminChatBootstrapResponse } from './chat/index.js';
 import { classifyChannel } from '../../trust/policy.js';
 import { resetRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
+import type { ConfirmationQueueEntry, ConfirmationResolveParams } from '../../gateway/protocol.js';
 
 // ── Helpers ──
 
@@ -255,6 +256,9 @@ describe('AdminServer', () => {
   let server: AdminServer;
   let port: number;
   let skillsRuntimeInvalidate: ReturnType<typeof vi.fn>;
+  let confirmationEntries: ConfirmationQueueEntry[];
+  let confirmationListMock: ReturnType<typeof vi.fn>;
+  let confirmationResolveMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-test-'));
@@ -297,6 +301,44 @@ describe('AdminServer', () => {
     scheduler.registerHeartbeat(() => {});
 
     skillsRuntimeInvalidate = vi.fn();
+    confirmationEntries = [];
+    confirmationListMock = vi.fn().mockImplementation(async () => ({
+      entries: confirmationEntries,
+    }));
+    confirmationResolveMock = vi.fn().mockImplementation(async (params: ConfirmationResolveParams) => {
+      const index = confirmationEntries.findIndex((entry) => entry.id === params.id);
+      if (index === -1) {
+        return {
+          id: params.id,
+          status: 'not_found',
+          message: 'Confirmation request not found.',
+          executed: false,
+        };
+      }
+      confirmationEntries.splice(index, 1);
+      if (params.decision === 'deny') {
+        return {
+          id: params.id,
+          status: 'denied',
+          message: 'Action denied by operator.',
+          executed: false,
+        };
+      }
+      if (params.decision === 'modify') {
+        return {
+          id: params.id,
+          status: 'modified',
+          message: 'Action executed with modified parameters.',
+          executed: true,
+        };
+      }
+      return {
+        id: params.id,
+        status: 'approved',
+        message: 'Action approved and executed.',
+        executed: true,
+      };
+    });
 
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
     shardManager = new ShardManager({
@@ -328,6 +370,10 @@ describe('AdminServer', () => {
         getSnapshot: () => testSkillSnapshot,
         invalidate: skillsRuntimeInvalidate,
       } as any,
+      confirmationQueueApi: {
+        listConfirmationQueue: () => confirmationListMock(),
+        resolveConfirmationQueue: (params) => confirmationResolveMock(params),
+      },
     });
     await server.init();
     await server.start();
@@ -703,6 +749,72 @@ describe('AdminServer', () => {
       expect(payload.defaultSessionId).toBe('discord:42');
       expect(payload.defaultAuthorName).toBe('Operator');
       expect(payload.defaultAuthorId).toBe('operator-42');
+    });
+  });
+
+  describe('Confirmations', () => {
+    it('returns confirmations page and shows navigation link', async () => {
+      const page = await request(port, 'GET', '/confirmations');
+      expect(page.status).toBe(200);
+      expect(page.body).toContain('Confirmations');
+      expect(page.body).toContain('/api/confirmations/list');
+
+      const dashboard = await request(port, 'GET', '/');
+      expect(dashboard.body).toContain('href="/confirmations"');
+    });
+
+    it('renders queued actions with approve/deny/modify controls', async () => {
+      confirmationEntries = [
+        {
+          id: 'confirm-1',
+          method: 'fs.write',
+          action: 'write',
+          scope: '/tmp/queued.txt',
+          params: { path: '/tmp/queued.txt', content: 'hello' },
+          companionReason: 'Need to save generated output',
+          requestedAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+        },
+      ];
+
+      const res = await request(port, 'GET', '/confirmations');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('confirm-1');
+      expect(res.body).toContain('name="decision" value="approve"');
+      expect(res.body).toContain('name="decision" value="deny"');
+      expect(res.body).toContain('name="decision" value="modify"');
+      expect(res.body).toContain('name="modifiedParamsJson"');
+    });
+
+    it('resolves confirmations through POST endpoint', async () => {
+      confirmationEntries = [
+        {
+          id: 'confirm-2',
+          method: 'web.fetch',
+          action: 'fetch',
+          scope: 'https://example.com',
+          params: { url: 'https://example.com' },
+          companionReason: 'Research context',
+          requestedAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+        },
+      ];
+
+      const body = new URLSearchParams({
+        id: 'confirm-2',
+        decision: 'deny',
+      }).toString();
+      const res = await request(port, 'POST', '/api/confirmations/resolve', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Action denied by operator.');
+      expect(confirmationResolveMock).toHaveBeenCalledWith({
+        id: 'confirm-2',
+        decision: 'deny',
+      });
+      expect(confirmationEntries).toEqual([]);
     });
   });
 

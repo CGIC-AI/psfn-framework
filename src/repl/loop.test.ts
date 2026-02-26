@@ -260,6 +260,30 @@ describe('runRLMLoop', () => {
     expect(result.budgetStatus.exceeded).toBeNull();
   });
 
+  it('enforces max tool-call budget across sandbox helper calls', async () => {
+    const llm = Object.assign(
+      sequentialLLM([
+        '```repl\nconst a = await read_file("a.txt"); const b = await read_file("b.txt"); print(a); print(b);\n```',
+        'FINAL("done")',
+      ]),
+      {
+        fsRead: vi.fn(async (path: string) => `content:${path}`),
+      },
+    ) as LLMProvider;
+
+    const deps = makeDeps(llm, {
+      config: makeConfig({ maxToolCalls: 1, maxIterations: 5 }),
+    });
+    const result = await runRLMLoop('Tool budget test', deps);
+
+    expect(result.truncated).toBe(true);
+    expect(result.budgetStatus.exceeded).toBe('tool-call limit');
+    expect(result.budgetStatus.toolCalls).toBe(1);
+    expect(result.steps[0].output).toContain('max tool calls reached');
+    expect((llm as any).fsRead).toHaveBeenCalledTimes(1);
+    expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
   it('includes variable tracking in feedback', async () => {
     const llm = sequentialLLM([
       '```repl\nvar myVar = 42;\n```',

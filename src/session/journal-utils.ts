@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import type { CompactionSummary, JournalEntry, SessionEntry } from './types.js';
+import type { CompactionSummary, JournalEntry, JournalMarkerType, SessionEntry } from './types.js';
 
 export interface QuarantinedJournalEntry {
   lineNumber: number;
@@ -34,6 +34,14 @@ export interface JournalIntegrityVerificationResult {
   verified: boolean;
   observedHmac: string | null;
   reason?: string;
+}
+
+export interface JournalMarkerEntry {
+  id: number;
+  channelId: string;
+  marker: JournalMarkerType;
+  timestamp: number;
+  coveredUpTo?: number;
 }
 
 const DEFAULT_KEY_VERSION = 'v1';
@@ -75,8 +83,8 @@ function parseJournalLine(line: string): JournalEntry {
   }
 
   const entry = parsed as Partial<JournalEntry>;
-  if (entry.type !== 'message' && entry.type !== 'compaction') {
-    throw new Error('entry type must be "message" or "compaction"');
+  if (entry.type !== 'message' && entry.type !== 'compaction' && entry.type !== 'marker') {
+    throw new Error('entry type must be "message", "compaction", or "marker"');
   }
   if (typeof entry.id !== 'number' || !Number.isFinite(entry.id)) {
     throw new Error('entry id must be a finite number');
@@ -86,6 +94,16 @@ function parseJournalLine(line: string): JournalEntry {
   }
   if (typeof entry.timestamp !== 'number' || !Number.isFinite(entry.timestamp)) {
     throw new Error('entry timestamp must be a finite number');
+  }
+  if (entry.type === 'marker') {
+    if (entry.marker !== 'extraction' && entry.marker !== 'graceful_shutdown') {
+      throw new Error('marker entry marker must be "extraction" or "graceful_shutdown"');
+    }
+    if (entry.marker === 'extraction') {
+      if (typeof entry.coveredUpTo !== 'number' || !Number.isFinite(entry.coveredUpTo)) {
+        throw new Error('extraction marker entry coveredUpTo must be a finite number');
+      }
+    }
   }
 
   return entry as JournalEntry;
@@ -351,6 +369,19 @@ export function journalToCompactionSummary(entry: JournalEntry): CompactionSumma
   };
 }
 
+export function journalToMarkerEntry(entry: JournalEntry): JournalMarkerEntry | null {
+  if (entry.type !== 'marker') return null;
+  if (entry.marker !== 'extraction' && entry.marker !== 'graceful_shutdown') return null;
+
+  return {
+    id: entry.id,
+    channelId: entry.channelId,
+    marker: entry.marker,
+    timestamp: entry.timestamp,
+    coveredUpTo: entry.coveredUpTo,
+  };
+}
+
 export function buildMessageJournalEntry(id: number, entry: Omit<SessionEntry, 'id'>): JournalEntry {
   return {
     type: 'message',
@@ -381,6 +412,36 @@ export function buildCompactionJournalEntry(
     channelId,
     summary,
     coveredUpTo,
+    timestamp,
+  };
+}
+
+export function buildExtractionMarkerJournalEntry(
+  id: number,
+  channelId: string,
+  coveredUpTo: number,
+  timestamp: number,
+): JournalEntry {
+  return {
+    type: 'marker',
+    id,
+    channelId,
+    marker: 'extraction',
+    coveredUpTo,
+    timestamp,
+  };
+}
+
+export function buildGracefulShutdownMarkerJournalEntry(
+  id: number,
+  channelId: string,
+  timestamp: number,
+): JournalEntry {
+  return {
+    type: 'marker',
+    id,
+    channelId,
+    marker: 'graceful_shutdown',
     timestamp,
   };
 }

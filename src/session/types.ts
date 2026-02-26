@@ -20,9 +20,11 @@ export interface CompactionSummary {
   createdAt: number;
 }
 
+export type JournalMarkerType = 'extraction' | 'graceful_shutdown';
+
 /** A single line in a channel's JSONL session file. */
 export interface JournalEntry {
-  type: 'message' | 'compaction';
+  type: 'message' | 'compaction' | 'marker';
   id: number;
   channelId: string;
   // message fields
@@ -37,7 +39,10 @@ export interface JournalEntry {
   channelVisibility?: string;
   // compaction fields
   summary?: string;
+  // compaction + extraction marker fields
   coveredUpTo?: number;
+  // marker fields
+  marker?: JournalMarkerType;
   // integrity fields
   _hmac?: string;
   _hmacKeyVersion?: string;

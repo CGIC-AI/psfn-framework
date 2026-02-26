@@ -79,6 +79,7 @@ export interface EventMap {
     channelId: string;
     count: number;
     triggerReason?: string;
+    coveredUpToMessageId?: number;
     parsedCount?: number;
     acceptedCount?: number;
     rejectedCount?: number;

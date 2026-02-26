@@ -1,9 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryExtractor, parseFactsXml, __test as extractionTestUtils } from './extraction.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { SessionStore } from '../session/store.js';
+
+const tempDirs: string[] = [];
 
 afterEach(() => {
   tokenTestUtils.resetTokenizerState();
+  extractionTestUtils.resetLastExtractionCount();
+  for (const dir of tempDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  tempDirs.length = 0;
 });
 
 describe('parseFactsXml', () => {
@@ -673,5 +684,141 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     await extractor.drain({ timeoutMs: 2_000 });
 
     expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe('MemoryExtractor crash recovery markers', () => {
+  it('writes an extraction marker after a successful extraction run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-extraction-marker-'));
+    tempDirs.push(dir);
+    const sessionStore = new SessionStore(dir);
+    const channelId = 'api:marker-test';
+
+    sessionStore.append({
+      channelId,
+      role: 'user',
+      content: 'User likes coffee',
+      timestamp: 1_000,
+    });
+    sessionStore.append({
+      channelId,
+      role: 'assistant',
+      content: 'Noted',
+      timestamp: 2_000,
+    });
+
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockImplementation((id: string, limit = 10) => sessionStore.getRecent(id, limit)),
+      getMessageCount: vi.fn().mockImplementation((id: string) => sessionStore.count(id)),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+      null,
+      sessionStore,
+    );
+
+    await extractor.extract(channelId);
+
+    const sessionFile = readdirSync(dir).find(file => file.endsWith('.jsonl') && !file.startsWith('user_'));
+    expect(sessionFile).toBeDefined();
+    const lines = readFileSync(join(dir, sessionFile!), 'utf-8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    const lastEntry = lines[lines.length - 1];
+    expect(lastEntry.type).toBe('marker');
+    expect(lastEntry.marker).toBe('extraction');
+    expect(lastEntry.coveredUpTo).toBe(2);
+  });
+
+  it('queues retroactive extraction using recovered un-extracted entries', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-extraction-recovery-'));
+    tempDirs.push(dir);
+    const sessionStore = new SessionStore(dir);
+    const channelId = 'api:crash-recovery';
+
+    sessionStore.append({
+      channelId,
+      role: 'user',
+      content: 'Message 1',
+      timestamp: 1_000,
+    });
+    sessionStore.insertExtractionMarker(channelId, 1, 1_500);
+    sessionStore.append({
+      channelId,
+      role: 'user',
+      content: 'Message 2',
+      timestamp: 2_000,
+    });
+    sessionStore.append({
+      channelId,
+      role: 'assistant',
+      content: 'Message 3',
+      timestamp: 3_000,
+    });
+
+    const candidates = sessionStore.getCrashRecoveryExtractionCandidates();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].unextractedEntries.map(entry => entry.content)).toEqual(['Message 2', 'Message 3']);
+
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockImplementation((id: string, limit = 10) => sessionStore.getRecent(id, limit)),
+      getMessageCount: vi.fn().mockImplementation((id: string) => sessionStore.count(id)),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+      null,
+      sessionStore,
+    );
+
+    await extractor.queueRetroactiveExtraction(channelId, candidates[0].unextractedEntries);
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    const prompt = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt as string;
+    expect(prompt).toContain('Message 2');
+    expect(prompt).toContain('Message 3');
+
+    const afterRecovery = sessionStore.getCrashRecoveryExtractionCandidates();
+    expect(afterRecovery).toHaveLength(0);
   });
 });

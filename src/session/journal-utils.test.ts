@@ -12,8 +12,11 @@ import {
   appendJournalEntry,
   buildSessionHmacKeyring,
   buildCompactionJournalEntry,
+  buildExtractionMarkerJournalEntry,
+  buildGracefulShutdownMarkerJournalEntry,
   buildMessageJournalEntry,
   journalToCompactionSummary,
+  journalToMarkerEntry,
   journalToSessionEntry,
   quarantineSidecarPath,
   parseJournalText,
@@ -105,6 +108,26 @@ describe('journal utils', () => {
       summary: 'sum',
       coveredUpTo: 2,
       createdAt: 5000,
+    });
+  });
+
+  it('builds and maps extraction + graceful shutdown marker entries', () => {
+    const extractionMarker = buildExtractionMarkerJournalEntry(4, 'ch1', 7, 6_000);
+    expect(journalToMarkerEntry(extractionMarker)).toEqual({
+      id: 4,
+      channelId: 'ch1',
+      marker: 'extraction',
+      timestamp: 6_000,
+      coveredUpTo: 7,
+    });
+
+    const shutdownMarker = buildGracefulShutdownMarkerJournalEntry(5, 'ch1', 7_000);
+    expect(journalToMarkerEntry(shutdownMarker)).toEqual({
+      id: 5,
+      channelId: 'ch1',
+      marker: 'graceful_shutdown',
+      timestamp: 7_000,
+      coveredUpTo: undefined,
     });
   });
 

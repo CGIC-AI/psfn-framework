@@ -812,6 +812,8 @@ describe('SubstrateAgent.handleMessage', () => {
       'TestUser',
       true,
     );
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[5]).toEqual({ isDirectMessage: true });
   });
 
   it('refreshes resolved model on next turn after config drift', async () => {

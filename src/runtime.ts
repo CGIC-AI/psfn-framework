@@ -473,11 +473,10 @@ export class SubstrateRuntime implements Lifecycle {
     this.stopDebugObserver?.();
     this.stopDebugObserver = undefined;
     this.scheduler?.stop();
-    const drained = await this.memoryExtractor?.stop({
-      timeoutMs: this.resolveExtractionDrainTimeoutMs(),
-    });
+    const timeoutMs = this.resolveExtractionDrainTimeoutMs();
+    const drained = await this.memoryExtractor?.stop({ timeoutMs });
     if (drained === false) {
-      log.warn('Proceeding with shutdown before extraction drain completed');
+      log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
     }
     const markedChannels = this.sessionStore?.markGracefulShutdownForActiveChannels();
     if ((markedChannels?.length ?? 0) > 0) {

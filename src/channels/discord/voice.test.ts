@@ -25,7 +25,28 @@ const connectorMocks = vi.hoisted(() => {
 
 const reliabilityMocks = vi.hoisted(() => {
   return {
-    runWithVoiceStageBudget: vi.fn(async ({ task }: { task: () => Promise<unknown> }) => task()),
+    runWithVoiceStageBudget: vi.fn(async ({
+      task,
+      signal,
+    }: {
+      task: () => Promise<unknown>;
+      signal?: AbortSignal;
+    }) => {
+      if (signal?.aborted) {
+        throw new Error('stage aborted');
+      }
+
+      if (!signal) {
+        return task();
+      }
+
+      return await Promise.race([
+        task(),
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('stage aborted')), { once: true });
+        }),
+      ]);
+    }),
     resolveVoiceReliabilityBudgets: vi.fn(() => ({
       ingest: { timeoutMs: 10, maxRetries: 0, baseDelayMs: 0 },
       stt: { timeoutMs: 10, maxRetries: 0, baseDelayMs: 0 },
@@ -286,6 +307,30 @@ async function flushAsyncWork(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('Timed out waiting for condition');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 function makeRuntimeHarness(
   eventBus: EventBus,
   handler: (...args: any[]) => any,
@@ -306,8 +351,13 @@ function makeRuntimeHarness(
   };
 
   (runtime as any).connection = {
+    destroy: vi.fn(),
     receiver: {
       subscribe: vi.fn(() => new PassThrough()),
+      speaking: {
+        on: vi.fn(),
+        off: vi.fn(),
+      },
     },
   };
   (runtime as any).player = player;
@@ -774,5 +824,108 @@ describe('DiscordVoiceRuntime', () => {
     expect((runtime as any).activeChannel?.id).toBe('channel-2');
     expect(stateEvents).toEqual([]);
     expect(endReasons).not.toContain('connection-destroyed');
+  });
+
+  it('cancels in-flight STT capture when leaving an active channel', async () => {
+    const transcriptRelease = createDeferred<void>();
+    const cancelStt = vi.fn(async () => {
+      transcriptRelease.resolve();
+    });
+
+    connectorMocks.sttConnector.startStream.mockResolvedValue({
+      transcripts: (async function* () {
+        await transcriptRelease.promise;
+      })(),
+      writeAudio: vi.fn(async () => {}),
+      endInput: vi.fn(async () => {}),
+      cancel: cancelStt,
+    });
+
+    const eventBus = new EventBus();
+    const handler = vi.fn();
+    const { runtime } = makeRuntimeHarness(eventBus, handler);
+    (runtime as any).decodeOpusToPcm = vi.fn(async () => Buffer.alloc(40_000, 1));
+
+    const utterancePromise = (runtime as any).handleUtterance();
+    await waitForCondition(() => connectorMocks.sttConnector.startStream.mock.calls.length === 1);
+
+    await (runtime as any).leaveChannel('target-left');
+    await utterancePromise.catch(() => undefined);
+
+    expect(cancelStt).toHaveBeenCalled();
+    expect(cancelStt.mock.calls.map((call) => call[0])).toContain('leave:target-left');
+    expect((runtime as any).capturing).toBe(false);
+    expect((runtime as any).activeTurnId).toBeNull();
+  });
+
+  it('cancels in-flight TTS synthesis when leaving during playback', async () => {
+    connectorMocks.sttConnector.startStream.mockResolvedValue({
+      transcripts: makeFinalTranscriptStream('hello world'),
+      writeAudio: vi.fn(async () => {}),
+      endInput: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+    });
+
+    const cancelTts = vi.fn(async () => {});
+    connectorMocks.ttsConnector.synthesizeStream.mockResolvedValue({
+      audio: makeAudioStream(),
+      cancel: cancelTts,
+    });
+
+    const eventBus = new EventBus();
+    const handler = vi.fn(async () => {
+      return {
+        content: 'assistant response',
+        channelId: 'discord-voice:guild-1',
+        metadata: {
+          model: 'test-model',
+          inputTokens: 10,
+          outputTokens: 12,
+          durationMs: 42,
+        },
+      };
+    });
+    const { runtime } = makeRuntimeHarness(eventBus, handler);
+    (runtime as any).decodeOpusToPcm = vi.fn(async () => Buffer.alloc(40_000, 1));
+    (runtime as any).playReadableAudio = vi.fn(async (_audio: unknown, turn: { abortController?: AbortController }) => {
+      const signal = turn?.abortController?.signal;
+      await new Promise<void>((resolve) => {
+        if (!signal || signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+
+    const utterancePromise = (runtime as any).handleUtterance();
+    await waitForCondition(() => connectorMocks.ttsConnector.synthesizeStream.mock.calls.length === 1);
+
+    await (runtime as any).leaveChannel('switch-channel');
+    await utterancePromise.catch(() => undefined);
+
+    expect(cancelTts).toHaveBeenCalled();
+    expect(cancelTts.mock.calls.map((call) => call[0])).toContain('leave:switch-channel');
+    expect((runtime as any).capturing).toBe(false);
+    expect((runtime as any).activeTurnId).toBeNull();
+  });
+
+  it('guards stale turn cleanup from clearing current capture state', () => {
+    const eventBus = new EventBus();
+    const handler = vi.fn();
+    const { runtime } = makeRuntimeHarness(eventBus, handler);
+
+    const staleTurn = { token: Symbol('stale') };
+    const currentTurn = { token: Symbol('current') };
+
+    (runtime as any).activeTurn = currentTurn;
+    (runtime as any).activeTurnId = 'voice-turn-current';
+    (runtime as any).capturing = true;
+
+    (runtime as any).resetTurnStateIfCurrent(staleTurn);
+
+    expect((runtime as any).activeTurn).toBe(currentTurn);
+    expect((runtime as any).activeTurnId).toBe('voice-turn-current');
+    expect((runtime as any).capturing).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { EventBus } from '../event-bus.js';
+import type { ToolRegistrar } from '../agent/tool-registrar.js';
 
 export interface ModuleRecord {
   id: string;
@@ -27,7 +27,7 @@ export interface ModuleRegistryMutation {
 export interface ModuleRuntimeContext {
   module: ModuleRecord;
   eventBus: EventBus;
-  registerTool: (tool: AgentTool<any>, category?: 'core' | 'extended') => void;
+  registerTool: ToolRegistrar;
 }
 
 export interface ModuleHealthStatus {

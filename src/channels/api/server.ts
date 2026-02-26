@@ -42,7 +42,7 @@ import {
 } from './voice-websocket.js';
 import { toErrorMessage } from '../../utils/errors.js';
 import {
-  readBodyWithLimit,
+  readJsonBodyWithLimit,
   sendEmpty,
   sendJson,
 } from '../http/primitives.js';
@@ -490,40 +490,35 @@ export class ApiServer implements ChannelAdapter {
   }
 
   private async handleChatCompletions(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    let body: string | null;
-    try {
-      body = await readBodyWithLimit(req, res, {
-        maxBytes: MAX_BODY_SIZE,
-        logger: log,
-      });
-    } catch (err) {
-      log.error('Failed reading request body', {
-        path: req.url ?? '/v1/chat/completions',
-        error: toErrorMessage(err),
-      });
-      if (this.canWriteResponse(res)) {
-        this.sendError(res, 500, 'internal_error', 'Internal server error');
+    const parsedBody = await readJsonBodyWithLimit<ChatCompletionRequest>(req, res, {
+      maxBytes: MAX_BODY_SIZE,
+      logger: log,
+    });
+    if (!parsedBody.ok) {
+      if (parsedBody.errorCode === 'payload_too_large') return;
+      if (parsedBody.errorCode === 'read_error') {
+        log.error('Failed reading request body', {
+          path: req.url ?? '/v1/chat/completions',
+          error: parsedBody.error.message,
+        });
+        if (this.canWriteResponse(res)) {
+          this.sendError(res, 500, 'internal_error', 'Internal server error');
+        }
+        return;
       }
-      return;
-    }
 
-    if (body === null) return;
-
-    let parsed: ChatCompletionRequest;
-    try {
-      parsed = JSON.parse(body) as ChatCompletionRequest;
-    } catch (err) {
       log.warn('Rejected request with invalid JSON body', {
         path: req.url ?? '/v1/chat/completions',
-        bodySize: Buffer.byteLength(body),
+        bodySize: Buffer.byteLength(parsedBody.rawBody),
         contentType: req.headers['content-type'],
         remoteAddress: req.socket.remoteAddress,
-        error: toErrorMessage(err),
+        error: parsedBody.error.message,
       });
       this.sendError(res, 400, 'invalid_json', 'Request body is not valid JSON');
       return;
     }
 
+    const parsed = parsedBody.value;
     if (!parsed.messages || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
       this.sendError(res, 400, 'invalid_request', 'messages field is required and must be a non-empty array');
       return;
@@ -537,35 +532,29 @@ export class ApiServer implements ChannelAdapter {
   }
 
   private async handleTelemetryIngest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    let body: string | null;
-    try {
-      body = await readBodyWithLimit(req, res, {
-        maxBytes: MAX_BODY_SIZE,
-        logger: log,
-      });
-    } catch (err) {
-      log.error('Failed reading telemetry body', {
-        error: toErrorMessage(err),
-      });
-      if (this.canWriteResponse(res)) {
-        this.sendError(res, 500, 'internal_error', 'Internal server error');
+    const parsedBody = await readJsonBodyWithLimit(req, res, {
+      maxBytes: MAX_BODY_SIZE,
+      logger: log,
+    });
+    if (!parsedBody.ok) {
+      if (parsedBody.errorCode === 'payload_too_large') return;
+      if (parsedBody.errorCode === 'read_error') {
+        log.error('Failed reading telemetry body', {
+          error: parsedBody.error.message,
+        });
+        if (this.canWriteResponse(res)) {
+          this.sendError(res, 500, 'internal_error', 'Internal server error');
+        }
+        return;
       }
-      return;
-    }
-
-    if (body === null) return;
-    await this.ingestTelemetryBody(body, res);
-  }
-
-  private async ingestTelemetryBody(body: string, res: ServerResponse): Promise<void> {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
       this.sendError(res, 400, 'invalid_json', 'Request body is not valid JSON');
       return;
     }
 
+    await this.ingestTelemetryPayload(parsedBody.value, res);
+  }
+
+  private async ingestTelemetryPayload(parsed: unknown, res: ServerResponse): Promise<void> {
     if (!Value.Check(telemetryIngestSchema, parsed)) {
       this.sendError(
         res,

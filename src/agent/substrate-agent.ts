@@ -37,6 +37,7 @@ import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
+import type { ToolCategory } from './tool-registrar.js';
 import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
 import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
@@ -278,7 +279,7 @@ export class SubstrateAgent {
     }
   }
 
-  registerTool(tool: AgentTool<any>, category: 'core' | 'extended' = 'core'): void {
+  registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
     const taggedTool = tagToolWithReversibility(tool);
     if (category === 'core') {
       this.coreTools.push(taggedTool);

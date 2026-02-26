@@ -2,10 +2,10 @@
 // Common primitives used by both single-process runtime and gateway agent mode.
 
 import { join } from 'node:path';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { SubstrateConfig } from '../types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
+import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
@@ -61,14 +61,11 @@ interface HeartbeatRuntimeOptions {
   memoryWriter?: Pick<MemoryWriter, 'write'>;
 }
 
-export interface PromptRuntimeTarget {
+export interface PromptRuntimeTarget extends ToolRegistrarTarget {
   promptComposer: PromptComposer | null;
-  registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void;
 }
 
-export interface CharacterCardRuntimeTarget {
-  registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void;
-}
+export type CharacterCardRuntimeTarget = ToolRegistrarTarget;
 
 /**
  * Wire prompt stack storage, composition, and tools.
@@ -141,7 +138,7 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
  * Shared across runtime.ts and agent-main.ts.
  */
 export function wireSettingsRuntime(
-  target: { registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void },
+  target: ToolRegistrarTarget,
   config: SubstrateConfig,
 ): void {
   target.registerTool(createSettingsGetTool(config), 'extended');
@@ -152,7 +149,7 @@ export function wireSettingsRuntime(
  * Registers policy-driven reflection tasks and agent tools for managing them.
  */
 export function wireHeartbeatRuntime(
-  target: { registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void },
+  target: ToolRegistrarTarget,
   scheduler: Scheduler,
   agentLoop: HeartbeatAgent,
   sender: MessageSender,

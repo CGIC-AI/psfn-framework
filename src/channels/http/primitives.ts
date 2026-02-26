@@ -10,6 +10,55 @@ export interface ReadBodyWithLimitOptions {
   logMeta?: Record<string, unknown>;
 }
 
+export interface ParseJsonBodySuccess<T> {
+  ok: true;
+  value: T;
+}
+
+export interface ParseJsonBodyFailure {
+  ok: false;
+  errorCode: 'invalid_json';
+  error: Error;
+}
+
+export type ParseJsonBodyResult<T> =
+  | ParseJsonBodySuccess<T>
+  | ParseJsonBodyFailure;
+
+export interface ReadJsonBodySuccess<T> {
+  ok: true;
+  value: T;
+  rawBody: string;
+}
+
+export interface ReadJsonBodyPayloadTooLarge {
+  ok: false;
+  errorCode: 'payload_too_large';
+}
+
+export interface ReadJsonBodyReadFailure {
+  ok: false;
+  errorCode: 'read_error';
+  error: Error;
+}
+
+export interface ReadJsonBodyParseFailure {
+  ok: false;
+  errorCode: 'invalid_json';
+  error: Error;
+  rawBody: string;
+}
+
+export type ReadJsonBodyResult<T> =
+  | ReadJsonBodySuccess<T>
+  | ReadJsonBodyPayloadTooLarge
+  | ReadJsonBodyReadFailure
+  | ReadJsonBodyParseFailure;
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 export async function readBodyWithLimit(
   req: IncomingMessage,
   res: ServerResponse,
@@ -70,6 +119,61 @@ export async function readBodyWithLimit(
     req.on('end', onEnd);
     req.on('error', onError);
   });
+}
+
+export function parseJsonBody<T = unknown>(rawBody: string): ParseJsonBodyResult<T> {
+  try {
+    return {
+      ok: true,
+      value: JSON.parse(rawBody) as T,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 'invalid_json',
+      error: normalizeError(error),
+    };
+  }
+}
+
+export async function readJsonBodyWithLimit<T = unknown>(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ReadBodyWithLimitOptions,
+): Promise<ReadJsonBodyResult<T>> {
+  let rawBody: string | null;
+  try {
+    rawBody = await readBodyWithLimit(req, res, options);
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 'read_error',
+      error: normalizeError(error),
+    };
+  }
+
+  if (rawBody === null) {
+    return {
+      ok: false,
+      errorCode: 'payload_too_large',
+    };
+  }
+
+  const parsed = parseJsonBody<T>(rawBody);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      errorCode: 'invalid_json',
+      error: parsed.error,
+      rawBody,
+    };
+  }
+
+  return {
+    ok: true,
+    value: parsed.value,
+    rawBody,
+  };
 }
 
 export function sendJson(

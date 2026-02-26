@@ -120,6 +120,7 @@ import {
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
 } from '../../session/compaction-audit.js';
+import { parseJsonBody } from '../http/primitives.js';
 import type {
   IdentityIntakeChatChunk,
   IdentityIntakeCardMutation,
@@ -2705,13 +2706,11 @@ export class AdminHandlers {
     if (!trimmedBody) return {};
 
     if (normalizedContentType.includes('application/json') || trimmedBody.startsWith('{')) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(trimmedBody);
-      } catch {
+      const parsed = parseJsonBody(trimmedBody);
+      if (!parsed.ok) {
         throw new Error('Invalid JSON payload');
       }
-      return this.parseChatBootstrapUpdateObject(parsed);
+      return this.parseChatBootstrapUpdateObject(parsed.value);
     }
 
     const params = new URLSearchParams(body);

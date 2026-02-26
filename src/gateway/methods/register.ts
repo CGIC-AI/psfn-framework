@@ -33,6 +33,7 @@ export function registerGatedDescriptors(
         descriptor.summary as (params: unknown) => Record<string, unknown>,
         descriptor.approvalAction,
         descriptor.approvalScope as (params: unknown) => string,
+        descriptor.approvalReason as ((params: unknown) => string) | undefined,
       ),
     );
   }

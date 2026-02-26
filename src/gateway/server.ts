@@ -9,29 +9,15 @@ import {
   parseWyomingShardRoutingConfigEnv,
   type CapabilityTier,
   type SubstrateMessage,
-  type WyomingRoutingMetadata,
   type WyomingShardRoutingConfig,
 } from '../types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketServer } from './transport.js';
-import { sanitizeWebContent } from './sanitize.js';
-import { evaluateUrlPolicy, checkResolvedIP, type UrlPolicyConfig } from './url-policy.js';
 import {
   GatewayErrors,
-  type LLMChatParams,
-  type LLMCompleteParams,
-  type LLMEmbedParams,
-  type DiscordSendParams,
-  type DiscordTypingParams,
-  type WebFetchParams,
-  type FsReadParams,
-  type FsWriteParams,
-  type FsListParams,
   type NotifyNtfyParams,
   type NotifyNtfyResult,
-  type PolicyContext,
   type PolicyDecision,
-  type LLMChunkNotification,
   type RpcSubstrateMessage,
   type VoiceHandleMessageResult,
   type VoiceStreamStartParams,
@@ -40,25 +26,12 @@ import {
   type VoiceStreamCancelParams,
   type VoiceStreamEndResult,
   type VoiceStreamMetadata,
-  type ConfirmationListParams,
-  type ConfirmationListResult,
-  type ConfirmationResolveParams,
-  type ConfirmationResolveResult,
-  type SessionHmacSignParams,
-  type SessionHmacSignResult,
-  type SessionHmacVerifyParams,
-  type SessionHmacVerifyResult,
 } from './protocol.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 
-import { readFile, writeFile, glob as fsGlob } from 'node:fs/promises';
-import { resolve, normalize, dirname, isAbsolute } from 'node:path';
-import { realpathSync } from 'node:fs';
 import type { AuditStore } from './audit.js';
 import {
   buildSessionHmacKeyring,
-  signJournalEntry,
-  verifyJournalEntryIntegrity,
   type SessionHmacKeyring,
 } from '../session/journal-utils.js';
 import { createComponentLogger } from '../logger.js';
@@ -69,15 +42,14 @@ import {
 } from '../capabilities/confirmation-queue.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { registerGatewayMethods } from './methods/index.js';
+import type { GatewayMethodRuntime } from './methods/types.js';
+import { evaluatePolicy, type PolicyConfig } from './policy.js';
+import { applyWyomingRoutingPolicy } from './wyoming-routing.js';
 const log = createComponentLogger('Gateway');
 
-// ── Policy Engine ──
-
-export interface PolicyConfig {
-  workspacePath: string;
-  allowedReadPaths?: string[];
-  urlPolicy?: UrlPolicyConfig;
-}
+export { evaluatePolicy };
+export type { PolicyConfig };
 
 export interface GatewayNtfyConfig {
   baseUrl: string;
@@ -93,20 +65,6 @@ export interface GatewayConfirmationConfig {
   ntfyTopic?: string;
 }
 
-interface WyomingStreamMetadataFields {
-  source?: string;
-  connectionId?: string;
-  sessionId?: string;
-  turnId?: string;
-  siteId?: string;
-  satelliteId?: string;
-}
-
-interface WyomingRoutingEvaluation {
-  routing: WyomingRoutingMetadata;
-  isWyoming: boolean;
-}
-
 const GATEWAY_SESSION_HMAC_KEYS_ENV = 'GATEWAY_SESSION_HMAC_KEYS';
 const GATEWAY_SESSION_HMAC_KEY_ENV = 'GATEWAY_SESSION_HMAC_KEY';
 const GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV = 'GATEWAY_SESSION_HMAC_ACTIVE_VERSION';
@@ -119,145 +77,6 @@ export function resolveGatewaySessionHmacKeyring(
     singleKey: env[GATEWAY_SESSION_HMAC_KEY_ENV],
     activeVersion: env[GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV],
   });
-}
-
-/** Check whether a resolved path falls inside any of the allowed prefixes */
-function isInsideAllowedPaths(resolvedPath: string, allowedPrefixes: string[]): boolean {
-  for (const prefix of allowedPrefixes) {
-    if (resolvedPath.startsWith(prefix + '/') || resolvedPath === prefix) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Resolve the canonical (symlink-resolved) path for policy checking.
- * Returns the normalized path unchanged if the file doesn't exist (ENOENT).
- * For writes to new files, resolves the parent directory if it exists.
- * Returns null only if a symlink explicitly resolves outside allowed paths.
- */
-function resolveCanonicalPath(normalized: string, isWrite: boolean): string {
-  try {
-    return realpathSync(normalized);
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    // ENOENT = path doesn't exist at all (not a symlink issue) — safe to use normalized
-    // ELOOP = too many symlinks (suspicious, but ENOENT for broken symlink targets too)
-    if (code === 'ENOENT') {
-      // For writes, try to resolve the parent directory to catch symlinked parents
-      if (isWrite) {
-        try {
-          const parentReal = realpathSync(dirname(normalized));
-          const basename = normalized.slice(normalized.lastIndexOf('/') + 1);
-          return resolve(parentReal, basename);
-        } catch {
-          // Parent doesn't exist either — use normalized path (will fail at write time)
-          return normalized;
-        }
-      }
-      return normalized;
-    }
-    // For any other error (EACCES, ELOOP, etc.), use normalized path
-    return normalized;
-  }
-}
-
-export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): PolicyDecision {
-  const { method, params } = ctx;
-
-  switch (method) {
-    case 'llm.chat':
-    case 'llm.complete':
-    case 'llm.embed':
-    case 'discord.send':
-    case 'discord.typing':
-    case 'notify.ntfy':
-      return 'ALLOW';
-
-    case 'web.fetch': {
-      // Synchronous URL policy check so the audit log reflects the real decision
-      const url = (params as Record<string, unknown>).url as string | undefined;
-      if (url && policyConfig.urlPolicy) {
-        const urlCheck = evaluateUrlPolicy(url, policyConfig.urlPolicy);
-        if (!urlCheck.allowed) {
-          return 'DENY';
-        }
-      }
-      return 'ALLOW';
-    }
-
-    case 'fs.read':
-    case 'fs.write': {
-      const path = (params as Record<string, unknown>).path as string;
-      const normalized = resolve(normalize(path));
-      const workspace = resolve(normalize(policyConfig.workspacePath));
-
-      // Build list of all allowed prefixes for this operation
-      const allowedPrefixes = [workspace];
-      if (method === 'fs.read' && policyConfig.allowedReadPaths) {
-        for (const allowed of policyConfig.allowedReadPaths) {
-          allowedPrefixes.push(resolve(normalize(allowed)));
-        }
-      }
-
-      // Step 1: Check normalized path (string prefix match)
-      if (!isInsideAllowedPaths(normalized, allowedPrefixes)) {
-        return 'NEEDS_APPROVAL';
-      }
-
-      // Step 2: Resolve symlinks and check canonical path
-      const isWrite = method === 'fs.write';
-      const canonical = resolveCanonicalPath(normalized, isWrite);
-
-      // If canonical differs from normalized (symlink), re-check against allowed prefixes
-      if (canonical !== normalized && !isInsideAllowedPaths(canonical, allowedPrefixes)) {
-        return 'DENY';
-      }
-
-      return 'ALLOW';
-    }
-
-    case 'fs.list': {
-      const glob = (params as Record<string, unknown>).glob;
-      if (glob !== undefined) {
-        if (typeof glob !== 'string') {
-          return 'DENY';
-        }
-        const trimmed = glob.trim();
-        if (!trimmed || trimmed.length > 512 || trimmed.includes('\0')) {
-          return 'DENY';
-        }
-
-        const normalizedGlob = normalize(trimmed).replace(/\\/g, '/');
-        if (
-          isAbsolute(trimmed) ||
-          normalizedGlob === '..' ||
-          normalizedGlob.startsWith('../') ||
-          normalizedGlob.includes('/../')
-        ) {
-          return 'DENY';
-        }
-      }
-
-      const maxEntries = (params as Record<string, unknown>).maxEntries;
-      if (maxEntries !== undefined) {
-        if (
-          typeof maxEntries !== 'number' ||
-          !Number.isFinite(maxEntries) ||
-          Math.floor(maxEntries) < 1 ||
-          maxEntries > 500
-        ) {
-          return 'DENY';
-        }
-      }
-
-      return 'ALLOW';
-    }
-
-    default:
-      return 'DENY';
-  }
 }
 
 // ── Gateway Server Class ──
@@ -498,319 +317,32 @@ export class GatewayServer {
   }
 
   private registerMethods(target: JSONRPCServerAndClient): void {
-    const { llmProvider, embeddingService, discordAdapter } = this.options;
-
-    // ── LLM Methods ──
-
-    target.addMethod('llm.chat', this.audited('llm.chat',
-      async (params: LLMChatParams) => {
-        // Generate a unique requestId for this stream, or use the client-provided one
-        const requestId = params.requestId ?? `gw-${++this.streamRequestCounter}`;
-        const response = await llmProvider.stream(
-          {
-            systemPrompt: params.systemPrompt,
-            messages: params.messages,
-            ...(params.tools?.length ? { tools: params.tools } : {}),
-          },
-          params.stream ? {
-            onText: (text) => {
-              this.notifyAll('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
-            },
-          } : undefined,
-        );
-        return {
-          content: response.content,
-          toolCalls: response.toolCalls,
-          model: response.model,
-          inputTokens: response.inputTokens,
-          outputTokens: response.outputTokens,
-          stopReason: response.stopReason,
-          requestId,
-        };
-      },
-      (p) => ({ model: p.model, stream: p.stream }),
-    ));
-
-    target.addMethod('llm.complete', this.audited('llm.complete',
-      async (params: LLMCompleteParams) => {
-        const response = await llmProvider.complete(
-          { systemPrompt: params.systemPrompt, messages: params.messages },
-          params.purpose,
-        );
-        return {
-          content: response.content,
-          model: response.model,
-          inputTokens: response.inputTokens,
-          outputTokens: response.outputTokens,
-          stopReason: response.stopReason,
-        };
-      },
-      (p) => ({ purpose: p.purpose }),
-    ));
-
-    target.addMethod('llm.embed', this.audited('llm.embed',
-      async (params: LLMEmbedParams) => {
-        const embeddings = await embeddingService.embedBatch(params.texts);
-        return { embeddings: embeddings.map(e => Array.from(e)) };
-      },
-      (p) => ({ textCount: p.texts.length }),
-    ));
-
-    // ── Discord Methods ──
-
-    target.addMethod('discord.send', this.audited('discord.send',
-      async (params: DiscordSendParams) => {
-        await discordAdapter.outbound.sendText(
-          { channelId: params.channelId },
-          params.content,
-        );
-        return { success: true };
-      },
-      (p) => ({ channelId: p.channelId }),
-    ));
-
-    target.addMethod('discord.typing', this.audited('discord.typing',
-      async (_params: DiscordTypingParams) => ({ success: true }),
-    ));
-
-    // ── Confirmation queue management ──
-
-    target.addMethod('confirmation.list', this.audited('confirmation.list',
-      async (_params: ConfirmationListParams): Promise<ConfirmationListResult> => {
-        return {
-          entries: this.confirmationQueue.listPending(),
-        };
-      },
-    ));
-
-    target.addMethod('confirmation.resolve', this.audited('confirmation.resolve',
-      async (params: ConfirmationResolveParams): Promise<ConfirmationResolveResult> => {
-        return await this.confirmationQueue.resolve({
-          id: params.id,
-          decision: params.decision,
-          modifiedParams: params.modifiedParams,
-        });
-      },
-      (p) => ({
-        id: p.id,
-        decision: p.decision,
-      }),
-    ));
-
-    target.addMethod('session.hmac.sign', this.audited('session.hmac.sign',
-      async (params: SessionHmacSignParams): Promise<SessionHmacSignResult> => {
-        if (!this.sessionHmacKeyring) {
-          throw new JSONRPCErrorException(
-            'Gateway session HMAC keyring is not configured',
-            GatewayErrors.PROVIDER_ERROR,
-          );
-        }
-        return {
-          entry: signJournalEntry(params.entry, this.sessionHmacKeyring, params.previousHmac),
-        };
-      },
-      (p) => ({
-        type: p.entry.type,
-        channelId: p.entry.channelId,
-        id: p.entry.id,
-      }),
-    ));
-
-    target.addMethod('session.hmac.verify', this.audited('session.hmac.verify',
-      async (params: SessionHmacVerifyParams): Promise<SessionHmacVerifyResult> => {
-        if (!this.sessionHmacKeyring) {
-          throw new JSONRPCErrorException(
-            'Gateway session HMAC keyring is not configured',
-            GatewayErrors.PROVIDER_ERROR,
-          );
-        }
-        return verifyJournalEntryIntegrity(params.entry, this.sessionHmacKeyring, params.previousHmac);
-      },
-      (p) => ({
-        type: p.entry.type,
-        channelId: p.entry.channelId,
-        id: p.entry.id,
-        keyVersion: p.entry._hmacKeyVersion,
-      }),
-    ));
-
-    // ── ntfy operator alerts ──
-
-    target.addMethod('notify.ntfy', this.audited('notify.ntfy',
-      async (params: NotifyNtfyParams): Promise<NotifyNtfyResult> => {
-        return await this.sendNtfy(params);
-      },
-      (p) => ({
-        topic: p.topic ? 'override' : 'default',
-        hasTitle: !!p.title,
-        priority: p.priority,
-        messageLength: typeof p.message === 'string' ? p.message.length : 0,
-      }),
-    ));
-
-    // ── Web Fetch (gated) ──
-
-    // Build URL policy config from environment and store on policyConfig
-    // so evaluatePolicy() can use it for accurate audit logging
-    const urlPolicyConfig = {
-      allowHttp: process.env.ALLOW_HTTP_FETCH === 'true',
-      domainAllowlist: process.env.FETCH_DOMAIN_ALLOWLIST
-        ? process.env.FETCH_DOMAIN_ALLOWLIST.split(',').map(d => d.trim()).filter(Boolean)
-        : undefined,
+    const runtime: GatewayMethodRuntime = {
+      target,
+      llmProvider: this.options.llmProvider,
+      embeddingService: this.options.embeddingService,
+      discordAdapter: this.options.discordAdapter,
+      policyConfig: this.options.policyConfig,
+      workspacePath: this.options.policyConfig.workspacePath,
+      sessionHmacKeyring: this.sessionHmacKeyring,
+      notifyAll: (method, params) => this.notifyAll(method, params),
+      listPendingConfirmations: () => this.confirmationQueue.listPending(),
+      resolveConfirmation: (params) => this.confirmationQueue.resolve(params),
+      sendNtfy: (params) => this.sendNtfy(params),
+      nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
+      audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
+      gated: (method, handler, paramsSummary, approvalAction, approvalScope, approvalReason) =>
+        this.gated(
+          method,
+          handler,
+          paramsSummary,
+          approvalAction,
+          approvalScope,
+          approvalReason,
+        ),
     };
-    this.options.policyConfig.urlPolicy = urlPolicyConfig;
 
-    target.addMethod('web.fetch', this.gated('web.fetch',
-      async (params: WebFetchParams) => {
-        // SSRF defense: evaluate URL policy before fetching
-        const urlCheck = evaluateUrlPolicy(params.url, urlPolicyConfig);
-        if (!urlCheck.allowed) {
-          log.warn(`URL policy blocked fetch: ${urlCheck.reason} (${params.url})`);
-          throw new JSONRPCErrorException(
-            `URL blocked: ${urlCheck.reason}`,
-            GatewayErrors.POLICY_DENIED,
-          );
-        }
-
-        // Post-DNS-resolution check: catch DNS rebinding (e.g. evil.com → 127.0.0.1)
-        const parsed = new URL(params.url);
-        const dnsCheck = await checkResolvedIP(parsed.hostname);
-        if (!dnsCheck.allowed) {
-          log.warn(`DNS resolution blocked fetch: ${dnsCheck.reason} (${params.url})`);
-          throw new JSONRPCErrorException(
-            `URL blocked: ${dnsCheck.reason}`,
-            GatewayErrors.POLICY_DENIED,
-          );
-        }
-
-        // Use redirect: 'manual' to prevent open-redirect SSRF bypass
-        // (attacker 302s to http://169.254.169.254/)
-        const response = await fetch(params.url, {
-          headers: { 'User-Agent': 'PurrsePhone-Substrate/0.1' },
-          signal: AbortSignal.timeout(15_000),
-          redirect: 'manual',
-        });
-        // If server redirected, validate the redirect target before following
-        if (response.status >= 300 && response.status < 400) {
-          const location = response.headers.get('location');
-          if (!location) {
-            throw new JSONRPCErrorException('Redirect with no Location header', GatewayErrors.PROVIDER_ERROR);
-          }
-          const redirectUrl = new URL(location, params.url).href;
-          const redirCheck = evaluateUrlPolicy(redirectUrl, urlPolicyConfig);
-          if (!redirCheck.allowed) {
-            log.warn(`Redirect URL blocked: ${redirCheck.reason} (${redirectUrl})`);
-            throw new JSONRPCErrorException(`Redirect blocked: ${redirCheck.reason}`, GatewayErrors.POLICY_DENIED);
-          }
-          const redirParsed = new URL(redirectUrl);
-          const redirDns = await checkResolvedIP(redirParsed.hostname);
-          if (!redirDns.allowed) {
-            log.warn(`Redirect DNS blocked: ${redirDns.reason} (${redirectUrl})`);
-            throw new JSONRPCErrorException(`Redirect blocked: ${redirDns.reason}`, GatewayErrors.POLICY_DENIED);
-          }
-          // Follow the validated redirect (single hop only — prevents redirect chains)
-          const redirectResponse = await fetch(redirectUrl, {
-            headers: { 'User-Agent': 'PurrsePhone-Substrate/0.1' },
-            signal: AbortSignal.timeout(15_000),
-            redirect: 'error', // no further redirects
-          });
-          if (!redirectResponse.ok) {
-            throw new JSONRPCErrorException(
-              `Fetch failed after redirect: ${redirectResponse.status} ${redirectResponse.statusText}`,
-              GatewayErrors.PROVIDER_ERROR,
-            );
-          }
-          const rawRedirContent = await redirectResponse.text();
-          const redirResult = sanitizeWebContent(rawRedirContent, redirectUrl);
-          if (redirResult.injectionPatternsFound > 0) {
-            log.warn(`Sanitized ${redirResult.injectionPatternsFound} injection patterns from ${redirectUrl}`);
-          }
-          return { content: redirResult.content, sanitized: redirResult.sanitized };
-        }
-        if (!response.ok) {
-          throw new JSONRPCErrorException(
-            `Fetch failed: ${response.status} ${response.statusText}`,
-            GatewayErrors.PROVIDER_ERROR,
-          );
-        }
-        const rawContent = await response.text();
-        const result = sanitizeWebContent(rawContent, params.url);
-        if (result.injectionPatternsFound > 0) {
-          log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${params.url}`);
-        }
-        return { content: result.content, sanitized: result.sanitized };
-      },
-      (p) => ({ url: p.url }),
-      'fetch', (p) => p.url,
-    ));
-
-    // ── Filesystem (gated) ──
-
-    target.addMethod('fs.read', this.gated('fs.read',
-      async (params: FsReadParams) => {
-        const content = await readFile(params.path, 'utf-8');
-        return { content };
-      },
-      (p) => ({ path: p.path }),
-      'read', (p) => p.path,
-    ));
-
-    target.addMethod('fs.write', this.gated('fs.write',
-      async (params: FsWriteParams) => {
-        await writeFile(params.path, params.content, 'utf-8');
-        return { success: true };
-      },
-      (p) => ({ path: p.path }),
-      'write', (p) => p.path,
-    ));
-
-    target.addMethod('fs.list', this.gated('fs.list',
-      async (params: FsListParams) => {
-        const rawGlob = typeof params.glob === 'string' ? params.glob.trim() : '**/*';
-        const normalizedGlob = rawGlob.replace(/\\/g, '/');
-        if (
-          !normalizedGlob ||
-          normalizedGlob.length > 512 ||
-          normalizedGlob.includes('\0') ||
-          normalizedGlob.startsWith('/') ||
-          normalizedGlob.startsWith('\\') ||
-          /(^|\/)\.\.(\/|$)/.test(normalizedGlob)
-        ) {
-          throw new JSONRPCErrorException(
-            'fs.list glob must be a non-empty workspace-relative pattern',
-            GatewayErrors.POLICY_DENIED,
-          );
-        }
-
-        const maxEntries = Number.isFinite(params.maxEntries)
-          ? Math.max(1, Math.min(500, Math.floor(Number(params.maxEntries))))
-          : 200;
-
-        const workspaceRoot = resolve(normalize(this.options.policyConfig.workspacePath));
-        const paths: string[] = [];
-        for await (const match of fsGlob(normalizedGlob, {
-          cwd: workspaceRoot,
-          withFileTypes: false,
-          dot: true,
-        })) {
-          const relative = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
-          const absolute = resolve(workspaceRoot, relative);
-          if (!isInsideAllowedPaths(absolute, [workspaceRoot])) {
-            continue;
-          }
-          paths.push(relative);
-          if (paths.length >= maxEntries) {
-            break;
-          }
-        }
-
-        paths.sort((a, b) => a.localeCompare(b));
-        return { paths };
-      },
-      (p) => ({ glob: p.glob ?? '**/*', maxEntries: p.maxEntries ?? 200 }),
-      'read',
-      (p) => p.glob ?? '**/*',
-    ));
+    registerGatewayMethods(runtime);
   }
 
   // ── Connection management ──
@@ -899,7 +431,7 @@ export class GatewayServer {
     const overflowPolicy = options.overflowPolicy ?? DEFAULT_VOICE_OVERFLOW_POLICY;
     const correlationId = options.correlationId ?? `voice-corr-${Date.now()}-${++this.streamRequestCounter}`;
     const streamId = options.streamId ?? `voice-stream-${Date.now()}-${this.streamRequestCounter}`;
-    const routedMessage = this.applyWyomingRoutingPolicy(message, options.metadata);
+    const routedMessage = applyWyomingRoutingPolicy(message, options.metadata, this.wyomingShardRouting);
 
     const queue = new BoundedQueue<string>({
       maxSize: maxQueueSize,
@@ -1063,147 +595,6 @@ export class GatewayServer {
     }
 
     return chunks;
-  }
-
-  private applyWyomingRoutingPolicy(
-    message: SubstrateMessage,
-    metadata?: VoiceStreamMetadata,
-  ): SubstrateMessage {
-    const evaluation = this.resolveWyomingRoutingMetadata(message, metadata);
-    if (!evaluation.isWyoming) {
-      return message;
-    }
-
-    const routing = evaluation.routing;
-    const siteAllowlist = this.wyomingShardRouting.siteAllowlist ?? [];
-    const satelliteAllowlist = this.wyomingShardRouting.satelliteAllowlist ?? [];
-    let eligible = false;
-    let reason = 'policy_disabled';
-
-    if (this.wyomingShardRouting.enabled) {
-      eligible = true;
-      reason = 'eligible';
-
-      if (siteAllowlist.length > 0) {
-        const siteId = routing.siteId?.trim();
-        if (!siteId || !siteAllowlist.includes(siteId)) {
-          eligible = false;
-          reason = 'site_not_allowlisted';
-        }
-      }
-
-      if (eligible && satelliteAllowlist.length > 0) {
-        const satelliteId = routing.satelliteId?.trim();
-        if (!satelliteId || !satelliteAllowlist.includes(satelliteId)) {
-          eligible = false;
-          reason = 'satellite_not_allowlisted';
-        }
-      }
-    }
-
-    return {
-      ...message,
-      routing: {
-        ...(message.routing ?? {}),
-        source: 'wyoming',
-        wyoming: {
-          ...routing,
-          shardDelegation: {
-            eligible,
-            reason,
-          },
-        },
-      },
-    };
-  }
-
-  private resolveWyomingRoutingMetadata(
-    message: SubstrateMessage,
-    metadata?: VoiceStreamMetadata,
-  ): WyomingRoutingEvaluation {
-    const existing = message.routing?.wyoming;
-    const stream = this.parseWyomingStreamMetadata(metadata);
-    const channel = this.parseWyomingChannelIdentity(message.channelId);
-    const source = stream.source?.toLowerCase();
-    const isWyoming = message.routing?.source === 'wyoming'
-      || existing !== undefined
-      || (message.channelType === 'api' && channel !== null)
-      || source === 'wyoming';
-
-    if (!isWyoming) {
-      return { routing: {}, isWyoming: false };
-    }
-
-    const connectionId = existing?.connectionId
-      ?? stream.connectionId
-      ?? this.parseWyomingConnectionId(message.id);
-
-    return {
-      isWyoming: true,
-      routing: {
-        ...(existing ?? {}),
-        ...(connectionId ? { connectionId } : {}),
-        ...(stream.sessionId ? { sessionId: stream.sessionId } : {}),
-        ...(stream.turnId ? { turnId: stream.turnId } : {}),
-        ...(stream.siteId ? { siteId: stream.siteId } : channel?.siteId ? { siteId: channel.siteId } : {}),
-        ...(stream.satelliteId
-          ? { satelliteId: stream.satelliteId }
-          : channel?.satelliteId
-            ? { satelliteId: channel.satelliteId }
-            : {}),
-      },
-    };
-  }
-
-  private parseWyomingStreamMetadata(metadata?: VoiceStreamMetadata): WyomingStreamMetadataFields {
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-      return {};
-    }
-
-    const record = metadata as Record<string, unknown>;
-    return {
-      source: this.readMetadataString(record, ['source', 'voiceSource']),
-      connectionId: this.readMetadataString(record, ['wyomingConnectionId', 'connectionId']),
-      sessionId: this.readMetadataString(record, ['wyomingSessionId', 'sessionId']),
-      turnId: this.readMetadataString(record, ['wyomingTurnId', 'turnId']),
-      siteId: this.readMetadataString(record, ['wyomingSiteId', 'siteId']),
-      satelliteId: this.readMetadataString(record, ['wyomingSatelliteId', 'satelliteId']),
-    };
-  }
-
-  private readMetadataString(record: Record<string, unknown>, keys: string[]): string | undefined {
-    for (const key of keys) {
-      const value = record[key];
-      if (typeof value !== 'string') continue;
-      const trimmed = value.trim();
-      if (trimmed) return trimmed;
-    }
-    return undefined;
-  }
-
-  private parseWyomingChannelIdentity(channelId: string): { siteId: string; satelliteId: string } | null {
-    if (!channelId.startsWith('api:wyoming:')) {
-      return null;
-    }
-
-    const parts = channelId.split(':');
-    if (parts.length < 4) {
-      return null;
-    }
-
-    const siteId = parts[2]?.trim();
-    const satelliteId = parts.slice(3).join(':').trim();
-    if (!siteId || !satelliteId) {
-      return null;
-    }
-
-    return { siteId, satelliteId };
-  }
-
-  private parseWyomingConnectionId(messageId: string): string | undefined {
-    const match = /^wyoming-msg-(.+)-\d+$/.exec(messageId);
-    const candidate = match?.[1]?.trim();
-    return candidate ? candidate : undefined;
   }
 
   private async notifyOperatorForPendingAction(entry: ConfirmationQueueEntry): Promise<void> {

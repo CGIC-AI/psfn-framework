@@ -12,6 +12,7 @@ export {
   identityImportResult,
   identityCardVersionResult,
   identityCardDiffFragment,
+  identityIntakeReviewFragment,
 } from './templates/identity.js';
 export { settingsPage, settingsFormResult } from './templates/settings.js';
 export { skillsPage } from './templates/skills.js';

@@ -50,6 +50,7 @@ import {
 import { attachVoiceObservers } from './voice/observers/index.js';
 import { loadRuntimeChannelsConfig } from './channels/config.js';
 import { resolveAdminChatApiBaseUrl } from './channels/admin/chat/api-base-url.js';
+import { CapabilityRuntime } from './capabilities/runtime.js';
 
 const log = createComponentLogger('Runtime');
 
@@ -67,6 +68,7 @@ export class SubstrateRuntime implements Lifecycle {
   private scheduler!: Scheduler;
   private shardManager!: ShardManager;
   private channelRegistry = new Map<string, ChannelAdapter>();
+  private capabilityRuntime!: CapabilityRuntime;
   private adminServer?: AdminServer;
   private lifecycleNotifier?: LifecycleNotifier;
   private stopVoiceObservers?: () => void;
@@ -118,6 +120,12 @@ export class SubstrateRuntime implements Lifecycle {
       seedDir: process.env.CONFIG_DIR,
     });
     this.config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
+    this.capabilityRuntime = new CapabilityRuntime({
+      dataDir: this.config.dataDir,
+      seedDir: process.env.CONFIG_DIR,
+      envTier: this.config.capabilityTier,
+    });
+    this.config.capabilityTier = this.capabilityRuntime.getTier();
 
     // Ensure data directory exists
     mkdirSync(dirname(this.config.databasePath), { recursive: true });
@@ -166,6 +174,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.config,
       { characterName: card.data.name },
     );
+    this.agentLoop.setCapabilityRuntime(this.capabilityRuntime);
 
     const skillsRuntime = wireSkillsRuntime(this.agentLoop, {
       dataDir: this.config.dataDir,

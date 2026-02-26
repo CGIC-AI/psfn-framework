@@ -1,9 +1,10 @@
 import type { DiscoveredModel } from '../../../llm/discovery.js';
-import type { ModelCatalogEntry, ModelRoleAssignments, SubstrateConfig } from '../../../types.js';
+import type { CapabilityTier, ModelCatalogEntry, ModelRoleAssignments, SubstrateConfig } from '../../../types.js';
 import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
+import type { CapabilityTierConfig } from '../../../config/capability-tier-config.js';
 import type { EnvInfo } from '../types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
@@ -26,6 +27,13 @@ const DEFAULT_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   longContext: 'primary',
 };
 
+const CAPABILITY_TIERS: readonly CapabilityTier[] = [
+  'nursery',
+  'apprentice',
+  'autonomous',
+  'custom',
+];
+
 interface CatalogRowView {
   slotKey: string;
   model: string;
@@ -41,6 +49,7 @@ export interface SettingsConfigEditors {
   skills: SkillsRuntimeConfig;
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;
+  capabilities: CapabilityTierConfig;
 }
 
 function jsonScript(value: unknown): string {
@@ -138,6 +147,12 @@ function renderRoleRows(assignments: ModelRoleAssignments): string {
       </tr>
     `)
     .join('');
+}
+
+function renderCapabilityTierOptions(selected: CapabilityTier): string {
+  return CAPABILITY_TIERS.map((tier) => (
+    `<option value="${escapeHtml(tier)}"${tier === selected ? ' selected' : ''}>${escapeHtml(tier)}</option>`
+  )).join('');
 }
 
 function renderJsonConfigEditor(options: {
@@ -339,6 +354,21 @@ export function settingsPage(
         </div>
       </div>
 
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">Capability Tier</h3>
+        <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
+          Controls which capability tokens are granted at runtime. Save Settings applies tier changes immediately.
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Active Tier</label>
+            <select name="capabilityTier">
+              ${renderCapabilityTierOptions(configEditors.capabilities.tier)}
+            </select>
+          </div>
+        </div>
+      </div>
+
       <div class="form-actions">
         <button type="submit" class="btn">Save Settings</button>
         <span id="settings-result"></span>
@@ -388,6 +418,16 @@ export function settingsPage(
       resultId: 'trust-policy-config-result',
       config: configEditors.trustPolicy,
       rows: 20,
+    })}
+
+    ${renderJsonConfigEditor({
+      title: 'Capability Tier JSON (capability-tier.json)',
+      fileName: 'capability-tier.json',
+      description: 'Defines active capability tier and custom token grants for tier "custom".',
+      action: '/api/settings/capabilities',
+      resultId: 'capability-tier-config-result',
+      config: configEditors.capabilities,
+      rows: 12,
     })}
 
     <script type="application/json" data-settings-model-meta>${escapeHtml(jsonScript(discoveryMeta))}</script>

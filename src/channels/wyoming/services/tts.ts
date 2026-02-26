@@ -8,7 +8,7 @@ import { isRecord, type WyomingFrame, type WyomingJsonObject } from '../protocol
 import type {
   WyomingServiceAdapter,
   WyomingServiceSessionClosedRequest,
-} from './index.js';
+} from './contracts.js';
 
 export const WYOMING_TTS_EVENT_TYPES = [
   'synthesize',

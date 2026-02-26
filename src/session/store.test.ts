@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSy
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
+import { buildSessionHmacKeyring } from './journal-utils.js';
 
 describe('SessionStore', () => {
   let dir: string;
@@ -349,6 +350,141 @@ describe('SessionStore', () => {
 
     const reloaded = new SessionStore(dir);
     expect(() => reloaded.listChannels()).not.toThrow();
+  });
+
+  it('writes HMAC metadata for each signed journal entry', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:old-key,v2:new-key',
+      activeVersion: 'v2',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    signedStore.append({
+      channelId: 'secure:ch',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1000,
+    });
+    signedStore.append({
+      channelId: 'secure:ch',
+      role: 'assistant',
+      content: 'world',
+      timestamp: 2000,
+    });
+
+    const file = readdirSync(dir)
+      .filter(f => f.endsWith('.jsonl'))
+      .find(f => !f.startsWith('user_'));
+    expect(file).toBeDefined();
+
+    const lines = readFileSync(join(dir, file!), 'utf-8')
+      .split('\n')
+      .filter(line => line.length > 0)
+      .map(line => JSON.parse(line) as { _hmac?: string; _hmacKeyVersion?: string });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]._hmac).toMatch(/^[a-f0-9]{64}$/i);
+    expect(lines[1]._hmac).toMatch(/^[a-f0-9]{64}$/i);
+    expect(lines[0]._hmacKeyVersion).toBe('v2');
+    expect(lines[1]._hmacKeyVersion).toBe('v2');
+  });
+
+  it('wraps tampered entries with <unverified_history> on load', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    signedStore.append({
+      channelId: 'api:session-1',
+      role: 'user',
+      content: 'original',
+      timestamp: 1000,
+    });
+    signedStore.append({
+      channelId: 'api:session-1',
+      role: 'assistant',
+      content: 'untouched',
+      timestamp: 2000,
+    });
+
+    const file = readdirSync(dir).find(f => f.endsWith('.jsonl') && !f.startsWith('user_'));
+    expect(file).toBeDefined();
+    const filePath = join(dir, file!);
+    const lines = readFileSync(filePath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[0].content = 'tampered';
+    writeFileSync(filePath, lines.map(line => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    const entries = reloaded.getRecent('api:session-1', 10);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].content).toContain('<unverified_history>');
+    expect(entries[0].content).toContain('tampered');
+    expect(entries[1].content).toBe('untouched');
+  });
+
+  it('keeps unmodified signed entries verified on reload', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    signedStore.append({
+      channelId: 'api:stable',
+      role: 'user',
+      content: 'safe',
+      timestamp: 1000,
+    });
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    const entries = reloaded.getRecent('api:stable', 10);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toBe('safe');
+    expect(entries[0].content).not.toContain('<unverified_history>');
+  });
+
+  it('supports key rotation while verifying older entries', () => {
+    const firstKeyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:old-key',
+      activeVersion: 'v1',
+    });
+    const rotatingStore = new SessionStore(dir, { integrityKeyring: firstKeyring });
+    rotatingStore.append({
+      channelId: 'api:rotate',
+      role: 'user',
+      content: 'first',
+      timestamp: 1000,
+    });
+
+    const rotatedKeyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:old-key,v2:new-key',
+      activeVersion: 'v2',
+    });
+    const rotatedStore = new SessionStore(dir, { integrityKeyring: rotatedKeyring });
+    rotatedStore.append({
+      channelId: 'api:rotate',
+      role: 'assistant',
+      content: 'second',
+      timestamp: 2000,
+    });
+
+    const file = readdirSync(dir).find(f => f.endsWith('.jsonl') && !f.startsWith('user_'));
+    expect(file).toBeDefined();
+    const lines = readFileSync(join(dir, file!), 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as { _hmacKeyVersion?: string });
+    expect(lines[0]._hmacKeyVersion).toBe('v1');
+    expect(lines[1]._hmacKeyVersion).toBe('v2');
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: rotatedKeyring });
+    const entries = reloaded.getRecent('api:rotate', 10);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].content).toBe('first');
+    expect(entries[1].content).toBe('second');
+    expect(entries[0].content).not.toContain('<unverified_history>');
+    expect(entries[1].content).not.toContain('<unverified_history>');
   });
 });
 

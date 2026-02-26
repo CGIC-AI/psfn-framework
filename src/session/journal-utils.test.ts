@@ -21,6 +21,9 @@ import {
   quarantineSidecarPath,
   parseJournalText,
   readJournalFile,
+  readJournalFirstEntry,
+  readJournalTailEntries,
+  scanJournalFileMetadata,
   signJournalEntry,
   verifyJournalEntryIntegrity,
   wrapUnverifiedHistory,
@@ -153,6 +156,84 @@ describe('journal utils', () => {
     expect(parsed.entries).toHaveLength(2);
     expect(parsed.maxId).toBe(2);
     expect(parsed.quarantined).toEqual([]);
+  });
+
+  it('reads first valid journal entry without full materialization', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-journal-utils-'));
+    dirs.push(dir);
+    const filePath = join(dir, 'first-entry.jsonl');
+
+    writeFileSync(filePath, '{bad\n\n' + JSON.stringify(buildMessageJournalEntry(2, {
+      channelId: 'ch1',
+      role: 'assistant',
+      content: 'hi',
+      timestamp: 2000,
+    })) + '\n', 'utf-8');
+
+    const first = readJournalFirstEntry(filePath);
+    expect(first).not.toBeNull();
+    expect(first?.channelId).toBe('ch1');
+    expect(first?.id).toBe(2);
+  });
+
+  it('scans journal metadata with bounded memory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-journal-utils-'));
+    dirs.push(dir);
+    const filePath = join(dir, 'meta.jsonl');
+
+    appendJournalEntry(filePath, buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'a',
+      timestamp: 1000,
+    }));
+    appendJournalEntry(filePath, buildExtractionMarkerJournalEntry(2, 'ch1', 1, 1100));
+    appendJournalEntry(filePath, buildCompactionJournalEntry(3, 'ch1', 'sum', 1, 1200));
+    appendJournalEntry(filePath, buildMessageJournalEntry(4, {
+      channelId: 'ch1',
+      role: 'assistant',
+      content: 'b',
+      timestamp: 1300,
+    }));
+
+    const metadata = scanJournalFileMetadata(filePath);
+    expect(metadata.maxId).toBe(4);
+    expect(metadata.messageCount).toBe(2);
+    expect(metadata.lastTimestamp).toBe(1300);
+    expect(metadata.lastExtractionCoveredUpTo).toBe(1);
+    expect(metadata.lastEntry?.type).toBe('message');
+  });
+
+  it('reads tail entries by message window and includes boundary entry', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-journal-utils-'));
+    dirs.push(dir);
+    const filePath = join(dir, 'tail.jsonl');
+
+    appendJournalEntry(filePath, buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'm1',
+      timestamp: 1000,
+    }));
+    appendJournalEntry(filePath, buildExtractionMarkerJournalEntry(2, 'ch1', 1, 1100));
+    appendJournalEntry(filePath, buildMessageJournalEntry(3, {
+      channelId: 'ch1',
+      role: 'assistant',
+      content: 'm2',
+      timestamp: 1200,
+    }));
+    appendJournalEntry(filePath, buildCompactionJournalEntry(4, 'ch1', 'sum', 2, 1300));
+    appendJournalEntry(filePath, buildMessageJournalEntry(5, {
+      channelId: 'ch1',
+      role: 'assistant',
+      content: 'm3',
+      timestamp: 1400,
+    }));
+
+    const tail = readJournalTailEntries(filePath, { messageLimit: 2 });
+    expect(tail.truncated).toBe(true);
+    expect(tail.entries.map(entry => entry.id)).toEqual([2, 3, 4, 5]);
+    expect(tail.entries.filter(entry => entry.type === 'message').map(entry => entry.id)).toEqual([3, 5]);
   });
 
   it('writes and clears quarantine sidecar files', () => {

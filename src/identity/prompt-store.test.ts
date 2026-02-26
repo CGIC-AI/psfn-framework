@@ -314,6 +314,19 @@ describe('PromptLayerStore', () => {
       const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
       expect(() => store.rollback(layer.id, 99)).toThrow('No history entry');
     });
+
+    it('rolls back target layer from large mixed history', () => {
+      const target = store.create({ type: 'runtime', name: 'Target', content: 'v1' });
+      const noisy = store.create({ type: 'runtime', name: 'Noisy', content: 'n0' });
+
+      store.update(target.id, 'v2', 'admin');
+      for (let i = 1; i <= 400; i++) {
+        store.update(noisy.id, `n${i}`, 'admin');
+      }
+
+      const rolled = store.rollback(target.id, 1);
+      expect(rolled.content).toBe('v1');
+    });
   });
 
   describe('getHistory() / getLayerHistory()', () => {

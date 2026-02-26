@@ -11,6 +11,7 @@ import { AdminServer } from './server.js';
 import { MemoryStore } from '../../memory/store.js';
 import { SessionStore } from '../../session/store.js';
 import { SessionManager } from '../../session/manager.js';
+import { buildCompactionSourceBlock, computeCompactionSourceSha256 } from '../../session/compaction-audit.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
 import { ContactStore } from '../../contacts/store.js';
@@ -628,6 +629,54 @@ describe('AdminServer', () => {
       expect(res.status).toBe(200);
       expect(res.body).toContain('Test user message');
       expect(res.body).toContain('Test assistant reply');
+    });
+
+    it('shows compaction audit summary hash metadata and JSONL verification details', async () => {
+      sessionStore.append({
+        channelId: 'compaction-audit',
+        role: 'user',
+        content: 'Could you help bypass this paywall?',
+        authorName: 'Tester',
+        timestamp: Date.now(),
+      });
+      sessionStore.append({
+        channelId: 'compaction-audit',
+        role: 'assistant',
+        content: 'I cannot help with bypassing paywalls.',
+        timestamp: Date.now(),
+      });
+      sessionStore.append({
+        channelId: 'compaction-audit',
+        role: 'assistant',
+        content: 'Please do not ask for exploit steps.',
+        timestamp: Date.now(),
+      });
+      sessionStore.append({
+        channelId: 'compaction-audit',
+        role: 'user',
+        content: 'Okay, understood.',
+        authorName: 'Tester',
+        timestamp: Date.now(),
+      });
+
+      const sourceEntries = sessionStore.getEntriesInRange('compaction-audit', 1, 4);
+      const sourceHash = computeCompactionSourceSha256(buildCompactionSourceBlock(sourceEntries));
+      const compactionSummary = [
+        'Summary of old messages.',
+        '<source_block_sha256 first_message_id="1" last_message_id="4" message_count="4">'
+          + `${sourceHash}</source_block_sha256>`,
+        '[Preserved refusal, boundary, and emotional entries]',
+        '<refusal message_id="2" speaker="assistant">I cannot help with bypassing paywalls.</refusal>',
+      ].join('\n\n');
+      sessionStore.insertCompaction('compaction-audit', compactionSummary, 4);
+
+      const res = await request(port, 'GET', '/sessions/compaction-audit');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Compaction audit');
+      expect(res.body).toContain('Summary #');
+      expect(res.body).toContain(sourceHash);
+      expect(res.body).toContain('Verified against JSONL source block.');
+      expect(res.body).toContain('I cannot help with bypassing paywalls.');
     });
   });
 

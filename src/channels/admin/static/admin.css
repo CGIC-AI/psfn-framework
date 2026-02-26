@@ -608,6 +608,74 @@ td {
   font-family: 'Courier New', monospace;
 }
 
+.compaction-audit-list {
+  margin-top: 0.7rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.compaction-audit-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #F9F6F1;
+  padding: 0.5rem 0.7rem;
+}
+
+.compaction-audit-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.compaction-audit-badge {
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  border: 1px solid transparent;
+}
+
+.compaction-audit-badge-verified {
+  background: #E8F3EC;
+  border-color: #9CC9A9;
+  color: #1E4D2D;
+}
+
+.compaction-audit-badge-mismatch {
+  background: #FFF0F0;
+  border-color: #E0A1A1;
+  color: #7A1E1E;
+}
+
+.compaction-audit-badge-missing-source,
+.compaction-audit-badge-missing-hash {
+  background: #F4F1EA;
+  border-color: #C7BBA7;
+  color: #5D4A33;
+}
+
+.compaction-audit-meta {
+  margin-top: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.compaction-audit-summary {
+  margin: 0.55rem 0 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #FCFAF6;
+  padding: 0.55rem 0.65rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .crm-notes {
   margin-top: 0.25rem;
   color: var(--text-muted);

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { MemoryStore } from '../../memory/store.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionManager } from '../../session/manager.js';
+import type { CompactionSummary } from '../../session/types.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { ShardManager } from '../../shards/manager.js';
 import type { EventBus, EventName, EventMap } from '../../event-bus.js';
@@ -23,6 +24,7 @@ import type {
   AdminChatDebugEventPayload,
   AdminChatDebugStreamOptions,
   AdminChatDebugDetailValue,
+  CompactionAuditView,
 } from './types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { ContactStore } from '../../contacts/store.js';
@@ -95,6 +97,11 @@ import {
   parseStructuredPromptForm,
 } from './prompt-structured-content.js';
 import { AdminAuditTimelineStore } from './audit-timeline.js';
+import {
+  buildCompactionSourceBlock,
+  computeCompactionSourceSha256,
+  parseCompactionSourceHashTag,
+} from '../../session/compaction-audit.js';
 import * as tpl from './templates.js';
 
 interface ContactIdentityLinkView {
@@ -536,6 +543,83 @@ export class AdminHandlers {
     return undefined;
   }
 
+  private buildCompactionAuditViews(channelId: string): CompactionAuditView[] {
+    return this.sessionStore
+      .getCompactionSummaries(channelId)
+      .slice()
+      .sort((left, right) => right.id - left.id)
+      .map(summary => this.verifyCompactionSummary(channelId, summary));
+  }
+
+  private verifyCompactionSummary(channelId: string, summary: CompactionSummary): CompactionAuditView {
+    const parsed = parseCompactionSourceHashTag(summary.summary);
+    if (!parsed) {
+      return {
+        id: summary.id,
+        createdAt: summary.createdAt,
+        coveredUpTo: summary.coveredUpTo,
+        summary: summary.summary,
+        sourceHash: null,
+        sourceFirstMessageId: null,
+        sourceLastMessageId: null,
+        sourceMessageCount: null,
+        verification: 'missing_hash',
+        verificationDetail: 'Source hash metadata is missing in this compaction summary.',
+      };
+    }
+
+    const sourceEntries = this.sessionStore.getEntriesInRange(
+      channelId,
+      parsed.firstMessageId,
+      parsed.lastMessageId,
+    );
+    const firstId = sourceEntries[0]?.id ?? null;
+    const lastId = sourceEntries[sourceEntries.length - 1]?.id ?? null;
+    if (sourceEntries.length !== parsed.messageCount || firstId !== parsed.firstMessageId || lastId !== parsed.lastMessageId) {
+      return {
+        id: summary.id,
+        createdAt: summary.createdAt,
+        coveredUpTo: summary.coveredUpTo,
+        summary: summary.summary,
+        sourceHash: parsed.sha256,
+        sourceFirstMessageId: parsed.firstMessageId,
+        sourceLastMessageId: parsed.lastMessageId,
+        sourceMessageCount: parsed.messageCount,
+        verification: 'missing_source',
+        verificationDetail: `JSONL source block mismatch: expected ids ${parsed.firstMessageId}-${parsed.lastMessageId} (${parsed.messageCount} entries), found ${sourceEntries.length} entries.`,
+      };
+    }
+
+    const computedHash = computeCompactionSourceSha256(buildCompactionSourceBlock(sourceEntries));
+    if (computedHash !== parsed.sha256) {
+      return {
+        id: summary.id,
+        createdAt: summary.createdAt,
+        coveredUpTo: summary.coveredUpTo,
+        summary: summary.summary,
+        sourceHash: parsed.sha256,
+        sourceFirstMessageId: parsed.firstMessageId,
+        sourceLastMessageId: parsed.lastMessageId,
+        sourceMessageCount: parsed.messageCount,
+        verification: 'mismatch',
+        verificationDetail: `Hash mismatch: summary=${parsed.sha256} jsonl=${computedHash}.`,
+      };
+    }
+
+    return {
+      id: summary.id,
+      createdAt: summary.createdAt,
+      coveredUpTo: summary.coveredUpTo,
+      summary: summary.summary,
+      sourceHash: parsed.sha256,
+      sourceFirstMessageId: parsed.firstMessageId,
+      sourceLastMessageId: parsed.lastMessageId,
+      sourceMessageCount: parsed.messageCount,
+      verification: 'verified',
+      verificationDetail: 'Verified against JSONL source block.',
+    };
+  }
+
   sessionList(): string {
     const channels = this.sessionStore.listChannels();
     const contacts = this.contactStore?.listAll() ?? [];
@@ -553,7 +637,12 @@ export class AdminHandlers {
 
   sessionMessages(channelId: string): string {
     const messages = this.sessionManager.getRecentMessages(channelId, 100);
-    return tpl.layout(`Session: ${channelId}`, tpl.sessionMessagesPage(channelId, messages), 'sessions');
+    const compactionAuditViews = this.buildCompactionAuditViews(channelId);
+    return tpl.layout(
+      `Session: ${channelId}`,
+      tpl.sessionMessagesPage(channelId, messages, compactionAuditViews),
+      'sessions',
+    );
   }
 
   sessionMessagesFragment(channelId: string): string {

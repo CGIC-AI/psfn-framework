@@ -1209,6 +1209,35 @@ describe('ApiServer with auth', () => {
     expect(body.error.type).toBe('invalid_request');
   });
 
+  it('rejects telemetry payloads with invalid JSON bodies', async () => {
+    const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port,
+          method: 'POST',
+          path: '/v1/telemetry/ingest',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer test-secret-key',
+          },
+        },
+        (response) => {
+          let data = '';
+          response.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+          response.on('end', () => resolve({ status: response.statusCode!, body: data }));
+        },
+      );
+      req.on('error', reject);
+      req.write('{bad json');
+      req.end();
+    });
+
+    expect(res.status).toBe(400);
+    const body = JSON.parse(res.body);
+    expect(body.error.type).toBe('invalid_json');
+  });
+
   it('rejects telemetry event types outside the allowlist', async () => {
     const res = await request(port, 'POST', '/v1/telemetry/ingest', {
       source: 'sensor-a',

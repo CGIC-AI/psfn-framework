@@ -1,7 +1,7 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { EventBus } from '../event-bus.js';
 import { createComponentLogger } from '../logger.js';
 import { toErrorMessage } from '../utils/errors.js';
+import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import {
   readModuleRegistry,
   resolveModuleRegistryPath,
@@ -26,7 +26,7 @@ interface ActiveModule {
 
 export interface ModuleLoaderOptions {
   eventBus: EventBus;
-  registerTool: (tool: AgentTool<any>, category?: 'core' | 'extended') => void;
+  registerTool: ToolRegistrar;
   registryPath?: string;
 }
 
@@ -58,7 +58,7 @@ function toActivationSource(action: ModuleRegistryMutation['action']): Activatio
 
 export class ModuleLoader {
   private readonly eventBus: EventBus;
-  private readonly registerTool: (tool: AgentTool<any>, category?: 'core' | 'extended') => void;
+  private readonly registerTool: ToolRegistrar;
   private readonly registryPath: string;
   private readonly activeModules = new Map<string, ActiveModule>();
 

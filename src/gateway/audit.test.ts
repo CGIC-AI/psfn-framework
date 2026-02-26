@@ -147,4 +147,33 @@ describe('AuditStore', () => {
     expect(() => new AuditStore(db, { maxAgeMs: 0 })).toThrow('maxAgeMs');
     expect(() => new AuditStore(db, { maxSizeBytes: 0 })).toThrow('maxSizeBytes');
   });
+
+  it('records summary entries with immediate completion', () => {
+    store.recordSummary({
+      method: 'wyoming.session.start',
+      decision: 'ALLOW',
+      params: { connectionId: 'conn-1', sessionId: 's-1' },
+      durationMs: 12.8,
+    });
+
+    const entries = store.getRecent(1);
+    expect(entries[0].method).toBe('wyoming.session.start');
+    expect(entries[0].durationMs).toBe(12);
+    expect(entries[0].error).toBeNull();
+  });
+
+  it('creates summary hooks for Wyoming/audit telemetry wiring', () => {
+    const hook = store.createSummaryHook();
+    hook({
+      method: 'wyoming.policy.violation',
+      decision: 'DENY',
+      params: { code: 'RATE_LIMIT_EXCEEDED' },
+      error: 'Session exceeded event rate',
+    });
+
+    const entries = store.getRecent(1);
+    expect(entries[0].method).toBe('wyoming.policy.violation');
+    expect(entries[0].decision).toBe('DENY');
+    expect(entries[0].error).toContain('event rate');
+  });
 });

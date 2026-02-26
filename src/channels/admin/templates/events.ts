@@ -42,6 +42,66 @@ function renderSelectOption(value: string, label: string, selected: boolean): st
   return `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
 }
 
+function formatEventValue(value: unknown): string {
+  if (value === undefined) return '';
+  if (value === null) return 'null';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `[${value.length} items]`;
+  return JSON.stringify(value);
+}
+
+function formatWyomingEventDetails(type: string, payload: Record<string, unknown>): string | null {
+  if (type === 'wyoming.session.start') {
+    return [
+      `connection=${formatEventValue(payload.connectionId)}`,
+      `session=${formatEventValue(payload.sessionId)}`,
+      `active=${formatEventValue(payload.activeSessions)}`,
+      `max=${formatEventValue(payload.maxSessions)}`,
+    ].join(' ');
+  }
+
+  if (type === 'wyoming.session.end') {
+    return [
+      `connection=${formatEventValue(payload.connectionId)}`,
+      `session=${formatEventValue(payload.sessionId)}`,
+      `reason=${formatEventValue(payload.reason)}`,
+      `durationMs=${formatEventValue(payload.durationMs)}`,
+    ].join(' ');
+  }
+
+  if (type === 'wyoming.policy.violation') {
+    return [
+      `code=${formatEventValue(payload.code)}`,
+      `scope=${formatEventValue(payload.scope)}`,
+      `connection=${formatEventValue(payload.connectionId)}`,
+      `session=${formatEventValue(payload.sessionId)}`,
+      `event=${formatEventValue(payload.eventType)}`,
+      `limit=${formatEventValue(payload.limit)}`,
+      `observed=${formatEventValue(payload.observed)}`,
+      `action=${formatEventValue(payload.action)}`,
+    ].filter(part => !part.endsWith('=')).join(' ');
+  }
+
+  if (type === 'wyoming.connection.error') {
+    return [
+      `connection=${formatEventValue(payload.connectionId)}`,
+      `code=${formatEventValue(payload.code)}`,
+      `error=${formatEventValue(payload.error)}`,
+    ].join(' ');
+  }
+
+  if (type === 'wyoming.audit.summary') {
+    return [
+      `method=${formatEventValue(payload.method)}`,
+      `decision=${formatEventValue(payload.decision)}`,
+      `error=${formatEventValue(payload.error)}`,
+    ].filter(part => !part.endsWith('=')).join(' ');
+  }
+
+  return null;
+}
+
 export function eventsPage(): string {
   return `
     <div hx-ext="sse" sse-connect="/events/stream">
@@ -53,9 +113,12 @@ export function eventsPage(): string {
 
 export function eventItem(type: string, timestamp: number, payload: Record<string, unknown>): string {
   const time = new Date(timestamp).toLocaleTimeString();
-  const details = Object.entries(payload)
+  const wyomingDetails = type.startsWith('wyoming.')
+    ? formatWyomingEventDetails(type, payload)
+    : null;
+  const details = wyomingDetails ?? Object.entries(payload)
     .filter(([k]) => k !== 'type' && k !== 'timestamp')
-    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .map(([k, v]) => `${k}=${formatEventValue(v)}`)
     .join(' ');
   return `<div class="event-item"><span class="event-time">${time}</span> <span class="event-type">${escapeHtml(type)}</span> ${escapeHtml(details)}</div>`;
 }

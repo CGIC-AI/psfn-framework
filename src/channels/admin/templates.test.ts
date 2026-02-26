@@ -18,6 +18,7 @@ import {
   confirmationQueueFragment,
   contactEditForm,
   contactRow,
+  eventItem,
   confirmationsPage,
   identityPage,
   layout,
@@ -213,6 +214,24 @@ describe('admin templates', () => {
     expect(html).toContain('data-version="1"');
     expect(html).toContain('values-reflection');
     expect(html).toContain('Integrity matters');
+  });
+
+  it('renders Wyoming event details in compact operator-friendly format', () => {
+    const html = eventItem('wyoming.policy.violation', 1_700_000_000_000, {
+      connectionId: 'wyoming-conn-1',
+      scope: 'transport',
+      code: 'READ_RATE_LIMIT_EXCEEDED',
+      sessionId: 'session-1',
+      eventType: 'audio.chunk',
+      limit: 120,
+      observed: 121,
+      action: 'close_connection',
+    });
+
+    expect(html).toContain('wyoming.policy.violation');
+    expect(html).toContain('code=READ_RATE_LIMIT_EXCEEDED');
+    expect(html).toContain('scope=transport');
+    expect(html).toContain('session=session-1');
   });
 
   it('escapes login errors', () => {

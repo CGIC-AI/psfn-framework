@@ -1,5 +1,6 @@
 import * as net from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EventBus } from '../../event-bus.js';
 import { WyomingFrameCodec } from './codec.js';
 import { WyomingTcpServer } from './server.js';
 import { WyomingServerError, type WyomingServerCloseReason, type WyomingTransportSession } from './protocol.js';
@@ -90,17 +91,88 @@ describe('WyomingTcpServer', () => {
 
     socket.destroy();
   });
+
+  it('emits Wyoming connection telemetry and audit summaries on open/close', async () => {
+    const eventBus = new EventBus();
+    const opens: string[] = [];
+    const closes: string[] = [];
+    const summaries: Array<{ method: string; decision: string }> = [];
+
+    eventBus.on('wyoming.connection.open', (event) => {
+      opens.push(event.connectionId);
+    });
+    eventBus.on('wyoming.connection.close', (event) => {
+      closes.push(event.reason);
+    });
+
+    const running = await createRunningServer({
+      idleTimeoutMs: 5_000,
+      eventBus,
+      onAuditSummary: (summary) => {
+        summaries.push({ method: summary.method, decision: summary.decision });
+      },
+    }, {});
+
+    const socket = await connectClient(running.port);
+    await waitFor(() => opens.length === 1);
+    socket.destroy();
+    await waitFor(() => closes.length === 1);
+
+    expect(summaries).toEqual(expect.arrayContaining([
+      { method: 'wyoming.connection.open', decision: 'ALLOW' },
+      expect.objectContaining({ method: 'wyoming.connection.close' }),
+    ]));
+  });
+
+  it('enforces read frame rate limits with explicit error code and rate_limited close reason', async () => {
+    const onConnectionError = vi.fn();
+    const onSessionClose = vi.fn();
+    const running = await createRunningServer({
+      idleTimeoutMs: 5_000,
+      maxFramesPerWindow: 1,
+      frameRateWindowMs: 60_000,
+    }, {
+      onConnectionError,
+      onSessionClose,
+    });
+
+    const socket = await connectClient(running.port);
+    const codec = new WyomingFrameCodec();
+    socket.write(Buffer.concat([
+      codec.encode({ type: 'describe' }),
+      codec.encode({ type: 'ping' }),
+    ]));
+
+    await waitFor(() => onConnectionError.mock.calls.length === 1);
+    expect(onConnectionError).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: expect.any(String) }),
+      expect.objectContaining<Partial<WyomingServerError>>({ code: 'READ_RATE_LIMIT_EXCEEDED' }),
+    );
+
+    await waitFor(() => onSessionClose.mock.calls.length === 1);
+    expect(onSessionClose).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: expect.any(String) }),
+      'rate_limited',
+    );
+
+    socket.destroy();
+  });
 });
 
 async function createRunningServer(
   options: {
     idleTimeoutMs: number;
     maxWriteQueueBytes?: number;
+    maxFramesPerWindow?: number;
+    frameRateWindowMs?: number;
+    eventBus?: EventBus;
+    onAuditSummary?: (summary: { method: string; decision: string }) => void;
   },
   hooks: {
     onFrame?: (session: WyomingTransportSession, frame: unknown) => void | Promise<void>;
     onSessionOpen?: (session: WyomingTransportSession) => void | Promise<void>;
     onSessionClose?: (session: WyomingTransportSession, reason: WyomingServerCloseReason) => void | Promise<void>;
+    onConnectionError?: (session: WyomingTransportSession, error: Error) => void | Promise<void>;
   },
 ): Promise<RunningServer> {
   const port = await allocatePort();
@@ -109,6 +181,10 @@ async function createRunningServer(
     port,
     idleTimeoutMs: options.idleTimeoutMs,
     maxWriteQueueBytes: options.maxWriteQueueBytes,
+    maxFramesPerWindow: options.maxFramesPerWindow,
+    frameRateWindowMs: options.frameRateWindowMs,
+    eventBus: options.eventBus,
+    onAuditSummary: options.onAuditSummary,
   }, hooks);
 
   await server.start();

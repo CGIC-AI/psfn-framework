@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { EventBus } from '../../event-bus.js';
 import { WyomingRuntime } from './runtime.js';
 import type { WyomingFrame, WyomingTransportSession } from './protocol.js';
 import {
@@ -366,5 +367,130 @@ describe('WyomingRuntime', () => {
         }),
       }),
     ]);
+  });
+
+  it('emits Wyoming lifecycle telemetry and audit summaries when sessions start/end', async () => {
+    const emitted: WyomingFrame[] = [];
+    const eventBus = new EventBus();
+    const auditSummaries: Array<{ method: string; decision: string }> = [];
+    const sessionStarts: Array<{ connectionId: string; sessionId: string }> = [];
+    const sessionEnds: Array<{ reason: string }> = [];
+
+    eventBus.on('wyoming.session.start', (event) => {
+      sessionStarts.push({
+        connectionId: event.connectionId,
+        sessionId: event.sessionId,
+      });
+    });
+    eventBus.on('wyoming.session.end', (event) => {
+      sessionEnds.push({ reason: event.reason });
+    });
+
+    const runtime = new WyomingRuntime({
+      info: {
+        name: 'psfn-wyoming',
+        version: '1.0.0',
+        services: [],
+      },
+      emitFrame: async (_session, frame) => {
+        emitted.push(frame);
+      },
+      eventBus,
+      onAuditSummary: (summary) => {
+        auditSummaries.push({ method: summary.method, decision: summary.decision });
+      },
+    });
+
+    const transportSession = createTransportSession('conn-audit');
+    await runtime.handleFrame(transportSession, {
+      type: 'session.start',
+      data: { session_id: 'session-audit' },
+    });
+    await runtime.handleFrame(transportSession, {
+      type: 'session.end',
+      data: { session_id: 'session-audit' },
+    });
+
+    expect(sessionStarts).toEqual([
+      { connectionId: 'conn-audit', sessionId: 'session-audit' },
+    ]);
+    expect(sessionEnds).toEqual([
+      { reason: 'session.end' },
+    ]);
+    expect(auditSummaries).toEqual(expect.arrayContaining([
+      { method: 'wyoming.session.start', decision: 'ALLOW' },
+      { method: 'wyoming.session.end', decision: 'ALLOW' },
+    ]));
+    expect(emitted.filter((frame) => frame.type === 'ack')).toHaveLength(2);
+  });
+
+  it('enforces per-session event rate limits with explicit error code and closes the session', async () => {
+    const emitted: WyomingFrame[] = [];
+    const eventBus = new EventBus();
+    const violations: Array<{ code: string; eventType?: string }> = [];
+    const endedReasons: string[] = [];
+    const now = vi.fn(() => 100);
+
+    eventBus.on('wyoming.policy.violation', (event) => {
+      violations.push({ code: event.code, eventType: event.eventType });
+    });
+    eventBus.on('wyoming.session.end', (event) => {
+      endedReasons.push(event.reason);
+    });
+
+    const runtime = new WyomingRuntime({
+      info: {
+        name: 'psfn-wyoming',
+        version: '1.0.0',
+        services: [],
+      },
+      emitFrame: async (_session, frame) => {
+        emitted.push(frame);
+      },
+      eventBus,
+      maxEventsPerSessionWindow: 1,
+      eventRateWindowMs: 1_000,
+      now,
+      onUnhandledEvent: ({ sessionId }) => ({
+        type: 'ack',
+        data: {
+          event: 'audio.chunk',
+          session_id: sessionId ?? null,
+        },
+      }),
+    });
+
+    const transportSession = createTransportSession('conn-rate');
+    await runtime.handleFrame(transportSession, {
+      type: 'session.start',
+      data: { session_id: 'session-rate' },
+    });
+    emitted.length = 0;
+
+    await runtime.handleFrame(transportSession, {
+      type: 'audio.chunk',
+      data: { session_id: 'session-rate' },
+      payload: new Uint8Array([1]),
+    });
+    await runtime.handleFrame(transportSession, {
+      type: 'audio.chunk',
+      data: { session_id: 'session-rate' },
+      payload: new Uint8Array([2]),
+    });
+
+    expect(runtime.getActiveSessionCount()).toBe(0);
+    expect(emitted).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          code: 'RATE_LIMIT_EXCEEDED',
+          event: 'audio.chunk',
+        }),
+      }),
+    ]));
+    expect(violations).toEqual(expect.arrayContaining([
+      { code: 'RATE_LIMIT_EXCEEDED', eventType: 'audio.chunk' },
+    ]));
+    expect(endedReasons).toContain('policy.rate_limit');
   });
 });

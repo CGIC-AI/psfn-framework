@@ -160,6 +160,32 @@ export function attachVoiceErrorsObserver(
         message: event.error,
       });
     }),
+    eventBus.on('wyoming.policy.violation', (event) => {
+      const stage: VoiceErrorStage = event.scope === 'runtime' ? 'orchestrator' : 'transport';
+      const category: VoiceErrorCategory = 'transport';
+      const code = normalizeErrorCode(event.code);
+
+      record({
+        channelId: event.connectionId,
+        stage,
+        category,
+        code,
+        message: event.message,
+      });
+    }),
+    eventBus.on('wyoming.connection.error', (event) => {
+      const stage: VoiceErrorStage = 'transport';
+      const category: VoiceErrorCategory = 'transport';
+      const code = normalizeErrorCode(event.code);
+
+      record({
+        channelId: event.connectionId,
+        stage,
+        category,
+        code,
+        message: event.error,
+      });
+    }),
   ];
 
   return () => {

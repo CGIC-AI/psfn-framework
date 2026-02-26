@@ -56,6 +56,17 @@ interface DiscordVoiceRuntimeConfig {
   getHandler: () => MessageHandler | null;
 }
 
+interface ActiveVoiceTurn {
+  token: symbol;
+  turnId: string;
+  channel: VoiceBasedChannel;
+  connection: VoiceConnection;
+  player: AudioPlayer;
+  abortController: AbortController;
+  sttSession: SttStreamSession | null;
+  ttsSession: TtsSynthesisSession | null;
+}
+
 export class DiscordVoiceRuntime {
   private readonly client: Client;
   private readonly config: SubstrateConfig;
@@ -77,6 +88,7 @@ export class DiscordVoiceRuntime {
   private capturing = false;
   private handlingState = false;
   private activeTurnId: string | null = null;
+  private activeTurn: ActiveVoiceTurn | null = null;
 
   constructor({ client, config, eventBus, getHandler }: DiscordVoiceRuntimeConfig) {
     this.client = client;
@@ -196,7 +208,7 @@ export class DiscordVoiceRuntime {
     this.activeChannel = channel;
 
     this.speakingListener = (userId: string) => {
-      if (userId !== this.targetUserId || this.capturing) return;
+      if (userId !== this.targetUserId || this.capturing || this.activeTurn) return;
       this.handleUtterance().catch((error) => this.emitVoiceError(error));
     };
     connection.receiver.speaking.on('start', this.speakingListener);
@@ -214,6 +226,8 @@ export class DiscordVoiceRuntime {
   }
 
   private async leaveChannel(reason: string): Promise<void> {
+    await this.cancelActiveTurn(`leave:${reason}`);
+
     const prevChannel = this.activeChannel;
     if (!prevChannel && !this.connection) return;
 
@@ -233,6 +247,8 @@ export class DiscordVoiceRuntime {
     this.connection = null;
     this.player = null;
     this.activeChannel = null;
+    this.activeTurn = null;
+    this.activeTurnId = null;
     this.capturing = false;
 
     if (prevChannel) {
@@ -246,26 +262,39 @@ export class DiscordVoiceRuntime {
   }
 
   private async handleUtterance(): Promise<void> {
+    if (this.activeTurn) return;
     if (!this.connection || !this.player || !this.activeChannel || !this.sttConnector || this.ttsConnectors.length === 0) {
       return;
     }
 
     const turnId = `voice-turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const timestampMs = Date.now();
+    const turn: ActiveVoiceTurn = {
+      token: Symbol(turnId),
+      turnId,
+      channel: this.activeChannel,
+      connection: this.connection,
+      player: this.player,
+      abortController: new AbortController(),
+      sttSession: null,
+      ttsSession: null,
+    };
+    this.activeTurn = turn;
     this.activeTurnId = turnId;
     let turnStatus: 'completed' | 'cancelled' | 'timeout' | 'error' = 'completed';
     let turnReason: string | undefined;
 
     this.capturing = true;
     try {
+      this.assertTurnActive(turn);
       await this.eventBus.emit('voice.turn.start', {
         turnId,
-        channelId: this.activeChannel.id,
+        channelId: turn.channel.id,
         userId: this.targetUserId,
         timestampMs,
       });
 
-      const opusStream = this.connection.receiver.subscribe(this.targetUserId, {
+      const opusStream = turn.connection.receiver.subscribe(this.targetUserId, {
         end: {
           behavior: EndBehaviorType.AfterSilence,
           duration: CAPTURE_SILENCE_MS,
@@ -275,8 +304,10 @@ export class DiscordVoiceRuntime {
       const pcm = await runWithVoiceStageBudget({
         stage: 'ingest',
         budgets: this.reliabilityBudgets,
-        task: () => this.decodeOpusToPcm(opusStream),
+        signal: turn.abortController.signal,
+        task: () => this.decodeOpusToPcm(opusStream, turn.abortController.signal),
       });
+      this.assertTurnActive(turn);
       if (pcm.length < MIN_PCM_BYTES) {
         turnReason = 'silence';
         await this.emitTurnObservation({
@@ -296,8 +327,10 @@ export class DiscordVoiceRuntime {
       const rawTranscript = await runWithVoiceStageBudget({
         stage: 'stt',
         budgets: this.reliabilityBudgets,
-        task: () => this.transcribePcm(pcm),
+        signal: turn.abortController.signal,
+        task: () => this.transcribePcm(pcm, turn),
       });
+      this.assertTurnActive(turn);
 
       const transcript = validateTranscriptText(rawTranscript, this.securityLimits);
       if (!transcript) {
@@ -314,26 +347,27 @@ export class DiscordVoiceRuntime {
       }
 
       await this.eventBus.emit('channel.voice.transcript', {
-        guildId: this.activeChannel.guild.id,
-        channelId: this.activeChannel.id,
+        guildId: turn.channel.guild.id,
+        channelId: turn.channel.id,
         userId: this.targetUserId,
         transcript,
       });
       await this.eventBus.emit('voice.stt.final', {
         turnId,
-        channelId: this.activeChannel.id,
+        channelId: turn.channel.id,
         userId: this.targetUserId,
         text: transcript,
         timestampMs: Date.now(),
       });
+      this.assertTurnActive(turn);
 
       const handler = this.getHandler();
       if (!handler) return;
 
-      const member = this.activeChannel.members.get(this.targetUserId);
+      const member = turn.channel.members.get(this.targetUserId);
       const message: SubstrateMessage = {
         id: `voice-${Date.now()}`,
-        channelId: `discord-voice:${this.activeChannel.id}`,
+        channelId: `discord-voice:${turn.channel.id}`,
         channelType: 'discord',
         isDirectMessage: false,
         authorId: this.targetUserId,
@@ -343,7 +377,13 @@ export class DiscordVoiceRuntime {
       };
 
       await this.eventBus.emit('message.received', { message });
-      const response = await handler(message);
+      const response = await runWithVoiceStageBudget({
+        stage: 'llm',
+        budgets: this.reliabilityBudgets,
+        signal: turn.abortController.signal,
+        task: () => handler(message),
+      });
+      this.assertTurnActive(turn);
       await this.eventBus.emit('message.sent', { response });
 
       const text = response.content.trim();
@@ -363,16 +403,17 @@ export class DiscordVoiceRuntime {
 
       await this.eventBus.emit('voice.tts.requested', {
         turnId,
-        channelId: this.activeChannel.id,
+        channelId: turn.channel.id,
         userId: this.targetUserId,
         text,
         timestampMs: Date.now(),
       });
 
-      await this.speakText(text, turnId);
+      await this.speakText(text, turn);
+      this.assertTurnActive(turn);
       await this.eventBus.emit('channel.voice.tts.sent', {
-        guildId: this.activeChannel.guild.id,
-        channelId: this.activeChannel.id,
+        guildId: turn.channel.guild.id,
+        channelId: turn.channel.id,
         userId: this.targetUserId,
         text,
       });
@@ -386,9 +427,10 @@ export class DiscordVoiceRuntime {
       });
       turnStatus = this.classifyTurnStatus(structuredError);
       turnReason = structuredError.message;
+      await this.cancelTurnResources(turn, `turn-error:${code}`);
       await this.eventBus.emit('voice.turn.error', {
         turnId,
-        channelId: this.activeChannel?.id,
+        channelId: turn.channel.id,
         userId: this.targetUserId,
         stage,
         code,
@@ -400,19 +442,19 @@ export class DiscordVoiceRuntime {
     } finally {
       await this.eventBus.emit('voice.turn.end', {
         turnId,
-        channelId: this.activeChannel?.id,
+        channelId: turn.channel.id,
         userId: this.targetUserId,
         status: turnStatus,
         reason: turnReason,
         timestampMs: Date.now(),
       });
-      this.activeTurnId = null;
-      this.capturing = false;
+      await this.cancelTurnResources(turn, `turn-${turnStatus}`);
+      this.resetTurnStateIfCurrent(turn);
     }
   }
 
-  private async transcribePcm(pcm: Buffer): Promise<string> {
-    if (!this.sttConnector || !this.activeChannel) return '';
+  private async transcribePcm(pcm: Buffer, turn: ActiveVoiceTurn): Promise<string> {
+    if (!this.sttConnector) return '';
 
     const session = await this.sttConnector.startStream({
       sampleRateHz: 48_000,
@@ -420,39 +462,40 @@ export class DiscordVoiceRuntime {
       encoding: 'pcm_s16le',
       model: this.config.deepgramModel,
       interimResults: true,
-    });
+    }, turn.abortController.signal);
+    turn.sttSession = session;
 
     let finalTranscript = '';
     let latestPartial = '';
     let streamError: unknown;
 
-    const writerPromise = this.writePcmToSttSession(session, pcm);
+    const writerPromise = this.writePcmToSttSession(session, pcm, turn.abortController.signal);
 
     try {
       for await (const chunk of session.transcripts) {
+        this.assertTurnActive(turn);
+
         const transcriptText = chunk.text.trim();
         if (!transcriptText) continue;
 
         if (chunk.type === 'partial') {
           latestPartial = transcriptText;
           await this.eventBus.emit('channel.voice.transcript.partial', {
-            guildId: this.activeChannel.guild.id,
-            channelId: this.activeChannel.id,
+            guildId: turn.channel.guild.id,
+            channelId: turn.channel.id,
             userId: this.targetUserId,
             transcript: transcriptText,
             confidence: chunk.confidence,
             startMs: chunk.startMs,
             endMs: chunk.endMs,
           });
-          if (this.activeTurnId) {
-            await this.eventBus.emit('voice.stt.partial', {
-              turnId: this.activeTurnId,
-              channelId: this.activeChannel.id,
-              userId: this.targetUserId,
-              text: transcriptText,
-              timestampMs: Date.now(),
-            });
-          }
+          await this.eventBus.emit('voice.stt.partial', {
+            turnId: turn.turnId,
+            channelId: turn.channel.id,
+            userId: this.targetUserId,
+            text: transcriptText,
+            timestampMs: Date.now(),
+          });
           continue;
         }
 
@@ -471,6 +514,10 @@ export class DiscordVoiceRuntime {
       if (!streamError) {
         streamError = error;
       }
+    } finally {
+      if (turn.sttSession === session) {
+        turn.sttSession = null;
+      }
     }
 
     if (streamError) {
@@ -484,17 +531,29 @@ export class DiscordVoiceRuntime {
     return finalTranscript || latestPartial;
   }
 
-  private async writePcmToSttSession(session: SttStreamSession, pcm: Buffer): Promise<void> {
+  private async writePcmToSttSession(session: SttStreamSession, pcm: Buffer, signal?: AbortSignal): Promise<void> {
     for (let offset = 0; offset < pcm.length; offset += STT_STREAM_CHUNK_BYTES) {
+      if (signal?.aborted) {
+        throw new Error('STT session aborted');
+      }
+
       const nextChunk = pcm.subarray(offset, Math.min(offset + STT_STREAM_CHUNK_BYTES, pcm.length));
       await session.writeAudio(nextChunk);
+    }
+
+    if (signal?.aborted) {
+      throw new Error('STT session aborted');
     }
 
     await session.endInput();
   }
 
-  private async speakText(text: string, turnId?: string): Promise<void> {
-    if (!this.player) return;
+  private async speakText(text: string, turn?: ActiveVoiceTurn): Promise<void> {
+    const player = turn?.player ?? this.player;
+    if (!player) return;
+    if (turn) {
+      this.assertTurnActive(turn);
+    }
 
     const safeText = validateTtsInputText(text, this.securityLimits);
     if (!safeText) return;
@@ -513,8 +572,9 @@ export class DiscordVoiceRuntime {
     await runWithVoiceStageBudget({
       stage: 'tts',
       budgets: this.reliabilityBudgets,
+      signal: turn?.abortController.signal,
       task: async () => {
-        await this.playWithTtsConnector(selected.value, safeText, turnId);
+        await this.playWithTtsConnector(selected.value, safeText, turn);
       },
     });
   }
@@ -522,16 +582,26 @@ export class DiscordVoiceRuntime {
   private async playWithTtsConnector(
     connector: StreamingTtsConnector,
     text: string,
-    turnId?: string,
+    turn?: ActiveVoiceTurn,
   ): Promise<void> {
     try {
+      if (turn) {
+        this.assertTurnActive(turn);
+      }
       const streamSession = await connector.synthesizeStream({
         text,
         encoding: 'mp3',
         allowBufferFallback: false,
-      });
-      await this.playTtsSession(streamSession, turnId);
+      }, turn?.abortController.signal);
+      if (turn) {
+        turn.ttsSession = streamSession;
+      }
+      await this.playTtsSession(streamSession, turn);
     } catch (error) {
+      if (turn?.abortController.signal.aborted || this.classifyTurnStatus(error) === 'cancelled') {
+        throw error;
+      }
+
       const errorText = error instanceof Error ? error.message : String(error);
       log.warn('Streaming TTS failed, using buffered fallback', {
         provider: connector.id,
@@ -539,17 +609,21 @@ export class DiscordVoiceRuntime {
       });
 
       try {
-        const audio = await connector.synthesizeBuffer({ text, encoding: 'mp3' });
+        if (turn) {
+          this.assertTurnActive(turn);
+        }
+
+        const audio = await connector.synthesizeBuffer({ text, encoding: 'mp3' }, turn?.abortController.signal);
         validateTtsAudioChunk(audio, 0, this.securityLimits);
-        if (turnId) {
+        if (turn?.turnId) {
           await this.eventBus.emit('voice.tts.first-byte', {
-            turnId,
-            channelId: this.activeChannel?.id,
+            turnId: turn.turnId,
+            channelId: turn.channel.id,
             userId: this.targetUserId,
             timestampMs: Date.now(),
           });
         }
-        await this.playReadableAudio(Readable.from(audio));
+        await this.playReadableAudio(Readable.from(audio), turn);
       } catch (fallbackError) {
         throw this.createVoiceError({
           error: fallbackError,
@@ -560,30 +634,38 @@ export class DiscordVoiceRuntime {
     }
   }
 
-  private async playTtsSession(session: TtsSynthesisSession, turnId?: string): Promise<void> {
+  private async playTtsSession(session: TtsSynthesisSession, turn?: ActiveVoiceTurn): Promise<void> {
     try {
-      await this.playReadableAudio(Readable.from(this.createPlaybackChunkIterator(session.audio, turnId)));
+      await this.playReadableAudio(Readable.from(this.createPlaybackChunkIterator(session.audio, turn)), turn);
     } finally {
-      await session.cancel('playback-finished').catch(() => undefined);
+      const reason = turn?.abortController.signal.aborted ? 'playback-aborted' : 'playback-finished';
+      await session.cancel(reason).catch(() => undefined);
+      if (turn && turn.ttsSession === session) {
+        turn.ttsSession = null;
+      }
     }
   }
 
   private async *createPlaybackChunkIterator(
     audio: AsyncIterable<TtsAudioChunk>,
-    turnId?: string,
+    turn?: ActiveVoiceTurn,
   ): AsyncGenerator<Buffer> {
     let totalAudioBytes = 0;
     let emittedFirstByte = false;
 
     for await (const chunk of audio) {
+      if (turn) {
+        this.assertTurnActive(turn);
+      }
+
       totalAudioBytes = validateTtsAudioChunk(chunk.audio, totalAudioBytes, this.securityLimits);
       if (chunk.audio.byteLength === 0) continue;
 
-      if (!emittedFirstByte && turnId) {
+      if (!emittedFirstByte && turn?.turnId) {
         emittedFirstByte = true;
         await this.eventBus.emit('voice.tts.first-byte', {
-          turnId,
-          channelId: this.activeChannel?.id,
+          turnId: turn.turnId,
+          channelId: turn.channel.id,
           userId: this.targetUserId,
           timestampMs: Date.now(),
         });
@@ -593,29 +675,38 @@ export class DiscordVoiceRuntime {
     }
   }
 
-  private async playReadableAudio(audio: Readable): Promise<void> {
-    if (!this.player) return;
+  private async playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void> {
+    const player = turn?.player ?? this.player;
+    if (!player) return;
+    if (turn) {
+      this.assertTurnActive(turn);
+    }
 
     const resource = createAudioResource(audio);
-    this.player.play(resource);
+    player.play(resource);
 
     try {
       await runWithVoiceStageBudget({
         stage: 'output',
         budgets: this.reliabilityBudgets,
+        signal: turn?.abortController.signal,
         task: async () => {
-          await entersState(this.player!, AudioPlayerStatus.Playing, 5_000);
-          await entersState(this.player!, AudioPlayerStatus.Idle, 120_000);
+          await entersState(player, AudioPlayerStatus.Playing, 5_000);
+          await entersState(player, AudioPlayerStatus.Idle, 120_000);
         },
       });
     } catch (error) {
+      if (this.classifyTurnStatus(error) === 'cancelled') {
+        throw error;
+      }
+
       const playbackError = this.createVoiceError({
         error,
         stage: 'tts',
         code: 'VOICE_PLAYBACK_FAILED',
       });
       await this.emitTurnObservation({
-        turnId: this.activeTurnId ?? undefined,
+        turnId: turn?.turnId ?? this.activeTurnId ?? undefined,
         stage: 'tts',
         kind: 'playback-error',
         detail: {
@@ -626,7 +717,7 @@ export class DiscordVoiceRuntime {
     }
   }
 
-  private async decodeOpusToPcm(opusStream: NodeJS.ReadableStream): Promise<Buffer> {
+  private async decodeOpusToPcm(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const decoder = new prism.opus.Decoder({
         rate: 48_000,
@@ -635,16 +726,57 @@ export class DiscordVoiceRuntime {
       });
       const chunks: Buffer[] = [];
       let total = 0;
+      let settled = false;
 
-      decoder.on('data', (chunk: Buffer) => {
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      const succeed = (): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(Buffer.concat(chunks, total));
+      };
+
+      const onData = (chunk: Buffer): void => {
         chunks.push(chunk);
         total += chunk.length;
-      });
-      decoder.once('end', () => {
-        resolve(Buffer.concat(chunks, total));
-      });
-      decoder.once('error', (error: Error) => reject(error));
-      opusStream.once('error', (error: Error) => reject(error));
+      };
+      const onEnd = (): void => {
+        succeed();
+      };
+      const onDecoderError = (error: Error): void => {
+        fail(error);
+      };
+      const onOpusError = (error: Error): void => {
+        fail(error);
+      };
+      const onAbort = (): void => {
+        fail(new Error('Voice capture aborted'));
+      };
+
+      const cleanup = (): void => {
+        decoder.off('data', onData);
+        decoder.off('end', onEnd);
+        decoder.off('error', onDecoderError);
+        opusStream.off('error', onOpusError);
+        signal?.removeEventListener('abort', onAbort);
+      };
+
+      if (signal?.aborted) {
+        fail(new Error('Voice capture aborted'));
+        return;
+      }
+
+      decoder.on('data', onData);
+      decoder.once('end', onEnd);
+      decoder.once('error', onDecoderError);
+      opusStream.once('error', onOpusError);
+      signal?.addEventListener('abort', onAbort, { once: true });
 
       opusStream.pipe(decoder);
     });
@@ -654,7 +786,55 @@ export class DiscordVoiceRuntime {
     return channel.members.filter(member => !member.user.bot).size;
   }
 
+  private assertTurnActive(turn: ActiveVoiceTurn): void {
+    if (this.activeTurn?.token !== turn.token || turn.abortController.signal.aborted) {
+      throw new Error('Voice turn aborted');
+    }
+  }
+
+  private resetTurnStateIfCurrent(turn: ActiveVoiceTurn): void {
+    if (this.activeTurn?.token !== turn.token) return;
+
+    this.activeTurn = null;
+    this.activeTurnId = null;
+    this.capturing = false;
+  }
+
+  private async cancelTurnResources(turn: ActiveVoiceTurn, reason: string): Promise<void> {
+    if (!turn.abortController.signal.aborted) {
+      turn.abortController.abort(reason);
+    }
+
+    const cancelTasks: Array<Promise<unknown>> = [];
+
+    if (turn.sttSession) {
+      const session = turn.sttSession;
+      turn.sttSession = null;
+      cancelTasks.push(session.cancel(reason).catch(() => undefined));
+    }
+
+    if (turn.ttsSession) {
+      const session = turn.ttsSession;
+      turn.ttsSession = null;
+      cancelTasks.push(session.cancel(reason).catch(() => undefined));
+    }
+
+    if (cancelTasks.length > 0) {
+      await Promise.allSettled(cancelTasks);
+    }
+  }
+
+  private async cancelActiveTurn(reason: string): Promise<void> {
+    const turn = this.activeTurn;
+    if (!turn) return;
+
+    await this.cancelTurnResources(turn, reason);
+    this.resetTurnStateIfCurrent(turn);
+  }
+
   private emitVoiceError(error: unknown): void {
+    void this.cancelActiveTurn('voice-error');
+
     const stage = this.resolveVoiceErrorStage(error);
     const code = this.resolveVoiceErrorCode(error);
     const voiceError = this.createVoiceError({

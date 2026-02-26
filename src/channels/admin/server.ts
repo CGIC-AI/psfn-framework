@@ -322,6 +322,7 @@ export class AdminServer implements Lifecycle {
           this.sendHtml(res, this.handlers.eventsPageHtml(url.searchParams));
         },
       },
+      { method: 'GET', match: exactPath('/values'), handle: (_req, res) => this.sendHtml(res, this.handlers.valuesTimelinePageHtml()) },
       { method: 'GET', match: exactPath('/primer'), handle: (_req, res) => this.sendHtml(res, this.handlers.primerPage()) },
       {
         method: 'GET',

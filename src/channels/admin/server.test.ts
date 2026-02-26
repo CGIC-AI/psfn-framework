@@ -1599,6 +1599,33 @@ describe('AdminServer', () => {
       const res = await request(port, 'GET', '/');
       expect(res.body).toContain('href="/primer"');
       expect(res.body).toContain('Garden Primer');
+      expect(res.body).toContain('href="/values"');
+    });
+  });
+
+  describe('Values timeline', () => {
+    it('returns values timeline page', async () => {
+      const res = await request(port, 'GET', '/values');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Values Timeline');
+      expect(res.body).toContain('Versioned values journal entries');
+    });
+
+    it('renders persisted values reflection entries', async () => {
+      writeFileSync(
+        join(tempDir, 'values.jsonl'),
+        [
+          '{"id":"values-1","version":1,"templateId":"values-reflection","templateName":"Values Reflection","prompt":"What matters to me and why?","reflection":"Integrity matters because trust compounds.","createdAt":"2026-02-26T00:00:00.000Z"}',
+          '{"id":"values-2","version":2,"templateId":"values-reflection","templateName":"Values Reflection","prompt":"What matters to me and why?","reflection":"Care matters because continuity protects identity.","createdAt":"2026-02-26T01:00:00.000Z"}',
+        ].join('\n') + '\n',
+        'utf-8',
+      );
+
+      const res = await request(port, 'GET', '/values');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('data-version="2"');
+      expect(res.body).toContain('Care matters because continuity protects identity');
+      expect(res.body).toContain('What matters to me and why?');
     });
   });
 

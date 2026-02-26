@@ -30,6 +30,7 @@ import {
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from '../scheduler/heartbeat-tools.js';
+import { ValuesJournalStore } from '../values/store.js';
 
 const log = createComponentLogger('SharedWiring');
 
@@ -142,6 +143,7 @@ export function wireHeartbeatRuntime(
   heartbeatChannelId?: string,
 ): void {
   const store = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
+  const valuesJournal = new ValuesJournalStore(join(dataDir, 'values.jsonl'));
   const policy = store.load();
 
   // Create sync function that re-registers all reflection tasks
@@ -174,6 +176,15 @@ export function wireHeartbeatRuntime(
                 content: template.prompt,
                 timestamp: new Date(),
               });
+
+              if (template.id === 'values-reflection') {
+                valuesJournal.append({
+                  templateId: template.id,
+                  templateName: template.name,
+                  prompt: template.prompt,
+                  reflection: response.content,
+                });
+              }
               if (template.sendToDiscord && heartbeatChannelId) {
                 await sender.send(heartbeatChannelId, response.content);
               }

@@ -279,6 +279,24 @@ td {
   gap: 0.75rem;
 }
 
+.values-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.values-item {
+  border-left: 3px solid var(--reflection);
+}
+
+.values-prompt {
+  margin-top: 0.45rem;
+}
+
+.values-reflection {
+  white-space: pre-wrap;
+}
+
 .audit-item {
   border: 1px solid var(--border);
   border-radius: 10px;

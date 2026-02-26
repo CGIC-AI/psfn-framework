@@ -27,6 +27,7 @@ import {
   promptDetailPage,
   sessionListPage,
   sessionMessagesPage,
+  valuesTimelinePage,
 } from './templates.js';
 
 describe('admin templates', () => {
@@ -37,6 +38,7 @@ describe('admin templates', () => {
     expect(html).toContain('<script src="/static/sse.js"></script>');
     expect(html).toContain('href="/skills"');
     expect(html).toContain('href="/confirmations"');
+    expect(html).toContain('href="/values"');
   });
 
   it('renders confirmation queue fragments with review controls', () => {
@@ -89,6 +91,27 @@ describe('admin templates', () => {
     expect(html).toContain('name="timeRange"');
     expect(html).toContain('PSFN edited runtime prompt layer');
     expect(html).toContain('data-action-type="identity_edit"');
+  });
+
+  it('renders values timeline entries with version metadata', () => {
+    const html = valuesTimelinePage({
+      entries: [
+        {
+          id: 'values-1',
+          version: 1,
+          templateId: 'values-reflection',
+          templateName: 'Values Reflection',
+          prompt: 'What matters to me and why?',
+          reflection: 'Integrity matters because trust compounds over time.',
+          createdAt: '2026-02-26T00:00:00.000Z',
+        },
+      ],
+    });
+
+    expect(html).toContain('Versioned values journal entries');
+    expect(html).toContain('data-version="1"');
+    expect(html).toContain('values-reflection');
+    expect(html).toContain('Integrity matters');
   });
 
   it('escapes login errors', () => {

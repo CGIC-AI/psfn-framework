@@ -11,6 +11,7 @@ import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { AdminHandlers } from './handlers.js';
+import { buildAdminApiRoutes } from './api-routes.js';
 import { createComponentLogger } from '../../logger.js';
 import {
   acceptsHtml,
@@ -26,6 +27,13 @@ import {
   sendRedirect,
   sendText,
 } from '../http/primitives.js';
+import { AdminDashboardDataService } from './services/dashboard-service.js';
+import { AdminMemoryDataService } from './services/memory-service.js';
+import { AdminSessionDataService } from './services/session-service.js';
+import { AdminContactsDataService } from './services/contacts-service.js';
+import { AdminSettingsDataService } from './services/settings-service.js';
+import { AdminIdentityDataService } from './services/identity-service.js';
+import { AdminPromptsDataService } from './services/prompts-service.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -34,7 +42,7 @@ type RouteParams = Record<string, string>;
 type RouteMatcher = (path: string) => RouteParams | null;
 
 interface AdminRoute {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
   handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
 }
@@ -73,6 +81,13 @@ export class AdminServer implements Lifecycle {
   private token?: string;
   private allowInsecureWithoutToken: boolean;
   private handlers: AdminHandlers;
+  private dashboardService: AdminDashboardDataService;
+  private memoryService: AdminMemoryDataService;
+  private sessionService: AdminSessionDataService;
+  private contactsService: AdminContactsDataService;
+  private settingsService: AdminSettingsDataService;
+  private identityService: AdminIdentityDataService;
+  private promptsService: AdminPromptsDataService;
   private staticFiles = new Map<string, { content: Buffer; contentType: string }>();
   private routes: AdminRoute[];
 
@@ -104,6 +119,44 @@ export class AdminServer implements Lifecycle {
       skillsRuntime: config.skillsRuntime,
       confirmationQueueApi: config.confirmationQueueApi,
       apiBaseUrl: config.apiBaseUrl,
+    });
+    this.dashboardService = new AdminDashboardDataService({
+      memoryStore: config.memoryStore,
+      sessionStore: config.sessionStore,
+      scheduler: config.scheduler,
+      shardManager: config.shardManager,
+      eventBus: config.eventBus,
+    });
+    this.memoryService = new AdminMemoryDataService({
+      memoryStore: config.memoryStore,
+      contactStore: config.contactStore,
+      embeddingService: config.embeddingService,
+    });
+    this.sessionService = new AdminSessionDataService({
+      sessionStore: config.sessionStore,
+      sessionManager: config.sessionManager,
+      contactStore: config.contactStore,
+    });
+    this.contactsService = new AdminContactsDataService({
+      contactStore: config.contactStore,
+      memoryStore: config.memoryStore,
+      sessionStore: config.sessionStore,
+    });
+    this.settingsService = new AdminSettingsDataService({
+      config: config.config,
+      skillsRuntime: config.skillsRuntime,
+    });
+    this.identityService = new AdminIdentityDataService({
+      characterCard: config.characterCard,
+      config: config.config,
+      cardVersionStore: config.cardVersionStore,
+      importIdentityCardHtml: (body) => this.handlers.importIdentityCard(body),
+    });
+    this.promptsService = new AdminPromptsDataService({
+      promptStore: config.promptStore,
+      promptRegistry: config.promptRegistry,
+      sessionStore: config.sessionStore,
+      sessionManager: config.sessionManager,
     });
     this.routes = this.buildRoutes();
     this.server = createServer((req, res) => this.handleRequest(req, res));
@@ -678,6 +731,16 @@ export class AdminServer implements Lifecycle {
           req.on('close', cleanup);
         },
       },
+      ...buildAdminApiRoutes({
+        dashboardService: this.dashboardService,
+        memoryService: this.memoryService,
+        sessionService: this.sessionService,
+        contactsService: this.contactsService,
+        settingsService: this.settingsService,
+        identityService: this.identityService,
+        promptsService: this.promptsService,
+        withBody: (req, res, cb) => this.withBody(req, res, cb),
+      }),
     ];
   }
 

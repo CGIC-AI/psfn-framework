@@ -57,6 +57,7 @@ describe('heartbeat_get_policy', () => {
     expect(text).toContain('[ON]');
     expect(text).toContain('Interval:');
     expect(text).toContain('Discord: yes');
+    expect(text).toContain('Mode:');
   });
 
   it('shows OFF for disabled templates', async () => {
@@ -115,6 +116,26 @@ describe('heartbeat_update_policy', () => {
     const policy = store.load();
     expect(policy.templates.find(t => t.id === 'whisper')!.intervalMs).toBe(7_200_000);
     expect(syncFn).toHaveBeenCalled();
+  });
+
+  it('updates mode and deliberation caps', async () => {
+    const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
+    const result = await tool.execute('call-mode', {
+      templateId: 'values-reflection',
+      mode: 'deliberation',
+      deliberation: {
+        maxRounds: 3,
+        maxTotalTokens: 5000,
+      },
+    }, new AbortController().signal);
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('mode=deliberation');
+    const policy = store.load();
+    const values = policy.templates.find(t => t.id === 'values-reflection');
+    expect(values?.mode).toBe('deliberation');
+    expect(values?.deliberation?.maxRounds).toBe(3);
+    expect(values?.deliberation?.maxTotalTokens).toBe(5000);
   });
 
   it('changes prompt text', async () => {

@@ -6,7 +6,10 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { HeartbeatPolicyStore } from './heartbeat-policy.js';
+import type {
+  HeartbeatPolicyStore,
+  ReflectionDeliberationConfig,
+} from './heartbeat-policy.js';
 import type { Scheduler } from './scheduler.js';
 import type { AgentLoop } from '../agent-loop.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
@@ -22,6 +25,34 @@ function formatMs(ms: number): string {
 }
 
 const MAX_SCHEDULED_TASKS = 50;
+
+function formatDeliberation(config?: ReflectionDeliberationConfig): string {
+  if (!config) return 'default';
+  const parts: string[] = [];
+  if (config.maxRounds !== undefined) parts.push(`rounds=${config.maxRounds}`);
+  if (config.maxTotalTokens !== undefined) parts.push(`tokens=${config.maxTotalTokens}`);
+  if (config.maxWallTimeMs !== undefined) parts.push(`wall=${config.maxWallTimeMs}ms`);
+  if (config.voices !== undefined && config.voices.length > 0) {
+    parts.push(`voices=${config.voices.join('+')}`);
+  }
+  return parts.length > 0 ? parts.join(', ') : 'default';
+}
+
+function cloneDeliberation(config: ReflectionDeliberationConfig | undefined): ReflectionDeliberationConfig | undefined {
+  if (!config) return undefined;
+  return {
+    ...(config.maxRounds !== undefined ? { maxRounds: config.maxRounds } : {}),
+    ...(config.maxTotalTokens !== undefined ? { maxTotalTokens: config.maxTotalTokens } : {}),
+    ...(config.maxWallTimeMs !== undefined ? { maxWallTimeMs: config.maxWallTimeMs } : {}),
+    ...(config.voices !== undefined ? { voices: [...config.voices] } : {}),
+    ...(config.inputUsdPerMillionTokens !== undefined
+      ? { inputUsdPerMillionTokens: config.inputUsdPerMillionTokens }
+      : {}),
+    ...(config.outputUsdPerMillionTokens !== undefined
+      ? { outputUsdPerMillionTokens: config.outputUsdPerMillionTokens }
+      : {}),
+  };
+}
 
 // ── Tool 1: heartbeat_get_policy ──
 
@@ -46,6 +77,10 @@ export function createHeartbeatGetPolicyTool(
         lines.push(`[${t.enabled ? 'ON' : 'OFF'}] ${t.id} — "${t.name}"`);
         lines.push(`  Interval: ${formatMs(t.intervalMs)}`);
         lines.push(`  Discord: ${t.sendToDiscord ? 'yes' : 'no'}`);
+        lines.push(`  Mode: ${t.mode ?? 'standard'}`);
+        if (t.mode === 'deliberation') {
+          lines.push(`  Deliberation: ${formatDeliberation(t.deliberation)}`);
+        }
         lines.push(`  Prompt: ${t.prompt.slice(0, 120)}${t.prompt.length > 120 ? '...' : ''}`);
         lines.push('');
       }
@@ -85,6 +120,31 @@ export function createHeartbeatUpdatePolicyTool(
       sendToDiscord: Type.Optional(
         Type.Boolean({ description: 'Whether to send the response to Discord' }),
       ),
+      mode: Type.Optional(
+        Type.Union([
+          Type.Literal('standard'),
+          Type.Literal('deliberation'),
+        ], { description: 'Reflection execution mode' }),
+      ),
+      deliberation: Type.Optional(
+        Type.Object({
+          maxRounds: Type.Optional(Type.Number({ description: 'Hard cap on deliberation rounds (1-8)' })),
+          maxTotalTokens: Type.Optional(Type.Number({ description: 'Hard cap on total deliberation tokens' })),
+          maxWallTimeMs: Type.Optional(Type.Number({ description: 'Hard cap on deliberation wall time (ms)' })),
+          voices: Type.Optional(
+            Type.Array(
+              Type.Union([Type.Literal('reasoning'), Type.Literal('background')]),
+              { description: 'Voice routing purposes for each round' },
+            ),
+          ),
+          inputUsdPerMillionTokens: Type.Optional(
+            Type.Number({ description: 'Estimated input token cost rate' }),
+          ),
+          outputUsdPerMillionTokens: Type.Optional(
+            Type.Number({ description: 'Estimated output token cost rate' }),
+          ),
+        }),
+      ),
     }),
     execute: async (
       _toolCallId: string,
@@ -97,6 +157,8 @@ export function createHeartbeatUpdatePolicyTool(
         intervalMs?: number;
         enabled?: boolean;
         sendToDiscord?: boolean;
+        mode?: 'standard' | 'deliberation';
+        deliberation?: ReflectionDeliberationConfig;
       },
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const policy = store.load();
@@ -122,6 +184,8 @@ export function createHeartbeatUpdatePolicyTool(
           intervalMs: params.intervalMs,
           enabled: params.enabled ?? true,
           sendToDiscord: params.sendToDiscord ?? false,
+          mode: params.mode ?? 'standard',
+          ...(params.deliberation ? { deliberation: cloneDeliberation(params.deliberation) } : {}),
         };
 
         const errors = store.validateNew(newTemplate);
@@ -157,6 +221,8 @@ export function createHeartbeatUpdatePolicyTool(
       if (params.name !== undefined) updates.name = params.name;
       if (params.prompt !== undefined) updates.prompt = params.prompt;
       if (params.intervalMs !== undefined) updates.intervalMs = params.intervalMs;
+      if (params.mode !== undefined) updates.mode = params.mode;
+      if (params.deliberation !== undefined) updates.deliberation = params.deliberation;
 
       if (Object.keys(updates).length > 0) {
         const errors = store.validateUpdate(updates);
@@ -174,6 +240,8 @@ export function createHeartbeatUpdatePolicyTool(
       if (params.intervalMs !== undefined) template.intervalMs = params.intervalMs;
       if (params.enabled !== undefined) template.enabled = params.enabled;
       if (params.sendToDiscord !== undefined) template.sendToDiscord = params.sendToDiscord;
+      if (params.mode !== undefined) template.mode = params.mode;
+      if (params.deliberation !== undefined) template.deliberation = cloneDeliberation(params.deliberation);
 
       policy.version++;
       policy.updatedAt = new Date().toISOString();
@@ -183,7 +251,8 @@ export function createHeartbeatUpdatePolicyTool(
 
       return textResult(
         `Updated template "${params.templateId}" — ` +
-        `${template.enabled ? 'enabled' : 'disabled'}, ${formatMs(template.intervalMs)} interval`,
+        `${template.enabled ? 'enabled' : 'disabled'}, ` +
+        `${formatMs(template.intervalMs)} interval, mode=${template.mode ?? 'standard'}`,
       );
     },
   };

@@ -80,4 +80,37 @@ describe('ValuesJournalStore', () => {
     expect(entries[0]?.version).toBe(2);
     expect(entries[1]?.version).toBe(1);
   });
+
+  it('persists deliberation metadata when provided', () => {
+    store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P',
+      reflection: 'R',
+      deliberation: {
+        sessionId: 'delib-1',
+        stopReason: 'fatigue_taper',
+        rounds: 2,
+        totalInputTokens: 111,
+        totalOutputTokens: 222,
+        totalTokens: 333,
+        estimatedCostUsd: 0.00123,
+        durationMs: 4567,
+      },
+      createdAt: '2026-02-26T00:00:00.000Z',
+    });
+
+    const entries = store.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.deliberation).toEqual({
+      sessionId: 'delib-1',
+      stopReason: 'fatigue_taper',
+      rounds: 2,
+      totalInputTokens: 111,
+      totalOutputTokens: 222,
+      totalTokens: 333,
+      estimatedCostUsd: 0.00123,
+      durationMs: 4567,
+    });
+  });
 });

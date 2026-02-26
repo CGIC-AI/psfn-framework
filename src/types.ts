@@ -209,6 +209,7 @@ export interface SubstrateConfig {
   dataDir: string;
   databasePath: string;
   sessionMessageLimit?: number;
+  continuityMessageLimit?: number;
   memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
@@ -366,6 +367,7 @@ export function loadConfig(): SubstrateConfig {
   const sessionMirrorActiveWindowMs = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS, 1_000);
   const sessionMirrorChannelOverrides = parseBooleanMapEnv(process.env.SESSION_MIRROR_CHANNEL_OVERRIDES);
   const sessionMessageLimit = parseOptionalIntegerEnv(process.env.SESSION_MESSAGE_LIMIT, 1);
+  const continuityMessageLimit = parseOptionalIntegerEnv(process.env.CONTINUITY_MESSAGE_LIMIT, 1);
   const memoryRetrievalLimit = parseOptionalIntegerEnv(process.env.MEMORY_RETRIEVAL_LIMIT, 1);
   const sessionHistoryBudgetPct = parseBoundedIntegerEnv(
     process.env.SESSION_HISTORY_BUDGET_PCT,
@@ -407,6 +409,7 @@ export function loadConfig(): SubstrateConfig {
     dataDir: process.env.DATA_DIR ?? './data',
     databasePath: process.env.DATABASE_PATH ?? './data/purrsephone.db',
     ...(sessionMessageLimit !== undefined ? { sessionMessageLimit } : {}),
+    ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
     ...(memoryRetrievalLimit !== undefined ? { memoryRetrievalLimit } : {}),
     sessionHistoryBudgetPct,
     memoryRetrievalBudgetPct,

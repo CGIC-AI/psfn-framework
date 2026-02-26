@@ -870,7 +870,7 @@ export class SessionManager {
 
     // Cross-channel continuity: include recent activity from other channels
     if (this.continuityStore && userId) {
-      const continuityLimit = (this.config as any).continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT;
+      const continuityLimit = this.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT;
       const crossChannel = this.getMergedContinuity(
         userId,
         continuityLimit,

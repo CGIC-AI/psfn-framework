@@ -181,6 +181,15 @@ describe('PromptLayerStore', () => {
       expect(history[0].version).toBe(1); // version at time of change
     });
 
+    it('persists optional reason in history entries', () => {
+      const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
+      store.update(layer.id, 'v2', 'admin', {}, 'Clarify behavioral guardrail');
+
+      const history = store.getLayerHistory(layer.id);
+      expect(history).toHaveLength(1);
+      expect(history[0].reason).toBe('Clarify behavioral guardrail');
+    });
+
     it('throws for unknown layer', () => {
       expect(() => store.update('nonexistent', 'content', 'admin')).toThrow('Prompt layer not found');
     });

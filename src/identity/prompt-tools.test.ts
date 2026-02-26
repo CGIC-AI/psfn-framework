@@ -13,6 +13,8 @@ import { PromptLayerStore } from './prompt-store.js';
 import {
   createPromptLayerListTool,
   createPromptLayerGetTool,
+  createIdentityDiffTool,
+  createIdentityChangelogTool,
   createPromptLayerUpdateTool,
   createPromptLayerToggleTool,
 } from './prompt-tools.js';
@@ -130,6 +132,67 @@ describe('Prompt Layer Tools', () => {
       const text = resultText(result);
 
       expect(text).toContain('Layer not found');
+    });
+  });
+
+  describe('identity_diff', () => {
+    it('compares current layer content against a historical version', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'line-a\nline-b' });
+      store.update(layer.id, 'line-a\nline-c', 'agent', {}, 'First rewrite');
+      store.update(layer.id, 'line-a\nline-d', 'agent', {}, 'Second rewrite');
+
+      const tool = gateToolWithCapabilities(
+        createIdentityDiffTool(store),
+        () => accessForTier('nursery'),
+      );
+      const result = await tool.execute('diff', { layer_id: layer.id, version: 1 });
+      const text = resultText(result);
+
+      expect(text).toContain('Identity diff for runtime/Runtime');
+      expect(text).toContain('Compared versions: v1 -> v3');
+      expect(text).toContain('- line-b');
+      expect(text).toContain('+ line-d');
+    });
+
+    it('returns validation errors for unknown layer or invalid versions', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'line-a' });
+      const tool = gateToolWithCapabilities(
+        createIdentityDiffTool(store),
+        () => accessForTier('nursery'),
+      );
+
+      const missingLayer = await tool.execute('missing', {
+        layer_id: 'missing',
+        version: 1,
+      });
+      expect(resultText(missingLayer)).toContain('Layer not found');
+
+      const tooNew = await tool.execute('too-new', {
+        layer_id: layer.id,
+        version: 9,
+      });
+      expect(resultText(tooNew)).toContain('newer than current version');
+    });
+  });
+
+  describe('identity_changelog', () => {
+    it('returns who/what/when/why changelog entries', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'line-a' });
+      store.update(layer.id, 'line-b', 'agent', {}, 'Shift tone');
+      store.update(layer.id, 'line-c', 'admin', {}, 'Operator calibration');
+
+      const tool = gateToolWithCapabilities(
+        createIdentityChangelogTool(store),
+        () => accessForTier('nursery'),
+      );
+
+      const result = await tool.execute('changelog', { layer_id: layer.id, limit: 10 });
+      const text = resultText(result);
+
+      expect(text).toContain('Identity changelog for runtime/Runtime');
+      expect(text).toContain('by agent');
+      expect(text).toContain('why: Shift tone');
+      expect(text).toContain('what: +1/-1 lines');
     });
   });
 
@@ -313,6 +376,24 @@ describe('Prompt Layer Tools', () => {
 
       expect(text).toContain('Updated layer');
       expect(store.getById(layer.id)?.content).toBe('updated');
+    });
+
+    it('writes update reason into prompt history', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'original' });
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store),
+        () => accessForTier('nursery'),
+      );
+
+      await tool.execute('reasoned-update', {
+        layer_id: layer.id,
+        content: 'updated',
+        reason: 'Need clearer guardrails',
+      });
+
+      const history = store.getLayerHistory(layer.id);
+      expect(history).toHaveLength(1);
+      expect(history[0].reason).toBe('Need clearer guardrails');
     });
   });
 

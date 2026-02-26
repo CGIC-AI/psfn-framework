@@ -20,6 +20,8 @@ import {
 import {
   createPromptLayerListTool,
   createPromptLayerGetTool,
+  createIdentityDiffTool,
+  createIdentityChangelogTool,
   createPromptLayerUpdateTool,
   createPromptLayerToggleTool,
   type PromptLayerUpdateToolOptions,
@@ -74,6 +76,8 @@ export function wirePromptRuntime(
   target.promptComposer = new PromptComposer(promptStore);
   target.registerTool(createPromptLayerListTool(promptStore), 'extended');
   target.registerTool(createPromptLayerGetTool(promptStore), 'extended');
+  target.registerTool(createIdentityDiffTool(promptStore), 'extended');
+  target.registerTool(createIdentityChangelogTool(promptStore), 'extended');
   target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
   target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
 

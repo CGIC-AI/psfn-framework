@@ -63,6 +63,7 @@ export interface PromptHistoryEntry {
   newContent: string;
   newChecksum: string;
   updatedBy: string;
+  reason?: string;
   timestamp: string;
   version: number;
 }

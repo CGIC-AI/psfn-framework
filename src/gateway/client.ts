@@ -280,14 +280,22 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     }
   }
 
-  async complete(context: LLMContext, purpose: CompletionPurpose): Promise<LLMResponse> {
-    const result = await this.rpcInstance.request('llm.complete', {
-      model: '',
-      provider: '',
-      messages: context.messages,
-      systemPrompt: context.systemPrompt,
-      purpose,
-    }) as LLMCompleteResult;
+  async complete(
+    context: LLMContext,
+    purpose: CompletionPurpose,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<LLMResponse> {
+    const result = await this.requestWithAbortSignal<LLMCompleteResult>(
+      'llm.complete',
+      {
+        model: '',
+        provider: '',
+        messages: context.messages,
+        systemPrompt: context.systemPrompt,
+        purpose,
+      },
+      options.signal,
+    );
 
     return {
       content: result.content,
@@ -305,15 +313,22 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     return this.embeddingDims;
   }
 
-  async embed(text: string): Promise<Float32Array> {
-    const results = await this.embedBatch([text]);
+  async embed(text: string, options: { signal?: AbortSignal } = {}): Promise<Float32Array> {
+    const results = await this.embedBatch([text], options);
     return results[0];
   }
 
-  async embedBatch(texts: string[]): Promise<Float32Array[]> {
-    const result = await this.rpcInstance.request('llm.embed', {
-      texts,
-    }) as LLMEmbedResult;
+  async embedBatch(
+    texts: string[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<Float32Array[]> {
+    const result = await this.requestWithAbortSignal<LLMEmbedResult>(
+      'llm.embed',
+      {
+        texts,
+      },
+      options.signal,
+    );
 
     return result.embeddings.map(e => new Float32Array(e));
   }
@@ -407,6 +422,46 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     return this.onNotification('discord.message', (params) => {
       const notification = params as DiscordMessageNotification;
       handler(notification.message);
+    });
+  }
+
+  private async requestWithAbortSignal<T>(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (!signal) {
+      return await this.rpcInstance.request(method, params) as T;
+    }
+
+    if (signal.aborted) {
+      throw createAbortError(signal.reason);
+    }
+
+    return await new Promise<T>((resolve, reject) => {
+      let settled = false;
+
+      const finalize = (kind: 'resolve' | 'reject', value: unknown): void => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        if (kind === 'resolve') {
+          resolve(value as T);
+        } else {
+          reject(value);
+        }
+      };
+
+      const onAbort = () => {
+        finalize('reject', createAbortError(signal.reason));
+      };
+
+      signal.addEventListener('abort', onAbort, { once: true });
+
+      this.rpcInstance.request(method, params).then(
+        (result) => finalize('resolve', result),
+        (error) => finalize('reject', error),
+      );
     });
   }
 
@@ -738,4 +793,17 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     }
     this.conn.destroy();
   }
+}
+
+function createAbortError(reason?: unknown): Error {
+  if (reason instanceof Error) {
+    reason.name = reason.name || 'AbortError';
+    return reason;
+  }
+  const message = typeof reason === 'string' && reason.trim().length > 0
+    ? reason
+    : 'Request aborted';
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
 }

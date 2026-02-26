@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -408,6 +408,47 @@ describe('SessionManager', () => {
       { trustLevel: 'primary' },
     );
     expect(overrideStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
+  });
+
+  it('imports legacy chat and bootstraps extraction in bounded token chunks', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const sourcePath = join(dir, 'legacy-bootstrap-source.json');
+    const records = Array.from({ length: 10 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `${index}:${'x'.repeat(68)}`,
+      timestamp: 1_700_100_000_000 + index,
+    }));
+    writeFileSync(sourcePath, JSON.stringify(records), 'utf-8');
+
+    const seenChunkIds: number[][] = [];
+    mgr.setPreCompactionExtractionHandler(async ({ entries, canonicalContactId }) => {
+      expect(canonicalContactId).toBe('contact-legacy');
+      const approxTokens = entries.reduce((sum, entry) => sum + entry.content.length, 0);
+      expect(approxTokens).toBeLessThanOrEqual(140);
+      seenChunkIds.push(entries.map(entry => entry.id));
+    });
+
+    const result = await mgr.importLegacyChatFromFile({
+      channelId: 'api:import-bootstrap',
+      sourcePath,
+      canonicalContactId: 'contact-legacy',
+      bootstrapMaxChunkTokens: 140,
+    });
+
+    expect(result.importResult.manifest.importedRecordCount).toBe(10);
+    expect(result.bootstrapResult).not.toBeNull();
+    expect(result.bootstrapResult?.chunkCount).toBeGreaterThan(1);
+    expect(result.bootstrapResult?.processedChunks).toBe(result.bootstrapResult?.chunkCount);
+    expect(result.bootstrapResult?.chunks.every(chunk => chunk.approxTokens <= 140)).toBe(true);
+
+    expect(seenChunkIds.length).toBe(result.bootstrapResult?.chunkCount);
+    const flattenedIds = seenChunkIds.flat();
+    expect(flattenedIds).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it('auto-compacts when context exceeds threshold', async () => {

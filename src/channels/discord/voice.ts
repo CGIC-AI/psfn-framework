@@ -56,6 +56,14 @@ interface DiscordVoiceRuntimeConfig {
   getHandler: () => MessageHandler | null;
 }
 
+interface VoiceConnectionStateChange {
+  connection: VoiceConnection;
+  channel: VoiceBasedChannel;
+  generation: number;
+  previousStatus: string;
+  status: string;
+}
+
 export class DiscordVoiceRuntime {
   private readonly client: Client;
   private readonly config: SubstrateConfig;
@@ -77,6 +85,8 @@ export class DiscordVoiceRuntime {
   private capturing = false;
   private handlingState = false;
   private activeTurnId: string | null = null;
+  private connectionGeneration = 0;
+  private connectionStateListener: ((oldState: VoiceConnection['state'], newState: VoiceConnection['state']) => void) | null = null;
 
   constructor({ client, config, eventBus, getHandler }: DiscordVoiceRuntimeConfig) {
     this.client = client;
@@ -186,12 +196,27 @@ export class DiscordVoiceRuntime {
       selfMute: false,
     });
 
-    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    const generation = this.connectionGeneration + 1;
+    this.connectionGeneration = generation;
+    this.connection = connection;
+    this.bindConnectionStateListener(connection, channel, generation);
+
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    } catch (error) {
+      if (this.isCurrentConnection(connection, generation)) {
+        await this.leaveChannel('connection-ready-timeout');
+      }
+      throw error;
+    }
+
+    if (!this.isCurrentConnection(connection, generation)) {
+      return;
+    }
 
     const player = createAudioPlayer();
     connection.subscribe(player);
 
-    this.connection = connection;
     this.player = player;
     this.activeChannel = channel;
 
@@ -215,10 +240,16 @@ export class DiscordVoiceRuntime {
 
   private async leaveChannel(reason: string): Promise<void> {
     const prevChannel = this.activeChannel;
-    if (!prevChannel && !this.connection) return;
+    const prevConnection = this.connection;
+    if (!prevChannel && !prevConnection) return;
 
-    if (this.connection && this.speakingListener) {
-      this.connection.receiver.speaking.off('start', this.speakingListener);
+    if (prevConnection && this.connectionStateListener) {
+      prevConnection.off('stateChange', this.connectionStateListener);
+    }
+    this.connectionStateListener = null;
+
+    if (prevConnection && this.speakingListener) {
+      prevConnection.receiver.speaking.off('start', this.speakingListener);
     }
     this.speakingListener = null;
 
@@ -226,8 +257,9 @@ export class DiscordVoiceRuntime {
       this.player.stop(true);
     }
 
-    if (this.connection) {
-      this.connection.destroy();
+    if (prevConnection) {
+      this.connectionGeneration += 1;
+      prevConnection.destroy();
     }
 
     this.connection = null;
@@ -242,6 +274,83 @@ export class DiscordVoiceRuntime {
         userId: this.targetUserId,
         reason,
       });
+    }
+  }
+
+  private bindConnectionStateListener(connection: VoiceConnection, channel: VoiceBasedChannel, generation: number): void {
+    const stateListener = (oldState: VoiceConnection['state'], newState: VoiceConnection['state']) => {
+      this.handleConnectionStateChange({
+        connection,
+        channel,
+        generation,
+        previousStatus: oldState.status,
+        status: newState.status,
+      }).catch((error) => this.emitVoiceError(error));
+    };
+
+    this.connectionStateListener = stateListener;
+    connection.on('stateChange', stateListener);
+  }
+
+  private isCurrentConnection(connection: VoiceConnection, generation: number): boolean {
+    return this.connection === connection && this.connectionGeneration === generation;
+  }
+
+  private async handleConnectionStateChange(params: VoiceConnectionStateChange): Promise<void> {
+    const { connection, channel, generation, previousStatus, status } = params;
+    if (!this.isCurrentConnection(connection, generation)) {
+      log.debug('Ignoring stale voice connection state change', {
+        guildId: channel.guild.id,
+        channelId: channel.id,
+        userId: this.targetUserId,
+        generation,
+        activeGeneration: this.connectionGeneration,
+        previousStatus,
+        status,
+      });
+      return;
+    }
+
+    const payload = {
+      guildId: channel.guild.id,
+      channelId: channel.id,
+      userId: this.targetUserId,
+      generation,
+      previousStatus,
+      status,
+      timestampMs: Date.now(),
+    };
+
+    await this.eventBus.emit('voice.connection.state', payload);
+    log.info('Voice connection state changed', payload);
+
+    if (status === VoiceConnectionStatus.Signalling) {
+      log.info('Voice connection entering signalling state', payload);
+      return;
+    }
+
+    if (status === VoiceConnectionStatus.Disconnected) {
+      const rejoinAttempt = connection.rejoinAttempts + 1;
+      const didRejoin = connection.rejoin();
+      if (didRejoin) {
+        log.warn('Voice connection disconnected; attempting rejoin', {
+          ...payload,
+          rejoinAttempt,
+        });
+        return;
+      }
+
+      log.warn('Voice connection disconnected and rejoin failed; tearing down channel', {
+        ...payload,
+        rejoinAttempt,
+      });
+      await this.leaveChannel('connection-disconnected');
+      return;
+    }
+
+    if (status === VoiceConnectionStatus.Destroyed) {
+      log.warn('Voice connection destroyed unexpectedly; tearing down channel', payload);
+      await this.leaveChannel('connection-destroyed');
     }
   }
 

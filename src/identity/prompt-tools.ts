@@ -1,6 +1,6 @@
 // ── Prompt Layer Agent Tools ──
 // Tools that let Purrsephone inspect and modify her own prompt stack.
-// Policy: agent can modify runtime/channel/task layers, but NOT base/operator.
+// Policy: read access is always available; writes are tier-gated by capabilities.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
@@ -89,7 +89,7 @@ export function createPromptLayerGetTool(store: PromptLayerStore): AgentTool<any
 export function createPromptLayerUpdateTool(store: PromptLayerStore): AgentTool<any> {
   const tool: AgentTool<any> = {
     name: 'prompt_layer_update',
-    description: 'Update the content of a prompt layer. Agent cannot modify base or operator layers (admin-only). History is preserved for rollback.',
+    description: 'Update the content of a prompt layer. Access is controlled by capability tier; history is preserved for rollback.',
     label: 'prompt_layer_update',
     parameters: Type.Object({
       layer_id: Type.String({ description: 'ID of the prompt layer to update (prefix match OK).' }),
@@ -104,11 +104,6 @@ export function createPromptLayerUpdateTool(store: PromptLayerStore): AgentTool<
       const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
       if (!layer) return textResult(`Layer not found: ${params.layer_id}`);
 
-      // Policy: agent can't modify base or operator layers
-      if (layer.type === 'base' || layer.type === 'operator') {
-        return textResult(`Cannot modify ${layer.type} layers -- these are admin-only.`);
-      }
-
       const updated = store.update(layer.id, params.content, 'agent');
       return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
     },
@@ -122,7 +117,7 @@ export function createPromptLayerUpdateTool(store: PromptLayerStore): AgentTool<
 export function createPromptLayerToggleTool(store: PromptLayerStore): AgentTool<any> {
   const tool: AgentTool<any> = {
     name: 'prompt_layer_toggle',
-    description: 'Toggle a prompt layer on/off. Cannot disable the only base layer.',
+    description: 'Toggle a prompt layer on/off. Access is controlled by capability tier.',
     label: 'prompt_layer_toggle',
     parameters: Type.Object({
       layer_id: Type.String({ description: 'ID of the prompt layer to toggle (prefix match OK).' }),
@@ -135,11 +130,6 @@ export function createPromptLayerToggleTool(store: PromptLayerStore): AgentTool<
       const layers = store.getAll();
       const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
       if (!layer) return textResult(`Layer not found: ${params.layer_id}`);
-
-      // Policy: don't let agent disable base layers
-      if (layer.type === 'base' && layer.enabled) {
-        return textResult('Cannot disable base layers -- ask an admin if you need to modify the foundation.');
-      }
 
       const toggled = store.toggle(layer.id);
       return textResult(`Layer "${toggled.name}" is now ${toggled.enabled ? 'enabled' : 'disabled'}`);

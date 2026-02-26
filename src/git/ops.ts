@@ -3,26 +3,40 @@
 // All write operations audit-logged, path-validated, and branch-protected.
 
 import { execSync } from 'node:child_process';
-import { writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve, relative, normalize, dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { REPO_ALLOWED_PATHS } from '../security/policy-constants.js';
 
 const log = createComponentLogger('GitOps');
 
+export interface GitAuditRotationConfig {
+  maxSizeBytes: number;
+  maxAgeMs: number;
+  maxCount: number;
+}
+
 export interface GitOpsConfig {
   repoRoot: string;
   allowedPaths: string[];
   protectedBranches: string[];
   auditLogPath: string;
+  auditRotation: GitAuditRotationConfig;
   execTimeoutMs: number;
 }
+
+const DEFAULT_AUDIT_ROTATION: GitAuditRotationConfig = {
+  maxSizeBytes: 10 * 1024 * 1024,
+  maxAgeMs: 30 * 24 * 60 * 60 * 1000,
+  maxCount: 50_000,
+};
 
 const DEFAULT_CONFIG: GitOpsConfig = {
   repoRoot: process.cwd(),
   allowedPaths: [...REPO_ALLOWED_PATHS],
   protectedBranches: ['main', 'master'],
   auditLogPath: 'data/repo-audit.jsonl',
+  auditRotation: { ...DEFAULT_AUDIT_ROTATION },
   execTimeoutMs: 30_000,
 };
 
@@ -64,10 +78,14 @@ interface AuditEntry {
 }
 
 export class GitOps implements GitOperations {
-  private config: GitOpsConfig;
+  private readonly config: GitOpsConfig;
 
   constructor(config?: Partial<GitOpsConfig>) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = {
+      ...DEFAULT_CONFIG,
+      ...config,
+      auditRotation: resolveAuditRotationConfig(config?.auditRotation),
+    };
   }
 
   // ── Read-only operations ──
@@ -282,8 +300,107 @@ export class GitOps implements GitOperations {
       const fullPath = resolve(this.config.repoRoot, this.config.auditLogPath);
       mkdirSync(dirname(fullPath), { recursive: true });
       appendFileSync(fullPath, JSON.stringify(entry) + '\n', 'utf-8');
+      this.rotateAuditLog(fullPath);
     } catch (err) {
       log.error('Failed to write audit log', { error: String(err) });
     }
   }
+
+  private rotateAuditLog(fullPath: string): void {
+    const nowMs = Date.now();
+    const { entries, rawLineCount } = this.readAuditLines(fullPath);
+    if (rawLineCount === 0) {
+      return;
+    }
+
+    const maxAgeCutoff = nowMs - this.config.auditRotation.maxAgeMs;
+    let retained = entries.filter(entry => entry.timestampMs >= maxAgeCutoff);
+
+    if (retained.length > this.config.auditRotation.maxCount) {
+      retained = retained.slice(-this.config.auditRotation.maxCount);
+    }
+
+    let totalBytes = retained.reduce((sum, entry) => sum + entry.bytes, 0);
+    let startIndex = 0;
+    while (
+      startIndex < retained.length - 1
+      && totalBytes > this.config.auditRotation.maxSizeBytes
+    ) {
+      totalBytes -= retained[startIndex].bytes;
+      startIndex += 1;
+    }
+    if (startIndex > 0) {
+      retained = retained.slice(startIndex);
+    }
+
+    if (retained.length === entries.length && rawLineCount === entries.length) {
+      return;
+    }
+
+    const payload = retained.map(entry => entry.line).join('\n');
+    writeFileSync(fullPath, payload.length > 0 ? payload + '\n' : '', 'utf-8');
+  }
+
+  private readAuditLines(fullPath: string): {
+    entries: { line: string; timestampMs: number; bytes: number }[];
+    rawLineCount: number;
+  } {
+    try {
+      const raw = readFileSync(fullPath, 'utf-8');
+      if (typeof raw !== 'string' || raw.trim() === '') {
+        return { entries: [], rawLineCount: 0 };
+      }
+
+      const lines = raw
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+
+      const entries = lines
+        .map((line) => {
+          try {
+            const parsed = JSON.parse(line) as { timestamp?: unknown };
+            if (typeof parsed.timestamp !== 'string') {
+              return null;
+            }
+            const timestampMs = Date.parse(parsed.timestamp);
+            if (!Number.isFinite(timestampMs)) {
+              return null;
+            }
+            return {
+              line,
+              timestampMs,
+              bytes: Buffer.byteLength(line + '\n', 'utf-8'),
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { line: string; timestampMs: number; bytes: number } => entry !== null);
+
+      return { entries, rawLineCount: lines.length };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === 'ENOENT') {
+        return { entries: [], rawLineCount: 0 };
+      }
+      throw err;
+    }
+  }
+}
+
+function resolveAuditRotationConfig(overrides?: Partial<GitAuditRotationConfig>): GitAuditRotationConfig {
+  const resolved = { ...DEFAULT_AUDIT_ROTATION, ...overrides };
+  return {
+    maxSizeBytes: asPositiveInteger('auditRotation.maxSizeBytes', resolved.maxSizeBytes),
+    maxAgeMs: asPositiveInteger('auditRotation.maxAgeMs', resolved.maxAgeMs),
+    maxCount: asPositiveInteger('auditRotation.maxCount', resolved.maxCount),
+  };
+}
+
+function asPositiveInteger(name: string, value: number): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer, got: ${value}`);
+  }
+  return value;
 }

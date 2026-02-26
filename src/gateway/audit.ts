@@ -14,13 +14,34 @@ export interface AuditEntry {
   error: string | null;
 }
 
-export class AuditStore {
-  private db: Database.Database;
-  private insertStmt: Database.Statement;
-  private updateDurationStmt: Database.Statement;
+export interface AuditRotationConfig {
+  maxSizeBytes: number;
+  maxAgeMs: number;
+  maxCount: number;
+}
 
-  constructor(db: Database.Database) {
+const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
+  maxSizeBytes: 10 * 1024 * 1024,
+  maxAgeMs: 30 * 24 * 60 * 60 * 1000,
+  maxCount: 50_000,
+};
+
+const SIZE_PRUNE_BATCH = 100;
+
+export class AuditStore {
+  private readonly db: Database.Database;
+  private readonly insertStmt: Database.Statement;
+  private readonly updateDurationStmt: Database.Statement;
+  private readonly countStmt: Database.Statement;
+  private readonly pruneByAgeStmt: Database.Statement;
+  private readonly pruneByCountStmt: Database.Statement;
+  private readonly estimateSizeStmt: Database.Statement;
+  private readonly pruneOldestBatchStmt: Database.Statement;
+  private readonly rotation: AuditRotationConfig;
+
+  constructor(db: Database.Database, rotationConfig?: Partial<AuditRotationConfig>) {
     this.db = db;
+    this.rotation = resolveRotationConfig(rotationConfig);
     this.createTable();
     this.insertStmt = this.db.prepare(`
       INSERT INTO gateway_audit (timestamp, method, decision, params_json, duration_ms, error)
@@ -28,6 +49,38 @@ export class AuditStore {
     `);
     this.updateDurationStmt = this.db.prepare(`
       UPDATE gateway_audit SET duration_ms = ?, error = ? WHERE id = ?
+    `);
+    this.countStmt = this.db.prepare(`
+      SELECT COUNT(*) as cnt FROM gateway_audit
+    `);
+    this.pruneByAgeStmt = this.db.prepare(`
+      DELETE FROM gateway_audit WHERE timestamp < ?
+    `);
+    this.pruneByCountStmt = this.db.prepare(`
+      DELETE FROM gateway_audit
+      WHERE id IN (
+        SELECT id FROM gateway_audit
+        ORDER BY timestamp DESC, id DESC
+        LIMIT -1 OFFSET ?
+      )
+    `);
+    this.estimateSizeStmt = this.db.prepare(`
+      SELECT COALESCE(SUM(
+        LENGTH(method) +
+        LENGTH(decision) +
+        COALESCE(LENGTH(params_json), 0) +
+        COALESCE(LENGTH(error), 0) +
+        24
+      ), 0) AS bytes
+      FROM gateway_audit
+    `);
+    this.pruneOldestBatchStmt = this.db.prepare(`
+      DELETE FROM gateway_audit
+      WHERE id IN (
+        SELECT id FROM gateway_audit
+        ORDER BY timestamp ASC, id ASC
+        LIMIT ?
+      )
     `);
   }
 
@@ -49,8 +102,10 @@ export class AuditStore {
   }
 
   log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number {
+    const timestamp = Date.now();
     const paramsJson = params ? summarizeParams(params) : null;
-    const result = this.insertStmt.run(Date.now(), method, decision, paramsJson, null, null);
+    const result = this.insertStmt.run(timestamp, method, decision, paramsJson, null, null);
+    this.enforceRotation(timestamp);
     return Number(result.lastInsertRowid);
   }
 
@@ -66,28 +121,66 @@ export class AuditStore {
 
   getRecent(limit: number = 50): AuditEntry[] {
     const stmt = this.db.prepare(`
-      SELECT ${AuditStore.SELECT_COLS} FROM gateway_audit ORDER BY timestamp DESC LIMIT ?
+      SELECT ${AuditStore.SELECT_COLS}
+      FROM gateway_audit
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ?
     `);
     return stmt.all(limit) as AuditEntry[];
   }
 
   getByMethod(method: string, limit: number = 50): AuditEntry[] {
     const stmt = this.db.prepare(`
-      SELECT ${AuditStore.SELECT_COLS} FROM gateway_audit WHERE method = ? ORDER BY timestamp DESC LIMIT ?
+      SELECT ${AuditStore.SELECT_COLS}
+      FROM gateway_audit
+      WHERE method = ?
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ?
     `);
     return stmt.all(method, limit) as AuditEntry[];
   }
 
   getApprovalEvents(limit: number = 50): AuditEntry[] {
     const stmt = this.db.prepare(`
-      SELECT ${AuditStore.SELECT_COLS} FROM gateway_audit WHERE decision != 'ALLOW' ORDER BY timestamp DESC LIMIT ?
+      SELECT ${AuditStore.SELECT_COLS}
+      FROM gateway_audit
+      WHERE decision != 'ALLOW'
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ?
     `);
     return stmt.all(limit) as AuditEntry[];
   }
 
   count(): number {
-    const row = this.db.prepare('SELECT COUNT(*) as cnt FROM gateway_audit').get() as { cnt: number };
+    const row = this.countStmt.get() as { cnt: number };
     return row.cnt;
+  }
+
+  private enforceRotation(nowMs: number): void {
+    this.pruneByAgeStmt.run(nowMs - this.rotation.maxAgeMs);
+    this.pruneByCountStmt.run(this.rotation.maxCount);
+    this.pruneBySize();
+  }
+
+  private pruneBySize(): void {
+    let currentSize = this.getApproximatePayloadSizeBytes();
+    while (currentSize > this.rotation.maxSizeBytes) {
+      const removableRows = this.count() - 1;
+      if (removableRows <= 0) {
+        break;
+      }
+      const batchSize = Math.min(SIZE_PRUNE_BATCH, removableRows);
+      const result = this.pruneOldestBatchStmt.run(batchSize) as { changes: number };
+      if (result.changes === 0) {
+        break;
+      }
+      currentSize = this.getApproximatePayloadSizeBytes();
+    }
+  }
+
+  private getApproximatePayloadSizeBytes(): number {
+    const row = this.estimateSizeStmt.get() as { bytes: number };
+    return row.bytes;
   }
 }
 
@@ -108,4 +201,20 @@ function summarizeParams(params: Record<string, unknown>): string {
     }
   }
   return JSON.stringify(summary);
+}
+
+function resolveRotationConfig(overrides?: Partial<AuditRotationConfig>): AuditRotationConfig {
+  const resolved = { ...DEFAULT_ROTATION_CONFIG, ...overrides };
+  return {
+    maxSizeBytes: positiveInteger('maxSizeBytes', resolved.maxSizeBytes),
+    maxAgeMs: positiveInteger('maxAgeMs', resolved.maxAgeMs),
+    maxCount: positiveInteger('maxCount', resolved.maxCount),
+  };
+}
+
+function positiveInteger(name: string, value: number): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer, got: ${value}`);
+  }
+  return value;
 }

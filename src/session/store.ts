@@ -17,6 +17,10 @@ import {
   journalToSessionEntry,
   quarantineSidecarPath,
   readJournalFile,
+  signJournalEntry,
+  verifyJournalEntryIntegrity,
+  wrapUnverifiedHistory,
+  type SessionHmacKeyring,
 } from './journal-utils.js';
 
 const log = createComponentLogger('SessionStore');
@@ -25,6 +29,7 @@ interface ChannelCache {
   entries: SessionEntry[];
   compactions: CompactionSummary[];
   nextId: number;
+  lastHmac: string | null;
   resolvedPath: string; // actual file path used (may be legacy format)
 }
 
@@ -41,6 +46,10 @@ interface SessionFileSeed {
   timestamp: number;
   authorId?: string;
   authorName?: string;
+}
+
+export interface SessionStoreOptions {
+  integrityKeyring?: SessionHmacKeyring | null;
 }
 
 const CHANNEL_INDEX_FILENAME = '_channel_index.json';
@@ -87,10 +96,12 @@ export class SessionStore {
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
+  private integrityKeyring: SessionHmacKeyring | null;
 
-  constructor(sessionsDir: string) {
+  constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
     this.channelIndexPath = join(sessionsDir, CHANNEL_INDEX_FILENAME);
+    this.integrityKeyring = options.integrityKeyring ?? null;
     mkdirSync(sessionsDir, { recursive: true });
     this.loadChannelIndex();
     this.migrateLegacyFilenames();
@@ -157,6 +168,7 @@ export class SessionStore {
       entries: [],
       compactions: [],
       nextId: 1,
+      lastHmac: null,
       resolvedPath: filePath,
     };
 
@@ -166,7 +178,10 @@ export class SessionStore {
     if (quarantined.length > 0) {
       this.warnAboutQuarantinedEntries(channelId, filePath, quarantined.length, entries.length);
     }
-    for (const entry of entries) {
+    let previousHmac: string | null = null;
+    for (const rawEntry of entries) {
+      const entry = this.verifyAndNormalizeEntry(rawEntry, previousHmac);
+      previousHmac = typeof rawEntry._hmac === 'string' ? rawEntry._hmac : previousHmac;
       const message = journalToSessionEntry(entry);
       if (message) {
         cache.entries.push(message);
@@ -180,7 +195,33 @@ export class SessionStore {
     }
 
     cache.nextId = maxId + 1;
+    cache.lastHmac = previousHmac;
     return cache;
+  }
+
+  private verifyAndNormalizeEntry(entry: JournalEntry, previousHmac: string | null): JournalEntry {
+    if (!this.integrityKeyring) return entry;
+
+    const verification = verifyJournalEntryIntegrity(entry, this.integrityKeyring, previousHmac);
+    if (verification.verified) {
+      return entry;
+    }
+
+    if (entry.type === 'message' && typeof entry.content === 'string') {
+      return {
+        ...entry,
+        content: wrapUnverifiedHistory(entry.content, verification.reason),
+      };
+    }
+
+    if (entry.type === 'compaction' && typeof entry.summary === 'string') {
+      return {
+        ...entry,
+        summary: wrapUnverifiedHistory(entry.summary, verification.reason),
+      };
+    }
+
+    return entry;
   }
 
   private readChannelIdFromFile(filePath: string): string | null {
@@ -325,6 +366,7 @@ export class SessionStore {
       entries: [],
       compactions: [],
       nextId: 1,
+      lastHmac: null,
       resolvedPath: newPath,
     };
     this.channels.set(channelId, cache);
@@ -361,7 +403,11 @@ export class SessionStore {
     const full: SessionEntry = { ...entry, id };
     cache.entries.push(full);
 
-    const journal = buildMessageJournalEntry(id, entry);
+    let journal: JournalEntry = buildMessageJournalEntry(id, entry);
+    if (this.integrityKeyring) {
+      journal = signJournalEntry(journal, this.integrityKeyring, cache.lastHmac);
+      cache.lastHmac = journal._hmac ?? cache.lastHmac;
+    }
     appendJournalEntry(cache.resolvedPath, journal);
 
     return id;
@@ -423,7 +469,11 @@ export class SessionStore {
 
     cache.compactions.push({ id, channelId, summary, coveredUpTo, createdAt: now });
 
-    const journal = buildCompactionJournalEntry(id, channelId, summary, coveredUpTo, now);
+    let journal: JournalEntry = buildCompactionJournalEntry(id, channelId, summary, coveredUpTo, now);
+    if (this.integrityKeyring) {
+      journal = signJournalEntry(journal, this.integrityKeyring, cache.lastHmac);
+      cache.lastHmac = journal._hmac ?? cache.lastHmac;
+    }
     appendJournalEntry(cache.resolvedPath, journal);
   }
 }

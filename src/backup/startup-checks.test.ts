@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createEmbeddingDimensionMismatchWarning,
   readStoredEmbeddingDimensions,
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
@@ -105,5 +106,35 @@ describe('embedding dimension checks', () => {
       configuredDims: 1024,
       storedDims: null,
     });
+  });
+
+  it('creates actionable mismatch warning payload', () => {
+    const warning = createEmbeddingDimensionMismatchWarning({
+      status: 'mismatch',
+      configuredDims: 1024,
+      storedDims: 768,
+    });
+
+    expect(warning).toEqual({
+      message: 'Embedding dimension mismatch detected at startup',
+      configuredDims: 1024,
+      storedDims: 768,
+      recommendation:
+        'Run memory embedding migration to re-embed l2_memories with the configured model before relying on retrieval quality.',
+    });
+  });
+
+  it('does not create mismatch warning for match or unknown states', () => {
+    expect(createEmbeddingDimensionMismatchWarning({
+      status: 'match',
+      configuredDims: 1024,
+      storedDims: 1024,
+    })).toBeNull();
+
+    expect(createEmbeddingDimensionMismatchWarning({
+      status: 'unknown',
+      configuredDims: 1024,
+      storedDims: null,
+    })).toBeNull();
   });
 });

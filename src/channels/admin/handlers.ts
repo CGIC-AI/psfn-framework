@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { MemoryStore } from '../../memory/store.js';
+import { MemoryWriter, type MemoryWriteOptions } from '../../memory/writer.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { CompactionSummary } from '../../session/types.js';
@@ -35,8 +36,9 @@ import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import {
   importCharacterCardFromPath,
-  importCharacterCardToPath,
+  persistExtractedCharacterAssets,
   writeNormalizedCharacterCard,
+  type CharacterMemorySeed,
 } from '../../identity/importer.js';
 import { PROMPT_LAYER_ROLES, type PromptLayerRole } from '../../identity/prompt-types.js';
 import type { TrustLevel } from '../../trust/types.js';
@@ -415,6 +417,7 @@ export class AdminHandlers {
   private shardManager: ShardManager;
   private eventBus: EventBus;
   private embeddingService: EmbeddingService | null;
+  private importMemoryWriter: MemoryWriter | null;
   private characterCard: CharacterCardV2;
   private config: SubstrateConfig;
   private modelDiscovery: ModelDiscovery | null;
@@ -468,6 +471,9 @@ export class AdminHandlers {
     this.shardManager = deps.shardManager;
     this.eventBus = deps.eventBus;
     this.embeddingService = deps.embeddingService;
+    this.importMemoryWriter = this.embeddingService
+      ? new MemoryWriter(this.memoryStore, this.embeddingService)
+      : null;
     this.characterCard = deps.characterCard;
     this.config = deps.config;
     this.modelDiscovery = deps.modelDiscovery ?? null;
@@ -1697,7 +1703,84 @@ export class AdminHandlers {
     });
   }
 
-  importIdentityCard(body: string): string {
+  private resolveCharacterImportAssetRootDir(): string | null {
+    const dataDir = this.config.dataDir?.trim();
+    if (!dataDir) return null;
+    return join(dataDir, 'identity-assets');
+  }
+
+  private buildCharacterBookSeedWrites(
+    seeds: readonly CharacterMemorySeed[],
+    sourcePath: string,
+  ): MemoryWriteOptions[] {
+    const sourceToken = encodeURIComponent(sourcePath);
+    return seeds.map((seed, index) => ({
+      text: seed.text,
+      type: seed.type,
+      importance: seed.importance,
+      tags: uniqueLowercase(['character_import', ...seed.tags]),
+      sourceRef: `admin:import:character_book:${sourceToken}:${index + 1}`,
+      sensitivity: seed.sensitivity,
+    }));
+  }
+
+  private async importCharacterBookSeeds(
+    seeds: readonly CharacterMemorySeed[],
+    sourcePath: string,
+  ): Promise<{
+    attempted: number;
+    written: number;
+    deduplicated: number;
+    superseded: number;
+    errors: number;
+    skippedReason?: string;
+  }> {
+    if (seeds.length === 0) {
+      return {
+        attempted: 0,
+        written: 0,
+        deduplicated: 0,
+        superseded: 0,
+        errors: 0,
+      };
+    }
+
+    if (!this.importMemoryWriter) {
+      return {
+        attempted: seeds.length,
+        written: 0,
+        deduplicated: 0,
+        superseded: 0,
+        errors: 0,
+        skippedReason: 'memory writer is not configured',
+      };
+    }
+
+    try {
+      const result = await this.importMemoryWriter.importBatch(
+        this.buildCharacterBookSeedWrites(seeds, sourcePath),
+      );
+      return {
+        attempted: seeds.length,
+        written: result.written,
+        deduplicated: result.deduplicated,
+        superseded: result.superseded,
+        errors: result.errors,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        attempted: seeds.length,
+        written: 0,
+        deduplicated: 0,
+        superseded: 0,
+        errors: 0,
+        skippedReason: message,
+      };
+    }
+  }
+
+  async importIdentityCard(body: string): Promise<string> {
     const params = new URLSearchParams(body);
     const sourcePath = (params.get('path') ?? '').trim();
     if (!sourcePath) {
@@ -1720,9 +1803,7 @@ export class AdminHandlers {
     }
 
     try {
-      const imported = this.cardVersionStore
-        ? importCharacterCardFromPath(sourcePath)
-        : importCharacterCardToPath(sourcePath, destinationPath);
+      const imported = importCharacterCardFromPath(sourcePath);
       if (this.cardVersionStore) {
         const updated = this.cardVersionStore.update(
           imported.card,
@@ -1731,10 +1812,59 @@ export class AdminHandlers {
         );
         this.characterCard = updated.card;
       } else {
+        writeNormalizedCharacterCard(destinationPath, imported.card);
         this.characterCard = imported.card;
       }
-      const warningSuffix = imported.warnings.length > 0
-        ? ` Warnings: ${imported.warnings.join('; ')}`
+
+      const warnings = [...imported.warnings];
+
+      let persistedAssetCount = 0;
+      let assetRootDir: string | null = null;
+      if (imported.assets.length > 0) {
+        assetRootDir = this.resolveCharacterImportAssetRootDir();
+        if (!assetRootDir) {
+          warnings.push('Extracted media assets were not persisted because dataDir is not configured.');
+        } else {
+          try {
+            persistExtractedCharacterAssets(imported.assets, assetRootDir);
+            persistedAssetCount = imported.assets.length;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            warnings.push(`Extracted media assets were not persisted: ${message}`);
+          }
+        }
+      }
+
+      const memorySeedResult = await this.importCharacterBookSeeds(
+        imported.memorySeeds,
+        imported.sourcePath,
+      );
+      if (memorySeedResult.skippedReason) {
+        warnings.push(`Character-book memory seeding skipped: ${memorySeedResult.skippedReason}`);
+      } else if (memorySeedResult.errors > 0) {
+        warnings.push(`Character-book memory seeding completed with ${memorySeedResult.errors} errors.`);
+      }
+
+      const summaryDetails: string[] = [];
+      if (imported.memorySeeds.length > 0) {
+        if (memorySeedResult.skippedReason) {
+          summaryDetails.push(`parsed ${imported.memorySeeds.length} character-book seeds (write skipped)`);
+        } else {
+          summaryDetails.push(
+            `character-book seeds: ${memorySeedResult.written} written, ${memorySeedResult.deduplicated} deduplicated`,
+          );
+        }
+      }
+      if (imported.assets.length > 0) {
+        summaryDetails.push(
+          persistedAssetCount > 0
+            ? `persisted ${persistedAssetCount} media assets`
+            : `extracted ${imported.assets.length} media assets (persistence skipped)`,
+        );
+      }
+
+      const warningSuffix = warnings.length > 0
+        ? ` Warnings: ${warnings.join('; ')}`
         : '';
       this.appendAuditTimelineEntry(
         'identity_edit',
@@ -1744,11 +1874,19 @@ export class AdminHandlers {
           `name=${imported.card.data.name}`,
           `format=${imported.containerFormat}`,
           `spec=${imported.spec}`,
+          imported.memorySeeds.length > 0 ? `memorySeeds=${imported.memorySeeds.length}` : null,
+          memorySeedResult.attempted > 0 && !memorySeedResult.skippedReason
+            ? `memoryWrites=${memorySeedResult.written}/${memorySeedResult.deduplicated}/${memorySeedResult.errors}`
+            : null,
+          imported.assets.length > 0 ? `assets=${imported.assets.length}` : null,
+          assetRootDir && persistedAssetCount > 0 ? `assetRoot=${assetRootDir}` : null,
         ],
       );
       return tpl.identityImportResult(
         true,
-        `Imported "${imported.card.data.name}" from ${imported.sourcePath} (${imported.containerFormat}/${imported.spec}).${warningSuffix}`,
+        `Imported "${imported.card.data.name}" from ${imported.sourcePath} (${imported.containerFormat}/${imported.spec}).`
+          + `${summaryDetails.length > 0 ? ` ${summaryDetails.join('; ')}.` : ''}`
+          + warningSuffix,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

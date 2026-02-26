@@ -151,12 +151,16 @@ function resolveEffectiveBudget(config: REPLConfig, tier: CapabilityTier): Think
   const baseSubQueries = typeof config.budget.maxSubQueries === 'number' && Number.isFinite(config.budget.maxSubQueries)
     ? Math.max(1, Math.floor(config.budget.maxSubQueries))
     : tierBudget.maxSubQueries;
+  const baseToolCalls = typeof config.budget.maxToolCalls === 'number' && Number.isFinite(config.budget.maxToolCalls)
+    ? Math.max(1, Math.floor(config.budget.maxToolCalls))
+    : tierBudget.maxToolCalls;
 
   return {
     ...config.budget,
     maxIterations: Math.min(baseIterations, tierBudget.maxIterations),
     maxWallTimeMs: Math.min(baseWallTime, tierBudget.maxWallTimeMs),
     maxSubQueries: Math.min(baseSubQueries, tierBudget.maxSubQueries),
+    maxToolCalls: Math.min(baseToolCalls, tierBudget.maxToolCalls),
   };
 }
 
@@ -243,7 +247,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     governanceState.invocationTimestampsMs = governanceState.invocationTimestampsMs
       .filter(ts => ts > cutoff);
     if (governanceState.invocationTimestampsMs.length >= maxInvocationsPerWindow) {
-      updateBudgetRuntime(budgetStatus, startTime, 0);
+      updateBudgetRuntime(budgetStatus, startTime, 0, 0);
       budgetStatus.exceeded = INVOCATION_RATE_LIMIT_REASON;
       return buildThinkResult({
         answer: RATE_LIMIT_ANSWER,
@@ -263,7 +267,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     ? Math.max(0, config.cost.nurseryDailyCapUsd)
     : 0;
   if (tier === 'nursery' && nurseryDailyCapUsd > 0 && dayCost.totalUsd >= nurseryDailyCapUsd) {
-    updateBudgetRuntime(budgetStatus, startTime, 0);
+    updateBudgetRuntime(budgetStatus, startTime, 0, 0);
     budgetStatus.exceeded = NURSERY_DAILY_COST_REASON;
     return buildThinkResult({
       answer: NURSERY_DAILY_CAP_ANSWER,
@@ -281,6 +285,8 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
   const budgetRef: SandboxBudgetRef = {
     subQueries: 0,
     maxSubQueries: budget.maxSubQueries ?? 20,
+    toolCalls: 0,
+    maxToolCalls: budget.maxToolCalls ?? 50,
   };
   const sandboxTokenUsage = {
     inputTokens: 0,
@@ -360,7 +366,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
 
   for (let i = 0; i < budget.maxIterations; i++) {
     if (tier === 'nursery' && nurseryDailyCapUsd > 0 && dayCost.totalUsd >= nurseryDailyCapUsd) {
-      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries);
+      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
       budgetStatus.exceeded = NURSERY_DAILY_COST_REASON;
       break;
     }
@@ -368,7 +374,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     const iterationStart = Date.now();
     const remainingBeforeLLM = getRemainingWallTimeMs(startTime, budget);
     if (remainingBeforeLLM !== null && remainingBeforeLLM <= 0) {
-      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries);
+      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
       budgetStatus.exceeded = 'wall time';
       break;
     }
@@ -379,7 +385,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
         ? null
         : Math.floor(remainingBeforeLLM - LLM_TIMEOUT_BUFFER_MS);
       if (timeoutMs !== null && timeoutMs <= 0) {
-        updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries);
+        updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
         budgetStatus.exceeded = 'wall time';
         break;
       }
@@ -392,7 +398,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
         ? await completion
         : await withTimeout(completion, timeoutMs);
     } catch (error) {
-      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries);
+      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
       if (error instanceof LLMIterationTimeoutError) {
         budgetStatus.exceeded = LLM_TIMEOUT_REASON;
         break;
@@ -411,6 +417,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
       totalOutputTokens,
       startTime,
       budgetRef.subQueries,
+      budgetRef.toolCalls ?? 0,
     );
 
     applyCostCharge(response.inputTokens, response.outputTokens);
@@ -529,14 +536,14 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     }
 
     // Check budget after each iteration
-    updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries);
+    updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
     checkBudget(budgetStatus, budget);
     if (budgetStatus.exceeded) break;
   }
 
   // Budget or max iterations exhausted
   const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
-  updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries);
+  updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
   if (!budgetStatus.exceeded) {
     budgetStatus.exceeded = 'max iterations';
   }

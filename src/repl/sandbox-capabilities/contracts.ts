@@ -39,6 +39,7 @@ export type GatewayREPLCapabilities = {
   gitCommit?: (message: string, intent: string, scope?: string) => Promise<GitCommitView>;
   fsRead?: (path: string) => Promise<string>;
   fsWrite?: (path: string, content: string) => Promise<void>;
+  fsList?: (glob?: string, maxEntries?: number) => Promise<string[]>;
 };
 
 export interface ScheduleView {
@@ -71,6 +72,8 @@ export interface SandboxDeps {
 export interface SandboxBudgetRef {
   subQueries: number;
   maxSubQueries: number;
+  toolCalls?: number;
+  maxToolCalls?: number;
 }
 
 export interface ExecuteResult {

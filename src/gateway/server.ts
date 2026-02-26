@@ -20,6 +20,7 @@ import {
   type WebFetchParams,
   type FsReadParams,
   type FsWriteParams,
+  type FsListParams,
   type NotifyNtfyParams,
   type NotifyNtfyResult,
   type PolicyContext,
@@ -44,8 +45,8 @@ import {
 } from './protocol.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 
-import { readFile, writeFile } from 'node:fs/promises';
-import { resolve, normalize, dirname } from 'node:path';
+import { readFile, writeFile, glob as fsGlob } from 'node:fs/promises';
+import { resolve, normalize, dirname, isAbsolute } from 'node:path';
 import { realpathSync } from 'node:fs';
 import type { AuditStore } from './audit.js';
 import {
@@ -191,6 +192,43 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       // If canonical differs from normalized (symlink), re-check against allowed prefixes
       if (canonical !== normalized && !isInsideAllowedPaths(canonical, allowedPrefixes)) {
         return 'DENY';
+      }
+
+      return 'ALLOW';
+    }
+
+    case 'fs.list': {
+      const glob = (params as Record<string, unknown>).glob;
+      if (glob !== undefined) {
+        if (typeof glob !== 'string') {
+          return 'DENY';
+        }
+        const trimmed = glob.trim();
+        if (!trimmed || trimmed.length > 512 || trimmed.includes('\0')) {
+          return 'DENY';
+        }
+
+        const normalizedGlob = normalize(trimmed).replace(/\\/g, '/');
+        if (
+          isAbsolute(trimmed) ||
+          normalizedGlob === '..' ||
+          normalizedGlob.startsWith('../') ||
+          normalizedGlob.includes('/../')
+        ) {
+          return 'DENY';
+        }
+      }
+
+      const maxEntries = (params as Record<string, unknown>).maxEntries;
+      if (maxEntries !== undefined) {
+        if (
+          typeof maxEntries !== 'number' ||
+          !Number.isFinite(maxEntries) ||
+          Math.floor(maxEntries) < 1 ||
+          maxEntries > 500
+        ) {
+          return 'DENY';
+        }
       }
 
       return 'ALLOW';
@@ -676,6 +714,54 @@ export class GatewayServer {
       },
       (p) => ({ path: p.path }),
       'write', (p) => p.path,
+    ));
+
+    target.addMethod('fs.list', this.gated('fs.list',
+      async (params: FsListParams) => {
+        const rawGlob = typeof params.glob === 'string' ? params.glob.trim() : '**/*';
+        const normalizedGlob = rawGlob.replace(/\\/g, '/');
+        if (
+          !normalizedGlob ||
+          normalizedGlob.length > 512 ||
+          normalizedGlob.includes('\0') ||
+          normalizedGlob.startsWith('/') ||
+          normalizedGlob.startsWith('\\') ||
+          /(^|\/)\.\.(\/|$)/.test(normalizedGlob)
+        ) {
+          throw new JSONRPCErrorException(
+            'fs.list glob must be a non-empty workspace-relative pattern',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+
+        const maxEntries = Number.isFinite(params.maxEntries)
+          ? Math.max(1, Math.min(500, Math.floor(Number(params.maxEntries))))
+          : 200;
+
+        const workspaceRoot = resolve(normalize(this.options.policyConfig.workspacePath));
+        const paths: string[] = [];
+        for await (const match of fsGlob(normalizedGlob, {
+          cwd: workspaceRoot,
+          withFileTypes: false,
+          dot: true,
+        })) {
+          const relative = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
+          const absolute = resolve(workspaceRoot, relative);
+          if (!isInsideAllowedPaths(absolute, [workspaceRoot])) {
+            continue;
+          }
+          paths.push(relative);
+          if (paths.length >= maxEntries) {
+            break;
+          }
+        }
+
+        paths.sort((a, b) => a.localeCompare(b));
+        return { paths };
+      },
+      (p) => ({ glob: p.glob ?? '**/*', maxEntries: p.maxEntries ?? 200 }),
+      'read',
+      (p) => p.glob ?? '**/*',
     ));
   }
 

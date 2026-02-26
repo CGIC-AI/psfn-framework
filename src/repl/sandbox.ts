@@ -17,6 +17,7 @@ import {
   createModuleCapabilities,
   createRepoCapabilities,
   createSchedulerCapabilities,
+  createToolchainCapabilities,
   createWebCapabilities,
 } from './sandbox-capabilities/index.js';
 
@@ -103,7 +104,13 @@ export class REPLSandbox {
     const web = createWebCapabilities({
       gatewayCaps,
       pushEvidence,
+      budgetRef: this.budgetRef,
       llm_query_json: llm.llm_query_json,
+    });
+
+    const toolchain = createToolchainCapabilities({
+      gatewayCaps,
+      budgetRef: this.budgetRef,
     });
 
     const contextValues: Record<string, unknown> = {
@@ -137,6 +144,10 @@ export class REPLSandbox {
       repo_diff: repo.repo_diff,
       repo_apply_patch: repo.repo_apply_patch,
       repo_commit: repo.repo_commit,
+      read_file: toolchain.read_file,
+      write_file: toolchain.write_file,
+      list_files: toolchain.list_files,
+      web_fetch: web.web_fetch,
       crawler_fetch: web.crawler_fetch,
       web_research: web.web_research,
 

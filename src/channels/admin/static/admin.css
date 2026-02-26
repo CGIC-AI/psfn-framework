@@ -242,6 +242,97 @@ td {
   font-weight: bold;
 }
 
+.audit-intro {
+  margin-bottom: 0.9rem;
+  color: var(--text-muted);
+}
+
+.audit-filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+}
+
+.audit-filter-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.audit-filter-form select {
+  min-width: 11rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  background: #fff;
+}
+
+.audit-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.audit-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  background: #fcfbf8;
+}
+
+.audit-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.audit-item-time {
+  color: var(--text-muted);
+}
+
+.audit-badge {
+  display: inline-block;
+  border-radius: 999px;
+  background: #efe8da;
+  color: #5a4a35;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.audit-badge-allowed {
+  background: #e4f4e8;
+  color: #2d6f3a;
+}
+
+.audit-badge-denied {
+  background: #f8dfe2;
+  color: #8b2d36;
+}
+
+.audit-item-narrative {
+  margin-top: 0.5rem;
+  font-size: 0.93rem;
+  line-height: 1.35;
+}
+
+.audit-item-details {
+  margin-top: 0.45rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 .think-trace {
   display: flex;
   flex-direction: column;

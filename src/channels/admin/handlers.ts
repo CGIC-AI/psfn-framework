@@ -17,6 +17,8 @@ import type {
   EnvInfo,
   ThinkTraceView,
   ConfirmationQueueAdminApi,
+  AdminAuditActionType,
+  AdminAuditDecision,
   AdminChatDebugCategory,
   AdminChatDebugEventPayload,
   AdminChatDebugStreamOptions,
@@ -92,6 +94,7 @@ import {
   getMalformedStructuredPromptErrors,
   parseStructuredPromptForm,
 } from './prompt-structured-content.js';
+import { AdminAuditTimelineStore } from './audit-timeline.js';
 import * as tpl from './templates.js';
 
 interface ContactIdentityLinkView {
@@ -112,6 +115,12 @@ interface SettingsConfigEditors {
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;
   capabilities: CapabilityTierConfig;
+}
+
+interface ActiveToolInvocation {
+  toolName: string;
+  channelId: string;
+  startedAt: number;
 }
 
 type ChatDebugEventName =
@@ -198,6 +207,8 @@ export class AdminHandlers {
   };
   private thinkTraces: ThinkTraceView[] = [];
   private chatDebugCounter = 0;
+  private auditTimeline = new AdminAuditTimelineStore();
+  private activeToolInvocations = new Map<string, ActiveToolInvocation>();
 
   constructor(deps: {
     memoryStore: MemoryStore;
@@ -273,6 +284,102 @@ export class AdminHandlers {
 
       this.thinkTraces.unshift(trace);
       if (this.thinkTraces.length > 5) this.thinkTraces.length = 5;
+    });
+
+    this.registerAuditTimelineSources();
+  }
+
+  private registerAuditTimelineSources(): void {
+    this.eventBus.on('agent.tool.start', ({ toolCallId, toolName, channelId }) => {
+      this.activeToolInvocations.set(toolCallId, {
+        toolName,
+        channelId,
+        startedAt: Date.now(),
+      });
+    });
+
+    this.eventBus.on('agent.tool.end', ({ toolCallId, toolName, channelId, isError, shardId }) => {
+      const active = this.activeToolInvocations.get(toolCallId);
+      if (active) {
+        this.activeToolInvocations.delete(toolCallId);
+      }
+      const durationMs = active ? Math.max(0, Date.now() - active.startedAt) : null;
+      const decision: AdminAuditDecision = isError ? 'denied' : 'allowed';
+      const toolLabel = active?.toolName ?? toolName;
+      const channelLabel = active?.channelId ?? channelId;
+      this.appendAuditTimelineEntry(
+        'tool_invocation',
+        decision,
+        isError
+          ? `Purrsephone attempted tool "${toolLabel}" in ${channelLabel}, but it failed.`
+          : `Purrsephone completed tool "${toolLabel}" in ${channelLabel}.`,
+        [
+          `callId=${toolCallId}`,
+          shardId ? `shard=${shardId}` : null,
+          durationMs !== null ? `durationMs=${durationMs}` : null,
+        ],
+      );
+    });
+
+    this.eventBus.on('memory.extraction.end', (event) => {
+      const writeCount = event.writeCount ?? 0;
+      const deduplicatedCount = event.deduplicatedCount ?? 0;
+      const supersededCount = event.supersededCount ?? 0;
+      if (writeCount <= 0 && deduplicatedCount <= 0 && supersededCount <= 0) return;
+      const decision: AdminAuditDecision = writeCount > 0 ? 'allowed' : 'denied';
+      this.appendAuditTimelineEntry(
+        'memory_mutation',
+        decision,
+        writeCount > 0
+          ? `Purrsephone mutated memory in ${event.channelId}: wrote ${writeCount} memory entries.`
+          : `Purrsephone attempted a memory mutation in ${event.channelId}, but no entries were written.`,
+        [
+          `accepted=${event.acceptedCount ?? 0}`,
+          `rejected=${event.rejectedCount ?? 0}`,
+          `deduplicated=${deduplicatedCount}`,
+          `superseded=${supersededCount}`,
+        ],
+      );
+    });
+
+    this.eventBus.on('message.sent', ({ response }) => {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'allowed',
+        `Purrsephone sent an external response to ${response.channelId}.`,
+        [
+          `model=${response.metadata.model}`,
+          `durationMs=${response.metadata.durationMs}`,
+        ],
+      );
+    });
+
+    this.eventBus.on('external.telemetry.ingested', ({ event }) => {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'allowed',
+        `External telemetry "${event.eventType}" from ${event.source} was ingested.`,
+        [
+          event.channelId ? `channelId=${event.channelId}` : null,
+          event.scope ? `scope=${event.scope}` : null,
+          `eventId=${event.id}`,
+        ],
+      );
+    });
+  }
+
+  private appendAuditTimelineEntry(
+    actionType: AdminAuditActionType,
+    decision: AdminAuditDecision,
+    narrative: string,
+    details: Array<string | null | undefined> = [],
+  ): void {
+    const detailText = details.filter((value): value is string => Boolean(value && value.trim())).join(' • ');
+    this.auditTimeline.append({
+      actionType,
+      decision,
+      narrative,
+      details: detailText || undefined,
     });
   }
 
@@ -356,8 +463,21 @@ export class AdminHandlers {
 
   memorySupersede(id: string): string {
     const m = this.memoryStore.getById(id);
-    if (!m) return '';
+    if (!m) {
+      this.appendAuditTimelineEntry(
+        'memory_mutation',
+        'denied',
+        `Memory supersede failed: memory "${id}" was not found.`,
+      );
+      return '';
+    }
     this.memoryStore.updateMemory(id, { supersededBy: `admin-${randomUUID()}` });
+    this.appendAuditTimelineEntry(
+      'memory_mutation',
+      'allowed',
+      `Purrsephone superseded memory "${m.id}".`,
+      [`source=${m.sourceRef}`],
+    );
     return '';  // Remove the row
   }
 
@@ -477,11 +597,21 @@ export class AdminHandlers {
     const params = new URLSearchParams(body);
     const sourcePath = (params.get('path') ?? '').trim();
     if (!sourcePath) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Identity import was denied: source path was not provided.',
+      );
       return tpl.identityImportResult(false, 'path is required');
     }
 
     const destinationPath = this.config.characterCardPath?.trim();
     if (!destinationPath) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Identity import was denied: CHARACTER_CARD_PATH is not configured.',
+      );
       return tpl.identityImportResult(false, 'CHARACTER_CARD_PATH is not configured');
     }
 
@@ -502,36 +632,74 @@ export class AdminHandlers {
       const warningSuffix = imported.warnings.length > 0
         ? ` Warnings: ${imported.warnings.join('; ')}`
         : '';
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `Purrsephone imported an identity card from ${imported.sourcePath}.`,
+        [
+          `name=${imported.card.data.name}`,
+          `format=${imported.containerFormat}`,
+          `spec=${imported.spec}`,
+        ],
+      );
       return tpl.identityImportResult(
         true,
         `Imported "${imported.card.data.name}" from ${imported.sourcePath} (${imported.containerFormat}/${imported.spec}).${warningSuffix}`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Identity import failed: ${message}`,
+        [`source=${sourcePath}`],
+      );
       return tpl.identityImportResult(false, `Import failed: ${message}`);
     }
   }
 
   rollbackIdentityCard(body: string): string {
     if (!this.cardVersionStore) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Identity rollback was denied: versioning is not configured.',
+      );
       return tpl.identityCardVersionResult(false, 'Character card versioning is not configured.');
     }
     const params = new URLSearchParams(body);
     const rawVersion = params.get('version') ?? '';
     const version = Number.parseInt(rawVersion, 10);
     if (!Number.isInteger(version) || version <= 0) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Identity rollback was denied: invalid version "${rawVersion}".`,
+      );
       return tpl.identityCardVersionResult(false, 'version must be a positive integer.');
     }
 
     try {
       const snapshot = this.cardVersionStore.rollback(version);
       this.characterCard = snapshot.card;
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `Purrsephone rolled identity back to version ${version}.`,
+        [`currentVersion=${snapshot.version}`],
+      );
       return tpl.identityCardVersionResult(
         true,
         `Rolled back to version ${version}. Current version is v${snapshot.version}.`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Identity rollback failed: ${message}`,
+        [`version=${version}`],
+      );
       return tpl.identityCardVersionResult(false, message);
     }
   }
@@ -836,6 +1004,11 @@ export class AdminHandlers {
 
   async resolveConfirmation(body: string): Promise<string> {
     if (!this.confirmationQueueApi) {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'denied',
+        'Confirmation decision was denied: confirmation queue is unavailable.',
+      );
       return this.renderConfirmationQueueFragment(
         'Confirmation queue is unavailable (gateway integration not configured).',
         true,
@@ -846,10 +1019,20 @@ export class AdminHandlers {
     const id = (params.get('id') ?? '').trim();
     const decisionRaw = (params.get('decision') ?? '').trim();
     if (!id) {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'denied',
+        'Confirmation decision was denied: missing confirmation id.',
+      );
       return this.renderConfirmationQueueFragment('Confirmation ID is required.', true);
     }
 
     if (decisionRaw !== 'approve' && decisionRaw !== 'deny' && decisionRaw !== 'modify') {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'denied',
+        `Confirmation ${id} was denied: invalid decision "${decisionRaw}".`,
+      );
       return this.renderConfirmationQueueFragment('Invalid confirmation decision.', true);
     }
 
@@ -861,15 +1044,30 @@ export class AdminHandlers {
     if (decisionRaw === 'modify') {
       const modifiedParamsRaw = (params.get('modifiedParamsJson') ?? '').trim();
       if (!modifiedParamsRaw) {
+        this.appendAuditTimelineEntry(
+          'external_action',
+          'denied',
+          `Confirmation ${id} modify request was denied: modified params were not provided.`,
+        );
         return this.renderConfirmationQueueFragment('Modified params JSON is required for modify.', true);
       }
       try {
         const parsed = JSON.parse(modifiedParamsRaw);
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          this.appendAuditTimelineEntry(
+            'external_action',
+            'denied',
+            `Confirmation ${id} modify request was denied: modified params were not a JSON object.`,
+          );
           return this.renderConfirmationQueueFragment('Modified params must be a JSON object.', true);
         }
         resolveParams.modifiedParams = parsed as Record<string, unknown>;
       } catch {
+        this.appendAuditTimelineEntry(
+          'external_action',
+          'denied',
+          `Confirmation ${id} modify request was denied: modified params JSON was invalid.`,
+        );
         return this.renderConfirmationQueueFragment('Modified params JSON is invalid.', true);
       }
     }
@@ -879,10 +1077,30 @@ export class AdminHandlers {
       result = await this.confirmationQueueApi.resolveConfirmationQueue(resolveParams);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'denied',
+        `Confirmation ${id} failed to resolve: ${message}`,
+      );
       return this.renderConfirmationQueueFragment(`Confirmation update failed: ${message}`, true);
     }
 
     const isError = result.status === 'failed';
+    const decision: AdminAuditDecision = (
+      result.status === 'denied'
+      || result.status === 'failed'
+      || result.status === 'expired'
+      || result.status === 'not_found'
+    ) ? 'denied' : 'allowed';
+    const decisionLabel = decisionRaw === 'modify'
+      ? 'modified'
+      : (decisionRaw === 'approve' ? 'approved' : 'denied');
+    this.appendAuditTimelineEntry(
+      'external_action',
+      decision,
+      `Operator ${decisionLabel} confirmation ${id}.`,
+      [`status=${result.status}`, `executed=${result.executed}`],
+    );
     return this.renderConfirmationQueueFragment(result.message, isError);
   }
 
@@ -1382,6 +1600,26 @@ export class AdminHandlers {
     const updated = this.contactStore.getById(contactId);
     if (!updated) return tpl.settingsFormResult(false, 'Update failed');
 
+    const identityTouched = (
+      displayName !== contact.displayName
+      || nickname !== currentNickname
+      || channelPrivacyUpdates.length > 0
+      || wantsNewChannelLink
+    );
+    if (identityTouched) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `Purrsephone updated identity details for contact "${updated.displayName}".`,
+        [
+          displayName !== contact.displayName ? `displayName=${updated.displayName}` : null,
+          nickname !== currentNickname ? `nickname=${nickname ?? '(none)'}` : null,
+          channelPrivacyUpdates.length > 0 ? `privacyUpdates=${channelPrivacyUpdates.length}` : null,
+          wantsNewChannelLink ? `linked=${newChannel}:${newChannelUserId}` : null,
+        ],
+      );
+    }
+
     // Return a fresh table row so htmx replaces the edit form
     const relatedChannels = this.buildRelatedConversationChannelMap([updated]).get(updated.id) ?? [];
     return tpl.contactRow(updated, this.memoryStore.getContactProfile(updated.id), relatedChannels);
@@ -1473,70 +1711,182 @@ export class AdminHandlers {
   }
 
   updatePromptLayer(body: string): string {
-    if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
+    if (!this.promptStore) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Prompt layer edit was denied: prompt store is not configured.',
+      );
+      return '<div class="form-error">Prompt store not configured</div>';
+    }
     const params = new URLSearchParams(body);
     const layerId = params.get('layerId') ?? '';
     const resolved = this.resolvePromptLayerContent(params);
-    if ('error' in resolved) return tpl.settingsFormResult(false, resolved.error);
+    if ('error' in resolved) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt layer edit was denied: ${resolved.error}`,
+        [`layerId=${layerId}`],
+      );
+      return tpl.settingsFormResult(false, resolved.error);
+    }
     const resolvedMetadata = this.resolvePromptLayerMetadata(params);
-    if ('error' in resolvedMetadata) return tpl.settingsFormResult(false, resolvedMetadata.error);
+    if ('error' in resolvedMetadata) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt layer edit was denied: ${resolvedMetadata.error}`,
+        [`layerId=${layerId}`],
+      );
+      return tpl.settingsFormResult(false, resolvedMetadata.error);
+    }
     try {
       const layer = this.promptStore.update(layerId, resolved.content, 'admin', resolvedMetadata.metadata);
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `Purrsephone edited ${layer.type} prompt layer "${layer.name}".`,
+        [`layerId=${layer.id}`, `version=${layer.version}`],
+      );
       return tpl.settingsFormResult(true, `Updated "${layer.name}" to v${layer.version}`);
     } catch (err) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt layer edit failed: ${String(err)}`,
+        [`layerId=${layerId}`],
+      );
       return tpl.settingsFormResult(false, String(err));
     }
   }
 
   updatePromptRegistry(body: string): string {
-    if (!this.promptRegistry) return '<div class="form-error">Prompt registry not configured</div>';
+    if (!this.promptRegistry) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Prompt registry edit was denied: prompt registry is not configured.',
+      );
+      return '<div class="form-error">Prompt registry not configured</div>';
+    }
     const params = new URLSearchParams(body);
     const key = params.get('key') ?? '';
     const content = params.get('content') ?? '';
     try {
       const prompt = this.promptRegistry.update(key, content, 'admin');
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `Purrsephone edited static prompt "${prompt.key}".`,
+        [`version=${prompt.version}`],
+      );
       return tpl.settingsFormResult(true, `Updated "${prompt.key}" to v${prompt.version}`);
     } catch (err) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt registry edit failed: ${String(err)}`,
+        [`key=${key}`],
+      );
       return tpl.settingsFormResult(false, String(err));
     }
   }
 
   togglePromptLayer(body: string): string {
-    if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
+    if (!this.promptStore) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Prompt toggle was denied: prompt store is not configured.',
+      );
+      return '<div class="form-error">Prompt store not configured</div>';
+    }
     const params = new URLSearchParams(body);
     const layerId = params.get('layerId') ?? '';
     try {
       this.promptStore.toggle(layerId);
+      const layer = this.promptStore.getById(layerId);
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `Purrsephone toggled prompt layer "${layer?.name ?? layerId}".`,
+        [layer ? `enabled=${layer.enabled}` : null],
+      );
       // Return the full updated list for htmx swap
       const layers = this.promptStore.getAll();
       return tpl.promptLayersFragment(layers);
     } catch (err) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt toggle failed: ${String(err)}`,
+        [`layerId=${layerId}`],
+      );
       return tpl.settingsFormResult(false, String(err));
     }
   }
 
   rollbackPromptLayer(body: string): string {
-    if (!this.promptStore) return '<div class="form-error">Prompt store not configured</div>';
+    if (!this.promptStore) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Prompt rollback was denied: prompt store is not configured.',
+      );
+      return '<div class="form-error">Prompt store not configured</div>';
+    }
     const params = new URLSearchParams(body);
     const layerId = params.get('layerId') ?? '';
     const version = parseInt(params.get('version') ?? '0', 10);
     try {
       const layer = this.promptStore.rollback(layerId, version);
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `Purrsephone rolled prompt layer "${layer.name}" back to v${version}.`,
+        [`layerId=${layer.id}`, `version=${layer.version}`],
+      );
       return tpl.settingsFormResult(true, `Rolled back "${layer.name}" to content from v${version}`);
     } catch (err) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt rollback failed: ${String(err)}`,
+        [`layerId=${layerId}`, `version=${version}`],
+      );
       return tpl.settingsFormResult(false, String(err));
     }
   }
 
   rollbackPromptRegistry(body: string): string {
-    if (!this.promptRegistry) return '<div class="form-error">Prompt registry not configured</div>';
+    if (!this.promptRegistry) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Static prompt rollback was denied: prompt registry is not configured.',
+      );
+      return '<div class="form-error">Prompt registry not configured</div>';
+    }
     const params = new URLSearchParams(body);
     const key = params.get('key') ?? '';
     const version = parseInt(params.get('version') ?? '0', 10);
     try {
       const prompt = this.promptRegistry.rollback(key, version);
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `Purrsephone rolled static prompt "${prompt.key}" back to v${version}.`,
+        [`version=${prompt.version}`],
+      );
       return tpl.settingsFormResult(true, `Rolled back "${prompt.key}" to content from v${version}`);
     } catch (err) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Static prompt rollback failed: ${String(err)}`,
+        [`key=${key}`, `version=${version}`],
+      );
       return tpl.settingsFormResult(false, String(err));
     }
   }
@@ -1554,8 +1904,10 @@ export class AdminHandlers {
 
   // ── Events (SSE) ──
 
-  eventsPageHtml(): string {
-    return tpl.layout('Garden Pulse', tpl.eventsPage(), 'events');
+  eventsPageHtml(searchParams?: URLSearchParams): string {
+    const filters = this.auditTimeline.parseFilters(searchParams);
+    const entries = this.auditTimeline.list(filters);
+    return tpl.layout('Audit Timeline', tpl.auditTimelinePage({ entries, filters }), 'events');
   }
 
   setupSSE(res: ServerResponse): () => void {

@@ -96,6 +96,25 @@ export interface AdminEvent {
   payload: Record<string, unknown>;
 }
 
+export type AdminAuditActionType = 'tool_invocation' | 'identity_edit' | 'external_action' | 'memory_mutation';
+export type AdminAuditDecision = 'allowed' | 'denied';
+export type AdminAuditTimeRange = '15m' | '1h' | '24h' | '7d' | '30d' | 'all';
+
+export interface AdminAuditTimelineEntry {
+  id: string;
+  timestamp: number;
+  actionType: AdminAuditActionType;
+  decision: AdminAuditDecision;
+  narrative: string;
+  details?: string;
+}
+
+export interface AdminAuditTimelineFilters {
+  actionType: AdminAuditActionType | 'all';
+  decision: AdminAuditDecision | 'all';
+  timeRange: AdminAuditTimeRange;
+}
+
 export type AdminChatDebugCategory = 'thinking' | 'text' | 'tools' | 'memory' | 'errors';
 
 export type AdminChatDebugDetailValue = string | number | boolean | null;

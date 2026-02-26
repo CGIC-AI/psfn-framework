@@ -228,7 +228,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     client = new GatewayClient(conn.conn, 1024);
   });
 
-  it('receives and processes discord.handleMessage requests from gateway', async () => {
+  it('receives and processes voice.handleMessage requests from gateway', async () => {
     const handler = vi.fn().mockResolvedValue({
       content: 'voice response',
       channelId: 'discord-voice:123',
@@ -241,7 +241,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     conn._emit({
       jsonrpc: '2.0',
       id: 42,
-      method: 'discord.handleMessage',
+      method: 'voice.handleMessage',
       params: {
         message: {
           id: 'voice-1',
@@ -274,7 +274,39 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(response.result.durationMs).toBe(500);
   });
 
-  it('handles discord.voice.start/chunk/end reverse RPC flow', async () => {
+  it('supports legacy discord.handleMessage reverse RPC alias', async () => {
+    const handler = vi.fn().mockResolvedValue({
+      content: 'legacy response',
+      channelId: 'discord-voice:123',
+      metadata: { model: 'legacy-model', inputTokens: 10, outputTokens: 5, durationMs: 500 },
+    });
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 43,
+      method: 'discord.handleMessage',
+      params: {
+        message: {
+          id: 'voice-legacy-1',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'LegacyUser',
+          content: 'legacy hello',
+          timestamp: '2025-01-01T00:00:00.000Z',
+        },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].content).toBe('legacy hello');
+    expect(getRpcResponse(conn.sent, 43).result.content).toBe('legacy response');
+  });
+
+  it('handles voice.stream.start/chunk/end reverse RPC flow', async () => {
     const handler = vi.fn().mockResolvedValue({
       content: 'assembled response',
       channelId: 'discord-voice:123',
@@ -285,7 +317,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     conn._emit({
       jsonrpc: '2.0',
       id: 100,
-      method: 'discord.voice.start',
+      method: 'voice.stream.start',
       params: {
         correlationId: 'corr-1',
         streamId: 'stream-1',
@@ -305,7 +337,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     conn._emit({
       jsonrpc: '2.0',
       id: 101,
-      method: 'discord.voice.chunk',
+      method: 'voice.stream.chunk',
       params: {
         correlationId: 'corr-1',
         streamId: 'stream-1',
@@ -316,7 +348,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     conn._emit({
       jsonrpc: '2.0',
       id: 102,
-      method: 'discord.voice.chunk',
+      method: 'voice.stream.chunk',
       params: {
         correlationId: 'corr-1',
         streamId: 'stream-1',
@@ -327,7 +359,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     conn._emit({
       jsonrpc: '2.0',
       id: 103,
-      method: 'discord.voice.end',
+      method: 'voice.stream.end',
       params: {
         correlationId: 'corr-1',
         streamId: 'stream-1',
@@ -347,6 +379,62 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(getRpcResponse(conn.sent, 103).result.content).toBe('assembled response');
   });
 
+  it('supports legacy discord.voice.* reverse RPC aliases', async () => {
+    const handler = vi.fn().mockResolvedValue({
+      content: 'legacy assembled response',
+      channelId: 'discord-voice:123',
+      metadata: { model: 'voice-model', inputTokens: 10, outputTokens: 4, durationMs: 250 },
+    });
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 150,
+      method: 'discord.voice.start',
+      params: {
+        correlationId: 'corr-legacy',
+        streamId: 'stream-legacy',
+        sequence: 0,
+        message: {
+          id: 'voice-legacy',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'Legacy Voice User',
+          content: '',
+          timestamp: '2025-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 151,
+      method: 'discord.voice.chunk',
+      params: {
+        correlationId: 'corr-legacy',
+        streamId: 'stream-legacy',
+        sequence: 1,
+        text: 'legacy voice',
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 152,
+      method: 'discord.voice.end',
+      params: {
+        correlationId: 'corr-legacy',
+        streamId: 'stream-legacy',
+        sequence: 2,
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].content).toBe('legacy voice');
+    expect(getRpcResponse(conn.sent, 152).result.content).toBe('legacy assembled response');
+  });
+
   it('supports voice stream cancellation', async () => {
     const handler = vi.fn().mockResolvedValue({
       content: 'should not happen',
@@ -358,7 +446,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     conn._emit({
       jsonrpc: '2.0',
       id: 200,
-      method: 'discord.voice.start',
+      method: 'voice.stream.start',
       params: {
         correlationId: 'corr-cancel',
         streamId: 'stream-cancel',
@@ -378,7 +466,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     conn._emit({
       jsonrpc: '2.0',
       id: 201,
-      method: 'discord.voice.chunk',
+      method: 'voice.stream.chunk',
       params: {
         correlationId: 'corr-cancel',
         streamId: 'stream-cancel',
@@ -390,7 +478,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     conn._emit({
       jsonrpc: '2.0',
       id: 202,
-      method: 'discord.voice.cancel',
+      method: 'voice.stream.cancel',
       params: {
         correlationId: 'corr-cancel',
         streamId: 'stream-cancel',
@@ -421,7 +509,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     localConn._emit({
       jsonrpc: '2.0',
       id: 300,
-      method: 'discord.voice.start',
+      method: 'voice.stream.start',
       params: {
         correlationId: 'corr-drop',
         streamId: 'stream-drop',
@@ -441,7 +529,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     localConn._emit({
       jsonrpc: '2.0',
       id: 301,
-      method: 'discord.voice.chunk',
+      method: 'voice.stream.chunk',
       params: {
         correlationId: 'corr-drop',
         streamId: 'stream-drop',
@@ -453,7 +541,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     localConn._emit({
       jsonrpc: '2.0',
       id: 302,
-      method: 'discord.voice.chunk',
+      method: 'voice.stream.chunk',
       params: {
         correlationId: 'corr-drop',
         streamId: 'stream-drop',
@@ -465,7 +553,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     localConn._emit({
       jsonrpc: '2.0',
       id: 303,
-      method: 'discord.voice.end',
+      method: 'voice.stream.end',
       params: {
         correlationId: 'corr-drop',
         streamId: 'stream-drop',

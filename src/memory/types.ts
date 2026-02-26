@@ -108,6 +108,41 @@ export interface MemoryDecayProfile {
   halflifeMultiplier: number;
 }
 
+export interface SensitivityWriteThreshold {
+  minSalience: number;
+  minNovelty: number;
+}
+
+export interface MemoryPrivacyRiskBreakdown {
+  sensitivity: number;
+  tagBoost: number;
+  sourceContextAdjustment: number;
+  consentBoost: number;
+}
+
+export interface MemoryPrivacyRiskEvaluation {
+  risk: number;
+  breakdown: MemoryPrivacyRiskBreakdown;
+}
+
+const SENSITIVE_PRIVACY_TAG_HINTS = new Set<string>([
+  'confidential',
+  'private',
+  'secret',
+  'sensitive',
+  'intimate',
+  'medical',
+  'health',
+  'financial',
+  'legal',
+  'sexual',
+  'trauma',
+]);
+const SENSITIVE_PRIVACY_TAG_HINT_LIST = [...SENSITIVE_PRIVACY_TAG_HINTS];
+
+const PUBLIC_SOURCE_PREFIXES = ['twitter:', 'x:', 'mastodon:', 'bluesky:', 'public:'] as const;
+const PRIVATE_SOURCE_PREFIXES = ['api:', 'shard:', 'discord:', 'telegram:', 'signal:', 'dm:'] as const;
+
 // Decay half-lives in milliseconds
 export const DECAY_HALFLIFE: Record<MemoryType, number> = {
   episodic:   7  * 24 * 60 * 60 * 1000,
@@ -134,6 +169,7 @@ export const MEMORY_CONFIG = {
   extractionInterval: 5,
   maxRetrievalCount: 15,
   retrievalThreshold: 0.3,
+  privacyRiskPenaltyWeight: 0.45,
   maintenanceIntervalMs: 60_000,
   salienceFloor: 0.05,
   durableSalienceFloor: 0.25,
@@ -141,6 +177,12 @@ export const MEMORY_CONFIG = {
   durableAutoImportanceThreshold: 0.75,
   contradictionThresholdOffset: 0.15,
   salienceBumpOnAccess: 0.05,
+  sensitivityWriteThresholds: {
+    public: { minSalience: 0, minNovelty: 0 },
+    personal: { minSalience: 0, minNovelty: 0 },
+    intimate: { minSalience: 0.6, minNovelty: 0.18 },
+    confidential: { minSalience: 0.72, minNovelty: 0.3 },
+  },
 } as const;
 
 export function normalizeMemoryTags(tags: readonly string[]): string[] {
@@ -155,6 +197,63 @@ export function normalizeMemoryTags(tags: readonly string[]): string[] {
 function clampUnit(value: number, fallback = 0.5): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(0, Math.min(1, value));
+}
+
+export function getSensitivityWriteThreshold(sensitivity: SensitivityLevel): SensitivityWriteThreshold {
+  return MEMORY_CONFIG.sensitivityWriteThresholds[sensitivity];
+}
+
+export function evaluateMemoryPrivacyRisk(
+  input: Pick<PurrMemory, 'sensitivity' | 'tags' | 'sourceRef' | 'consentFlags'>,
+): MemoryPrivacyRiskEvaluation {
+  const sensitivityBase: Record<SensitivityLevel, number> = {
+    public: 0.05,
+    personal: 0.22,
+    intimate: 0.62,
+    confidential: 0.82,
+  };
+
+  const normalizedTags = normalizeMemoryTags(input.tags ?? []);
+  const tagMatches = normalizedTags.filter(tag => (
+    SENSITIVE_PRIVACY_TAG_HINTS.has(tag)
+    || SENSITIVE_PRIVACY_TAG_HINT_LIST.some(hint => tag.includes(hint))
+  ));
+  const tagBoost = Math.min(0.18, tagMatches.length * 0.06);
+
+  const sourceRef = input.sourceRef.trim().toLowerCase();
+  let sourceContextAdjustment = 0;
+  if (PUBLIC_SOURCE_PREFIXES.some(prefix => sourceRef.startsWith(prefix))) {
+    sourceContextAdjustment -= 0.08;
+  } else if (PRIVATE_SOURCE_PREFIXES.some(prefix => sourceRef.startsWith(prefix))) {
+    sourceContextAdjustment += 0.08;
+  } else if (sourceRef.includes(':dm') || sourceRef.includes('private')) {
+    sourceContextAdjustment += 0.04;
+  }
+
+  const consentFlags = input.consentFlags ?? {};
+  const consentBoost = (
+    (consentFlags.allowRecall === false ? 0.22 : 0)
+    + (consentFlags.allowAbstraction === false ? 0.04 : 0)
+    + (consentFlags.deleteOnRequest ? 0.04 : 0)
+  );
+
+  const risk = clampUnit(
+    sensitivityBase[input.sensitivity]
+    + tagBoost
+    + sourceContextAdjustment
+    + consentBoost,
+    sensitivityBase[input.sensitivity],
+  );
+
+  return {
+    risk,
+    breakdown: {
+      sensitivity: sensitivityBase[input.sensitivity],
+      tagBoost,
+      sourceContextAdjustment,
+      consentBoost,
+    },
+  };
 }
 
 export function normalizeMemoryTypeValue(value: unknown): MemoryType | undefined {

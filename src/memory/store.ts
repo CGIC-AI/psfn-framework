@@ -402,7 +402,7 @@ export class MemoryStore {
       .slice(0, limit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'tags' | 'provenanceRefs' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
+  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'consentFlags' | 'tags' | 'provenanceRefs' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -425,6 +425,10 @@ export class MemoryStore {
     if (updates.sensitivity !== undefined) {
       setClauses.push('sensitivity = ?');
       values.push(updates.sensitivity);
+    }
+    if (updates.consentFlags !== undefined) {
+      setClauses.push('consent_flags = ?');
+      values.push(JSON.stringify(updates.consentFlags));
     }
     if (updates.tags !== undefined) {
       setClauses.push('tags = ?');

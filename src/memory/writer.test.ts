@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MemoryWriter } from './writer.js';
+import { MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
 import type { EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from './store.js';
@@ -387,6 +387,8 @@ describe('MemoryWriter', () => {
         text: 'Intimate secret',
         type: 'emotional',
         sensitivity: 'intimate',
+        importance: 0.7,
+        salience: 0.7,
       });
 
       expect(result.memory.sensitivity).toBe('intimate');
@@ -418,6 +420,81 @@ describe('MemoryWriter', () => {
       const result = await writer.write({ text: 'No consent', type: 'semantic' });
 
       expect(result.memory.consentFlags).toBeUndefined();
+    });
+
+    it('rejects low-salience confidential writes without consent-deny override', async () => {
+      store.searchByEmbedding.mockReturnValueOnce([]); // dedup
+      store.searchByEmbedding.mockReturnValueOnce([]); // broader novelty
+
+      await expect(writer.write({
+        text: 'Low salience confidential detail',
+        type: 'semantic',
+        sensitivity: 'confidential',
+        salience: 0.4,
+        importance: 0.4,
+      })).rejects.toThrow(MemoryWritePolicyError);
+
+      expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
+    it('rejects intimate writes when novelty is below threshold', async () => {
+      const similar = makeExistingMemory({
+        type: 'emotional',
+        similarity: 0.9, // novelty = 0.1
+      });
+      store.searchByEmbedding.mockReturnValueOnce([]); // dedup
+      store.searchByEmbedding.mockReturnValueOnce([similar]); // broader
+
+      await expect(writer.write({
+        text: 'Near-duplicate intimate memory',
+        type: 'emotional',
+        sensitivity: 'intimate',
+        salience: 0.85,
+        importance: 0.85,
+      })).rejects.toThrow(MemoryWritePolicyError);
+
+      expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
+    it('allows low-threshold sensitive writes when allowRecall is explicitly denied', async () => {
+      store.searchByEmbedding.mockReturnValueOnce([]); // dedup
+      store.searchByEmbedding.mockReturnValueOnce([]); // broader novelty
+
+      const result = await writer.write({
+        text: 'Consent denied confidential boundary',
+        type: 'semantic',
+        sensitivity: 'confidential',
+        salience: 0.2,
+        importance: 0.2,
+        consentFlags: { allowRecall: false },
+      });
+
+      expect(result.action).toBe('created');
+      expect(result.memory.consentFlags).toEqual({ allowRecall: false });
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('preserves explicit consent deny when deduplicating', async () => {
+      const existing = makeExistingMemory({
+        type: 'semantic',
+        consentFlags: {},
+      });
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+
+      const result = await writer.write({
+        text: 'An existing memory with deny',
+        type: 'semantic',
+        consentFlags: { allowRecall: false },
+      });
+
+      expect(result.action).toBe('deduplicated');
+      expect(store.updateMemory).toHaveBeenCalledWith(
+        'existing-001',
+        expect.objectContaining({
+          consentFlags: { allowRecall: false },
+        }),
+      );
+      expect(result.memory.consentFlags).toEqual({ allowRecall: false });
     });
   });
 
@@ -487,6 +564,29 @@ describe('MemoryWriter', () => {
       expect(result.action).toBe('superseded');
       expect(store.updateMemory).toHaveBeenCalled();
       expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('preserves existing consent-deny flags during upsert replacements', async () => {
+      const existing = makeExistingMemory({
+        type: 'semantic',
+        confidence: 0.95,
+        consentFlags: { allowRecall: false },
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+
+      const result = await writer.upsert({
+        text: 'Replacement without explicit consent flags',
+        type: 'semantic',
+        sensitivity: 'confidential',
+        salience: 0.2,
+        importance: 0.2,
+      });
+
+      expect(result.action).toBe('superseded');
+      expect(result.memory.consentFlags).toEqual({ allowRecall: false });
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.consentFlags).toEqual({ allowRecall: false });
     });
 
     it('throws on invalid memory type', async () => {

@@ -4,7 +4,18 @@
 
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import {
   PROMPT_LAYER_ROLES,
@@ -16,6 +27,7 @@ import {
 import { createComponentLogger } from '../logger.js';
 
 const log = createComponentLogger('PromptStore');
+const HISTORY_SCAN_CHUNK_BYTES = 32 * 1024;
 
 function contentChecksum(content: string): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16);
@@ -86,6 +98,79 @@ export class PromptLayerStore {
     } catch (err) {
       log.error('Failed to write prompt history', { error: String(err) });
     }
+  }
+
+  private scanHistoryLines(onLine: (line: string) => boolean | void): void {
+    if (!existsSync(this.historyPath)) return;
+
+    const fd = openSync(this.historyPath, 'r');
+    try {
+      const fileSize = fstatSync(fd).size;
+      if (fileSize <= 0) return;
+
+      const buffer = Buffer.allocUnsafe(HISTORY_SCAN_CHUNK_BYTES);
+      let offset = 0;
+      let remainder = Buffer.alloc(0);
+
+      while (offset < fileSize) {
+        const bytesToRead = Math.min(HISTORY_SCAN_CHUNK_BYTES, fileSize - offset);
+        const bytesRead = readSync(fd, buffer, 0, bytesToRead, offset);
+        if (bytesRead <= 0) break;
+        offset += bytesRead;
+
+        const chunk = buffer.subarray(0, bytesRead);
+        const combined = remainder.length > 0 ? Buffer.concat([remainder, chunk]) : chunk;
+
+        let start = 0;
+        let newlineIndex = combined.indexOf(0x0A, start);
+        while (newlineIndex !== -1) {
+          let lineBuffer = combined.subarray(start, newlineIndex);
+          if (lineBuffer.length > 0 && lineBuffer[lineBuffer.length - 1] === 0x0D) {
+            lineBuffer = lineBuffer.subarray(0, lineBuffer.length - 1);
+          }
+          if (onLine(lineBuffer.toString('utf8'))) return;
+          start = newlineIndex + 1;
+          newlineIndex = combined.indexOf(0x0A, start);
+        }
+
+        remainder = start < combined.length
+          ? Buffer.from(combined.subarray(start))
+          : Buffer.alloc(0);
+      }
+
+      if (remainder.length > 0) {
+        if (onLine(remainder.toString('utf8'))) return;
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  private collectHistoryEntries(filter?: (entry: PromptHistoryEntry) => boolean): PromptHistoryEntry[] {
+    const entries: PromptHistoryEntry[] = [];
+    this.scanHistoryLines((line) => {
+      if (line.trim().length === 0) return false;
+      const entry = JSON.parse(line) as PromptHistoryEntry;
+      if (!filter || filter(entry)) {
+        entries.push(entry);
+      }
+      return false;
+    });
+    return entries;
+  }
+
+  private findHistoryEntry(layerId: string, version: number): PromptHistoryEntry | null {
+    let found: PromptHistoryEntry | null = null;
+    this.scanHistoryLines((line) => {
+      if (line.trim().length === 0) return false;
+      const entry = JSON.parse(line) as PromptHistoryEntry;
+      if (entry.layerId === layerId && entry.version === version) {
+        found = entry;
+        return true;
+      }
+      return false;
+    });
+    return found;
   }
 
   getAll(): PromptLayer[] {
@@ -212,21 +297,22 @@ export class PromptLayerStore {
 
   getHistory(): PromptHistoryEntry[] {
     try {
-      if (!existsSync(this.historyPath)) return [];
-      const raw = readFileSync(this.historyPath, 'utf-8');
-      return raw.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+      return this.collectHistoryEntries();
     } catch {
       return [];
     }
   }
 
   getLayerHistory(layerId: string): PromptHistoryEntry[] {
-    return this.getHistory().filter(h => h.layerId === layerId);
+    try {
+      return this.collectHistoryEntries(entry => entry.layerId === layerId);
+    } catch {
+      return [];
+    }
   }
 
   rollback(layerId: string, version: number): PromptLayer {
-    const history = this.getLayerHistory(layerId);
-    const entry = history.find(h => h.version === version);
+    const entry = this.findHistoryEntry(layerId, version);
     if (!entry) throw new Error(`No history entry for layer ${layerId} version ${version}`);
     return this.update(layerId, entry.previousContent, 'admin:rollback');
   }

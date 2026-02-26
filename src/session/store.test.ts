@@ -85,9 +85,11 @@ describe('SessionStore', () => {
 
     expect(existsSync(join(dir, '_channel_index.json'))).toBe(true);
     const index = JSON.parse(readFileSync(join(dir, '_channel_index.json'), 'utf-8')) as {
-      channels: Record<string, { filename: string }>;
+      channels: Record<string, { filename: string; messageCount?: number; lastTimestamp?: number }>;
     };
     expect(index.channels['api:e2e-internal'].filename).toBe(sessionFiles[0]);
+    expect(index.channels['api:e2e-internal'].messageCount).toBe(1);
+    expect(index.channels['api:e2e-internal'].lastTimestamp).toBe(1739443200000);
 
     const reloaded = new SessionStore(dir);
     reloaded.append({
@@ -99,6 +101,12 @@ describe('SessionStore', () => {
 
     const entries = reloaded.getRecent('api:e2e-internal', 10);
     expect(entries).toHaveLength(2);
+
+    const updatedIndex = JSON.parse(readFileSync(join(dir, '_channel_index.json'), 'utf-8')) as {
+      channels: Record<string, { messageCount?: number; lastTimestamp?: number }>;
+    };
+    expect(updatedIndex.channels['api:e2e-internal'].messageCount).toBe(2);
+    expect(updatedIndex.channels['api:e2e-internal'].lastTimestamp).toBe(1739443201000);
 
     const filesAfter = readdirSync(dir)
       .filter(f => f.endsWith('.jsonl'))
@@ -197,6 +205,34 @@ describe('SessionStore', () => {
     const summaries = store2.getCompactionSummaries('ch1');
     expect(summaries).toHaveLength(1);
     expect(summaries[0].summary).toBe('Summary from before');
+  });
+
+  it('handles large sessions via tail-first recent loads and metadata index', () => {
+    const channelId = 'api:large-tail';
+    const baseTimestamp = 1_700_000_000_000;
+
+    for (let i = 0; i < 1500; i++) {
+      store.append({
+        channelId,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `Message ${i}`,
+        timestamp: baseTimestamp + i,
+      });
+    }
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.count(channelId)).toBe(1500);
+
+    const recent = reloaded.getRecent(channelId, 5);
+    expect(recent).toHaveLength(5);
+    expect(recent[0].content).toBe('Message 1495');
+    expect(recent[4].content).toBe('Message 1499');
+
+    const index = JSON.parse(readFileSync(join(dir, '_channel_index.json'), 'utf-8')) as {
+      channels: Record<string, { messageCount?: number; lastTimestamp?: number }>;
+    };
+    expect(index.channels[channelId].messageCount).toBe(1500);
+    expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
   });
 
   it('persists discord message IDs for dedup helpers', () => {

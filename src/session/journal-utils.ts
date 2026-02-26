@@ -1,5 +1,15 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import type { CompactionSummary, JournalEntry, JournalMarkerType, SessionEntry } from './types.js';
 
 export interface QuarantinedJournalEntry {
@@ -16,6 +26,32 @@ export interface ReadJournalResult {
 
 export interface ReadJournalFileOptions {
   persistQuarantine?: boolean;
+}
+
+export interface ScanJournalMetadataOptions {
+  persistQuarantine?: boolean;
+}
+
+export interface JournalFileMetadata {
+  entryCount: number;
+  maxId: number;
+  messageCount: number;
+  lastTimestamp: number;
+  lastHmac: string | null;
+  lastEntry: JournalEntry | null;
+  lastExtractionCoveredUpTo: number;
+  quarantined: QuarantinedJournalEntry[];
+}
+
+export interface ReadJournalTailOptions {
+  messageLimit: number;
+  includeBoundaryEntry?: boolean;
+}
+
+export interface ReadJournalTailResult {
+  entries: JournalEntry[];
+  quarantined: QuarantinedJournalEntry[];
+  truncated: boolean;
 }
 
 export interface SessionHmacKeyring {
@@ -47,6 +83,7 @@ export interface JournalMarkerEntry {
 const DEFAULT_KEY_VERSION = 'v1';
 const HMAC_DIGEST = 'sha256';
 const HEX_SHA256_PATTERN = /^[a-f0-9]{64}$/i;
+const DEFAULT_JOURNAL_SCAN_CHUNK_BYTES = 64 * 1024;
 
 export function parseJournalText(raw: string): ReadJournalResult {
   const entries: JournalEntry[] = [];
@@ -109,6 +146,96 @@ function parseJournalLine(line: string): JournalEntry {
   return entry as JournalEntry;
 }
 
+function scanJournalLinesForward(
+  filePath: string,
+  onLine: (line: string, lineNumber: number) => boolean | void,
+): boolean {
+  const fd = openSync(filePath, 'r');
+  let stoppedEarly = false;
+  try {
+    const fileSize = fstatSync(fd).size;
+    if (fileSize <= 0) return false;
+
+    const buffer = Buffer.allocUnsafe(DEFAULT_JOURNAL_SCAN_CHUNK_BYTES);
+    let offset = 0;
+    let remainder = '';
+    let lineNumber = 0;
+
+    while (offset < fileSize) {
+      const bytesToRead = Math.min(DEFAULT_JOURNAL_SCAN_CHUNK_BYTES, fileSize - offset);
+      const bytesRead = readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) break;
+      offset += bytesRead;
+
+      const chunk = buffer.toString('utf8', 0, bytesRead);
+      const parts = (remainder + chunk).split('\n');
+      remainder = parts.pop() ?? '';
+
+      for (const line of parts) {
+        lineNumber += 1;
+        if (onLine(line, lineNumber)) {
+          stoppedEarly = true;
+          return stoppedEarly;
+        }
+      }
+    }
+
+    if (remainder.length > 0) {
+      lineNumber += 1;
+      if (onLine(remainder, lineNumber)) {
+        stoppedEarly = true;
+      }
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return stoppedEarly;
+}
+
+function scanJournalLinesBackward(
+  filePath: string,
+  onLine: (line: string) => boolean | void,
+): boolean {
+  const fd = openSync(filePath, 'r');
+  let stoppedEarly = false;
+  try {
+    const fileSize = fstatSync(fd).size;
+    if (fileSize <= 0) return false;
+
+    const buffer = Buffer.allocUnsafe(DEFAULT_JOURNAL_SCAN_CHUNK_BYTES);
+    let position = fileSize;
+    let remainder = '';
+
+    while (position > 0) {
+      const bytesToRead = Math.min(DEFAULT_JOURNAL_SCAN_CHUNK_BYTES, position);
+      position -= bytesToRead;
+
+      const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
+      if (bytesRead <= 0) break;
+
+      const chunk = buffer.toString('utf8', 0, bytesRead);
+      const parts = (chunk + remainder).split('\n');
+      remainder = parts.shift() ?? '';
+
+      for (let index = parts.length - 1; index >= 0; index--) {
+        if (onLine(parts[index])) {
+          stoppedEarly = true;
+          return stoppedEarly;
+        }
+      }
+    }
+
+    if (remainder.length > 0) {
+      if (onLine(remainder)) {
+        stoppedEarly = true;
+      }
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return stoppedEarly;
+}
+
 export function quarantineSidecarPath(filePath: string): string {
   return `${filePath}.quarantine`;
 }
@@ -146,6 +273,153 @@ export function readJournalFile(
     }
   }
   return parsed;
+}
+
+export function readJournalFirstEntry(filePath: string): JournalEntry | null {
+  if (!existsSync(filePath)) return null;
+
+  let first: JournalEntry | null = null;
+  scanJournalLinesForward(filePath, (line) => {
+    if (line.trim().length === 0) return false;
+    try {
+      first = parseJournalLine(line);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  return first;
+}
+
+export function scanJournalFileMetadata(
+  filePath: string,
+  options: ScanJournalMetadataOptions = {},
+): JournalFileMetadata {
+  if (!existsSync(filePath)) {
+    return {
+      entryCount: 0,
+      maxId: 0,
+      messageCount: 0,
+      lastTimestamp: 0,
+      lastHmac: null,
+      lastEntry: null,
+      lastExtractionCoveredUpTo: 0,
+      quarantined: [],
+    };
+  }
+
+  let entryCount = 0;
+  let maxId = 0;
+  let messageCount = 0;
+  let lastTimestamp = 0;
+  let lastHmac: string | null = null;
+  let lastEntry: JournalEntry | null = null;
+  let lastExtractionCoveredUpTo = 0;
+  const quarantined: QuarantinedJournalEntry[] = [];
+
+  scanJournalLinesForward(filePath, (line, lineNumber) => {
+    if (line.trim().length === 0) return false;
+
+    try {
+      const entry = parseJournalLine(line);
+      entryCount += 1;
+      maxId = Math.max(maxId, entry.id);
+      if (entry.type === 'message') {
+        messageCount += 1;
+      }
+      lastTimestamp = entry.timestamp;
+      lastEntry = entry;
+      if (typeof entry._hmac === 'string') {
+        lastHmac = entry._hmac;
+      }
+      if (entry.type === 'marker' && entry.marker === 'extraction' && typeof entry.coveredUpTo === 'number') {
+        lastExtractionCoveredUpTo = Math.max(lastExtractionCoveredUpTo, entry.coveredUpTo);
+      }
+      return false;
+    } catch (error) {
+      quarantined.push({
+        lineNumber,
+        error: error instanceof Error ? error.message : String(error),
+        raw: line,
+      });
+      return false;
+    }
+  });
+
+  if (options.persistQuarantine !== false) {
+    try {
+      persistQuarantinedEntries(filePath, quarantined);
+    } catch {
+      // Quarantine sidecar write failure should never block journal loading.
+    }
+  }
+
+  return {
+    entryCount,
+    maxId,
+    messageCount,
+    lastTimestamp,
+    lastHmac,
+    lastEntry,
+    lastExtractionCoveredUpTo,
+    quarantined,
+  };
+}
+
+export function readJournalTailEntries(
+  filePath: string,
+  options: ReadJournalTailOptions,
+): ReadJournalTailResult {
+  const messageLimit = Math.max(0, Math.floor(options.messageLimit));
+  if (!existsSync(filePath) || messageLimit <= 0) {
+    return {
+      entries: [],
+      quarantined: [],
+      truncated: false,
+    };
+  }
+
+  const includeBoundaryEntry = options.includeBoundaryEntry !== false;
+  const parsedDescending: JournalEntry[] = [];
+  const quarantined: QuarantinedJournalEntry[] = [];
+  let messageCount = 0;
+  let needBoundaryEntry = false;
+
+  const truncated = scanJournalLinesBackward(filePath, (line) => {
+    if (line.trim().length === 0) return false;
+
+    try {
+      const entry = parseJournalLine(line);
+      parsedDescending.push(entry);
+
+      if (needBoundaryEntry) {
+        return true;
+      }
+
+      if (entry.type === 'message') {
+        messageCount += 1;
+        if (messageCount >= messageLimit) {
+          if (!includeBoundaryEntry) return true;
+          needBoundaryEntry = true;
+        }
+      }
+      return false;
+    } catch (error) {
+      quarantined.push({
+        lineNumber: -1,
+        error: error instanceof Error ? error.message : String(error),
+        raw: line,
+      });
+      return false;
+    }
+  });
+
+  return {
+    entries: parsedDescending.reverse(),
+    quarantined,
+    truncated,
+  };
 }
 
 export function appendJournalEntry(filePath: string, entry: JournalEntry): void {

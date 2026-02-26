@@ -49,7 +49,7 @@ export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
       ),
     }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: {
         text: string;
         type: MemoryType;
@@ -92,7 +92,7 @@ export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
           emotionalValence,
           confidence,
           tags,
-          sourceRef: 'tool:memory_write',
+          sourceRef: `source:tool:memory_write|invocation:${toolCallId}`,
           sensitivity: params.sensitivity,
         });
 
@@ -151,7 +151,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
       ),
     }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: {
         records: Array<{
           text: string;
@@ -204,7 +204,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
             emotionalValence: r.emotional_valence !== undefined ? clamp(Number(r.emotional_valence), -1, 1) : undefined,
             confidence: r.confidence !== undefined ? clamp(Number(r.confidence), 0, 1) : undefined,
             tags: r.tags ? r.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
-            sourceRef: `tool:memory_import:${source}`,
+            sourceRef: `source:tool:memory_import:${source}|invocation:${toolCallId}`,
             sensitivity: r.sensitivity,
           });
         }

@@ -17,6 +17,8 @@ import {
   getDefaultPromptText,
 } from '../identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
+import { classifyChannel } from '../trust/policy.js';
+import type { ChannelVisibility } from '../trust/types.js';
 const log = createComponentLogger('Extraction');
 
 // Track last extraction per channel
@@ -418,6 +420,8 @@ export class MemoryExtractor {
         ? recoveredEntries
         : this.sessionManager.getRecentMessages(channelId, 10)
       ).slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+      const channelVisibility = classifyChannel(channelId);
+      const sourceRef = buildExtractionSourceRef(channelId, recentEntries, channelVisibility);
       const recentMessages = recentEntries
         .map(e => `${e.authorName ?? e.role}: ${e.content}`)
         .join('\n');
@@ -447,7 +451,8 @@ export class MemoryExtractor {
       );
 
       // Parse XML response
-      const facts = parseFactsXml(response.content);
+      const facts = parseFactsXml(response.content)
+        .map(fact => applyChannelImportanceCaps(fact, channelVisibility));
       if (!this.acceptingExtractions) {
         log.debug('Skipping fact writes while extractor is stopping', {
           channelId,
@@ -543,7 +548,7 @@ export class MemoryExtractor {
       for (const candidate of selectedCandidates) {
         const { fact } = candidate;
         try {
-          const result = await this.processFact(fact, channelId, canonicalContactId);
+          const result = await this.processFact(fact, sourceRef, canonicalContactId);
           acceptedCount++;
 
           switch (result.action) {
@@ -606,7 +611,7 @@ export class MemoryExtractor {
 
   private async processFact(
     fact: ExtractedFact,
-    channelId: string,
+    sourceRef: string,
     canonicalContactId?: string,
   ): Promise<WriteResult> {
     return this.writer.write({
@@ -616,7 +621,7 @@ export class MemoryExtractor {
       emotionalValence: fact.emotionalValence,
       confidence: fact.confidence,
       tags: fact.tags,
-      sourceRef: `${channelId}:${Date.now()}`,
+      sourceRef,
       sensitivity: fact.sensitivity,
       contactId: canonicalContactId,
     });
@@ -1116,6 +1121,40 @@ function normalizeMaxWrites(value: number | undefined, fallback: number): number
   const candidate = Number.isFinite(value) ? Math.floor(value as number) : fallback;
   if (!Number.isFinite(candidate)) return DEFAULT_MAX_WRITES;
   return Math.max(0, candidate);
+}
+
+function applyChannelImportanceCaps(
+  fact: ExtractedFact,
+  channelVisibility: ChannelVisibility,
+): ExtractedFact {
+  if (channelVisibility !== 'public') return fact;
+  if (fact.importance <= 0.5) return fact;
+  return { ...fact, importance: 0.5 };
+}
+
+function buildExtractionSourceRef(
+  channelId: string,
+  entries: SessionEntry[],
+  channelVisibility: ChannelVisibility,
+): string {
+  const source = resolveExtractionSource(channelId);
+  const lineRange = resolveExtractionLineRange(entries);
+  return `source:${source}|session:${channelId}|lines:${lineRange}|visibility:${channelVisibility}|operation:extract`;
+}
+
+function resolveExtractionSource(channelId: string): string {
+  if (channelId.startsWith('shard:')) return channelId;
+  return 'session';
+}
+
+function resolveExtractionLineRange(entries: SessionEntry[]): string {
+  const ids = entries
+    .map(entry => entry.id)
+    .filter(id => Number.isFinite(id));
+  if (ids.length === 0) return 'unknown';
+  const start = Math.min(...ids);
+  const end = Math.max(...ids);
+  return start === end ? `${start}` : `${start}-${end}`;
 }
 
 export const __test = {

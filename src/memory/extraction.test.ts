@@ -5,12 +5,14 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../session/store.js';
+import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
   tokenTestUtils.resetTokenizerState();
   extractionTestUtils.resetLastExtractionCount();
+  resetRuntimeTrustPolicy();
   for (const dir of tempDirs) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -530,6 +532,138 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(endCall?.[1]?.acceptedCount).toBe(2);
     expect(endCall?.[1]?.writeCount).toBe(2);
     expect(endCall?.[1]?.rejectionBreakdown?.write_cap).toBe(1);
+  });
+});
+
+describe('MemoryExtractor provenance and trust caps', () => {
+  it('caps extracted importance to 0.5 on public channels', async () => {
+    const defaultPolicy = getDefaultTrustPolicy();
+    setRuntimeTrustPolicy({
+      ...defaultPolicy,
+      trustCeiling: {
+        ...defaultPolicy.trustCeiling,
+      },
+      visibilityAllowed: {
+        ...defaultPolicy.visibilityAllowed,
+      },
+      channelClassification: {
+        privatePrefixes: [...defaultPolicy.channelClassification.privatePrefixes],
+        broadcastPrefixes: [...defaultPolicy.channelClassification.broadcastPrefixes],
+        defaultVisibility: 'public',
+      },
+    });
+
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User plans to change jobs soon</text>
+<type>semantic</type>
+<importance>0.95</importance>
+<emotional_valence>0</emotional_valence>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+      }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { id: 10, role: 'user', authorName: 'user', content: 'I might switch teams soon', timestamp: 1_000 },
+        { id: 11, role: 'assistant', authorName: 'assistant', content: 'Noted', timestamp: 2_000 },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+    );
+
+    const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-public-1' } }));
+    (extractor as any).writer = { write };
+
+    await extractor.extract('discord:public-room');
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({
+      importance: 0.5,
+      sourceRef: expect.stringContaining('visibility:public'),
+    }));
+  });
+
+  it('tags shard extractions with shard source and session line range', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>Shard discovered a concrete implementation detail</text>
+<type>semantic</type>
+<importance>0.8</importance>
+<emotional_valence>0</emotional_valence>
+<confidence>0.92</confidence>
+</fact>
+</response>`,
+      }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { id: 41, role: 'user', authorName: 'user', content: 'Investigating option A', timestamp: 1_000 },
+        { id: 42, role: 'assistant', authorName: 'assistant', content: 'Option A works', timestamp: 2_000 },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+    );
+
+    const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-shard-1' } }));
+    (extractor as any).writer = { write };
+
+    await extractor.extract('shard:shard-abc');
+
+    expect(write).toHaveBeenCalledTimes(1);
+    const sourceRef = write.mock.calls[0][0].sourceRef as string;
+    expect(sourceRef).toContain('source:shard:shard-abc');
+    expect(sourceRef).toContain('session:shard:shard-abc');
+    expect(sourceRef).toContain('lines:41-42');
   });
 });
 

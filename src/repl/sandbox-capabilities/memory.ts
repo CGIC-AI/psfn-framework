@@ -39,6 +39,10 @@ interface CreateMemoryCapabilitiesOptions {
   pushEvidence: (entry: ThinkEvidence) => void;
 }
 
+function nextReplInvocationId(): string {
+  return `repl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOptions): MemoryCapabilities {
   const writer = (options.embeddingService && options.memoryStore)
     ? new MemoryWriter(options.memoryStore, options.embeddingService)
@@ -97,7 +101,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
       importance,
       emotionalValence,
       tags: splitCsvTags(tags),
-      sourceRef: 'repl:memory_write',
+      sourceRef: `source:repl|operation:memory_write|invocation:${nextReplInvocationId()}`,
     });
     return { action: result.action, id: result.memory.id };
   };
@@ -109,13 +113,14 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
       return { written: 0, deduplicated: 0, errors: 0 };
     }
 
+    const invocationId = nextReplInvocationId();
     const opts = records.map(record => ({
       text: record.text,
       type: record.type as MemoryType,
       importance: record.importance,
       emotionalValence: record.emotional_valence,
       tags: splitCsvTags(record.tags),
-      sourceRef: 'repl:memory_import',
+      sourceRef: `source:repl|operation:memory_import_batch|invocation:${invocationId}`,
     }));
 
     const result = await writer.importBatch(opts);
@@ -146,7 +151,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
       importance,
       emotionalValence,
       tags: splitCsvTags(tags),
-      sourceRef: 'repl:memory_upsert',
+      sourceRef: `source:repl|operation:memory_upsert|invocation:${nextReplInvocationId()}`,
     });
 
     return {

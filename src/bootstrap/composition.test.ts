@@ -283,3 +283,26 @@ describe('agent-main split wiring', () => {
     expect(source).toContain('onModuleRegistryMutation: async (mutation) =>');
   });
 });
+
+describe('runtime composition wiring', () => {
+  it('routes runtime bootstrap through composition helpers', () => {
+    const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+    expect(source).toContain('composeSessionRuntime({');
+    expect(source).toContain('createEmbeddingProviderFromEnv()');
+    expect(source).toContain('composeAgentLoop({');
+    expect(source).toContain('wireMemoryRuntime({');
+    expect(source).toContain('wireShardAndThinkRuntime({');
+  });
+
+  it('avoids duplicating composition-owned constructor wiring', () => {
+    const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+    expect(source).not.toContain('new SessionStore(');
+    expect(source).not.toContain('new SessionManager(');
+    expect(source).not.toContain('new AgentLoop(');
+    expect(source).not.toContain('new MemoryRetriever(');
+    expect(source).not.toContain('new MemoryExtractor(');
+    expect(source).not.toContain('new ShardManager(');
+    expect(source).not.toContain('createSpawnShardTool(');
+    expect(source).not.toContain('createThinkTool(');
+  });
+});

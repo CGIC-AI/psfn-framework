@@ -118,6 +118,26 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     });
   });
 
+  it('keeps existing behavior for elevenlabs when provider is explicitly set', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      ttsProvider: 'elevenlabs',
+      elevenLabsApiKey: 'elevenlabs-key',
+      elevenLabsVoiceId: 'voice-id',
+      elevenLabsModelId: 'eleven_turbo_v2_5',
+    }));
+
+    expect(runtime).toBeDefined();
+    expect(createStreamingSttConnectorMock).toHaveBeenCalledWith('deepgram', {
+      apiKey: 'deepgram-key',
+      model: 'nova-3',
+    });
+    expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('elevenlabs', {
+      apiKey: 'elevenlabs-key',
+      voiceId: 'voice-id',
+      modelId: 'eleven_turbo_v2_5',
+    });
+  });
+
   it('allows echo provider to start without explicit Echo overrides', () => {
     const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
       ttsProvider: 'echo',

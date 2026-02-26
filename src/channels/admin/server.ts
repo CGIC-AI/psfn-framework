@@ -281,7 +281,10 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/identity/import'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.importIdentityCard(body));
+            this.handlers.importIdentityCard(body).then(
+              (html) => this.sendFragment(res, html),
+              (err) => this.send500('Identity import error', err, res),
+            );
           });
         },
       },

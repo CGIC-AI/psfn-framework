@@ -318,3 +318,29 @@ Implementation constraints from the ADR:
 - Identity contract: map Wyoming turns to `SubstrateMessage` with `channelType: 'api'` and `channelId` prefixed with `api:wyoming:` for compatibility with current trust/session behavior.
 - Event contract: reuse existing generic voice lifecycle events (`voice.turn.*`, `voice.stt.*`, `voice.tts.*`) and message events (`message.received`, `message.sent`) rather than Discord-specific `channel.voice.*`.
 - Reliability/security contract: reuse existing queueing/timeouts and voice safety budgets (`src/gateway/backpressure.ts`, `src/gateway/server.ts`, `src/voice/policy/reliability.ts`, `src/voice/policy/security.ts`).
+
+## 13) Echo TTS Operational Compatibility Notes (PSFN-mndj)
+
+### 13.1 Env keys and rollout stance
+
+- Current parsed voice keys are ElevenLabs-centric (`DEEPGRAM_API_KEY`, `DEEPGRAM_MODEL`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL_ID`) in `src/types.ts`.
+- Planned provider-switch keys are tracked under `PSFN-mndj.2` assumptions and are documented as:
+  - `TTS_PROVIDER`
+  - `ECHO_API_URL` (default: `http://220.158.196.150:8001`)
+  - `ECHO_VOICE` (default: `11labs-Allison`)
+  - `ECHO_PRESET` (default: `Independent-High-Speaker-CFG`)
+  - `ECHO_MODEL` (optional override)
+- Safe default for rollout remains `elevenlabs` until provider-registry wiring (`PSFN-mndj.2`, `.3`, `.4`) is merged into active runtime paths.
+
+### 13.2 Runtime mapping (Discord/API/Wyoming)
+
+- Discord runtime currently instantiates `createStreamingTtsConnector('elevenlabs', ...)` in `src/channels/discord/voice.ts`.
+- API voice websocket runtime currently instantiates `createStreamingTtsConnector('elevenlabs', ...)` in `src/channels/api/voice-websocket-runtime.ts`.
+- Wyoming `tts` service path is already connector-agnostic (`StreamingTtsConnector`) in `src/channels/wyoming/services/tts.ts`; provider switching lands by injecting the selected connector, not by changing Wyoming event families.
+- MVP Wyoming `handle` behavior remains valid even when `tts` service is disabled; `describe/info` must advertise enabled services truthfully.
+
+### 13.3 Troubleshooting quick notes (format, latency, fallback)
+
+- Streaming format mismatch: confirm requested `encoding` aligns with consumer expectations (`mp3` in current API websocket runtime defaults; `pcm_s16le` where raw PCM metadata is required).
+- First-byte latency spikes: inspect per-stage timing (`voice.tts.first-byte` and runtime stage budgets) before tuning; most spikes come from upstream provider cold starts or transient network stalls.
+- Fallback behavior: if streamed chunks fail decode/playback, allow buffered fallback for that turn and keep one known-good provider config complete before enabling automatic switch-over.

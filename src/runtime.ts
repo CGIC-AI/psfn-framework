@@ -509,6 +509,11 @@ export class SubstrateRuntime implements Lifecycle {
       this.discord,
       this.config.dataDir,
       heartbeatChannelId,
+      {
+        llmProvider: this.llmClient,
+        sessionManager: this.sessionManager,
+        memoryWriter,
+      },
     );
 
     // API server — OpenAI-compatible endpoints

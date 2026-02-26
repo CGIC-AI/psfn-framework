@@ -67,6 +67,13 @@ describe('HeartbeatPolicyStore', () => {
     }
   });
 
+  it('values-reflection defaults to deliberation mode', () => {
+    const policy = store.load();
+    const values = policy.templates.find(t => t.id === 'values-reflection');
+    expect(values?.mode).toBe('deliberation');
+    expect(values?.deliberation?.maxRounds).toBe(4);
+  });
+
   it('returns defaults for corrupt file', () => {
     store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
     const policy = store.load();
@@ -135,6 +142,20 @@ describe('validateTemplate', () => {
   it('rejects empty name', () => {
     const errors = validateTemplate({ ...validTemplate, name: '' }, true);
     expect(errors.some(e => e.field === 'name')).toBe(true);
+  });
+
+  it('rejects invalid mode', () => {
+    const errors = validateTemplate({ ...validTemplate, mode: 'other' as any }, true);
+    expect(errors.some(e => e.field === 'mode')).toBe(true);
+  });
+
+  it('rejects invalid deliberation voices', () => {
+    const errors = validateTemplate({
+      ...validTemplate,
+      mode: 'deliberation',
+      deliberation: { voices: ['reasoning', 'invalid' as any] },
+    }, true);
+    expect(errors.some(e => e.field === 'deliberation.voices')).toBe(true);
   });
 
   it('boundary: accepts exactly 10-char prompt', () => {

@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
+import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
+import type { LLMProvider } from '../agent/contracts.js';
 import { wireHeartbeatRuntime } from './parity.js';
 
 describe('wireHeartbeatRuntime', () => {
@@ -64,6 +66,144 @@ describe('wireHeartbeatRuntime', () => {
       expect(entry.templateId).toBe('values-reflection');
       expect(entry.templateName).toBe('Values Reflection');
       expect(entry.reflection).toContain('Values reflection body');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('runs deliberation mode and persists journal/memory metadata', async () => {
+    const store = new HeartbeatPolicyStore(join(tempDir, 'heartbeat-policy.json'));
+    const policy = store.load();
+    const values = policy.templates.find(template => template.id === 'values-reflection');
+    if (!values) {
+      throw new Error('values-reflection template missing');
+    }
+    values.mode = 'deliberation';
+    values.deliberation = {
+      maxRounds: 1,
+      maxTotalTokens: 4000,
+      maxWallTimeMs: 30_000,
+      voices: ['reasoning', 'background'],
+    };
+    store.save(policy);
+
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'fallback response' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const purposes: string[] = [];
+    const llmProvider: LLMProvider = {
+      stream: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'mock-stream',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })),
+      complete: vi.fn(async (_context, purpose) => {
+        purposes.push(purpose);
+        const responses = {
+          reasoning: {
+            content: purposes.length === 3
+              ? 'A single synthesized values reflection.'
+              : 'Reasoning voice: continuity and trust matter.',
+            inputTokens: 30,
+            outputTokens: 40,
+          },
+          background: {
+            content: 'Background voice: steadiness and care matter.',
+            inputTokens: 20,
+            outputTokens: 30,
+          },
+          extraction: {
+            content: '',
+            inputTokens: 0,
+            outputTokens: 0,
+          },
+          summary: {
+            content: '',
+            inputTokens: 0,
+            outputTokens: 0,
+          },
+        } as const;
+        const selected = responses[purpose];
+        return {
+          content: selected.content,
+          toolCalls: [],
+          model: `mock-${purpose}`,
+          inputTokens: selected.inputTokens,
+          outputTokens: selected.outputTokens,
+          stopReason: 'stop',
+        };
+      }),
+    };
+    const sessionManager = {
+      recordAssistantMessage: vi.fn(),
+      appendSystemNote: vi.fn(),
+    };
+    const memoryWriter = {
+      write: vi.fn().mockResolvedValue({
+        action: 'created',
+        memory: { id: 'mem-1' },
+      }),
+    };
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      wireHeartbeatRuntime(
+        target,
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+        undefined,
+        {
+          llmProvider,
+          sessionManager,
+          memoryWriter,
+        },
+      );
+
+      const task = scheduler.getTask('reflection:values-reflection');
+      expect(task).toBeDefined();
+
+      nowSpy.mockReturnValue(1_700_000_000_000 + task!.intervalMs + 1);
+      await scheduler.tick();
+
+      const handledChannels = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls
+        .map(call => call[0]?.channelId);
+      expect(handledChannels).not.toContain('internal:reflection:values-reflection');
+      expect(purposes).toEqual(['reasoning', 'background', 'reasoning']);
+      expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
+      expect(sessionManager.appendSystemNote).toHaveBeenCalledTimes(1);
+      expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+
+      const raw = readFileSync(join(tempDir, 'values.jsonl'), 'utf-8').trim();
+      const entry = JSON.parse(raw) as {
+        reflection: string;
+        deliberation?: {
+          rounds: number;
+          totalTokens: number;
+          estimatedCostUsd: number;
+        };
+      };
+      expect(entry.reflection).toContain('synthesized values reflection');
+      expect(entry.deliberation?.rounds).toBe(1);
+      expect(entry.deliberation?.totalTokens).toBe(190);
+      expect(entry.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
     } finally {
       nowSpy.mockRestore();
     }

@@ -37,6 +37,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     memoryBudgetPct: 20,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
     modelRoster: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 1000 },
     },
@@ -294,6 +295,87 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('I cannot help with bypassing license checks.');
     expect(ctx.systemPrompt).toContain('<boundary');
     expect(ctx.systemPrompt).toContain('I can help with legal alternatives, but I am not going to provide exploit steps.');
+  });
+
+  it('scans only compacted entries for emotional salience before compaction', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70, compactionEmotionalSalienceThresholdPct: 75 });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+    const freshEmotionalMoment = 'I love you and I am heartbroken without you right now.';
+
+    for (let i = 0; i < 9; i++) {
+      mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+    }
+
+    mgr.recordUserMessage('ch1', freshEmotionalMoment, 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'I hear you. I care deeply about this too.');
+
+    const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+
+    expect(ctx.systemPrompt).not.toContain('<emotional');
+    expect(ctx.systemPrompt).not.toContain(freshEmotionalMoment);
+  });
+
+  it('preserves high-salience emotional entries verbatim during compaction', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70, compactionEmotionalSalienceThresholdPct: 70 });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+    const emotionalMoment = [
+      'I feel absolutely heartbroken and terrified right now because I think I lost my best friend',
+      'and I do not know what to do. This matters deeply to me and I really need support right now.',
+      'I have been crying for hours and this hurts so much.',
+    ].join(' ');
+
+    mgr.recordUserMessage('ch1', emotionalMoment, 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'I hear you and I am here with you.');
+    for (let i = 0; i < 9; i++) {
+      mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+    }
+
+    const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+
+    expect(ctx.systemPrompt).toContain('<emotional');
+    expect(ctx.systemPrompt).toContain('salience_score="');
+    expect(ctx.systemPrompt).toContain(emotionalMoment);
+  });
+
+  it('honors configurable emotional salience thresholds', async () => {
+    const moderateEmotionalMoment = 'I feel sad and anxious about this situation right now.';
+    const highThresholdStore = new SessionStore(join(dir, 'high-threshold'));
+    const lowThresholdStore = new SessionStore(join(dir, 'low-threshold'));
+    const highThresholdManager = new SessionManager(
+      highThresholdStore,
+      makeConfig({
+        compactionThresholdPct: 70,
+        compactionEmotionalSalienceThresholdPct: 95,
+      }),
+    );
+    const lowThresholdManager = new SessionManager(
+      lowThresholdStore,
+      makeConfig({
+        compactionThresholdPct: 70,
+        compactionEmotionalSalienceThresholdPct: 40,
+      }),
+    );
+    const mockLLM = makeMockLLM();
+
+    for (const manager of [highThresholdManager, lowThresholdManager]) {
+      manager.recordUserMessage('ch1', moderateEmotionalMoment, 'u1', 'User');
+      manager.recordAssistantMessage('ch1', 'Thank you for sharing this with me.');
+      for (let i = 0; i < 9; i++) {
+        manager.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+        manager.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+      }
+    }
+
+    const highThresholdContext = await highThresholdManager.buildContext('ch1', 'Sys', '', mockLLM);
+    const lowThresholdContext = await lowThresholdManager.buildContext('ch1', 'Sys', '', mockLLM);
+
+    expect(highThresholdContext.systemPrompt).not.toContain('<emotional');
+    expect(lowThresholdContext.systemPrompt).toContain('<emotional');
+    expect(lowThresholdContext.systemPrompt).toContain(moderateEmotionalMoment);
   });
 
   it('flushes memories from compacted entries into L2 before compaction', async () => {

@@ -39,13 +39,19 @@ export type PreCompactionExtractionHandler = (
   context: PreCompactionExtractionContext,
 ) => Promise<void>;
 
-type CompactionPreservedTag = 'refusal' | 'boundary';
+type CompactionPreservedTag = 'refusal' | 'boundary' | 'emotional';
 
 interface TaggedCompactionEntry {
   tag: CompactionPreservedTag;
   messageId: number;
   speaker: string;
   content: string;
+  emotionalWeight?: number;
+}
+
+interface EmotionalPatternWeight {
+  pattern: RegExp;
+  weight: number;
 }
 
 const REFUSAL_PATTERNS = [
@@ -62,8 +68,51 @@ const BOUNDARY_PATTERNS = [
   /\bi(?:'m| am)\s+not\s+going\s+to\b/i,
 ];
 
-const MAX_PRESERVED_COMPACTION_TAGS = 8;
-const MAX_PRESERVED_TAG_CONTENT_CHARS = 240;
+const STRONG_EMOTIONAL_PATTERNS: EmotionalPatternWeight[] = [
+  { pattern: /\b(i|we)\s+(love|adore|need|miss)\s+you\b/i, weight: 0.95 },
+  {
+    pattern: /\b(i|we)\s+(am|are|'m|feel|felt)(?:\s+\w+){0,3}\s+(heartbroken|devastated|terrified|grieving|betrayed|overwhelmed)\b/i,
+    weight: 0.9,
+  },
+  { pattern: /\b(thank\s+you\s+for\s+being\s+here|you\s+mean\s+so\s+much\s+to\s+me)\b/i, weight: 0.82 },
+];
+
+const MODERATE_EMOTIONAL_PATTERNS: EmotionalPatternWeight[] = [
+  {
+    pattern: /\b(i|we)\s+(am|are|'m|feel|felt)(?:\s+\w+){0,3}\s+(sad|happy|afraid|scared|anxious|lonely|angry|grateful|thankful|relieved|ashamed|hurt)\b/i,
+    weight: 0.58,
+  },
+  { pattern: /\b(i|we)\s+(need|needed)\s+support\b/i, weight: 0.55 },
+  { pattern: /\b(this|that)\s+(hurt|matters|mattered)\s+to\s+me\b/i, weight: 0.52 },
+];
+
+const EMOTIONAL_KEYWORDS = new Set([
+  'love',
+  'adore',
+  'heartbroken',
+  'devastated',
+  'grief',
+  'grieving',
+  'sad',
+  'happy',
+  'afraid',
+  'scared',
+  'anxious',
+  'lonely',
+  'angry',
+  'thankful',
+  'grateful',
+  'hurt',
+  'betrayed',
+  'overwhelmed',
+  'crying',
+  'tears',
+]);
+
+const DEFAULT_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
+const MAX_PRESERVED_SAFETY_TAGS = 8;
+const MAX_PRESERVED_EMOTIONAL_ENTRIES = 6;
+const MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS = 240;
 
 async function withRetry<T>(
   task: () => Promise<T>,
@@ -126,22 +175,64 @@ function classifyCompactionTag(content: string): CompactionPreservedTag | null {
 
 function normalizeTaggedContent(content: string): string {
   const normalized = content.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= MAX_PRESERVED_TAG_CONTENT_CHARS) {
+  if (normalized.length <= MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS) {
     return normalized;
   }
-  return `${normalized.slice(0, MAX_PRESERVED_TAG_CONTENT_CHARS - 3)}...`;
+  return `${normalized.slice(0, MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS - 3)}...`;
 }
 
-function escapeTaggedValue(content: string): string {
-  return content
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;');
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
-function buildCompactionBoundaryTagBlock(entries: SessionEntry[]): string {
+function resolveEmotionalSalienceThreshold(config: SubstrateConfig): number {
+  const thresholdPct = config.compactionEmotionalSalienceThresholdPct
+    ?? DEFAULT_EMOTIONAL_SALIENCE_THRESHOLD_PCT;
+  return clampUnit(thresholdPct / 100);
+}
+
+function applyWeightedPatterns(content: string, patterns: EmotionalPatternWeight[]): number {
+  let score = 0;
+  for (const candidate of patterns) {
+    if (candidate.pattern.test(content)) score += candidate.weight;
+  }
+  return score;
+}
+
+function scoreEmotionalSalience(content: string): number {
+  const normalized = content.toLowerCase().trim();
+  if (!normalized) return 0;
+
+  let score = 0;
+  score += applyWeightedPatterns(normalized, STRONG_EMOTIONAL_PATTERNS);
+  score += applyWeightedPatterns(normalized, MODERATE_EMOTIONAL_PATTERNS);
+
+  const tokens = normalized
+    .split(/[^a-z0-9]+/)
+    .filter(token => token.length > 1);
+  const keywordHits = tokens.reduce(
+    (count, token) => count + (EMOTIONAL_KEYWORDS.has(token) ? 1 : 0),
+    0,
+  );
+  if (keywordHits > 0) {
+    score += Math.min(0.36, keywordHits * 0.12);
+  }
+
+  if (/[!?]{2,}/.test(content)) {
+    score += 0.08;
+  }
+  if (/\b(very|really|so|extremely|deeply)\b/.test(normalized) && keywordHits > 0) {
+    score += 0.08;
+  }
+  if (/\b(i|we)\s+(am|are|'m|feel|felt)\b/.test(normalized) && keywordHits > 0) {
+    score += 0.12;
+  }
+
+  return clampUnit(score);
+}
+
+function scanCompactionSafetyEntries(entries: SessionEntry[]): TaggedCompactionEntry[] {
   const preserved: TaggedCompactionEntry[] = [];
   const seen = new Set<string>();
 
@@ -166,16 +257,80 @@ function buildCompactionBoundaryTagBlock(entries: SessionEntry[]): string {
     });
   }
 
+  return preserved.slice(-MAX_PRESERVED_SAFETY_TAGS);
+}
+
+function scanCompactionEmotionalEntries(
+  entries: SessionEntry[],
+  emotionalThreshold: number,
+): TaggedCompactionEntry[] {
+  const threshold = clampUnit(emotionalThreshold);
+  const candidates: TaggedCompactionEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of entries) {
+    const verbatimContent = entry.content.trim();
+    if (!verbatimContent) continue;
+
+    const emotionalWeight = scoreEmotionalSalience(verbatimContent);
+    if (emotionalWeight < threshold) continue;
+
+    const dedupeKey = `${entry.role}:${verbatimContent.toLowerCase()}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    candidates.push({
+      tag: 'emotional',
+      messageId: entry.id,
+      speaker: entry.authorName ?? entry.role,
+      content: verbatimContent,
+      emotionalWeight,
+    });
+  }
+
+  const selected = candidates
+    .sort((left, right) => {
+      const weightDelta = (right.emotionalWeight ?? 0) - (left.emotionalWeight ?? 0);
+      if (weightDelta !== 0) return weightDelta;
+      return right.messageId - left.messageId;
+    })
+    .slice(0, MAX_PRESERVED_EMOTIONAL_ENTRIES);
+
+  selected.sort((left, right) => left.messageId - right.messageId);
+  return selected;
+}
+
+function escapeTaggedValue(content: string): string {
+  return content
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+function buildCompactionPreservedTagBlock(
+  entries: SessionEntry[],
+  emotionalThreshold: number,
+): string {
+  const preserved = [
+    ...scanCompactionSafetyEntries(entries),
+    ...scanCompactionEmotionalEntries(entries, emotionalThreshold),
+  ];
+
   if (preserved.length === 0) return '';
 
-  const taggedLines = preserved
-    .slice(-MAX_PRESERVED_COMPACTION_TAGS)
-    .map((entry) => (
-      `<${entry.tag} message_id="${entry.messageId}" speaker="${escapeTaggedValue(entry.speaker)}">`
+  const taggedLines = preserved.map((entry) => {
+    const salienceScoreAttr = entry.tag === 'emotional' && entry.emotionalWeight !== undefined
+      ? ` salience_score="${entry.emotionalWeight.toFixed(2)}"`
+      : '';
+    return (
+      `<${entry.tag} message_id="${entry.messageId}" speaker="${escapeTaggedValue(entry.speaker)}"${salienceScoreAttr}>`
       + `${escapeTaggedValue(entry.content)}</${entry.tag}>`
-    ));
+    );
+  });
 
-  return ['[Preserved refusal and boundary entries]', ...taggedLines].join('\n');
+  return ['[Preserved refusal, boundary, and emotional entries]', ...taggedLines].join('\n');
 }
 
 function appendCompactionTagBlock(summary: string, tagBlock: string): string {
@@ -303,7 +458,11 @@ export class SessionManager {
         const compactText = toCompact
           .map(e => `${e.authorName ?? e.role}: ${e.content}`)
           .join('\n');
-        const preservedTagBlock = buildCompactionBoundaryTagBlock(toCompact);
+        const emotionalSalienceThreshold = resolveEmotionalSalienceThreshold(this.config);
+        const preservedTagBlock = buildCompactionPreservedTagBlock(
+          toCompact,
+          emotionalSalienceThreshold,
+        );
 
         log.info('Auto-compacting session', { channelId, totalTokens, budget: tokenBudget });
         await this.eventBus?.emit('agent.compaction.start', {

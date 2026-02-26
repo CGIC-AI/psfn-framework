@@ -60,6 +60,7 @@ export interface EditableSettings {
   memoryBudgetPct?: number;
   extractionThresholdPct?: number;
   compactionThresholdPct?: number;
+  compactionEmotionalSalienceThresholdPct?: number;
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
@@ -99,6 +100,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryBudgetPct',
   'extractionThresholdPct',
   'compactionThresholdPct',
+  'compactionEmotionalSalienceThresholdPct',
   'thinkMaxTokens',
   'thinkMaxWallTimeMs',
   'thinkMaxSubQueries',
@@ -128,7 +130,16 @@ function toPositiveInteger(value: unknown): number | undefined {
 }
 
 function toIntegerInRange(value: unknown, min: number, max: number): number | undefined {
-  const parsed = toPositiveInteger(value);
+  let parsed: number | undefined;
+  if (typeof value === 'number') {
+    parsed = Number.isInteger(value) ? value : undefined;
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const candidate = Number.parseInt(trimmed, 10);
+    parsed = Number.isInteger(candidate) ? candidate : undefined;
+  }
+
   if (parsed === undefined) return undefined;
   return parsed >= min && parsed <= max ? parsed : undefined;
 }
@@ -368,6 +379,17 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     delete normalized.memoryRetrievalBudgetPct;
   }
 
+  const emotionalSalienceThresholdPct = toIntegerInRange(
+    settings.compactionEmotionalSalienceThresholdPct,
+    0,
+    100,
+  );
+  if (emotionalSalienceThresholdPct !== undefined) {
+    normalized.compactionEmotionalSalienceThresholdPct = emotionalSalienceThresholdPct;
+  } else {
+    delete normalized.compactionEmotionalSalienceThresholdPct;
+  }
+
   return normalized;
 }
 
@@ -566,6 +588,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     memoryBudgetPct: config.memoryBudgetPct,
     extractionThresholdPct: config.extractionThresholdPct,
     compactionThresholdPct: config.compactionThresholdPct,
+    compactionEmotionalSalienceThresholdPct: config.compactionEmotionalSalienceThresholdPct ?? 75,
     thinkMaxTokens: config.thinkMaxTokens ?? null,
     thinkMaxWallTimeMs: config.thinkMaxWallTimeMs ?? null,
     thinkMaxSubQueries: config.thinkMaxSubQueries ?? null,
@@ -617,6 +640,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (settings.sessionMessageLimit !== undefined) config.sessionMessageLimit = settings.sessionMessageLimit;
   if (settings.memoryRetrievalLimit !== undefined) config.memoryRetrievalLimit = settings.memoryRetrievalLimit;
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
+  if (settings.compactionEmotionalSalienceThresholdPct !== undefined) {
+    config.compactionEmotionalSalienceThresholdPct = settings.compactionEmotionalSalienceThresholdPct;
+  }
   if (settings.thinkMaxTokens !== undefined) config.thinkMaxTokens = settings.thinkMaxTokens;
   if (settings.thinkMaxWallTimeMs !== undefined) config.thinkMaxWallTimeMs = settings.thinkMaxWallTimeMs;
   if (settings.thinkMaxSubQueries !== undefined) config.thinkMaxSubQueries = settings.thinkMaxSubQueries;
@@ -664,6 +690,7 @@ export const SETTINGS_VALIDATION = {
   sessionMessageLimit: { min: 5, max: 200 },
   memoryRetrievalLimit: { min: 1, max: 50 },
   extractionInterval: { min: 1, max: 50 },
+  compactionEmotionalSalienceThresholdPct: { min: 0, max: 100 },
   thinkMaxTokens: { min: 1000, max: 1000000 },
   thinkMaxWallTimeMs: { min: 5000, max: 600000 },
   thinkMaxSubQueries: { min: 1, max: 100 },

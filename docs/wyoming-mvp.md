@@ -45,6 +45,23 @@ The objective is to prove both:
 | Wyoming port | `10700` | Port for Wyoming TCP service. |
 | Fallback Assist pipeline | `Home Assistant (local)` | Mandatory safety fallback when gateway path is unavailable. |
 
+### 2.3 TTS provider compatibility snapshot (Echo + ElevenLabs)
+
+- As of 2026-02-26, active Discord/API voice runtime constructors in this repo still instantiate ElevenLabs directly (`src/channels/discord/voice.ts`, `src/channels/api/voice-websocket-runtime.ts`).
+- Wyoming `tts` adapter is provider-agnostic (`StreamingTtsConnector` in `src/channels/wyoming/services/tts.ts`) but requires runtime wiring to pass the selected connector.
+- Provider-switch env names below follow `PSFN-mndj.2` assumptions and may be ignored on branches where that wiring is not merged yet.
+
+```bash
+# Safe default / compatibility mode
+TTS_PROVIDER=elevenlabs
+
+# Planned Echo mode
+TTS_PROVIDER=echo
+ECHO_API_URL=http://220.158.196.150:8001
+ECHO_VOICE=11labs-Allison
+ECHO_PRESET=Independent-High-Speaker-CFG
+```
+
 ## 3) Startup Order (Operator Flow)
 
 1. Start PSFN gateway and agent in separate terminals:
@@ -118,6 +135,9 @@ Use these utterances during live Voice PE validation:
 | No response after Voice PE speech | Assist pipeline not targeting PSFN Wyoming path | Re-check Assist pipeline routing and selected satellite |
 | Voice PE still responds but not from PSFN | Fallback pipeline is active | Confirm expected for outage test; switch pipeline back for MVP validation |
 | Interruption still returns full response | Cancellation hook not applied in runtime integration | Validate onSessionEnd wiring and request cancellation propagation |
+| `audio-chunk` frames arrive but playback fails | Encoding mismatch between TTS output and HA/Wyoming consumer expectations | Explicitly set synthesis `encoding` (`mp3` vs `pcm_s16le`) and verify decoder support on the receiving side |
+| First audio byte is consistently slow | Provider cold start, upstream queueing, or network jitter | Capture first-byte timing (`voice.tts.first-byte` where emitted), compare against stage budgets, and keep HA fallback enabled |
+| Echo vars are set but behavior is still ElevenLabs | Provider-switch config not wired in current runtime build | Verify branch includes `PSFN-mndj.2/.3/.4` wiring; until then, treat Echo vars as documentation only |
 
 ## 8) Known Limitations and Fallback Guidance
 
@@ -125,3 +145,4 @@ Use these utterances during live Voice PE validation:
 - MVP identity mapping currently follows `api:wyoming:<siteId>:<satelliteId>` as defined in `docs/architecture/wyoming-mvp-adr.md`.
 - Optional Wyoming `asr`/`tts` families may be disabled; `handle` is the required MVP surface.
 - Keep HA local/default fallback pipeline configured so Voice PE remains usable during gateway outages/timeouts.
+- Provider-switch env names for Echo are documented for operational readiness, but branches without `PSFN-mndj` runtime wiring will continue to run ElevenLabs-only constructors.

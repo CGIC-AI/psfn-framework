@@ -548,6 +548,106 @@ describe('ShardManager', () => {
     );
   });
 
+  it('delegates Wyoming sessions with stable channel continuity', async () => {
+    mockShardContent = 'wyoming delegated response';
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const result = await manager.delegateWyomingSession({
+      message: {
+        id: 'wyoming-msg-conn-kitchen-7',
+        channelId: 'api:wyoming:ha-main:voice-pe-kitchen',
+        channelType: 'api',
+        authorId: 'wyoming-user:owner',
+        authorName: 'Wyoming Voice User',
+        content: 'status check',
+        isDirectMessage: true,
+        timestamp: new Date('2026-02-26T12:00:00.000Z'),
+      },
+      routing: {
+        connectionId: 'conn-kitchen',
+        sessionId: 'session-kitchen',
+        turnId: 'wyoming-turn-conn-kitchen-session-kitchen-1',
+        siteId: 'ha-main',
+        satelliteId: 'voice-pe-kitchen',
+      },
+    });
+
+    expect(result.shardId).toMatch(/^wyoming-shard-/);
+    expect(result.content.length).toBeGreaterThan(0);
+    const delegatedEntries = sessionStore.getRecent('api:wyoming:ha-main:voice-pe-kitchen', 10);
+    expect(delegatedEntries).toHaveLength(2);
+    expect(delegatedEntries[0]).toMatchObject({
+      role: 'user',
+      content: 'status check',
+    });
+    expect(delegatedEntries[1]).toMatchObject({
+      role: 'assistant',
+      content: result.content,
+    });
+  });
+
+  it('audits Wyoming delegation start/end with routing identity context', async () => {
+    const auditTrail = {
+      append: vi.fn(),
+    };
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      auditTrail,
+    });
+
+    await manager.delegateWyomingSession({
+      message: {
+        id: 'wyoming-msg-conn-office-3',
+        channelId: 'api:wyoming:ha-main:voice-pe-office',
+        channelType: 'api',
+        authorId: 'wyoming-user:owner',
+        authorName: 'Wyoming Voice User',
+        content: 'what time is it',
+        isDirectMessage: true,
+        timestamp: new Date('2026-02-26T12:00:00.000Z'),
+      },
+      routing: {
+        connectionId: 'conn-office',
+        sessionId: 'session-office',
+        turnId: 'wyoming-turn-conn-office-session-office-1',
+        siteId: 'ha-main',
+        satelliteId: 'voice-pe-office',
+      },
+    });
+
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'wyoming.shard.delegate.start',
+      expect.objectContaining({
+        connectionId: 'conn-office',
+        sessionId: 'session-office',
+        turnId: 'wyoming-turn-conn-office-session-office-1',
+      }),
+    );
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'wyoming.shard.delegate.end',
+      expect.objectContaining({
+        status: 'completed',
+        connectionId: 'conn-office',
+        sessionId: 'session-office',
+      }),
+    );
+  });
+
   it('decrements active count even on failure', async () => {
     // Make prompt throw
     mockShardError = new Error('LLM failed');

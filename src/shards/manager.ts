@@ -9,6 +9,7 @@ import type {
   ShardToolsetConfig,
   SubstrateConfig,
   SubstrateMessage,
+  WyomingRoutingMetadata,
 } from '../types.js';
 import type { EventBus } from '../event-bus.js';
 import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent-loop.js';
@@ -64,11 +65,18 @@ export interface ShardManagerDeps {
   auditTrail?: ShardAuditTrail;
 }
 
+export interface WyomingShardDelegationRequest {
+  message: SubstrateMessage;
+  routing?: WyomingRoutingMetadata;
+  shardName?: string;
+}
+
 export interface ActiveShard {
   id: string;
   name: string;
   task: string;
   startedAt: number;
+  channelId: string;
 }
 
 export class ShardManager {
@@ -77,6 +85,7 @@ export class ShardManager {
   private activeCount = 0;
   private maxConcurrent: number;
   private activeShards = new Map<string, ActiveShard>();
+  private activeShardChannels = new Map<string, Set<string>>();
 
   constructor(deps: ShardManagerDeps) {
     this.deps = deps;
@@ -86,6 +95,86 @@ export class ShardManager {
   }
 
   async spawn(shardConfig: ShardConfig): Promise<ShardResult> {
+    const shardId = `shard-${randomUUID()}`;
+    const channelId = `shard:${shardId}`;
+    const baseMessage: SubstrateMessage = {
+      id: shardId,
+      channelId,
+      channelType: 'api',
+      authorId: 'system',
+      authorName: 'ShardManager',
+      content: shardConfig.task,
+      timestamp: new Date(),
+    };
+    return this.executeShard(shardId, channelId, shardConfig, baseMessage);
+  }
+
+  async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {
+    const content = request.message.content?.trim();
+    if (!content) {
+      throw new Error('Wyoming shard delegation requires non-empty message content.');
+    }
+
+    const routing = request.routing ?? request.message.routing?.wyoming;
+    const shardId = `wyoming-shard-${randomUUID()}`;
+    const shardName = request.shardName?.trim()
+      || this.resolveWyomingShardName(routing);
+    const shardConfig: ShardConfig = {
+      name: shardName,
+      task: request.message.content,
+      maxTurns: 1,
+    };
+    this.auditTrail?.append('wyoming.shard.delegate.start', {
+      shardId,
+      channelId: request.message.channelId,
+      messageId: request.message.id,
+      connectionId: routing?.connectionId,
+      sessionId: routing?.sessionId,
+      turnId: routing?.turnId,
+      siteId: routing?.siteId,
+      satelliteId: routing?.satelliteId,
+    });
+
+    try {
+      const result = await this.executeShard(
+        shardId,
+        request.message.channelId,
+        shardConfig,
+        request.message,
+      );
+      this.auditTrail?.append('wyoming.shard.delegate.end', {
+        shardId,
+        status: 'completed',
+        durationMs: result.durationMs,
+        channelId: request.message.channelId,
+        messageId: request.message.id,
+        connectionId: routing?.connectionId,
+        sessionId: routing?.sessionId,
+        turnId: routing?.turnId,
+      });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.auditTrail?.append('wyoming.shard.delegate.end', {
+        shardId,
+        status: 'failed',
+        error: message,
+        channelId: request.message.channelId,
+        messageId: request.message.id,
+        connectionId: routing?.connectionId,
+        sessionId: routing?.sessionId,
+        turnId: routing?.turnId,
+      });
+      throw error;
+    }
+  }
+
+  private async executeShard(
+    shardId: string,
+    channelId: string,
+    shardConfig: ShardConfig,
+    baseMessage: SubstrateMessage,
+  ): Promise<ShardResult> {
     if (this.activeCount >= this.maxConcurrent) {
       throw new Error(
         `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
@@ -93,8 +182,6 @@ export class ShardManager {
     }
 
     const startTime = Date.now();
-    const shardId = `shard-${randomUUID()}`;
-    const channelId = `shard:${shardId}`;
     const maxTurns = shardConfig.maxTurns ?? DEFAULT_MAX_TURNS;
 
     this.activeCount++;
@@ -103,11 +190,14 @@ export class ShardManager {
       name: shardConfig.name,
       task: shardConfig.task,
       startedAt: startTime,
+      channelId,
     });
+    this.registerActiveShardChannel(channelId, shardId);
     this.auditTrail?.append('shard.spawn.start', {
       shardId,
       name: shardConfig.name,
       maxTurns,
+      channelId,
     });
     try {
       // Each shard gets its own SessionManager wrapping the shared store
@@ -144,17 +234,6 @@ export class ShardManager {
       });
       // No memoryExtractor — shards don't run L1 extraction/archive jobs.
 
-      // Build initial message
-      const message: SubstrateMessage = {
-        id: shardId,
-        channelId,
-        channelType: 'api',
-        authorId: 'system',
-        authorName: 'ShardManager',
-        content: shardConfig.task,
-        timestamp: new Date(),
-      };
-
       // Execute (single-turn by default)
       let totalInput = 0;
       let totalOutput = 0;
@@ -163,8 +242,8 @@ export class ShardManager {
       let turns = 0;
 
       for (let turn = 0; turn < maxTurns; turn++) {
-        const turnMessage = turn === 0 ? message : {
-          ...message,
+        const turnMessage = turn === 0 ? baseMessage : {
+          ...baseMessage,
           id: `${shardId}-turn-${turn}`,
           content: lastContent,
         };
@@ -211,6 +290,7 @@ export class ShardManager {
     } finally {
       this.activeCount--;
       this.activeShards.delete(shardId);
+      this.unregisterActiveShardChannel(channelId, shardId);
     }
   }
 
@@ -330,10 +410,38 @@ export class ShardManager {
     };
   }
 
+  private resolveWyomingShardName(routing: WyomingRoutingMetadata | undefined): string {
+    const siteId = routing?.siteId?.trim() || 'unknown-site';
+    const satelliteId = routing?.satelliteId?.trim() || 'unknown-satellite';
+    return `wyoming:${siteId}:${satelliteId}`;
+  }
+
+  private registerActiveShardChannel(channelId: string, shardId: string): void {
+    const active = this.activeShardChannels.get(channelId) ?? new Set<string>();
+    active.add(shardId);
+    this.activeShardChannels.set(channelId, active);
+  }
+
+  private unregisterActiveShardChannel(channelId: string, shardId: string): void {
+    const active = this.activeShardChannels.get(channelId);
+    if (!active) return;
+    active.delete(shardId);
+    if (active.size === 0) {
+      this.activeShardChannels.delete(channelId);
+    }
+  }
+
   private resolveShardId(channelId: string): string | null {
-    if (!channelId.startsWith('shard:')) return null;
-    const shardId = channelId.slice('shard:'.length).trim();
-    return shardId.length > 0 ? shardId : null;
+    if (channelId.startsWith('shard:')) {
+      const shardId = channelId.slice('shard:'.length).trim();
+      return shardId.length > 0 ? shardId : null;
+    }
+
+    const activeShards = this.activeShardChannels.get(channelId);
+    if (!activeShards || activeShards.size === 0) {
+      return null;
+    }
+    return activeShards.values().next().value ?? null;
   }
 }
 

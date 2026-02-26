@@ -5,7 +5,13 @@ import * as net from 'node:net';
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../agent-loop.js';
 import type { ChannelOutboundDock } from '../channels/types.js';
-import type { CapabilityTier, SubstrateMessage } from '../types.js';
+import {
+  parseWyomingShardRoutingConfigEnv,
+  type CapabilityTier,
+  type SubstrateMessage,
+  type WyomingRoutingMetadata,
+  type WyomingShardRoutingConfig,
+} from '../types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketServer } from './transport.js';
 import { sanitizeWebContent } from './sanitize.js';
@@ -84,6 +90,20 @@ export interface GatewayConfirmationConfig {
   expiryMs: number;
   operatorDiscordChannelId?: string;
   ntfyTopic?: string;
+}
+
+interface WyomingStreamMetadataFields {
+  source?: string;
+  connectionId?: string;
+  sessionId?: string;
+  turnId?: string;
+  siteId?: string;
+  satelliteId?: string;
+}
+
+interface WyomingRoutingEvaluation {
+  routing: WyomingRoutingMetadata;
+  isWyoming: boolean;
 }
 
 const GATEWAY_SESSION_HMAC_KEYS_ENV = 'GATEWAY_SESSION_HMAC_KEYS';
@@ -252,6 +272,7 @@ export interface GatewayServerOptions {
   sessionHmacKeyring?: SessionHmacKeyring | null;
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
+  wyomingShardRouting?: WyomingShardRoutingConfig;
 }
 
 const DEFAULT_AGENT_TIMEOUT_MS = 60_000;
@@ -306,6 +327,7 @@ export class GatewayServer {
   private confirmationQueue: ConfirmationQueue;
   private confirmationConfig: GatewayConfirmationConfig;
   private capabilityTierProvider: () => CapabilityTier;
+  private wyomingShardRouting: WyomingShardRoutingConfig;
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -324,6 +346,7 @@ export class GatewayServer {
       defaultExpiryMs: this.confirmationConfig.expiryMs,
     });
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => this.resolveCapabilityTierFromEnv());
+    this.wyomingShardRouting = options.wyomingShardRouting ?? parseWyomingShardRoutingConfigEnv(process.env);
     if (this.sessionHmacKeyring) {
       log.info('Session HMAC keyring configured', {
         activeVersion: this.sessionHmacKeyring.activeVersion,
@@ -875,13 +898,14 @@ export class GatewayServer {
     const overflowPolicy = options.overflowPolicy ?? DEFAULT_VOICE_OVERFLOW_POLICY;
     const correlationId = options.correlationId ?? `voice-corr-${Date.now()}-${++this.streamRequestCounter}`;
     const streamId = options.streamId ?? `voice-stream-${Date.now()}-${this.streamRequestCounter}`;
+    const routedMessage = this.applyWyomingRoutingPolicy(message, options.metadata);
 
     const queue = new BoundedQueue<string>({
       maxSize: maxQueueSize,
       overflowPolicy,
     });
 
-    const chunks = this.chunkText(message.content ?? '', chunkSize);
+    const chunks = this.chunkText(routedMessage.content ?? '', chunkSize);
     let droppedChunks = 0;
     for (const chunk of chunks) {
       try {
@@ -930,7 +954,7 @@ export class GatewayServer {
 
     let sequence = 0;
     const serializedMessage = this.serializeMessage({
-      ...message,
+      ...routedMessage,
       content: '',
     });
     const startParams: VoiceStreamStartParams = {
@@ -1038,6 +1062,147 @@ export class GatewayServer {
     }
 
     return chunks;
+  }
+
+  private applyWyomingRoutingPolicy(
+    message: SubstrateMessage,
+    metadata?: VoiceStreamMetadata,
+  ): SubstrateMessage {
+    const evaluation = this.resolveWyomingRoutingMetadata(message, metadata);
+    if (!evaluation.isWyoming) {
+      return message;
+    }
+
+    const routing = evaluation.routing;
+    const siteAllowlist = this.wyomingShardRouting.siteAllowlist ?? [];
+    const satelliteAllowlist = this.wyomingShardRouting.satelliteAllowlist ?? [];
+    let eligible = false;
+    let reason = 'policy_disabled';
+
+    if (this.wyomingShardRouting.enabled) {
+      eligible = true;
+      reason = 'eligible';
+
+      if (siteAllowlist.length > 0) {
+        const siteId = routing.siteId?.trim();
+        if (!siteId || !siteAllowlist.includes(siteId)) {
+          eligible = false;
+          reason = 'site_not_allowlisted';
+        }
+      }
+
+      if (eligible && satelliteAllowlist.length > 0) {
+        const satelliteId = routing.satelliteId?.trim();
+        if (!satelliteId || !satelliteAllowlist.includes(satelliteId)) {
+          eligible = false;
+          reason = 'satellite_not_allowlisted';
+        }
+      }
+    }
+
+    return {
+      ...message,
+      routing: {
+        ...(message.routing ?? {}),
+        source: 'wyoming',
+        wyoming: {
+          ...routing,
+          shardDelegation: {
+            eligible,
+            reason,
+          },
+        },
+      },
+    };
+  }
+
+  private resolveWyomingRoutingMetadata(
+    message: SubstrateMessage,
+    metadata?: VoiceStreamMetadata,
+  ): WyomingRoutingEvaluation {
+    const existing = message.routing?.wyoming;
+    const stream = this.parseWyomingStreamMetadata(metadata);
+    const channel = this.parseWyomingChannelIdentity(message.channelId);
+    const source = stream.source?.toLowerCase();
+    const isWyoming = message.routing?.source === 'wyoming'
+      || existing !== undefined
+      || (message.channelType === 'api' && channel !== null)
+      || source === 'wyoming';
+
+    if (!isWyoming) {
+      return { routing: {}, isWyoming: false };
+    }
+
+    const connectionId = existing?.connectionId
+      ?? stream.connectionId
+      ?? this.parseWyomingConnectionId(message.id);
+
+    return {
+      isWyoming: true,
+      routing: {
+        ...(existing ?? {}),
+        ...(connectionId ? { connectionId } : {}),
+        ...(stream.sessionId ? { sessionId: stream.sessionId } : {}),
+        ...(stream.turnId ? { turnId: stream.turnId } : {}),
+        ...(stream.siteId ? { siteId: stream.siteId } : channel?.siteId ? { siteId: channel.siteId } : {}),
+        ...(stream.satelliteId
+          ? { satelliteId: stream.satelliteId }
+          : channel?.satelliteId
+            ? { satelliteId: channel.satelliteId }
+            : {}),
+      },
+    };
+  }
+
+  private parseWyomingStreamMetadata(metadata?: VoiceStreamMetadata): WyomingStreamMetadataFields {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+
+    const record = metadata as Record<string, unknown>;
+    return {
+      source: this.readMetadataString(record, ['source', 'voiceSource']),
+      connectionId: this.readMetadataString(record, ['wyomingConnectionId', 'connectionId']),
+      sessionId: this.readMetadataString(record, ['wyomingSessionId', 'sessionId']),
+      turnId: this.readMetadataString(record, ['wyomingTurnId', 'turnId']),
+      siteId: this.readMetadataString(record, ['wyomingSiteId', 'siteId']),
+      satelliteId: this.readMetadataString(record, ['wyomingSatelliteId', 'satelliteId']),
+    };
+  }
+
+  private readMetadataString(record: Record<string, unknown>, keys: string[]): string | undefined {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value !== 'string') continue;
+      const trimmed = value.trim();
+      if (trimmed) return trimmed;
+    }
+    return undefined;
+  }
+
+  private parseWyomingChannelIdentity(channelId: string): { siteId: string; satelliteId: string } | null {
+    if (!channelId.startsWith('api:wyoming:')) {
+      return null;
+    }
+
+    const parts = channelId.split(':');
+    if (parts.length < 4) {
+      return null;
+    }
+
+    const siteId = parts[2]?.trim();
+    const satelliteId = parts.slice(3).join(':').trim();
+    if (!siteId || !satelliteId) {
+      return null;
+    }
+
+    return { siteId, satelliteId };
+  }
+
+  private parseWyomingConnectionId(messageId: string): string | undefined {
+    const match = /^wyoming-msg-(.+)-\d+$/.exec(messageId);
+    const candidate = match?.[1]?.trim();
+    return candidate ? candidate : undefined;
   }
 
   private async notifyOperatorForPendingAction(entry: ConfirmationQueueEntry): Promise<void> {

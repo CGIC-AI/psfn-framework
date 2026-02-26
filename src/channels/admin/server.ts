@@ -287,6 +287,27 @@ export class AdminServer implements Lifecycle {
       },
       {
         method: 'POST',
+        match: exactPath('/api/identity/intake/stage'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.sendFragment(res, this.handlers.stageIdentityIntake(body));
+          });
+        },
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/identity/intake/commit'),
+        handle: (req, res) => {
+          this.withBody(req, res, (body) => {
+            this.handlers.commitIdentityIntake(body).then(
+              (html) => this.sendFragment(res, html),
+              (err) => this.send500('Identity intake commit error', err, res),
+            );
+          });
+        },
+      },
+      {
+        method: 'POST',
         match: exactPath('/api/identity/card/rollback'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {

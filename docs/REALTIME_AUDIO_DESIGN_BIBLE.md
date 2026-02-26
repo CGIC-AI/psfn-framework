@@ -1,6 +1,6 @@
 # Real-Time Audio Design Bible (PSFN)
 
-Updated: 2026-02-16  
+Updated: 2026-02-26
 Scope: architectural concepts and reusable design patterns for upgrading PSFN voice capabilities.  
 Source inspiration: Pipecat framework patterns, adapted to PSFN constraints and security model.
 
@@ -304,3 +304,17 @@ Primary implementation zones:
   - `src/pipecat/serializers/base_serializer.py`
 - Pipecat service switcher pattern:
   - `src/pipecat/pipeline/service_switcher.py`
+
+## 12) Wyoming MVP Addendum (PSFN-slsv.1)
+
+Architecture decisions for the Home Assistant Voice PE MVP path are locked in:
+
+- `docs/architecture/wyoming-mvp-adr.md`
+
+Implementation constraints from the ADR:
+
+- Topology: Voice PE -> Home Assistant Assist pipeline -> gateway-hosted Wyoming services.
+- MVP service contract: `handle` is required; `describe/info` is required for discovery; `asr`/`tts` are optional and must be explicitly advertised when enabled.
+- Identity contract: map Wyoming turns to `SubstrateMessage` with `channelType: 'api'` and `channelId` prefixed with `api:wyoming:` for compatibility with current trust/session behavior.
+- Event contract: reuse existing generic voice lifecycle events (`voice.turn.*`, `voice.stt.*`, `voice.tts.*`) and message events (`message.received`, `message.sent`) rather than Discord-specific `channel.voice.*`.
+- Reliability/security contract: reuse existing queueing/timeouts and voice safety budgets (`src/gateway/backpressure.ts`, `src/gateway/server.ts`, `src/voice/policy/reliability.ts`, `src/voice/policy/security.ts`).

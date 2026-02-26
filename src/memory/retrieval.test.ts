@@ -393,14 +393,26 @@ describe('MemoryRetriever basic behavior', () => {
       memoryRetrievalLimit: undefined,
       memoryRetrievalBudgetPct: 2,
       modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 2_000 },
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 2_000,
+          contextBudget: { memoryRetrievalMinTokens: 1 },
+        },
       },
     });
     const largeConfig = makeRuntimeConfig({
       memoryRetrievalLimit: undefined,
       memoryRetrievalBudgetPct: 2,
       modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 12_000 },
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 12_000,
+          contextBudget: { memoryRetrievalMinTokens: 1 },
+        },
       },
     });
 
@@ -449,7 +461,13 @@ describe('MemoryRetriever basic behavior', () => {
       memoryRetrievalLimit: undefined,
       memoryRetrievalBudgetPct: 5,
       modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 1_000 },
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 1_000,
+          contextBudget: { memoryRetrievalMinTokens: 1 },
+        },
       },
     });
     const retriever = new MemoryRetriever(makeMockStore(memories), embedding, config);

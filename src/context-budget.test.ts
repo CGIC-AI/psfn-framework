@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT,
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   resolveMemoryRetrievalBudget,
   resolveMemoryRetrievalBudgetPct,
   resolveSessionHistoryBudget,
   resolveSessionHistoryBudgetPct,
+  SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from './context-budget.js';
@@ -48,6 +50,74 @@ describe('context-budget', () => {
     expect(sessionBudget.estimatedCount).toBe(42);
     expect(retrievalBudget.mode).toBe('hard_limit');
     expect(retrievalBudget.estimatedCount).toBe(11);
+  });
+
+  it('enforces minimum token floors for small context windows', () => {
+    const sessionBudget = resolveSessionHistoryBudget({
+      defaultContextWindow: 8_000,
+      modelRoster: {
+        chat: {
+          model: 'small/chat',
+          provider: 'openrouter',
+          maxTokens: 2048,
+          contextWindow: 8_000,
+        },
+      },
+      sessionHistoryBudgetPct: 6,
+    });
+    const retrievalBudget = resolveMemoryRetrievalBudget({
+      defaultContextWindow: 8_000,
+      modelRoster: {
+        chat: {
+          model: 'small/chat',
+          provider: 'openrouter',
+          maxTokens: 2048,
+          contextWindow: 8_000,
+        },
+      },
+      memoryRetrievalBudgetPct: 2,
+    });
+
+    expect(sessionBudget.tokenBudget).toBe(SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT);
+    expect(retrievalBudget.tokenBudget).toBe(MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT);
+  });
+
+  it('supports per-model token floor overrides from chat roster', () => {
+    const sessionBudget = resolveSessionHistoryBudget({
+      defaultContextWindow: 8_000,
+      modelRoster: {
+        chat: {
+          model: 'small/chat',
+          provider: 'openrouter',
+          maxTokens: 2048,
+          contextWindow: 8_000,
+          contextBudget: {
+            sessionHistoryMinTokens: 2_500,
+            memoryRetrievalMinTokens: 750,
+          },
+        },
+      },
+      sessionHistoryBudgetPct: 6,
+    });
+    const retrievalBudget = resolveMemoryRetrievalBudget({
+      defaultContextWindow: 8_000,
+      modelRoster: {
+        chat: {
+          model: 'small/chat',
+          provider: 'openrouter',
+          maxTokens: 2048,
+          contextWindow: 8_000,
+          contextBudget: {
+            sessionHistoryMinTokens: 2_500,
+            memoryRetrievalMinTokens: 750,
+          },
+        },
+      },
+      memoryRetrievalBudgetPct: 2,
+    });
+
+    expect(sessionBudget.tokenBudget).toBe(2_500);
+    expect(retrievalBudget.tokenBudget).toBe(750);
   });
 
   it('clamps or defaults budget percentages into supported ranges', () => {

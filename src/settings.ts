@@ -5,6 +5,7 @@
 import { join } from 'node:path';
 import type {
   ModelCatalogEntry,
+  ModelContextBudgetConfig,
   ModelPurpose,
   ModelRoleAssignments,
   ModelSlot,
@@ -150,17 +151,32 @@ function toNonEmptyString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function sanitizeModelContextBudget(value: unknown): ModelContextBudgetConfig | undefined {
+  if (!isRecord(value)) return undefined;
+  const sessionHistoryMinTokens = toPositiveInteger(value.sessionHistoryMinTokens);
+  const memoryRetrievalMinTokens = toPositiveInteger(value.memoryRetrievalMinTokens);
+  if (sessionHistoryMinTokens === undefined && memoryRetrievalMinTokens === undefined) {
+    return undefined;
+  }
+  return {
+    ...(sessionHistoryMinTokens !== undefined ? { sessionHistoryMinTokens } : {}),
+    ...(memoryRetrievalMinTokens !== undefined ? { memoryRetrievalMinTokens } : {}),
+  };
+}
+
 function sanitizeModelSlotDefaults(value: unknown): ModelSlotDefaults | undefined {
   if (!isRecord(value)) return undefined;
   const maxTokens = toPositiveInteger(value.maxTokens);
   const contextWindow = toPositiveInteger(value.contextWindow);
+  const contextBudget = sanitizeModelContextBudget(value.contextBudget);
   const description = toNonEmptyString(value.description);
-  if (maxTokens === undefined && contextWindow === undefined && description === undefined) {
+  if (maxTokens === undefined && contextWindow === undefined && contextBudget === undefined && description === undefined) {
     return undefined;
   }
   return {
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(contextBudget !== undefined ? { contextBudget } : {}),
     ...(description !== undefined ? { description } : {}),
   };
 }
@@ -169,12 +185,14 @@ function sanitizeModelSlotOverrides(value: unknown): ModelSlotOverrides | undefi
   if (!isRecord(value)) return undefined;
   const maxTokens = toPositiveInteger(value.maxTokens);
   const contextWindow = toPositiveInteger(value.contextWindow);
-  if (maxTokens === undefined && contextWindow === undefined) {
+  const contextBudget = sanitizeModelContextBudget(value.contextBudget);
+  if (maxTokens === undefined && contextWindow === undefined && contextBudget === undefined) {
     return undefined;
   }
   return {
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(contextBudget !== undefined ? { contextBudget } : {}),
   };
 }
 
@@ -226,6 +244,7 @@ function sanitizeModelRoster(value: unknown): Partial<Record<ModelPurpose, Model
     const provider = toNonEmptyString(candidate.provider);
     const maxTokens = toPositiveInteger(candidate.maxTokens);
     const contextWindow = toPositiveInteger(candidate.contextWindow);
+    const contextBudget = sanitizeModelContextBudget(candidate.contextBudget);
     if (!model || !provider || maxTokens === undefined) continue;
 
     roster[purpose] = {
@@ -233,6 +252,7 @@ function sanitizeModelRoster(value: unknown): Partial<Record<ModelPurpose, Model
       provider,
       maxTokens,
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(contextBudget !== undefined ? { contextBudget } : {}),
     };
   }
 
@@ -247,6 +267,7 @@ function mergeCatalogSlot(
     provider?: string;
     maxTokens?: number;
     contextWindow?: number;
+    contextBudget?: ModelContextBudgetConfig;
   },
 ): void {
   const model = toNonEmptyString(slot.model);
@@ -265,6 +286,7 @@ function mergeCatalogSlot(
   };
   if (slot.maxTokens !== undefined) overrides.maxTokens = slot.maxTokens;
   if (slot.contextWindow !== undefined) overrides.contextWindow = slot.contextWindow;
+  if (slot.contextBudget !== undefined) overrides.contextBudget = slot.contextBudget;
   merged.overrides = Object.keys(overrides).length > 0 ? overrides : undefined;
 
   catalog[slotKey] = merged;
@@ -307,7 +329,7 @@ function resolveCatalogSlotKey(
 
 function modelSlotFromCatalogEntry(
   entry: ModelCatalogEntry,
-  fallback: { maxTokens?: number; contextWindow?: number },
+  fallback: { maxTokens?: number; contextWindow?: number; contextBudget?: ModelContextBudgetConfig },
 ): ModelSlot | undefined {
   const maxTokens = entry.overrides?.maxTokens
     ?? entry.defaults?.maxTokens
@@ -317,12 +339,16 @@ function modelSlotFromCatalogEntry(
   const contextWindow = entry.overrides?.contextWindow
     ?? entry.defaults?.contextWindow
     ?? fallback.contextWindow;
+  const contextBudget = entry.overrides?.contextBudget
+    ?? entry.defaults?.contextBudget
+    ?? fallback.contextBudget;
 
   return {
     model: entry.model,
     provider: entry.provider,
     maxTokens,
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(contextBudget !== undefined ? { contextBudget } : {}),
   };
 }
 
@@ -330,7 +356,7 @@ function resolvePurposeSlot(
   catalog: Record<string, ModelCatalogEntry>,
   assignments: ModelRoleAssignments,
   purpose: string,
-  fallback: { maxTokens?: number; contextWindow?: number },
+  fallback: { maxTokens?: number; contextWindow?: number; contextBudget?: ModelContextBudgetConfig },
   fallbackSlotKey?: string,
 ): ModelSlot | undefined {
   const slotKey = resolveCatalogSlotKey(catalog, assignments, purpose, fallbackSlotKey);
@@ -428,6 +454,7 @@ export function normalizeEditableSettings(
       provider: slot.provider,
       maxTokens: slot.maxTokens,
       contextWindow: slot.contextWindow,
+      contextBudget: slot.contextBudget,
     });
   }
 
@@ -436,6 +463,7 @@ export function normalizeEditableSettings(
     provider: normalizedInput.primaryProvider,
     maxTokens: normalizedInput.primaryMaxTokens,
     contextWindow: roster.chat?.contextWindow ?? options?.defaultContextWindow,
+    contextBudget: roster.chat?.contextBudget,
   });
   mergeCatalogSlot(catalog, EXTRACTION_MODEL_SLOT_KEY, {
     model: normalizedInput.extractionModel,
@@ -467,6 +495,7 @@ export function normalizeEditableSettings(
     {
       maxTokens: normalizedInput.primaryMaxTokens,
       contextWindow: roster.chat?.contextWindow ?? options?.defaultContextWindow,
+      contextBudget: roster.chat?.contextBudget,
     },
     PRIMARY_MODEL_SLOT_KEY,
   );
@@ -498,6 +527,7 @@ export function normalizeEditableSettings(
     {
       maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
       contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
+      contextBudget: chatSlot?.contextBudget,
     },
     assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
   );
@@ -509,6 +539,7 @@ export function normalizeEditableSettings(
     {
       maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
       contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
+      contextBudget: chatSlot?.contextBudget,
     },
     assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
   );

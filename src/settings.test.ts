@@ -182,6 +182,35 @@ describe('settings', () => {
       expect(normalized.modelRoster?.chat?.model).toBe('chat/model');
       expect(normalized.modelRoster?.background?.model).toBe('extract/model');
     });
+
+    it('projects context budget overrides from model catalog into chat roster', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'chat/model',
+            provider: 'openrouter',
+            defaults: {
+              maxTokens: 6000,
+              contextWindow: 128_000,
+              contextBudget: {
+                sessionHistoryMinTokens: 3_500,
+                memoryRetrievalMinTokens: 900,
+              },
+            },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelRoster?.chat?.contextBudget).toEqual({
+        sessionHistoryMinTokens: 3_500,
+        memoryRetrievalMinTokens: 900,
+      });
+    });
   });
 
   describe('applySettings', () => {
@@ -319,6 +348,43 @@ describe('settings', () => {
         provider: 'openrouter',
         maxTokens: 10000,
         contextWindow: 256_000,
+      });
+    });
+
+    it('applies per-model context budget overrides from catalog to roster', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        modelCatalog: {
+          primary: {
+            model: 'openai/gpt-4.1-mini',
+            provider: 'openrouter',
+            defaults: {
+              maxTokens: 2048,
+              contextWindow: 8_000,
+            },
+            overrides: {
+              contextBudget: {
+                sessionHistoryMinTokens: 3_000,
+                memoryRetrievalMinTokens: 800,
+              },
+            },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 3072 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          extraction: 'extraction',
+          background: 'extraction',
+        },
+      });
+
+      expect(config.modelRoster.chat?.contextBudget).toEqual({
+        sessionHistoryMinTokens: 3_000,
+        memoryRetrievalMinTokens: 800,
       });
     });
   });

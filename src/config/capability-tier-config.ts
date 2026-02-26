@@ -1,0 +1,67 @@
+import { join } from 'node:path';
+import type { CapabilityTier } from '../types.js';
+import { isCapabilityTier } from '../capabilities/tiers.js';
+import type { CapabilityToken } from '../capabilities/tokens.js';
+import { normalizeCapabilityTokens } from '../capabilities/tokens.js';
+import {
+  loadOrSeedJson,
+  writeJsonAtomic,
+} from './load-or-seed.js';
+
+export const CAPABILITY_TIER_FILE_NAME = 'capability-tier.json';
+export const CAPABILITY_TIER_SEED_FILE_NAME = 'capability-tier.seed.json';
+
+export interface CapabilityTierConfig {
+  tier: CapabilityTier;
+  customTokens: CapabilityToken[];
+}
+
+interface CapabilityTierLoadOptions {
+  seedDir?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validateCapabilityTierConfig(raw: unknown, sourcePath: string): CapabilityTierConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid capability config at ${sourcePath}: expected object`);
+  }
+
+  const tier = raw.tier;
+  if (!isCapabilityTier(tier)) {
+    throw new Error(`Invalid capability config at ${sourcePath}: tier is not supported`);
+  }
+
+  const customTokens = normalizeCapabilityTokens(
+    raw.customTokens ?? [],
+    'customTokens',
+  );
+
+  return {
+    tier,
+    customTokens,
+  };
+}
+
+export function loadCapabilityTierConfig(
+  dataDir: string,
+  options: CapabilityTierLoadOptions = {},
+): CapabilityTierConfig {
+  const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
+  return loadOrSeedJson({
+    dataPath: join(dataDir, CAPABILITY_TIER_FILE_NAME),
+    seedPath: join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME),
+    validate: validateCapabilityTierConfig,
+  });
+}
+
+export function saveCapabilityTierConfig(
+  dataDir: string,
+  nextConfig: unknown,
+): CapabilityTierConfig {
+  const validated = validateCapabilityTierConfig(nextConfig, CAPABILITY_TIER_FILE_NAME);
+  writeJsonAtomic(join(dataDir, CAPABILITY_TIER_FILE_NAME), validated);
+  return validated;
+}

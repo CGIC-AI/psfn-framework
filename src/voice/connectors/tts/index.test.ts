@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ElevenLabsStreamingTtsConnector } from './elevenlabs-stream.js';
+import { EchoStreamingTtsConnector } from './echo-stream.js';
 import {
   createStreamingTtsConnector,
   registerStreamingTtsConnectorFactory,
@@ -27,6 +28,18 @@ describe('createStreamingTtsConnector', () => {
 
     expect(connector).toBeInstanceOf(ElevenLabsStreamingTtsConnector);
     expect(connector.id).toBe('elevenlabs');
+  });
+
+  it('creates the Echo connector for provider "echo"', () => {
+    const connector = createStreamingTtsConnector('echo', {
+      url: 'http://127.0.0.1:5050/v1/audio/speech',
+      voice: 'echo-voice-1',
+      preset: 'normal',
+      model: 'echo-v1',
+    });
+
+    expect(connector).toBeInstanceOf(EchoStreamingTtsConnector);
+    expect(connector.id).toBe('echo');
   });
 
   it('dispatches to a registered factory for provider "echo"', () => {

@@ -9,9 +9,27 @@ import type { MemoryStore } from './store.js';
 import type { MemoryType, SensitivityLevel } from './types.js';
 import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
 
+const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
+
 function clamp(val: number, min: number, max: number): number {
   if (isNaN(val)) return (min + max) / 2;
   return Math.max(min, Math.min(max, val));
+}
+
+function extractInternalSource(params: Record<string, unknown>): string | null {
+  const candidate = params[INTERNAL_SHARD_SOURCE_PARAM];
+  if (typeof candidate !== 'string') return null;
+  const normalized = candidate.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function buildToolSourceRef(
+  toolName: string,
+  toolCallId: string,
+  shardSource: string | null,
+): string {
+  if (!shardSource) return `source:tool:${toolName}|invocation:${toolCallId}`;
+  return `source:${shardSource}|tool:${toolName}|invocation:${toolCallId}`;
 }
 
 export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
@@ -62,6 +80,7 @@ export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
+        const internalSource = extractInternalSource(params as Record<string, unknown>);
         const { text, type } = params;
 
         if (!text || text.trim().length === 0) {
@@ -92,7 +111,7 @@ export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
           emotionalValence,
           confidence,
           tags,
-          sourceRef: `source:tool:memory_write|invocation:${toolCallId}`,
+          sourceRef: buildToolSourceRef('memory_write', toolCallId, internalSource),
           sensitivity: params.sensitivity,
         });
 
@@ -167,6 +186,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
+        const internalSource = extractInternalSource(params as Record<string, unknown>);
         const rawRecords = params.records;
         const source = params.source || 'import';
 
@@ -204,7 +224,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
             emotionalValence: r.emotional_valence !== undefined ? clamp(Number(r.emotional_valence), -1, 1) : undefined,
             confidence: r.confidence !== undefined ? clamp(Number(r.confidence), 0, 1) : undefined,
             tags: r.tags ? r.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
-            sourceRef: `source:tool:memory_import:${source}|invocation:${toolCallId}`,
+            sourceRef: buildToolSourceRef(`memory_import:${source}`, toolCallId, internalSource),
             sensitivity: r.sensitivity,
           });
         }

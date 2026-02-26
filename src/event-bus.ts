@@ -32,8 +32,8 @@ export interface EventMap {
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage };
   'agent.stream.delta': { channelId: string; text: string };
   'agent.stream.thinking': { channelId: string; text: string };
-  'agent.tool.start': { channelId: string; toolCallId: string; toolName: string };
-  'agent.tool.end': { channelId: string; toolCallId: string; toolName: string; isError: boolean };
+  'agent.tool.start': { channelId: string; toolCallId: string; toolName: string; shardId?: string };
+  'agent.tool.end': { channelId: string; toolCallId: string; toolName: string; isError: boolean; shardId?: string };
   'agent.compaction.start': {
     channelId: string;
     reason: 'threshold' | 'overflow';

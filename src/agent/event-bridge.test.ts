@@ -112,6 +112,33 @@ describe('createEventBridge', () => {
     });
   });
 
+  it('tags shard tool events with shardId derived from channelId', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const starts: any[] = [];
+    const ends: any[] = [];
+    eventBus.on('agent.tool.start', (data) => { starts.push(data); });
+    eventBus.on('agent.tool.end', (data) => { ends.push(data); });
+
+    bridge.setChannel('shard:shard-abc');
+    emitAgentEvent({
+      type: 'tool_execution_start',
+      toolCallId: 'call-5',
+      toolName: 'memory_write',
+      args: {},
+    });
+    emitAgentEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'call-5',
+      toolName: 'memory_write',
+      result: {},
+      isError: false,
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(starts[0]?.shardId).toBe('shard-abc');
+    expect(ends[0]?.shardId).toBe('shard-abc');
+  });
+
   it('stops emitting after clearChannel', async () => {
     const bridge = createEventBridge(agent, eventBus);
     const deltas: string[] = [];

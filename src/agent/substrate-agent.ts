@@ -244,6 +244,13 @@ export class SubstrateAgent {
     }
   }
 
+  getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
+    return {
+      core: [...this.coreTools],
+      extended: [...this.extendedTools],
+    };
+  }
+
   setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {
     this.channelRegistry = new Map(registry);
   }

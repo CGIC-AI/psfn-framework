@@ -534,7 +534,7 @@ export class SessionManager {
                 systemPrompt: runtimeCompactionPrompt,
                 messages: [{ role: 'user', content: compactText }],
               },
-              'summary',
+              'background',
             ),
             { maxRetries: retryMaxRetries, baseDelayMs: 250 },
             {

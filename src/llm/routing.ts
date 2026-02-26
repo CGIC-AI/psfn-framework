@@ -81,10 +81,10 @@ function purposeSlotChain(assignments: ModelRoleAssignments | undefined, purpose
     : purpose === 'background'
       ? [
         role.background,
-        role.extraction,
-        'extraction',
         role.chat,
         'primary',
+        role.extraction,
+        'extraction',
       ]
       : [
         role.reasoning,
@@ -124,17 +124,17 @@ function rosterChain(config: SubstrateConfig, purpose: RoutingPurpose): Array<Mo
   if (purpose === 'background') {
     return [
       config.modelRoster.background,
-      {
-        model: config.extractionModel,
-        provider: config.extractionProvider,
-        maxTokens: config.extractionMaxTokens,
-      },
       config.modelRoster.chat,
       {
         model: config.primaryModel,
         provider: config.primaryProvider,
         maxTokens: config.primaryMaxTokens,
         contextWindow: config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow,
+      },
+      {
+        model: config.extractionModel,
+        provider: config.extractionProvider,
+        maxTokens: config.extractionMaxTokens,
       },
     ];
   }

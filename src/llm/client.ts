@@ -276,6 +276,9 @@ export class LLMClient {
     if (purpose === 'reasoning') {
       return 'reasoning';
     }
+    if (purpose === 'background') {
+      return 'background';
+    }
     return 'background';
   }
 

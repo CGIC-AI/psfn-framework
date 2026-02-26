@@ -643,6 +643,10 @@ describe('MemoryExtractor provenance and trust caps', () => {
         privatePrefixes: [...defaultPolicy.channelClassification.privatePrefixes],
         broadcastPrefixes: [...defaultPolicy.channelClassification.broadcastPrefixes],
         defaultVisibility: 'public',
+        visibilityOverrides: {
+          exact: { ...defaultPolicy.channelClassification.visibilityOverrides.exact },
+          prefix: { ...defaultPolicy.channelClassification.visibilityOverrides.prefix },
+        },
       },
     });
 

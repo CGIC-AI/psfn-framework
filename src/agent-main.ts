@@ -212,6 +212,14 @@ async function main(): Promise<void> {
     seedDir: process.env.CONFIG_DIR,
   });
   setRuntimeTrustPolicy(trustPolicyConfig);
+  log.info('Loaded trust policy configuration', {
+    exactOverrideCount: Object.keys(
+      trustPolicyConfig.channelClassification.visibilityOverrides.exact,
+    ).length,
+    prefixOverrideCount: Object.keys(
+      trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
+    ).length,
+  });
   const schedulerConfig = resolveRuntimeSchedulerConfig({
     dataDir: config.dataDir,
     seedDir: process.env.CONFIG_DIR,

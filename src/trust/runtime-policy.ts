@@ -17,6 +17,10 @@ const DEFAULT_POLICY: TrustPolicyConfig = {
     privatePrefixes: ['api:', 'sillytavern:', 'openwebui:', 'shard:', 'internal:'],
     broadcastPrefixes: ['twitter:', 'social:'],
     defaultVisibility: 'semi_private',
+    visibilityOverrides: {
+      exact: {},
+      prefix: {},
+    },
   },
 };
 

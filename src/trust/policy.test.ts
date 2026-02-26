@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect } from 'vitest';
 import {
   evaluateMemoryPolicy,
   classifyChannel,
@@ -7,12 +7,18 @@ import {
 } from './policy.js';
 import type { PolicyContext } from './policy.js';
 import {
+  type ChannelVisibility,
   trustAtLeast,
   sensitivityAtMost,
   trustOrd,
   sensitivityOrd,
   TRUST_CEILING,
 } from './types.js';
+import {
+  getDefaultTrustPolicy,
+  resetRuntimeTrustPolicy,
+  setRuntimeTrustPolicy,
+} from './runtime-policy.js';
 
 // ── Helper ──
 
@@ -24,6 +30,41 @@ function ctx(overrides: Partial<PolicyContext>): PolicyContext {
     ...overrides,
   };
 }
+
+function setVisibilityOverrides(overrides: {
+  exact?: Record<string, ChannelVisibility>;
+  prefix?: Record<string, ChannelVisibility>;
+}): void {
+  const defaultPolicy = getDefaultTrustPolicy();
+  setRuntimeTrustPolicy({
+    ...defaultPolicy,
+    trustCeiling: {
+      ...defaultPolicy.trustCeiling,
+    },
+    visibilityAllowed: {
+      ...defaultPolicy.visibilityAllowed,
+    },
+    channelClassification: {
+      ...defaultPolicy.channelClassification,
+      privatePrefixes: [...defaultPolicy.channelClassification.privatePrefixes],
+      broadcastPrefixes: [...defaultPolicy.channelClassification.broadcastPrefixes],
+      visibilityOverrides: {
+        exact: {
+          ...defaultPolicy.channelClassification.visibilityOverrides.exact,
+          ...(overrides.exact ?? {}),
+        },
+        prefix: {
+          ...defaultPolicy.channelClassification.visibilityOverrides.prefix,
+          ...(overrides.prefix ?? {}),
+        },
+      },
+    },
+  });
+}
+
+beforeEach(() => {
+  resetRuntimeTrustPolicy();
+});
 
 describe('evaluateMemoryPolicy', () => {
   // ── Layer 1: Operator approval ──
@@ -221,6 +262,44 @@ describe('evaluateMemoryPolicy', () => {
 });
 
 describe('classifyChannel', () => {
+  it('prioritizes exact visibility overrides over prefix overrides', () => {
+    setVisibilityOverrides({
+      exact: { 'guild:ops-room': 'broadcast' },
+      prefix: { 'guild:': 'private' },
+    });
+
+    expect(classifyChannel('guild:ops-room')).toBe('broadcast');
+  });
+
+  it('applies prefix visibility overrides when exact override is absent', () => {
+    setVisibilityOverrides({
+      prefix: { 'guild:ops-': 'private' },
+    });
+
+    expect(classifyChannel('guild:ops-briefing')).toBe('private');
+  });
+
+  it('uses overrides before DM metadata and legacy prefix heuristics', () => {
+    setVisibilityOverrides({
+      exact: { '1234567890': 'broadcast' },
+      prefix: { 'api:': 'public' },
+    });
+
+    expect(classifyChannel('1234567890', { isDirectMessage: true })).toBe('broadcast');
+    expect(classifyChannel('api:session123')).toBe('public');
+  });
+
+  it('falls back to existing classification heuristics when no override matches', () => {
+    setVisibilityOverrides({
+      exact: { 'guild:ops-room': 'private' },
+      prefix: { 'guild:ops-': 'private' },
+    });
+
+    expect(classifyChannel('api:session123')).toBe('private');
+    expect(classifyChannel('twitter:timeline')).toBe('broadcast');
+    expect(classifyChannel('1234567890')).toBe('semi_private');
+  });
+
   it('classifies API channels as private', () => {
     expect(classifyChannel('api:session123')).toBe('private');
   });

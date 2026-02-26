@@ -4,11 +4,14 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { EmbeddingService } from '../agent-loop.js';
 import type { MemoryStore } from './store.js';
+import { abstractMemoryText } from './abstraction.js';
 import type {
   PurrMemory,
   MemoryType,
   SensitivityLevel,
   ConsentFlags,
+  ConsentRedactionBehavior,
+  MemoryRedactionOperation,
   MemoryRetentionClass,
 } from './types.js';
 import {
@@ -20,6 +23,7 @@ import {
   inferMemoryRetentionClass,
   isDurableMemory,
   normalizeMemoryTags,
+  resolveConsentRedactionBehavior,
 } from './types.js';
 import { createComponentLogger } from '../logger.js';
 
@@ -94,6 +98,24 @@ export class MemoryWritePolicyError extends Error {
   }
 }
 
+export interface MemoryRedactionOptions {
+  memoryId: string;
+  operation?: MemoryRedactionOperation;
+  reason?: string;
+  requestedBy?: string;
+  sourceRef?: string;
+}
+
+export interface MemoryRedactionResult {
+  operation: 'deleted' | 'abstracted';
+  behavior: ConsentRedactionBehavior;
+  sourceMemoryId: string;
+  deleteId: string;
+  abstractedMemoryId?: string;
+  abstractedText?: string;
+  externalProvenanceRef?: string;
+}
+
 function applyRetentionSemantics(input: {
   type: MemoryType;
   importance: number;
@@ -129,6 +151,11 @@ function normalizeSourceRef(sourceRef: string | undefined, fallback: string): st
 function clampUnit(value: number, fallback = 0.5): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(0, Math.min(1, value));
+}
+
+function clampSigned(value: number, fallback = 0): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(-1, Math.min(1, value));
 }
 
 function normalizeProvenanceRefs(
@@ -306,6 +333,9 @@ export class MemoryWriter {
       tags,
       retentionClass,
     });
+    const normalizedConsentFlags = consentFlags === undefined
+      ? undefined
+      : normalizeConsentFlags(consentFlags);
     const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_write');
     const incomingProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
     const targetSalience = clampUnit(salience ?? importance, importance);
@@ -477,7 +507,7 @@ export class MemoryWriter {
       provenanceRefs: incomingProvenanceRefs,
       retentionClass: retention.retentionClass,
       sensitivity,
-      consentFlags,
+      consentFlags: normalizedConsentFlags,
       contactId,
     };
 
@@ -522,6 +552,9 @@ export class MemoryWriter {
       tags,
       retentionClass,
     });
+    const normalizedConsentFlags = consentFlags === undefined
+      ? undefined
+      : normalizeConsentFlags(consentFlags);
     const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_upsert');
     const normalizedProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
     const targetSalience = clampUnit(salience ?? importance, importance);
@@ -619,6 +652,96 @@ export class MemoryWriter {
     return {
       action: didSupersede ? 'superseded' : 'created',
       memory,
+    };
+  }
+
+  async redact(opts: MemoryRedactionOptions): Promise<MemoryRedactionResult | null> {
+    const memoryId = opts.memoryId.trim();
+    if (!memoryId) {
+      throw new Error('memoryId is required');
+    }
+
+    const source = this.memoryStore.getById(memoryId);
+    if (!source || source.deletedAt !== undefined) {
+      return null;
+    }
+
+    const behavior = resolveConsentRedactionBehavior(
+      source.consentFlags,
+      opts.operation ?? 'auto',
+    );
+    const requestedBy = normalizeSourceRef(opts.requestedBy, 'agent:memory_redact');
+    const reason = opts.reason?.trim() || undefined;
+
+    if (behavior === 'delete') {
+      const deleted = this.memoryStore.softDeleteMemory(memoryId, {
+        deletedBy: requestedBy,
+        reason,
+      });
+      if (!deleted) return null;
+      return {
+        operation: 'deleted',
+        behavior,
+        sourceMemoryId: memoryId,
+        deleteId: deleted.deleteId,
+      };
+    }
+
+    const abstraction = abstractMemoryText(source.text);
+    const externalRef = `abstraction:${uuidv4()}`;
+    const abstractionSourceRef = normalizeSourceRef(opts.sourceRef, 'tool:memory_redact');
+    const abstractionImportance = clampUnit(Math.max(source.importance, 0.55), 0.55);
+    const abstractionConfidence = clampUnit(Math.max(source.confidence, 0.6), 0.6);
+    const abstractionSensitivity = (
+      source.sensitivity === 'intimate' || source.sensitivity === 'confidential'
+    )
+      ? 'personal'
+      : source.sensitivity;
+
+    const written = await this.write({
+      text: abstraction.text,
+      type: 'reflection',
+      importance: abstractionImportance,
+      emotionalValence: clampSigned(source.emotionalValence, 0),
+      confidence: abstractionConfidence,
+      tags: normalizeMemoryTags([...source.tags, 'abstracted', 'lesson']),
+      sourceRef: abstractionSourceRef,
+      provenanceRefs: [externalRef],
+      sensitivity: abstractionSensitivity,
+      consentFlags: source.consentFlags,
+      contactId: source.contactId,
+    });
+
+    this.memoryStore.recordAbstractionLink({
+      sourceMemoryId: source.id,
+      abstractedMemoryId: written.memory.id,
+      externalRef,
+      createdBy: requestedBy,
+      reason,
+    });
+
+    const deleteReasonParts = [
+      reason,
+      `abstracted_memory:${written.memory.id}`,
+      `external_ref:${externalRef}`,
+    ].filter((part): part is string => typeof part === 'string' && part.length > 0);
+
+    const deleted = this.memoryStore.softDeleteMemory(memoryId, {
+      deletedBy: requestedBy,
+      reason: deleteReasonParts.join(' | '),
+    });
+    if (!deleted) {
+      throw new Error(`Failed to delete source memory ${memoryId} after abstraction`);
+    }
+
+    return {
+      operation: 'abstracted',
+      behavior,
+      sourceMemoryId: memoryId,
+      deleteId: deleted.deleteId,
+      abstractedMemoryId: written.memory.id,
+      abstractedText: written.memory.text,
+      externalProvenanceRef: externalRef,
     };
   }
 

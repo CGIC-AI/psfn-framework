@@ -161,14 +161,24 @@ describe('MemoryStore', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(
         makeMemory('m1', 'Consent test', {
-          consentFlags: { allowRecall: false, deleteOnRequest: true },
+          consentFlags: {
+            allowRecall: false,
+            allowAbstraction: true,
+            deleteOnRequest: true,
+            redactionBehavior: 'abstract',
+          },
         }),
         emb,
       );
 
       const mem = store.getById('m1');
       expect(mem).toBeDefined();
-      expect(mem!.consentFlags).toEqual({ allowRecall: false, deleteOnRequest: true });
+      expect(mem!.consentFlags).toEqual({
+        allowRecall: false,
+        allowAbstraction: true,
+        deleteOnRequest: true,
+        redactionBehavior: 'abstract',
+      });
     });
 
     it('defaults sensitivity to personal for records without it', () => {
@@ -254,6 +264,35 @@ describe('MemoryStore', () => {
 
       const mem = store.getById('m-provenance');
       expect(mem?.provenanceRefs).toEqual(['legacy:source#0', 'backup:archive#3']);
+    });
+
+    it('records abstraction links with non-reversible external refs', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(makeMemory('m-source', 'Sensitive source memory'), emb);
+      store.insertMemory(makeMemory('m-abstract', 'Generalized lesson memory', {
+        type: 'reflection',
+      }), emb);
+
+      const link = store.recordAbstractionLink({
+        sourceMemoryId: 'm-source',
+        abstractedMemoryId: 'm-abstract',
+        externalRef: 'abstraction:ext-1',
+        createdBy: 'tool:test',
+        reason: 'consent request',
+      });
+
+      expect(link.sourceMemoryId).toBe('m-source');
+      expect(link.abstractedMemoryId).toBe('m-abstract');
+      expect(link.externalRef).toBe('abstraction:ext-1');
+
+      const bySource = store.getAbstractionLinksForSourceMemory('m-source');
+      expect(bySource).toHaveLength(1);
+      expect(bySource[0].externalRef).toBe('abstraction:ext-1');
+      expect(bySource[0].externalRef).not.toBe('m-source');
+
+      const byAbstracted = store.getAbstractionLinksForAbstractedMemory('m-abstract');
+      expect(byAbstracted).toHaveLength(1);
+      expect(byAbstracted[0].sourceMemoryId).toBe('m-source');
     });
 
     it('getMemoriesByContact returns active memories for canonical contact', () => {

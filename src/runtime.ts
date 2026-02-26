@@ -52,6 +52,7 @@ import { MemoryWriter } from './memory/writer.js';
 import {
   createMemoryWriteTool,
   createMemoryImportTool,
+  createMemoryRedactTool,
   createMemoryDeleteTool,
   createUndoMemoryDeleteTool,
   createScratchpadReadTool,
@@ -434,6 +435,7 @@ export class SubstrateRuntime implements Lifecycle {
     const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
     this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
+    this.agentLoop.registerTool(createMemoryRedactTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryDeleteTool(this.memoryStore));
     this.agentLoop.registerTool(createUndoMemoryDeleteTool(this.memoryStore));
     this.agentLoop.registerTool(createScratchpadReadTool(this.memoryStore));

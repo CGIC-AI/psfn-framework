@@ -1,5 +1,10 @@
 import type { Contact, RelationshipType } from '../contacts/types.js';
-import type { PurrMemory, MemoryType, SensitivityLevel, ConsentFlags } from '../memory/types.js';
+import {
+  normalizeConsentFlags,
+  type PurrMemory,
+  type MemoryType,
+  type SensitivityLevel,
+} from '../memory/types.js';
 import type { TrustLevel } from '../trust/types.js';
 
 export interface MemoryRow {
@@ -36,7 +41,7 @@ export function mapMemoryRow(row: MemoryRow): PurrMemory {
     supersededBy: row.superseded_by ?? undefined,
     tags: JSON.parse(row.tags) as string[],
     sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
-    consentFlags: JSON.parse(row.consent_flags ?? '{}') as ConsentFlags,
+    consentFlags: normalizeConsentFlags(JSON.parse(row.consent_flags ?? '{}')),
   };
 }
 

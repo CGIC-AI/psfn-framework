@@ -43,6 +43,7 @@ import { MemoryWriter } from './memory/writer.js';
 import {
   createMemoryWriteTool,
   createMemoryImportTool,
+  createMemoryRedactTool,
   createMemoryDeleteTool,
   createUndoMemoryDeleteTool,
   createScratchpadReadTool,
@@ -422,6 +423,7 @@ async function main(): Promise<void> {
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
   agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
   agentLoop.registerTool(createMemoryImportTool(memoryWriter));
+  agentLoop.registerTool(createMemoryRedactTool(memoryWriter));
   agentLoop.registerTool(createMemoryDeleteTool(memoryStore));
   agentLoop.registerTool(createUndoMemoryDeleteTool(memoryStore));
   agentLoop.registerTool(createScratchpadReadTool(memoryStore));

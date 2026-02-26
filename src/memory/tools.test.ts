@@ -2,12 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   createMemoryWriteTool,
   createMemoryImportTool,
+  createMemoryRedactTool,
   createMemoryDeleteTool,
   createUndoMemoryDeleteTool,
   createScratchpadReadTool,
   createScratchpadWriteTool,
 } from './tools.js';
-import type { MemoryWriter, WriteResult, BatchImportResult } from './writer.js';
+import type {
+  MemoryWriter,
+  WriteResult,
+  BatchImportResult,
+  MemoryRedactionResult,
+} from './writer.js';
 import type { PurrMemory } from './types.js';
 import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
 import type { MemoryStore, MemoryDeleteVersion } from './store.js';
@@ -537,6 +543,95 @@ describe('createMemoryImportTool', () => {
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
     expect(importedRecords[0].sensitivity).toBeUndefined();
+  });
+});
+
+describe('createMemoryRedactTool', () => {
+  function makeRedaction(overrides: Partial<MemoryRedactionResult> = {}): MemoryRedactionResult {
+    return {
+      operation: 'abstracted',
+      behavior: 'abstract',
+      sourceMemoryId: 'mem-1',
+      deleteId: 'del-1',
+      abstractedMemoryId: 'mem-abstract-1',
+      abstractedText: 'Partner benefits from medication reminders during high workload periods.',
+      externalProvenanceRef: 'abstraction:ext-1',
+      ...overrides,
+    };
+  }
+
+  function mockRedactWriter(): { redact: ReturnType<typeof vi.fn> } {
+    return {
+      redact: vi.fn(),
+    };
+  }
+
+  it('returns abstraction success details', async () => {
+    const writer = mockRedactWriter();
+    writer.redact.mockResolvedValue(makeRedaction());
+
+    const tool = createMemoryRedactTool(writer as unknown as MemoryWriter);
+    const result = await tool.execute('call-1', {
+      memory_id: 'mem-1',
+      operation: 'auto',
+      reason: 'consent request',
+    });
+
+    expect(resultText(result as any)).toContain('redacted via abstraction');
+    expect(resultText(result as any)).toContain('mem-abstract-1');
+    expect(resultText(result as any)).toContain('abstraction:ext-1');
+    expect(writer.redact).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: 'mem-1',
+      operation: 'auto',
+      reason: 'consent request',
+      sourceRef: 'source:tool:memory_redact|invocation:call-1',
+    }));
+  });
+
+  it('returns delete success details', async () => {
+    const writer = mockRedactWriter();
+    writer.redact.mockResolvedValue(makeRedaction({
+      operation: 'deleted',
+      behavior: 'delete',
+      abstractedMemoryId: undefined,
+      externalProvenanceRef: undefined,
+    }));
+
+    const tool = createMemoryRedactTool(writer as unknown as MemoryWriter);
+    const result = await tool.execute('call-2', {
+      memory_id: 'mem-1',
+      operation: 'delete',
+    });
+
+    expect(resultText(result as any)).toContain('redacted via delete');
+    expect(resultText(result as any)).toContain('delete');
+  });
+
+  it('validates memory_id and operation', async () => {
+    const writer = mockRedactWriter();
+    const tool = createMemoryRedactTool(writer as unknown as MemoryWriter);
+
+    const missingId = await tool.execute('call-3', { memory_id: '   ' });
+    expect(resultText(missingId as any)).toContain('memory_id is required');
+    expect((missingId.details as any).isError).toBe(true);
+
+    const badOp = await tool.execute('call-4', {
+      memory_id: 'mem-1',
+      operation: 'purge' as any,
+    });
+    expect(resultText(badOp as any)).toContain('invalid operation');
+    expect((badOp.details as any).isError).toBe(true);
+    expect(writer.redact).not.toHaveBeenCalled();
+  });
+
+  it('returns error when memory is not found', async () => {
+    const writer = mockRedactWriter();
+    writer.redact.mockResolvedValue(null);
+
+    const tool = createMemoryRedactTool(writer as unknown as MemoryWriter);
+    const result = await tool.execute('call-5', { memory_id: 'missing' });
+    expect(resultText(result as any)).toContain('not found or already deleted');
+    expect((result.details as any).isError).toBe(true);
   });
 });
 

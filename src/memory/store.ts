@@ -1,7 +1,12 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import * as sqliteVec from 'sqlite-vec';
-import type { PurrMemory, SensitivityLevel, ConsentFlags } from './types.js';
+import {
+  normalizeConsentFlags,
+  type PurrMemory,
+  type SensitivityLevel,
+  type ConsentFlags,
+} from './types.js';
 
 const SCRATCHPAD_MAX_ENTRIES = 64;
 const SCRATCHPAD_MAX_CONTENT_CHARS = 1_000;
@@ -40,6 +45,16 @@ interface MemoryDeleteVersionRow {
   restored_by: string | null;
 }
 
+interface MemoryAbstractionLinkRow {
+  id: string;
+  source_memory_id: string;
+  abstracted_memory_id: string;
+  external_ref: string;
+  created_at: number;
+  created_by: string | null;
+  reason: string | null;
+}
+
 interface ContactProfileRow {
   contact_id: string;
   summary_text: string;
@@ -74,6 +89,16 @@ export interface MemoryDeleteVersion {
   deleteReason?: string;
   restoredAt?: number;
   restoredBy?: string;
+}
+
+export interface MemoryAbstractionLink {
+  id: string;
+  sourceMemoryId: string;
+  abstractedMemoryId: string;
+  externalRef: string;
+  createdAt: number;
+  createdBy?: string;
+  reason?: string;
 }
 
 export interface ScratchpadEntry {
@@ -122,6 +147,18 @@ function mapMemoryDeleteVersionRow(row: MemoryDeleteVersionRow): MemoryDeleteVer
   };
 }
 
+function mapMemoryAbstractionLinkRow(row: MemoryAbstractionLinkRow): MemoryAbstractionLink {
+  return {
+    id: row.id,
+    sourceMemoryId: row.source_memory_id,
+    abstractedMemoryId: row.abstracted_memory_id,
+    externalRef: row.external_ref,
+    createdAt: row.created_at,
+    createdBy: row.created_by ?? undefined,
+    reason: row.reason ?? undefined,
+  };
+}
+
 function mapMemoryRow(row: MemoryRow): PurrMemory {
   let tags: string[] = [];
   let provenanceRefs: string[] = [];
@@ -140,7 +177,7 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
     provenanceRefs = [];
   }
   try {
-    consentFlags = JSON.parse(row.consent_flags ?? '{}') as ConsentFlags;
+    consentFlags = normalizeConsentFlags(JSON.parse(row.consent_flags ?? '{}'));
   } catch {
     consentFlags = {};
   }
@@ -242,6 +279,18 @@ export class MemoryStore {
       CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_memory ON l2_memory_delete_versions(memory_id);
       CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_active ON l2_memory_delete_versions(restored_at, deleted_at);
 
+      CREATE TABLE IF NOT EXISTS l2_memory_abstraction_links (
+        id TEXT PRIMARY KEY,
+        source_memory_id TEXT NOT NULL,
+        abstracted_memory_id TEXT NOT NULL,
+        external_ref TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        created_by TEXT,
+        reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_l2_abstraction_source ON l2_memory_abstraction_links(source_memory_id);
+      CREATE INDEX IF NOT EXISTS idx_l2_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id);
+
       CREATE VIRTUAL TABLE IF NOT EXISTS l2_memory_embeddings USING vec0(
         memory_id TEXT PRIMARY KEY,
         embedding float[${this.embeddingDims}]
@@ -314,6 +363,20 @@ export class MemoryStore {
     `);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_memory ON l2_memory_delete_versions(memory_id)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_active ON l2_memory_delete_versions(restored_at, deleted_at)`);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS l2_memory_abstraction_links (
+        id TEXT PRIMARY KEY,
+        source_memory_id TEXT NOT NULL,
+        abstracted_memory_id TEXT NOT NULL,
+        external_ref TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        created_by TEXT,
+        reason TEXT
+      );
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_abstraction_source ON l2_memory_abstraction_links(source_memory_id)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id)`);
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS scratchpad_entries (
@@ -601,6 +664,85 @@ export class MemoryStore {
     `).get(deleteId) as MemoryDeleteVersionRow | undefined;
     if (!row) return undefined;
     return mapMemoryDeleteVersionRow(row);
+  }
+
+  recordAbstractionLink(
+    input: {
+      sourceMemoryId: string;
+      abstractedMemoryId: string;
+      externalRef: string;
+      createdAt?: number;
+      createdBy?: string;
+      reason?: string;
+      linkId?: string;
+    },
+  ): MemoryAbstractionLink {
+    const sourceMemoryId = input.sourceMemoryId.trim();
+    const abstractedMemoryId = input.abstractedMemoryId.trim();
+    const externalRef = input.externalRef.trim();
+    if (!sourceMemoryId || !abstractedMemoryId || !externalRef) {
+      throw new Error('sourceMemoryId, abstractedMemoryId, and externalRef are required');
+    }
+
+    const id = input.linkId?.trim() || randomUUID();
+    const createdAt = input.createdAt ?? Date.now();
+    const createdBy = input.createdBy?.trim() || undefined;
+    const reason = input.reason?.trim() || undefined;
+
+    this.db.prepare(`
+      INSERT INTO l2_memory_abstraction_links (
+        id,
+        source_memory_id,
+        abstracted_memory_id,
+        external_ref,
+        created_at,
+        created_by,
+        reason
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      sourceMemoryId,
+      abstractedMemoryId,
+      externalRef,
+      createdAt,
+      createdBy ?? null,
+      reason ?? null,
+    );
+
+    return {
+      id,
+      sourceMemoryId,
+      abstractedMemoryId,
+      externalRef,
+      createdAt,
+      createdBy,
+      reason,
+    };
+  }
+
+  getAbstractionLinksForSourceMemory(sourceMemoryId: string): MemoryAbstractionLink[] {
+    const normalized = sourceMemoryId.trim();
+    if (!normalized) return [];
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM l2_memory_abstraction_links
+      WHERE source_memory_id = ?
+      ORDER BY created_at DESC
+    `).all(normalized) as MemoryAbstractionLinkRow[];
+    return rows.map(mapMemoryAbstractionLinkRow);
+  }
+
+  getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): MemoryAbstractionLink[] {
+    const normalized = abstractedMemoryId.trim();
+    if (!normalized) return [];
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM l2_memory_abstraction_links
+      WHERE abstracted_memory_id = ?
+      ORDER BY created_at DESC
+    `).all(normalized) as MemoryAbstractionLinkRow[];
+    return rows.map(mapMemoryAbstractionLinkRow);
   }
 
   getStats(): { total: number; byType: Record<string, number>; avgSalience: number } {

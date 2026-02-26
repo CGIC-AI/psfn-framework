@@ -31,6 +31,7 @@ Variables persist across iterations. When you have the answer, call FINAL().
 - \`await memory_write(text, type, importance?, emotionalValence?, tags?)\` — Write a new memory with dedup checking
 - \`await memory_upsert(text, type, importance?, emotionalValence?, tags?)\` — Write or supersede similar existing memory
 - \`await memory_import_batch(records)\` — Import array of {text, type, importance?, emotionalValence?, tags?} records
+- \`await memory_redact(memoryId, operation?, reason?)\` — Redact memory via consent-aware auto/delete/abstract workflow
 - \`await memory_get_by_id(id)\` — Get a specific memory by its ID
 
 ### Session

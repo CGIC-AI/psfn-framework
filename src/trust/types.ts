@@ -8,10 +8,14 @@ export type SensitivityLevel = 'public' | 'personal' | 'intimate' | 'confidentia
 
 export type ChannelVisibility = 'private' | 'semi_private' | 'public' | 'broadcast';
 
+export type ConsentRedactionBehavior = 'delete' | 'abstract';
+export type MemoryRedactionOperation = 'auto' | 'delete' | 'abstract';
+
 export interface ConsentFlags {
   allowRecall?: boolean;
   allowAbstraction?: boolean;
   deleteOnRequest?: boolean;
+  redactionBehavior?: ConsentRedactionBehavior;
 }
 
 // ── Ordered constants ──
@@ -21,6 +25,8 @@ export const TRUST_LEVELS: readonly TrustLevel[] = ['primary', 'trusted', 'regul
 export const SENSITIVITY_LEVELS: readonly SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
 
 export const VALID_SENSITIVITY_LEVELS: SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
+export const VALID_CONSENT_REDACTION_BEHAVIORS: ConsentRedactionBehavior[] = ['delete', 'abstract'];
+export const VALID_MEMORY_REDACTION_OPERATIONS: MemoryRedactionOperation[] = ['auto', 'delete', 'abstract'];
 
 // ── Numeric ordering (higher = more privileged / more sensitive) ──
 
@@ -67,4 +73,67 @@ export function trustOrd(level: TrustLevel): number {
 
 export function sensitivityOrd(level: SensitivityLevel): number {
   return SENSITIVITY_ORDER[level];
+}
+
+function normalizeBehavior(value: unknown): ConsentRedactionBehavior | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'delete') return 'delete';
+  if (normalized === 'abstract') return 'abstract';
+  return undefined;
+}
+
+export function normalizeConsentFlags(input: unknown): ConsentFlags {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return {};
+  }
+
+  const source = input as Record<string, unknown>;
+  const normalized: ConsentFlags = {};
+
+  if (typeof source.allowRecall === 'boolean') {
+    normalized.allowRecall = source.allowRecall;
+  }
+  if (typeof source.allowAbstraction === 'boolean') {
+    normalized.allowAbstraction = source.allowAbstraction;
+  }
+  if (typeof source.deleteOnRequest === 'boolean') {
+    normalized.deleteOnRequest = source.deleteOnRequest;
+  }
+
+  const redactionBehavior = normalizeBehavior(source.redactionBehavior);
+  if (redactionBehavior) {
+    normalized.redactionBehavior = redactionBehavior;
+  }
+
+  return normalized;
+}
+
+export function resolveConsentRedactionBehavior(
+  flags: ConsentFlags | undefined,
+  requestedOperation: MemoryRedactionOperation = 'auto',
+): ConsentRedactionBehavior {
+  const normalized = normalizeConsentFlags(flags);
+
+  if (requestedOperation === 'delete') return 'delete';
+  if (requestedOperation === 'abstract') {
+    return normalized.allowAbstraction === false ? 'delete' : 'abstract';
+  }
+
+  if (normalized.redactionBehavior) {
+    if (normalized.redactionBehavior === 'abstract' && normalized.allowAbstraction === false) {
+      return 'delete';
+    }
+    return normalized.redactionBehavior;
+  }
+
+  if (normalized.allowAbstraction === false) {
+    return 'delete';
+  }
+
+  if (normalized.deleteOnRequest === true || normalized.allowRecall === false) {
+    return 'abstract';
+  }
+
+  return 'delete';
 }

@@ -6,8 +6,12 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
 import type { MemoryStore } from './store.js';
-import type { MemoryType, SensitivityLevel } from './types.js';
-import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
+import type { MemoryType, SensitivityLevel, MemoryRedactionOperation } from './types.js';
+import {
+  VALID_MEMORY_TYPES,
+  VALID_SENSITIVITY_LEVELS,
+  VALID_MEMORY_REDACTION_OPERATIONS,
+} from './types.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
@@ -265,6 +269,102 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
         const msg = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: 'text', text: `Error importing memories: ${msg}` }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+    },
+  };
+}
+
+export function createMemoryRedactTool(writer: MemoryWriter): AgentTool<any> {
+  return {
+    name: 'memory_redact',
+    description:
+      'Redact a memory using consent-aware behavior. ' +
+      'operation=auto uses consent flags to choose delete vs abstraction. ' +
+      'operation=delete always soft-deletes. operation=abstract keeps a generalized lesson and deletes the original.',
+    label: 'memory_redact',
+    parameters: Type.Object({
+      memory_id: Type.String({ description: 'Memory ID to redact.' }),
+      operation: Type.Optional(
+        Type.Unsafe<MemoryRedactionOperation>({
+          type: 'string',
+          enum: [...VALID_MEMORY_REDACTION_OPERATIONS],
+          description: 'auto (default), delete, or abstract.',
+        }),
+      ),
+      reason: Type.Optional(
+        Type.String({ description: 'Reason for redaction (logged in delete checkpoint and abstraction provenance).' }),
+      ),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: {
+        memory_id: string;
+        operation?: MemoryRedactionOperation;
+        reason?: string;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const internalSource = extractInternalSource(params as Record<string, unknown>);
+      const memoryId = params.memory_id?.trim();
+      if (!memoryId) {
+        return {
+          content: [{ type: 'text', text: 'Error: memory_id is required' }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+
+      const operation = params.operation ?? 'auto';
+      if (!VALID_MEMORY_REDACTION_OPERATIONS.includes(operation)) {
+        return {
+          content: [{ type: 'text', text: `Error: invalid operation "${operation}"` }] satisfies TextContent[],
+          details: { isError: true },
+        };
+      }
+
+      const sourceRef = buildToolSourceRef('memory_redact', toolCallId, internalSource);
+
+      try {
+        const redacted = await writer.redact({
+          memoryId,
+          operation,
+          reason: params.reason?.trim(),
+          requestedBy: sourceRef,
+          sourceRef,
+        });
+
+        if (!redacted) {
+          return {
+            content: [{ type: 'text', text: `Memory not found or already deleted: ${memoryId}` }] satisfies TextContent[],
+            details: { isError: true },
+          };
+        }
+
+        if (redacted.operation === 'deleted') {
+          return {
+            content: [{
+              type: 'text',
+              text:
+                `Memory redacted via delete (id: ${redacted.sourceMemoryId}, delete_id: ${redacted.deleteId}, behavior: ${redacted.behavior}).`,
+            }] satisfies TextContent[],
+            details: {},
+          };
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text:
+              `Memory redacted via abstraction (source: ${redacted.sourceMemoryId}, abstracted: ${redacted.abstractedMemoryId}, ` +
+              `delete_id: ${redacted.deleteId}, provenance_ref: ${redacted.externalProvenanceRef}).`,
+          }] satisfies TextContent[],
+          details: {},
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: 'text', text: `Error redacting memory: ${msg}` }] satisfies TextContent[],
           details: { isError: true },
         };
       }

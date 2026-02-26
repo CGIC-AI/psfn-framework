@@ -13,7 +13,7 @@ import type {
 import type { Scheduler } from './scheduler.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
-import { textResultWithError as textResult } from '../tools/results.js';
+import { textResult, textResultWithError } from '../tools/results.js';
 
 // ── Helpers ──
 
@@ -25,6 +25,10 @@ function formatMs(ms: number): string {
 }
 
 const MAX_SCHEDULED_TASKS = 50;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function formatDeliberation(config?: ReflectionDeliberationConfig): string {
   if (!config) return 'default';
@@ -66,26 +70,30 @@ export function createHeartbeatGetPolicyTool(
       'View all reflection templates in the heartbeat policy: their IDs, prompts, intervals, and enabled status.',
     parameters: Type.Object({}),
     execute: async (): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const policy = store.load();
-      const lines = [
-        `Heartbeat Policy (v${policy.version}, updated ${policy.updatedAt} by ${policy.updatedBy})`,
-        `Templates: ${policy.templates.length}`,
-        '',
-      ];
+      try {
+        const policy = store.load();
+        const lines = [
+          `Heartbeat Policy (v${policy.version}, updated ${policy.updatedAt} by ${policy.updatedBy})`,
+          `Templates: ${policy.templates.length}`,
+          '',
+        ];
 
-      for (const t of policy.templates) {
-        lines.push(`[${t.enabled ? 'ON' : 'OFF'}] ${t.id} — "${t.name}"`);
-        lines.push(`  Interval: ${formatMs(t.intervalMs)}`);
-        lines.push(`  Discord: ${t.sendToDiscord ? 'yes' : 'no'}`);
-        lines.push(`  Mode: ${t.mode ?? 'standard'}`);
-        if (t.mode === 'deliberation') {
-          lines.push(`  Deliberation: ${formatDeliberation(t.deliberation)}`);
+        for (const t of policy.templates) {
+          lines.push(`[${t.enabled ? 'ON' : 'OFF'}] ${t.id} — "${t.name}"`);
+          lines.push(`  Interval: ${formatMs(t.intervalMs)}`);
+          lines.push(`  Discord: ${t.sendToDiscord ? 'yes' : 'no'}`);
+          lines.push(`  Mode: ${t.mode ?? 'standard'}`);
+          if (t.mode === 'deliberation') {
+            lines.push(`  Deliberation: ${formatDeliberation(t.deliberation)}`);
+          }
+          lines.push(`  Prompt: ${t.prompt.slice(0, 120)}${t.prompt.length > 120 ? '...' : ''}`);
+          lines.push('');
         }
-        lines.push(`  Prompt: ${t.prompt.slice(0, 120)}${t.prompt.length > 120 ? '...' : ''}`);
-        lines.push('');
-      }
 
-      return textResult(lines.join('\n'));
+        return textResult(lines.join('\n'));
+      } catch (error) {
+        return textResultWithError(`heartbeat_get_policy failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }
@@ -161,99 +169,103 @@ export function createHeartbeatUpdatePolicyTool(
         deliberation?: ReflectionDeliberationConfig;
       },
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const policy = store.load();
+      try {
+        const policy = store.load();
 
-      // ── Add mode ──
-      if (params.action === 'add') {
-        if (!params.id || !params.name || !params.prompt || params.intervalMs === undefined) {
-          return textResult('Add requires: id, name, prompt, intervalMs', true);
+        // ── Add mode ──
+        if (params.action === 'add') {
+          if (!params.id || !params.name || !params.prompt || params.intervalMs === undefined) {
+            return textResultWithError('Add requires: id, name, prompt, intervalMs', true);
+          }
+
+          if (policy.templates.length >= store.maxTemplates) {
+            return textResultWithError(`Max ${store.maxTemplates} templates allowed`, true);
+          }
+
+          if (policy.templates.some(t => t.id === params.id)) {
+            return textResultWithError(`Template "${params.id}" already exists`, true);
+          }
+
+          const newTemplate = {
+            id: params.id,
+            name: params.name,
+            prompt: params.prompt,
+            intervalMs: params.intervalMs,
+            enabled: params.enabled ?? true,
+            sendToDiscord: params.sendToDiscord ?? false,
+            mode: params.mode ?? 'standard',
+            ...(params.deliberation ? { deliberation: cloneDeliberation(params.deliberation) } : {}),
+          };
+
+          const errors = store.validateNew(newTemplate);
+          if (errors.length > 0) {
+            return textResultWithError(
+              'Validation errors:\n' + errors.map(e => `  ${e.field}: ${e.message}`).join('\n'),
+              true,
+            );
+          }
+
+          policy.templates.push(newTemplate);
+          policy.version++;
+          policy.updatedAt = new Date().toISOString();
+          policy.updatedBy = 'agent';
+          store.save(policy);
+          syncFn();
+
+          return textResult(`Added template "${params.id}" (${formatMs(params.intervalMs)} interval)`);
         }
 
-        if (policy.templates.length >= store.maxTemplates) {
-          return textResult(`Max ${store.maxTemplates} templates allowed`, true);
+        // ── Update mode ──
+        if (!params.templateId) {
+          return textResultWithError('Provide templateId to update, or action="add" to create', true);
         }
 
-        if (policy.templates.some(t => t.id === params.id)) {
-          return textResult(`Template "${params.id}" already exists`, true);
+        const template = policy.templates.find(t => t.id === params.templateId);
+        if (!template) {
+          return textResultWithError(`Template "${params.templateId}" not found`, true);
         }
 
-        const newTemplate = {
-          id: params.id,
-          name: params.name,
-          prompt: params.prompt,
-          intervalMs: params.intervalMs,
-          enabled: params.enabled ?? true,
-          sendToDiscord: params.sendToDiscord ?? false,
-          mode: params.mode ?? 'standard',
-          ...(params.deliberation ? { deliberation: cloneDeliberation(params.deliberation) } : {}),
-        };
+        // Build update object for validation
+        const updates: Record<string, unknown> = {};
+        if (params.name !== undefined) updates.name = params.name;
+        if (params.prompt !== undefined) updates.prompt = params.prompt;
+        if (params.intervalMs !== undefined) updates.intervalMs = params.intervalMs;
+        if (params.mode !== undefined) updates.mode = params.mode;
+        if (params.deliberation !== undefined) updates.deliberation = params.deliberation;
 
-        const errors = store.validateNew(newTemplate);
-        if (errors.length > 0) {
-          return textResult(
-            'Validation errors:\n' + errors.map(e => `  ${e.field}: ${e.message}`).join('\n'),
-            true,
-          );
+        if (Object.keys(updates).length > 0) {
+          const errors = store.validateUpdate(updates);
+          if (errors.length > 0) {
+            return textResultWithError(
+              'Validation errors:\n' + errors.map(e => `  ${e.field}: ${e.message}`).join('\n'),
+              true,
+            );
+          }
         }
 
-        policy.templates.push(newTemplate);
+        // Apply changes
+        if (params.name !== undefined) template.name = params.name;
+        if (params.prompt !== undefined) template.prompt = params.prompt;
+        if (params.intervalMs !== undefined) template.intervalMs = params.intervalMs;
+        if (params.enabled !== undefined) template.enabled = params.enabled;
+        if (params.sendToDiscord !== undefined) template.sendToDiscord = params.sendToDiscord;
+        if (params.mode !== undefined) template.mode = params.mode;
+        if (params.deliberation !== undefined) template.deliberation = cloneDeliberation(params.deliberation);
+
         policy.version++;
         policy.updatedAt = new Date().toISOString();
         policy.updatedBy = 'agent';
         store.save(policy);
         syncFn();
 
-        return textResult(`Added template "${params.id}" (${formatMs(params.intervalMs)} interval)`);
+        return textResult(
+          `Updated template "${params.templateId}" — ` +
+          `${template.enabled ? 'enabled' : 'disabled'}, ` +
+          `${formatMs(template.intervalMs)} interval, mode=${template.mode ?? 'standard'}`,
+        );
+      } catch (error) {
+        return textResultWithError(`heartbeat_update_policy failed: ${errorMessage(error)}`, true);
       }
-
-      // ── Update mode ──
-      if (!params.templateId) {
-        return textResult('Provide templateId to update, or action="add" to create', true);
-      }
-
-      const template = policy.templates.find(t => t.id === params.templateId);
-      if (!template) {
-        return textResult(`Template "${params.templateId}" not found`, true);
-      }
-
-      // Build update object for validation
-      const updates: Record<string, unknown> = {};
-      if (params.name !== undefined) updates.name = params.name;
-      if (params.prompt !== undefined) updates.prompt = params.prompt;
-      if (params.intervalMs !== undefined) updates.intervalMs = params.intervalMs;
-      if (params.mode !== undefined) updates.mode = params.mode;
-      if (params.deliberation !== undefined) updates.deliberation = params.deliberation;
-
-      if (Object.keys(updates).length > 0) {
-        const errors = store.validateUpdate(updates);
-        if (errors.length > 0) {
-          return textResult(
-            'Validation errors:\n' + errors.map(e => `  ${e.field}: ${e.message}`).join('\n'),
-            true,
-          );
-        }
-      }
-
-      // Apply changes
-      if (params.name !== undefined) template.name = params.name;
-      if (params.prompt !== undefined) template.prompt = params.prompt;
-      if (params.intervalMs !== undefined) template.intervalMs = params.intervalMs;
-      if (params.enabled !== undefined) template.enabled = params.enabled;
-      if (params.sendToDiscord !== undefined) template.sendToDiscord = params.sendToDiscord;
-      if (params.mode !== undefined) template.mode = params.mode;
-      if (params.deliberation !== undefined) template.deliberation = cloneDeliberation(params.deliberation);
-
-      policy.version++;
-      policy.updatedAt = new Date().toISOString();
-      policy.updatedBy = 'agent';
-      store.save(policy);
-      syncFn();
-
-      return textResult(
-        `Updated template "${params.templateId}" — ` +
-        `${template.enabled ? 'enabled' : 'disabled'}, ` +
-        `${formatMs(template.intervalMs)} interval, mode=${template.mode ?? 'standard'}`,
-      );
     },
   };
 }
@@ -281,58 +293,62 @@ export function createScheduleTaskTool(
       _toolCallId: string,
       params: { name: string; prompt: string; delay_minutes: number },
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      if (params.delay_minutes < 1 || params.delay_minutes > 10080) {
-        return textResult('delay_minutes must be between 1 and 10080 (7 days)', true);
-      }
+      try {
+        if (params.delay_minutes < 1 || params.delay_minutes > 10080) {
+          return textResultWithError('delay_minutes must be between 1 and 10080 (7 days)', true);
+        }
 
-      if (!params.name || params.name.length === 0) {
-        return textResult('name is required', true);
-      }
+        if (!params.name || params.name.length === 0) {
+          return textResultWithError('name is required', true);
+        }
 
-      if (!params.prompt || params.prompt.length < 10) {
-        return textResult('prompt must be at least 10 characters', true);
-      }
+        if (!params.prompt || params.prompt.length < 10) {
+          return textResultWithError('prompt must be at least 10 characters', true);
+        }
 
-      // Count existing tasks
-      const allTasks = scheduler.listTasks();
-      if (allTasks.length >= MAX_SCHEDULED_TASKS) {
-        return textResult(`Max ${MAX_SCHEDULED_TASKS} total tasks allowed`, true);
-      }
+        // Count existing tasks
+        const allTasks = scheduler.listTasks();
+        if (allTasks.length >= MAX_SCHEDULED_TASKS) {
+          return textResultWithError(`Max ${MAX_SCHEDULED_TASKS} total tasks allowed`, true);
+        }
 
-      const taskId = `planned:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const runAt = Date.now() + params.delay_minutes * 60_000;
+        const taskId = `planned:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const runAt = Date.now() + params.delay_minutes * 60_000;
 
-      scheduler.register({
-        id: taskId,
-        name: params.name,
-        type: 'one-shot',
-        intervalMs: 0,
-        runAt,
-        handler: async () => {
-          try {
-            const response = await agentLoop.handleMessage({
-              id: `planned-${Date.now()}`,
-              channelId: `internal:planned:${taskId}`,
-              channelType: 'terminal',
-              authorId: 'scheduler',
-              authorName: params.name,
-              content: params.prompt,
-              timestamp: new Date(),
-            });
+        scheduler.register({
+          id: taskId,
+          name: params.name,
+          type: 'one-shot',
+          intervalMs: 0,
+          runAt,
+          handler: async () => {
+            try {
+              const response = await agentLoop.handleMessage({
+                id: `planned-${Date.now()}`,
+                channelId: `internal:planned:${taskId}`,
+                channelType: 'terminal',
+                authorId: 'scheduler',
+                authorName: params.name,
+                content: params.prompt,
+                timestamp: new Date(),
+              });
 
-            // If sender + channel available, send result to Discord
-            if (sender && heartbeatChannelId) {
-              await sender.send(heartbeatChannelId, response.content);
+              // If sender + channel available, send result to Discord
+              if (sender && heartbeatChannelId) {
+                await sender.send(heartbeatChannelId, response.content);
+              }
+            } catch (err) {
+              // Logged by scheduler's own error handling
             }
-          } catch (err) {
-            // Logged by scheduler's own error handling
-          }
-        },
-        state: 'idle',
-      });
+          },
+          state: 'idle',
+        });
 
-      const fireAt = new Date(runAt).toISOString();
-      return textResult(`Scheduled "${params.name}" to fire at ${fireAt} (in ${params.delay_minutes}m)`);
+        const fireAt = new Date(runAt).toISOString();
+        return textResult(`Scheduled "${params.name}" to fire at ${fireAt} (in ${params.delay_minutes}m)`);
+      } catch (error) {
+        return textResultWithError(`schedule_task failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }

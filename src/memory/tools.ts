@@ -3,7 +3,6 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { TextContent } from '@mariozechner/pi-ai';
 import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
 import type { MemoryStore } from './store.js';
 import type { MemoryType, SensitivityLevel, MemoryRedactionOperation } from './types.js';
@@ -12,10 +11,15 @@ import {
   VALID_SENSITIVITY_LEVELS,
   VALID_MEMORY_REDACTION_OPERATIONS,
 } from './types.js';
+import { textResult, textResultWithError } from '../tools/results.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
 const SCRATCHPAD_MAX_LIMIT = 64;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function clamp(val: number, min: number, max: number): number {
   if (isNaN(val)) return (min + max) / 2;
@@ -109,16 +113,13 @@ export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
         const { text, type } = params;
 
         if (!text || text.trim().length === 0) {
-          return {
-            content: [{ type: 'text', text: 'Error: text is required' }] satisfies TextContent[],
-            details: { isError: true },
-          };
+          return textResultWithError('Error: text is required', true);
         }
         if (!VALID_MEMORY_TYPES.includes(type)) {
-          return {
-            content: [{ type: 'text', text: `Error: invalid type "${type}". Must be one of: ${VALID_MEMORY_TYPES.join(', ')}` }] satisfies TextContent[],
-            details: { isError: true },
-          };
+          return textResultWithError(
+            `Error: invalid type "${type}". Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`,
+            true,
+          );
         }
 
         const importance = params.importance !== undefined ? clamp(Number(params.importance), 0, 1) : undefined;
@@ -142,27 +143,14 @@ export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
 
         switch (result.action) {
           case 'created':
-            return {
-              content: [{ type: 'text', text: `Memory created (id: ${result.memory.id}, type: ${type})` }] satisfies TextContent[],
-              details: {},
-            };
+            return textResult(`Memory created (id: ${result.memory.id}, type: ${type})`);
           case 'deduplicated':
-            return {
-              content: [{ type: 'text', text: `Duplicate detected — bumped salience on existing memory (id: ${result.existingId})` }] satisfies TextContent[],
-              details: {},
-            };
+            return textResult(`Duplicate detected — bumped salience on existing memory (id: ${result.existingId})`);
           case 'superseded':
-            return {
-              content: [{ type: 'text', text: `Memory created, superseding older conflicting memory (id: ${result.memory.id}, type: ${type})` }] satisfies TextContent[],
-              details: {},
-            };
+            return textResult(`Memory created, superseding older conflicting memory (id: ${result.memory.id}, type: ${type})`);
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text', text: `Error writing memory: ${msg}` }] satisfies TextContent[],
-          details: { isError: true },
-        };
+        return textResultWithError(`Error writing memory: ${errorMessage(error)}`, true);
       }
     },
   };
@@ -216,10 +204,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
         const source = params.source || 'import';
 
         if (!Array.isArray(rawRecords) || rawRecords.length === 0) {
-          return {
-            content: [{ type: 'text', text: 'Error: records must be a non-empty array' }] satisfies TextContent[],
-            details: { isError: true },
-          };
+          return textResultWithError('Error: records must be a non-empty array', true);
         }
 
         // Validate and convert records
@@ -230,16 +215,10 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
           const type = r.type as MemoryType;
 
           if (!text || text.trim().length === 0) {
-            return {
-              content: [{ type: 'text', text: `Error: record[${i}] has empty text` }] satisfies TextContent[],
-              details: { isError: true },
-            };
+            return textResultWithError(`Error: record[${i}] has empty text`, true);
           }
           if (!VALID_MEMORY_TYPES.includes(type)) {
-            return {
-              content: [{ type: 'text', text: `Error: record[${i}] has invalid type "${type}"` }] satisfies TextContent[],
-              details: { isError: true },
-            };
+            return textResultWithError(`Error: record[${i}] has invalid type "${type}"`, true);
           }
 
           records.push({
@@ -256,21 +235,12 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
 
         const result = await writer.importBatch(records);
 
-        return {
-          content: [{
-            type: 'text',
-            text:
-              `Import complete: ${result.written} written, ${result.deduplicated} deduplicated, ` +
-              `${result.superseded} superseded, ${result.errors} errors (${records.length} total)`,
-          }] satisfies TextContent[],
-          details: {},
-        };
+        return textResult(
+          `Import complete: ${result.written} written, ${result.deduplicated} deduplicated, ` +
+          `${result.superseded} superseded, ${result.errors} errors (${records.length} total)`,
+        );
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text', text: `Error importing memories: ${msg}` }] satisfies TextContent[],
-          details: { isError: true },
-        };
+        return textResultWithError(`Error importing memories: ${errorMessage(error)}`, true);
       }
     },
   };
@@ -306,26 +276,20 @@ export function createMemoryRedactTool(writer: MemoryWriter): AgentTool<any> {
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const internalSource = extractInternalSource(params as Record<string, unknown>);
-      const memoryId = params.memory_id?.trim();
-      if (!memoryId) {
-        return {
-          content: [{ type: 'text', text: 'Error: memory_id is required' }] satisfies TextContent[],
-          details: { isError: true },
-        };
-      }
-
-      const operation = params.operation ?? 'auto';
-      if (!VALID_MEMORY_REDACTION_OPERATIONS.includes(operation)) {
-        return {
-          content: [{ type: 'text', text: `Error: invalid operation "${operation}"` }] satisfies TextContent[],
-          details: { isError: true },
-        };
-      }
-
-      const sourceRef = buildToolSourceRef('memory_redact', toolCallId, internalSource);
-
       try {
+        const internalSource = extractInternalSource(params as Record<string, unknown>);
+        const memoryId = params.memory_id?.trim();
+        if (!memoryId) {
+          return textResultWithError('Error: memory_id is required', true);
+        }
+
+        const operation = params.operation ?? 'auto';
+        if (!VALID_MEMORY_REDACTION_OPERATIONS.includes(operation)) {
+          return textResultWithError(`Error: invalid operation "${operation}"`, true);
+        }
+
+        const sourceRef = buildToolSourceRef('memory_redact', toolCallId, internalSource);
+
         const redacted = await writer.redact({
           memoryId,
           operation,
@@ -335,38 +299,21 @@ export function createMemoryRedactTool(writer: MemoryWriter): AgentTool<any> {
         });
 
         if (!redacted) {
-          return {
-            content: [{ type: 'text', text: `Memory not found or already deleted: ${memoryId}` }] satisfies TextContent[],
-            details: { isError: true },
-          };
+          return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
         }
 
         if (redacted.operation === 'deleted') {
-          return {
-            content: [{
-              type: 'text',
-              text:
-                `Memory redacted via delete (id: ${redacted.sourceMemoryId}, delete_id: ${redacted.deleteId}, behavior: ${redacted.behavior}).`,
-            }] satisfies TextContent[],
-            details: {},
-          };
+          return textResult(
+            `Memory redacted via delete (id: ${redacted.sourceMemoryId}, delete_id: ${redacted.deleteId}, behavior: ${redacted.behavior}).`,
+          );
         }
 
-        return {
-          content: [{
-            type: 'text',
-            text:
-              `Memory redacted via abstraction (source: ${redacted.sourceMemoryId}, abstracted: ${redacted.abstractedMemoryId}, ` +
-              `delete_id: ${redacted.deleteId}, provenance_ref: ${redacted.externalProvenanceRef}).`,
-          }] satisfies TextContent[],
-          details: {},
-        };
+        return textResult(
+          `Memory redacted via abstraction (source: ${redacted.sourceMemoryId}, abstracted: ${redacted.abstractedMemoryId}, ` +
+          `delete_id: ${redacted.deleteId}, provenance_ref: ${redacted.externalProvenanceRef}).`,
+        );
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text', text: `Error redacting memory: ${msg}` }] satisfies TextContent[],
-          details: { isError: true },
-        };
+        return textResultWithError(`Error redacting memory: ${errorMessage(error)}`, true);
       }
     },
   };
@@ -393,41 +340,26 @@ export function createMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<any>
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const memoryId = params.memory_id?.trim();
-      if (!memoryId) {
-        return {
-          content: [{ type: 'text', text: 'Error: memory_id is required' }] satisfies TextContent[],
-          details: { isError: true },
-        };
-      }
-
       try {
+        const memoryId = params.memory_id?.trim();
+        if (!memoryId) {
+          return textResultWithError('Error: memory_id is required', true);
+        }
+
         const deleted = memoryStore.softDeleteMemory(memoryId, {
           deletedBy: 'tool:memory_delete',
           reason: params.reason?.trim(),
         });
         if (!deleted) {
-          return {
-            content: [{ type: 'text', text: `Memory not found or already deleted: ${memoryId}` }] satisfies TextContent[],
-            details: { isError: true },
-          };
+          return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
         }
 
-        return {
-          content: [{
-            type: 'text',
-            text:
-              `Memory soft-deleted (id: ${deleted.memoryId}, delete_id: ${deleted.deleteId}). ` +
-              'Use undo_memory_delete with delete_id to restore.',
-          }] satisfies TextContent[],
-          details: {},
-        };
+        return textResult(
+          `Memory soft-deleted (id: ${deleted.memoryId}, delete_id: ${deleted.deleteId}). ` +
+          'Use undo_memory_delete with delete_id to restore.',
+        );
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text', text: `Error deleting memory: ${msg}` }] satisfies TextContent[],
-          details: { isError: true },
-        };
+        return textResultWithError(`Error deleting memory: ${errorMessage(error)}`, true);
       }
     },
   };
@@ -450,38 +382,22 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const deleteId = params.delete_id?.trim();
-      if (!deleteId) {
-        return {
-          content: [{ type: 'text', text: 'Error: delete_id is required' }] satisfies TextContent[],
-          details: { isError: true },
-        };
-      }
-
       try {
+        const deleteId = params.delete_id?.trim();
+        if (!deleteId) {
+          return textResultWithError('Error: delete_id is required', true);
+        }
+
         const restored = memoryStore.undoSoftDelete(deleteId, {
           restoredBy: 'tool:undo_memory_delete',
         });
         if (!restored) {
-          return {
-            content: [{ type: 'text', text: `Delete checkpoint not found or already restored: ${deleteId}` }] satisfies TextContent[],
-            details: { isError: true },
-          };
+          return textResultWithError(`Delete checkpoint not found or already restored: ${deleteId}`, true);
         }
 
-        return {
-          content: [{
-            type: 'text',
-            text: `Memory restored (id: ${restored.memoryId}, delete_id: ${restored.deleteId}).`,
-          }] satisfies TextContent[],
-          details: {},
-        };
+        return textResult(`Memory restored (id: ${restored.memoryId}, delete_id: ${restored.deleteId}).`);
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text', text: `Error restoring memory: ${msg}` }] satisfies TextContent[],
-          details: { isError: true },
-        };
+        return textResultWithError(`Error restoring memory: ${errorMessage(error)}`, true);
       }
     },
   };
@@ -509,16 +425,9 @@ export function createScratchpadReadTool(memoryStore: MemoryStore): AgentTool<an
           ? SCRATCHPAD_DEFAULT_LIMIT
           : clampInt(params.limit, 1, SCRATCHPAD_MAX_LIMIT);
         const entries = memoryStore.listScratchpadEntries(limit);
-        return {
-          content: [{ type: 'text', text: formatScratchpadList(entries) }] satisfies TextContent[],
-          details: {},
-        };
+        return textResult(formatScratchpadList(entries));
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text', text: `Error reading scratchpad: ${msg}` }] satisfies TextContent[],
-          details: { isError: true },
-        };
+        return textResultWithError(`Error reading scratchpad: ${errorMessage(error)}`, true);
       }
     },
   };
@@ -556,90 +465,53 @@ export function createScratchpadWriteTool(memoryStore: MemoryStore): AgentTool<a
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const operation = params.operation;
-      if (!SCRATCHPAD_WRITE_OPERATIONS.includes(operation)) {
-        return {
-          content: [{ type: 'text', text: `Error: invalid operation "${operation}"` }] satisfies TextContent[],
-          details: { isError: true },
-        };
-      }
-
       try {
+        const operation = params.operation;
+        if (!SCRATCHPAD_WRITE_OPERATIONS.includes(operation)) {
+          return textResultWithError(`Error: invalid operation "${operation}"`, true);
+        }
+
         switch (operation) {
           case 'add': {
             const content = params.content?.trim();
             if (!content) {
-              return {
-                content: [{ type: 'text', text: 'Error: content is required for add' }] satisfies TextContent[],
-                details: { isError: true },
-              };
+              return textResultWithError('Error: content is required for add', true);
             }
             const result = memoryStore.addScratchpadEntry(content);
             const evictedSuffix = result.evictedIds.length > 0
               ? ` Evicted oldest ids: ${result.evictedIds.join(', ')}`
               : '';
-            return {
-              content: [{
-                type: 'text',
-                text: `Scratchpad entry added (id: ${result.entry.id}).${evictedSuffix}`,
-              }] satisfies TextContent[],
-              details: {},
-            };
+            return textResult(`Scratchpad entry added (id: ${result.entry.id}).${evictedSuffix}`);
           }
           case 'replace': {
             const id = params.id?.trim();
             const content = params.content?.trim();
             if (!id) {
-              return {
-                content: [{ type: 'text', text: 'Error: id is required for replace' }] satisfies TextContent[],
-                details: { isError: true },
-              };
+              return textResultWithError('Error: id is required for replace', true);
             }
             if (!content) {
-              return {
-                content: [{ type: 'text', text: 'Error: content is required for replace' }] satisfies TextContent[],
-                details: { isError: true },
-              };
+              return textResultWithError('Error: content is required for replace', true);
             }
             const replaced = memoryStore.replaceScratchpadEntry(id, content);
             if (!replaced) {
-              return {
-                content: [{ type: 'text', text: `Scratchpad entry not found: ${id}` }] satisfies TextContent[],
-                details: { isError: true },
-              };
+              return textResultWithError(`Scratchpad entry not found: ${id}`, true);
             }
-            return {
-              content: [{ type: 'text', text: `Scratchpad entry replaced (id: ${replaced.id}).` }] satisfies TextContent[],
-              details: {},
-            };
+            return textResult(`Scratchpad entry replaced (id: ${replaced.id}).`);
           }
           case 'remove': {
             const id = params.id?.trim();
             if (!id) {
-              return {
-                content: [{ type: 'text', text: 'Error: id is required for remove' }] satisfies TextContent[],
-                details: { isError: true },
-              };
+              return textResultWithError('Error: id is required for remove', true);
             }
             const removed = memoryStore.removeScratchpadEntry(id);
             if (!removed) {
-              return {
-                content: [{ type: 'text', text: `Scratchpad entry not found: ${id}` }] satisfies TextContent[],
-                details: { isError: true },
-              };
+              return textResultWithError(`Scratchpad entry not found: ${id}`, true);
             }
-            return {
-              content: [{ type: 'text', text: `Scratchpad entry removed (id: ${id}).` }] satisfies TextContent[],
-              details: {},
-            };
+            return textResult(`Scratchpad entry removed (id: ${id}).`);
           }
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text', text: `Error writing scratchpad: ${msg}` }] satisfies TextContent[],
-          details: { isError: true },
-        };
+        return textResultWithError(`Error writing scratchpad: ${errorMessage(error)}`, true);
       }
     },
   };

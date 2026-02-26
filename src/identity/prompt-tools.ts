@@ -12,7 +12,7 @@ import {
   IdentityCoolingOffManager,
 } from '../capabilities/safeguards.js';
 import type { CapabilityTier } from '../types.js';
-import { textResult } from '../tools/results.js';
+import { textResult, textResultWithError } from '../tools/results.js';
 
 const DEFAULT_DIFF_LINE_LIMIT = 160;
 const MAX_DIFF_LINE_LIMIT = 1_000;
@@ -24,6 +24,10 @@ interface PromptLineDiffSummary {
   removed: number;
   lines: string[];
   hiddenLineCount: number;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function resolvePromptLayerById(store: PromptLayerStore, layerId: string): PromptLayer | null {
@@ -151,19 +155,23 @@ export function createPromptLayerListTool(store: PromptLayerStore): AgentTool<an
       _toolCallId: string,
       _params: Record<string, never>,
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const layers = store.getAll();
-      if (layers.length === 0) return textResult('No prompt layers configured.');
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const layers = store.getAll();
+        if (layers.length === 0) return textResult('No prompt layers configured.');
 
-      const lines = layers.map(l => {
-        const status = l.enabled ? 'ON' : 'OFF';
-        const meta = [
-          l.channelType ? `channel=${l.channelType}` : null,
-          l.taskKind ? `task=${l.taskKind}` : null,
-        ].filter(Boolean).join(', ');
-        return `[${status}] ${l.type}/${l.name} (v${l.version}, priority=${l.priority}${meta ? ', ' + meta : ''}) -- ${l.id.slice(0, 8)}`;
-      });
-      return textResult(lines.join('\n'));
+        const lines = layers.map(l => {
+          const status = l.enabled ? 'ON' : 'OFF';
+          const meta = [
+            l.channelType ? `channel=${l.channelType}` : null,
+            l.taskKind ? `task=${l.taskKind}` : null,
+          ].filter(Boolean).join(', ');
+          return `[${status}] ${l.type}/${l.name} (v${l.version}, priority=${l.priority}${meta ? ', ' + meta : ''}) -- ${l.id.slice(0, 8)}`;
+        });
+        return textResult(lines.join('\n'));
+      } catch (error) {
+        return textResultWithError(`prompt_layer_list failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }
@@ -180,25 +188,29 @@ export function createPromptLayerGetTool(store: PromptLayerStore): AgentTool<any
       _toolCallId: string,
       params: { layer_id: string },
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const layers = store.getAll();
-      const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
-      if (!layer) return textResult(`Layer not found: ${params.layer_id}`);
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const layers = store.getAll();
+        const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
+        if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
 
-      const text = [
-        `ID: ${layer.id}`,
-        `Type: ${layer.type}`,
-        `Name: ${layer.name}`,
-        `Enabled: ${layer.enabled}`,
-        `Priority: ${layer.priority}`,
-        `Version: ${layer.version}`,
-        `Updated: ${layer.updatedAt} by ${layer.updatedBy}`,
-        `Checksum: ${layer.checksum}`,
-        layer.channelType ? `Channel: ${layer.channelType}` : null,
-        layer.taskKind ? `Task: ${layer.taskKind}` : null,
-        `\n--- Content ---\n${layer.content}`,
-      ].filter(Boolean).join('\n');
-      return textResult(text);
+        const text = [
+          `ID: ${layer.id}`,
+          `Type: ${layer.type}`,
+          `Name: ${layer.name}`,
+          `Enabled: ${layer.enabled}`,
+          `Priority: ${layer.priority}`,
+          `Version: ${layer.version}`,
+          `Updated: ${layer.updatedAt} by ${layer.updatedBy}`,
+          `Checksum: ${layer.checksum}`,
+          layer.channelType ? `Channel: ${layer.channelType}` : null,
+          layer.taskKind ? `Task: ${layer.taskKind}` : null,
+          `\n--- Content ---\n${layer.content}`,
+        ].filter(Boolean).join('\n');
+        return textResult(text);
+      } catch (error) {
+        return textResultWithError(`prompt_layer_get failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }
@@ -225,54 +237,61 @@ export function createIdentityDiffTool(store: PromptLayerStore): AgentTool<any> 
         max_diff_lines?: number;
       },
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const layer = resolvePromptLayerById(store, params.layer_id);
-      if (!layer) return textResult(`Layer not found: ${params.layer_id}`);
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const layer = resolvePromptLayerById(store, params.layer_id);
+        if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
 
-      const requestedVersion = Math.floor(params.version);
-      if (!Number.isInteger(requestedVersion) || requestedVersion <= 0) {
-        return textResult('version must be a positive integer.');
-      }
-      if (requestedVersion > layer.version) {
-        return textResult(`Version ${requestedVersion} is newer than current version ${layer.version}.`);
-      }
+        const requestedVersion = Math.floor(params.version);
+        if (!Number.isInteger(requestedVersion) || requestedVersion <= 0) {
+          return textResultWithError('version must be a positive integer.', true);
+        }
+        if (requestedVersion > layer.version) {
+          return textResultWithError(
+            `Version ${requestedVersion} is newer than current version ${layer.version}.`,
+            true,
+          );
+        }
 
-      const history = store.getLayerHistory(layer.id);
-      const baseline = resolveHistoricalPromptVersion(layer, history, requestedVersion);
-      if (!baseline) {
-        return textResult(`No prompt history entry found for version ${requestedVersion}.`);
-      }
+        const history = store.getLayerHistory(layer.id);
+        const baseline = resolveHistoricalPromptVersion(layer, history, requestedVersion);
+        if (!baseline) {
+          return textResultWithError(`No prompt history entry found for version ${requestedVersion}.`, true);
+        }
 
-      const maxDiffLines = normalizeOptionalBoundedInteger(
-        params.max_diff_lines,
-        DEFAULT_DIFF_LINE_LIMIT,
-        1,
-        MAX_DIFF_LINE_LIMIT,
-      );
-      const diff = buildPromptLineDiff(baseline.content, layer.content, maxDiffLines);
+        const maxDiffLines = normalizeOptionalBoundedInteger(
+          params.max_diff_lines,
+          DEFAULT_DIFF_LINE_LIMIT,
+          1,
+          MAX_DIFF_LINE_LIMIT,
+        );
+        const diff = buildPromptLineDiff(baseline.content, layer.content, maxDiffLines);
 
-      const lines = [
-        `Identity diff for ${layer.type}/${layer.name} (${layer.id.slice(0, 8)})`,
-        `Compared versions: v${requestedVersion} -> v${layer.version}`,
-        `Checksums: ${baseline.checksum} -> ${layer.checksum}`,
-        `Changed lines: +${diff.added} / -${diff.removed}`,
-      ];
+        const lines = [
+          `Identity diff for ${layer.type}/${layer.name} (${layer.id.slice(0, 8)})`,
+          `Compared versions: v${requestedVersion} -> v${layer.version}`,
+          `Checksums: ${baseline.checksum} -> ${layer.checksum}`,
+          `Changed lines: +${diff.added} / -${diff.removed}`,
+        ];
 
-      if (requestedVersion === layer.version) {
-        lines.push('No changes: requested version is the current version.');
+        if (requestedVersion === layer.version) {
+          lines.push('No changes: requested version is the current version.');
+          return textResult(lines.join('\n'));
+        }
+
+        if (diff.lines.length === 0) {
+          lines.push('No textual changes between these versions (metadata-only update).');
+          return textResult(lines.join('\n'));
+        }
+
+        lines.push('', '--- Diff ---', ...diff.lines);
+        if (diff.hiddenLineCount > 0) {
+          lines.push(`... ${diff.hiddenLineCount} more changed line(s) omitted.`);
+        }
         return textResult(lines.join('\n'));
+      } catch (error) {
+        return textResultWithError(`identity_diff failed: ${errorMessage(error)}`, true);
       }
-
-      if (diff.lines.length === 0) {
-        lines.push('No textual changes between these versions (metadata-only update).');
-        return textResult(lines.join('\n'));
-      }
-
-      lines.push('', '--- Diff ---', ...diff.lines);
-      if (diff.hiddenLineCount > 0) {
-        lines.push(`... ${diff.hiddenLineCount} more changed line(s) omitted.`);
-      }
-      return textResult(lines.join('\n'));
     },
   }, 'identity.read');
 }
@@ -297,63 +316,67 @@ export function createIdentityChangelogTool(store: PromptLayerStore): AgentTool<
         limit?: number;
       },
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const limit = normalizeOptionalBoundedInteger(
-        params.limit,
-        DEFAULT_CHANGELOG_LIMIT,
-        1,
-        MAX_CHANGELOG_LIMIT,
-      );
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const limit = normalizeOptionalBoundedInteger(
+          params.limit,
+          DEFAULT_CHANGELOG_LIMIT,
+          1,
+          MAX_CHANGELOG_LIMIT,
+        );
 
-      const layerFilter = typeof params.layer_id === 'string' && params.layer_id.trim().length > 0
-        ? resolvePromptLayerById(store, params.layer_id)
-        : null;
-      if (params.layer_id && !layerFilter) {
-        return textResult(`Layer not found: ${params.layer_id}`);
+        const layerFilter = typeof params.layer_id === 'string' && params.layer_id.trim().length > 0
+          ? resolvePromptLayerById(store, params.layer_id)
+          : null;
+        if (params.layer_id && !layerFilter) {
+          return textResultWithError(`Layer not found: ${params.layer_id}`, true);
+        }
+
+        const history = layerFilter
+          ? store.getLayerHistory(layerFilter.id)
+          : store.getHistory();
+        if (history.length === 0) {
+          return textResult('No prompt changes recorded yet.');
+        }
+
+        const layerTypeById = new Map(store.getAll().map(layer => [layer.id, layer.type]));
+        const sorted = [...history].sort((left, right) => {
+          const timeDelta = new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime();
+          if (timeDelta !== 0) return timeDelta;
+          return right.version - left.version;
+        });
+
+        const selected = sorted.slice(0, limit);
+        const heading = layerFilter
+          ? `Identity changelog for ${layerFilter.type}/${layerFilter.name} (${layerFilter.id.slice(0, 8)})`
+          : 'Identity changelog for all prompt layers';
+
+        const lines = selected.map(entry => {
+          const lineDelta = countLineChanges(entry.previousContent, entry.newContent);
+          const layerType = layerTypeById.get(entry.layerId) ?? 'unknown';
+          const reason = entry.reason ?? 'unspecified';
+          const deltaSummary = (lineDelta.added === 0 && lineDelta.removed === 0)
+            ? 'metadata-only'
+            : `+${lineDelta.added}/-${lineDelta.removed} lines`;
+          return [
+            `- ${entry.timestamp}`,
+            `${layerType}/${entry.layerName}`,
+            `v${entry.version}->v${entry.version + 1}`,
+            `by ${entry.updatedBy}`,
+            `what: ${deltaSummary}`,
+            `why: ${reason}`,
+          ].join(' | ');
+        });
+
+        const hiddenCount = sorted.length - selected.length;
+        if (hiddenCount > 0) {
+          lines.push(`... ${hiddenCount} older change(s) omitted.`);
+        }
+
+        return textResult([heading, ...lines].join('\n'));
+      } catch (error) {
+        return textResultWithError(`identity_changelog failed: ${errorMessage(error)}`, true);
       }
-
-      const history = layerFilter
-        ? store.getLayerHistory(layerFilter.id)
-        : store.getHistory();
-      if (history.length === 0) {
-        return textResult('No prompt changes recorded yet.');
-      }
-
-      const layerTypeById = new Map(store.getAll().map(layer => [layer.id, layer.type]));
-      const sorted = [...history].sort((left, right) => {
-        const timeDelta = new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime();
-        if (timeDelta !== 0) return timeDelta;
-        return right.version - left.version;
-      });
-
-      const selected = sorted.slice(0, limit);
-      const heading = layerFilter
-        ? `Identity changelog for ${layerFilter.type}/${layerFilter.name} (${layerFilter.id.slice(0, 8)})`
-        : 'Identity changelog for all prompt layers';
-
-      const lines = selected.map(entry => {
-        const lineDelta = countLineChanges(entry.previousContent, entry.newContent);
-        const layerType = layerTypeById.get(entry.layerId) ?? 'unknown';
-        const reason = entry.reason ?? 'unspecified';
-        const deltaSummary = (lineDelta.added === 0 && lineDelta.removed === 0)
-          ? 'metadata-only'
-          : `+${lineDelta.added}/-${lineDelta.removed} lines`;
-        return [
-          `- ${entry.timestamp}`,
-          `${layerType}/${entry.layerName}`,
-          `v${entry.version}->v${entry.version + 1}`,
-          `by ${entry.updatedBy}`,
-          `what: ${deltaSummary}`,
-          `why: ${reason}`,
-        ].join(' | ');
-      });
-
-      const hiddenCount = sorted.length - selected.length;
-      if (hiddenCount > 0) {
-        lines.push(`... ${hiddenCount} older change(s) omitted.`);
-      }
-
-      return textResult([heading, ...lines].join('\n'));
     },
   }, 'identity.read');
 }
@@ -399,103 +422,108 @@ export function createPromptLayerUpdateTool(
         stage_id?: string;
       },
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const action = params.action ?? 'update';
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const action = params.action ?? 'update';
 
-      if (action === 'cancel' || action === 'commit') {
-        if (!identityCoolingOff) {
-          return textResult('Identity cooling-off safeguard is not configured.');
-        }
-        const stageId = params.stage_id?.trim();
-        if (!stageId) {
-          return textResult('stage_id is required for commit/cancel actions.');
-        }
+        if (action === 'cancel' || action === 'commit') {
+          if (!identityCoolingOff) {
+            return textResultWithError('Identity cooling-off safeguard is not configured.', true);
+          }
+          const stageId = params.stage_id?.trim();
+          if (!stageId) {
+            return textResultWithError('stage_id is required for commit/cancel actions.', true);
+          }
 
-        if (action === 'cancel') {
-          const cancelled = identityCoolingOff.cancel(stageId);
-          if (cancelled.status === 'not_found') {
-            return textResult(`Stage not found: ${stageId}`);
+          if (action === 'cancel') {
+            const cancelled = identityCoolingOff.cancel(stageId);
+            if (cancelled.status === 'not_found') {
+              return textResultWithError(`Stage not found: ${stageId}`, true);
+            }
+            if (cancelled.status === 'already_committed') {
+              return textResultWithError(`Stage already committed: ${stageId}`, true);
+            }
+            if (cancelled.status === 'already_cancelled') {
+              return textResultWithError(`Stage already cancelled: ${stageId}`, true);
+            }
+            return textResult(`Cancelled staged base-layer update (stage_id: ${stageId}).`);
           }
-          if (cancelled.status === 'already_committed') {
-            return textResult(`Stage already committed: ${stageId}`);
-          }
-          if (cancelled.status === 'already_cancelled') {
-            return textResult(`Stage already cancelled: ${stageId}`);
-          }
-          return textResult(`Cancelled staged base-layer update (stage_id: ${stageId}).`);
-        }
 
-        const readiness = identityCoolingOff.checkReady(stageId);
-        if (readiness.status === 'not_found') {
-          return textResult(`Stage not found: ${stageId}`);
-        }
-        if (readiness.status === 'already_cancelled') {
-          return textResult(`Stage already cancelled: ${stageId}`);
-        }
-        if (readiness.status === 'already_committed') {
-          return textResult(`Stage already committed: ${stageId}`);
-        }
-        if (readiness.status === 'cooling_off') {
-          const waitSeconds = Math.max(1, Math.ceil((readiness.waitMs ?? 0) / 1000));
+          const readiness = identityCoolingOff.checkReady(stageId);
+          if (readiness.status === 'not_found') {
+            return textResultWithError(`Stage not found: ${stageId}`, true);
+          }
+          if (readiness.status === 'already_cancelled') {
+            return textResultWithError(`Stage already cancelled: ${stageId}`, true);
+          }
+          if (readiness.status === 'already_committed') {
+            return textResultWithError(`Stage already committed: ${stageId}`, true);
+          }
+          if (readiness.status === 'cooling_off') {
+            const waitSeconds = Math.max(1, Math.ceil((readiness.waitMs ?? 0) / 1000));
+            return textResultWithError(
+              `Stage ${stageId} is still cooling off (${waitSeconds}s remaining).`,
+              true,
+            );
+          }
+
+          const committed = identityCoolingOff.markCommitted(stageId);
+          if (committed.status !== 'ready' || !committed.stage) {
+            return textResultWithError(`Unable to commit stage ${stageId}.`, true);
+          }
+
+          const layer = store.getById(committed.stage.layerId);
+          if (!layer) return textResultWithError(`Layer not found: ${committed.stage.layerId}`, true);
+
+          const reason = normalizeReason(params.reason) ?? 'Committed staged prompt-layer update via prompt_layer_update';
+          const updated = store.update(
+            layer.id,
+            committed.stage.nextContent,
+            'agent',
+            {},
+            reason,
+          );
           return textResult(
-            `Stage ${stageId} is still cooling off (${waitSeconds}s remaining).`,
+            `Committed staged update for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
           );
         }
 
-        const committed = identityCoolingOff.markCommitted(stageId);
-        if (committed.status !== 'ready' || !committed.stage) {
-          return textResult(`Unable to commit stage ${stageId}.`);
+        const layerId = params.layer_id?.trim();
+        const content = params.content;
+        if (!layerId) return textResultWithError('layer_id is required.', true);
+        if (typeof content !== 'string') return textResultWithError('content is required.', true);
+
+        const layer = resolvePromptLayerById(store, layerId);
+        if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+
+        const tier = getCapabilityTier();
+        const needsCoolingOff = (
+          layer.type === 'base'
+          && (tier === 'nursery' || tier === 'apprentice')
+          && !!identityCoolingOff
+        );
+        if (needsCoolingOff) {
+          const staged = identityCoolingOff.stageBaseLayerEdit({
+            layerId: layer.id,
+            layerName: layer.name,
+            previousContent: layer.content,
+            nextContent: content,
+            requestedBy: 'agent',
+            tier,
+          });
+          return textResult(
+            `Staged base-layer update (stage_id: ${staged.id}). ` +
+            `Cooling-off until ${new Date(staged.readyAt).toISOString()}. ` +
+            'Use prompt_layer_update with action=commit and stage_id to apply, or action=cancel to abort.',
+          );
         }
 
-        const layer = store.getById(committed.stage.layerId);
-        if (!layer) return textResult(`Layer not found: ${committed.stage.layerId}`);
-
-        const reason = normalizeReason(params.reason) ?? 'Committed staged prompt-layer update via prompt_layer_update';
-        const updated = store.update(
-          layer.id,
-          committed.stage.nextContent,
-          'agent',
-          {},
-          reason,
-        );
-        return textResult(
-          `Committed staged update for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
-        );
+        const reason = normalizeReason(params.reason) ?? 'Prompt layer updated via prompt_layer_update';
+        const updated = store.update(layer.id, content, 'agent', {}, reason);
+        return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
+      } catch (error) {
+        return textResultWithError(`prompt_layer_update failed: ${errorMessage(error)}`, true);
       }
-
-      const layerId = params.layer_id?.trim();
-      const content = params.content;
-      if (!layerId) return textResult('layer_id is required.');
-      if (typeof content !== 'string') return textResult('content is required.');
-
-      const layer = resolvePromptLayerById(store, layerId);
-      if (!layer) return textResult(`Layer not found: ${layerId}`);
-
-      const tier = getCapabilityTier();
-      const needsCoolingOff = (
-        layer.type === 'base'
-        && (tier === 'nursery' || tier === 'apprentice')
-        && !!identityCoolingOff
-      );
-      if (needsCoolingOff) {
-        const staged = identityCoolingOff.stageBaseLayerEdit({
-          layerId: layer.id,
-          layerName: layer.name,
-          previousContent: layer.content,
-          nextContent: content,
-          requestedBy: 'agent',
-          tier,
-        });
-        return textResult(
-          `Staged base-layer update (stage_id: ${staged.id}). ` +
-          `Cooling-off until ${new Date(staged.readyAt).toISOString()}. ` +
-          'Use prompt_layer_update with action=commit and stage_id to apply, or action=cancel to abort.',
-        );
-      }
-
-      const reason = normalizeReason(params.reason) ?? 'Prompt layer updated via prompt_layer_update';
-      const updated = store.update(layer.id, content, 'agent', {}, reason);
-      return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
     },
   };
 
@@ -524,13 +552,17 @@ export function createPromptLayerToggleTool(store: PromptLayerStore): AgentTool<
       _toolCallId: string,
       params: { layer_id: string },
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const layers = store.getAll();
-      const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
-      if (!layer) return textResult(`Layer not found: ${params.layer_id}`);
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const layers = store.getAll();
+        const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
+        if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
 
-      const toggled = store.toggle(layer.id);
-      return textResult(`Layer "${toggled.name}" is now ${toggled.enabled ? 'enabled' : 'disabled'}`);
+        const toggled = store.toggle(layer.id);
+        return textResult(`Layer "${toggled.name}" is now ${toggled.enabled ? 'enabled' : 'disabled'}`);
+      } catch (error) {
+        return textResultWithError(`prompt_layer_toggle failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 

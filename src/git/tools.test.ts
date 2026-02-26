@@ -80,6 +80,17 @@ describe('git tools', () => {
       expect(text).toContain('No staged changes');
       expect(text).toContain('No unstaged modifications');
     });
+
+    it('returns canonical error when status throws', async () => {
+      mockOps.status.mockRejectedValueOnce(new Error('status failed'));
+
+      const tool = createRepoStatusTool(mockOps);
+      const result = await tool.execute('call-status-error', {});
+
+      expect(resultText(result)).toContain('repo_status failed');
+      expect(resultText(result)).toContain('status failed');
+      expect(result.details?.isError).toBe(true);
+    });
   });
 
   // ── repo_diff ──
@@ -125,6 +136,17 @@ describe('git tools', () => {
 
       expect(text).toBe('No changes detected.');
     });
+
+    it('returns canonical error when diff throws', async () => {
+      mockOps.diff.mockRejectedValueOnce(new Error('diff failed'));
+
+      const tool = createRepoDiffTool(mockOps);
+      const result = await tool.execute('call-diff-error', {});
+
+      expect(resultText(result)).toContain('repo_diff failed');
+      expect(resultText(result)).toContain('diff failed');
+      expect(result.details?.isError).toBe(true);
+    });
   });
 
   // ── repo_apply_patch ──
@@ -139,6 +161,20 @@ describe('git tools', () => {
 
       expect(mockOps.applyPatch).toHaveBeenCalledWith('src/foo.ts', 'new content');
       expect(resultText(result)).toContain('Applied and staged: src/foo.ts');
+    });
+
+    it('returns canonical error when applyPatch throws', async () => {
+      mockOps.applyPatch.mockRejectedValueOnce(new Error('patch failed'));
+
+      const tool = createRepoApplyPatchTool(mockOps);
+      const result = await tool.execute('call-apply-error', {
+        file_path: 'src/foo.ts',
+        content: 'new content',
+      });
+
+      expect(resultText(result)).toContain('repo_apply_patch failed');
+      expect(resultText(result)).toContain('patch failed');
+      expect(result.details?.isError).toBe(true);
     });
   });
 
@@ -165,6 +201,20 @@ describe('git tools', () => {
       expect(text).toContain('abc1234');
       expect(text).toContain('2 files changed');
     });
+
+    it('returns canonical error when commit throws', async () => {
+      mockOps.commit.mockRejectedValueOnce(new Error('commit failed'));
+
+      const tool = createRepoCommitTool(mockOps);
+      const result = await tool.execute('call-commit-error', {
+        message: 'Fix bug',
+        intent: 'fix bug',
+      });
+
+      expect(resultText(result)).toContain('repo_commit failed');
+      expect(resultText(result)).toContain('commit failed');
+      expect(result.details?.isError).toBe(true);
+    });
   });
 
   // ── repo_create_branch ──
@@ -187,6 +237,17 @@ describe('git tools', () => {
       await tool.execute('call-1', { name: 'feature/new', start_point: 'develop' });
 
       expect(mockOps.createBranch).toHaveBeenCalledWith('feature/new', 'develop');
+    });
+
+    it('returns canonical error when createBranch throws', async () => {
+      mockOps.createBranch.mockRejectedValueOnce(new Error('branch failed'));
+
+      const tool = createRepoCreateBranchTool(mockOps);
+      const result = await tool.execute('call-branch-error', { name: 'feature/new' });
+
+      expect(resultText(result)).toContain('repo_create_branch failed');
+      expect(resultText(result)).toContain('branch failed');
+      expect(result.details?.isError).toBe(true);
     });
   });
 
@@ -217,6 +278,20 @@ describe('git tools', () => {
       });
 
       expect(mockOps.openPR).toHaveBeenCalledWith('Title', 'Body', 'develop');
+    });
+
+    it('returns canonical error when openPR throws', async () => {
+      mockOps.openPR.mockRejectedValueOnce(new Error('pr failed'));
+
+      const tool = createRepoOpenPRTool(mockOps);
+      const result = await tool.execute('call-pr-error', {
+        title: 'Title',
+        body: 'Body',
+      });
+
+      expect(resultText(result)).toContain('repo_open_pr failed');
+      expect(resultText(result)).toContain('pr failed');
+      expect(result.details?.isError).toBe(true);
     });
   });
 });

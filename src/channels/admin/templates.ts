@@ -20,6 +20,7 @@ export { confirmationsPage, confirmationQueueFragment } from './templates/confir
 export { contactsPage, contactRow, contactEditForm, contactMutationAuditFragment } from './templates/contacts.js';
 export { chatPage } from './templates/chat.js';
 export { eventsPage, eventItem, auditTimelinePage, auditTimelineItem } from './templates/events.js';
+export { valuesTimelinePage, valuesTimelineItem } from './templates/values.js';
 export {
   promptsPage,
   promptRegistryFragment,

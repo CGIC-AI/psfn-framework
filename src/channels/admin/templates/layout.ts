@@ -14,6 +14,7 @@ const navItems = [
   { href: '/skills', label: 'Skills', id: 'skills' },
   { href: '/prompts', label: 'Prompt Soil', id: 'prompts' },
   { href: '/primer', label: 'Garden Primer', id: 'primer' },
+  { href: '/values', label: 'Values Timeline', id: 'values' },
   { href: '/events', label: 'Audit Timeline', id: 'events' },
 ];
 

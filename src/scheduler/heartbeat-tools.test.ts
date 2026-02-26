@@ -53,6 +53,7 @@ describe('heartbeat_get_policy', () => {
     expect(text).toContain('daily-review');
     expect(text).toContain('emotional-check');
     expect(text).toContain('goal-update');
+    expect(text).toContain('values-reflection');
     expect(text).toContain('[ON]');
     expect(text).toContain('Interval:');
     expect(text).toContain('Discord: yes');
@@ -181,7 +182,7 @@ describe('heartbeat_update_policy', () => {
     expect(syncFn).toHaveBeenCalled();
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
     const added = policy.templates.find(t => t.id === 'custom-check');
     expect(added).toBeDefined();
     expect(added!.enabled).toBe(true);

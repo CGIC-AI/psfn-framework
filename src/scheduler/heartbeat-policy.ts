@@ -110,6 +110,14 @@ function getDefaults(): HeartbeatPolicy {
         enabled: true,
         sendToDiscord: false,
       },
+      {
+        id: 'values-reflection',
+        name: 'Values Reflection',
+        prompt: 'Pause and reflect on what matters to you right now. Name the values guiding you today, explain why they matter, and note how recent interactions reinforced or challenged them.',
+        intervalMs: 24 * 60 * 60_000, // 24 hours
+        enabled: true,
+        sendToDiscord: false,
+      },
     ],
     version: 1,
     updatedAt: new Date().toISOString(),

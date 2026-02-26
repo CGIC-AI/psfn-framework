@@ -27,6 +27,8 @@ import { createComponentLogger } from '../logger.js';
 const log = createComponentLogger('ContactStore');
 const LEGACY_DISCORD_CHANNEL = 'discord';
 const DEFAULT_LINK_VERIFICATION_TTL_MS = 5 * 60_000;
+const DEFAULT_EMOTIONAL_CONFIDENCE = 0.7;
+const DEFAULT_SESSION_MOOD_LEARNING_RATE = 0.55;
 
 interface ContactRow {
   id: string;
@@ -359,6 +361,67 @@ export class ContactStore {
     const trimmed = actor?.trim();
     if (!trimmed) return 'system:unknown';
     return trimmed.slice(0, 120);
+  }
+
+  private clampUnit(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(-1, Math.min(1, value));
+  }
+
+  private clampProbability(value: number): number {
+    if (!Number.isFinite(value)) return DEFAULT_EMOTIONAL_CONFIDENCE;
+    return Math.max(0, Math.min(1, value));
+  }
+
+  private normalizeCount(value: number | undefined): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.floor(value as number));
+  }
+
+  private round(value: number, precision = 4): number {
+    if (!Number.isFinite(value)) return 0;
+    const factor = 10 ** precision;
+    return Math.round(value * factor) / factor;
+  }
+
+  private resolveEmotionalBaselineLearningRate(sampleCount: number): number {
+    if (sampleCount <= 0) return 0.4;
+    if (sampleCount < 5) return 0.3;
+    if (sampleCount < 15) return 0.2;
+    return 0.12;
+  }
+
+  private parseMoodSnapshot(
+    baseline: Record<string, number> | undefined,
+  ): {
+    baselineValence: number;
+    moodValence: number;
+    moodDrift: number;
+    moodSamples: number;
+    lastMoodUpdateEpochMs?: number;
+  } {
+    const baselineRecord = baseline ?? {};
+    const baselineValence = this.clampUnit(
+      baselineRecord.valenceBaseline ?? baselineRecord.moodBaseline ?? 0,
+    );
+    const moodValence = this.clampUnit(
+      baselineRecord.moodValence ?? baselineRecord.sessionMoodValence ?? baselineValence,
+    );
+    const moodDrift = Number.isFinite(baselineRecord.moodDrift)
+      ? this.clampUnit(baselineRecord.moodDrift)
+      : this.clampUnit(moodValence - baselineValence);
+    const moodSamples = this.normalizeCount(baselineRecord.moodSamples);
+    const lastMoodUpdateEpochMs = Number.isFinite(baselineRecord.lastMoodUpdateEpochMs)
+      ? Math.max(0, Math.floor(baselineRecord.lastMoodUpdateEpochMs))
+      : undefined;
+
+    return {
+      baselineValence,
+      moodValence,
+      moodDrift,
+      moodSamples,
+      lastMoodUpdateEpochMs,
+    };
   }
 
   private appendMutationAuditEntry(
@@ -1204,6 +1267,93 @@ export class ContactStore {
     this.db.prepare('UPDATE contacts SET notes = ? WHERE id = ?').run(notes, id);
     this.appendMutationAuditEntry(id, 'notes', previousNotes, notes, actor);
     return true;
+  }
+
+  /**
+   * Learn/update the contact's emotional baseline from observed interaction signals.
+   * Uses slower EWMA for long-term baseline and faster EWMA for intra-session mood drift.
+   */
+  updateEmotionalBaseline(
+    id: string,
+    observation: {
+      valence: number;
+      confidence?: number;
+      observedAtMs?: number;
+    },
+  ): Contact | undefined {
+    const contact = this.getById(id);
+    if (!contact) return undefined;
+
+    const baseline = { ...(contact.emotionalBaseline ?? {}) };
+    const snapshot = this.parseMoodSnapshot(baseline);
+    const observedValence = this.clampUnit(observation.valence);
+    const confidence = this.clampProbability(observation.confidence ?? DEFAULT_EMOTIONAL_CONFIDENCE);
+    const confidenceWeight = 0.5 + (confidence * 0.5);
+    const baselineLearningRate = this.resolveEmotionalBaselineLearningRate(snapshot.moodSamples) * confidenceWeight;
+    const moodLearningRate = DEFAULT_SESSION_MOOD_LEARNING_RATE * confidenceWeight;
+
+    const updatedBaselineValence = this.round(
+      snapshot.baselineValence + ((observedValence - snapshot.baselineValence) * baselineLearningRate),
+    );
+    const updatedMoodValence = this.round(
+      snapshot.moodValence + ((observedValence - snapshot.moodValence) * moodLearningRate),
+    );
+    const updatedMoodDrift = this.round(updatedMoodValence - updatedBaselineValence);
+    const observedAtMs = Number.isFinite(observation.observedAtMs)
+      ? Math.max(0, Math.floor(observation.observedAtMs as number))
+      : Date.now();
+
+    const updatedBaseline: Record<string, number> = {
+      ...baseline,
+      valenceBaseline: updatedBaselineValence,
+      moodValence: updatedMoodValence,
+      moodDrift: updatedMoodDrift,
+      lastObservedValence: this.round(observedValence),
+      emotionalConfidence: this.round(confidence),
+      moodSamples: snapshot.moodSamples + 1,
+      lastMoodUpdateEpochMs: observedAtMs,
+    };
+
+    this.db.prepare(`
+      UPDATE contacts
+      SET emotional_baseline = ?, last_seen = ?
+      WHERE id = ?
+    `).run(
+      JSON.stringify(updatedBaseline),
+      new Date().toISOString(),
+      id,
+    );
+
+    return this.getById(id);
+  }
+
+  /**
+   * Read the current emotional continuity snapshot for a contact.
+   * Returns undefined when no contact exists or no mood signal has been learned yet.
+   */
+  getEmotionalSnapshot(
+    id: string,
+  ): {
+    baselineValence: number;
+    moodValence: number;
+    moodDrift: number;
+    moodSamples: number;
+    lastMoodUpdateEpochMs?: number;
+  } | undefined {
+    const contact = this.getById(id);
+    if (!contact) return undefined;
+
+    const snapshot = this.parseMoodSnapshot(contact.emotionalBaseline);
+    if (
+      snapshot.moodSamples === 0
+      && Math.abs(snapshot.baselineValence) < 1e-6
+      && Math.abs(snapshot.moodValence) < 1e-6
+      && snapshot.lastMoodUpdateEpochMs === undefined
+    ) {
+      return undefined;
+    }
+
+    return snapshot;
   }
 
   /** Update a contact's relationship type. Returns false if not found. */

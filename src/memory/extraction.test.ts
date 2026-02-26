@@ -912,6 +912,86 @@ describe('MemoryExtractor canonical profile synthesis', () => {
   });
 });
 
+describe('MemoryExtractor emotional state persistence', () => {
+  it('updates canonical contact emotional baseline from accepted emotional signals', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User felt anxious and overwhelmed during the incident</text>
+<type>emotional</type>
+<importance>0.88</importance>
+<emotional_valence>-0.7</emotional_valence>
+<confidence>0.91</confidence>
+<tags>emotion,stress</tags>
+</fact>
+</response>`,
+      }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'I am anxious and overwhelmed right now', authorName: 'user' },
+      ]),
+      getMessageCount: vi.fn().mockReturnValue(1),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      searchByEmbedding: vi.fn().mockReturnValue([]),
+      insertMemory: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const contactStore = {
+      updateEmotionalBaseline: vi.fn().mockReturnValue({
+        id: 'contact-canonical-1',
+        emotionalBaseline: {
+          valenceBaseline: -0.28,
+          moodValence: -0.49,
+          moodDrift: -0.21,
+          moodSamples: 3,
+        },
+      }),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+      null,
+      null,
+      contactStore,
+    );
+
+    await extractor.extract('api:mood-test', 'contact-canonical-1');
+
+    expect(contactStore.updateEmotionalBaseline).toHaveBeenCalledTimes(1);
+    expect(contactStore.updateEmotionalBaseline).toHaveBeenCalledWith(
+      'contact-canonical-1',
+      expect.objectContaining({
+        valence: expect.any(Number),
+        confidence: expect.any(Number),
+        observedAtMs: expect.any(Number),
+      }),
+    );
+    const observedValence = contactStore.updateEmotionalBaseline.mock.calls[0][1].valence as number;
+    expect(observedValence).toBeLessThan(0);
+  });
+});
+
 describe('MemoryExtractor crash recovery markers', () => {
   it('queues pre-compaction extraction over provided compacted entries', async () => {
     const llmClient = {

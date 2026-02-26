@@ -12,6 +12,7 @@ import { AgentLoop } from '../agent-loop.js';
 import { MemoryRetriever } from '../memory/retrieval.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import type { MemoryStore } from '../memory/store.js';
+import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
 import { createSpawnShardTool } from '../shards/tools.js';
 import { createThinkTool } from '../repl/tools.js';
@@ -109,12 +110,25 @@ export interface MemoryRuntimeOptions {
   eventBus: EventBus;
   config?: SubstrateConfig;
   promptRegistry?: PromptRegistryStore | null;
+  contactStore?: ContactStore | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
   options.agentLoop.memoryProvider = options.config
-    ? new MemoryRetriever(options.memoryStore, options.embeddingService, options.config)
-    : new MemoryRetriever(options.memoryStore, options.embeddingService);
+    ? new MemoryRetriever(
+      options.memoryStore,
+      options.embeddingService,
+      options.config,
+      undefined,
+      options.contactStore ?? null,
+    )
+    : new MemoryRetriever(
+      options.memoryStore,
+      options.embeddingService,
+      undefined,
+      undefined,
+      options.contactStore ?? null,
+    );
 
   const memoryExtractor = options.config
     ? new MemoryExtractor(
@@ -125,6 +139,8 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.eventBus,
       options.config,
       options.promptRegistry ?? null,
+      undefined,
+      options.contactStore ?? null,
     )
     : new MemoryExtractor(
       options.llmProvider,
@@ -134,6 +150,8 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.eventBus,
       undefined,
       options.promptRegistry ?? null,
+      undefined,
+      options.contactStore ?? null,
     );
   options.sessionManager.setPreCompactionExtractionHandler(async ({
     channelId,

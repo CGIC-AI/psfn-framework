@@ -11,6 +11,7 @@ import { countMessageTokens } from '../llm/tokens.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
 import { createComponentLogger } from '../logger.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
+import type { ContactStore } from '../contacts/store.js';
 import {
   EXTRACTION_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
@@ -110,6 +111,11 @@ interface AcceptedFactCandidate {
   index: number;
 }
 
+interface EmotionalSignal {
+  valence: number;
+  confidence: number;
+}
+
 const DEFAULT_MIN_IMPORTANCE = 0.45;
 const DEFAULT_MIN_CONFIDENCE = 0.6;
 const DEFAULT_MIN_NOVELTY = 0.35;
@@ -174,6 +180,37 @@ const LOW_SIGNAL_PATTERNS = [
   /\b(user|assistant)\s+(joined|left|started|ended)\s+(the )?(chat|conversation)\b/,
   /\b(greetings|pleasantries|small talk|chit chat|chitchat)\b/,
 ];
+const POSITIVE_EMOTION_HINTS = new Set([
+  'happy',
+  'excited',
+  'grateful',
+  'thankful',
+  'relieved',
+  'hopeful',
+  'optimistic',
+  'joy',
+  'joyful',
+  'love',
+  'loved',
+  'loving',
+]);
+const NEGATIVE_EMOTION_HINTS = new Set([
+  'sad',
+  'anxious',
+  'anxiety',
+  'angry',
+  'upset',
+  'stressed',
+  'overwhelmed',
+  'afraid',
+  'scared',
+  'hurt',
+  'lonely',
+  'heartbroken',
+  'devastated',
+  'grieving',
+]);
+const TRANSCRIPT_EMOTIONAL_SIGNAL_LIMIT = 12;
 
 export class MemoryExtractor {
   private llmClient: LLMProvider;
@@ -190,6 +227,7 @@ export class MemoryExtractor {
   private telemetryEnabled: boolean;
   private promptRegistry: PromptRegistryStore | null;
   private sessionStore: SessionStore | null;
+  private contactStore: ContactStore | null;
   private acceptingExtractions = true;
   private inFlightExtractions = new Set<Promise<void>>();
   private inFlightByChannel = new Map<string, Promise<void>>();
@@ -205,6 +243,7 @@ export class MemoryExtractor {
     config?: MemoryExtractorConfig | SubstrateConfig,
     promptRegistry?: PromptRegistryStore | null,
     sessionStore?: SessionStore | null,
+    contactStore?: ContactStore | null,
   ) {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
@@ -232,6 +271,7 @@ export class MemoryExtractor {
     }
     this.promptRegistry = promptRegistry ?? null;
     this.sessionStore = sessionStore ?? null;
+    this.contactStore = contactStore ?? null;
   }
 
   async queueRetroactiveExtraction(
@@ -609,6 +649,11 @@ export class MemoryExtractor {
       }
       this.recordExtractionMarker(channelId, coveredUpToMessageId);
       await this.emitExtractionEnd(telemetry);
+      this.maybePersistEmotionalState(
+        canonicalContactId,
+        acceptedCandidates.map(candidate => candidate.fact),
+        recentEntries,
+      );
       this.maybeRefreshContactProfile(
         channelId,
         triggerReason,
@@ -866,6 +911,44 @@ export class MemoryExtractor {
     }
   }
 
+  private maybePersistEmotionalState(
+    canonicalContactId: string | undefined,
+    acceptedFacts: ExtractedFact[],
+    recentEntries: SessionEntry[],
+  ): void {
+    if (!canonicalContactId) return;
+    if (!this.contactStore) return;
+
+    const signal = deriveEmotionalSignal(acceptedFacts, recentEntries);
+    if (!signal) return;
+
+    try {
+      const updated = this.contactStore.updateEmotionalBaseline(canonicalContactId, {
+        valence: signal.valence,
+        confidence: signal.confidence,
+        observedAtMs: Date.now(),
+      });
+      if (!updated) return;
+
+      if (this.isTelemetryEnabled()) {
+        log.debug('Updated contact emotional baseline from extraction signals', {
+          canonicalContactId,
+          signalValence: signal.valence,
+          signalConfidence: signal.confidence,
+          moodBaseline: updated.emotionalBaseline?.valenceBaseline ?? 0,
+          moodValence: updated.emotionalBaseline?.moodValence ?? 0,
+          moodDrift: updated.emotionalBaseline?.moodDrift ?? 0,
+          moodSamples: updated.emotionalBaseline?.moodSamples ?? 0,
+        });
+      }
+    } catch (error) {
+      log.warn('Failed to persist emotional baseline update', {
+        canonicalContactId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private resolveProfileConfig(): ProfileSynthesisConfig {
     return {
       enabled: this.runtimeConfig?.profileSynthesisEnabled ?? true,
@@ -1017,6 +1100,112 @@ function isLowSignalFact(text: string): boolean {
 function computeFactValueScore(fact: ExtractedFact, novelty: number): number {
   const typeBoost = fact.type === 'boundary' ? 1.6 : 1;
   return clamp(fact.importance, 0, 1) * clamp(fact.confidence, 0, 1) * clamp(novelty, 0, 1) * typeBoost;
+}
+
+function deriveEmotionalSignal(
+  acceptedFacts: ExtractedFact[],
+  recentEntries: SessionEntry[],
+): EmotionalSignal | null {
+  const factSignal = deriveFactEmotionalSignal(acceptedFacts);
+  const transcriptSignal = deriveTranscriptEmotionalSignal(recentEntries);
+
+  if (!factSignal && !transcriptSignal) return null;
+  if (factSignal && !transcriptSignal) return factSignal;
+  if (!factSignal || !transcriptSignal) return transcriptSignal;
+
+  const combinedConfidence = clamp(
+    (factSignal.confidence * 0.7) + (transcriptSignal.confidence * 0.3),
+    0,
+    1,
+  );
+  const denominator = factSignal.confidence + transcriptSignal.confidence;
+  const combinedValence = denominator > 0
+    ? clamp(
+      (
+        (factSignal.valence * factSignal.confidence)
+        + (transcriptSignal.valence * transcriptSignal.confidence)
+      ) / denominator,
+      -1,
+      1,
+    )
+    : 0;
+
+  if (Math.abs(combinedValence) < 0.08 && combinedConfidence < 0.5) {
+    return null;
+  }
+
+  return { valence: combinedValence, confidence: combinedConfidence };
+}
+
+function deriveFactEmotionalSignal(facts: ExtractedFact[]): EmotionalSignal | null {
+  const emotionalFacts = facts.filter((fact) => (
+    fact.type === 'emotional' || Math.abs(fact.emotionalValence) >= 0.2
+  ));
+  if (emotionalFacts.length === 0) return null;
+
+  let weightedValence = 0;
+  let totalWeight = 0;
+  let confidenceSum = 0;
+
+  for (const fact of emotionalFacts) {
+    const weight = clamp((fact.importance * 0.6) + (fact.confidence * 0.4), 0.1, 1);
+    weightedValence += clamp(fact.emotionalValence, -1, 1) * weight;
+    totalWeight += weight;
+    confidenceSum += clamp(fact.confidence, 0, 1);
+  }
+
+  if (totalWeight <= 0) return null;
+
+  return {
+    valence: clamp(weightedValence / totalWeight, -1, 1),
+    confidence: clamp(confidenceSum / emotionalFacts.length, 0.4, 1),
+  };
+}
+
+function deriveTranscriptEmotionalSignal(entries: SessionEntry[]): EmotionalSignal | null {
+  const userEntries = entries
+    .filter(entry => entry.role === 'user')
+    .slice(-TRANSCRIPT_EMOTIONAL_SIGNAL_LIMIT);
+  if (userEntries.length === 0) return null;
+
+  let valenceSum = 0;
+  let signalCount = 0;
+
+  for (const entry of userEntries) {
+    const entrySignal = scoreTranscriptEmotionalValence(entry.content);
+    if (entrySignal === null) continue;
+    valenceSum += entrySignal;
+    signalCount++;
+  }
+
+  if (signalCount === 0) return null;
+
+  return {
+    valence: clamp(valenceSum / signalCount, -1, 1),
+    confidence: clamp(0.35 + (Math.min(signalCount, 4) * 0.1), 0, 0.75),
+  };
+}
+
+function scoreTranscriptEmotionalValence(content: string): number | null {
+  const normalized = normalizeForSimilarity(content);
+  if (!normalized) return null;
+
+  const tokens = tokenizeForSimilarity(normalized);
+  let score = 0;
+  let hits = 0;
+
+  for (const token of tokens) {
+    if (POSITIVE_EMOTION_HINTS.has(token)) {
+      score += 1;
+      hits++;
+    } else if (NEGATIVE_EMOTION_HINTS.has(token)) {
+      score -= 1;
+      hits++;
+    }
+  }
+
+  if (hits === 0) return null;
+  return clamp(score / Math.max(2, hits), -1, 1);
 }
 
 function compareAcceptedFactCandidates(left: AcceptedFactCandidate, right: AcceptedFactCandidate): number {
@@ -1175,6 +1364,7 @@ export const __test = {
   evaluateFactAcceptance,
   computeNoveltyScore,
   computeProfileNovelty,
+  deriveEmotionalSignal,
   resetLastExtractionCount: () => {
     lastExtractionCount.clear();
   },

@@ -681,6 +681,61 @@ describe('ContactStore', () => {
       // Empty JSON object stored, should parse to empty object
       expect(found!.emotionalBaseline).toEqual({});
     });
+
+    it('learns baseline values dynamically from observed emotional signals', () => {
+      const contact = store.upsert({
+        displayName: 'Mood Learner',
+        emotionalBaseline: { warmth: 0.7 },
+      });
+
+      const updated = store.updateEmotionalBaseline(contact.id, {
+        valence: 0.8,
+        confidence: 1,
+        observedAtMs: 1_000,
+      });
+
+      expect(updated).toBeDefined();
+      expect(updated?.emotionalBaseline?.warmth).toBe(0.7);
+      expect(updated?.emotionalBaseline?.valenceBaseline).toBeCloseTo(0.32, 4);
+      expect(updated?.emotionalBaseline?.moodValence).toBeCloseTo(0.44, 4);
+      expect(updated?.emotionalBaseline?.moodDrift).toBeCloseTo(0.12, 4);
+      expect(updated?.emotionalBaseline?.moodSamples).toBe(1);
+
+      const snapshot = store.getEmotionalSnapshot(contact.id);
+      expect(snapshot).toEqual(expect.objectContaining({
+        baselineValence: 0.32,
+        moodValence: 0.44,
+        moodDrift: 0.12,
+        moodSamples: 1,
+        lastMoodUpdateEpochMs: 1_000,
+      }));
+    });
+
+    it('preserves intra-session mood drift across updates', () => {
+      const contact = store.upsert({ displayName: 'Session Mood' });
+      store.updateEmotionalBaseline(contact.id, {
+        valence: 0.6,
+        confidence: 1,
+        observedAtMs: 1_000,
+      });
+
+      const updated = store.updateEmotionalBaseline(contact.id, {
+        valence: -0.4,
+        confidence: 1,
+        observedAtMs: 2_000,
+      });
+
+      expect(updated).toBeDefined();
+      expect(updated?.emotionalBaseline?.moodSamples).toBe(2);
+      expect(updated?.emotionalBaseline?.moodValence).toBeLessThan(0);
+      expect(updated?.emotionalBaseline?.moodDrift).toBeLessThan(0);
+
+      const snapshot = store.getEmotionalSnapshot(contact.id);
+      expect(snapshot).toEqual(expect.objectContaining({
+        moodSamples: 2,
+        lastMoodUpdateEpochMs: 2_000,
+      }));
+    });
   });
 
   describe('no primaryUserId configured', () => {

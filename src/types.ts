@@ -9,6 +9,25 @@ import {
 
 export type ChannelType = 'discord' | 'terminal' | 'api' | 'telegram';
 
+export interface WyomingShardDelegationHint {
+  eligible: boolean;
+  reason: string;
+}
+
+export interface WyomingRoutingMetadata {
+  connectionId?: string;
+  sessionId?: string;
+  turnId?: string;
+  siteId?: string;
+  satelliteId?: string;
+  shardDelegation?: WyomingShardDelegationHint;
+}
+
+export interface MessageRoutingMetadata {
+  source?: 'wyoming' | 'discord' | 'api' | 'unknown';
+  wyoming?: WyomingRoutingMetadata;
+}
+
 export interface SubstrateMessage {
   id: string;
   channelId: string;
@@ -20,6 +39,8 @@ export interface SubstrateMessage {
   timestamp: Date;
   /** True for direct/private messages (e.g. Discord DMs). Adapters set this explicitly. */
   isDirectMessage?: boolean;
+  /** Optional transport/runtime routing hints (e.g. Wyoming session policy decisions). */
+  routing?: MessageRoutingMetadata;
 }
 
 export interface Attachment {
@@ -156,6 +177,12 @@ export interface RuntimeConfigHooks {
 export type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous' | 'custom';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 
+export interface WyomingShardRoutingConfig {
+  enabled: boolean;
+  siteAllowlist?: string[];
+  satelliteAllowlist?: string[];
+}
+
 export interface SubstrateConfig {
   primaryModel: string;
   primaryProvider: string;
@@ -226,6 +253,7 @@ export interface SubstrateConfig {
   importProcessingStrictPolicy?: boolean;
   importProcessingLocalEndpointUrl?: string;
   importProcessingLocalModel?: string;
+  wyomingShardRouting?: WyomingShardRoutingConfig;
 }
 
 export function loadConfig(): SubstrateConfig {
@@ -312,6 +340,7 @@ export function loadConfig(): SubstrateConfig {
   const importProcessingStrictPolicy = parseOptionalBooleanEnv(process.env.IMPORT_PROCESSING_STRICT_POLICY) ?? false;
   const importProcessingLocalEndpointUrl = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_ENDPOINT_URL);
   const importProcessingLocalModel = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_MODEL);
+  const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(process.env);
   const capabilityTier = parseCapabilityTierEnv(process.env.CAPABILITY_TIER, 'nursery');
   const shardToolsets = parseShardToolsetEnv(process.env);
   const sessionMirrorEnabled = parseOptionalBooleanEnv(process.env.SESSION_MIRROR_ENABLED);
@@ -411,8 +440,29 @@ export function loadConfig(): SubstrateConfig {
     importProcessingStrictPolicy,
     ...(importProcessingLocalEndpointUrl ? { importProcessingLocalEndpointUrl } : {}),
     ...(importProcessingLocalModel ? { importProcessingLocalModel } : {}),
+    wyomingShardRouting,
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
+  };
+}
+
+export function parseWyomingShardRoutingConfigEnv(
+  env: NodeJS.ProcessEnv,
+): WyomingShardRoutingConfig {
+  const enabled = parseOptionalBooleanEnv(
+    env.WYOMING_SHARD_DELEGATION_ENABLED ?? env.WYOMING_SHARD_ROUTING_ENABLED,
+  ) ?? false;
+  const siteAllowlist = parseStringListEnv(
+    env.WYOMING_SHARD_DELEGATION_SITE_ALLOWLIST ?? env.WYOMING_SHARD_ROUTING_SITE_ALLOWLIST,
+  );
+  const satelliteAllowlist = parseStringListEnv(
+    env.WYOMING_SHARD_DELEGATION_SATELLITE_ALLOWLIST ?? env.WYOMING_SHARD_ROUTING_SATELLITE_ALLOWLIST,
+  );
+
+  return {
+    enabled,
+    ...(siteAllowlist.length > 0 ? { siteAllowlist } : {}),
+    ...(satelliteAllowlist.length > 0 ? { satelliteAllowlist } : {}),
   };
 }
 

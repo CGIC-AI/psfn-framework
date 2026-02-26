@@ -179,6 +179,7 @@ async function main(): Promise<void> {
     },
     capabilityTierProvider: () => capabilityRuntime.getTier(),
     auditStore,
+    wyomingShardRouting: config.wyomingShardRouting,
   });
 
   const voiceModuleHost = new GatewayVoiceModuleHost({

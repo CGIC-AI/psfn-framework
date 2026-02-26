@@ -113,6 +113,22 @@ function makeVoiceMessage(content: string) {
   };
 }
 
+function makeWyomingVoiceMessage(content: string) {
+  return {
+    id: 'wyoming-msg-conn-hallway-1',
+    channelId: 'api:wyoming:ha-main:voice-pe-hallway',
+    channelType: 'api' as const,
+    authorId: 'wyoming-user:owner',
+    authorName: 'Wyoming Voice User',
+    content,
+    timestamp: new Date('2025-01-01T00:00:00.000Z'),
+    isDirectMessage: true,
+    routing: {
+      source: 'wyoming' as const,
+    },
+  };
+}
+
 async function invokeRpc(
   conn: ReturnType<typeof createMockConnection>,
   id: number,
@@ -511,6 +527,136 @@ describe('GatewayServer', () => {
       expect(methods[0]).toBe('voice.stream.start');
       expect(methods[methods.length - 1]).toBe('voice.stream.end');
       expect(methods.filter(m => m === 'voice.stream.chunk').length).toBeGreaterThan(1);
+    });
+
+    it('marks Wyoming shard delegation ineligible by default-safe policy', async () => {
+      let routedMessage: Record<string, unknown> | null = null;
+      const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
+        if (!msg.id || typeof msg.method !== 'string') return;
+        if (msg.method === 'voice.stream.start') {
+          routedMessage = msg.params.message as Record<string, unknown>;
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              sequence: msg.params.sequence,
+              accepted: true,
+              queueDepth: 0,
+            },
+          });
+          return;
+        }
+        if (msg.method === 'voice.stream.chunk') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              sequence: msg.params.sequence,
+              accepted: true,
+              queueDepth: 0,
+            },
+          });
+          return;
+        }
+        if (msg.method === 'voice.stream.end') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              content: 'voice response',
+              channelId: 'api:wyoming:ha-main:voice-pe-hallway',
+              model: 'voice-model',
+              durationMs: 321,
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              droppedChunks: msg.params.metadata?.droppedChunks ?? 0,
+            },
+          });
+        }
+      });
+
+      await server.requestAgentVoiceStream(makeWyomingVoiceMessage('hello from hallway'));
+
+      const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
+      expect(routing).toMatchObject({
+        connectionId: 'conn-hallway',
+        siteId: 'ha-main',
+        satelliteId: 'voice-pe-hallway',
+      });
+      expect(routing.shardDelegation).toEqual({
+        eligible: false,
+        reason: 'policy_disabled',
+      });
+    });
+
+    it('marks Wyoming shard delegation eligible when policy allowlists match', async () => {
+      let routedMessage: Record<string, unknown> | null = null;
+      const { server } = await setupServerConnection({
+        ...createMinimalOptions(),
+        wyomingShardRouting: {
+          enabled: true,
+          siteAllowlist: ['ha-main'],
+          satelliteAllowlist: ['voice-pe-hallway'],
+        },
+      }, (msg, emit) => {
+        if (!msg.id || typeof msg.method !== 'string') return;
+        if (msg.method === 'voice.stream.start') {
+          routedMessage = msg.params.message as Record<string, unknown>;
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              sequence: msg.params.sequence,
+              accepted: true,
+              queueDepth: 0,
+            },
+          });
+          return;
+        }
+        if (msg.method === 'voice.stream.chunk') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              sequence: msg.params.sequence,
+              accepted: true,
+              queueDepth: 0,
+            },
+          });
+          return;
+        }
+        if (msg.method === 'voice.stream.end') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              content: 'voice response',
+              channelId: 'api:wyoming:ha-main:voice-pe-hallway',
+              model: 'voice-model',
+              durationMs: 321,
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              droppedChunks: msg.params.metadata?.droppedChunks ?? 0,
+            },
+          });
+        }
+      });
+
+      await server.requestAgentVoiceStream(makeWyomingVoiceMessage('route to shard'));
+
+      const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
+      expect(routing.shardDelegation).toEqual({
+        eligible: true,
+        reason: 'eligible',
+      });
     });
 
     it('falls back to legacy discord.voice.* stream methods when generic stream methods are unavailable', async () => {

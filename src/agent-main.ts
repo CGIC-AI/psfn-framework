@@ -7,7 +7,11 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { loadConfig } from './types.js';
-import type { SubstrateMessage } from './types.js';
+import type {
+  SubstrateConfig,
+  SubstrateMessage,
+  WyomingRoutingMetadata,
+} from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
 import { MemoryStore } from './memory/store.js';
@@ -87,6 +91,13 @@ const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
 
+interface WyomingDelegationDecision {
+  isWyoming: boolean;
+  delegate: boolean;
+  reason: string;
+  routing?: WyomingRoutingMetadata;
+}
+
 function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -95,6 +106,65 @@ function parsePositiveIntEnv(value: string | undefined, fallback: number): numbe
 
 function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
+}
+
+function resolveWyomingRoutingMetadata(message: SubstrateMessage): WyomingRoutingMetadata | undefined {
+  const routing = message.routing?.wyoming;
+  if (routing) {
+    return routing;
+  }
+  if (message.channelType !== 'api' || !message.channelId.startsWith('api:wyoming:')) {
+    return undefined;
+  }
+
+  const parts = message.channelId.split(':');
+  if (parts.length < 4) {
+    return undefined;
+  }
+
+  return {
+    siteId: parts[2],
+    satelliteId: parts.slice(3).join(':'),
+  };
+}
+
+function evaluateWyomingDelegation(
+  message: SubstrateMessage,
+  config: SubstrateConfig,
+): WyomingDelegationDecision {
+  const routing = resolveWyomingRoutingMetadata(message);
+  if (!routing) {
+    return {
+      isWyoming: false,
+      delegate: false,
+      reason: 'not_wyoming',
+    };
+  }
+
+  if (!config.wyomingShardRouting?.enabled) {
+    return {
+      isWyoming: true,
+      delegate: false,
+      reason: 'agent_policy_disabled',
+      routing,
+    };
+  }
+
+  if (routing.shardDelegation?.eligible !== true) {
+    return {
+      isWyoming: true,
+      delegate: false,
+      reason: routing.shardDelegation?.reason ?? 'gateway_policy_denied',
+      routing,
+    };
+  }
+
+  return {
+    isWyoming: true,
+    delegate: true,
+    reason: 'delegation_enabled',
+    routing,
+  };
 }
 
 async function enforceNetworkIsolationOnStartup(): Promise<void> {
@@ -657,6 +727,77 @@ async function main(): Promise<void> {
   gateway.onHandleMessage(async (message: SubstrateMessage) => {
     writeLastActiveChannel(config.dataDir, message.channelId);
     log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
+    const routingDecision = evaluateWyomingDelegation(message, config);
+    if (routingDecision.isWyoming) {
+      safeguardAuditTrail.append('wyoming.routing.decision', {
+        channelId: message.channelId,
+        messageId: message.id,
+        delegated: routingDecision.delegate,
+        reason: routingDecision.reason,
+        connectionId: routingDecision.routing?.connectionId,
+        sessionId: routingDecision.routing?.sessionId,
+        turnId: routingDecision.routing?.turnId,
+        siteId: routingDecision.routing?.siteId,
+        satelliteId: routingDecision.routing?.satelliteId,
+      });
+    }
+
+    if (routingDecision.delegate) {
+      try {
+        const delegated = await shardManager.delegateWyomingSession({
+          message,
+          routing: routingDecision.routing,
+        });
+        safeguardAuditTrail.append('wyoming.routing.delegated', {
+          channelId: message.channelId,
+          messageId: message.id,
+          shardId: delegated.shardId,
+          connectionId: routingDecision.routing?.connectionId,
+          sessionId: routingDecision.routing?.sessionId,
+          turnId: routingDecision.routing?.turnId,
+          siteId: routingDecision.routing?.siteId,
+          satelliteId: routingDecision.routing?.satelliteId,
+        });
+        return {
+          content: delegated.content,
+          channelId: message.channelId,
+          metadata: {
+            model: delegated.model,
+            inputTokens: delegated.inputTokens,
+            outputTokens: delegated.outputTokens,
+            durationMs: delegated.durationMs,
+          },
+        };
+      } catch (error) {
+        const delegationError = error instanceof Error ? error.message : String(error);
+        safeguardAuditTrail.append('wyoming.routing.fallback', {
+          channelId: message.channelId,
+          messageId: message.id,
+          reason: 'delegation_error',
+          error: delegationError,
+          connectionId: routingDecision.routing?.connectionId,
+          sessionId: routingDecision.routing?.sessionId,
+          turnId: routingDecision.routing?.turnId,
+        });
+        log.warn('Wyoming delegation failed; falling back to primary path', {
+          channelId: message.channelId,
+          error: delegationError,
+        });
+      }
+    }
+
+    if (routingDecision.isWyoming) {
+      safeguardAuditTrail.append('wyoming.routing.primary', {
+        channelId: message.channelId,
+        messageId: message.id,
+        reason: routingDecision.reason,
+        connectionId: routingDecision.routing?.connectionId,
+        sessionId: routingDecision.routing?.sessionId,
+        turnId: routingDecision.routing?.turnId,
+        siteId: routingDecision.routing?.siteId,
+        satelliteId: routingDecision.routing?.satelliteId,
+      });
+    }
     return agentLoop.handleMessage(message);
     // Note: no discord.send() — gateway voice runtime handles TTS directly
   });

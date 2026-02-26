@@ -875,6 +875,20 @@ describe('AdminServer', () => {
       expect(payload.defaultAuthorName).toBe('Operator');
       expect(payload.defaultAuthorId).toBe('operator-42');
     });
+
+    it('returns 400 for invalid JSON bootstrap payloads', async () => {
+      const res = await request(
+        port,
+        'POST',
+        '/api/chat/bootstrap',
+        '{bad json',
+        { 'Content-Type': 'application/json' },
+      );
+
+      expect(res.status).toBe(400);
+      const payload = JSON.parse(res.body) as { error: string };
+      expect(payload.error).toBe('Invalid JSON payload');
+    });
   });
 
   describe('Confirmations', () => {

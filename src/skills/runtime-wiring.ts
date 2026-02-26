@@ -1,4 +1,4 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import { SkillsRuntime, type SkillsRuntimeOptions } from './runtime.js';
 import {
   createSkillCreateTool,
@@ -9,7 +9,7 @@ import {
 
 export interface SkillsRuntimeTarget {
   skillsRuntime: SkillsRuntime | null;
-  registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void;
+  registerTool: ToolRegistrar;
 }
 
 export function wireSkillsRuntime(

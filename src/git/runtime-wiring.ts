@@ -1,7 +1,7 @@
 // ── Git Runtime Wiring ──
 // Instantiates GitOps and registers all 6 git tools on a target (SubstrateAgent).
 
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import { GitOps, type GitOpsConfig, type GitOperations } from './ops.js';
 import {
   createRepoStatusTool,
@@ -13,7 +13,7 @@ import {
 } from './tools.js';
 
 export interface GitRuntimeTarget {
-  registerTool(tool: AgentTool<any>, category?: 'core' | 'extended'): void;
+  registerTool: ToolRegistrar;
 }
 
 export function registerGitTools(target: GitRuntimeTarget, gitOps: GitOperations): void {

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { GatewayServer, resolveGatewaySessionHmacKeyring, type GatewayServerOptions } from './server.js';
+import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
 
 // Mock the transport module to avoid real socket operations
@@ -227,6 +231,148 @@ describe('GatewayServer', () => {
       await expect(
         server.requestAgent('test.method', {}, 50),
       ).rejects.toThrow('Agent request timed out');
+    });
+  });
+
+  describe('confirmation queue', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = mkdtempSync(join(tmpdir(), 'gw-confirmation-'));
+    });
+
+    afterEach(() => {
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('queues gated actions until operator approval arrives', async () => {
+      const queuedPath = join(tempDir, 'queued-write.txt');
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        capabilityTierProvider: () => 'apprentice',
+      });
+
+      const queued = await invokeRpc(conn, 10, 'fs.write', {
+        path: queuedPath,
+        content: 'queued-content',
+      });
+
+      expect(queued.error).toBeDefined();
+      expect(queued.error.code).toBe(GatewayErrors.NEEDS_APPROVAL);
+      expect(queued.error.message).toContain('pending operator approval');
+      expect(existsSync(queuedPath)).toBe(false);
+
+      const listed = await invokeRpc(conn, 11, 'confirmation.list', {});
+      expect(listed.result.entries).toHaveLength(1);
+      const entry = listed.result.entries[0];
+      expect(entry.method).toBe('fs.write');
+      expect(entry.scope).toBe(queuedPath);
+      expect(entry.params).toEqual({
+        path: queuedPath,
+        content: 'queued-content',
+      });
+
+      const approved = await invokeRpc(conn, 12, 'confirmation.resolve', {
+        id: entry.id,
+        decision: 'approve',
+      });
+      expect(approved.result).toEqual({
+        id: entry.id,
+        status: 'approved',
+        message: 'Action approved and executed.',
+        executed: true,
+      });
+      expect(readFileSync(queuedPath, 'utf-8')).toBe('queued-content');
+
+      const empty = await invokeRpc(conn, 13, 'confirmation.list', {});
+      expect(empty.result.entries).toEqual([]);
+    });
+
+    it('executes modify decision with operator-provided params', async () => {
+      const originalPath = join(tempDir, 'original.txt');
+      const modifiedPath = join(tempDir, 'modified.txt');
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        capabilityTierProvider: () => 'apprentice',
+      });
+
+      const queued = await invokeRpc(conn, 20, 'fs.write', {
+        path: originalPath,
+        content: 'original-content',
+      });
+      expect(queued.error.code).toBe(GatewayErrors.NEEDS_APPROVAL);
+
+      const listed = await invokeRpc(conn, 21, 'confirmation.list', {});
+      const entry = listed.result.entries[0];
+
+      const modified = await invokeRpc(conn, 22, 'confirmation.resolve', {
+        id: entry.id,
+        decision: 'modify',
+        modifiedParams: {
+          path: modifiedPath,
+          content: 'modified-content',
+        },
+      });
+      expect(modified.result).toEqual({
+        id: entry.id,
+        status: 'modified',
+        message: 'Action executed with modified parameters.',
+        executed: true,
+      });
+      expect(existsSync(originalPath)).toBe(false);
+      expect(readFileSync(modifiedPath, 'utf-8')).toBe('modified-content');
+    });
+
+    it('bypasses confirmation queue for autonomous tier', async () => {
+      const autoPath = join(tempDir, 'autonomous-write.txt');
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        capabilityTierProvider: () => 'autonomous',
+      });
+
+      const response = await invokeRpc(conn, 30, 'fs.write', {
+        path: autoPath,
+        content: 'autonomous-content',
+      });
+      expect(response.result).toEqual({ success: true });
+      expect(readFileSync(autoPath, 'utf-8')).toBe('autonomous-content');
+
+      const listed = await invokeRpc(conn, 31, 'confirmation.list', {});
+      expect(listed.result.entries).toEqual([]);
+    });
+
+    it('expires pending requests after configured timeout', async () => {
+      const queuedPath = join(tempDir, 'expired.txt');
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        capabilityTierProvider: () => 'apprentice',
+        confirmation: {
+          expiryMs: 20,
+        },
+      });
+
+      const queued = await invokeRpc(conn, 40, 'fs.write', {
+        path: queuedPath,
+        content: 'expired-content',
+      });
+      expect(queued.error.code).toBe(GatewayErrors.NEEDS_APPROVAL);
+
+      const listed = await invokeRpc(conn, 41, 'confirmation.list', {});
+      const entry = listed.result.entries[0];
+
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      const resolved = await invokeRpc(conn, 42, 'confirmation.resolve', {
+        id: entry.id,
+        decision: 'approve',
+      });
+      expect(resolved.result).toEqual({
+        id: entry.id,
+        status: 'expired',
+        message: 'Confirmation request expired before resolution.',
+        executed: false,
+      });
+      expect(existsSync(queuedPath)).toBe(false);
     });
   });
 

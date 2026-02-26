@@ -279,6 +279,10 @@ async function main(): Promise<void> {
       promptStore,
       promptRegistry,
       skillsRuntime,
+      confirmationQueueApi: {
+        listConfirmationQueue: () => gateway.listConfirmationQueue(),
+        resolveConfirmationQueue: (params) => gateway.resolveConfirmationQueue(params),
+      },
     });
     await adminServer.init();
     await adminServer.start();

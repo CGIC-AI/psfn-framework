@@ -397,6 +397,48 @@ td {
   font-size: 0.85rem;
 }
 
+.confirmation-intro {
+  margin-bottom: 0.9rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.confirmation-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 0.2rem;
+}
+
+.confirmation-params {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f7f4ee;
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.confirmation-actions textarea {
+  width: 100%;
+  min-height: 130px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+  background: var(--bg);
+}
+
+.confirmation-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .crm-person {
   display: flex;
   flex-direction: column;

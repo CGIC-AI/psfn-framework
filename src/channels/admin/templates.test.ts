@@ -10,11 +10,14 @@ import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { ShardManager } from '../../shards/manager.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
+import type { ConfirmationQueueEntry } from '../../gateway/protocol.js';
 import { EventBus } from '../../event-bus.js';
 import { AdminHandlers } from './handlers.js';
 import {
+  confirmationQueueFragment,
   contactEditForm,
   contactRow,
+  confirmationsPage,
   layout,
   loginPage,
   memoryDetailPage,
@@ -31,6 +34,32 @@ describe('admin templates', () => {
     expect(html).toContain('<script src="/static/htmx.min.js"></script>');
     expect(html).toContain('<script src="/static/sse.js"></script>');
     expect(html).toContain('href="/skills"');
+    expect(html).toContain('href="/confirmations"');
+  });
+
+  it('renders confirmation queue fragments with review controls', () => {
+    const entry: ConfirmationQueueEntry = {
+      id: 'confirm-1',
+      method: 'fs.write',
+      action: 'write',
+      scope: '/tmp/target.txt',
+      params: { path: '/tmp/target.txt', content: 'hello' },
+      companionReason: 'Store output',
+      requestedAt: 1_700_000_000_000,
+      expiresAt: 1_700_000_060_000,
+    };
+    const fragment = confirmationQueueFragment({
+      entries: [entry],
+      available: true,
+    });
+    const page = confirmationsPage(fragment);
+
+    expect(page).toContain('Actions requiring approval are queued here');
+    expect(fragment).toContain('name="decision" value="approve"');
+    expect(fragment).toContain('name="decision" value="deny"');
+    expect(fragment).toContain('name="decision" value="modify"');
+    expect(fragment).toContain('name="modifiedParamsJson"');
+    expect(fragment).toContain('/api/confirmations/resolve');
   });
 
   it('escapes login errors', () => {

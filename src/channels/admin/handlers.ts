@@ -16,6 +16,7 @@ import type {
   DashboardStats,
   EnvInfo,
   ThinkTraceView,
+  ConfirmationQueueAdminApi,
   AdminChatDebugCategory,
   AdminChatDebugEventPayload,
   AdminChatDebugStreamOptions,
@@ -78,6 +79,10 @@ import {
   type AdminChatBootstrapResponse,
   type AdminChatBootstrapUpdateInput,
 } from './chat/index.js';
+import type {
+  ConfirmationResolveParams,
+  ConfirmationResolveResult,
+} from '../../gateway/protocol.js';
 import {
   containsStructuredPromptSections,
   getMalformedStructuredPromptErrors,
@@ -174,6 +179,7 @@ export class AdminHandlers {
   private promptStore: PromptLayerStore | null;
   private promptRegistry: PromptRegistryStore | null;
   private skillsRuntime: SkillsRuntime | null;
+  private confirmationQueueApi: ConfirmationQueueAdminApi | null;
   private chatBootstrapService: AdminChatBootstrapService;
   private usageTotals = {
     turns: 0,
@@ -203,6 +209,7 @@ export class AdminHandlers {
     promptStore?: PromptLayerStore | null;
     promptRegistry?: PromptRegistryStore | null;
     skillsRuntime?: SkillsRuntime | null;
+    confirmationQueueApi?: ConfirmationQueueAdminApi | null;
     apiBaseUrl?: string;
   }) {
     this.memoryStore = deps.memoryStore;
@@ -219,6 +226,7 @@ export class AdminHandlers {
     this.promptStore = deps.promptStore ?? null;
     this.promptRegistry = deps.promptRegistry ?? null;
     this.skillsRuntime = deps.skillsRuntime ?? null;
+    this.confirmationQueueApi = deps.confirmationQueueApi ?? null;
     this.chatBootstrapService = new AdminChatBootstrapService(this.contactStore, {
       apiBaseUrl: deps.apiBaseUrl,
     });
@@ -738,8 +746,101 @@ export class AdminHandlers {
     return tpl.layout('Garden Chat', tpl.chatPage(), 'chat');
   }
 
+  async confirmationsPage(): Promise<string> {
+    const body = await this.renderConfirmationQueueFragment();
+    return tpl.layout('Confirmations', tpl.confirmationsPage(body), 'confirmations');
+  }
+
+  async confirmationsListFragment(): Promise<string> {
+    return this.renderConfirmationQueueFragment();
+  }
+
+  async resolveConfirmation(body: string): Promise<string> {
+    if (!this.confirmationQueueApi) {
+      return this.renderConfirmationQueueFragment(
+        'Confirmation queue is unavailable (gateway integration not configured).',
+        true,
+      );
+    }
+
+    const params = new URLSearchParams(body);
+    const id = (params.get('id') ?? '').trim();
+    const decisionRaw = (params.get('decision') ?? '').trim();
+    if (!id) {
+      return this.renderConfirmationQueueFragment('Confirmation ID is required.', true);
+    }
+
+    if (decisionRaw !== 'approve' && decisionRaw !== 'deny' && decisionRaw !== 'modify') {
+      return this.renderConfirmationQueueFragment('Invalid confirmation decision.', true);
+    }
+
+    const resolveParams: ConfirmationResolveParams = {
+      id,
+      decision: decisionRaw,
+    };
+
+    if (decisionRaw === 'modify') {
+      const modifiedParamsRaw = (params.get('modifiedParamsJson') ?? '').trim();
+      if (!modifiedParamsRaw) {
+        return this.renderConfirmationQueueFragment('Modified params JSON is required for modify.', true);
+      }
+      try {
+        const parsed = JSON.parse(modifiedParamsRaw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return this.renderConfirmationQueueFragment('Modified params must be a JSON object.', true);
+        }
+        resolveParams.modifiedParams = parsed as Record<string, unknown>;
+      } catch {
+        return this.renderConfirmationQueueFragment('Modified params JSON is invalid.', true);
+      }
+    }
+
+    let result: ConfirmationResolveResult;
+    try {
+      result = await this.confirmationQueueApi.resolveConfirmationQueue(resolveParams);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return this.renderConfirmationQueueFragment(`Confirmation update failed: ${message}`, true);
+    }
+
+    const isError = result.status === 'failed';
+    return this.renderConfirmationQueueFragment(result.message, isError);
+  }
+
   chatBootstrap(): AdminChatBootstrapResponse {
     return this.chatBootstrapService.buildBootstrap();
+  }
+
+  private async renderConfirmationQueueFragment(
+    message?: string,
+    isError = false,
+  ): Promise<string> {
+    if (!this.confirmationQueueApi) {
+      return tpl.confirmationQueueFragment({
+        entries: [],
+        available: false,
+        message: message ?? 'Confirmation queue is unavailable (gateway integration not configured).',
+        isError: true,
+      });
+    }
+
+    try {
+      const list = await this.confirmationQueueApi.listConfirmationQueue();
+      return tpl.confirmationQueueFragment({
+        entries: list.entries,
+        available: true,
+        message,
+        isError,
+      });
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      return tpl.confirmationQueueFragment({
+        entries: [],
+        available: true,
+        message: message ?? `Unable to load confirmation queue: ${details}`,
+        isError: true,
+      });
+    }
   }
 
   updateChatBootstrap(

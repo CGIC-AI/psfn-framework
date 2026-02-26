@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -8,6 +14,7 @@ import {
   buildMessageJournalEntry,
   journalToCompactionSummary,
   journalToSessionEntry,
+  quarantineSidecarPath,
   parseJournalText,
   readJournalFile,
 } from './journal-utils.js';
@@ -40,8 +47,32 @@ describe('journal utils', () => {
     expect(parsed.maxId).toBe(4);
   });
 
-  it('throws on malformed JSON journal lines', () => {
-    expect(() => parseJournalText('{bad\n')).toThrow();
+  it('skips malformed journal lines and records quarantine details', () => {
+    const raw = [
+      JSON.stringify(buildMessageJournalEntry(1, {
+        channelId: 'ch1',
+        role: 'user',
+        content: 'before',
+        timestamp: 1000,
+      })),
+      '{bad',
+      JSON.stringify(buildMessageJournalEntry(3, {
+        channelId: 'ch1',
+        role: 'assistant',
+        content: 'after',
+        timestamp: 3000,
+      })),
+      '',
+    ].join('\n');
+
+    const parsed = parseJournalText(raw);
+    expect(parsed.entries).toHaveLength(2);
+    expect(parsed.maxId).toBe(3);
+    expect(parsed.quarantined).toHaveLength(1);
+    expect(parsed.quarantined[0]).toMatchObject({
+      lineNumber: 2,
+      raw: '{bad',
+    });
   });
 
   it('builds and maps message journal entries with continuity metadata', () => {
@@ -94,5 +125,27 @@ describe('journal utils', () => {
     const parsed = readJournalFile(filePath);
     expect(parsed.entries).toHaveLength(2);
     expect(parsed.maxId).toBe(2);
+    expect(parsed.quarantined).toEqual([]);
+  });
+
+  it('writes and clears quarantine sidecar files', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-journal-utils-'));
+    dirs.push(dir);
+    const filePath = join(dir, 'broken.jsonl');
+    const quarantinePath = quarantineSidecarPath(filePath);
+
+    writeFileSync(filePath, '{"type":"message","id":1,"channelId":"ch1","timestamp":1}\n{bad\n', 'utf-8');
+    const withCorruption = readJournalFile(filePath);
+    expect(withCorruption.quarantined).toHaveLength(1);
+    expect(existsSync(quarantinePath)).toBe(true);
+
+    const quarantineLines = readFileSync(quarantinePath, 'utf-8').trim().split('\n');
+    expect(quarantineLines).toHaveLength(1);
+    expect(JSON.parse(quarantineLines[0]).lineNumber).toBe(2);
+
+    writeFileSync(filePath, '{"type":"message","id":1,"channelId":"ch1","timestamp":1}\n', 'utf-8');
+    const repaired = readJournalFile(filePath);
+    expect(repaired.quarantined).toEqual([]);
+    expect(existsSync(quarantinePath)).toBe(false);
   });
 });

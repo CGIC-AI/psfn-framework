@@ -1,5 +1,11 @@
 import type { DiscoveredModel } from '../../../llm/discovery.js';
-import type { CapabilityTier, ModelCatalogEntry, ModelRoleAssignments, SubstrateConfig } from '../../../types.js';
+import type {
+  CapabilityTier,
+  ImportProcessingRouteMode,
+  ModelCatalogEntry,
+  ModelRoleAssignments,
+  SubstrateConfig,
+} from '../../../types.js';
 import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
@@ -31,6 +37,7 @@ const DEFAULT_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   summary: 'primary',
   reasoning: 'primary',
   longContext: 'primary',
+  import_processing: 'extraction',
 };
 
 const CAPABILITY_TIERS: readonly CapabilityTier[] = [
@@ -217,6 +224,17 @@ function renderCapabilityTierOptions(selected: CapabilityTier): string {
   )).join('');
 }
 
+function renderImportRouteModeOptions(selected: ImportProcessingRouteMode): string {
+  const options: Array<{ value: ImportProcessingRouteMode; label: string }> = [
+    { value: 'background', label: 'Background Routing (default)' },
+    { value: 'openrouter_zdr', label: 'OpenRouter ZDR-only' },
+    { value: 'local_endpoint', label: 'Local Endpoint Only' },
+  ];
+  return options.map((option) => (
+    `<option value="${escapeHtml(option.value)}"${option.value === selected ? ' selected' : ''}>${escapeHtml(option.label)}</option>`
+  )).join('');
+}
+
 function renderJsonConfigEditor(options: {
   title: string;
   fileName: string;
@@ -281,6 +299,11 @@ export function settingsPage(
   });
   const retryMaxAttempts = config.retryMaxAttempts ?? 3;
   const retryBaseDelayMs = config.retryBaseDelayMs ?? 2000;
+  const importRouteMode = config.importProcessingRouteMode ?? 'background';
+  const importStrictPolicyEnabled = config.importProcessingStrictPolicy ?? false;
+  const openRouterProviderOrderText = (config.openRouterProviderOrder ?? []).join(', ');
+  const importLocalEndpointUrl = config.importProcessingLocalEndpointUrl ?? '';
+  const importLocalModel = config.importProcessingLocalModel ?? '';
 
   const secretKeys: Array<[string, string]> = [
     ['DISCORD_TOKEN', envInfo.discordToken],
@@ -290,6 +313,7 @@ export function settingsPage(
     ['LITELLM_BASE_URL', envInfo.litellmBaseUrl],
     ['LITELLM_API_KEY', envInfo.litellmApiKey],
     ['OLLAMA_URL', envInfo.ollamaUrl],
+    ['IMPORT_PROCESSING_LOCAL_API_KEY', envInfo.importProcessingLocalApiKey],
   ];
 
   const secretsRowsHtml = secretKeys
@@ -432,6 +456,59 @@ export function settingsPage(
           <div class="form-group">
             <label>Base Delay Ms (500-30000)</label>
             <input type="number" name="retryBaseDelayMs" value="${retryBaseDelayMs}" min="500" max="30000">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">Sensitive Import Processing</h3>
+        <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
+          Configure the dedicated route for sensitive import jobs. Strict policy rejects non-ZDR routes at runtime.
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Import Route Mode</label>
+            <select name="importProcessingRouteMode">
+              ${renderImportRouteModeOptions(importRouteMode)}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Strict Policy</label>
+            <select name="importProcessingStrictPolicy">
+              <option value="false"${!importStrictPolicyEnabled ? ' selected' : ''}>Disabled</option>
+              <option value="true"${importStrictPolicyEnabled ? ' selected' : ''}>Enabled (ZDR required)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>OpenRouter Provider Preference Order (comma-separated)</label>
+            <input
+              type="text"
+              name="openRouterProviderOrder"
+              value="${escapeHtml(openRouterProviderOrderText)}"
+              placeholder="parasail, openai, anthropic"
+            >
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Local Endpoint URL (llama.cpp / Ollama OpenAI-compatible)</label>
+            <input
+              type="text"
+              name="importProcessingLocalEndpointUrl"
+              value="${escapeHtml(importLocalEndpointUrl)}"
+              placeholder="http://localhost:11434/v1"
+            >
+          </div>
+          <div class="form-group">
+            <label>Local Endpoint Model</label>
+            <input
+              type="text"
+              name="importProcessingLocalModel"
+              value="${escapeHtml(importLocalModel)}"
+              placeholder="llama3.2:latest"
+            >
           </div>
         </div>
       </div>

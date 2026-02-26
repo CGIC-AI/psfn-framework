@@ -26,7 +26,8 @@ import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerMetadataUpdate, PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
-import { importCharacterCardToPath } from '../../identity/importer.js';
+import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+import { importCharacterCardFromPath, importCharacterCardToPath } from '../../identity/importer.js';
 import { PROMPT_LAYER_ROLES, type PromptLayerRole } from '../../identity/prompt-types.js';
 import type { TrustLevel } from '../../trust/types.js';
 import type {
@@ -178,6 +179,7 @@ export class AdminHandlers {
   private contactStore: ContactStore | null;
   private promptStore: PromptLayerStore | null;
   private promptRegistry: PromptRegistryStore | null;
+  private cardVersionStore: CharacterCardVersionStore | null;
   private skillsRuntime: SkillsRuntime | null;
   private confirmationQueueApi: ConfirmationQueueAdminApi | null;
   private chatBootstrapService: AdminChatBootstrapService;
@@ -208,6 +210,7 @@ export class AdminHandlers {
     contactStore?: ContactStore | null;
     promptStore?: PromptLayerStore | null;
     promptRegistry?: PromptRegistryStore | null;
+    cardVersionStore?: CharacterCardVersionStore | null;
     skillsRuntime?: SkillsRuntime | null;
     confirmationQueueApi?: ConfirmationQueueAdminApi | null;
     apiBaseUrl?: string;
@@ -225,6 +228,7 @@ export class AdminHandlers {
     this.contactStore = deps.contactStore ?? null;
     this.promptStore = deps.promptStore ?? null;
     this.promptRegistry = deps.promptRegistry ?? null;
+    this.cardVersionStore = deps.cardVersionStore ?? null;
     this.skillsRuntime = deps.skillsRuntime ?? null;
     this.confirmationQueueApi = deps.confirmationQueueApi ?? null;
     this.chatBootstrapService = new AdminChatBootstrapService(this.contactStore, {
@@ -451,7 +455,19 @@ export class AdminHandlers {
   // ── Identity ──
 
   identityPage(): string {
-    return tpl.layout('Identity', tpl.identityPage(this.characterCard, this.config), 'identity');
+    const snapshot = this.cardVersionStore?.getCurrent();
+    const history = this.cardVersionStore?.getHistory() ?? [];
+    const card = snapshot?.card ?? this.characterCard;
+
+    return tpl.layout(
+      'Identity',
+      tpl.identityPage(card, this.config, {
+        version: snapshot?.version ?? 1,
+        checksum: snapshot?.checksum,
+        history,
+      }),
+      'identity',
+    );
   }
 
   importIdentityCard(body: string): string {
@@ -467,8 +483,19 @@ export class AdminHandlers {
     }
 
     try {
-      const imported = importCharacterCardToPath(sourcePath, destinationPath);
-      this.characterCard = imported.card;
+      const imported = this.cardVersionStore
+        ? importCharacterCardFromPath(sourcePath)
+        : importCharacterCardToPath(sourcePath, destinationPath);
+      if (this.cardVersionStore) {
+        const updated = this.cardVersionStore.update(
+          imported.card,
+          'admin:import',
+          `Imported from ${imported.sourcePath}`,
+        );
+        this.characterCard = updated.card;
+      } else {
+        this.characterCard = imported.card;
+      }
       const warningSuffix = imported.warnings.length > 0
         ? ` Warnings: ${imported.warnings.join('; ')}`
         : '';
@@ -480,6 +507,55 @@ export class AdminHandlers {
       const message = error instanceof Error ? error.message : String(error);
       return tpl.identityImportResult(false, `Import failed: ${message}`);
     }
+  }
+
+  rollbackIdentityCard(body: string): string {
+    if (!this.cardVersionStore) {
+      return tpl.identityCardVersionResult(false, 'Character card versioning is not configured.');
+    }
+    const params = new URLSearchParams(body);
+    const rawVersion = params.get('version') ?? '';
+    const version = Number.parseInt(rawVersion, 10);
+    if (!Number.isInteger(version) || version <= 0) {
+      return tpl.identityCardVersionResult(false, 'version must be a positive integer.');
+    }
+
+    try {
+      const snapshot = this.cardVersionStore.rollback(version);
+      this.characterCard = snapshot.card;
+      return tpl.identityCardVersionResult(
+        true,
+        `Rolled back to version ${version}. Current version is v${snapshot.version}.`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return tpl.identityCardVersionResult(false, message);
+    }
+  }
+
+  previewIdentityCardDiff(body: string): string {
+    if (!this.cardVersionStore) {
+      return '<div class="form-error">Character card versioning is not configured.</div>';
+    }
+    const params = new URLSearchParams(body);
+    const rawVersion = params.get('version') ?? '';
+    const version = Number.parseInt(rawVersion, 10);
+    if (!Number.isInteger(version) || version <= 0) {
+      return '<div class="form-error">version must be a positive integer.</div>';
+    }
+
+    const entry = this.cardVersionStore.getHistoryEntry(version);
+    if (!entry) {
+      return `<div class="form-error">No history entry found for version ${version}.</div>`;
+    }
+
+    return tpl.identityCardDiffFragment(entry.previousCard, entry.newCard, {
+      fromVersion: entry.version,
+      toVersion: entry.version + 1,
+      updatedBy: entry.updatedBy,
+      timestamp: entry.timestamp,
+      reason: entry.reason,
+    });
   }
 
   // ── Settings ──

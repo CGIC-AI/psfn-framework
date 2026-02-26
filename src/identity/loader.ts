@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { CharacterCardV2, CharacterData } from './types.js';
+import type { CharacterCardV2 } from './types.js';
 
 const PLACEHOLDER_PATTERNS = [
   /^sytem prompt$/i,
@@ -23,11 +23,15 @@ export function loadCharacterCard(path: string): CharacterCardV2 {
   const raw = readFileSync(path, 'utf-8');
   const card = JSON.parse(raw) as CharacterCardV2;
 
-  if (!card.data?.name || !card.data?.personality) {
-    throw new Error(`Invalid character card at ${path}: missing name or personality`);
-  }
+  assertValidCharacterCard(card, path);
 
   return card;
+}
+
+export function assertValidCharacterCard(card: CharacterCardV2, pathHint = 'character card'): void {
+  if (!card.data?.name || !card.data?.personality) {
+    throw new Error(`Invalid character card at ${pathHint}: missing name or personality`);
+  }
 }
 
 export function composeSystemPrompt(card: CharacterCardV2, userName = '{{user}}'): string {

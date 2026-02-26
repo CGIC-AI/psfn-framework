@@ -95,6 +95,13 @@ describe('ContactStore', () => {
       ).all();
       expect(tables).toHaveLength(1);
     });
+
+    it('creates contact_mutation_audit table', () => {
+      const tables = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='contact_mutation_audit'",
+      ).all();
+      expect(tables).toHaveLength(1);
+    });
   });
 
   describe('upsert', () => {
@@ -255,6 +262,25 @@ describe('ContactStore', () => {
     it('returns false for nonexistent id', () => {
       expect(store.setTrustLevel('nonexistent', 'trusted')).toBe(false);
     });
+
+    it('records trust mutations with actor and old/new values', () => {
+      const contact = store.upsert({ displayName: 'Audit Trust Target', trustLevel: 'regular' });
+      expect(store.setTrustLevel(contact.id, 'trusted', 'admin:gui')).toBe(true);
+
+      const entries = store.listMutationAuditEntries({
+        contactId: contact.id,
+        field: 'trust_level',
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        contactId: contact.id,
+        field: 'trust_level',
+        actor: 'admin:gui',
+        oldValue: 'regular',
+        newValue: 'trusted',
+      });
+      expect(Number.isNaN(Date.parse(entries[0].timestamp))).toBe(false);
+    });
   });
 
   describe('updateLastSeen', () => {
@@ -413,6 +439,24 @@ describe('ContactStore', () => {
 
     it('returns false for nonexistent id', () => {
       expect(store.updateNotes('nonexistent', 'notes')).toBe(false);
+    });
+
+    it('records notes mutations and supports query filters', () => {
+      const contact = store.upsert({ displayName: 'Note Audit Target' });
+      expect(store.updateNotes(contact.id, 'First note', 'agent:tool:contact_note')).toBe(true);
+      expect(store.updateNotes(contact.id, 'First note', 'agent:tool:contact_note')).toBe(true);
+
+      const byField = store.listMutationAuditEntries({ field: 'notes' });
+      expect(byField).toHaveLength(1);
+      expect(byField[0]).toMatchObject({
+        contactId: contact.id,
+        actor: 'agent:tool:contact_note',
+        oldValue: null,
+        newValue: 'First note',
+      });
+
+      const byActor = store.listMutationAuditEntries({ actor: 'agent:tool:contact_note', limit: 10 });
+      expect(byActor.some(entry => entry.contactId === contact.id && entry.field === 'notes')).toBe(true);
     });
   });
 

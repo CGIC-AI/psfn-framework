@@ -3,6 +3,7 @@
 
 import type { ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { MemoryStore } from '../../memory/store.js';
 import type { SessionStore } from '../../session/store.js';
@@ -32,7 +33,11 @@ import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerMetadataUpdate, PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';
-import { importCharacterCardFromPath, importCharacterCardToPath } from '../../identity/importer.js';
+import {
+  importCharacterCardFromPath,
+  importCharacterCardToPath,
+  writeNormalizedCharacterCard,
+} from '../../identity/importer.js';
 import { PROMPT_LAYER_ROLES, type PromptLayerRole } from '../../identity/prompt-types.js';
 import type { TrustLevel } from '../../trust/types.js';
 import type {
@@ -47,7 +52,13 @@ import type {
 import type { SkillsRuntime } from '../../skills/runtime.js';
 import { TRUST_LEVELS } from '../../trust/types.js';
 import { VALID_RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '../../contacts/types.js';
-import { MEMORY_CONFIG } from '../../memory/types.js';
+import {
+  MEMORY_CONFIG,
+  VALID_MEMORY_TYPES,
+  VALID_SENSITIVITY_LEVELS,
+  type MemoryType,
+  type SensitivityLevel,
+} from '../../memory/types.js';
 import {
   loadSettings,
   saveSettings,
@@ -104,6 +115,15 @@ import {
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
 } from '../../session/compaction-audit.js';
+import type {
+  IdentityIntakeChatChunk,
+  IdentityIntakeCardMutation,
+  IdentityIntakeFlash,
+  IdentityIntakeItemStatus,
+  IdentityIntakeMemoryItem,
+  IdentityIntakeReviewState,
+  IdentityIntakeSourceSummary,
+} from './templates/identity.js';
 import * as tpl from './templates.js';
 
 interface ContactIdentityLinkView {
@@ -175,6 +195,87 @@ const MAX_DEBUG_TEXT_CHARS = 280;
 const MAX_DEBUG_MESSAGE_CHARS = 220;
 const MAX_DEBUG_DETAILS = 6;
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+const DEFAULT_CHAT_CHUNK_TARGET_TOKENS = 50_000;
+const MIN_CHAT_CHUNK_TARGET_TOKENS = 1_000;
+const MAX_CHAT_CHUNK_TARGET_TOKENS = 200_000;
+
+const INTAKE_CARD_DIFF_FIELDS: Array<{ key: keyof CharacterCardV2['data']; label: string }> = [
+  { key: 'name', label: 'Name' },
+  { key: 'description', label: 'Description' },
+  { key: 'personality', label: 'Personality' },
+  { key: 'scenario', label: 'Scenario' },
+  { key: 'first_mes', label: 'First Message' },
+  { key: 'mes_example', label: 'Message Example' },
+  { key: 'system_prompt', label: 'System Prompt' },
+  { key: 'post_history_instructions', label: 'Post-History Instructions' },
+  { key: 'tags', label: 'Tags' },
+  { key: 'creator', label: 'Creator' },
+  { key: 'creator_notes', label: 'Creator Notes' },
+];
+
+type IntakeStageStatus = 'pending' | 'partially_committed' | 'committed' | 'rejected';
+
+interface StagedIntakeSource {
+  kind: IdentityIntakeSourceSummary['kind'];
+  path: string;
+  itemCount: number;
+  note?: string;
+}
+
+interface StagedIntakeCardMutation {
+  sourcePath: string;
+  containerFormat: string;
+  spec: string;
+  warnings: string[];
+  status: IdentityIntakeItemStatus;
+  rows: IdentityIntakeCardMutation['rows'];
+  importedCard: CharacterCardV2;
+}
+
+interface StagedIntakeChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+  authorId?: string;
+  authorName?: string;
+}
+
+interface StagedIntakeChatMutation {
+  channelId: string;
+  chunkTargetTokens: number;
+  messages: StagedIntakeChatMessage[];
+  chunks: IdentityIntakeChatChunk[];
+}
+
+interface StagedIntakeMemoryMutation extends Omit<IdentityIntakeMemoryItem, 'textPreview'> {
+  text: string;
+}
+
+interface StagedIdentityIntake {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  status: IntakeStageStatus;
+  sources: StagedIntakeSource[];
+  cardMutation: StagedIntakeCardMutation | null;
+  chatMutation: StagedIntakeChatMutation | null;
+  memoryMutations: StagedIntakeMemoryMutation[];
+}
+
+interface IntakeFlash {
+  kind: IdentityIntakeFlash['kind'];
+  message: string;
+}
+
+interface ParsedRawMemoryItem {
+  text: string;
+  type: MemoryType;
+  importance: number;
+  salience: number;
+  tags: string[];
+  sensitivity: SensitivityLevel;
+  contactId?: string;
+}
 
 function truncateDebugText(value: unknown, maxChars = MAX_DEBUG_TEXT_CHARS): string {
   if (typeof value !== 'string') return '';
@@ -190,6 +291,110 @@ function toDebugDetailValue(value: unknown): AdminChatDebugDetailValue | undefin
   if (value instanceof Error) return truncateDebugText(value.message, 160);
   if (Array.isArray(value)) return `[${value.length} items]`;
   return undefined;
+}
+
+function clampUnit(value: number, fallback = 0.5): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(1, value));
+}
+
+function parsePositiveInteger(
+  value: string | null | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function toNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue;
+    const trimmed = entry.trim();
+    if (trimmed.length > 0) out.push(trimmed);
+  }
+  return out;
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function normalizeSessionRole(value: unknown): 'user' | 'assistant' | 'system' {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (text === 'assistant' || text === 'bot' || text === 'ai' || text === 'character' || text === 'char') {
+    return 'assistant';
+  }
+  if (text === 'system') return 'system';
+  return 'user';
+}
+
+function normalizeMemoryType(value: unknown): MemoryType {
+  if (typeof value !== 'string') return 'semantic';
+  const normalized = value.trim().toLowerCase() as MemoryType;
+  return VALID_MEMORY_TYPES.includes(normalized) ? normalized : 'semantic';
+}
+
+function normalizeSensitivity(value: unknown): SensitivityLevel {
+  if (typeof value !== 'string') return 'personal';
+  const normalized = value.trim().toLowerCase();
+  return VALID_SENSITIVITY_LEVELS.includes(normalized as SensitivityLevel)
+    ? normalized as SensitivityLevel
+    : 'personal';
+}
+
+function estimateTokens(text: string): number {
+  if (!text) return 1;
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function parseTimestamp(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      const parsedNumber = Number.parseInt(trimmed, 10);
+      if (Number.isInteger(parsedNumber) && parsedNumber > 0) return parsedNumber;
+      const parsedDate = Date.parse(trimmed);
+      if (Number.isFinite(parsedDate) && parsedDate > 0) return parsedDate;
+    }
+  }
+  return fallback;
+}
+
+function uniqueLowercase(values: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const value of values) {
+    const normalized = value.trim().toLowerCase();
+    if (normalized.length > 0) out.add(normalized);
+  }
+  return [...out];
+}
+
+function normalizeCardFieldValue(card: CharacterCardV2, key: keyof CharacterCardV2['data']): string {
+  if (key === 'tags') return card.data.tags.join(', ');
+  const value = card.data[key];
+  return typeof value === 'string' ? value : '';
 }
 
 export class AdminHandlers {
@@ -225,6 +430,7 @@ export class AdminHandlers {
   private auditTimeline = new AdminAuditTimelineStore();
   private valuesJournal: ValuesJournalStore;
   private activeToolInvocations = new Map<string, ActiveToolInvocation>();
+  private stagedIntake: StagedIdentityIntake | null = null;
 
   constructor(deps: {
     memoryStore: MemoryStore;
@@ -715,9 +921,724 @@ export class AdminHandlers {
         version: snapshot?.version ?? 1,
         checksum: snapshot?.checksum,
         history,
+        intakeReview: this.buildIdentityIntakeReviewState(),
       }),
       'identity',
     );
+  }
+
+  private buildIdentityIntakeReviewState(): IdentityIntakeReviewState | null {
+    if (!this.stagedIntake) return null;
+    const stage = this.stagedIntake;
+    return {
+      stageId: stage.id,
+      createdAt: stage.createdAt,
+      updatedAt: stage.updatedAt,
+      status: stage.status,
+      sources: stage.sources,
+      cardMutation: stage.cardMutation
+        ? {
+          sourcePath: stage.cardMutation.sourcePath,
+          containerFormat: stage.cardMutation.containerFormat,
+          spec: stage.cardMutation.spec,
+          warnings: stage.cardMutation.warnings,
+          status: stage.cardMutation.status,
+          rows: stage.cardMutation.rows,
+        }
+        : undefined,
+      chatProposal: stage.chatMutation
+        ? {
+          channelId: stage.chatMutation.channelId,
+          totalMessages: stage.chatMutation.messages.length,
+          chunkTargetTokens: stage.chatMutation.chunkTargetTokens,
+          chunks: stage.chatMutation.chunks,
+        }
+        : undefined,
+      memoryItems: stage.memoryMutations.map(item => ({
+        id: item.id,
+        source: item.source,
+        textPreview: truncateDebugText(item.text, 220),
+        type: item.type,
+        importance: item.importance,
+        salience: item.salience,
+        mergeDecision: item.mergeDecision,
+        mergeTargetId: item.mergeTargetId,
+        existingSalience: item.existingSalience,
+        proposedSalience: item.proposedSalience,
+        status: item.status,
+        error: item.error,
+      })),
+    };
+  }
+
+  private renderIdentityIntakeReview(flash?: IntakeFlash): string {
+    return tpl.identityIntakeReviewFragment(this.buildIdentityIntakeReviewState(), flash);
+  }
+
+  private parseJsonFileFromPath(rawPath: string, label: string): unknown {
+    const path = rawPath.trim();
+    if (!path) {
+      throw new Error(`${label} path is required`);
+    }
+    let raw: string;
+    try {
+      raw = readFileSync(path, 'utf-8');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unable to read ${label} file "${path}": ${message}`);
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${label} file "${path}" is not valid JSON: ${message}`);
+    }
+  }
+
+  private parseChatMessagesFromPayload(payload: unknown): StagedIntakeChatMessage[] {
+    let rows: unknown[] = [];
+    if (Array.isArray(payload)) {
+      rows = payload;
+    } else {
+      const record = toRecord(payload);
+      if (record) {
+        const candidates = record.messages ?? record.chat ?? record.turns ?? record.entries;
+        if (Array.isArray(candidates)) rows = candidates;
+      }
+    }
+
+    const now = Date.now();
+    const messages: StagedIntakeChatMessage[] = [];
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      if (typeof row === 'string') {
+        const content = row.trim();
+        if (!content) continue;
+        messages.push({
+          role: 'user',
+          content,
+          timestamp: now + index,
+        });
+        continue;
+      }
+
+      const entry = toRecord(row);
+      if (!entry) continue;
+      const content = toNonEmptyString(entry.content)
+        ?? toNonEmptyString(entry.text)
+        ?? toNonEmptyString(entry.message)
+        ?? toNonEmptyString(entry.body);
+      if (!content) continue;
+
+      messages.push({
+        role: normalizeSessionRole(entry.role ?? entry.speaker ?? entry.authorRole ?? entry.type),
+        content,
+        timestamp: parseTimestamp(
+          entry.timestamp ?? entry.createdAt ?? entry.created_at ?? entry.date,
+          now + index,
+        ),
+        authorId: toNonEmptyString(entry.authorId) ?? toNonEmptyString(entry.userId) ?? undefined,
+        authorName: toNonEmptyString(entry.authorName)
+          ?? toNonEmptyString(entry.author)
+          ?? toNonEmptyString(entry.name)
+          ?? undefined,
+      });
+    }
+
+    return messages;
+  }
+
+  private chunkChatMessages(
+    messages: readonly StagedIntakeChatMessage[],
+    chunkTargetTokens: number,
+  ): IdentityIntakeChatChunk[] {
+    if (messages.length === 0) return [];
+    const chunks: IdentityIntakeChatChunk[] = [];
+    let chunkStart = 0;
+    let chunkTokenCount = 0;
+    let chunkIndex = 1;
+
+    const pushChunk = (endExclusive: number, tokenCount: number): void => {
+      if (endExclusive <= chunkStart) return;
+      const messageCount = endExclusive - chunkStart;
+      chunks.push({
+        id: `chat-chunk-${chunkIndex}`,
+        index: chunkIndex,
+        startMessage: chunkStart + 1,
+        endMessage: endExclusive,
+        messageCount,
+        estimatedTokens: tokenCount,
+        status: 'pending',
+      });
+      chunkIndex += 1;
+      chunkStart = endExclusive;
+      chunkTokenCount = 0;
+    };
+
+    for (let idx = 0; idx < messages.length; idx++) {
+      const messageTokens = estimateTokens(messages[idx].content);
+      if (chunkTokenCount > 0 && chunkTokenCount + messageTokens > chunkTargetTokens) {
+        pushChunk(idx, chunkTokenCount);
+      }
+      chunkTokenCount += messageTokens;
+    }
+
+    pushChunk(messages.length, chunkTokenCount);
+    return chunks;
+  }
+
+  private parseMemoryItemsFromPayload(payload: unknown): ParsedRawMemoryItem[] {
+    let rows: unknown[] = [];
+    if (Array.isArray(payload)) {
+      rows = payload;
+    } else {
+      const record = toRecord(payload);
+      if (record) {
+        const candidates = record.memories ?? record.memory ?? record.items ?? record.entries;
+        if (Array.isArray(candidates)) rows = candidates;
+      }
+    }
+
+    const items: ParsedRawMemoryItem[] = [];
+    for (const row of rows) {
+      const entry = toRecord(row);
+      if (!entry) continue;
+      const text = toNonEmptyString(entry.text)
+        ?? toNonEmptyString(entry.content)
+        ?? toNonEmptyString(entry.memory)
+        ?? toNonEmptyString(entry.summary);
+      if (!text) continue;
+
+      const importance = clampUnit(
+        toNumber(entry.importance)
+          ?? toNumber(entry.priority)
+          ?? toNumber(entry.weight)
+          ?? 0.5,
+      );
+      const salience = clampUnit(toNumber(entry.salience) ?? importance, importance);
+
+      items.push({
+        text,
+        type: normalizeMemoryType(entry.type ?? entry.memoryType),
+        importance,
+        salience,
+        tags: uniqueLowercase(toStringArray(entry.tags)),
+        sensitivity: normalizeSensitivity(entry.sensitivity),
+        contactId: toNonEmptyString(entry.contactId) ?? toNonEmptyString(entry.contact_id) ?? undefined,
+      });
+    }
+    return items;
+  }
+
+  private parseLorebookItemsFromPayload(payload: unknown): ParsedRawMemoryItem[] {
+    let rows: unknown[] = [];
+    if (Array.isArray(payload)) {
+      rows = payload;
+    } else {
+      const root = toRecord(payload);
+      if (root) {
+        const topLevel = root.entries ?? root.items ?? root.lorebook;
+        if (Array.isArray(topLevel)) rows = topLevel;
+        if (rows.length === 0) {
+          const cardData = toRecord(root.data);
+          const characterBook = toRecord(cardData?.character_book ?? root.character_book);
+          if (characterBook && Array.isArray(characterBook.entries)) {
+            rows = characterBook.entries;
+          }
+        }
+      }
+    }
+
+    const items: ParsedRawMemoryItem[] = [];
+    for (const row of rows) {
+      const entry = toRecord(row);
+      if (!entry) continue;
+      const text = toNonEmptyString(entry.content)
+        ?? toNonEmptyString(entry.text)
+        ?? toNonEmptyString(entry.description)
+        ?? toNonEmptyString(entry.comment);
+      if (!text) continue;
+
+      const keywords = toStringArray(entry.keys)
+        .concat(toStringArray(entry.keywords))
+        .concat(toStringArray(entry.trigger_words))
+        .slice(0, 6);
+      const tags = uniqueLowercase(['lorebook', ...keywords]);
+      const importance = clampUnit(
+        toNumber(entry.importance)
+          ?? toNumber(entry.priority)
+          ?? toNumber(entry.weight)
+          ?? 0.55,
+      );
+      const salience = clampUnit(toNumber(entry.salience) ?? importance, importance);
+
+      items.push({
+        text,
+        type: normalizeMemoryType(entry.type ?? 'semantic'),
+        importance,
+        salience,
+        tags,
+        sensitivity: normalizeSensitivity(entry.sensitivity),
+        contactId: toNonEmptyString(entry.contactId) ?? toNonEmptyString(entry.contact_id) ?? undefined,
+      });
+    }
+
+    return items;
+  }
+
+  private stageMemoryMutations(
+    items: readonly ParsedRawMemoryItem[],
+    source: 'lorebook' | 'memory',
+  ): StagedIntakeMemoryMutation[] {
+    const existingByText = new Map<string, ReturnType<MemoryStore['getAllActiveMemories']>[number]>();
+    for (const memory of this.memoryStore.getAllActiveMemories()) {
+      const key = memory.text.trim().toLowerCase();
+      if (!key || existingByText.has(key)) continue;
+      existingByText.set(key, memory);
+    }
+
+    return items.map((item, index) => {
+      const key = item.text.trim().toLowerCase();
+      const existing = key ? existingByText.get(key) : undefined;
+      const mergeDecision: IdentityIntakeMemoryItem['mergeDecision'] = existing ? 'merge' : 'create';
+      return {
+        id: `${source}-item-${index + 1}`,
+        source,
+        text: item.text,
+        type: item.type,
+        importance: item.importance,
+        salience: item.salience,
+        mergeDecision,
+        mergeTargetId: existing?.id,
+        existingSalience: existing?.salience,
+        proposedSalience: existing ? Math.max(existing.salience, item.salience) : item.salience,
+        status: 'pending',
+        tags: item.tags,
+        sensitivity: item.sensitivity,
+        contactId: item.contactId,
+      };
+    });
+  }
+
+  private recomputeStagedIntakeStatus(stage: StagedIdentityIntake): void {
+    const statuses: IdentityIntakeItemStatus[] = [];
+    if (stage.cardMutation) statuses.push(stage.cardMutation.status);
+    if (stage.chatMutation) statuses.push(...stage.chatMutation.chunks.map(chunk => chunk.status));
+    statuses.push(...stage.memoryMutations.map(item => item.status));
+
+    const pending = statuses.filter(status => status === 'pending').length;
+    const committed = statuses.filter(status => status === 'committed').length;
+    const rejected = statuses.filter(status => status === 'rejected').length;
+    const failed = statuses.filter(status => status === 'failed').length;
+
+    if (pending === 0 && committed > 0 && rejected === 0 && failed === 0) {
+      stage.status = 'committed';
+    } else if (pending === 0 && committed === 0 && (rejected > 0 || failed > 0)) {
+      stage.status = 'rejected';
+    } else if (committed > 0 || rejected > 0 || failed > 0) {
+      stage.status = 'partially_committed';
+    } else {
+      stage.status = 'pending';
+    }
+    stage.updatedAt = Date.now();
+  }
+
+  stageIdentityIntake(body: string): string {
+    const params = new URLSearchParams(body);
+    const cardPath = (params.get('cardPath') ?? '').trim();
+    const chatPath = (params.get('chatPath') ?? '').trim();
+    const lorebookPath = (params.get('lorebookPath') ?? '').trim();
+    const memoryPath = (params.get('memoryPath') ?? '').trim();
+
+    if (!cardPath && !chatPath && !lorebookPath && !memoryPath) {
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Staged intake was denied: no source paths were provided.',
+      );
+      return this.renderIdentityIntakeReview({
+        kind: 'error',
+        message: 'Provide at least one source path to stage.',
+      });
+    }
+
+    try {
+      const now = Date.now();
+      const stage: StagedIdentityIntake = {
+        id: `intake-${randomUUID()}`,
+        createdAt: now,
+        updatedAt: now,
+        status: 'pending',
+        sources: [],
+        cardMutation: null,
+        chatMutation: null,
+        memoryMutations: [],
+      };
+
+      if (cardPath) {
+        const imported = importCharacterCardFromPath(cardPath);
+        const rows = INTAKE_CARD_DIFF_FIELDS.map(({ key, label }) => {
+          const previous = normalizeCardFieldValue(this.characterCard, key);
+          const next = normalizeCardFieldValue(imported.card, key);
+          return {
+            field: label,
+            previous,
+            next,
+            changed: previous !== next,
+          };
+        });
+        stage.cardMutation = {
+          sourcePath: imported.sourcePath,
+          containerFormat: imported.containerFormat,
+          spec: imported.spec,
+          warnings: imported.warnings,
+          status: 'pending',
+          rows,
+          importedCard: imported.card,
+        };
+        stage.sources.push({
+          kind: 'card',
+          path: imported.sourcePath,
+          itemCount: 1,
+          note: imported.warnings.length > 0 ? imported.warnings.join('; ') : undefined,
+        });
+      }
+
+      if (chatPath) {
+        const payload = this.parseJsonFileFromPath(chatPath, 'Chat');
+        const messages = this.parseChatMessagesFromPayload(payload);
+        if (messages.length === 0) {
+          throw new Error(`Chat source "${chatPath}" produced no valid messages`);
+        }
+        const channelId = (params.get('chatChannelId') ?? '').trim() || `import:${stage.id}`;
+        const chunkTargetTokens = parsePositiveInteger(
+          params.get('chatChunkTargetTokens'),
+          DEFAULT_CHAT_CHUNK_TARGET_TOKENS,
+          MIN_CHAT_CHUNK_TARGET_TOKENS,
+          MAX_CHAT_CHUNK_TARGET_TOKENS,
+        );
+        const chunks = this.chunkChatMessages(messages, chunkTargetTokens);
+        stage.chatMutation = {
+          channelId,
+          chunkTargetTokens,
+          messages,
+          chunks,
+        };
+        stage.sources.push({
+          kind: 'chat',
+          path: chatPath,
+          itemCount: messages.length,
+          note: `${chunks.length} chunks @ ~${chunkTargetTokens} tokens`,
+        });
+      }
+
+      if (lorebookPath) {
+        const payload = this.parseJsonFileFromPath(lorebookPath, 'Lorebook');
+        const lorebookItems = this.parseLorebookItemsFromPayload(payload);
+        if (lorebookItems.length === 0) {
+          throw new Error(`Lorebook source "${lorebookPath}" produced no valid entries`);
+        }
+        stage.memoryMutations.push(...this.stageMemoryMutations(lorebookItems, 'lorebook'));
+        stage.sources.push({
+          kind: 'lorebook',
+          path: lorebookPath,
+          itemCount: lorebookItems.length,
+        });
+      }
+
+      if (memoryPath) {
+        const payload = this.parseJsonFileFromPath(memoryPath, 'Memory');
+        const memoryItems = this.parseMemoryItemsFromPayload(payload);
+        if (memoryItems.length === 0) {
+          throw new Error(`Memory source "${memoryPath}" produced no valid entries`);
+        }
+        stage.memoryMutations.push(...this.stageMemoryMutations(memoryItems, 'memory'));
+        stage.sources.push({
+          kind: 'memory',
+          path: memoryPath,
+          itemCount: memoryItems.length,
+        });
+      }
+
+      if (!stage.cardMutation && !stage.chatMutation && stage.memoryMutations.length === 0) {
+        throw new Error('No mutations were parsed from the provided intake sources');
+      }
+
+      this.stagedIntake = stage;
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'allowed',
+        `PSFN staged intake bundle ${stage.id} for operator review.`,
+        [
+          `sources=${stage.sources.map(source => source.kind).join(',')}`,
+          stage.chatMutation ? `chatChunks=${stage.chatMutation.chunks.length}` : null,
+          stage.memoryMutations.length > 0 ? `memoryItems=${stage.memoryMutations.length}` : null,
+        ],
+      );
+      return this.renderIdentityIntakeReview({
+        kind: 'success',
+        message: `Staged intake bundle ${stage.id}. Review proposed changes, then approve/reject/commit selected.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Staged intake failed: ${message}`,
+      );
+      return this.renderIdentityIntakeReview({
+        kind: 'error',
+        message: `Staging failed: ${message}`,
+      });
+    }
+  }
+
+  async commitIdentityIntake(body: string): Promise<string> {
+    if (!this.stagedIntake) {
+      return this.renderIdentityIntakeReview({
+        kind: 'error',
+        message: 'No staged intake bundle is available.',
+      });
+    }
+
+    const stage = this.stagedIntake;
+    const params = new URLSearchParams(body);
+    const stageId = (params.get('stageId') ?? '').trim();
+    if (stageId && stageId !== stage.id) {
+      return this.renderIdentityIntakeReview({
+        kind: 'error',
+        message: `Staged bundle changed. Active stage is ${stage.id}.`,
+      });
+    }
+
+    const decision = (params.get('decision') ?? '').trim();
+    if (decision !== 'approve' && decision !== 'reject' && decision !== 'partial') {
+      return this.renderIdentityIntakeReview({
+        kind: 'error',
+        message: `Unknown review decision "${decision}".`,
+      });
+    }
+
+    const reason = (params.get('reason') ?? '').trim();
+    const pendingCard = stage.cardMutation?.status === 'pending';
+    const pendingChatChunks = stage.chatMutation?.chunks.filter(chunk => chunk.status === 'pending') ?? [];
+    const pendingMemoryItems = stage.memoryMutations.filter(item => item.status === 'pending');
+
+    if (!pendingCard && pendingChatChunks.length === 0 && pendingMemoryItems.length === 0) {
+      return this.renderIdentityIntakeReview({
+        kind: 'error',
+        message: 'No pending staged changes remain.',
+      });
+    }
+
+    if (decision === 'reject') {
+      if (stage.cardMutation?.status === 'pending') stage.cardMutation.status = 'rejected';
+      for (const chunk of pendingChatChunks) chunk.status = 'rejected';
+      for (const item of pendingMemoryItems) item.status = 'rejected';
+      stage.status = 'rejected';
+      stage.updatedAt = Date.now();
+
+      this.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Operator rejected staged intake bundle ${stage.id}.`,
+        [
+          pendingCard ? 'card=rejected' : null,
+          pendingChatChunks.length > 0 ? `chatChunksRejected=${pendingChatChunks.length}` : null,
+          pendingMemoryItems.length > 0 ? `memoryItemsRejected=${pendingMemoryItems.length}` : null,
+          reason ? `note=${reason}` : null,
+        ],
+      );
+      return this.renderIdentityIntakeReview({
+        kind: 'success',
+        message: `Rejected pending changes for bundle ${stage.id}.`,
+      });
+    }
+
+    const applyCard = decision === 'approve'
+      ? pendingCard
+      : (pendingCard && (params.get('applyCard') === 'true' || params.get('applyCard') === 'on'));
+    const selectedChatChunkIds = decision === 'approve'
+      ? new Set(pendingChatChunks.map(chunk => chunk.id))
+      : new Set(
+        params.getAll('chatChunkId')
+          .map(value => value.trim())
+          .filter(Boolean),
+      );
+    const selectedMemoryItemIds = decision === 'approve'
+      ? new Set(pendingMemoryItems.map(item => item.id))
+      : new Set(
+        params.getAll('memoryItemId')
+          .map(value => value.trim())
+          .filter(Boolean),
+      );
+
+    if (!applyCard && selectedChatChunkIds.size === 0 && selectedMemoryItemIds.size === 0) {
+      return this.renderIdentityIntakeReview({
+        kind: 'error',
+        message: 'Select at least one pending mutation to commit.',
+      });
+    }
+
+    let committedCard = false;
+    let committedChatChunks = 0;
+    let committedChatMessages = 0;
+    let committedMemoryItems = 0;
+    let failedCard = false;
+    let failedChatChunks = 0;
+    let failedMemoryItems = 0;
+
+    if (applyCard && stage.cardMutation && stage.cardMutation.status === 'pending') {
+      try {
+        const destinationPath = this.config.characterCardPath?.trim();
+        if (this.cardVersionStore) {
+          const updated = this.cardVersionStore.update(
+            stage.cardMutation.importedCard,
+            'admin:intake',
+            reason || `Committed staged intake bundle ${stage.id}`,
+          );
+          this.characterCard = updated.card;
+        } else {
+          if (destinationPath) {
+            writeNormalizedCharacterCard(destinationPath, stage.cardMutation.importedCard);
+          }
+          this.characterCard = stage.cardMutation.importedCard;
+        }
+        stage.cardMutation.status = 'committed';
+        committedCard = true;
+      } catch (error) {
+        stage.cardMutation.status = 'failed';
+        failedCard = true;
+      }
+    }
+
+    if (stage.chatMutation) {
+      for (const chunk of stage.chatMutation.chunks) {
+        if (chunk.status !== 'pending' || !selectedChatChunkIds.has(chunk.id)) continue;
+        try {
+          const rows = stage.chatMutation.messages.slice(chunk.startMessage - 1, chunk.endMessage);
+          for (const message of rows) {
+            this.sessionStore.append({
+              channelId: stage.chatMutation.channelId,
+              role: message.role,
+              content: message.content,
+              authorId: message.authorId,
+              authorName: message.authorName,
+              timestamp: message.timestamp,
+              metadata: JSON.stringify({
+                type: 'admin_staged_intake',
+                stageId: stage.id,
+                chunkId: chunk.id,
+              }),
+            });
+          }
+          chunk.status = 'committed';
+          committedChatChunks += 1;
+          committedChatMessages += rows.length;
+        } catch (error) {
+          chunk.status = 'failed';
+          chunk.error = error instanceof Error ? error.message : String(error);
+          failedChatChunks += 1;
+        }
+      }
+    }
+
+    for (const item of stage.memoryMutations) {
+      if (item.status !== 'pending' || !selectedMemoryItemIds.has(item.id)) continue;
+      try {
+        if (item.mergeDecision === 'merge' && item.mergeTargetId) {
+          const existing = this.memoryStore.getById(item.mergeTargetId);
+          if (!existing) {
+            throw new Error(`merge target "${item.mergeTargetId}" was not found`);
+          }
+          const mergedSalience = Math.max(existing.salience, item.salience);
+          const mergedTags = uniqueLowercase([...existing.tags, ...item.tags]);
+          this.memoryStore.updateMemory(existing.id, {
+            salience: mergedSalience,
+            tags: mergedTags,
+            lastAccessed: Date.now(),
+            accessCount: existing.accessCount + 1,
+          });
+          item.proposedSalience = mergedSalience;
+        } else {
+          if (!this.embeddingService) {
+            throw new Error('Embedding service is not configured for new memory writes');
+          }
+          const embedding = await this.embeddingService.embed(item.text);
+          const now = Date.now();
+          this.memoryStore.insertMemory({
+            id: `intake-${randomUUID()}`,
+            text: item.text,
+            type: item.type,
+            importance: item.importance,
+            confidence: 0.82,
+            emotionalValence: 0,
+            salience: item.salience,
+            sourceRef: `admin:intake:${stage.id}:${item.source}`,
+            extractedAt: now,
+            lastAccessed: now,
+            accessCount: 1,
+            tags: item.tags,
+            sensitivity: item.sensitivity,
+            contactId: item.contactId,
+          }, embedding);
+        }
+        item.status = 'committed';
+        item.error = undefined;
+        committedMemoryItems += 1;
+      } catch (error) {
+        item.status = 'failed';
+        item.error = error instanceof Error ? error.message : String(error);
+        failedMemoryItems += 1;
+      }
+    }
+
+    this.recomputeStagedIntakeStatus(stage);
+
+    this.appendAuditTimelineEntry(
+      'identity_edit',
+      failedCard || failedChatChunks > 0 || failedMemoryItems > 0 ? 'denied' : 'allowed',
+      `Operator applied "${decision}" decision to staged intake bundle ${stage.id}.`,
+      [
+        committedCard ? 'card=committed' : null,
+        committedChatChunks > 0 ? `chatChunksCommitted=${committedChatChunks}` : null,
+        committedChatMessages > 0 ? `chatMessagesCommitted=${committedChatMessages}` : null,
+        committedMemoryItems > 0 ? `memoryItemsCommitted=${committedMemoryItems}` : null,
+        failedCard ? 'card=failed' : null,
+        failedChatChunks > 0 ? `chatChunksFailed=${failedChatChunks}` : null,
+        failedMemoryItems > 0 ? `memoryItemsFailed=${failedMemoryItems}` : null,
+        reason ? `note=${reason}` : null,
+      ],
+    );
+
+    if (committedMemoryItems > 0 || failedMemoryItems > 0) {
+      this.appendAuditTimelineEntry(
+        'memory_mutation',
+        failedMemoryItems > 0 ? 'denied' : 'allowed',
+        failedMemoryItems > 0
+          ? `Staged memory commit finished with failures for bundle ${stage.id}.`
+          : `Staged memory commit completed for bundle ${stage.id}.`,
+        [
+          `committed=${committedMemoryItems}`,
+          `failed=${failedMemoryItems}`,
+        ],
+      );
+    }
+
+    const summary: string[] = [];
+    if (committedCard) summary.push('card committed');
+    if (committedChatChunks > 0) summary.push(`${committedChatChunks} chat chunks committed`);
+    if (committedMemoryItems > 0) summary.push(`${committedMemoryItems} memory items committed`);
+    if (failedCard) summary.push('card failed');
+    if (failedChatChunks > 0) summary.push(`${failedChatChunks} chat chunks failed`);
+    if (failedMemoryItems > 0) summary.push(`${failedMemoryItems} memory items failed`);
+    if (summary.length === 0) summary.push('no pending items matched selection');
+
+    return this.renderIdentityIntakeReview({
+      kind: failedCard || failedChatChunks > 0 || failedMemoryItems > 0 ? 'error' : 'success',
+      message: summary.join('; '),
+    });
   }
 
   importIdentityCard(body: string): string {

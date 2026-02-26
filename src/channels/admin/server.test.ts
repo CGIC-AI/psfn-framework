@@ -20,7 +20,7 @@ import { PromptRegistryStore, EXTRACTION_PROMPT_KEY } from '../../identity/promp
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
-import type { LLMProvider } from '../../agent-loop.js';
+import type { EmbeddingService, LLMProvider } from '../../agent-loop.js';
 import type { SkillSnapshot } from '../../skills/types.js';
 import type { AdminChatBootstrapResponse } from './chat/index.js';
 import { classifyChannel } from '../../trust/policy.js';
@@ -242,6 +242,20 @@ const testSkillSnapshot: SkillSnapshot = {
   ],
 };
 
+const testEmbeddingService: EmbeddingService = {
+  dims: 3,
+  embed: async (text: string) => {
+    const normalized = text.trim().toLowerCase();
+    const base = Math.max(1, normalized.length);
+    return new Float32Array([
+      Math.min(1, base / 120),
+      normalized.includes('lore') ? 0.9 : 0.3,
+      normalized.includes('memory') ? 0.8 : 0.2,
+    ]);
+  },
+  embedBatch: async (texts: string[]) => Promise.all(texts.map(text => testEmbeddingService.embed(text))),
+};
+
 // ── Tests ──
 
 describe('AdminServer', () => {
@@ -372,7 +386,7 @@ describe('AdminServer', () => {
       eventBus,
       characterCard: testCard,
       config: testConfig,
-      embeddingService: null,
+      embeddingService: testEmbeddingService,
       promptStore,
       promptRegistry,
       cardVersionStore,
@@ -891,6 +905,238 @@ describe('AdminServer', () => {
       const res = await request(port, 'GET', '/identity');
       expect(res.body).toContain('test-model');
       expect(res.body).not.toContain('discordToken');
+    });
+
+    it('renders staged intake staging/review controls on identity page', async () => {
+      const res = await request(port, 'GET', '/identity');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('hx-post="/api/identity/intake/stage"');
+      expect(res.body).toContain('id="identity-intake-review"');
+      expect(res.body).toContain('Chat Chunk Target Tokens');
+      expect(res.body).toContain('No staged intake bundle yet');
+    });
+
+    it('stages card/chat/lorebook/memory sources for review with chunk and merge visibility', async () => {
+      testConfig.characterCardPath = join(tempDir, 'character.json');
+      const cardPath = join(tempDir, 'staged-card.json');
+      writeFileSync(cardPath, JSON.stringify({
+        spec: 'chara_card_v3',
+        spec_version: '3.0',
+        data: {
+          name: 'StagedBot',
+          description: 'Staged description',
+          personality: 'Staged personality',
+          scenario: 'A staged scenario',
+          first_mes: 'Hello from staged card',
+          mes_example: '{{user}}: hi\n{{char}}: hello',
+          creator: 'stage-test',
+          tags: ['staged'],
+          system_prompt: 'Staged system prompt',
+          post_history_instructions: 'Staged post-history instructions',
+          creator_notes: 'staged notes',
+          character_version: '1.0',
+        },
+      }), 'utf-8');
+
+      const chatPath = join(tempDir, 'staged-chat.json');
+      writeFileSync(chatPath, JSON.stringify({
+        messages: [
+          { role: 'user', content: 'message one '.repeat(12), timestamp: 1_700_000_001_000 },
+          { role: 'assistant', content: 'message two '.repeat(12), timestamp: 1_700_000_002_000 },
+          { role: 'user', content: 'message three '.repeat(12), timestamp: 1_700_000_003_000 },
+        ],
+      }), 'utf-8');
+
+      const lorebookPath = join(tempDir, 'staged-lorebook.json');
+      writeFileSync(lorebookPath, JSON.stringify({
+        entries: [
+          {
+            content: 'Known lore memory',
+            keys: ['origin', 'lore'],
+            importance: 0.6,
+          },
+        ],
+      }), 'utf-8');
+
+      const memoryPath = join(tempDir, 'staged-memory.json');
+      writeFileSync(memoryPath, JSON.stringify([
+        {
+          text: 'Known lore memory',
+          type: 'semantic',
+          importance: 0.82,
+          salience: 0.84,
+          tags: ['memory-export'],
+        },
+        {
+          text: 'Fresh memory from export',
+          type: 'episodic',
+          importance: 0.77,
+          salience: 0.78,
+          tags: ['fresh'],
+        },
+      ]), 'utf-8');
+
+      memoryStore.insertMemory({
+        id: 'existing-memory-1',
+        text: 'Known lore memory',
+        type: 'semantic',
+        importance: 0.5,
+        confidence: 0.8,
+        emotionalValence: 0,
+        salience: 0.4,
+        sourceRef: 'seed:test',
+        extractedAt: Date.now(),
+        lastAccessed: Date.now(),
+        accessCount: 1,
+        tags: ['seed'],
+        sensitivity: 'personal',
+      }, new Float32Array([0.1, 0.2, 0.3]));
+
+      const body = new URLSearchParams({
+        cardPath,
+        chatPath,
+        lorebookPath,
+        memoryPath,
+        chatChannelId: 'import:test-stage',
+        chatChunkTargetTokens: '30',
+      }).toString();
+      const res = await request(port, 'POST', '/api/identity/intake/stage', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Staged intake bundle');
+      expect(res.body).toContain('Proposed Identity Mutations');
+      expect(res.body).toContain('Proposed L0 Chat Mutations');
+      expect(res.body).toContain('Proposed L2 Memory Mutations');
+      expect(res.body).toContain('chat-chunk-1');
+      expect(res.body).toContain('name="decision" value="partial"');
+      expect(res.body).toContain('Merge into existing-memory-1');
+      expect(res.body).toContain('name="memoryItemId" value="memory-item-1"');
+    });
+
+    it('partially commits selected staged sources and records audit entries', async () => {
+      testConfig.characterCardPath = join(tempDir, 'character.json');
+      const cardPath = join(tempDir, 'commit-card.json');
+      writeFileSync(cardPath, JSON.stringify({
+        spec: 'chara_card_v3',
+        spec_version: '3.0',
+        data: {
+          name: 'CommittedBot',
+          description: 'Committed description',
+          personality: 'Committed personality',
+          scenario: '',
+          first_mes: '',
+          mes_example: '',
+          creator: 'commit-test',
+          tags: ['committed'],
+          system_prompt: '',
+          post_history_instructions: '',
+          character_version: '1.0',
+        },
+      }), 'utf-8');
+
+      const chatPath = join(tempDir, 'commit-chat.json');
+      writeFileSync(chatPath, JSON.stringify({
+        messages: [
+          { role: 'user', content: 'alpha '.repeat(700), timestamp: 1_700_000_011_000 },
+          { role: 'assistant', content: 'beta '.repeat(700), timestamp: 1_700_000_012_000 },
+        ],
+      }), 'utf-8');
+
+      const memoryPath = join(tempDir, 'commit-memory.json');
+      writeFileSync(memoryPath, JSON.stringify([
+        {
+          text: 'Committed memory item',
+          type: 'semantic',
+          importance: 0.8,
+          salience: 0.79,
+          tags: ['commit-path'],
+        },
+      ]), 'utf-8');
+
+      const stageBody = new URLSearchParams({
+        cardPath,
+        chatPath,
+        memoryPath,
+        chatChannelId: 'import:partial-commit',
+        chatChunkTargetTokens: '30',
+      }).toString();
+      const stageRes = await request(port, 'POST', '/api/identity/intake/stage', stageBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(stageRes.status).toBe(200);
+
+      const stageIdMatch = stageRes.body.match(/name="stageId" value="([^"]+)"/);
+      expect(stageIdMatch?.[1]).toBeTruthy();
+      const stageId = stageIdMatch?.[1] ?? '';
+
+      const commitBody = new URLSearchParams({
+        stageId,
+        decision: 'partial',
+        applyCard: 'true',
+        chatChunkId: 'chat-chunk-1',
+        memoryItemId: 'memory-item-1',
+        reason: 'Commit selected artifacts only',
+      }).toString();
+      const commitRes = await request(port, 'POST', '/api/identity/intake/commit', commitBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(commitRes.status).toBe(200);
+      expect(commitRes.body).toContain('card committed');
+      expect(commitRes.body).toContain('chat chunks committed');
+      expect(commitRes.body).toContain('memory items committed');
+      expect(commitRes.body).toContain('Partially committed');
+
+      expect(cardVersionStore.getCurrent().card.data.name).toBe('CommittedBot');
+      const stagedEntries = sessionStore.getRecent('import:partial-commit', 10);
+      expect(stagedEntries).toHaveLength(1);
+      expect(stagedEntries[0]?.content).toContain('alpha');
+
+      const activeMemories = memoryStore.getAllActiveMemories();
+      expect(activeMemories.some(entry => entry.text === 'Committed memory item')).toBe(true);
+
+      const eventsRes = await request(port, 'GET', '/events');
+      expect(eventsRes.body).toContain('staged intake bundle');
+      expect(eventsRes.body).toContain('Commit selected artifacts only');
+    });
+
+    it('rejects pending staged intake changes with audit visibility', async () => {
+      const chatPath = join(tempDir, 'reject-chat.json');
+      writeFileSync(chatPath, JSON.stringify({
+        messages: [
+          { role: 'user', content: 'reject path message', timestamp: 1_700_000_031_000 },
+        ],
+      }), 'utf-8');
+
+      const stageBody = new URLSearchParams({
+        chatPath,
+        chatChannelId: 'import:reject',
+      }).toString();
+      const stageRes = await request(port, 'POST', '/api/identity/intake/stage', stageBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(stageRes.status).toBe(200);
+
+      const stageIdMatch = stageRes.body.match(/name="stageId" value="([^"]+)"/);
+      const stageId = stageIdMatch?.[1] ?? '';
+      const rejectBody = new URLSearchParams({
+        stageId,
+        decision: 'reject',
+        reason: 'Do not import this source',
+      }).toString();
+      const rejectRes = await request(port, 'POST', '/api/identity/intake/commit', rejectBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(rejectRes.status).toBe(200);
+      expect(rejectRes.body).toContain('Rejected pending changes');
+      expect(sessionStore.getRecent('import:reject', 10)).toHaveLength(0);
+
+      const eventsRes = await request(port, 'GET', '/events');
+      expect(eventsRes.body).toContain('rejected staged intake bundle');
+      expect(eventsRes.body).toContain('Do not import this source');
     });
 
     it('imports a character card from disk via POST endpoint', async () => {

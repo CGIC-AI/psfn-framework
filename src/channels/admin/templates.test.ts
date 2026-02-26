@@ -19,6 +19,7 @@ import {
   contactEditForm,
   contactRow,
   confirmationsPage,
+  identityPage,
   layout,
   loginPage,
   memoryDetailPage,
@@ -64,6 +65,106 @@ describe('admin templates', () => {
     expect(fragment).toContain('name="decision" value="modify"');
     expect(fragment).toContain('name="modifiedParamsJson"');
     expect(fragment).toContain('/api/confirmations/resolve');
+  });
+
+  it('renders staged intake review controls on identity page', () => {
+    const card: CharacterCardV2 = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'Template Bot',
+        description: 'Template description',
+        personality: 'Template personality',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: ['template'],
+        creator: 'tester',
+      },
+    };
+    const config = {
+      primaryModel: 'main-model',
+      extractionModel: 'extract-model',
+      discordBotId: '1234',
+      dataDir: '/tmp/test',
+      characterCardPath: '/tmp/test/card.json',
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+      sessionMessageLimit: 30,
+      memoryRetrievalLimit: 15,
+    } as SubstrateConfig;
+
+    const html = identityPage(card, config, {
+      intakeReview: {
+        stageId: 'intake-1',
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_010_000,
+        status: 'pending',
+        sources: [
+          { kind: 'card', path: '/tmp/incoming-card.json', itemCount: 1 },
+          { kind: 'chat', path: '/tmp/chat.json', itemCount: 4, note: '2 chunks @ ~50000 tokens' },
+          { kind: 'memory', path: '/tmp/memory.json', itemCount: 1 },
+        ],
+        cardMutation: {
+          sourcePath: '/tmp/incoming-card.json',
+          containerFormat: 'json',
+          spec: 'V3',
+          warnings: [],
+          status: 'pending',
+          rows: [
+            {
+              field: 'Name',
+              previous: 'Template Bot',
+              next: 'Imported Bot',
+              changed: true,
+            },
+          ],
+        },
+        chatProposal: {
+          channelId: 'import:staged',
+          totalMessages: 4,
+          chunkTargetTokens: 50_000,
+          chunks: [
+            {
+              id: 'chat-chunk-1',
+              index: 1,
+              startMessage: 1,
+              endMessage: 2,
+              messageCount: 2,
+              estimatedTokens: 100,
+              status: 'pending',
+            },
+          ],
+        },
+        memoryItems: [
+          {
+            id: 'memory-item-1',
+            source: 'memory',
+            textPreview: 'Imported memory',
+            type: 'semantic',
+            importance: 0.72,
+            salience: 0.72,
+            mergeDecision: 'merge',
+            mergeTargetId: 'existing-memory',
+            existingSalience: 0.4,
+            proposedSalience: 0.72,
+            status: 'pending',
+          },
+        ],
+      },
+    });
+
+    expect(html).toContain('hx-post="/api/identity/intake/stage"');
+    expect(html).toContain('Staged Intake (Card + L0 + L2)');
+    expect(html).toContain('Proposed Identity Mutations');
+    expect(html).toContain('Proposed L0 Chat Mutations');
+    expect(html).toContain('Proposed L2 Memory Mutations');
+    expect(html).toContain('name="decision" value="partial"');
+    expect(html).toContain('name="chatChunkId" value="chat-chunk-1"');
+    expect(html).toContain('name="memoryItemId" value="memory-item-1"');
+    expect(html).toContain('Merge into existing-memory');
   });
 
   it('renders audit timeline page with filters and narrative entries', () => {

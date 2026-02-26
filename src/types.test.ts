@@ -44,3 +44,46 @@ describe('loadConfig voice DAVE options', () => {
     expect(config.importProcessingLocalModel).toBe('llama3.2:latest');
   });
 });
+
+describe('loadConfig TTS provider options', () => {
+  it('defaults to elevenlabs when provider env vars are unset', () => {
+    delete process.env.TTS_PROVIDER;
+    delete process.env.VOICE_TTS_PROVIDER;
+    delete process.env.ECHO_TTS_URL;
+    delete process.env.ECHO_TTS_VOICE;
+    delete process.env.ECHO_TTS_PRESET;
+    delete process.env.ECHO_TTS_MODEL;
+
+    const config = loadConfig();
+
+    expect(config.ttsProvider).toBe('elevenlabs');
+    expect(config.echoTtsUrl).toBeUndefined();
+    expect(config.echoTtsVoice).toBeUndefined();
+    expect(config.echoTtsPreset).toBeUndefined();
+    expect(config.echoTtsModel).toBeUndefined();
+  });
+
+  it('parses echo provider and settings env vars', () => {
+    process.env.TTS_PROVIDER = 'echo';
+    process.env.ECHO_TTS_URL = 'http://127.0.0.1:5050/v1/audio/speech';
+    process.env.ECHO_TTS_VOICE = 'echo-voice-1';
+    process.env.ECHO_TTS_PRESET = 'normal';
+    process.env.ECHO_TTS_MODEL = 'echo-v1';
+
+    const config = loadConfig();
+
+    expect(config.ttsProvider).toBe('echo');
+    expect(config.echoTtsUrl).toBe('http://127.0.0.1:5050/v1/audio/speech');
+    expect(config.echoTtsVoice).toBe('echo-voice-1');
+    expect(config.echoTtsPreset).toBe('normal');
+    expect(config.echoTtsModel).toBe('echo-v1');
+  });
+
+  it('falls back to elevenlabs when provider env var is invalid', () => {
+    process.env.TTS_PROVIDER = 'definitely-not-a-provider';
+
+    const config = loadConfig();
+
+    expect(config.ttsProvider).toBe('elevenlabs');
+  });
+});

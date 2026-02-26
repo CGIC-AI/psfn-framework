@@ -647,7 +647,20 @@ export class ApiServer implements ChannelAdapter {
     content: string,
     authorId: string,
     authorName: string,
+    req: IncomingMessage,
   ): SubstrateMessage {
+    const approvalToken = this.clampHeader(
+      this.singleHeader(req.headers['x-broadcast-approval-token']),
+      256,
+    );
+    const requestedScope = this.clampHeader(
+      this.singleHeader(req.headers['x-broadcast-visibility-scope']),
+      64,
+    );
+    const visibilityScope = requestedScope === 'public_only' || requestedScope === 'approved_private_context'
+      ? requestedScope
+      : undefined;
+
     return {
       id: `api-${randomUUID()}`,
       channelId,
@@ -655,11 +668,28 @@ export class ApiServer implements ChannelAdapter {
       authorId,
       authorName,
       content,
+      ...(approvalToken || visibilityScope
+        ? {
+          routing: {
+            source: 'api' as const,
+            broadcast: {
+              ...(approvalToken ? { approvalToken } : {}),
+              ...(visibilityScope ? { visibilityScope } : {}),
+            },
+          },
+        }
+        : {}),
       timestamp: new Date(),
     };
   }
 
   private deriveChannelId(req: IncomingMessage): string {
+    const explicitChannelId = this.clampHeader(
+      this.singleHeader(req.headers['x-channel-id']),
+      256,
+    );
+    if (explicitChannelId) return explicitChannelId;
+
     const sessionId = req.headers['x-session-id'] as string | undefined;
     return sessionId ? `api:${sessionId}` : `api:${randomUUID()}`;
   }
@@ -965,7 +995,7 @@ export class ApiServer implements ChannelAdapter {
     this.seedSession(channelId, request.messages, authorId, authorName);
 
     const lastUserMsg = this.getLastUserMessage(request.messages);
-    const substrateMsg = this.buildSubstrateMessage(channelId, lastUserMsg, authorId, authorName);
+    const substrateMsg = this.buildSubstrateMessage(channelId, lastUserMsg, authorId, authorName, req);
     return { channelId, claimToken, substrateMsg };
   }
 

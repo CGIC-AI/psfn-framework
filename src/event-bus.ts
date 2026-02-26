@@ -95,6 +95,32 @@ export interface EventMap {
     ranked?: number;
     returned?: number;
     reason?: string;
+    channelVisibility?: string;
+    visibilityScope?: 'public_only' | 'approved_private_context' | 'non_broadcast';
+    operatorApproval?: boolean;
+    provenanceRefs?: string[];
+  };
+  'broadcast.pre_send.classified': {
+    channelId: string;
+    risky: boolean;
+    signals: Array<'sensitive' | 'private' | 'off_brand'>;
+    visibilityScope: 'public_only' | 'approved_private_context';
+  };
+  'broadcast.approval.required': {
+    channelId: string;
+    signals: Array<'sensitive' | 'private' | 'off_brand'>;
+    visibilityScope: 'public_only' | 'approved_private_context';
+    draftLength: number;
+  };
+  'broadcast.provenance': {
+    channelId: string;
+    visibilityScope: 'public_only' | 'approved_private_context';
+    operatorApproval: boolean;
+    risky: boolean;
+    signals: Array<'sensitive' | 'private' | 'off_brand'>;
+    provenanceRefs: string[];
+    contextMessageCount: number;
+    memoryContextChars: number;
   };
   'channel.queue.telemetry': {
     channelId: string;

@@ -159,6 +159,28 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Confidential secret');
   });
 
+  it('broadcast channels stay public_only unless explicit approval token is present', async () => {
+    const memories = makeAllSensitivities();
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const defaultScope = await retriever.retrieve('test query', 'twitter:feed', 'primary');
+    expect(defaultScope).toContain('Public fact');
+    expect(defaultScope).not.toContain('Confidential secret');
+
+    const approvedScope = await retriever.retrieve(
+      'test query',
+      'twitter:feed',
+      'primary',
+      { broadcastApprovalToken: 'approve:operator-12345678' },
+    );
+    expect(approvedScope).toContain('Public fact');
+    expect(approvedScope).toContain('Personal detail');
+    expect(approvedScope).toContain('Intimate memory');
+    expect(approvedScope).toContain('Confidential secret');
+  });
+
   it('primary trust + semi_private channel returns public + personal only', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);

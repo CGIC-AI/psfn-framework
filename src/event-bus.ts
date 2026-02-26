@@ -137,6 +137,30 @@ export interface EventMap {
     status: string;
     timestampMs: number;
   };
+  'voice.connection.recovery': {
+    guildId: string;
+    channelId: string;
+    userId: string;
+    generation: number;
+    failureCount: number;
+    tolerance: number;
+    attempt: number;
+    maxAttempts: number;
+    windowMs: number;
+    cooldownMs: number;
+    timestampMs: number;
+  };
+  'voice.connection.recovery.exhausted': {
+    guildId: string;
+    channelId: string;
+    userId: string;
+    generation: number;
+    failureCount: number;
+    tolerance: number;
+    maxAttempts: number;
+    windowMs: number;
+    timestampMs: number;
+  };
   'voice.turn.start': {
     turnId: string;
     channelId?: string;

@@ -1,8 +1,10 @@
 import { createElevenLabsStreamingTtsConnector, type ElevenLabsStreamingTtsConfig } from './elevenlabs-stream.js';
+import { createEchoStreamingTtsConnector } from './echo-stream.js';
 import type { StreamingTtsConnector } from './types.js';
 
 export * from './types.js';
 export * from './elevenlabs-stream.js';
+export * from './echo-stream.js';
 
 export type StreamingTtsProvider = 'elevenlabs' | 'echo';
 
@@ -26,7 +28,22 @@ const connectorFactories: Partial<{
   [TProvider in StreamingTtsProvider]: StreamingTtsConnectorFactory<TProvider>;
 }> = {
   elevenlabs: createElevenLabsStreamingTtsConnector,
+  echo: (config) => createEchoStreamingTtsConnector({
+    baseUrl: toEchoBaseUrl(config.url),
+    voice: config.voice,
+    preset: config.preset,
+    model: config.model,
+  }),
 };
+
+function toEchoBaseUrl(url: string): string {
+  const trimmed = url.replace(/\/+$/, '');
+  const echoSpeechPath = '/v1/audio/speech';
+  if (trimmed.endsWith(echoSpeechPath)) {
+    return trimmed.slice(0, -echoSpeechPath.length);
+  }
+  return trimmed;
+}
 
 export function registerStreamingTtsConnectorFactory<TProvider extends StreamingTtsProvider>(
   provider: TProvider,

@@ -3,9 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Agent } from '@mariozechner/pi-agent-core';
+import { Type } from '@sinclair/typebox';
 import { EventBus } from '../event-bus.js';
 import { SessionStore } from '../session/store.js';
-import { ShardManager } from './manager.js';
+import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createSpawnShardTool } from './tools.js';
 import type { LLMProvider, MemoryProvider } from '../agent-loop.js';
 import type { SubstrateConfig, LLMResponse } from '../types.js';
@@ -34,6 +35,31 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
 });
 
 const setSystemPromptSpy = vi.spyOn(Agent.prototype, 'setSystemPrompt');
+const setToolsSpy = vi.spyOn(Agent.prototype, 'setTools');
+
+function makeTestTool(name: string) {
+  const execute = vi.fn(async () => ({
+    content: [{ type: 'text' as const, text: `${name} ok` }],
+    details: {},
+  }));
+  return {
+    tool: {
+      name,
+      label: name,
+      description: `${name} test tool`,
+      parameters: Type.Object({}),
+      execute,
+    },
+    execute,
+  };
+}
+
+function lastSetToolNames(): string[] {
+  const call = setToolsSpy.mock.calls.at(-1);
+  if (!call) return [];
+  const tools = call[0] as Array<{ name: string }>;
+  return tools.map((tool) => tool.name);
+}
 
 // ── Fixtures ──
 
@@ -97,6 +123,7 @@ describe('ShardManager', () => {
     mockShardError = null;
     promptSpy.mockClear();
     setSystemPromptSpy.mockClear();
+    setToolsSpy.mockClear();
   });
 
   afterEach(() => {
@@ -314,6 +341,213 @@ describe('ShardManager', () => {
     expect(memory.retrieve).toHaveBeenCalled();
   });
 
+  it('injects default nursery shard toolset and blocks recursion tools', async () => {
+    const memoryWrite = makeTestTool('memory_write');
+    const contactLookup = makeTestTool('contact_lookup');
+    const repoStatus = makeTestTool('repo_status');
+    const repoDiff = makeTestTool('repo_diff');
+    const repoCommit = makeTestTool('repo_commit');
+    const spawnShard = makeTestTool('spawn_shard');
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'nursery' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryWrite.tool, contactLookup.tool],
+        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
+      }),
+    });
+
+    await manager.spawn({ name: 'toolset-default', task: 'test' });
+
+    const injected = lastSetToolNames();
+    expect(injected).toEqual(expect.arrayContaining(['load_tools', ...DEFAULT_SHARD_TOOLSET]));
+    expect(injected).not.toContain('repo_commit');
+    expect(injected).not.toContain('spawn_shard');
+  });
+
+  it('unlocks additional shard tools for apprentice tier', async () => {
+    const memoryWrite = makeTestTool('memory_write');
+    const contactLookup = makeTestTool('contact_lookup');
+    const contactList = makeTestTool('contact_list');
+    const memoryImport = makeTestTool('memory_import_batch');
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryWrite.tool, contactLookup.tool, contactList.tool, memoryImport.tool],
+        extended: [],
+      }),
+    });
+
+    await manager.spawn({ name: 'toolset-apprentice', task: 'test' });
+
+    const injected = lastSetToolNames();
+    expect(injected).toContain('contact_list');
+    expect(injected).toContain('memory_import_batch');
+  });
+
+  it('unlocks full configured catalog for autonomous tier', async () => {
+    const memoryWrite = makeTestTool('memory_write');
+    const repoCommit = makeTestTool('repo_commit');
+    const promptUpdate = makeTestTool('prompt_layer_update');
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryWrite.tool],
+        extended: [repoCommit.tool, promptUpdate.tool],
+      }),
+    });
+
+    await manager.spawn({ name: 'toolset-autonomous', task: 'test' });
+
+    const injected = lastSetToolNames();
+    expect(injected).toEqual(expect.arrayContaining([
+      'memory_write',
+      'repo_commit',
+      'prompt_layer_update',
+    ]));
+  });
+
+  it('respects configured shard toolset overrides', async () => {
+    const memoryWrite = makeTestTool('memory_write');
+    const contactLookup = makeTestTool('contact_lookup');
+    const repoStatus = makeTestTool('repo_status');
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'nursery',
+        shardToolsets: { nursery: ['contact_lookup'] },
+      },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryWrite.tool, contactLookup.tool],
+        extended: [repoStatus.tool],
+      }),
+    });
+
+    await manager.spawn({ name: 'toolset-customized', task: 'test' });
+
+    const injected = lastSetToolNames();
+    expect(injected).toContain('contact_lookup');
+    expect(injected).not.toContain('memory_write');
+    expect(injected).not.toContain('repo_status');
+  });
+
+  it('stamps shard source provenance on shard memory tools', async () => {
+    const memoryWrite = makeTestTool('memory_write');
+    const memoryImport = makeTestTool('memory_import_batch');
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryWrite.tool, memoryImport.tool],
+        extended: [],
+      }),
+    });
+
+    const result = await manager.spawn({ name: 'provenance', task: 'test' });
+    const tools = (setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>)
+      ?? [];
+    const wrappedMemoryWrite = tools.find((tool) => tool.name === 'memory_write');
+    const wrappedMemoryImport = tools.find((tool) => tool.name === 'memory_import_batch');
+
+    await wrappedMemoryWrite?.execute('mem-call', { text: 'x', type: 'semantic' });
+    await wrappedMemoryImport?.execute('import-call', { records: [{ text: 'x', type: 'semantic' }] });
+
+    expect(memoryWrite.execute).toHaveBeenCalledWith(
+      'mem-call',
+      expect.objectContaining({
+        __psfnShardSource: `shard:${result.shardId}`,
+      }),
+      undefined,
+    );
+    expect(memoryImport.execute).toHaveBeenCalledWith(
+      'import-call',
+      expect.objectContaining({
+        __psfnShardSource: `shard:${result.shardId}`,
+      }),
+      undefined,
+    );
+  });
+
+  it('logs shard provenance metadata in audit trail entries', async () => {
+    const auditTrail = {
+      append: vi.fn(),
+    };
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      auditTrail,
+    });
+
+    const result = await manager.spawn({ name: 'audit', task: 'test' });
+    await eventBus.emit('agent.tool.start', {
+      channelId: `shard:${result.shardId}`,
+      toolCallId: 'call-a',
+      toolName: 'memory_write',
+    });
+    await eventBus.emit('agent.tool.end', {
+      channelId: `shard:${result.shardId}`,
+      toolCallId: 'call-a',
+      toolName: 'memory_write',
+      isError: false,
+    });
+
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'shard.spawn.start',
+      expect.objectContaining({ shardId: result.shardId }),
+    );
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'shard.spawn.end',
+      expect.objectContaining({ shardId: result.shardId, status: 'completed' }),
+    );
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'shard.tool.start',
+      expect.objectContaining({ shardId: result.shardId, toolName: 'memory_write' }),
+    );
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'shard.tool.end',
+      expect.objectContaining({ shardId: result.shardId, toolName: 'memory_write', isError: false }),
+    );
+  });
+
   it('decrements active count even on failure', async () => {
     // Make prompt throw
     mockShardError = new Error('LLM failed');
@@ -354,6 +588,7 @@ describe('createSpawnShardTool', () => {
     mockShardDelayMs = 0;
     mockShardError = null;
     promptSpy.mockClear();
+    setToolsSpy.mockClear();
     // Restore default prompt mock behavior
     promptSpy.mockImplementation(async function (this: Agent) {
       if (mockShardError) throw mockShardError;

@@ -344,6 +344,8 @@ export class SubstrateRuntime implements Lifecycle {
       memoryProvider: this.agentLoop.memoryProvider,
       config: this.config,
       parentSystemPrompt: systemPrompt,
+      toolCatalogProvider: () => this.agentLoop.getToolCatalog(),
+      auditTrail: safeguardAuditTrail,
     });
     this.agentLoop.registerTool(createSpawnShardTool(this.shardManager));
 

@@ -245,6 +245,7 @@ async function main(): Promise<void> {
     parentSystemPrompt: systemPrompt,
     scheduler,
     replConfig,
+    shardAuditTrail: safeguardAuditTrail,
   });
 
   // Memory write/import tools — intentional memory creation

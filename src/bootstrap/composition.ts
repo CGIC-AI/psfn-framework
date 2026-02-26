@@ -21,6 +21,7 @@ import { loadCharacterCard, composeSystemPrompt } from '../identity/loader.js';
 import type { CharacterCardV2 } from '../identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
+import type { ShardAuditTrail } from '../shards/manager.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -161,6 +162,7 @@ export interface ToolRuntimeOptions {
   parentSystemPrompt: string;
   scheduler?: Scheduler | null;
   replConfig?: REPLConfig;
+  shardAuditTrail?: ShardAuditTrail | null;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardManager {
@@ -172,6 +174,8 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     memoryProvider: options.agentLoop.memoryProvider,
     config: options.config,
     parentSystemPrompt: options.parentSystemPrompt,
+    toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
+    auditTrail: options.shardAuditTrail ?? undefined,
   });
   options.agentLoop.registerTool(createSpawnShardTool(shardManager));
 

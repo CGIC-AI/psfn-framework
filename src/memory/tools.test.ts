@@ -235,6 +235,20 @@ describe('createMemoryWriteTool', () => {
     }));
   });
 
+  it('accepts internal shard provenance overrides for orchestration wrappers', async () => {
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-13b', {
+      text: 'Shard reintegration finding',
+      type: 'semantic',
+      __psfnShardSource: 'shard:shard-abc',
+    } as any);
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRef: 'source:shard:shard-abc|tool:memory_write|invocation:call-13b',
+    }));
+  });
+
   it('parses comma-separated tags', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
@@ -368,6 +382,20 @@ describe('createMemoryImportTool', () => {
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
     expect(importedRecords[0].sourceRef).toBe('source:tool:memory_import:import|invocation:call-3');
+  });
+
+  it('accepts internal shard provenance for imported memory batches', async () => {
+    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-3b', {
+      records: [{ text: 'from shard', type: 'semantic' }],
+      __psfnShardSource: 'shard:shard-xyz',
+    } as any);
+
+    const importedRecords = writer.importBatch.mock.calls[0][0];
+    expect(importedRecords[0].sourceRef).toBe(
+      'source:shard:shard-xyz|tool:memory_import:import|invocation:call-3b',
+    );
   });
 
   it('returns error for empty records array', async () => {

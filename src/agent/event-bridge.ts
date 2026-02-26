@@ -34,6 +34,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
   const unsub = agent.subscribe((event: AgentEvent) => {
     if (!currentChannelId) return;
     const channelId = currentChannelId;
+    const shardId = resolveShardId(channelId);
 
     switch (event.type) {
       case 'message_update': {
@@ -56,6 +57,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
           channelId,
           toolCallId: event.toolCallId,
           toolName: event.toolName,
+          ...(shardId ? { shardId } : {}),
         }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.start', error: String(err) }));
         break;
       case 'tool_execution_end':
@@ -64,6 +66,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           isError: event.isError,
+          ...(shardId ? { shardId } : {}),
         }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.end', error: String(err) }));
         break;
     }
@@ -74,4 +77,10 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
     clearChannel() { currentChannelId = null; },
     destroy() { unsub(); },
   };
+}
+
+function resolveShardId(channelId: string): string | undefined {
+  if (!channelId.startsWith('shard:')) return undefined;
+  const shardId = channelId.slice('shard:'.length).trim();
+  return shardId.length > 0 ? shardId : undefined;
 }

@@ -138,6 +138,7 @@ export interface RuntimeConfigHooks {
 // ── Configuration ──
 
 export type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous' | 'custom';
+export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 
 export interface SubstrateConfig {
   primaryModel: string;
@@ -181,6 +182,7 @@ export interface SubstrateConfig {
   modelRoleAssignments?: ModelRoleAssignments;
   runtimeHooks?: RuntimeConfigHooks;
   capabilityTier?: CapabilityTier;
+  shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
   voiceTargetGuildId?: string;
@@ -274,6 +276,7 @@ export function loadConfig(): SubstrateConfig {
   const retryMaxAttempts = parseInt(process.env.RETRY_MAX_ATTEMPTS ?? '3', 10);
   const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
   const capabilityTier = parseCapabilityTierEnv(process.env.CAPABILITY_TIER, 'nursery');
+  const shardToolsets = parseShardToolsetEnv(process.env);
   const sessionMessageLimit = parseOptionalIntegerEnv(process.env.SESSION_MESSAGE_LIMIT, 1);
   const memoryRetrievalLimit = parseOptionalIntegerEnv(process.env.MEMORY_RETRIEVAL_LIMIT, 1);
   const sessionHistoryBudgetPct = parseBoundedIntegerEnv(
@@ -345,6 +348,7 @@ export function loadConfig(): SubstrateConfig {
     retryMaxAttempts,
     retryBaseDelayMs,
     capabilityTier,
+    ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
   };
 }
 
@@ -392,6 +396,36 @@ function parseCapabilityTierEnv(
     return trimmed;
   }
   return fallback;
+}
+
+function parseShardToolsetEnv(
+  env: NodeJS.ProcessEnv,
+): ShardToolsetConfig {
+  const entries: Array<[CapabilityTier, string | undefined]> = [
+    ['nursery', env.SHARD_TOOLSET_NURSERY],
+    ['apprentice', env.SHARD_TOOLSET_APPRENTICE],
+    ['autonomous', env.SHARD_TOOLSET_AUTONOMOUS],
+    ['custom', env.SHARD_TOOLSET_CUSTOM],
+  ];
+
+  const result: ShardToolsetConfig = {};
+  for (const [tier, raw] of entries) {
+    const parsed = parseStringListEnv(raw);
+    if (parsed.length > 0) {
+      result[tier] = parsed;
+    }
+  }
+  return result;
+}
+
+function parseStringListEnv(value: string | undefined): string[] {
+  if (typeof value !== 'string') return [];
+  return [...new Set(
+    value
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean),
+  )];
 }
 
 // ── Lifecycle ──

@@ -652,6 +652,7 @@ async function main(): Promise<void> {
   );
 
   // ── Register reverse RPC handler for voice messages from gateway ──
+  // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
 
   gateway.onHandleMessage(async (message: SubstrateMessage) => {
     writeLastActiveChannel(config.dataDir, message.channelId);

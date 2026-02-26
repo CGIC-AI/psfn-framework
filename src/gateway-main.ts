@@ -27,6 +27,71 @@ const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
+interface GatewayVoiceModuleContext {
+  gateway: GatewayServer;
+  discord: DiscordAdapter;
+  eventBus: EventBus;
+}
+
+interface GatewayVoiceModule {
+  id: string;
+  register?(context: GatewayVoiceModuleContext): void | Promise<void>;
+  start?(context: GatewayVoiceModuleContext): void | Promise<void>;
+  stop?(context: GatewayVoiceModuleContext): void | Promise<void>;
+}
+
+class GatewayVoiceModuleHost {
+  private readonly modules: GatewayVoiceModule[] = [];
+  private readonly context: GatewayVoiceModuleContext;
+
+  constructor(context: GatewayVoiceModuleContext) {
+    this.context = context;
+  }
+
+  registerModule(module: GatewayVoiceModule): void {
+    this.modules.push(module);
+  }
+
+  async registerAll(): Promise<void> {
+    for (const module of this.modules) {
+      await module.register?.(this.context);
+    }
+  }
+
+  async startAll(): Promise<void> {
+    for (const module of this.modules) {
+      await module.start?.(this.context);
+    }
+  }
+
+  async stopAll(): Promise<void> {
+    for (const module of [...this.modules].reverse()) {
+      await module.stop?.(this.context);
+    }
+  }
+}
+
+function createDiscordReverseRpcVoiceModule(): GatewayVoiceModule {
+  return {
+    id: 'discord-reverse-rpc-voice',
+    register: ({ gateway, discord }) => {
+      discord.setVoiceHandler(async (message) => {
+        const result = await gateway.requestAgentVoiceStream(message);
+        return {
+          content: result.content,
+          channelId: result.channelId,
+          metadata: {
+            model: result.model,
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: result.durationMs,
+          },
+        };
+      });
+    },
+  };
+}
+
 function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -116,6 +181,14 @@ async function main(): Promise<void> {
     auditStore,
   });
 
+  const voiceModuleHost = new GatewayVoiceModuleHost({
+    gateway,
+    discord,
+    eventBus,
+  });
+  voiceModuleHost.registerModule(createDiscordReverseRpcVoiceModule());
+  await voiceModuleHost.registerAll();
+
   if ((ntfyBaseUrl && !ntfyTopic) || (!ntfyBaseUrl && ntfyTopic)) {
     log.warn('ntfy alerts disabled: both NTFY_BASE_URL and NTFY_TOPIC are required');
   }
@@ -135,22 +208,8 @@ async function main(): Promise<void> {
 
   await discord.init();
   gateway.start();
+  await voiceModuleHost.startAll();
   await discord.start();
-
-  // Wire voice handler to use reverse RPC to agent
-  discord.setVoiceHandler(async (message) => {
-    const result = await gateway.requestAgentVoiceStream(message);
-    return {
-      content: result.content,
-      channelId: result.channelId,
-      metadata: {
-        model: result.model,
-        inputTokens: 0,
-        outputTokens: 0,
-        durationMs: result.durationMs,
-      },
-    };
-  });
 
   log.info(`Ready — listening on ${socketPath}`);
   log.info(`Workspace: ${workspacePath}`);
@@ -160,6 +219,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     log.info(`Received ${signal}, shutting down...`);
     stopDebugObserver();
+    await voiceModuleHost.stopAll();
     await gateway.stop();
     await discord.stop();
     auditDb.close();

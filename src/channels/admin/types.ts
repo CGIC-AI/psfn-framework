@@ -141,6 +141,21 @@ export interface ChannelInfo {
   linkedContactName?: string;
 }
 
+export type CompactionAuditVerification = 'verified' | 'mismatch' | 'missing_hash' | 'missing_source';
+
+export interface CompactionAuditView {
+  id: number;
+  createdAt: number;
+  coveredUpTo: number;
+  summary: string;
+  sourceHash: string | null;
+  sourceFirstMessageId: number | null;
+  sourceLastMessageId: number | null;
+  sourceMessageCount: number | null;
+  verification: CompactionAuditVerification;
+  verificationDetail: string;
+}
+
 export interface EnvInfo {
   salienceFloor: number;
   maintenanceIntervalMs: number;

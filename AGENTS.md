@@ -11,7 +11,7 @@ bd ready --json              # Find available work
 bd show <id> --json          # View issue details
 bd update <id> --status in_progress --json  # Claim work
 bd close <id> --reason "Completed" --json   # Complete work
-bd sync               # Sync with git
+bd sync --json               # Sync with git
 ```
 
 ## Issue Tracking with bd (beads)
@@ -203,7 +203,7 @@ For example: `bd create --help` shows `--parent`, `--deps`, `--assignee`, etc.
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
+   bd sync --json
    git push
    git status  # MUST show "up to date with origin"
    ```

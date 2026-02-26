@@ -59,8 +59,9 @@ npm run agent:docker     # Start agent in --network=none container
 
 ## Configuration Source Of Truth
 
-- `.env.example` is the canonical runtime env reference.
 - `src/types.ts` is the canonical parser/defaults source for runtime config.
+- `.env.example` is a starter template and can lag newer runtime keys.
+- Voice config uses `ECHO_TTS_*` parser keys with provider selection via `TTS_PROVIDER`/`VOICE_TTS_PROVIDER`.
 - When docs and code disagree, prefer `src/types.ts` and entrypoint wiring (`src/runtime.ts`, `src/agent-main.ts`, `src/gateway-main.ts`).
 
 ## Voice Runtime Snapshot

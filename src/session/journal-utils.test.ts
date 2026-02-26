@@ -4,12 +4,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   appendJournalEntry,
+  buildSessionHmacKeyring,
   buildCompactionJournalEntry,
   buildMessageJournalEntry,
   journalToCompactionSummary,
   journalToSessionEntry,
   parseJournalText,
   readJournalFile,
+  signJournalEntry,
+  verifyJournalEntryIntegrity,
+  wrapUnverifiedHistory,
 } from './journal-utils.js';
 
 describe('journal utils', () => {
@@ -94,5 +98,62 @@ describe('journal utils', () => {
     const parsed = readJournalFile(filePath);
     expect(parsed.entries).toHaveLength(2);
     expect(parsed.maxId).toBe(2);
+  });
+
+  it('builds keyrings and supports explicit active version', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1=old-secret,v2:new-secret',
+      activeVersion: 'v2',
+    });
+    expect(keyring).not.toBeNull();
+    expect(keyring?.activeVersion).toBe('v2');
+    expect(Object.keys(keyring?.keys ?? {})).toEqual(['v1', 'v2']);
+  });
+
+  it('signs and verifies entries with HMAC chain state', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:alpha',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+
+    const first = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1,
+    }), keyring!, null);
+    const firstVerification = verifyJournalEntryIntegrity(first, keyring!, null);
+    expect(firstVerification.verified).toBe(true);
+
+    const second = signJournalEntry(buildMessageJournalEntry(2, {
+      channelId: 'ch1',
+      role: 'assistant',
+      content: 'world',
+      timestamp: 2,
+    }), keyring!, first._hmac ?? null);
+    const secondVerification = verifyJournalEntryIntegrity(second, keyring!, first._hmac ?? null);
+    expect(secondVerification.verified).toBe(true);
+  });
+
+  it('flags tampered content and wraps unverified entries', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:alpha',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+
+    const signed = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'safe content',
+      timestamp: 1,
+    }), keyring!, null);
+    signed.content = 'tampered content';
+
+    const verification = verifyJournalEntryIntegrity(signed, keyring!, null);
+    expect(verification.verified).toBe(false);
+    expect(wrapUnverifiedHistory(signed.content ?? '', verification.reason))
+      .toContain('<unverified_history>');
   });
 });

@@ -323,7 +323,7 @@ export class SubstrateAgent {
   steer(message: SubstrateMessage): void {
     if (!this.agent.state.isStreaming) return;
     const authorContext = this.resolveAuthorContext(message);
-    this.recordUserMessage(message, authorContext.canonicalContactKey);
+    this.recordUserMessage(message, authorContext.trustLevel, authorContext.canonicalContactKey);
     this.agent.steer({
       role: 'user',
       content: message.content,
@@ -338,7 +338,7 @@ export class SubstrateAgent {
    */
   followUp(message: SubstrateMessage): void {
     const authorContext = this.resolveAuthorContext(message);
-    this.recordUserMessage(message, authorContext.canonicalContactKey);
+    this.recordUserMessage(message, authorContext.trustLevel, authorContext.canonicalContactKey);
     this.agent.followUp({
       role: 'user',
       content: message.content,
@@ -371,7 +371,7 @@ export class SubstrateAgent {
     });
 
     // Record user message in session (JSONL append = L0 archival)
-    this.recordUserMessage(message, authorContext.canonicalContactKey);
+    this.recordUserMessage(message, authorContext.trustLevel, authorContext.canonicalContactKey);
 
     try {
       const trustLevel = authorContext.trustLevel;
@@ -535,7 +535,12 @@ export class SubstrateAgent {
       const responseText = this.extractResponseText();
 
       // Record assistant message (JSONL append = L0 archival)
-      this.recordAssistantMessage(message, responseText, authorContext.canonicalContactKey);
+      this.recordAssistantMessage(
+        message,
+        responseText,
+        authorContext.trustLevel,
+        authorContext.canonicalContactKey,
+      );
 
       const agentResponse: AgentResponse = {
         content: responseText,
@@ -604,7 +609,11 @@ export class SubstrateAgent {
     });
   }
 
-  private recordUserMessage(message: SubstrateMessage, canonicalContactKey?: string): void {
+  private recordUserMessage(
+    message: SubstrateMessage,
+    trustLevel: TrustLevel,
+    canonicalContactKey?: string,
+  ): void {
     if (canonicalContactKey) {
       this.sessionManager.recordUserMessage(
         message.channelId,
@@ -613,6 +622,7 @@ export class SubstrateAgent {
         message.authorName,
         message.isDirectMessage,
         canonicalContactKey,
+        { trustLevel },
       );
       return;
     }
@@ -623,12 +633,15 @@ export class SubstrateAgent {
       message.authorId,
       message.authorName,
       message.isDirectMessage,
+      undefined,
+      { trustLevel },
     );
   }
 
   private recordAssistantMessage(
     message: SubstrateMessage,
     responseText: string,
+    trustLevel: TrustLevel,
     canonicalContactKey?: string,
   ): void {
     if (canonicalContactKey) {
@@ -638,6 +651,7 @@ export class SubstrateAgent {
         message.authorId,
         message.isDirectMessage,
         canonicalContactKey,
+        { trustLevel },
       );
       return;
     }
@@ -647,6 +661,8 @@ export class SubstrateAgent {
       responseText,
       message.authorId,
       message.isDirectMessage,
+      undefined,
+      { trustLevel },
     );
   }
 

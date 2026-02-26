@@ -278,6 +278,138 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Legacy continuity message');
   });
 
+  it('mirrors related messages into other active sessions with mirror metadata', () => {
+    const config = makeConfig({
+      sessionMirrorEnabled: true,
+      sessionMirrorMaxChars: 80,
+      sessionMirrorActiveWindowMs: 60_000,
+    });
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = new UserContinuityStore(dir);
+
+    mgr.recordUserMessage(
+      'api:target',
+      'target bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    mgr.recordAssistantMessage(
+      'api:source',
+      'This is a mirrored assistant response that should be clipped if too long.',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    mgr.recordUserMessage(
+      'api:source',
+      'And this mirrored user message should also appear in target.',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+
+    const targetEntries = store.getRecent('api:target', 10);
+    const mirrors = targetEntries.filter(entry => entry.role === 'system' && entry.metadata?.includes('"type":"mirror"'));
+    expect(mirrors).toHaveLength(2);
+    expect(mirrors[0].content).toContain('[from api:source]');
+    expect(mirrors[1].content).toContain('[from api:source]');
+  });
+
+  it('applies trust filtering before writing mirrors', () => {
+    const config = makeConfig({
+      sessionMirrorEnabled: true,
+      sessionMirrorActiveWindowMs: 60_000,
+    });
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = new UserContinuityStore(dir);
+
+    mgr.recordUserMessage(
+      'api:target',
+      'target bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+
+    mgr.recordAssistantMessage(
+      'api:source',
+      'private mirror candidate',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'regular' },
+    );
+
+    const targetEntries = store.getRecent('api:target', 10);
+    const mirrors = targetEntries.filter(entry => entry.role === 'system' && entry.metadata?.includes('"type":"mirror"'));
+    expect(mirrors).toHaveLength(0);
+  });
+
+  it('supports global and per-channel mirror toggles', () => {
+    const disabledConfig = makeConfig({
+      sessionMirrorEnabled: false,
+      sessionMirrorActiveWindowMs: 60_000,
+    });
+    const disabledStore = new SessionStore(join(dir, 'mirrors-disabled'));
+    const globallyDisabled = new SessionManager(disabledStore, disabledConfig);
+    globallyDisabled.continuityStore = new UserContinuityStore(join(dir, 'mirrors-disabled'));
+
+    globallyDisabled.recordUserMessage(
+      'api:target',
+      'bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    globallyDisabled.recordAssistantMessage(
+      'api:source',
+      'should not mirror',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    expect(disabledStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
+
+    const overrideConfig = makeConfig({
+      sessionMirrorEnabled: true,
+      sessionMirrorChannelOverrides: { 'api:target': false },
+      sessionMirrorActiveWindowMs: 60_000,
+    });
+    const overrideStore = new SessionStore(join(dir, 'mirrors-overrides'));
+    const perChannelDisabled = new SessionManager(overrideStore, overrideConfig);
+    perChannelDisabled.continuityStore = new UserContinuityStore(join(dir, 'mirrors-overrides'));
+
+    perChannelDisabled.recordUserMessage(
+      'api:target',
+      'bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    perChannelDisabled.recordAssistantMessage(
+      'api:source',
+      'should also not mirror',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    expect(overrideStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
+  });
+
   it('auto-compacts when context exceeds threshold', async () => {
     // contextWindow=1000, compactionThresholdPct=70 → budget=700 tokens
     // 700 tokens ≈ 2800 chars. Fill with enough messages to exceed.

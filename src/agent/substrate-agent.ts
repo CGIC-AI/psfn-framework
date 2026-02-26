@@ -15,6 +15,7 @@ import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type {
   AgentResponse,
+  CapabilityTier,
   ContextMessage,
   SubstrateConfig,
   SubstrateMessage,
@@ -33,6 +34,10 @@ import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
+import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
+import { CapabilityRuntime } from '../capabilities/runtime.js';
+import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
+import type { CapabilityToken } from '../capabilities/tokens.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -68,6 +73,8 @@ export class SubstrateAgent {
   private modelSignature: string | null = null;
   private bridge: EventBridge;
   private channelRegistry = new Map<string, ChannelPromptDock>();
+  private capabilityRuntime: CapabilityRuntime | null = null;
+  private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -134,12 +141,55 @@ export class SubstrateAgent {
 
   private installRuntimeHooks(): void {
     const existingHooks = this.config.runtimeHooks ?? {};
+    const priorRefreshModels = existingHooks.refreshModels;
+    const priorRefreshCapabilities = existingHooks.refreshCapabilities;
     this.config.runtimeHooks = {
       ...existingHooks,
       refreshModels: () => {
+        priorRefreshModels?.();
         this.refreshRuntimeModels();
       },
+      refreshCapabilities: () => {
+        priorRefreshCapabilities?.();
+        this.refreshCapabilityRuntime();
+      },
     };
+  }
+
+  private refreshCapabilityRuntime(): void {
+    if (this.capabilityRuntime) {
+      const refreshed = this.capabilityRuntime.refreshFromDisk();
+      this.config.capabilityTier = refreshed.tier;
+      return;
+    }
+
+    this.config.capabilityTier = this.resolveCapabilityTier();
+  }
+
+  private resolveCapabilityTier(): CapabilityTier {
+    return normalizeCapabilityTier(this.config.capabilityTier);
+  }
+
+  private resolveCapabilityAccess(): CapabilityAccess {
+    if (this.capabilityRuntime) return this.capabilityRuntime;
+
+    const tier = this.resolveCapabilityTier();
+    const grantedTokens = new Set(resolveTierCapabilityTokens(tier));
+    return {
+      getTier: () => tier,
+      getGrantedTokens: () => grantedTokens,
+      has: (token: CapabilityToken) => grantedTokens.has(token),
+    };
+  }
+
+  private withCapabilityGates(tools: AgentTool<any>[]): AgentTool<any>[] {
+    return tools.map((tool) => {
+      const cached = this.gatedToolCache.get(tool);
+      if (cached) return cached;
+      const wrapped = gateToolWithCapabilities(tool, () => this.resolveCapabilityAccess());
+      this.gatedToolCache.set(tool, wrapped);
+      return wrapped;
+    });
   }
 
   private getChatModelSignature(): string {
@@ -196,6 +246,12 @@ export class SubstrateAgent {
     this.channelRegistry = new Map(registry);
   }
 
+  setCapabilityRuntime(runtime: CapabilityRuntime | null): void {
+    this.capabilityRuntime = runtime;
+    this.gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
+    this.refreshCapabilityRuntime();
+  }
+
   private createLoadToolsTool(): AgentTool<any> {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
@@ -216,7 +272,7 @@ export class SubstrateAgent {
           ...self.coreTools,
           ...self.extendedTools.filter(t => self.loadedExtended.has(t.name)),
         ];
-        self.agent.setTools(active);
+        self.agent.setTools(self.withCapabilityGates(active));
         const text = matched.length
           ? `Loaded ${matched.length} tools: ${matched.map(t => t.name).join(', ')}`
           : `No matching tools found. Available: ${self.extendedTools.map(t => t.name).join(', ')}`;
@@ -370,7 +426,7 @@ export class SubstrateAgent {
       this.ensureModel();
       this.agent.setSystemPrompt(context.systemPrompt);
       this.loadedExtended.clear();
-      this.agent.setTools(this.coreTools);
+      this.agent.setTools(this.withCapabilityGates(this.coreTools));
 
       // Convert ContextMessage[] to AgentMessage[] for the Agent.
       // Exclude the last message (the user message we just recorded) —
@@ -708,6 +764,8 @@ export class SubstrateAgent {
     const contextWindow = this.resolveContextWindow();
     const coreCount = this.coreTools.length;
     const extendedCount = this.extendedTools.length;
+    const capabilityAccess = this.resolveCapabilityAccess();
+    const capabilityTier = capabilityAccess.getTier();
     const skillsContext = this.skillsRuntime?.getPromptXml() ?? '';
 
     const lines = [
@@ -716,6 +774,7 @@ export class SubstrateAgent {
       `Channel: ${message.channelId} (type: ${channelType ?? 'unknown'}, visibility: ${visibility})`,
       `Speaking with: ${message.authorName} (userId: ${message.authorId}, canonicalId: ${canonicalContactKey ?? message.authorId}, trust: ${trustLevel})`,
       `Model: ${modelId}`,
+      `Capability tier: ${capabilityTier}`,
       `Context window: ${contextWindow} tokens`,
       `Tools: ${coreCount} active` + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
     ];

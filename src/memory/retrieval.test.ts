@@ -41,6 +41,8 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     updateMemory: vi.fn(),
     getContactProfile: vi.fn().mockReturnValue(undefined),
     getMemoriesByContact: vi.fn().mockReturnValue([]),
+    getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    getAllActiveMemories: vi.fn().mockReturnValue(memories),
   } as unknown as MemoryStore;
 }
 
@@ -671,6 +673,107 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).toContain('Cross-session emotional continuity:');
     expect(result).toContain('User felt relieved after finishing the deadline sprint.');
     expect(result).not.toContain('User likes black coffee.');
+  });
+
+  it('surfaces spontaneous recall weighted by emotional significance and last-access recency', async () => {
+    const now = Date.now();
+    const lowWeightMemory = makeMemory({
+      id: 'proactive-low',
+      text: 'A minor and stale detail.',
+      type: 'semantic',
+      emotionalValence: 0.02,
+      salience: 0.2,
+      importance: 0.2,
+      lastAccessed: now - 120 * 24 * 60 * 60 * 1000,
+      extractedAt: now - 120 * 24 * 60 * 60 * 1000,
+      sensitivity: 'public',
+      similarity: 0.5,
+    });
+    const highWeightMemory = makeMemory({
+      id: 'proactive-high',
+      text: 'User felt deeply relieved after finishing the launch.',
+      type: 'emotional',
+      emotionalValence: 0.92,
+      salience: 0.95,
+      importance: 0.9,
+      lastAccessed: now - 60 * 60 * 1000,
+      extractedAt: now - 2 * 24 * 60 * 60 * 1000,
+      sensitivity: 'public',
+      similarity: 0.5,
+    });
+    const store = makeMockStore([]);
+    (store.getMemoriesByContact as ReturnType<typeof vi.fn>).mockReturnValue([
+      lowWeightMemory,
+      highWeightMemory,
+    ]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, {
+      retrievalLimit: 20,
+      proactiveRecallProbability: 1,
+      proactiveRecallMinTurnsBetween: 0,
+    });
+
+    const randomSpy = vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)   // probability gate
+      .mockReturnValueOnce(0.1); // weighted draw
+    try {
+      const result = await retriever.retrieveProactiveRecall(
+        'api:test',
+        'primary',
+        undefined,
+        'contact-1',
+      );
+
+      expect(result).toContain('Spontaneous recall:');
+      expect(result).toContain(highWeightMemory.text);
+      expect(result).not.toContain(lowWeightMemory.text);
+      expect(store.updateMemory).toHaveBeenCalledWith(
+        'proactive-high',
+        expect.objectContaining({
+          accessCount: highWeightMemory.accessCount + 1,
+        }),
+      );
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('respects configurable proactive recall frequency across turns', async () => {
+    const now = Date.now();
+    const memory = makeMemory({
+      id: 'proactive-frequency',
+      text: 'Remembering this without being asked.',
+      type: 'emotional',
+      emotionalValence: 0.6,
+      salience: 0.8,
+      importance: 0.8,
+      lastAccessed: now,
+      extractedAt: now,
+      sensitivity: 'public',
+      similarity: 0.5,
+    });
+    const store = makeMockStore([]);
+    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([memory]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, {
+      retrievalLimit: 20,
+      proactiveRecallProbability: 1,
+      proactiveRecallMinTurnsBetween: 1,
+    });
+
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const first = await retriever.retrieveProactiveRecall('api:test', 'primary');
+      const second = await retriever.retrieveProactiveRecall('api:test', 'primary');
+      const third = await retriever.retrieveProactiveRecall('api:test', 'primary');
+
+      expect(first).toContain('Spontaneous recall:');
+      expect(second).toBe('');
+      expect(third).toContain('Spontaneous recall:');
+      expect(store.updateMemory).toHaveBeenCalledTimes(2);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it('emits structured retrieval telemetry event when event bus is provided', async () => {

@@ -46,6 +46,11 @@ interface RetrievalTelemetry {
   emotionalContinuityCount?: number;
 }
 
+interface ProactiveWeightedMemory {
+  memory: PurrMemory;
+  weight: number;
+}
+
 interface EmotionalSnapshot {
   baselineValence: number;
   moodValence: number;
@@ -60,11 +65,18 @@ export interface MemoryRetrieverConfig {
   contextWindow?: number;
   retrievalThreshold?: number;
   telemetryEnabled?: boolean;
+  proactiveRecallProbability?: number;
+  proactiveRecallMinTurnsBetween?: number;
 }
 
 function isSubstrateConfig(config: MemoryRetrieverConfig | SubstrateConfig | undefined): config is SubstrateConfig {
   return !!config && typeof config === 'object' && 'defaultContextWindow' in config;
 }
+
+type ProactiveRecallRuntimeConfig = SubstrateConfig & {
+  memoryProactiveRecallProbability?: number;
+  memoryProactiveRecallMinTurnsBetween?: number;
+};
 
 export class MemoryRetriever implements MemoryProvider {
   private memoryStore: MemoryStore;
@@ -75,6 +87,10 @@ export class MemoryRetriever implements MemoryProvider {
   private eventBus?: EventBus;
   private contactStore: ContactStore | null;
   private telemetryEnabled: boolean;
+  private proactiveRecallProbability: number;
+  private proactiveRecallMinTurnsBetween: number;
+  private proactiveTurnCounter: number;
+  private lastProactiveRecallTurn: number;
 
   constructor(
     memoryStore: MemoryStore,
@@ -91,6 +107,9 @@ export class MemoryRetriever implements MemoryProvider {
       this.fallbackBudgetConfig = null;
       this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
       this.telemetryEnabled = config.memoryRetrievalTelemetryEnabled ?? true;
+      const proactiveConfig = config as ProactiveRecallRuntimeConfig;
+      this.proactiveRecallProbability = clampProbability(proactiveConfig.memoryProactiveRecallProbability ?? 0);
+      this.proactiveRecallMinTurnsBetween = clampTurnFrequency(proactiveConfig.memoryProactiveRecallMinTurnsBetween ?? 2);
     } else {
       const retrieverConfig = config as MemoryRetrieverConfig | undefined;
       this.runtimeConfig = null;
@@ -106,8 +125,12 @@ export class MemoryRetriever implements MemoryProvider {
       };
       this.retrievalThreshold = retrieverConfig?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
       this.telemetryEnabled = retrieverConfig?.telemetryEnabled ?? true;
+      this.proactiveRecallProbability = clampProbability(retrieverConfig?.proactiveRecallProbability ?? 0);
+      this.proactiveRecallMinTurnsBetween = clampTurnFrequency(retrieverConfig?.proactiveRecallMinTurnsBetween ?? 2);
     }
     this.contactStore = contactStore ?? null;
+    this.proactiveTurnCounter = 0;
+    this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
   }
 
   private resolveRetrievalBudget(): ReturnType<typeof resolveMemoryRetrievalBudget> {
@@ -300,6 +323,63 @@ export class MemoryRetriever implements MemoryProvider {
     }
   }
 
+  async retrieveProactiveRecall(
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
+  ): Promise<string> {
+    if (this.proactiveRecallProbability <= 0) return '';
+
+    const currentTurn = ++this.proactiveTurnCounter;
+    if (currentTurn - this.lastProactiveRecallTurn <= this.proactiveRecallMinTurnsBetween) {
+      return '';
+    }
+
+    if (Math.random() > this.proactiveRecallProbability) {
+      return '';
+    }
+
+    const effectiveTrust = trustLevel ?? 'regular';
+    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const candidates = this.collectProactiveRecallCandidates(channelId, canonicalContactId);
+    if (candidates.length === 0) return '';
+
+    const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
+    const weighted = candidates
+      .filter(memory => allowed.includes(memory.sensitivity))
+      .filter((memory) => {
+        const policy = evaluateMemoryPolicy({
+          trustLevel: effectiveTrust,
+          channelVisibility,
+          memorySensitivity: memory.sensitivity,
+          consentFlags: memory.consentFlags,
+        });
+        return policy.decision === 'allow';
+      })
+      .map(memory => ({
+        memory,
+        weight: computeProactiveRecallWeight(memory),
+      }))
+      .filter(item => item.weight > 0)
+      .sort((left, right) => right.weight - left.weight);
+
+    if (weighted.length === 0) return '';
+
+    const selected = selectWeightedMemory(weighted);
+    if (!selected) return '';
+
+    this.lastProactiveRecallTurn = currentTurn;
+    try {
+      this.memoryStore.updateMemory(selected.id, {
+        lastAccessed: Date.now(),
+        accessCount: selected.accessCount + 1,
+      });
+    } catch { /* ignore */ }
+
+    return renderProactiveRecall(selected);
+  }
+
   private resolveEmotionalSnapshot(contactId: string): EmotionalSnapshot | undefined {
     if (!this.contactStore) return undefined;
 
@@ -370,6 +450,24 @@ export class MemoryRetriever implements MemoryProvider {
       })
       .sort((left, right) => right.extractedAt - left.extractedAt)
       .slice(0, 3);
+  }
+
+  private collectProactiveRecallCandidates(
+    channelId: string,
+    canonicalContactId?: string,
+  ): PurrMemory[] {
+    if (canonicalContactId) {
+      const byContact = this.memoryStore.getMemoriesByContact(canonicalContactId, 24);
+      if (byContact.length > 0) return byContact;
+    }
+
+    const byChannel = this.memoryStore.getMemoriesByChannel(channelId, 24);
+    if (byChannel.length > 0) return byChannel;
+
+    return this.memoryStore
+      .getAllActiveMemories()
+      .sort((left, right) => right.lastAccessed - left.lastAccessed)
+      .slice(0, 24);
   }
 
   private isTelemetryEnabled(): boolean {
@@ -547,4 +645,50 @@ function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
 function clamp(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return (min + max) / 2;
   return Math.max(min, Math.min(max, val));
+}
+
+function clampProbability(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function clampTurnFrequency(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value));
+}
+
+function computeProactiveRecallWeight(memory: PurrMemory): number {
+  const now = Date.now();
+  const lastAccessed = Number.isFinite(memory.lastAccessed) ? memory.lastAccessed : memory.extractedAt;
+  const ageMs = Math.max(0, now - lastAccessed);
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  const recencyWeight = 1 / (1 + ageDays / 14);
+  const emotionalSignificance = 1 + Math.abs(memory.emotionalValence) * 2;
+  const salienceWeight = Math.max(0.1, memory.salience);
+  const importanceWeight = Math.max(0.1, memory.importance);
+
+  return recencyWeight * emotionalSignificance * salienceWeight * importanceWeight;
+}
+
+function selectWeightedMemory(weighted: ProactiveWeightedMemory[]): PurrMemory | undefined {
+  if (weighted.length === 0) return undefined;
+  const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight <= 0) return undefined;
+
+  let draw = Math.random() * totalWeight;
+  for (const item of weighted) {
+    draw -= item.weight;
+    if (draw <= 0) return item.memory;
+  }
+  return weighted[weighted.length - 1]?.memory;
+}
+
+function renderProactiveRecall(memory: PurrMemory): string {
+  const valenceSuffix =
+    memory.emotionalValence > 0.3 ? ' (+)' :
+    memory.emotionalValence < -0.3 ? ' (-)' : '';
+  return [
+    'Spontaneous recall:',
+    `- [${memory.type}] ${memory.text}${valenceSuffix}`,
+  ].join('\n');
 }

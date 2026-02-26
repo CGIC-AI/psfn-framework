@@ -41,6 +41,10 @@ import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { tagToolWithReversibility } from '../capabilities/safeguards.js';
+import {
+  classifyBroadcastDraft,
+  resolveBroadcastVisibilityScope,
+} from '../broadcast/safety.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -382,6 +386,21 @@ export class SubstrateAgent {
 
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
     const startTime = Date.now();
+    const channelMeta: ChannelMeta = {
+      ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
+      ...(message.routing?.broadcast?.approvalToken
+        ? { broadcastApprovalToken: message.routing.broadcast.approvalToken }
+        : {}),
+    };
+    const channelVisibility = classifyChannel(message.channelId, channelMeta);
+    const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
+    let retrievalProvenanceRefs: string[] = [];
+    const unsubscribeRetrieval = this.eventBus.on('memory.retrieval', (telemetry) => {
+      if (telemetry.channelId !== message.channelId) return;
+      const refs = telemetry.provenanceRefs ?? [];
+      if (refs.length === 0) return;
+      retrievalProvenanceRefs = [...new Set(refs.map(ref => ref.trim()).filter(Boolean))];
+    });
 
     await this.eventBus.emit('agent.turn.start', { message });
 
@@ -407,7 +426,7 @@ export class SubstrateAgent {
           message.content,
           message.channelId,
           trustLevel,
-          { isDirectMessage: message.isDirectMessage },
+          channelMeta,
           authorContext.canonicalContactKey,
         )
         : '';
@@ -417,7 +436,7 @@ export class SubstrateAgent {
           proactiveRecallBlock = await memoryProvider.retrieveProactiveRecall(
             message.channelId,
             trustLevel,
-            { isDirectMessage: message.isDirectMessage },
+            channelMeta,
             authorContext.canonicalContactKey,
           );
         } catch (error) {
@@ -500,7 +519,7 @@ export class SubstrateAgent {
         memoryContextBlock,
         this.llmClient,
         authorContext.canonicalContactKey ?? message.authorId,
-        { isDirectMessage: message.isDirectMessage },
+        channelMeta,
         authorContext.continuityFallbackKeys,
       );
       this.emitTurnStage(message, startTime, 'context', {
@@ -567,23 +586,79 @@ export class SubstrateAgent {
 
       // Extract response from agent state (last assistant message)
       const responseText = this.extractResponseText();
+      let safeResponseText = responseText;
+      let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
+
+      if (channelVisibility === 'broadcast') {
+        const visibilityScope = broadcastVisibilityScope ?? 'public_only';
+        const classification = classifyBroadcastDraft(responseText);
+        const operatorApproval = visibilityScope === 'approved_private_context';
+        const approvalRequired = classification.risky && !operatorApproval;
+        const provenanceRefs = [...new Set(retrievalProvenanceRefs)];
+
+        broadcastSafetyMeta = {
+          visibilityScope,
+          operatorApproval,
+          risky: classification.risky,
+          signals: classification.signals,
+          approvalRequired,
+          provenanceRefs,
+        };
+
+        this.emitTelemetry('broadcast.pre_send.classified', {
+          channelId: message.channelId,
+          risky: classification.risky,
+          signals: classification.signals,
+          visibilityScope,
+        });
+
+        if (approvalRequired) {
+          this.emitTelemetry('broadcast.approval.required', {
+            channelId: message.channelId,
+            signals: classification.signals,
+            visibilityScope,
+            draftLength: responseText.length,
+          });
+          this.sessionManager.appendSystemNote(
+            message.channelId,
+            `Broadcast draft held for approval (${classification.signals.join(', ') || 'risk'} risk).`,
+          );
+          safeResponseText = '';
+        }
+
+        const provenancePayload = {
+          channelId: message.channelId,
+          visibilityScope,
+          operatorApproval,
+          risky: classification.risky,
+          signals: classification.signals,
+          provenanceRefs,
+          contextMessageCount: context.messages.length,
+          memoryContextChars: memoryContextBlock.length,
+        };
+        this.emitTelemetry('broadcast.provenance', provenancePayload);
+        log.info('Broadcast provenance', provenancePayload);
+      }
 
       // Record assistant message (JSONL append = L0 archival)
-      this.recordAssistantMessage(
-        message,
-        responseText,
-        authorContext.trustLevel,
-        authorContext.canonicalContactKey,
-      );
+      if (!broadcastSafetyMeta?.approvalRequired) {
+        this.recordAssistantMessage(
+          message,
+          safeResponseText,
+          authorContext.trustLevel,
+          authorContext.canonicalContactKey,
+        );
+      }
 
       const agentResponse: AgentResponse = {
-        content: responseText,
+        content: safeResponseText,
         channelId: message.channelId,
         metadata: {
           model: this.agent.state.model?.id ?? 'unknown',
           inputTokens: turnUsage.inputTokens,
           outputTokens: turnUsage.outputTokens,
           durationMs: Date.now() - startTime,
+          ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         },
       };
 
@@ -609,6 +684,8 @@ export class SubstrateAgent {
       const err = error instanceof Error ? error : new Error(String(error));
       await this.eventBus.emit('agent.error', { message, error: err });
       throw err;
+    } finally {
+      unsubscribeRetrieval();
     }
   }
 

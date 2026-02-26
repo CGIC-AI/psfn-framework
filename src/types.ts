@@ -24,9 +24,15 @@ export interface WyomingRoutingMetadata {
   shardDelegation?: WyomingShardDelegationHint;
 }
 
+export interface BroadcastRoutingMetadata {
+  approvalToken?: string;
+  visibilityScope?: 'public_only' | 'approved_private_context';
+}
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'unknown';
   wyoming?: WyomingRoutingMetadata;
+  broadcast?: BroadcastRoutingMetadata;
 }
 
 export interface SubstrateMessage {
@@ -61,6 +67,14 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  broadcastSafety?: {
+    visibilityScope: 'public_only' | 'approved_private_context';
+    operatorApproval: boolean;
+    risky: boolean;
+    signals: Array<'sensitive' | 'private' | 'off_brand'>;
+    approvalRequired: boolean;
+    provenanceRefs: string[];
+  };
 }
 
 export interface TurnUsage {

@@ -266,13 +266,13 @@ export class DiscordAdapter implements ChannelAdapter {
       await this.eventBus.emit('message.received', { message: substrateMsg });
 
       const response = await this.handler(substrateMsg);
-
-      if (response.content.trim()) {
+      const hasText = response.content.trim().length > 0;
+      if (hasText) {
         await this.outbound.sendText({ channelId }, response.content);
+        await this.eventBus.emit('message.sent', { response });
       } else {
         log.debug('Suppressing empty handler response for Discord channel', { channelId });
       }
-      await this.eventBus.emit('message.sent', { response });
 
     } catch (error) {
       log.error('Error processing message', { error: String(error) });

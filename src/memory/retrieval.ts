@@ -17,6 +17,10 @@ import {
   evaluateMemoryPolicy,
   type ChannelMeta,
 } from '../trust/policy.js';
+import {
+  resolveBroadcastVisibilityScope,
+  type BroadcastVisibilityScope,
+} from '../broadcast/safety.js';
 import { computeBoundarySimilarityBoost, isBoundaryMemory } from './boundary-log.js';
 import { createComponentLogger } from '../logger.js';
 import type { ContactStore } from '../contacts/store.js';
@@ -67,6 +71,9 @@ interface RetrievalTelemetry {
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
   scoreRejectedCount?: number;
+  visibilityScope: BroadcastVisibilityScope | 'non_broadcast';
+  operatorApproval: boolean;
+  provenanceRefs: string[];
   profileIncluded?: boolean;
   emotionalSnapshotIncluded?: boolean;
   emotionalContinuityCount?: number;
@@ -183,6 +190,8 @@ export class MemoryRetriever implements MemoryProvider {
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
     const channelVisibility = classifyChannel(channelId, channelMeta);
+    const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
+    const operatorApproval = visibilityScope === 'approved_private_context';
     const telemetry: RetrievalTelemetry = {
       channelId,
       count: 0,
@@ -197,6 +206,9 @@ export class MemoryRetriever implements MemoryProvider {
       retrievalBudgetPct: budget.budgetPct,
       retrievalTokenBudget: budget.tokenBudget,
       retrievalLimitMode: budget.mode,
+      visibilityScope,
+      operatorApproval,
+      provenanceRefs: [],
       profileIncluded: false,
       emotionalSnapshotIncluded: false,
       emotionalContinuityCount: 0,
@@ -217,6 +229,7 @@ export class MemoryRetriever implements MemoryProvider {
         effectiveTrust,
         channelVisibility,
         emptySelectedIds,
+        operatorApproval,
       )
       : [];
     telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
@@ -264,7 +277,7 @@ export class MemoryRetriever implements MemoryProvider {
       const policyAllowed: Array<PurrMemory & { similarity: number }> = [];
 
       for (const memory of memories) {
-        if (!allowed.includes(memory.sensitivity)) {
+        if (!operatorApproval && !allowed.includes(memory.sensitivity)) {
           diagnostics.rejectedBySensitivity++;
           continue;
         }
@@ -274,6 +287,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          operatorApproval,
         });
         if (policy.decision !== 'allow') {
           diagnostics.rejectedByPolicy++;
@@ -355,9 +369,11 @@ export class MemoryRetriever implements MemoryProvider {
           effectiveTrust,
           channelVisibility,
           selectedIds,
+          operatorApproval,
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
+      telemetry.provenanceRefs = collectSelectedProvenanceRefs(selected);
 
       // Update access stats (fire-and-forget)
       for (const s of selected) {
@@ -406,18 +422,21 @@ export class MemoryRetriever implements MemoryProvider {
 
     const effectiveTrust = trustLevel ?? 'regular';
     const channelVisibility = classifyChannel(channelId, channelMeta);
+    const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
+    const operatorApproval = visibilityScope === 'approved_private_context';
     const candidates = this.collectProactiveRecallCandidates(channelId, canonicalContactId);
     if (candidates.length === 0) return '';
 
     const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
     const weighted = candidates
-      .filter(memory => allowed.includes(memory.sensitivity))
+      .filter(memory => operatorApproval || allowed.includes(memory.sensitivity))
       .filter((memory) => {
         const policy = evaluateMemoryPolicy({
           trustLevel: effectiveTrust,
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          operatorApproval,
         });
         return policy.decision === 'allow';
       })
@@ -493,6 +512,7 @@ export class MemoryRetriever implements MemoryProvider {
     trustLevel: TrustLevel,
     channelVisibility: ChannelVisibility,
     selectedIds: ReadonlySet<string>,
+    operatorApproval = false,
   ): PurrMemory[] {
     const source = this.memoryStore.getMemoriesByContact(canonicalContactId, 12);
     if (source.length === 0) return [];
@@ -503,12 +523,13 @@ export class MemoryRetriever implements MemoryProvider {
       .filter(memory => memory.type === 'emotional')
       .filter(memory => !selectedIds.has(memory.id))
       .filter((memory) => {
-        if (!allowed.includes(memory.sensitivity)) return false;
+        if (!operatorApproval && !allowed.includes(memory.sensitivity)) return false;
         const policy = evaluateMemoryPolicy({
           trustLevel,
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          operatorApproval,
         });
         return policy.decision === 'allow';
       })
@@ -565,6 +586,20 @@ export class MemoryRetriever implements MemoryProvider {
       });
     }
   }
+}
+
+function collectSelectedProvenanceRefs(scored: ScoredMemory[]): string[] {
+  const refs = new Set<string>();
+  for (const item of scored) {
+    if (item.memory.sourceRef?.trim()) {
+      refs.add(item.memory.sourceRef.trim());
+    }
+    for (const provenanceRef of item.memory.provenanceRefs ?? []) {
+      const normalized = provenanceRef.trim();
+      if (normalized) refs.add(normalized);
+    }
+  }
+  return [...refs];
 }
 
 function computeRetrievalScore(

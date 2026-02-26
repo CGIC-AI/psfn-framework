@@ -19,6 +19,7 @@ import { getRuntimeTrustPolicy } from './runtime-policy.js';
 
 export interface ChannelMeta {
   isDirectMessage?: boolean;
+  broadcastApprovalToken?: string;
 }
 
 // ── Policy evaluation ──

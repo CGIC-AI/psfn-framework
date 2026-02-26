@@ -132,9 +132,12 @@ export type CompletionPurpose = 'extraction' | 'summary' | 'reasoning';
 
 export interface RuntimeConfigHooks {
   refreshModels?: () => void;
+  refreshCapabilities?: () => void;
 }
 
 // ── Configuration ──
+
+export type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous' | 'custom';
 
 export interface SubstrateConfig {
   primaryModel: string;
@@ -177,6 +180,7 @@ export interface SubstrateConfig {
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
   runtimeHooks?: RuntimeConfigHooks;
+  capabilityTier?: CapabilityTier;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
   voiceTargetGuildId?: string;
@@ -269,6 +273,7 @@ export function loadConfig(): SubstrateConfig {
   const profileSynthesisMinSourceMemories = parseInt(process.env.PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES ?? '2', 10);
   const retryMaxAttempts = parseInt(process.env.RETRY_MAX_ATTEMPTS ?? '3', 10);
   const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
+  const capabilityTier = parseCapabilityTierEnv(process.env.CAPABILITY_TIER, 'nursery');
   const sessionMessageLimit = parseOptionalIntegerEnv(process.env.SESSION_MESSAGE_LIMIT, 1);
   const memoryRetrievalLimit = parseOptionalIntegerEnv(process.env.MEMORY_RETRIEVAL_LIMIT, 1);
   const sessionHistoryBudgetPct = parseBoundedIntegerEnv(
@@ -339,6 +344,7 @@ export function loadConfig(): SubstrateConfig {
     elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
     retryMaxAttempts,
     retryBaseDelayMs,
+    capabilityTier,
   };
 }
 
@@ -369,6 +375,23 @@ function parseBoundedIntegerEnv(
   const parsed = Number.parseInt(value ?? '', 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
+}
+
+function parseCapabilityTierEnv(
+  value: string | undefined,
+  fallback: CapabilityTier,
+): CapabilityTier {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim().toLowerCase();
+  if (
+    trimmed === 'nursery'
+    || trimmed === 'apprentice'
+    || trimmed === 'autonomous'
+    || trimmed === 'custom'
+  ) {
+    return trimmed;
+  }
+  return fallback;
 }
 
 // ── Lifecycle ──

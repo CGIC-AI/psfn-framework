@@ -65,8 +65,14 @@ import {
   saveTrustPolicyConfig,
   type TrustPolicyConfig,
 } from '../../config/trust-policy-config.js';
+import {
+  loadCapabilityTierConfig,
+  saveCapabilityTierConfig,
+  type CapabilityTierConfig,
+} from '../../config/capability-tier-config.js';
 import { resolveRuntimeSchedulerConfig } from '../../config/scheduler-runtime.js';
 import { setRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
+import { CAPABILITY_TIER_VALUES, isCapabilityTier } from '../../capabilities/tiers.js';
 import {
   AdminChatBootstrapService,
   type AdminChatBootstrapResponse,
@@ -96,6 +102,7 @@ interface SettingsConfigEditors {
   skills: SkillsRuntimeConfig;
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;
+  capabilities: CapabilityTierConfig;
 }
 
 type ChatDebugEventName =
@@ -498,6 +505,9 @@ export class AdminHandlers {
       trustPolicy: loadTrustPolicyConfig(this.config.dataDir, {
         seedDir: process.env.CONFIG_DIR,
       }),
+      capabilities: loadCapabilityTierConfig(this.config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      }),
     };
   }
 
@@ -538,6 +548,13 @@ export class AdminHandlers {
 
   updateSettings(body: string): string {
     const params = new URLSearchParams(body);
+    const capabilityTierInput = (params.get('capabilityTier') ?? '').trim();
+    if (capabilityTierInput && !isCapabilityTier(capabilityTierInput)) {
+      return tpl.settingsFormResult(
+        false,
+        `capabilityTier must be one of: ${CAPABILITY_TIER_VALUES.join(', ')}`,
+      );
+    }
     const [settings, errors] = parseSettingsForm(params);
 
     if (errors.length > 0) {
@@ -572,6 +589,23 @@ export class AdminHandlers {
     } catch {
       // Keep settings save successful even if runtime model refresh fails.
       // Next turn will still re-attempt refresh through SubstrateAgent drift detection.
+    }
+
+    if (capabilityTierInput) {
+      try {
+        const current = loadCapabilityTierConfig(this.config.dataDir, {
+          seedDir: process.env.CONFIG_DIR,
+        });
+        const saved = saveCapabilityTierConfig(this.config.dataDir, {
+          ...current,
+          tier: capabilityTierInput,
+        });
+        this.config.capabilityTier = saved.tier;
+        this.config.runtimeHooks?.refreshCapabilities?.();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return tpl.settingsFormResult(false, `Settings saved but capability tier update failed: ${message}`);
+      }
     }
 
     return tpl.settingsFormResult(true, 'Settings saved');
@@ -670,6 +704,25 @@ export class AdminHandlers {
       const saved = saveTrustPolicyConfig(this.config.dataDir, payload);
       setRuntimeTrustPolicy(saved);
       return tpl.settingsFormResult(true, 'trust-policy.json saved');
+    } catch (error) {
+      return tpl.settingsFormResult(false, this.formatConfigError(error));
+    }
+  }
+
+  capabilitiesConfigJson(): string {
+    const config = loadCapabilityTierConfig(this.config.dataDir, {
+      seedDir: process.env.CONFIG_DIR,
+    });
+    return JSON.stringify(config, null, 2);
+  }
+
+  updateCapabilitiesConfig(body: string): string {
+    try {
+      const payload = this.parseConfigJsonBody(body);
+      const saved = saveCapabilityTierConfig(this.config.dataDir, payload);
+      this.config.capabilityTier = saved.tier;
+      this.config.runtimeHooks?.refreshCapabilities?.();
+      return tpl.settingsFormResult(true, 'capability-tier.json saved');
     } catch (error) {
       return tpl.settingsFormResult(false, this.formatConfigError(error));
     }

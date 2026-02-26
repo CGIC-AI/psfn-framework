@@ -48,6 +48,7 @@ import {
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
 import { resolveAdminChatApiBaseUrl } from './channels/admin/chat/api-base-url.js';
+import { CapabilityRuntime } from './capabilities/runtime.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -81,6 +82,12 @@ async function main(): Promise<void> {
     seedDir: process.env.CONFIG_DIR,
   });
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
+  const capabilityRuntime = new CapabilityRuntime({
+    dataDir: config.dataDir,
+    seedDir: process.env.CONFIG_DIR,
+    envTier: config.capabilityTier,
+  });
+  config.capabilityTier = capabilityRuntime.getTier();
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
@@ -132,6 +139,7 @@ async function main(): Promise<void> {
     characterName: card.data.name,
     config,
   });
+  agentLoop.setCapabilityRuntime(capabilityRuntime);
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
     dataDir: config.dataDir,

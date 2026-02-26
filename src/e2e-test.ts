@@ -4,7 +4,7 @@
 //
 // Requirements:
 //   - LiteLLM proxy running (npm run proxy:up)
-//   - Ollama running at OLLAMA_URL with embedding model
+//   - Embedding provider configured via EMBEDDING_PROVIDER (defaults to Ollama)
 //   - .env configured
 
 import 'dotenv/config';

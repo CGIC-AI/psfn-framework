@@ -118,7 +118,7 @@ async function main(): Promise<void> {
   await eventBus.emit('system.ready', {});
 
   console.log(`\nModel: ${config.primaryModel}`);
-  console.log(`Embeddings: ${embeddingProvider.dims}d via Ollama`);
+  console.log(`Embeddings: ${embeddingProvider.dims}d via ${embeddingProvider.kind}`);
   console.log(`Channel: ${CHANNEL}`);
 
   // ── The Walkthrough ──

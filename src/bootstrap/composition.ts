@@ -12,7 +12,10 @@ import type { EventBus } from '../event-bus.js';
 import { SessionStore, type SessionIntegrityProvider } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
 import { UserContinuityStore } from '../session/continuity.js';
-import { EmbeddingProvider } from '../memory/embedding.js';
+import {
+  createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
+  type EmbeddingRuntimeProvider,
+} from '../memory/embedding.js';
 import { SubstrateAgent } from '../agent/substrate-agent.js';
 import { MemoryRetriever } from '../memory/retrieval.js';
 import { MemoryExtractor } from '../memory/extraction.js';
@@ -68,12 +71,8 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
   return { sessionStore, sessionManager, continuityStore };
 }
 
-export function createEmbeddingProviderFromEnv(): EmbeddingProvider {
-  return new EmbeddingProvider({
-    ollamaUrl: process.env.OLLAMA_URL,
-    model: process.env.EMBEDDING_MODEL,
-    dims: process.env.EMBEDDING_DIMS ? parseInt(process.env.EMBEDDING_DIMS, 10) : undefined,
-  });
+export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {
+  return createEmbeddingProviderFromMemoryEnv(process.env);
 }
 
 export interface IdentityComposition {

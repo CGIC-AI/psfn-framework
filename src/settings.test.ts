@@ -37,6 +37,7 @@ function makeConfig(): SubstrateConfig {
     memoryBudgetPct: 20,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
     modelCatalog: {
       primary: {
         model: 'z-ai/glm-5',
@@ -217,6 +218,7 @@ describe('settings', () => {
         sessionMessageLimit: 50,
         memoryRetrievalLimit: 25,
         extractionInterval: 10,
+        compactionEmotionalSalienceThresholdPct: 55,
         retryMaxAttempts: 5,
         retryBaseDelayMs: 4000,
       });
@@ -225,6 +227,7 @@ describe('settings', () => {
       expect(config.sessionMessageLimit).toBe(50);
       expect(config.memoryRetrievalLimit).toBe(25);
       expect(config.extractionInterval).toBe(10);
+      expect(config.compactionEmotionalSalienceThresholdPct).toBe(55);
       expect(config.retryMaxAttempts).toBe(5);
       expect(config.retryBaseDelayMs).toBe(4000);
     });
@@ -471,6 +474,7 @@ describe('settings', () => {
       expect(snapshot.thinkMaxTokens).toBeNull();
       expect(snapshot.thinkMaxWallTimeMs).toBeNull();
       expect(snapshot.thinkMaxSubQueries).toBeNull();
+      expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
     });
 
     it('resolves budget percentages and nullable hard overrides', () => {

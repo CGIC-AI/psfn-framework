@@ -23,6 +23,7 @@ function makeConfig(): SubstrateConfig {
     memoryBudgetPct: 20,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
     modelRoster: {
       chat: {
         model: 'z-ai/glm-5',

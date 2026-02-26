@@ -65,7 +65,7 @@ function makeGatewayLLM(
   };
 }
 
-class FakeAgentLoop {
+class FakeSubstrateAgent {
   memoryProvider = null;
   tools: AgentTool<any>[] = [];
 
@@ -81,7 +81,7 @@ class FakeAgentLoop {
   }
 }
 
-function findThinkTool(target: FakeAgentLoop): AgentTool<any> {
+function findThinkTool(target: FakeSubstrateAgent): AgentTool<any> {
   const think = target.tools.find((tool) => tool.name === 'think');
   if (!think) {
     throw new Error('think tool was not registered');
@@ -119,8 +119,8 @@ function wireSplitThinkTool(options: {
   eventBus: EventBus;
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
-}): FakeAgentLoop {
-  const target = new FakeAgentLoop();
+}): FakeSubstrateAgent {
+  const target = new FakeSubstrateAgent();
   wireShardAndThinkRuntime({
     agentLoop: target as any,
     eventBus: options.eventBus,
@@ -176,7 +176,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       const eventBus = new EventBus();
       const queue = new ConfirmationQueue({ idFactory: () => 'confirm-1' });
       const llm = makeGatewayLLM([makeInstallScript(moduleWithActivation('planner_probe_queue'))], registryPath);
-      const target = new FakeAgentLoop();
+      const target = new FakeSubstrateAgent();
       const moduleLoader = new ModuleLoader({
         eventBus,
         registerTool: (tool, category) => target.registerTool(tool, category),
@@ -234,7 +234,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
     try {
       const eventBus = new EventBus();
       const llm = makeGatewayLLM([makeInstallScript(moduleWithActivation('planner_probe_auto'))], registryPath);
-      const target = new FakeAgentLoop();
+      const target = new FakeSubstrateAgent();
       const moduleLoader = new ModuleLoader({
         eventBus,
         registerTool: (tool, category) => target.registerTool(tool, category),
@@ -287,9 +287,10 @@ describe('agent-main split wiring', () => {
 describe('runtime composition wiring', () => {
   it('routes runtime bootstrap through composition helpers', () => {
     const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+    expect(source).toContain('composeIdentity(this.config)');
     expect(source).toContain('composeSessionRuntime({');
     expect(source).toContain('createEmbeddingProviderFromEnv()');
-    expect(source).toContain('composeAgentLoop({');
+    expect(source).toContain('composeSubstrateAgent({');
     expect(source).toContain('wireMemoryRuntime({');
     expect(source).toContain('wireShardAndThinkRuntime({');
   });

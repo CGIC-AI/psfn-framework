@@ -25,7 +25,7 @@ import {
   composeIdentity,
   composeSessionRuntime,
   createEmbeddingProviderFromEnv,
-  composeAgentLoop,
+  composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
@@ -108,7 +108,7 @@ async function main(): Promise<void> {
   const memoryStore = new MemoryStore(db, embeddingProvider.dims);
 
   // Agent loop
-  const agentLoop = composeAgentLoop({
+  const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: llmClient,
     sessionManager,

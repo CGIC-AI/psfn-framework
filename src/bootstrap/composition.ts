@@ -1,5 +1,10 @@
 // ── Shared Runtime Composition ──
 // Common builders used across runtime, agent container, CLI, and test harnesses.
+//
+// Intentional wiring differences:
+// - src/runtime.ts runs single-process and wires local transports/providers directly.
+// - src/agent-main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
+// Keep core construction through these helpers so behavior stays aligned across both entrypoints.
 
 import { join } from 'node:path';
 import type { SubstrateConfig } from '../types.js';
@@ -84,7 +89,7 @@ export function composeIdentity(config: SubstrateConfig): IdentityComposition {
   };
 }
 
-export interface AgentLoopCompositionOptions {
+export interface SubstrateAgentCompositionOptions {
   eventBus: EventBus;
   llmProvider: LLMProvider;
   sessionManager: SessionManager;
@@ -93,7 +98,7 @@ export interface AgentLoopCompositionOptions {
   config: SubstrateConfig;
 }
 
-export function composeAgentLoop(options: AgentLoopCompositionOptions): SubstrateAgent {
+export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
   return new SubstrateAgent(
     options.eventBus,
     options.llmProvider,

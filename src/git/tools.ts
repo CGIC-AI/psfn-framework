@@ -6,9 +6,13 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { GitOperations } from './ops.js';
-import { textResult } from '../tools/results.js';
+import { textResult, textResultWithError } from '../tools/results.js';
 
 const MAX_DIFF_CHARS = 8000;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function createRepoStatusTool(gitOps: GitOperations): AgentTool<any> {
   return {
@@ -17,24 +21,28 @@ export function createRepoStatusTool(gitOps: GitOperations): AgentTool<any> {
     description:
       'Show the current git repository status: branch, ahead/behind, staged, modified, and untracked files.',
     parameters: Type.Object({}),
-    execute: async (): Promise<AgentToolResult<Record<string, never>>> => {
-      const status = await gitOps.status();
-      const lines = [
-        `Branch: ${status.branch}`,
-        status.ahead > 0 || status.behind > 0
-          ? `Ahead: ${status.ahead}, Behind: ${status.behind}`
-          : null,
-        status.staged.length > 0
-          ? `Staged (${status.staged.length}): ${status.staged.join(', ')}`
-          : 'No staged changes',
-        status.modified.length > 0
-          ? `Modified (${status.modified.length}): ${status.modified.join(', ')}`
-          : 'No unstaged modifications',
-        status.untracked.length > 0
-          ? `Untracked (${status.untracked.length}): ${status.untracked.join(', ')}`
-          : null,
-      ].filter(Boolean);
-      return textResult(lines.join('\n'));
+    execute: async (): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const status = await gitOps.status();
+        const lines = [
+          `Branch: ${status.branch}`,
+          status.ahead > 0 || status.behind > 0
+            ? `Ahead: ${status.ahead}, Behind: ${status.behind}`
+            : null,
+          status.staged.length > 0
+            ? `Staged (${status.staged.length}): ${status.staged.join(', ')}`
+            : 'No staged changes',
+          status.modified.length > 0
+            ? `Modified (${status.modified.length}): ${status.modified.join(', ')}`
+            : 'No unstaged modifications',
+          status.untracked.length > 0
+            ? `Untracked (${status.untracked.length}): ${status.untracked.join(', ')}`
+            : null,
+        ].filter(Boolean);
+        return textResult(lines.join('\n'));
+      } catch (error) {
+        return textResultWithError(`repo_status failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }
@@ -53,24 +61,28 @@ export function createRepoDiffTool(gitOps: GitOperations): AgentTool<any> {
     execute: async (
       _toolCallId: string,
       params: { staged?: boolean },
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const diff = await gitOps.diff({ staged: params.staged });
-      const parts: string[] = [];
-      if (diff.staged) {
-        const truncated =
-          diff.staged.length > MAX_DIFF_CHARS
-            ? diff.staged.slice(0, MAX_DIFF_CHARS) + '\n... (truncated)'
-            : diff.staged;
-        parts.push(`=== Staged ===\n${truncated}`);
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const diff = await gitOps.diff({ staged: params.staged });
+        const parts: string[] = [];
+        if (diff.staged) {
+          const truncated =
+            diff.staged.length > MAX_DIFF_CHARS
+              ? diff.staged.slice(0, MAX_DIFF_CHARS) + '\n... (truncated)'
+              : diff.staged;
+          parts.push(`=== Staged ===\n${truncated}`);
+        }
+        if (diff.unstaged) {
+          const truncated =
+            diff.unstaged.length > MAX_DIFF_CHARS
+              ? diff.unstaged.slice(0, MAX_DIFF_CHARS) + '\n... (truncated)'
+              : diff.unstaged;
+          parts.push(`=== Unstaged ===\n${truncated}`);
+        }
+        return textResult(parts.length > 0 ? parts.join('\n\n') : 'No changes detected.');
+      } catch (error) {
+        return textResultWithError(`repo_diff failed: ${errorMessage(error)}`, true);
       }
-      if (diff.unstaged) {
-        const truncated =
-          diff.unstaged.length > MAX_DIFF_CHARS
-            ? diff.unstaged.slice(0, MAX_DIFF_CHARS) + '\n... (truncated)'
-            : diff.unstaged;
-        parts.push(`=== Unstaged ===\n${truncated}`);
-      }
-      return textResult(parts.length > 0 ? parts.join('\n\n') : 'No changes detected.');
     },
   };
 }
@@ -91,9 +103,13 @@ export function createRepoApplyPatchTool(gitOps: GitOperations): AgentTool<any> 
     execute: async (
       _toolCallId: string,
       params: { file_path: string; content: string },
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      await gitOps.applyPatch(params.file_path, params.content);
-      return textResult(`Applied and staged: ${params.file_path}`);
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        await gitOps.applyPatch(params.file_path, params.content);
+        return textResult(`Applied and staged: ${params.file_path}`);
+      } catch (error) {
+        return textResultWithError(`repo_apply_patch failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }
@@ -116,11 +132,15 @@ export function createRepoCommitTool(gitOps: GitOperations): AgentTool<any> {
     execute: async (
       _toolCallId: string,
       params: { message: string; intent: string; scope?: string },
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const result = await gitOps.commit(params.message, params.intent, params.scope);
-      return textResult(
-        `Committed ${result.hash}: ${result.message} (${result.filesChanged} files changed)`,
-      );
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const result = await gitOps.commit(params.message, params.intent, params.scope);
+        return textResult(
+          `Committed ${result.hash}: ${result.message} (${result.filesChanged} files changed)`,
+        );
+      } catch (error) {
+        return textResultWithError(`repo_commit failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }
@@ -142,9 +162,13 @@ export function createRepoCreateBranchTool(gitOps: GitOperations): AgentTool<any
     execute: async (
       _toolCallId: string,
       params: { name: string; start_point?: string },
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const name = await gitOps.createBranch(params.name, params.start_point);
-      return textResult(`Created and checked out branch: ${name}`);
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const name = await gitOps.createBranch(params.name, params.start_point);
+        return textResult(`Created and checked out branch: ${name}`);
+      } catch (error) {
+        return textResultWithError(`repo_create_branch failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }
@@ -165,9 +189,13 @@ export function createRepoOpenPRTool(gitOps: GitOperations): AgentTool<any> {
     execute: async (
       _toolCallId: string,
       params: { title: string; body: string; base?: string },
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const url = await gitOps.openPR(params.title, params.body, params.base);
-      return textResult(`PR created: ${url}`);
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const url = await gitOps.openPR(params.title, params.body, params.base);
+        return textResult(`PR created: ${url}`);
+      } catch (error) {
+        return textResultWithError(`repo_open_pr failed: ${errorMessage(error)}`, true);
+      }
     },
   };
 }

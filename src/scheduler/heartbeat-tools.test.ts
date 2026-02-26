@@ -71,6 +71,22 @@ describe('heartbeat_get_policy', () => {
 
     expect(text).toContain('[OFF]');
   });
+
+  it('returns canonical error when policy load throws', async () => {
+    const brokenStore = {
+      load: () => {
+        throw new Error('policy read failed');
+      },
+    } as unknown as HeartbeatPolicyStore;
+
+    const tool = createHeartbeatGetPolicyTool(brokenStore);
+    const result = await tool.execute('call-err', {}, new AbortController().signal);
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(text).toContain('heartbeat_get_policy failed');
+    expect(text).toContain('policy read failed');
+    expect(result.details.isError).toBe(true);
+  });
 });
 
 describe('heartbeat_update_policy', () => {

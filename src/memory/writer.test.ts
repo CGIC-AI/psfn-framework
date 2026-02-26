@@ -29,6 +29,8 @@ function mockMemoryStore(): {
   insertMemory: ReturnType<typeof vi.fn>;
   searchByEmbedding: ReturnType<typeof vi.fn>;
   updateMemory: ReturnType<typeof vi.fn>;
+  softDeleteMemory: ReturnType<typeof vi.fn>;
+  recordAbstractionLink: ReturnType<typeof vi.fn>;
   getAllActiveMemories: ReturnType<typeof vi.fn>;
   getById: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
@@ -38,6 +40,8 @@ function mockMemoryStore(): {
     insertMemory: vi.fn(),
     searchByEmbedding: vi.fn(() => []),
     updateMemory: vi.fn(),
+    softDeleteMemory: vi.fn(),
+    recordAbstractionLink: vi.fn(),
     getAllActiveMemories: vi.fn(() => []),
     getById: vi.fn(),
     getStats: vi.fn(() => ({ total: 0, byType: {}, avgSalience: 0 })),
@@ -608,6 +612,105 @@ describe('MemoryWriter', () => {
       expect(result.action).toBe('created');
       expect(store.updateMemory).not.toHaveBeenCalled();
       expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('redact()', () => {
+    it('abstracts and deletes source when consent policy selects abstraction', async () => {
+      const source = makeExistingMemory({
+        id: 'mem-source',
+        text: 'V missed meds Tuesday at 9am after a 14-hour shift.',
+        type: 'episodic',
+        tags: ['health'],
+        sensitivity: 'confidential',
+        consentFlags: { deleteOnRequest: true, allowAbstraction: true },
+      });
+      store.getById.mockReturnValue(source);
+      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.softDeleteMemory.mockReturnValue({
+        deleteId: 'del-1',
+        memoryId: 'mem-source',
+      });
+
+      const result = await writer.redact({
+        memoryId: 'mem-source',
+        operation: 'auto',
+        reason: 'consent request',
+        requestedBy: 'tool:test_redact',
+        sourceRef: 'source:test',
+      });
+
+      expect(result?.operation).toBe('abstracted');
+      expect(result?.abstractedMemoryId).toBeDefined();
+      expect(result?.externalProvenanceRef).toMatch(/^abstraction:/);
+      expect(result?.abstractedText).toContain('medication reminders');
+      expect(result?.abstractedText).not.toContain('Tuesday');
+      expect(result?.abstractedText).not.toContain('9am');
+
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+      const [abstractedMemory] = store.insertMemory.mock.calls[0];
+      expect(abstractedMemory.type).toBe('reflection');
+      expect(abstractedMemory.sensitivity).toBe('personal');
+      expect(abstractedMemory.text).toContain('medication reminders');
+      expect(abstractedMemory.text).not.toContain('V');
+      expect(abstractedMemory.provenanceRefs).toEqual(
+        expect.arrayContaining([expect.stringMatching(/^abstraction:/)]),
+      );
+
+      expect(store.recordAbstractionLink).toHaveBeenCalledWith(expect.objectContaining({
+        sourceMemoryId: 'mem-source',
+        abstractedMemoryId: result?.abstractedMemoryId,
+        externalRef: expect.stringMatching(/^abstraction:/),
+      }));
+
+      expect(store.softDeleteMemory).toHaveBeenCalledWith(
+        'mem-source',
+        expect.objectContaining({
+          deletedBy: 'tool:test_redact',
+          reason: expect.stringContaining('abstracted_memory:'),
+        }),
+      );
+    });
+
+    it('deletes directly when abstraction is disallowed by consent policy', async () => {
+      const source = makeExistingMemory({
+        id: 'mem-source-delete',
+        consentFlags: { deleteOnRequest: true, allowAbstraction: false },
+      });
+      store.getById.mockReturnValue(source);
+      store.softDeleteMemory.mockReturnValue({
+        deleteId: 'del-delete',
+        memoryId: 'mem-source-delete',
+      });
+
+      const result = await writer.redact({
+        memoryId: 'mem-source-delete',
+        operation: 'auto',
+        requestedBy: 'tool:test_redact',
+      });
+
+      expect(result).toEqual(expect.objectContaining({
+        operation: 'deleted',
+        behavior: 'delete',
+        sourceMemoryId: 'mem-source-delete',
+        deleteId: 'del-delete',
+      }));
+      expect(store.insertMemory).not.toHaveBeenCalled();
+      expect(store.recordAbstractionLink).not.toHaveBeenCalled();
+    });
+
+    it('returns null when memory is missing or already deleted', async () => {
+      store.getById.mockReturnValueOnce(undefined);
+      const missing = await writer.redact({ memoryId: 'missing' });
+      expect(missing).toBeNull();
+
+      store.getById.mockReturnValueOnce(makeExistingMemory({
+        id: 'deleted',
+        deletedAt: Date.now(),
+      }));
+      const deleted = await writer.redact({ memoryId: 'deleted' });
+      expect(deleted).toBeNull();
     });
   });
 

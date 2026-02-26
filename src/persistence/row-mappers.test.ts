@@ -46,4 +46,32 @@ describe('row mappers', () => {
     expect(mapped.notes).toBeUndefined();
     expect(mapped.emotionalBaseline).toEqual({ warmth: 0.8 });
   });
+
+  it('normalizes consent flag schema fields from JSON', () => {
+    const row: MemoryRow = {
+      id: 'mem-2',
+      text: 'memory text',
+      type: 'semantic',
+      importance: 0.8,
+      confidence: 0.9,
+      emotional_valence: 0.2,
+      salience: 0.7,
+      source_ref: 'test:source',
+      extracted_at: 1000,
+      last_accessed: 2000,
+      access_count: 3,
+      superseded_by: null,
+      tags: '[]',
+      sensitivity: 'personal',
+      consent_flags: '{"allowRecall":false,"allowAbstraction":true,"deleteOnRequest":true,"redactionBehavior":"abstract","unknown":"x"}',
+    };
+
+    const mapped = mapMemoryRow(row);
+    expect(mapped.consentFlags).toEqual({
+      allowRecall: false,
+      allowAbstraction: true,
+      deleteOnRequest: true,
+      redactionBehavior: 'abstract',
+    });
+  });
 });

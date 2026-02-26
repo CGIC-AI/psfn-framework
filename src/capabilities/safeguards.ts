@@ -33,6 +33,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   contact_set_trust: 'irreversible',
   memory_write: 'reversible',
   memory_import_batch: 'reversible',
+  memory_redact: 'irreversible',
   memory_delete: 'irreversible',
   undo_memory_delete: 'reversible',
   scratchpad_read: 'reversible',

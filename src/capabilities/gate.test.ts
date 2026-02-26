@@ -101,6 +101,24 @@ describe('capability tool gating', () => {
     expect(memoryDelete.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('gates memory_redact by memory.delete capability token', async () => {
+    const memoryRedact = createTool('memory_redact');
+    const nurseryGated = gateToolWithCapabilities(
+      memoryRedact.tool,
+      () => accessForTier('nursery'),
+    );
+    const denied = await nurseryGated.execute('call-1', {});
+    expect(memoryRedact.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('memory.delete');
+
+    const apprenticeGated = gateToolWithCapabilities(
+      memoryRedact.tool,
+      () => accessForTier('apprentice'),
+    );
+    await apprenticeGated.execute('call-2', {});
+    expect(memoryRedact.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('grants autonomous tier access for locked tools', async () => {
     const restart = createTool('self_restart');
     const restartGated = gateToolWithCapabilities(

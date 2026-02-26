@@ -2,8 +2,11 @@ import { MemoryWriter } from '../../memory/writer.js';
 import type { EmbeddingService, LLMProvider } from '../../agent-loop.js';
 import type { MemoryStore } from '../../memory/store.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { MemoryType } from '../../memory/types.js';
-import { VALID_MEMORY_TYPES } from '../../memory/types.js';
+import type { MemoryType, MemoryRedactionOperation } from '../../memory/types.js';
+import {
+  VALID_MEMORY_TYPES,
+  VALID_MEMORY_REDACTION_OPERATIONS,
+} from '../../memory/types.js';
 import { classifyChannel, getAllowedSensitivities } from '../../trust/policy.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../trust/types.js';
 import type { ThinkEvidence } from '../types.js';
@@ -68,6 +71,17 @@ export interface MemoryCapabilities {
     emotionalValence?: number,
     tags?: string,
   ) => Promise<{ action: string; id: string; superseded: boolean }>;
+  memory_redact: (
+    memoryId: string,
+    operation?: MemoryRedactionOperation,
+    reason?: string,
+  ) => Promise<{
+    operation: string;
+    sourceId: string;
+    deleteId?: string;
+    abstractedId?: string;
+    provenanceRef?: string;
+  }>;
   session_messages: (channelId: string, limit?: number) => Array<{ role: string; content: string; timestamp: number }>;
   session_search: (
     query: string,
@@ -326,6 +340,52 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     };
   };
 
+  const memory_redact = async (
+    memoryId: string,
+    operation: MemoryRedactionOperation = 'auto',
+    reason?: string,
+  ): Promise<{
+    operation: string;
+    sourceId: string;
+    deleteId?: string;
+    abstractedId?: string;
+    provenanceRef?: string;
+  }> => {
+    if (!writer) {
+      return { operation: 'error', sourceId: 'no memory system' };
+    }
+
+    const normalizedId = toTrimmedString(memoryId);
+    if (!normalizedId) {
+      return { operation: 'error', sourceId: 'memory id is required' };
+    }
+
+    const normalizedOperation = VALID_MEMORY_REDACTION_OPERATIONS.includes(operation)
+      ? operation
+      : 'auto';
+    const invocationId = nextReplInvocationId();
+
+    const result = await writer.redact({
+      memoryId: normalizedId,
+      operation: normalizedOperation,
+      reason: toTrimmedString(reason) || undefined,
+      requestedBy: `source:repl|operation:memory_redact|invocation:${invocationId}`,
+      sourceRef: `source:repl|operation:memory_redact|invocation:${invocationId}`,
+    });
+
+    if (!result) {
+      return { operation: 'error', sourceId: 'memory not found' };
+    }
+
+    return {
+      operation: result.operation,
+      sourceId: result.sourceMemoryId,
+      deleteId: result.deleteId,
+      abstractedId: result.abstractedMemoryId,
+      provenanceRef: result.externalProvenanceRef,
+    };
+  };
+
   const session_messages = (
     channelId: string,
     limit = 20,
@@ -463,6 +523,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     memory_write,
     memory_import_batch,
     memory_upsert,
+    memory_redact,
     session_messages,
     session_search,
     session_append_note,

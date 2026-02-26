@@ -200,6 +200,16 @@ export interface EventMap {
     error: string;
     timestampMs?: number;
   };
+  'voice.turn.observation': {
+    turnId: string;
+    channelId?: string;
+    userId?: string;
+    stage?: 'ingest' | 'transport' | 'stt' | 'llm' | 'tts' | 'orchestrator' | 'unknown';
+    kind: string;
+    code?: string;
+    detail?: Record<string, unknown>;
+    timestampMs?: number;
+  };
   'voice.stt.partial': {
     turnId: string;
     channelId?: string;
@@ -226,6 +236,75 @@ export interface EventMap {
     channelId?: string;
     userId?: string;
     timestampMs?: number;
+  };
+  'wyoming.connection.open': {
+    connectionId: string;
+    openedAtMs: number;
+    remoteAddress?: string;
+    remotePort?: number;
+    timestampMs: number;
+  };
+  'wyoming.connection.close': {
+    connectionId: string;
+    reason: string;
+    openedAtMs: number;
+    lastSeenAtMs: number;
+    durationMs: number;
+    timestampMs: number;
+  };
+  'wyoming.connection.error': {
+    connectionId: string;
+    code: string;
+    error: string;
+    timestampMs: number;
+  };
+  'wyoming.frame.received': {
+    connectionId: string;
+    frameType: string;
+    sessionId?: string;
+    payloadBytes: number;
+    timestampMs: number;
+  };
+  'wyoming.frame.sent': {
+    connectionId: string;
+    frameType: string;
+    sessionId?: string;
+    payloadBytes: number;
+    timestampMs: number;
+  };
+  'wyoming.session.start': {
+    connectionId: string;
+    sessionId: string;
+    activeSessions: number;
+    maxSessions: number;
+    timestampMs: number;
+  };
+  'wyoming.session.end': {
+    connectionId: string;
+    sessionId: string;
+    reason: string;
+    durationMs: number;
+    activeSessions: number;
+    timestampMs: number;
+  };
+  'wyoming.policy.violation': {
+    connectionId: string;
+    scope: 'runtime' | 'transport' | 'codec';
+    code: string;
+    message: string;
+    sessionId?: string;
+    eventType?: string;
+    limit?: number;
+    observed?: number;
+    action: 'error_frame' | 'close_connection';
+    timestampMs: number;
+  };
+  'wyoming.audit.summary': {
+    method: string;
+    decision: 'ALLOW' | 'DENY' | 'NEEDS_APPROVAL';
+    params?: Record<string, unknown>;
+    error?: string;
+    timestampMs: number;
   };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent };
   'module.install': {

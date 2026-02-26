@@ -166,6 +166,11 @@ type ChatDebugEventName =
   | 'agent.error'
   | 'channel.voice.error'
   | 'voice.turn.error'
+  | 'wyoming.session.start'
+  | 'wyoming.session.end'
+  | 'wyoming.connection.error'
+  | 'wyoming.policy.violation'
+  | 'wyoming.audit.summary'
   | 'system.error';
 
 const CHAT_DEBUG_EVENTS: ChatDebugEventName[] = [
@@ -182,6 +187,11 @@ const CHAT_DEBUG_EVENTS: ChatDebugEventName[] = [
   'agent.error',
   'channel.voice.error',
   'voice.turn.error',
+  'wyoming.session.start',
+  'wyoming.session.end',
+  'wyoming.connection.error',
+  'wyoming.policy.violation',
+  'wyoming.audit.summary',
   'system.error',
 ];
 
@@ -601,6 +611,52 @@ export class AdminHandlers {
           event.channelId ? `channelId=${event.channelId}` : null,
           event.scope ? `scope=${event.scope}` : null,
           `eventId=${event.id}`,
+        ],
+      );
+    });
+
+    this.eventBus.on('wyoming.session.start', (event) => {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'allowed',
+        `Wyoming session "${event.sessionId}" opened on ${event.connectionId}.`,
+        [
+          `activeSessions=${event.activeSessions}`,
+          `maxSessions=${event.maxSessions}`,
+        ],
+      );
+    });
+
+    this.eventBus.on('wyoming.session.end', (event) => {
+      const deniedReason = event.reason.includes('policy')
+        || event.reason.includes('error')
+        || event.reason.includes('timeout');
+      this.appendAuditTimelineEntry(
+        'external_action',
+        deniedReason ? 'denied' : 'allowed',
+        deniedReason
+          ? `Wyoming session "${event.sessionId}" ended with policy/error reason "${event.reason}".`
+          : `Wyoming session "${event.sessionId}" ended on ${event.connectionId}.`,
+        [
+          `reason=${event.reason}`,
+          `durationMs=${event.durationMs}`,
+          `activeSessions=${event.activeSessions}`,
+        ],
+      );
+    });
+
+    this.eventBus.on('wyoming.policy.violation', (event) => {
+      this.appendAuditTimelineEntry(
+        'external_action',
+        'denied',
+        `Wyoming policy violation ${event.code} on ${event.connectionId}.`,
+        [
+          `scope=${event.scope}`,
+          event.sessionId ? `sessionId=${event.sessionId}` : null,
+          event.eventType ? `eventType=${event.eventType}` : null,
+          event.limit !== undefined ? `limit=${event.limit}` : null,
+          event.observed !== undefined ? `observed=${event.observed}` : null,
+          `action=${event.action}`,
         ],
       );
     });
@@ -3005,6 +3061,11 @@ export class AdminHandlers {
       'memory.retrieval',
       'schedule.task.run',
       'schedule.heartbeat',
+      'wyoming.session.start',
+      'wyoming.session.end',
+      'wyoming.connection.error',
+      'wyoming.policy.violation',
+      'wyoming.audit.summary',
       'system.error',
     ];
 
@@ -3227,6 +3288,92 @@ export class AdminHandlers {
               userId: event.userId,
               stage: event.stage,
               code: event.code,
+            }),
+          },
+        );
+      }
+      case 'wyoming.session.start': {
+        const event = data as EventMap['wyoming.session.start'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'text',
+          `Wyoming session started: ${event.sessionId}`,
+          {
+            details: this.compactDebugDetails({
+              connectionId: event.connectionId,
+              sessionId: event.sessionId,
+              activeSessions: event.activeSessions,
+              maxSessions: event.maxSessions,
+            }),
+          },
+        );
+      }
+      case 'wyoming.session.end': {
+        const event = data as EventMap['wyoming.session.end'];
+        const category = event.reason.includes('policy')
+          || event.reason.includes('error')
+          || event.reason.includes('timeout')
+          ? 'errors'
+          : 'text';
+        return this.buildChatDebugEvent(
+          eventName,
+          category,
+          `Wyoming session ended: ${event.sessionId}`,
+          {
+            details: this.compactDebugDetails({
+              connectionId: event.connectionId,
+              reason: event.reason,
+              durationMs: event.durationMs,
+              activeSessions: event.activeSessions,
+            }),
+          },
+        );
+      }
+      case 'wyoming.connection.error': {
+        const event = data as EventMap['wyoming.connection.error'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'errors',
+          `Wyoming connection error: ${truncateDebugText(event.error, 120)}`,
+          {
+            details: this.compactDebugDetails({
+              connectionId: event.connectionId,
+              code: event.code,
+            }),
+          },
+        );
+      }
+      case 'wyoming.policy.violation': {
+        const event = data as EventMap['wyoming.policy.violation'];
+        return this.buildChatDebugEvent(
+          eventName,
+          'errors',
+          `Wyoming policy violation: ${event.code}`,
+          {
+            details: this.compactDebugDetails({
+              connectionId: event.connectionId,
+              code: event.code,
+              scope: event.scope,
+              sessionId: event.sessionId,
+              eventType: event.eventType,
+              limit: event.limit,
+              observed: event.observed,
+              action: event.action,
+            }),
+          },
+        );
+      }
+      case 'wyoming.audit.summary': {
+        const event = data as EventMap['wyoming.audit.summary'];
+        return this.buildChatDebugEvent(
+          eventName,
+          event.decision === 'ALLOW' ? 'text' : 'errors',
+          `Wyoming audit summary: ${event.method}`,
+          {
+            details: this.compactDebugDetails({
+              method: event.method,
+              decision: event.decision,
+              error: event.error,
             }),
           },
         );

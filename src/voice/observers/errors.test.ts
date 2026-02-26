@@ -136,4 +136,47 @@ describe('attachVoiceErrorsObserver', () => {
       count: 1,
     });
   });
+
+  it('ingests Wyoming policy/connection failures as transport metrics', async () => {
+    const eventBus = new EventBus();
+    const seen: VoiceErrorMetric[] = [];
+    attachVoiceErrorsObserver(eventBus, {
+      onMetric: (metric) => seen.push(metric),
+    });
+
+    await eventBus.emit('wyoming.policy.violation', {
+      connectionId: 'wyoming-conn-1',
+      scope: 'transport',
+      code: 'READ_RATE_LIMIT_EXCEEDED',
+      message: 'read rate exceeded',
+      sessionId: 'session-1',
+      eventType: 'audio.chunk',
+      limit: 120,
+      observed: 121,
+      action: 'close_connection',
+      timestampMs: 1,
+    });
+    await eventBus.emit('wyoming.connection.error', {
+      connectionId: 'wyoming-conn-1',
+      code: 'WRITE_QUEUE_OVERFLOW',
+      error: 'Write queue exceeded',
+      timestampMs: 2,
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({
+      channelId: 'wyoming-conn-1',
+      stage: 'transport',
+      category: 'transport',
+      code: 'E_READ_RATE_LIMIT_EXCEEDED',
+      count: 1,
+    });
+    expect(seen[1]).toMatchObject({
+      channelId: 'wyoming-conn-1',
+      stage: 'transport',
+      category: 'transport',
+      code: 'E_WRITE_QUEUE_OVERFLOW',
+      count: 1,
+    });
+  });
 });

@@ -2219,6 +2219,61 @@ describe('AdminServer', () => {
       expect(payload.details?.toolCallId).toBe('tool-1');
     });
 
+    it('SSE stream includes Wyoming policy telemetry events', async () => {
+      const sseBody = await captureSseBody(port, '/events/stream', {
+        predicate: (body) => body.includes('wyoming.policy.violation') && body.includes('READ_RATE_LIMIT_EXCEEDED'),
+        emit: () => eventBus.emit('wyoming.policy.violation', {
+          connectionId: 'wyoming-conn-7',
+          scope: 'transport',
+          code: 'READ_RATE_LIMIT_EXCEEDED',
+          message: 'Read frame rate exceeded',
+          sessionId: 'session-7',
+          eventType: 'audio.chunk',
+          limit: 120,
+          observed: 121,
+          action: 'close_connection',
+          timestampMs: Date.now(),
+        }),
+      });
+
+      expect(sseBody).toContain('wyoming.policy.violation');
+      expect(sseBody).toContain('READ_RATE_LIMIT_EXCEEDED');
+      expect(sseBody).toContain('session-7');
+    });
+
+    it('chat debug SSE stream maps Wyoming policy events to errors payloads', async () => {
+      const sseBody = await captureSseBody(port, '/api/chat/events/stream', {
+        predicate: (body) => body.includes('event: chat-debug') && body.includes('"event":"wyoming.policy.violation"'),
+        emit: () => eventBus.emit('wyoming.policy.violation', {
+          connectionId: 'wyoming-conn-9',
+          scope: 'runtime',
+          code: 'RATE_LIMIT_EXCEEDED',
+          message: 'Session exceeded rate',
+          sessionId: 'session-9',
+          eventType: 'audio.chunk',
+          limit: 120,
+          observed: 135,
+          action: 'error_frame',
+          timestampMs: Date.now(),
+        }),
+      });
+
+      const payloadLine = sseBody
+        .split('\n')
+        .find(line => line.startsWith('data: ') && line.includes('"event":"wyoming.policy.violation"'));
+      expect(payloadLine).toBeDefined();
+      const payload = JSON.parse(payloadLine!.slice(6)) as {
+        event: string;
+        category: string;
+        details?: Record<string, string | number | boolean | null>;
+      };
+
+      expect(payload.event).toBe('wyoming.policy.violation');
+      expect(payload.category).toBe('errors');
+      expect(payload.details?.scope).toBe('runtime');
+      expect(payload.details?.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
     it('chat debug SSE channelId filter scopes events', async () => {
       const sseBody = await captureSseBody(port, '/api/chat/events/stream?channelId=ch-filter', {
         predicate: (body) => body.includes('"channelId":"ch-filter"'),

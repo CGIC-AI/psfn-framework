@@ -20,6 +20,7 @@ import {
   journalToSessionEntry,
   quarantineSidecarPath,
   parseJournalText,
+  parseLegacyChatSource,
   readJournalFile,
   readJournalFirstEntry,
   readJournalTailEntries,
@@ -312,5 +313,61 @@ describe('journal utils', () => {
     expect(verification.verified).toBe(false);
     expect(wrapUnverifiedHistory(signed.content ?? '', verification.reason))
       .toContain('<unverified_history>');
+  });
+
+  it('parses legacy chat JSON arrays and normalizes timestamps', () => {
+    const parsed = parseLegacyChatSource(JSON.stringify([
+      {
+        role: 'user',
+        text: 'Hello from legacy',
+        timestamp: 1_700_000_000,
+      },
+      {
+        role: 'assistant',
+        content: 'Reply from import',
+        createdAt: '2024-01-01T00:00:01.000Z',
+      },
+    ]));
+
+    expect(parsed.format).toBe('json-array');
+    expect(parsed.records).toHaveLength(2);
+    expect(parsed.records[0]).toMatchObject({
+      sourceIndex: 0,
+      role: 'user',
+      content: 'Hello from legacy',
+      timestamp: 1_700_000_000_000,
+    });
+    expect(parsed.records[1]).toMatchObject({
+      sourceIndex: 1,
+      role: 'assistant',
+      content: 'Reply from import',
+      timestamp: Date.parse('2024-01-01T00:00:01.000Z'),
+    });
+    expect(parsed.sourceHash).toMatch(/^[a-f0-9]{64}$/i);
+  });
+
+  it('parses legacy chat JSONL and skips malformed or incomplete lines', () => {
+    const raw = [
+      '{"role":"human","message":"line one","time":"2024-01-01T00:00:00.000Z"}',
+      '{bad json',
+      '{"speaker":"assistant","content":"line two","timestamp":1704067201000}',
+      '{"content":"missing timestamp"}',
+    ].join('\n');
+    const parsed = parseLegacyChatSource(raw);
+
+    expect(parsed.format).toBe('jsonl');
+    expect(parsed.records).toHaveLength(2);
+    expect(parsed.records[0]).toMatchObject({
+      sourceIndex: 0,
+      role: 'user',
+      content: 'line one',
+      timestamp: Date.parse('2024-01-01T00:00:00.000Z'),
+    });
+    expect(parsed.records[1]).toMatchObject({
+      sourceIndex: 2,
+      role: 'assistant',
+      content: 'line two',
+      timestamp: 1_704_067_201_000,
+    });
   });
 });

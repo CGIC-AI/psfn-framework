@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { GatewayServer, type GatewayServerOptions } from './server.js';
+import { GatewayServer, resolveGatewaySessionHmacKeyring, type GatewayServerOptions } from './server.js';
 import type { NdjsonConnection } from './transport.js';
 
 // Mock the transport module to avoid real socket operations
@@ -134,6 +134,24 @@ async function invokeRpc(
 
   throw new Error(`No RPC response found for id ${id}`);
 }
+
+describe('resolveGatewaySessionHmacKeyring', () => {
+  it('parses versioned keyrings with explicit active version', () => {
+    const keyring = resolveGatewaySessionHmacKeyring({
+      GATEWAY_SESSION_HMAC_KEYS: 'v1:old-secret,v2:new-secret',
+      GATEWAY_SESSION_HMAC_ACTIVE_VERSION: 'v2',
+    });
+    expect(keyring).not.toBeNull();
+    expect(keyring?.activeVersion).toBe('v2');
+    expect(keyring?.keys.v1).toBe('old-secret');
+    expect(keyring?.keys.v2).toBe('new-secret');
+  });
+
+  it('returns null when gateway HMAC env vars are absent', () => {
+    const keyring = resolveGatewaySessionHmacKeyring({});
+    expect(keyring).toBeNull();
+  });
+});
 
 describe('GatewayServer', () => {
   describe('requestAgent', () => {

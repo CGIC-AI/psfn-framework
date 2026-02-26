@@ -4,6 +4,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from './context-budget.js';
+import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 
 // ── Channel-agnostic message types ──
 
@@ -238,11 +239,16 @@ export interface SubstrateConfig {
   voiceReadyCueText?: string;
   voiceDaveEncryption?: boolean;
   voiceDecryptionFailureTolerance?: number;
+  ttsProvider?: StreamingTtsProvider;
   deepgramApiKey?: string;
   deepgramModel?: string;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
   elevenLabsModelId?: string;
+  echoTtsUrl?: string;
+  echoTtsVoice?: string;
+  echoTtsPreset?: string;
+  echoTtsModel?: string;
   thinkMaxTokens?: number;
   thinkMaxWallTimeMs?: number;
   thinkMaxSubQueries?: number;
@@ -367,6 +373,14 @@ export function loadConfig(): SubstrateConfig {
     24,
     0,
   );
+  const ttsProvider = parseStreamingTtsProviderEnv(
+    process.env.TTS_PROVIDER ?? process.env.VOICE_TTS_PROVIDER,
+    'elevenlabs',
+  );
+  const echoTtsUrl = parseOptionalStringEnv(process.env.ECHO_TTS_URL);
+  const echoTtsVoice = parseOptionalStringEnv(process.env.ECHO_TTS_VOICE);
+  const echoTtsPreset = parseOptionalStringEnv(process.env.ECHO_TTS_PRESET);
+  const echoTtsModel = parseOptionalStringEnv(process.env.ECHO_TTS_MODEL);
 
   return {
     primaryModel,
@@ -428,11 +442,16 @@ export function loadConfig(): SubstrateConfig {
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
+    ttsProvider,
     deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
     deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? '',
     elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID ?? 'rPQ6h200dfjiuYAy0JDA',
     elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
+    ...(echoTtsUrl ? { echoTtsUrl } : {}),
+    ...(echoTtsVoice ? { echoTtsVoice } : {}),
+    ...(echoTtsPreset ? { echoTtsPreset } : {}),
+    ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts,
     retryBaseDelayMs,
     ...(openRouterProviderOrder.length > 0 ? { openRouterProviderOrder } : {}),
@@ -511,6 +530,18 @@ function parseOptionalStringEnv(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseStreamingTtsProviderEnv(
+  value: string | undefined,
+  fallback: StreamingTtsProvider,
+): StreamingTtsProvider {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === 'elevenlabs' || trimmed === 'echo') {
+    return trimmed;
+  }
+  return fallback;
 }
 
 function parseImportProcessingRouteMode(

@@ -29,6 +29,7 @@ import {
   type JournalIntegrityVerificationResult,
   type SessionHmacKeyring,
 } from './journal-utils.js';
+import { SessionSearchIndex, type SessionSearchHit } from './search-index.js';
 
 const log = createComponentLogger('SessionStore');
 
@@ -70,6 +71,8 @@ interface SessionFileSeed {
 export interface SessionStoreOptions {
   integrityProvider?: SessionIntegrityProvider | null;
   integrityKeyring?: SessionHmacKeyring | null;
+  searchIndexPath?: string;
+  disableSearchIndex?: boolean;
 }
 
 export interface SessionIntegrityProvider {
@@ -173,10 +176,12 @@ export class SessionStore {
   private channels: Map<string, ChannelCache> = new Map();
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
+  private searchIndex: SessionSearchIndex | null = null;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
   private integrityProvider: SessionIntegrityProvider | null;
   private integritySignFailureLogged = false;
   private integrityVerifyFailureLogged = false;
+  private searchIndexFailureLogged = false;
 
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
@@ -184,9 +189,22 @@ export class SessionStore {
     this.integrityProvider = options.integrityProvider
       ?? createKeyringIntegrityProvider(options.integrityKeyring ?? null);
     mkdirSync(sessionsDir, { recursive: true });
+    if (!options.disableSearchIndex) {
+      try {
+        this.searchIndex = new SessionSearchIndex(
+          options.searchIndexPath ?? join(this.sessionsDir, 'session-search.sqlite'),
+        );
+      } catch (error) {
+        log.warn('Session search index unavailable; keyword search disabled', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.searchIndex = null;
+      }
+    }
     this.loadChannelIndex();
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
+    this.backfillSearchIndexFromDisk();
   }
 
   private encodedFilePath(channelId: string): string {
@@ -619,6 +637,58 @@ export class SessionStore {
     }
   }
 
+  private backfillSearchIndexFromDisk(): void {
+    if (!this.searchIndex) return;
+
+    for (const [channelId, indexEntry] of this.channelIndex.entries()) {
+      const expectedCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
+      if (expectedCount <= 0) continue;
+
+      const indexedCount = this.searchIndex.countIndexedMessages(channelId);
+      if (indexedCount >= expectedCount) continue;
+
+      const filePath = join(this.sessionsDir, indexEntry.filename);
+      if (!existsSync(filePath)) continue;
+
+      try {
+        const { entries } = readJournalFile(filePath);
+        let previousHmac: string | null = null;
+        for (const rawEntry of entries) {
+          const entry = this.verifyAndNormalizeEntry(rawEntry, previousHmac);
+          previousHmac = typeof rawEntry._hmac === 'string' ? rawEntry._hmac : previousHmac;
+          const message = journalToSessionEntry(entry);
+          if (!message) continue;
+          this.searchIndex.upsertSessionEntry(message);
+        }
+      } catch (error) {
+        if (!this.searchIndexFailureLogged) {
+          this.searchIndexFailureLogged = true;
+          log.warn('Session search index backfill failed; continuing without interruption', {
+            channelId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+  }
+
+  private indexSessionEntry(entry: SessionEntry): void {
+    if (!this.searchIndex) return;
+
+    try {
+      this.searchIndex.upsertSessionEntry(entry);
+    } catch (error) {
+      if (!this.searchIndexFailureLogged) {
+        this.searchIndexFailureLogged = true;
+        log.warn('Session search index write failed; continuing without interruption', {
+          channelId: entry.channelId,
+          messageId: entry.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
   private warnAboutQuarantinedEntries(
     channelId: string,
     filePath: string,
@@ -751,9 +821,9 @@ export class SessionStore {
       authorName: entry.authorName,
     });
     const id = cache.nextId++;
+    const full: SessionEntry = { ...entry, id };
 
     if (cache.fullyLoaded) {
-      const full: SessionEntry = { ...entry, id };
       cache.entries.push(full);
     }
     cache.messageCount += 1;
@@ -761,8 +831,18 @@ export class SessionStore {
 
     const journal = buildMessageJournalEntry(id, entry);
     this.writeJournalEntry(cache, journal);
+    this.indexSessionEntry(full);
 
     return id;
+  }
+
+  searchByKeywords(query: string, limit = 10): SessionSearchHit[] {
+    if (!this.searchIndex) return [];
+    return this.searchIndex.searchByKeywords(query, limit);
+  }
+
+  rebuildSearchIndex(): void {
+    this.backfillSearchIndexFromDisk();
   }
 
   getRecent(channelId: string, limit: number): SessionEntry[] {

@@ -116,6 +116,7 @@ export interface ThinkEvidence {
     | 'memory_search'
     | 'memory_get_by_id'
     | 'session_messages'
+    | 'session_search'
     | 'llm_query'
     | 'web_fetch'
     | 'repo'

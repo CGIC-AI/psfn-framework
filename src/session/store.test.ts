@@ -66,6 +66,65 @@ describe('SessionStore', () => {
     expect(store.count('ch2')).toBe(1);
   });
 
+  it('indexes appended messages for FTS keyword search across channels', () => {
+    store.append({
+      channelId: 'api:alpha',
+      role: 'user',
+      content: 'Kyoto itinerary planning for spring',
+      timestamp: 1_000,
+    });
+    store.append({
+      channelId: 'api:beta',
+      role: 'assistant',
+      content: 'Booked Kyoto train tickets and hotel options',
+      timestamp: 2_000,
+    });
+
+    const hits = store.searchByKeywords('Kyoto', 10);
+    expect(hits).toHaveLength(2);
+
+    const channels = new Set(hits.map(hit => hit.channelId));
+    expect(channels.has('api:alpha')).toBe(true);
+    expect(channels.has('api:beta')).toBe(true);
+    expect(hits[0].snippet.toLowerCase()).toContain('kyoto');
+  });
+
+  it('ranks denser FTS matches above sparse matches', () => {
+    store.append({
+      channelId: 'rank:strong',
+      role: 'assistant',
+      content: 'nebula launch prep; nebula telemetry; nebula anomaly notes',
+      timestamp: 1_000,
+    });
+    store.append({
+      channelId: 'rank:weak',
+      role: 'assistant',
+      content: 'nebula launch prep only once',
+      timestamp: 2_000,
+    });
+
+    const hits = store.searchByKeywords('nebula launch', 5);
+    expect(hits).toHaveLength(2);
+    expect(hits[0].channelId).toBe('rank:strong');
+    expect(hits[1].channelId).toBe('rank:weak');
+    expect(hits[0].score).toBeLessThanOrEqual(hits[1].score);
+  });
+
+  it('backfills existing JSONL transcripts into FTS index on startup', () => {
+    const noIndexStore = new SessionStore(dir, { disableSearchIndex: true });
+    noIndexStore.append({
+      channelId: 'api:legacy-search',
+      role: 'user',
+      content: 'Archived mention of aurora protocol handoff',
+      timestamp: 1_000,
+    });
+
+    const reloaded = new SessionStore(dir);
+    const hits = reloaded.searchByKeywords('aurora protocol', 5);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].channelId).toBe('api:legacy-search');
+  });
+
   it('creates readable filename pattern for new channels and persists mapping', () => {
     store.append({
       channelId: 'api:e2e-internal',

@@ -35,6 +35,7 @@ import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
 import { registerScheduledBackupTask } from './backup/service.js';
 import {
+  createEmbeddingDimensionMismatchWarning,
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
@@ -251,10 +252,14 @@ export class SubstrateRuntime implements Lifecycle {
       this.db,
       embeddingProvider.dims,
     );
-    if (embeddingDimensionCheck.status === 'mismatch') {
-      log.warn('Embedding dimension mismatch detected at startup', {
-        configuredDims: embeddingDimensionCheck.configuredDims,
-        storedDims: embeddingDimensionCheck.storedDims,
+    const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
+      embeddingDimensionCheck,
+    );
+    if (embeddingDimensionWarning) {
+      log.warn(embeddingDimensionWarning.message, {
+        configuredDims: embeddingDimensionWarning.configuredDims,
+        storedDims: embeddingDimensionWarning.storedDims,
+        recommendation: embeddingDimensionWarning.recommendation,
       });
     }
 

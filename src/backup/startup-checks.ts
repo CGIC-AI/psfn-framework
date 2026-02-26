@@ -11,6 +11,13 @@ export interface EmbeddingDimensionValidationResult {
   storedDims: number | null;
 }
 
+export interface EmbeddingDimensionMismatchWarning {
+  message: string;
+  configuredDims: number;
+  storedDims: number;
+  recommendation: string;
+}
+
 function firstStringValue(row: Record<string, unknown>): string | null {
   for (const value of Object.values(row)) {
     if (typeof value === 'string') return value;
@@ -99,5 +106,21 @@ export function validateEmbeddingDimensions(
     status: 'mismatch',
     configuredDims,
     storedDims,
+  };
+}
+
+export function createEmbeddingDimensionMismatchWarning(
+  result: EmbeddingDimensionValidationResult,
+): EmbeddingDimensionMismatchWarning | null {
+  if (result.status !== 'mismatch' || result.storedDims === null) {
+    return null;
+  }
+
+  return {
+    message: 'Embedding dimension mismatch detected at startup',
+    configuredDims: result.configuredDims,
+    storedDims: result.storedDims,
+    recommendation:
+      'Run memory embedding migration to re-embed l2_memories with the configured model before relying on retrieval quality.',
   };
 }

@@ -27,7 +27,13 @@ function toError(error: unknown): Error {
 }
 
 function candidateKey(candidate: RoutingCandidate): string {
-  return `${candidate.provider}::${candidate.model}`;
+  return [
+    candidate.provider,
+    candidate.model,
+    candidate.requestBaseUrl ?? '',
+    candidate.openRouterZdrOnly ? 'zdr' : '',
+    candidate.importRouteMode ?? '',
+  ].join('::');
 }
 
 export class FallbackRunner {

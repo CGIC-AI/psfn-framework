@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SubstrateConfig } from '../types.js';
-import { resolveRoutingCandidates } from './routing.js';
+import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -103,5 +103,97 @@ describe('resolveRoutingCandidates(background)', () => {
       model: 'catalog/primary',
       provider: 'openrouter',
     });
+  });
+
+  it('attaches OpenRouter provider preference ordering to OpenRouter candidates', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      openRouterProviderOrder: ['parasail', 'openai'],
+    }), 'background');
+
+    expect(candidates[0]?.openRouterProviderOrder).toEqual(['parasail', 'openai']);
+    expect(candidates.every(candidate => candidate.provider === 'openrouter')).toBe(true);
+  });
+});
+
+describe('resolveRoutingCandidates(import_processing)', () => {
+  it('enforces openrouter_zdr mode for import processing', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      importProcessingRouteMode: 'openrouter_zdr',
+      modelRoster: {
+        background: {
+          model: 'background/model',
+          provider: 'openrouter',
+          maxTokens: 2048,
+        },
+        chat: {
+          model: 'chat/fallback',
+          provider: 'anthropic',
+          maxTokens: 4096,
+        },
+      },
+    }), 'import_processing');
+
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every(candidate => candidate.provider === 'openrouter')).toBe(true);
+    expect(candidates.every(candidate => candidate.openRouterZdrOnly === true)).toBe(true);
+    expect(candidates.every(candidate => candidate.importRouteMode === 'openrouter_zdr')).toBe(true);
+  });
+
+  it('returns only local endpoint candidate when local mode is configured', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      importProcessingRouteMode: 'local_endpoint',
+      importProcessingLocalEndpointUrl: 'http://localhost:11434/v1',
+      importProcessingLocalModel: 'llama3.2:latest',
+    }), 'import_processing');
+
+    expect(candidates).toEqual([
+      {
+        model: 'llama3.2:latest',
+        provider: 'local_endpoint',
+        maxTokens: 2048,
+        requestBaseUrl: 'http://localhost:11434/v1',
+        requestApiKeyEnv: 'IMPORT_PROCESSING_LOCAL_API_KEY',
+        importRouteMode: 'local_endpoint',
+      },
+    ]);
+  });
+});
+
+describe('evaluateImportPolicy', () => {
+  it('rejects non-zdr import routes when strict policy is enabled', () => {
+    const config = makeConfig({
+      importProcessingRouteMode: 'background',
+      importProcessingStrictPolicy: true,
+    });
+
+    const decision = evaluateImportPolicy(config, 'import_processing', {
+      model: 'background/model',
+      provider: 'openrouter',
+      maxTokens: 2048,
+      importRouteMode: 'background',
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('strict_requires_openrouter_zdr');
+    expect(decision.audit.strictPolicyEnabled).toBe(true);
+    expect(decision.audit.openRouterZdrOnly).toBe(false);
+  });
+
+  it('allows strict-mode import routes when candidate is OpenRouter ZDR', () => {
+    const config = makeConfig({
+      importProcessingRouteMode: 'openrouter_zdr',
+      importProcessingStrictPolicy: true,
+    });
+
+    const decision = evaluateImportPolicy(config, 'import_processing', {
+      model: 'background/model',
+      provider: 'openrouter',
+      maxTokens: 2048,
+      openRouterZdrOnly: true,
+      importRouteMode: 'openrouter_zdr',
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.reason).toBeUndefined();
   });
 });

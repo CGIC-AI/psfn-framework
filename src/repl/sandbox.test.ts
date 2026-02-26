@@ -396,6 +396,40 @@ describe('REPLSandbox', () => {
     expect(result.output).toBe('0');
   });
 
+  it('memory_write stamps repl provenance sourceRef', async () => {
+    const embedding = new Float32Array([1, 0, 0]);
+    const embeddingService = {
+      embed: vi.fn(async () => embedding),
+      embedBatch: vi.fn(),
+      dims: 3,
+    } as unknown as EmbeddingService;
+
+    const memoryStore = {
+      searchByEmbedding: vi.fn(() => []),
+      insertMemory: vi.fn(),
+      getAllActiveMemories: vi.fn(() => []),
+      updateMemory: vi.fn(),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    const result = await sandbox.execute(
+      'const r = await memory_write("from repl", "semantic"); print(r.action);',
+      5000,
+      8192,
+    );
+
+    expect(result.output).toBe('created');
+    expect((memoryStore.insertMemory as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    const insertedMemory = (memoryStore.insertMemory as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(insertedMemory.sourceRef).toMatch(/^source:repl\|operation:memory_write\|invocation:repl-/);
+  });
+
   it('getLocals returns user-defined variables', async () => {
     const sandbox = new REPLSandbox(nullDeps());
     await sandbox.execute('var myVar = "hello";\nvar num = 42;', 5000, 8192);

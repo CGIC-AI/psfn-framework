@@ -121,6 +121,22 @@ describe('MemoryWriter', () => {
       expect(result.memory.sourceRef).toBe('tool:memory_write');
     });
 
+    it('normalizes empty sourceRef values to defaults', async () => {
+      const writeResult = await writer.write({
+        text: 'Fallback source write',
+        type: 'semantic',
+        sourceRef: '   ',
+      });
+      expect(writeResult.memory.sourceRef).toBe('tool:memory_write');
+
+      const upsertResult = await writer.upsert({
+        text: 'Fallback source upsert',
+        type: 'semantic',
+        sourceRef: '',
+      });
+      expect(upsertResult.memory.sourceRef).toBe('tool:memory_upsert');
+    });
+
     it('returns the inserted memory with a UUID id', async () => {
       const result = await writer.write({ text: 'test', type: 'semantic' });
 

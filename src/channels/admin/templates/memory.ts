@@ -58,6 +58,28 @@ function memoryConsentDetail(m: PurrMemory): string {
   return escapeHtml(consentCues.join(', '));
 }
 
+function formatProvenanceSegment(segment: string): string {
+  if (segment.startsWith('source:')) return `source ${segment.slice('source:'.length)}`;
+  if (segment.startsWith('session:')) return `session ${segment.slice('session:'.length)}`;
+  if (segment.startsWith('lines:')) return `lines ${segment.slice('lines:'.length)}`;
+  if (segment.startsWith('visibility:')) return `visibility ${segment.slice('visibility:'.length)}`;
+  if (segment.startsWith('operation:')) return `operation ${segment.slice('operation:'.length)}`;
+  if (segment.startsWith('invocation:')) return `invocation ${segment.slice('invocation:'.length)}`;
+  if (segment.startsWith('item:')) return `item ${segment.slice('item:'.length)}`;
+  return segment;
+}
+
+function memoryProvenanceDetail(m: PurrMemory): string {
+  const segments = m.sourceRef
+    .split('|')
+    .map(segment => segment.trim())
+    .filter(Boolean)
+    .map(formatProvenanceSegment);
+
+  if (segments.length === 0) return 'none';
+  return segments.map(segment => escapeHtml(segment)).join(' &rarr; ');
+}
+
 export function memoryListPage(
   memories: PurrMemory[],
   contactById: ReadonlyMap<string, MemoryContactView> = new Map(),
@@ -115,6 +137,7 @@ export function memoryDetailPage(m: PurrMemory, linkedContact?: MemoryContactVie
         <tr><td>Sensitivity</td><td>${sensitivityBadge(m.sensitivity)}</td></tr>
         <tr><td>Consent Flags</td><td>${memoryConsentDetail(m)}</td></tr>
         ${isRelationalMemory(m) || m.contactId ? `<tr><td>Related Contact</td><td>${memoryContactDetail(m, linkedContact)}</td></tr>` : ''}
+        <tr><td>Provenance</td><td>${memoryProvenanceDetail(m)}</td></tr>
         <tr><td>Source</td><td>${escapeHtml(m.sourceRef)}</td></tr>
         <tr><td>Extracted</td><td>${date}</td></tr>
         <tr><td>Last Accessed</td><td>${accessed}</td></tr>

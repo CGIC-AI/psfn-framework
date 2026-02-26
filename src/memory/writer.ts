@@ -80,6 +80,11 @@ function applyRetentionSemantics(input: {
   };
 }
 
+function normalizeSourceRef(sourceRef: string | undefined, fallback: string): string {
+  const trimmed = sourceRef?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
 export class MemoryWriter {
   constructor(
     private memoryStore: MemoryStore,
@@ -102,7 +107,7 @@ export class MemoryWriter {
       emotionalValence = 0,
       confidence = 0.8,
       tags = [],
-      sourceRef = 'tool:memory_write',
+      sourceRef,
       sensitivity = 'personal',
       consentFlags,
       retentionClass,
@@ -195,6 +200,7 @@ export class MemoryWriter {
 
     // 3. Insert new memory
     const now = Date.now();
+    const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_write');
     const memory: PurrMemory = {
       id: uuidv4(),
       text,
@@ -203,7 +209,7 @@ export class MemoryWriter {
       confidence,
       emotionalValence,
       salience: importance, // Initial salience = importance
-      sourceRef,
+      sourceRef: normalizedSourceRef,
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,
@@ -236,7 +242,7 @@ export class MemoryWriter {
       emotionalValence = 0,
       confidence = 0.8,
       tags = [],
-      sourceRef = 'tool:memory_upsert',
+      sourceRef,
       sensitivity = 'personal',
       consentFlags,
       retentionClass,
@@ -278,6 +284,7 @@ export class MemoryWriter {
 
     // Always insert the new memory
     const now = Date.now();
+    const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_upsert');
     const memory: PurrMemory = {
       id: uuidv4(),
       text,
@@ -286,7 +293,7 @@ export class MemoryWriter {
       confidence,
       emotionalValence,
       salience: importance,
-      sourceRef,
+      sourceRef: normalizedSourceRef,
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,

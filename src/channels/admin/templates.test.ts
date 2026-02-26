@@ -113,7 +113,7 @@ describe('admin templates', () => {
       confidence: 0.88,
       emotionalValence: 0.52,
       salience: 0.81,
-      sourceRef: 'test:relational',
+      sourceRef: 'source:shard:shard-77|session:shard:shard-77|lines:41-42|visibility:private|operation:extract',
       extractedAt: Date.now(),
       lastAccessed: Date.now(),
       accessCount: 2,
@@ -144,6 +144,11 @@ describe('admin templates', () => {
     expect(detailHtml).toContain('Related Contact');
     expect(detailHtml).toContain('/api/contacts/contact-1/edit');
     expect(detailHtml).toContain('Consent Flags');
+    expect(detailHtml).toContain('Provenance');
+    expect(detailHtml).toContain('source shard:shard-77');
+    expect(detailHtml).toContain('session shard:shard-77');
+    expect(detailHtml).toContain('lines 41-42');
+    expect(detailHtml).toContain('visibility private');
   });
 
   it('sorts prompt layers by type order then priority', () => {

@@ -23,6 +23,12 @@ import { loadModelsConfig } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
+import { resolveBackupRuntimeConfig } from './backup/config.js';
+import { registerScheduledBackupTask } from './backup/service.js';
+import {
+  runDatabaseIntegrityCheck,
+  validateEmbeddingDimensions,
+} from './backup/startup-checks.js';
 import { MemoryWriter } from './memory/writer.js';
 import {
   createMemoryWriteTool,
@@ -131,6 +137,9 @@ async function main(): Promise<void> {
     dataDir: config.dataDir,
     seedDir: process.env.CONFIG_DIR,
   });
+  const backupConfig = resolveBackupRuntimeConfig({
+    dataDir: config.dataDir,
+  });
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const capabilityRuntime = new CapabilityRuntime({
     dataDir: config.dataDir,
@@ -161,6 +170,8 @@ async function main(): Promise<void> {
   const db = new Database(config.databasePath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  runDatabaseIntegrityCheck(db);
+  log.info('SQLite integrity check passed');
 
   // ── Load identity (mounted read-only in container) ──
 
@@ -177,9 +188,11 @@ async function main(): Promise<void> {
 
   // ── Initialize local components ──
 
+  const sessionsDir = join(config.dataDir, 'sessions');
   const sessionComposition = composeSessionRuntime({
     config,
     eventBus,
+    sessionsDir,
     enableContinuity: true,
     promptRegistry,
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
@@ -187,6 +200,13 @@ async function main(): Promise<void> {
   const { sessionStore, sessionManager } = sessionComposition;
 
   const memoryStore = new MemoryStore(db, gateway.dims);
+  const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
+  if (embeddingDimensionCheck.status === 'mismatch') {
+    log.warn('Embedding dimension mismatch detected at startup', {
+      configuredDims: embeddingDimensionCheck.configuredDims,
+      storedDims: embeddingDimensionCheck.storedDims,
+    });
+  }
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
@@ -260,6 +280,18 @@ async function main(): Promise<void> {
     intervalMs: config.maintenanceIntervalMs,
     handler: () => salienceDecay.run(),
     state: 'idle',
+  });
+  registerScheduledBackupTask({
+    scheduler,
+    db,
+    databasePath: config.databasePath,
+    sessionsDir,
+    config: backupConfig,
+  });
+  log.info('Scheduled backups enabled', {
+    intervalMs: backupConfig.intervalMs,
+    retentionCount: backupConfig.retentionCount,
+    backupRootDir: backupConfig.rootDir,
   });
   scheduler.registerHeartbeat(async () => {
     const now = Date.now();

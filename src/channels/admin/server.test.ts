@@ -825,10 +825,12 @@ describe('AdminServer', () => {
       expect(res.body).toContain('Skills JSON (skills.json)');
       expect(res.body).toContain('Scheduler JSON (scheduler.json)');
       expect(res.body).toContain('Trust Policy JSON (trust-policy.json)');
+      expect(res.body).toContain('Capability Tier JSON (capability-tier.json)');
       expect(res.body).toContain('hx-post="/api/settings/models"');
       expect(res.body).toContain('hx-post="/api/settings/skills"');
       expect(res.body).toContain('hx-post="/api/settings/scheduler"');
       expect(res.body).toContain('hx-post="/api/settings/trust-policy"');
+      expect(res.body).toContain('hx-post="/api/settings/capabilities"');
     });
 
     it('returns persisted skills config via GET endpoint', async () => {
@@ -838,6 +840,15 @@ describe('AdminServer', () => {
       const payload = JSON.parse(res.body) as { maxLoadedSkills: number; directories: string[] };
       expect(payload.maxLoadedSkills).toBe(32);
       expect(payload.directories).toContain('skills');
+    });
+
+    it('returns persisted capability tier config via GET endpoint', async () => {
+      const res = await request(port, 'GET', '/api/settings/capabilities');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('application/json');
+      const payload = JSON.parse(res.body) as { tier: string; customTokens: string[] };
+      expect(payload.tier).toBe('nursery');
+      expect(payload.customTokens).toEqual([]);
     });
 
     it('saves settings via POST', async () => {
@@ -855,6 +866,23 @@ describe('AdminServer', () => {
       // Reset for other tests
       testConfig.primaryMaxTokens = 16384;
       testConfig.sessionMessageLimit = 30;
+    });
+
+    it('updates capability tier via settings form POST', async () => {
+      const body = 'capabilityTier=apprentice';
+      const res = await request(port, 'POST', '/api/settings', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Settings saved');
+      expect(testConfig.capabilityTier).toBe('apprentice');
+
+      const persisted = JSON.parse(
+        readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8'),
+      ) as { tier: string };
+      expect(persisted.tier).toBe('apprentice');
+
+      testConfig.capabilityTier = 'nursery';
     });
 
     it('saves context budget percentages via POST', async () => {
@@ -1075,6 +1103,31 @@ describe('AdminServer', () => {
       expect(saved.channelClassification.defaultVisibility).toBe('public');
       expect(classifyChannel('custom:123')).toBe('private');
       expect(classifyChannel('unknown:123')).toBe('public');
+    });
+
+    it('saves capability-tier.json via dedicated POST endpoint', async () => {
+      const body = new URLSearchParams({
+        configJson: JSON.stringify({
+          tier: 'custom',
+          customTokens: ['identity.read', 'git.read'],
+        }),
+      }).toString();
+
+      const res = await request(port, 'POST', '/api/settings/capabilities', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('capability-tier.json saved');
+
+      const saved = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8')) as {
+        tier: string;
+        customTokens: string[];
+      };
+      expect(saved.tier).toBe('custom');
+      expect(saved.customTokens).toEqual(['identity.read', 'git.read']);
+      expect(testConfig.capabilityTier).toBe('custom');
+
+      testConfig.capabilityTier = 'nursery';
     });
 
     it('shows validation error for invalid JSON config payloads', async () => {

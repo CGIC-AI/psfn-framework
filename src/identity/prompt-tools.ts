@@ -5,7 +5,24 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { PromptLayerStore } from './prompt-store.js';
+import type { CapabilityToken } from '../capabilities/tokens.js';
+import { withCapabilityRequirement } from '../capabilities/requirements.js';
 import { textResult } from '../tools/results.js';
+
+function resolvePromptLayerById(store: PromptLayerStore, layerId: string) {
+  const normalized = layerId.trim();
+  if (!normalized) return null;
+  const layers = store.getAll();
+  return layers.find(l => l.id === normalized || l.id.startsWith(normalized)) ?? null;
+}
+
+function resolvePromptLayerWriteCapability(store: PromptLayerStore, layerId: string): CapabilityToken {
+  const layer = resolvePromptLayerById(store, layerId);
+  if (!layer) return 'identity.write.runtime';
+  if (layer.type === 'base') return 'identity.write.base';
+  if (layer.type === 'operator') return 'identity.write.operator';
+  return 'identity.write.runtime';
+}
 
 export function createPromptLayerListTool(store: PromptLayerStore): AgentTool<any> {
   return {
@@ -70,7 +87,7 @@ export function createPromptLayerGetTool(store: PromptLayerStore): AgentTool<any
 }
 
 export function createPromptLayerUpdateTool(store: PromptLayerStore): AgentTool<any> {
-  return {
+  const tool: AgentTool<any> = {
     name: 'prompt_layer_update',
     description: 'Update the content of a prompt layer. Agent cannot modify base or operator layers (admin-only). History is preserved for rollback.',
     label: 'prompt_layer_update',
@@ -96,10 +113,14 @@ export function createPromptLayerUpdateTool(store: PromptLayerStore): AgentTool<
       return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
     },
   };
+
+  return withCapabilityRequirement(tool, (params) =>
+    resolvePromptLayerWriteCapability(store, String(params.layer_id ?? '')),
+  );
 }
 
 export function createPromptLayerToggleTool(store: PromptLayerStore): AgentTool<any> {
-  return {
+  const tool: AgentTool<any> = {
     name: 'prompt_layer_toggle',
     description: 'Toggle a prompt layer on/off. Cannot disable the only base layer.',
     label: 'prompt_layer_toggle',
@@ -124,4 +145,8 @@ export function createPromptLayerToggleTool(store: PromptLayerStore): AgentTool<
       return textResult(`Layer "${toggled.name}" is now ${toggled.enabled ? 'enabled' : 'disabled'}`);
     },
   };
+
+  return withCapabilityRequirement(tool, (params) =>
+    resolvePromptLayerWriteCapability(store, String(params.layer_id ?? '')),
+  );
 }

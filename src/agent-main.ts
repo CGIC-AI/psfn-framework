@@ -71,6 +71,7 @@ import {
 } from './capabilities/safeguards.js';
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
+import { ModuleLoader } from './modules/loader.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -305,6 +306,11 @@ async function main(): Promise<void> {
   scheduler.start();
   log.info(`Memory system enabled (${gateway.dims}d embeddings via gateway)`);
 
+  const moduleLoader = new ModuleLoader({
+    eventBus,
+    registerTool: (tool, category) => agentLoop.registerTool(tool, category),
+  });
+
   const replConfig = buildReplConfig(config);
   const shardManager = wireShardAndThinkRuntime({
     agentLoop,
@@ -319,6 +325,11 @@ async function main(): Promise<void> {
     scheduler,
     replConfig,
     shardAuditTrail: safeguardAuditTrail,
+    getCapabilityTier: () => capabilityRuntime.getTier(),
+    moduleInstallConfirmationQueue: cardProposalQueue,
+    onModuleRegistryMutation: async (mutation) => {
+      await moduleLoader.applyRegistryMutation(mutation);
+    },
   });
 
   // Memory write/import tools — intentional memory creation
@@ -331,6 +342,9 @@ async function main(): Promise<void> {
   // Git tools — self-modification via gateway-hosted git ops
   registerGitTools(agentLoop, new GatewayGitOps(gateway));
   log.info('Git self-modification tools enabled');
+
+  const moduleSummary = await moduleLoader.loadEnabledModules();
+  log.info('Runtime modules initialized', moduleSummary);
 
   // ── API server (optional) ──
 

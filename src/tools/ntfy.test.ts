@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createNotifyOperatorTool, type NtfyNotifier } from './ntfy.js';
+import { ExternalCommunicationRateLimiter } from '../capabilities/safeguards.js';
 
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
@@ -73,5 +74,37 @@ describe('notify_operator tool', () => {
     expect(resultText(result as any)).toContain('notify_operator: failure');
     expect((result.details as any).isError).toBe(true);
     expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('enforces external communication rate limits', async () => {
+    let now = 1_000;
+    const limiter = new ExternalCommunicationRateLimiter({
+      now: () => now,
+      discordPerHour: 1,
+      emailPerHour: 1,
+    });
+    const notifier: NtfyNotifier = {
+      notify: vi.fn().mockResolvedValue({
+        status: 'sent',
+        topic: 'ops',
+      }),
+    };
+    const tool = createNotifyOperatorTool(notifier, {
+      rateLimiter: limiter,
+      defaultChannel: 'discord',
+    });
+
+    const first = await tool.execute('call-5', { message: 'First alert' });
+    expect(resultText(first as any)).toContain('notify_operator: success');
+
+    const blocked = await tool.execute('call-6', { message: 'Second alert' });
+    expect(resultText(blocked as any)).toContain('rate limit');
+    expect((blocked.details as any).isError).toBe(true);
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+
+    now += 60 * 60 * 1000 + 1;
+    const afterWindow = await tool.execute('call-7', { message: 'Third alert' });
+    expect(resultText(afterWindow as any)).toContain('notify_operator: success');
+    expect(notifier.notify).toHaveBeenCalledTimes(2);
   });
 });

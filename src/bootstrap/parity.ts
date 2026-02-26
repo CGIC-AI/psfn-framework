@@ -17,6 +17,7 @@ import {
   createPromptLayerGetTool,
   createPromptLayerUpdateTool,
   createPromptLayerToggleTool,
+  type PromptLayerUpdateToolOptions,
 } from '../identity/prompt-tools.js';
 import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import {
@@ -52,6 +53,7 @@ export function wirePromptRuntime(
   target: PromptRuntimeTarget,
   dataDir: string,
   baseSystemPrompt: string,
+  options: PromptLayerUpdateToolOptions = {},
 ): PromptLayerStore {
   const promptStore = new PromptLayerStore(
     join(dataDir, 'prompt-layers.json'),
@@ -62,7 +64,7 @@ export function wirePromptRuntime(
   target.promptComposer = new PromptComposer(promptStore);
   target.registerTool(createPromptLayerListTool(promptStore), 'extended');
   target.registerTool(createPromptLayerGetTool(promptStore), 'extended');
-  target.registerTool(createPromptLayerUpdateTool(promptStore), 'extended');
+  target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
   target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
 
   log.info(`Prompt stack enabled (${promptStore.count} layers)`);

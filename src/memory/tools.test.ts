@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createMemoryWriteTool, createMemoryImportTool } from './tools.js';
+import {
+  createMemoryWriteTool,
+  createMemoryImportTool,
+  createMemoryDeleteTool,
+  createUndoMemoryDeleteTool,
+} from './tools.js';
 import type { MemoryWriter, WriteResult, BatchImportResult } from './writer.js';
 import type { PurrMemory } from './types.js';
 import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
+import type { MemoryStore, MemoryDeleteVersion } from './store.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -501,5 +507,100 @@ describe('createMemoryImportTool', () => {
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
     expect(importedRecords[0].sensitivity).toBeUndefined();
+  });
+});
+
+describe('memory_delete and undo_memory_delete tools', () => {
+  function makeDeleteVersion(overrides: Partial<MemoryDeleteVersion> = {}): MemoryDeleteVersion {
+    return {
+      deleteId: 'del-1',
+      memoryId: 'mem-1',
+      snapshot: makeMemory({ id: 'mem-1' }),
+      deletedAt: Date.now(),
+      deletedBy: 'tool:memory_delete',
+      ...overrides,
+    };
+  }
+
+  function mockStore(): {
+    softDeleteMemory: ReturnType<typeof vi.fn>;
+    undoSoftDelete: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      softDeleteMemory: vi.fn(),
+      undoSoftDelete: vi.fn(),
+    };
+  }
+
+  it('soft-deletes memory and returns delete_id', async () => {
+    const store = mockStore();
+    store.softDeleteMemory.mockReturnValue(makeDeleteVersion({
+      deleteId: 'del-abc',
+      memoryId: 'mem-abc',
+    }));
+
+    const tool = createMemoryDeleteTool(store as unknown as MemoryStore);
+    const result = await tool.execute('call-1', {
+      memory_id: 'mem-abc',
+      reason: 'stale',
+    });
+
+    expect(resultText(result as any)).toContain('Memory soft-deleted');
+    expect(resultText(result as any)).toContain('del-abc');
+    expect(store.softDeleteMemory).toHaveBeenCalledWith('mem-abc', {
+      deletedBy: 'tool:memory_delete',
+      reason: 'stale',
+    });
+  });
+
+  it('returns error when memory_id is missing', async () => {
+    const store = mockStore();
+    const tool = createMemoryDeleteTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-2', {
+      memory_id: '   ',
+    });
+
+    expect(resultText(result as any)).toContain('memory_id is required');
+    expect((result.details as any).isError).toBe(true);
+    expect(store.softDeleteMemory).not.toHaveBeenCalled();
+  });
+
+  it('returns error when memory is missing/already deleted', async () => {
+    const store = mockStore();
+    store.softDeleteMemory.mockReturnValue(null);
+    const tool = createMemoryDeleteTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-3', { memory_id: 'missing' });
+    expect(resultText(result as any)).toContain('not found or already deleted');
+    expect((result.details as any).isError).toBe(true);
+  });
+
+  it('restores deleted memory from delete_id', async () => {
+    const store = mockStore();
+    store.undoSoftDelete.mockReturnValue(makeDeleteVersion({
+      deleteId: 'del-restore',
+      memoryId: 'mem-restore',
+      restoredAt: Date.now(),
+      restoredBy: 'tool:undo_memory_delete',
+    }));
+    const tool = createUndoMemoryDeleteTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-4', { delete_id: 'del-restore' });
+    expect(resultText(result as any)).toContain('Memory restored');
+    expect(resultText(result as any)).toContain('mem-restore');
+    expect(store.undoSoftDelete).toHaveBeenCalledWith('del-restore', {
+      restoredBy: 'tool:undo_memory_delete',
+    });
+  });
+
+  it('returns error when delete checkpoint is missing', async () => {
+    const store = mockStore();
+    store.undoSoftDelete.mockReturnValue(null);
+    const tool = createUndoMemoryDeleteTool(store as unknown as MemoryStore);
+
+    const result = await tool.execute('call-5', { delete_id: 'unknown' });
+    expect(resultText(result as any)).toContain('Delete checkpoint not found');
+    expect((result.details as any).isError).toBe(true);
   });
 });

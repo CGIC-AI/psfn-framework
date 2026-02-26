@@ -50,6 +50,9 @@ export interface PurrMemory {
   sensitivity: SensitivityLevel;    // default 'personal'
   consentFlags?: ConsentFlags;      // default {}
   contactId?: string;               // FK to contacts table (for relational memories)
+  deletedAt?: number;
+  deletedBy?: string;
+  deleteReason?: string;
 }
 
 export interface ExtractedFact {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRestartTool, createRebuildTool } from './lifecycle.js';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
 import { execSync } from 'node:child_process';
+import { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
 
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
@@ -44,9 +45,9 @@ describe('createRestartTool', () => {
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
     const tool = createRestartTool(mockNotifier, mockStopFn);
-    const result = await tool.execute('call-1', {});
+    const result = await tool.execute('call-1', { reason: 'apply config' });
 
-    expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith(undefined);
+    expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('apply config');
     expect(resultText(result)).toContain('Restart initiated');
     expect(result.details?.isError).toBeUndefined();
 
@@ -63,6 +64,47 @@ describe('createRestartTool', () => {
     await tool.execute('call-2', { reason: 'config change' });
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('config change');
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('blocks restart when reason is missing', async () => {
+    const tool = createRestartTool(mockNotifier, mockStopFn);
+    const result = await tool.execute('call-3', { reason: '   ' });
+
+    expect(resultText(result)).toContain('reason is required');
+    expect((result.details as any).isError).toBe(true);
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+  });
+
+  it('enforces restart cooldown/max-per-hour when safeguard is configured', async () => {
+    let now = 0;
+    const safeguard = new LifecycleRestartSafeguard({
+      now: () => now,
+      cooldownMs: 60_000,
+      maxPerHour: 1,
+    });
+    const tool = createRestartTool(mockNotifier, mockStopFn, {
+      restartSafeguard: safeguard,
+      getCapabilityTier: () => 'autonomous',
+    });
+
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
+
+    const first = await tool.execute('call-4', { reason: 'first' });
+    expect(resultText(first)).toContain('Restart initiated');
+
+    const cooldownBlocked = await tool.execute('call-5', { reason: 'second' });
+    expect(resultText(cooldownBlocked)).toContain('cooldown');
+    expect((cooldownBlocked.details as any).isError).toBe(true);
+
+    now = 61_000;
+    const hourlyBlocked = await tool.execute('call-6', { reason: 'third' });
+    expect(resultText(hourlyBlocked)).toContain('hourly limit');
+    expect((hourlyBlocked.details as any).isError).toBe(true);
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();
@@ -97,9 +139,9 @@ describe('createRebuildTool', () => {
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
     const tool = createRebuildTool(mockNotifier, mockStopFn);
-    const result = await tool.execute('call-3', {});
+    const result = await tool.execute('call-3', { reason: 'dependency refresh' });
 
-    expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild');
+    expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: dependency refresh');
     expect(resultText(result)).toContain('Rebuild initiated');
 
     globalThis.setImmediate = origSetImmediate;
@@ -133,7 +175,7 @@ describe('createRebuildTool', () => {
     }) as typeof setImmediate;
 
     const tool = createRebuildTool(mockNotifier, mockStopFn);
-    await tool.execute('call-5', {});
+    await tool.execute('call-5', { reason: 'verify build' });
     await new Promise(r => setTimeout(r, 0));
 
     expect(mockNotifier.notifyShutdown).toHaveBeenCalled();
@@ -142,5 +184,14 @@ describe('createRebuildTool', () => {
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();
+  });
+
+  it('blocks rebuild when reason is missing', async () => {
+    const tool = createRebuildTool(mockNotifier, mockStopFn);
+    const result = await tool.execute('call-6', { reason: '   ' });
+
+    expect(resultText(result)).toContain('reason is required');
+    expect((result.details as any).isError).toBe(true);
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
   });
 });

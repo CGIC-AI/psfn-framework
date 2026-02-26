@@ -4,6 +4,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
+import type { CapabilityTier } from '../types.js';
+import type { CapabilityToken } from '../capabilities/tokens.js';
+import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
+import { resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import { PromptLayerStore } from './prompt-store.js';
 import {
   createPromptLayerListTool,
@@ -18,6 +22,18 @@ function resultText(result: AgentToolResult<any>): string {
     .filter((c): c is TextContent => c.type === 'text')
     .map(c => c.text)
     .join('');
+}
+
+function accessForTier(
+  tier: CapabilityTier,
+  customTokens: CapabilityToken[] = [],
+): CapabilityAccess {
+  const granted = new Set(resolveTierCapabilityTokens(tier, customTokens));
+  return {
+    getTier: () => tier,
+    getGrantedTokens: () => granted,
+    has: (token) => granted.has(token),
+  };
 }
 
 describe('Prompt Layer Tools', () => {
@@ -62,24 +78,42 @@ describe('Prompt Layer Tools', () => {
   });
 
   describe('prompt_layer_get', () => {
-    it('returns full layer details', async () => {
-      const layer = store.create({ type: 'base', name: 'Test Base', content: 'You are helpful.' });
-      const tool = createPromptLayerGetTool(store);
+    it('allows reading base/operator layers at all tiers', async () => {
+      const baseLayer = store.create({ type: 'base', name: 'Test Base', content: 'You are helpful.' });
+      const operatorLayer = store.create({ type: 'operator', name: 'Operator', content: 'Run safely.' });
+      const tiers: CapabilityTier[] = ['nursery', 'apprentice', 'autonomous'];
 
-      const result = await tool.execute('test', { layer_id: layer.id });
-      const text = resultText(result);
+      for (const tier of tiers) {
+        const tool = gateToolWithCapabilities(
+          createPromptLayerGetTool(store),
+          () => accessForTier(tier),
+        );
 
-      expect(text).toContain('ID: ' + layer.id);
-      expect(text).toContain('Type: base');
-      expect(text).toContain('Name: Test Base');
-      expect(text).toContain('You are helpful.');
+        const baseResult = await tool.execute(`base-${tier}`, { layer_id: baseLayer.id });
+        const operatorResult = await tool.execute(`operator-${tier}`, { layer_id: operatorLayer.id });
+
+        expect(resultText(baseResult)).toContain('Type: base');
+        expect(resultText(baseResult)).toContain('You are helpful.');
+        expect(resultText(operatorResult)).toContain('Type: operator');
+        expect(resultText(operatorResult)).toContain('Run safely.');
+      }
+
+      const custom = gateToolWithCapabilities(
+        createPromptLayerGetTool(store),
+        () => accessForTier('custom', ['identity.read']),
+      );
+      const customResult = await custom.execute('custom-read', { layer_id: baseLayer.id });
+      expect(resultText(customResult)).toContain('Type: base');
     });
 
     it('handles prefix match', async () => {
       const layer = store.create({ type: 'base', name: 'Test', content: 'content' });
       const prefix = layer.id.slice(0, 8);
 
-      const tool = createPromptLayerGetTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerGetTool(store),
+        () => accessForTier('nursery'),
+      );
       const result = await tool.execute('test', { layer_id: prefix });
       const text = resultText(result);
 
@@ -87,7 +121,10 @@ describe('Prompt Layer Tools', () => {
     });
 
     it('returns not found for unknown id', async () => {
-      const tool = createPromptLayerGetTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerGetTool(store),
+        () => accessForTier('nursery'),
+      );
       const result = await tool.execute('test', { layer_id: 'nonexistent' });
       const text = resultText(result);
 
@@ -96,64 +133,113 @@ describe('Prompt Layer Tools', () => {
   });
 
   describe('prompt_layer_update', () => {
-    it('blocks agent from modifying base layers', async () => {
+    it('denies base layer updates in nursery tier', async () => {
       const layer = store.create({ type: 'base', name: 'Base', content: 'original' });
-      const tool = createPromptLayerUpdateTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store),
+        () => accessForTier('nursery'),
+      );
 
       const result = await tool.execute('test', { layer_id: layer.id, content: 'modified' });
       const text = resultText(result);
 
-      expect(text).toContain('Cannot modify base layers');
+      expect(text).toContain('Capability denied');
+      expect(text).toContain('identity.write.base');
       expect(store.getById(layer.id)?.content).toBe('original');
     });
 
-    it('blocks agent from modifying operator layers', async () => {
+    it('allows base layer updates in apprentice and autonomous tiers', async () => {
+      for (const tier of ['apprentice', 'autonomous'] as const) {
+        const layer = store.create({ type: 'base', name: `Base-${tier}`, content: 'original' });
+        const tool = gateToolWithCapabilities(
+          createPromptLayerUpdateTool(store),
+          () => accessForTier(tier),
+        );
+
+        const result = await tool.execute(`test-${tier}`, {
+          layer_id: layer.id,
+          content: `modified-${tier}`,
+        });
+        const text = resultText(result);
+
+        expect(text).toContain('Updated layer');
+        expect(store.getById(layer.id)?.content).toBe(`modified-${tier}`);
+        expect(store.getById(layer.id)?.updatedBy).toBe('agent');
+      }
+    });
+
+    it('denies operator layer updates in nursery tier', async () => {
       const layer = store.create({ type: 'operator', name: 'Operator', content: 'original' });
-      const tool = createPromptLayerUpdateTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store),
+        () => accessForTier('nursery'),
+      );
 
       const result = await tool.execute('test', { layer_id: layer.id, content: 'modified' });
       const text = resultText(result);
 
-      expect(text).toContain('Cannot modify operator layers');
+      expect(text).toContain('Capability denied');
+      expect(text).toContain('identity.write.operator');
+      expect(store.getById(layer.id)?.content).toBe('original');
     });
 
-    it('allows agent to modify runtime layers', async () => {
-      const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'original' });
-      const tool = createPromptLayerUpdateTool(store);
+    it('allows operator layer updates in apprentice and autonomous tiers', async () => {
+      for (const tier of ['apprentice', 'autonomous'] as const) {
+        const layer = store.create({ type: 'operator', name: `Operator-${tier}`, content: 'original' });
+        const tool = gateToolWithCapabilities(
+          createPromptLayerUpdateTool(store),
+          () => accessForTier(tier),
+        );
 
-      const result = await tool.execute('test', { layer_id: layer.id, content: 'modified by agent' });
-      const text = resultText(result);
+        const result = await tool.execute(`test-${tier}`, {
+          layer_id: layer.id,
+          content: `operator-${tier}`,
+        });
+        const text = resultText(result);
 
-      expect(text).toContain('Updated layer');
-      expect(text).toContain('v2');
-      expect(store.getById(layer.id)?.content).toBe('modified by agent');
-      expect(store.getById(layer.id)?.updatedBy).toBe('agent');
+        expect(text).toContain('Updated layer');
+        expect(store.getById(layer.id)?.content).toBe(`operator-${tier}`);
+      }
     });
 
-    it('allows agent to modify channel layers', async () => {
-      const layer = store.create({ type: 'channel', name: 'Discord', content: 'original', channelType: 'discord_text' });
-      const tool = createPromptLayerUpdateTool(store);
+    it('allows nursery updates for runtime/channel/task layers', async () => {
+      const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'runtime-original' });
+      const channel = store.create({
+        type: 'channel',
+        name: 'Discord',
+        content: 'channel-original',
+        channelType: 'discord_text',
+      });
+      const task = store.create({
+        type: 'task',
+        name: 'Heartbeat',
+        content: 'task-original',
+        taskKind: 'heartbeat',
+      });
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store),
+        () => accessForTier('nursery'),
+      );
 
-      const result = await tool.execute('test', { layer_id: layer.id, content: 'updated' });
-      const text = resultText(result);
+      const runtimeResult = await tool.execute('runtime', { layer_id: runtime.id, content: 'runtime-updated' });
+      const channelResult = await tool.execute('channel', { layer_id: channel.id, content: 'channel-updated' });
+      const taskResult = await tool.execute('task', { layer_id: task.id, content: 'task-updated' });
 
-      expect(text).toContain('Updated layer');
-    });
-
-    it('allows agent to modify task layers', async () => {
-      const layer = store.create({ type: 'task', name: 'Heartbeat', content: 'original', taskKind: 'heartbeat' });
-      const tool = createPromptLayerUpdateTool(store);
-
-      const result = await tool.execute('test', { layer_id: layer.id, content: 'updated' });
-      const text = resultText(result);
-
-      expect(text).toContain('Updated layer');
+      expect(resultText(runtimeResult)).toContain('Updated layer');
+      expect(resultText(channelResult)).toContain('Updated layer');
+      expect(resultText(taskResult)).toContain('Updated layer');
+      expect(store.getById(runtime.id)?.content).toBe('runtime-updated');
+      expect(store.getById(channel.id)?.content).toBe('channel-updated');
+      expect(store.getById(task.id)?.content).toBe('task-updated');
     });
 
     it('supports prefix match for layer id', async () => {
       const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'original' });
       const prefix = layer.id.slice(0, 8);
-      const tool = createPromptLayerUpdateTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store),
+        () => accessForTier('nursery'),
+      );
 
       const result = await tool.execute('test', { layer_id: prefix, content: 'updated' });
       const text = resultText(result);
@@ -164,20 +250,75 @@ describe('Prompt Layer Tools', () => {
   });
 
   describe('prompt_layer_toggle', () => {
-    it('blocks agent from disabling base layers', async () => {
+    it('denies base toggles in nursery tier', async () => {
       const layer = store.create({ type: 'base', name: 'Base', content: 'base' });
-      const tool = createPromptLayerToggleTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerToggleTool(store),
+        () => accessForTier('nursery'),
+      );
 
       const result = await tool.execute('test', { layer_id: layer.id });
       const text = resultText(result);
 
-      expect(text).toContain('Cannot disable base layers');
+      expect(text).toContain('Capability denied');
+      expect(text).toContain('identity.write.base');
       expect(store.getById(layer.id)?.enabled).toBe(true);
     });
 
-    it('allows agent to toggle runtime layers', async () => {
+    it('allows base toggles in apprentice and autonomous tiers', async () => {
+      for (const tier of ['apprentice', 'autonomous'] as const) {
+        const baseA = store.create({ type: 'base', name: `Base-A-${tier}`, content: 'a' });
+        store.create({ type: 'base', name: `Base-B-${tier}`, content: 'b' });
+        const tool = gateToolWithCapabilities(
+          createPromptLayerToggleTool(store),
+          () => accessForTier(tier),
+        );
+
+        const result = await tool.execute(`toggle-${tier}`, { layer_id: baseA.id });
+        const text = resultText(result);
+
+        expect(text).toContain('disabled');
+        expect(store.getById(baseA.id)?.enabled).toBe(false);
+      }
+    });
+
+    it('denies operator toggles in nursery tier', async () => {
+      const layer = store.create({ type: 'operator', name: 'Operator', content: 'policy' });
+      const tool = gateToolWithCapabilities(
+        createPromptLayerToggleTool(store),
+        () => accessForTier('nursery'),
+      );
+
+      const result = await tool.execute('test', { layer_id: layer.id });
+      const text = resultText(result);
+
+      expect(text).toContain('Capability denied');
+      expect(text).toContain('identity.write.operator');
+      expect(store.getById(layer.id)?.enabled).toBe(true);
+    });
+
+    it('allows operator toggles in apprentice and autonomous tiers', async () => {
+      for (const tier of ['apprentice', 'autonomous'] as const) {
+        const layer = store.create({ type: 'operator', name: `Operator-${tier}`, content: 'policy' });
+        const tool = gateToolWithCapabilities(
+          createPromptLayerToggleTool(store),
+          () => accessForTier(tier),
+        );
+
+        const result = await tool.execute(`toggle-${tier}`, { layer_id: layer.id });
+        const text = resultText(result);
+
+        expect(text).toContain('disabled');
+        expect(store.getById(layer.id)?.enabled).toBe(false);
+      }
+    });
+
+    it('allows nursery runtime toggles', async () => {
       const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'runtime' });
-      const tool = createPromptLayerToggleTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerToggleTool(store),
+        () => accessForTier('nursery'),
+      );
 
       const result = await tool.execute('test', { layer_id: layer.id });
       const text = resultText(result);
@@ -191,7 +332,10 @@ describe('Prompt Layer Tools', () => {
       store.toggle(layer.id); // disable
       expect(store.getById(layer.id)?.enabled).toBe(false);
 
-      const tool = createPromptLayerToggleTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerToggleTool(store),
+        () => accessForTier('nursery'),
+      );
       const result = await tool.execute('test', { layer_id: layer.id });
       const text = resultText(result);
 
@@ -200,7 +344,10 @@ describe('Prompt Layer Tools', () => {
     });
 
     it('returns not found for unknown layer', async () => {
-      const tool = createPromptLayerToggleTool(store);
+      const tool = gateToolWithCapabilities(
+        createPromptLayerToggleTool(store),
+        () => accessForTier('nursery'),
+      );
       const result = await tool.execute('test', { layer_id: 'nonexistent' });
       const text = resultText(result);
 

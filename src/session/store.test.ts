@@ -509,6 +509,132 @@ describe('SessionStore', () => {
     expect(() => reloaded.listChannels()).not.toThrow();
   });
 
+  it('imports legacy chats preserving timestamps, provenance metadata, and integrity signatures', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:legacy-import-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    const sourcePath = join(dir, 'legacy-import-source.jsonl');
+    const sourceLines = [
+      JSON.stringify({
+        role: 'user',
+        content: 'Legacy hello',
+        timestamp: 1_700_000_000_000,
+        authorName: 'Legacy User',
+        metadata: { turn: 1 },
+      }),
+      JSON.stringify({
+        role: 'assistant',
+        message: 'Legacy reply',
+        createdAt: '2024-01-01T00:00:01.000Z',
+      }),
+    ];
+    writeFileSync(sourcePath, sourceLines.join('\n') + '\n', 'utf-8');
+
+    const result = signedStore.importLegacyChatFromFile({
+      channelId: 'api:legacy-import',
+      sourcePath,
+      defaultChannelVisibility: 'private',
+      metadataTag: 'seed-import',
+    });
+
+    expect(result.manifest.importedRecordCount).toBe(2);
+    expect(result.manifest.entryRanges).toEqual([
+      {
+        sourceStartIndex: 0,
+        sourceEndIndex: 1,
+        firstEntryId: 1,
+        lastEntryId: 2,
+        messageCount: 2,
+      },
+    ]);
+    expect(result.importedEntryIds).toEqual([1, 2]);
+
+    const entries = signedStore.getRecent('api:legacy-import', 10);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].timestamp).toBe(1_700_000_000_000);
+    expect(entries[1].timestamp).toBe(Date.parse('2024-01-01T00:00:01.000Z'));
+
+    const metadata = JSON.parse(entries[0].metadata ?? '{}') as Record<string, unknown>;
+    expect(metadata.type).toBe('legacy_import');
+    expect(metadata.sourcePath).toBe(sourcePath);
+    expect(metadata.sourceIndex).toBe(0);
+    expect(metadata.sourceTimestamp).toBe(1_700_000_000_000);
+    expect(metadata.tag).toBe('seed-import');
+
+    const sessionFile = readdirSync(dir).find(
+      f => f.endsWith('.jsonl') && !f.startsWith('user_') && f !== '_import_manifest.jsonl',
+    );
+    expect(sessionFile).toBeDefined();
+    const signedLines = readFileSync(join(dir, sessionFile!), 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as { _hmac?: string; _hmacKeyVersion?: string });
+    expect(signedLines).toHaveLength(2);
+    expect(signedLines[0]._hmac).toMatch(/^[a-f0-9]{64}$/i);
+    expect(signedLines[1]._hmac).toMatch(/^[a-f0-9]{64}$/i);
+    expect(signedLines[0]._hmacKeyVersion).toBe('v1');
+
+    const manifestLines = readFileSync(join(dir, '_import_manifest.jsonl'), 'utf-8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { sourcePath: string; channelId: string; entryRanges: unknown[] });
+    expect(manifestLines).toHaveLength(1);
+    expect(manifestLines[0].sourcePath).toBe(sourcePath);
+    expect(manifestLines[0].channelId).toBe('api:legacy-import');
+    expect(manifestLines[0].entryRanges).toHaveLength(1);
+  });
+
+  it('resumes legacy imports using manifest source index mapping', () => {
+    const sourcePath = join(dir, 'legacy-resume-source.json');
+    const channelId = 'api:legacy-resume';
+    const firstBatch = [
+      { role: 'user', content: 'one', timestamp: 1_700_000_001_000 },
+      { role: 'assistant', content: 'two', timestamp: 1_700_000_002_000 },
+      { role: 'user', content: 'three', timestamp: 1_700_000_003_000 },
+    ];
+    writeFileSync(sourcePath, JSON.stringify(firstBatch), 'utf-8');
+
+    const firstImport = store.importLegacyChatFromFile({
+      channelId,
+      sourcePath,
+    });
+    expect(firstImport.manifest.importedRecordCount).toBe(3);
+    expect(firstImport.manifest.nextSourceIndex).toBe(3);
+    expect(store.count(channelId)).toBe(3);
+
+    const secondBatch = [
+      ...firstBatch,
+      { role: 'assistant', content: 'four', timestamp: 1_700_000_004_000 },
+      { role: 'user', content: 'five', timestamp: 1_700_000_005_000 },
+    ];
+    writeFileSync(sourcePath, JSON.stringify(secondBatch), 'utf-8');
+
+    const secondImport = store.importLegacyChatFromFile({
+      channelId,
+      sourcePath,
+    });
+    expect(secondImport.manifest.resumedFromSourceIndex).toBe(3);
+    expect(secondImport.manifest.importedRecordCount).toBe(2);
+    expect(secondImport.manifest.nextSourceIndex).toBe(5);
+    expect(secondImport.manifest.entryRanges).toEqual([
+      {
+        sourceStartIndex: 3,
+        sourceEndIndex: 4,
+        firstEntryId: 4,
+        lastEntryId: 5,
+        messageCount: 2,
+      },
+    ]);
+    expect(store.count(channelId)).toBe(5);
+
+    const manifests = store.listLegacyImportManifests({ channelId, sourcePath });
+    expect(manifests).toHaveLength(2);
+    expect(manifests[0].nextSourceIndex).toBe(3);
+    expect(manifests[1].nextSourceIndex).toBe(5);
+  });
+
   it('writes HMAC metadata for each signed journal entry', () => {
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:old-key,v2:new-key',

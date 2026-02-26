@@ -1,6 +1,11 @@
 import type { ContextMessage, LLMContext, SubstrateConfig } from '../types.js';
 import type { LLMProvider } from '../agent-loop.js';
-import type { SessionStore } from './store.js';
+import type {
+  SessionStore,
+  LegacyChatImportRequest,
+  LegacyChatImportResult,
+  LegacyChatImportRange,
+} from './store.js';
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
 import type { SessionSearchHit } from './search-index.js';
@@ -32,6 +37,8 @@ const log = createComponentLogger('SessionManager');
 const DEFAULT_CONTINUITY_CONTEXT_LIMIT = 10;
 const DEFAULT_SESSION_MIRROR_MAX_CHARS = 220;
 const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 30 * 60 * 1000;
+const DEFAULT_IMPORT_BOOTSTRAP_MAX_TOKENS = 50_000;
+const MIN_IMPORT_BOOTSTRAP_MAX_TOKENS = 1;
 
 interface SessionMessageRecordOptions {
   trustLevel?: TrustLevel;
@@ -67,6 +74,33 @@ export interface PreCompactionExtractionContext {
 export type PreCompactionExtractionHandler = (
   context: PreCompactionExtractionContext,
 ) => Promise<void>;
+
+export interface ImportedHistoryBootstrapChunk {
+  startId: number;
+  endId: number;
+  entryCount: number;
+  approxTokens: number;
+}
+
+export interface ImportedHistoryBootstrapResult {
+  channelId: string;
+  totalEntries: number;
+  maxChunkTokens: number;
+  chunkCount: number;
+  processedChunks: number;
+  chunks: ImportedHistoryBootstrapChunk[];
+}
+
+export interface LegacyChatImportRunRequest extends LegacyChatImportRequest {
+  canonicalContactId?: string;
+  bootstrap?: boolean;
+  bootstrapMaxChunkTokens?: number;
+}
+
+export interface LegacyChatImportRunResult {
+  importResult: LegacyChatImportResult;
+  bootstrapResult: ImportedHistoryBootstrapResult | null;
+}
 
 type CompactionPreservedTag = 'refusal' | 'boundary' | 'emotional';
 
@@ -193,6 +227,13 @@ function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBudget: nu
   }
 
   return selected.reverse();
+}
+
+function normalizeImportBootstrapMaxTokens(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_IMPORT_BOOTSTRAP_MAX_TOKENS;
+  }
+  return Math.max(MIN_IMPORT_BOOTSTRAP_MAX_TOKENS, Math.floor(value));
 }
 
 function classifyCompactionTag(content: string): CompactionPreservedTag | null {
@@ -932,6 +973,130 @@ export class SessionManager {
 
   setPreCompactionExtractionHandler(handler: PreCompactionExtractionHandler | null): void {
     this.preCompactionExtractionHandler = handler;
+  }
+
+  async importLegacyChatFromFile(request: LegacyChatImportRunRequest): Promise<LegacyChatImportRunResult> {
+    const importResult = this.store.importLegacyChatFromFile(request);
+    const shouldBootstrap = request.bootstrap !== false;
+    if (!shouldBootstrap || importResult.manifest.importedRecordCount === 0) {
+      return {
+        importResult,
+        bootstrapResult: null,
+      };
+    }
+
+    const bootstrapResult = await this.bootstrapImportedHistory({
+      channelId: request.channelId,
+      entryRanges: importResult.manifest.entryRanges,
+      canonicalContactId: request.canonicalContactId,
+      maxChunkTokens: request.bootstrapMaxChunkTokens,
+    });
+
+    return {
+      importResult,
+      bootstrapResult,
+    };
+  }
+
+  async bootstrapImportedHistory(params: {
+    channelId: string;
+    entryRanges: LegacyChatImportRange[];
+    canonicalContactId?: string;
+    maxChunkTokens?: number;
+  }): Promise<ImportedHistoryBootstrapResult> {
+    const maxChunkTokens = normalizeImportBootstrapMaxTokens(params.maxChunkTokens);
+    const importedEntries = this.collectImportedEntries(params.channelId, params.entryRanges);
+    if (importedEntries.length === 0) {
+      return {
+        channelId: params.channelId,
+        totalEntries: 0,
+        maxChunkTokens,
+        chunkCount: 0,
+        processedChunks: 0,
+        chunks: [],
+      };
+    }
+
+    const chunkPlans = this.chunkImportedEntries(importedEntries, maxChunkTokens);
+    let processedChunks = 0;
+    for (const chunk of chunkPlans) {
+      if (!this.preCompactionExtractionHandler) break;
+      await this.preCompactionExtractionHandler({
+        channelId: params.channelId,
+        entries: [...chunk.entries],
+        canonicalContactId: params.canonicalContactId,
+      });
+      processedChunks += 1;
+    }
+
+    return {
+      channelId: params.channelId,
+      totalEntries: importedEntries.length,
+      maxChunkTokens,
+      chunkCount: chunkPlans.length,
+      processedChunks,
+      chunks: chunkPlans.map(chunk => ({
+        startId: chunk.entries[0].id,
+        endId: chunk.entries[chunk.entries.length - 1].id,
+        entryCount: chunk.entries.length,
+        approxTokens: chunk.tokens,
+      })),
+    };
+  }
+
+  private collectImportedEntries(
+    channelId: string,
+    entryRanges: LegacyChatImportRange[],
+  ): SessionEntry[] {
+    if (entryRanges.length === 0) return [];
+
+    const deduped = new Map<number, SessionEntry>();
+    for (const range of entryRanges) {
+      const entries = this.store.getEntriesInRange(
+        channelId,
+        range.firstEntryId,
+        range.lastEntryId,
+      );
+      for (const entry of entries) {
+        deduped.set(entry.id, entry);
+      }
+    }
+
+    return [...deduped.values()].sort((left, right) => left.id - right.id);
+  }
+
+  private chunkImportedEntries(
+    entries: SessionEntry[],
+    maxChunkTokens: number,
+  ): Array<{ entries: SessionEntry[]; tokens: number }> {
+    const chunks: Array<{ entries: SessionEntry[]; tokens: number }> = [];
+    let currentEntries: SessionEntry[] = [];
+    let currentTokens = 0;
+
+    for (const entry of entries) {
+      const entryTokens = Math.max(1, countTokens(entry.content));
+      const shouldStartNewChunk = currentEntries.length > 0 && currentTokens + entryTokens > maxChunkTokens;
+      if (shouldStartNewChunk) {
+        chunks.push({
+          entries: currentEntries,
+          tokens: currentTokens,
+        });
+        currentEntries = [];
+        currentTokens = 0;
+      }
+
+      currentEntries.push(entry);
+      currentTokens += entryTokens;
+    }
+
+    if (currentEntries.length > 0) {
+      chunks.push({
+        entries: currentEntries,
+        tokens: currentTokens,
+      });
+    }
+
+    return chunks;
   }
 
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {

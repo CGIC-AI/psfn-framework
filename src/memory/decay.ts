@@ -25,25 +25,27 @@ export class SalienceDecay {
   }
 
   run(): void {
-    const now = Date.now();
-    const memories = this.memoryStore.getAllActiveMemories();
+    this.memoryStore.runInTransaction(() => {
+      const now = Date.now();
+      const memories = this.memoryStore.getAllActiveMemories();
 
-    for (const memory of memories) {
-      const profile = getMemoryDecayProfile(memory);
-      const halflife = DECAY_HALFLIFE[memory.type as MemoryType] * profile.halflifeMultiplier;
-      if (!halflife || halflife <= 0) continue;
+      for (const memory of memories) {
+        const profile = getMemoryDecayProfile(memory);
+        const halflife = DECAY_HALFLIFE[memory.type as MemoryType] * profile.halflifeMultiplier;
+        if (!halflife || halflife <= 0) continue;
 
-      const dt = now - memory.lastAccessed;
-      const decayFactor = Math.exp((-Math.LN2 * dt) / halflife);
-      const newSalience = Math.max(
-        profile.salienceFloor,
-        memory.salience * decayFactor,
-      );
+        const dt = now - memory.lastAccessed;
+        const decayFactor = Math.exp((-Math.LN2 * dt) / halflife);
+        const newSalience = Math.max(
+          profile.salienceFloor,
+          memory.salience * decayFactor,
+        );
 
-      // Only update if meaningful change
-      if (Math.abs(newSalience - memory.salience) > 0.01) {
-        this.memoryStore.updateMemory(memory.id, { salience: newSalience });
+        // Only update if meaningful change
+        if (Math.abs(newSalience - memory.salience) > 0.01) {
+          this.memoryStore.updateMemory(memory.id, { salience: newSalience });
+        }
       }
-    }
+    });
   }
 }

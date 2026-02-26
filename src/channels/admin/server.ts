@@ -242,7 +242,14 @@ export class AdminServer implements Lifecycle {
         },
       },
       { method: 'GET', match: exactPath('/'), handle: (_req, res) => this.sendHtml(res, this.handlers.dashboard()) },
-      { method: 'GET', match: exactPath('/memory'), handle: (_req, res) => this.sendHtml(res, this.handlers.memoryList()) },
+      {
+        method: 'GET',
+        match: exactPath('/memory'),
+        handle: (req, res) => {
+          const url = new URL(req.url ?? '/memory', `http://${req.headers.host ?? 'localhost'}`);
+          this.sendHtml(res, this.handlers.memoryList(url.searchParams));
+        },
+      },
       {
         method: 'GET',
         match: prefixedParamPath('/memory/', 'id', { exclude: (path) => path.startsWith('/memory/search') }),
@@ -351,7 +358,10 @@ export class AdminServer implements Lifecycle {
       {
         method: 'GET',
         match: exactPath('/api/memory/list'),
-        handle: (_req, res) => this.sendFragment(res, this.handlers.memoryListFragment()),
+        handle: (req, res) => {
+          const url = new URL(req.url ?? '/api/memory/list', `http://${req.headers.host ?? 'localhost'}`);
+          this.sendFragment(res, this.handlers.memoryListFragment(url.searchParams));
+        },
       },
       {
         method: 'POST',

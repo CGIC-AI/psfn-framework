@@ -131,4 +131,34 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     expect(queueRetroactiveExtraction).toHaveBeenNthCalledWith(2, 'api:recover-2', pendingQueue[1].unextractedEntries);
     expect(runtime.crashRecoveryQueue).toEqual([]);
   });
+
+  it('starts channel adapters in parallel and keeps healthy adapters when one fails', async () => {
+    const runtime = makeRuntime() as any;
+    const startHealthy = vi.fn().mockResolvedValue(undefined);
+    const startFailing = vi.fn().mockRejectedValue(new Error('failed to connect'));
+    runtime.channelRegistry = new Map([
+      ['healthy', { id: 'healthy', gateway: { start: startHealthy } }],
+      ['failing', { id: 'failing', gateway: { start: startFailing } }],
+    ]);
+    runtime.agentLoop = { setChannelRegistry: vi.fn() };
+
+    await expect(runtime.startChannels()).resolves.toBeUndefined();
+
+    expect(startHealthy).toHaveBeenCalledTimes(1);
+    expect(startFailing).toHaveBeenCalledTimes(1);
+    expect(runtime.channelRegistry.has('healthy')).toBe(true);
+    expect(runtime.channelRegistry.has('failing')).toBe(false);
+    expect(runtime.agentLoop.setChannelRegistry).toHaveBeenCalledWith(runtime.channelRegistry);
+  });
+
+  it('fails startup when all channel adapters fail to start', async () => {
+    const runtime = makeRuntime() as any;
+    runtime.channelRegistry = new Map([
+      ['failing-a', { id: 'failing-a', gateway: { start: vi.fn().mockRejectedValue(new Error('down')) } }],
+      ['failing-b', { id: 'failing-b', gateway: { start: vi.fn().mockRejectedValue(new Error('down')) } }],
+    ]);
+    runtime.agentLoop = { setChannelRegistry: vi.fn() };
+
+    await expect(runtime.startChannels()).rejects.toThrow('No channel adapters started successfully');
+  });
 });

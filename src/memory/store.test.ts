@@ -223,6 +223,36 @@ describe('MemoryStore', () => {
       expect(active[0].sensitivity).toBe('public');
     });
 
+    it('supports LIMIT/OFFSET pagination for active memory listing', () => {
+      const base = Date.now();
+      store.insertMemory(
+        makeMemory('m-old', 'Oldest', {
+          extractedAt: base - 3_000,
+          lastAccessed: base - 3_000,
+        }),
+        makeEmbedding(1),
+      );
+      store.insertMemory(
+        makeMemory('m-mid', 'Middle', {
+          extractedAt: base - 2_000,
+          lastAccessed: base - 2_000,
+        }),
+        makeEmbedding(2),
+      );
+      store.insertMemory(
+        makeMemory('m-new', 'Newest', {
+          extractedAt: base - 1_000,
+          lastAccessed: base - 1_000,
+        }),
+        makeEmbedding(3),
+      );
+
+      const page = store.listActiveMemories({ limit: 1, offset: 1 });
+      expect(page).toHaveLength(1);
+      expect(page[0].id).toBe('m-mid');
+      expect(store.countActiveMemories()).toBe(3);
+    });
+
     it('getMemoriesByChannel returns sensitivity', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(

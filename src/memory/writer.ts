@@ -306,6 +306,14 @@ export class MemoryWriter {
    * 4. Insert new memory
    */
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
+    const embedding = await this.embeddingService.embed(opts.text);
+    return this.writeWithEmbedding(opts, embedding);
+  }
+
+  private async writeWithEmbedding(
+    opts: MemoryWriteOptions,
+    embedding: Float32Array,
+  ): Promise<WriteResult> {
     const {
       text,
       type,
@@ -339,8 +347,6 @@ export class MemoryWriter {
     const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_write');
     const incomingProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
     const targetSalience = clampUnit(salience ?? importance, importance);
-
-    const embedding = await this.embeddingService.embed(text);
 
     // 1. Check for exact duplicates (high threshold per type)
     const duplicates = this.memoryStore.searchByEmbedding(
@@ -756,9 +762,30 @@ export class MemoryWriter {
     let superseded = 0;
     let errors = 0;
 
-    for (const record of records) {
+    if (records.length === 0) {
+      log.info('Batch import complete', { written, deduplicated, superseded, errors, total: records.length });
+      return { written, deduplicated, superseded, errors, results };
+    }
+
+    let batchEmbeddings: Float32Array[] | null = null;
+    try {
+      const embedded = await this.embeddingService.embedBatch(records.map(record => record.text));
+      if (embedded.length !== records.length) {
+        throw new Error(`Expected ${records.length} embeddings, received ${embedded.length}`);
+      }
+      batchEmbeddings = embedded;
+    } catch (error) {
+      log.warn('Batch embedding failed during import; falling back to per-record embedding', {
+        error: String(error),
+        total: records.length,
+      });
+    }
+
+    for (const [index, record] of records.entries()) {
       try {
-        const result = await this.write(record);
+        const result = batchEmbeddings
+          ? await this.writeWithEmbedding(record, batchEmbeddings[index])
+          : await this.write(record);
         results.push(result);
 
         switch (result.action) {

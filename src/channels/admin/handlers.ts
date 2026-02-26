@@ -213,6 +213,8 @@ const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 const DEFAULT_CHAT_CHUNK_TARGET_TOKENS = 50_000;
 const MIN_CHAT_CHUNK_TARGET_TOKENS = 1_000;
 const MAX_CHAT_CHUNK_TARGET_TOKENS = 200_000;
+const DEFAULT_MEMORY_LIST_LIMIT = 50;
+const MAX_MEMORY_LIST_LIMIT = 200;
 
 const INTAKE_CARD_DIFF_FIELDS: Array<{ key: keyof CharacterCardV2['data']; label: string }> = [
   { key: 'name', label: 'Name' },
@@ -850,9 +852,39 @@ export class AdminHandlers {
     return map;
   }
 
-  memoryList(): string {
-    const memories = this.memoryStore.getAllActiveMemories();
-    return tpl.layout('Memory Blossoms', tpl.memoryListPage(memories, this.buildContactSummaryMap()), 'memory');
+  private resolveMemoryListPagination(params?: URLSearchParams): {
+    limit: number;
+    offset: number;
+  } {
+    const limit = parsePositiveInteger(
+      params?.get('limit'),
+      DEFAULT_MEMORY_LIST_LIMIT,
+      1,
+      MAX_MEMORY_LIST_LIMIT,
+    );
+    const offset = parsePositiveInteger(params?.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
+    return { limit, offset };
+  }
+
+  memoryList(params?: URLSearchParams): string {
+    const { limit, offset } = this.resolveMemoryListPagination(params);
+    const memories = this.memoryStore.listActiveMemories({ limit, offset });
+    const total = this.memoryStore.countActiveMemories();
+    return tpl.layout(
+      'Memory Blossoms',
+      tpl.memoryListPage(
+        memories,
+        this.buildContactSummaryMap(),
+        {
+          limit,
+          offset,
+          total,
+          hasPrevious: offset > 0,
+          hasNext: offset + memories.length < total,
+        },
+      ),
+      'memory',
+    );
   }
 
   memoryDetail(id: string): string | null {
@@ -862,8 +894,9 @@ export class AdminHandlers {
     return tpl.layout(`Memory: ${m.text.slice(0, 40)}...`, tpl.memoryDetailPage(m, linkedContact), 'memory');
   }
 
-  memoryListFragment(): string {
-    const memories = this.memoryStore.getAllActiveMemories();
+  memoryListFragment(params?: URLSearchParams): string {
+    const { limit, offset } = this.resolveMemoryListPagination(params);
+    const memories = this.memoryStore.listActiveMemories({ limit, offset });
     const contactsById = this.buildContactSummaryMap();
     return memories.length > 0
       ? memories.map(m => tpl.memoryRow(m, m.contactId ? contactsById.get(m.contactId) : undefined)).join('')

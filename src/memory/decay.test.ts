@@ -174,6 +174,21 @@ describe('SalienceDecay', () => {
     expect(updated[0].salience).toBe(0.8);
   });
 
+  it('runs decay updates inside a single transaction', () => {
+    const txSpy = vi.spyOn(store, 'runInTransaction');
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    store.insertMemory(makeMemory({
+      id: 'tx-check',
+      type: 'episodic',
+      salience: 1.0,
+      lastAccessed: oneWeekAgo,
+    }), makeEmbedding());
+
+    decay.run();
+
+    expect(txSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('uses provided maintenance interval when starting timer', () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');

@@ -91,7 +91,7 @@ DATA_DIR=./data
 DATABASE_PATH=./data/purrsephone.db
 ```
 
-For the full configuration surface, use `.env.example` as the source of truth. Runtime parsing/defaults live in `src/types.ts`.
+For full configuration details, use `src/types.ts` as the parser/defaults source of truth and confirm runtime wiring in `src/runtime.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`. `.env.example` is a starter template and can lag newer voice keys (for example `ECHO_TTS_*`).
 
 ### Running
 
@@ -102,11 +102,11 @@ npm run dev          # Hot-reload via tsx
 
 **Gateway + Agent split (production):**
 ```bash
-# Terminal 1 — Gateway (holds secrets)
+# Terminal 1 — Gateway (holds secrets, loads .env via dotenv)
 npm run gateway
 
-# Terminal 2 — Agent (connects to gateway)
-npm run agent
+# Terminal 2 — Agent (agent-main.ts does NOT load dotenv)
+set -a && source .env && set +a && npm run agent
 ```
 
 **Containerized agent (maximum isolation):**

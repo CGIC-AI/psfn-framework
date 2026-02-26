@@ -182,6 +182,10 @@ export class DiscordAdapter implements ChannelAdapter {
     this.client.destroy();
   }
 
+  isConnected(): boolean {
+    return this.client.isReady();
+  }
+
   async send(channelId: string, content: string): Promise<void> {
     const normalized = content.trim();
     if (!normalized) {

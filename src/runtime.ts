@@ -483,6 +483,77 @@ export class SubstrateRuntime implements Lifecycle {
         contactStore,
         apiKey: process.env.API_KEY || undefined,
         modelName: process.env.API_MODEL_NAME,
+        healthChecks: {
+          memory: () => {
+            const stats = this.memoryStore.getStats();
+            return {
+              status: 'healthy',
+              meta: {
+                total: stats.total,
+                avgSalience: Number(stats.avgSalience.toFixed(4)),
+              },
+            };
+          },
+          llm: () => ({
+            status: this.config.primaryModel && this.config.primaryProvider
+              ? 'healthy'
+              : 'degraded',
+            ...(this.config.primaryModel && this.config.primaryProvider
+              ? {}
+              : { detail: 'Primary model/provider is not configured' }),
+            meta: {
+              provider: this.config.primaryProvider,
+              model: this.config.primaryModel,
+            },
+          }),
+          discord: () => {
+            if (!this.discord.config.enabled) {
+              return {
+                status: 'degraded',
+                detail: 'Discord adapter is disabled',
+              };
+            }
+            if (!this.discord.isConnected()) {
+              return {
+                status: 'degraded',
+                detail: 'Discord client is not connected',
+              };
+            }
+            return {
+              status: 'healthy',
+              meta: {
+                accountId: this.discord.config.accountId ?? null,
+              },
+            };
+          },
+          embeddings: () => {
+            if (!Number.isFinite(embeddingProvider.dims) || embeddingProvider.dims <= 0) {
+              return {
+                status: 'degraded',
+                detail: 'Embedding dimensions are invalid',
+              };
+            }
+            return {
+              status: 'healthy',
+              meta: { dims: embeddingProvider.dims },
+            };
+          },
+          scheduler: () => {
+            const taskCount = this.scheduler.taskCount;
+            const hasHeartbeatTask = Boolean(this.scheduler.getTask('heartbeat'));
+            if (!hasHeartbeatTask) {
+              return {
+                status: 'degraded',
+                detail: 'Heartbeat task is not registered',
+                meta: { taskCount },
+              };
+            }
+            return {
+              status: 'healthy',
+              meta: { taskCount },
+            };
+          },
+        },
         voiceWebSocketRuntime,
       });
       await apiServer.init();

@@ -78,3 +78,32 @@ export interface TelemetryIngestResponse {
   id: string;
   acceptedEventType: string;
 }
+
+export const API_HEALTH_SUBSYSTEMS = [
+  'memory',
+  'llm',
+  'discord',
+  'embeddings',
+  'scheduler',
+] as const;
+
+export type ApiHealthState = 'healthy' | 'degraded';
+export type ApiHealthSubsystem = (typeof API_HEALTH_SUBSYSTEMS)[number];
+
+export interface ApiHealthSubsystemStatus {
+  status: ApiHealthState;
+  detail?: string;
+  meta?: Record<string, unknown>;
+}
+
+export type ApiServerHealthChecks = Partial<Record<
+ApiHealthSubsystem,
+() => Promise<ApiHealthSubsystemStatus> | ApiHealthSubsystemStatus
+>>;
+
+export interface ApiHealthResponse {
+  status: ApiHealthState;
+  checkedAt: string;
+  uptimeSeconds: number;
+  subsystems: Record<ApiHealthSubsystem, ApiHealthSubsystemStatus>;
+}

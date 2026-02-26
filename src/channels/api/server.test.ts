@@ -374,6 +374,8 @@ describe('ApiServer', () => {
       expect(body.subsystems.discord.status).toBe('healthy');
       expect(body.subsystems.embeddings.status).toBe('healthy');
       expect(body.subsystems.scheduler.status).toBe('healthy');
+      expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
+      expect(typeof body.subsystems.embeddings.meta.checkLatencyMs).toBe('number');
     });
 
     it('returns degraded health when any subsystem check fails', async () => {
@@ -399,6 +401,7 @@ describe('ApiServer', () => {
       expect(body.status).toBe('degraded');
       expect(body.subsystems.llm.status).toBe('degraded');
       expect(body.subsystems.llm.detail).toContain('LLM provider timeout');
+      expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
       expect(body.subsystems.memory.status).toBe('healthy');
       expect(body.subsystems.discord.status).toBe('healthy');
       expect(body.subsystems.embeddings.status).toBe('healthy');

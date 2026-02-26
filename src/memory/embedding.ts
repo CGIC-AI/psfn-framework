@@ -21,12 +21,12 @@ export class EmbeddingProvider {
     return this.config.dims;
   }
 
-  async embed(text: string): Promise<Float32Array> {
-    const results = await this.embedBatch([text]);
+  async embed(text: string, options: { signal?: AbortSignal } = {}): Promise<Float32Array> {
+    const results = await this.embedBatch([text], options);
     return results[0];
   }
 
-  async embedBatch(texts: string[]): Promise<Float32Array[]> {
+  async embedBatch(texts: string[], options: { signal?: AbortSignal } = {}): Promise<Float32Array[]> {
     const url = `${this.config.ollamaUrl}/api/embed`;
 
     const response = await fetch(url, {
@@ -36,6 +36,7 @@ export class EmbeddingProvider {
         model: this.config.model,
         input: texts,
       }),
+      ...(options.signal ? { signal: options.signal } : {}),
     });
 
     if (!response.ok) {

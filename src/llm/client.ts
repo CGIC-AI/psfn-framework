@@ -192,7 +192,11 @@ export class LLMClient {
     }
   }
 
-  async complete(context: LLMContext, purpose: CompletionPurpose): Promise<LLMResponse> {
+  async complete(
+    context: LLMContext,
+    purpose: CompletionPurpose,
+    options: { signal?: AbortSignal; disableRetry?: boolean } = {},
+  ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
     const piContext = toPiContext(context);
 
@@ -205,28 +209,44 @@ export class LLMClient {
           candidateTarget.maxTokens,
         );
 
-        return withRetry(
-          () => completeSimple(
-            model,
-            piContext,
-            { apiKey, maxTokens: candidateTarget.maxTokens },
-          ),
-          llmRetryConfig(this.config),
-          {
-            onRetry: ({ attempt, maxRetries, delayMs, error }) => {
-              log.warn('LLM complete failed, retrying', {
-                model: String(model.id),
-                provider: candidateTarget.provider,
-                purpose,
-                routingPurpose,
-                attempt,
-                maxRetries,
-                delayMs,
-                error: error.message,
-              });
-            },
+        const request = async () => {
+          try {
+            return await completeSimple(
+              model,
+              piContext,
+              {
+                apiKey,
+                maxTokens: candidateTarget.maxTokens,
+                ...(options.signal ? { signal: options.signal } : {}),
+              } as any,
+            );
+          } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            if (isAbortError(err) || options.signal?.aborted) {
+              markErrorAsNonRetryable(err);
+            }
+            throw err;
+          }
+        };
+
+        if (options.disableRetry) {
+          return request();
+        }
+
+        return withRetry(request, llmRetryConfig(this.config), {
+          onRetry: ({ attempt, maxRetries, delayMs, error }) => {
+            log.warn('LLM complete failed, retrying', {
+              model: String(model.id),
+              provider: candidateTarget.provider,
+              purpose,
+              routingPurpose,
+              attempt,
+              maxRetries,
+              delayMs,
+              error: error.message,
+            });
           },
-        );
+        });
       },
     );
 
@@ -266,6 +286,10 @@ export class LLMClient {
     const candidates = resolveRoutingCandidates(this.config, purpose);
     return this.fallbackRunner.run(purpose, candidates, execute);
   }
+}
+
+function isAbortError(error: Error): boolean {
+  return error.name === 'AbortError' || /aborted|abort|cancelled|canceled/i.test(error.message);
 }
 
 // ── Content normalization ──

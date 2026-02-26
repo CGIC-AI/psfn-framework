@@ -23,6 +23,11 @@ import { ShardManager } from './shards/manager.js';
 import { createSpawnShardTool } from './shards/tools.js';
 import { createThinkTool } from './repl/tools.js';
 import { ApiServer } from './channels/api/server.js';
+import {
+  CachedActiveHealthProbe,
+  resolveActiveHealthProbeConfig,
+  toActiveProbeMeta,
+} from './channels/api/active-health-probe.js';
 import type { ChannelAdapter } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
@@ -515,6 +520,9 @@ export class SubstrateRuntime implements Lifecycle {
         eventBus: this.eventBus,
         config: this.config,
       });
+      const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
+      const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
+      const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
 
       const apiServer = new ApiServer({
         port: apiPort,
@@ -536,18 +544,57 @@ export class SubstrateRuntime implements Lifecycle {
               },
             };
           },
-          llm: () => ({
-            status: this.config.primaryModel && this.config.primaryProvider
-              ? 'healthy'
-              : 'degraded',
-            ...(this.config.primaryModel && this.config.primaryProvider
-              ? {}
-              : { detail: 'Primary model/provider is not configured' }),
-            meta: {
-              provider: this.config.primaryProvider,
-              model: this.config.primaryModel,
-            },
-          }),
+          llm: async () => {
+            const configured = Boolean(this.config.primaryModel && this.config.primaryProvider);
+            const baseMeta = {
+              provider: this.config.primaryProvider ?? null,
+              model: this.config.primaryModel ?? null,
+              ...toActiveProbeMeta(activeProbeConfig),
+            };
+
+            if (!configured) {
+              return {
+                status: 'degraded',
+                detail: 'Primary model/provider is not configured',
+                meta: baseMeta,
+              };
+            }
+
+            if (!activeProbeConfig.enabled) {
+              return {
+                status: 'healthy',
+                meta: baseMeta,
+              };
+            }
+
+            const probeResult = await llmActiveProbe.run(async (signal) => {
+              await this.llmClient.complete(
+                {
+                  systemPrompt: 'You are a health check. Respond with exactly: OK',
+                  messages: [{ role: 'user', content: 'health probe' }],
+                },
+                'reasoning',
+                { signal, disableRetry: true },
+              );
+            });
+            const meta = {
+              ...baseMeta,
+              ...toActiveProbeMeta(activeProbeConfig, probeResult),
+            };
+
+            if (!probeResult.ok) {
+              return {
+                status: 'degraded',
+                detail: probeResult.reason ?? 'LLM connectivity probe failed',
+                meta,
+              };
+            }
+
+            return {
+              status: 'healthy',
+              meta,
+            };
+          },
           discord: () => {
             if (!this.discord.config.enabled) {
               return {
@@ -568,16 +615,49 @@ export class SubstrateRuntime implements Lifecycle {
               },
             };
           },
-          embeddings: () => {
+          embeddings: async () => {
+            const baseMeta = {
+              dims: embeddingProvider.dims,
+              ...toActiveProbeMeta(activeProbeConfig),
+            };
             if (!Number.isFinite(embeddingProvider.dims) || embeddingProvider.dims <= 0) {
               return {
                 status: 'degraded',
                 detail: 'Embedding dimensions are invalid',
+                meta: baseMeta,
               };
             }
+            if (!activeProbeConfig.enabled) {
+              return {
+                status: 'healthy',
+                meta: baseMeta,
+              };
+            }
+
+            const probeResult = await embeddingsActiveProbe.run(async (signal) => {
+              const vector = await embeddingProvider.embed('health probe', { signal });
+              if (vector.length !== embeddingProvider.dims) {
+                throw new Error(
+                  `Embedding probe dimension mismatch: expected ${embeddingProvider.dims}, got ${vector.length}`,
+                );
+              }
+            });
+            const meta = {
+              ...baseMeta,
+              ...toActiveProbeMeta(activeProbeConfig, probeResult),
+            };
+
+            if (!probeResult.ok) {
+              return {
+                status: 'degraded',
+                detail: probeResult.reason ?? 'Embeddings connectivity probe failed',
+                meta,
+              };
+            }
+
             return {
               status: 'healthy',
-              meta: { dims: embeddingProvider.dims },
+              meta,
             };
           },
           scheduler: () => {

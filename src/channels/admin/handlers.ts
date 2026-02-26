@@ -57,7 +57,6 @@ import { VALID_RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '../../contacts
 import {
   MEMORY_CONFIG,
   VALID_MEMORY_TYPES,
-  VALID_SENSITIVITY_LEVELS,
   estimateImportedMemoryCriticality,
   inferImportedMemoryType,
   initializeImportedMemorySalience,
@@ -132,18 +131,43 @@ import type {
 } from './templates/identity.js';
 import * as tpl from './templates.js';
 import { toErrorMessage } from '../../utils/errors.js';
-
-interface ContactIdentityLinkView {
-  channel: string;
-  userId: string;
-  lastSeen?: string;
-}
-
-interface ContactConversationChannelView {
-  channel: string;
-  channelId: string;
-  lastSeen?: string;
-}
+import {
+  buildMemoryDedupKey,
+  clampUnit,
+  estimateTokens,
+  inferRelationshipTypeHint,
+  normalizeCardFieldValue,
+  normalizeProvenanceRefs,
+  normalizeSensitivity,
+  normalizeSessionRole,
+  parsePositiveInteger,
+  parseProvenanceRefs,
+  parseTimestamp,
+  shouldPromoteRelationship,
+  toDebugDetailValue,
+  toNonEmptyString,
+  toNumber,
+  toRecord,
+  toStringArray,
+  truncateDebugText,
+  uniqueLowercase,
+} from './utils.js';
+import {
+  buildRelatedConversationChannelMap as buildRelatedConversationChannelMapFromContacts,
+  getContactIdentityLinks as getContactIdentityLinksFromContact,
+  getLinkedContactForSession as getLinkedContactForSessionFromContacts,
+  getPersistedConversationChannels as getPersistedConversationChannelsFromContact,
+  normalizeSessionChannelType as normalizeSessionChannelTypeFromId,
+  sessionMatchesConversationChannel as sessionMatchesConversationChannelFromId,
+  sessionMatchesIdentity as sessionMatchesIdentityFromId,
+  splitSessionChannelId as splitSessionChannelIdFromSession,
+  type ContactConversationChannelView,
+  type ContactIdentityLinkView,
+} from './services/contact-session-linker.js';
+import {
+  registerAuditTimelineSources,
+  type ActiveToolInvocation,
+} from './services/audit-event-collector.js';
 
 interface SettingsConfigEditors {
   models: ModelsRuntimeConfig;
@@ -151,12 +175,6 @@ interface SettingsConfigEditors {
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;
   capabilities: CapabilityTierConfig;
-}
-
-interface ActiveToolInvocation {
-  toolName: string;
-  channelId: string;
-  startedAt: number;
 }
 
 type ChatDebugEventName =
@@ -202,16 +220,8 @@ const CHAT_DEBUG_EVENTS: ChatDebugEventName[] = [
   'system.error',
 ];
 
-const AGENT_IDENTITY_EDIT_TOOLS = new Set([
-  'prompt_layer_update',
-  'prompt_layer_toggle',
-  'character_card_update',
-]);
-
-const MAX_DEBUG_TEXT_CHARS = 280;
 const MAX_DEBUG_MESSAGE_CHARS = 220;
 const MAX_DEBUG_DETAILS = 6;
-const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 const DEFAULT_CHAT_CHUNK_TARGET_TOKENS = 50_000;
 const MIN_CHAT_CHUNK_TARGET_TOKENS = 1_000;
 const MAX_CHAT_CHUNK_TARGET_TOKENS = 200_000;
@@ -299,198 +309,6 @@ interface ParsedRawMemoryItem {
   extractedAt?: number;
   lastAccessed?: number;
   relationshipTypeHint?: RelationshipType;
-}
-
-function truncateDebugText(value: unknown, maxChars = MAX_DEBUG_TEXT_CHARS): string {
-  if (typeof value !== 'string') return '';
-  if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}...`;
-}
-
-function toDebugDetailValue(value: unknown): AdminChatDebugDetailValue | undefined {
-  if (value === null) return null;
-  if (typeof value === 'string') return truncateDebugText(value, 160);
-  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
-  if (typeof value === 'boolean') return value;
-  if (value instanceof Error) return truncateDebugText(value.message, 160);
-  if (Array.isArray(value)) return `[${value.length} items]`;
-  return undefined;
-}
-
-function clampUnit(value: number, fallback = 0.5): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1, value));
-}
-
-function parsePositiveInteger(
-  value: string | null | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const parsed = Number.parseInt(value ?? '', 10);
-  if (!Number.isInteger(parsed)) return fallback;
-  return Math.max(min, Math.min(max, parsed));
-}
-
-function toRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function toNonEmptyString(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function toStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== 'string') continue;
-    const trimmed = entry.trim();
-    if (trimmed.length > 0) out.push(trimmed);
-  }
-  return out;
-}
-
-function toNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string') {
-    const parsed = Number.parseFloat(value.trim());
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-function normalizeSessionRole(value: unknown): 'user' | 'assistant' | 'system' {
-  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (text === 'assistant' || text === 'bot' || text === 'ai' || text === 'character' || text === 'char') {
-    return 'assistant';
-  }
-  if (text === 'system') return 'system';
-  return 'user';
-}
-
-function normalizeSensitivity(value: unknown): SensitivityLevel {
-  if (typeof value !== 'string') return 'personal';
-  const normalized = value.trim().toLowerCase();
-  return VALID_SENSITIVITY_LEVELS.includes(normalized as SensitivityLevel)
-    ? normalized as SensitivityLevel
-    : 'personal';
-}
-
-function estimateTokens(text: string): number {
-  if (!text) return 1;
-  return Math.max(1, Math.ceil(text.length / 4));
-}
-
-function parseTimestamp(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value);
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (trimmed.length > 0) {
-      const parsedNumber = Number.parseInt(trimmed, 10);
-      if (Number.isInteger(parsedNumber) && parsedNumber > 0) return parsedNumber;
-      const parsedDate = Date.parse(trimmed);
-      if (Number.isFinite(parsedDate) && parsedDate > 0) return parsedDate;
-    }
-  }
-  return fallback;
-}
-
-function uniqueLowercase(values: readonly string[]): string[] {
-  const out = new Set<string>();
-  for (const value of values) {
-    const normalized = value.trim().toLowerCase();
-    if (normalized.length > 0) out.add(normalized);
-  }
-  return [...out];
-}
-
-const RELATIONSHIP_TYPE_HINTS: ReadonlyArray<{ type: RelationshipType; hints: readonly string[] }> = [
-  { type: 'partner', hints: ['partner', 'spouse', 'wife', 'husband', 'boyfriend', 'girlfriend'] },
-  { type: 'family', hints: ['family', 'mother', 'father', 'sister', 'brother', 'parent', 'child'] },
-  { type: 'friend', hints: ['friend', 'bestie', 'buddy'] },
-  { type: 'acquaintance', hints: ['acquaintance', 'coworker', 'colleague', 'neighbor'] },
-  { type: 'ai_companion', hints: ['ai_companion', 'companion'] },
-];
-
-const RELATIONSHIP_STRENGTH: Record<RelationshipType, number> = {
-  stranger: 0,
-  acquaintance: 1,
-  friend: 2,
-  family: 3,
-  ai_companion: 3,
-  partner: 4,
-};
-
-function normalizeProvenanceRefs(values: readonly string[], fallback?: string): string[] {
-  const out = new Set<string>();
-  for (const raw of values) {
-    const normalized = raw.trim();
-    if (normalized.length > 0) out.add(normalized);
-  }
-  const normalizedFallback = fallback?.trim();
-  if (normalizedFallback && normalizedFallback.length > 0) {
-    out.add(normalizedFallback);
-  }
-  return [...out];
-}
-
-function parseProvenanceRefs(entry: Record<string, unknown>, fallbackRef: string): string[] {
-  const refs = [
-    ...toStringArray(entry.provenanceRefs),
-    ...toStringArray(entry.provenance),
-    ...toStringArray(entry.sources),
-  ];
-  const source = toNonEmptyString(entry.sourceRef)
-    ?? toNonEmptyString(entry.source)
-    ?? toNonEmptyString(entry.origin);
-  if (source) refs.push(source);
-  return normalizeProvenanceRefs(refs, fallbackRef);
-}
-
-function buildMemoryDedupKey(text: string, type: MemoryType, contactId?: string): string {
-  const normalizedText = text
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-  const normalizedContact = contactId?.trim().toLowerCase() ?? '';
-  return `${type}|${normalizedContact}|${normalizedText}`;
-}
-
-function inferRelationshipTypeHint(input: {
-  explicitValue?: unknown;
-  text: string;
-  tags: readonly string[];
-  type: MemoryType;
-}): RelationshipType | undefined {
-  const explicit = toNonEmptyString(input.explicitValue)?.toLowerCase();
-  if (explicit && VALID_RELATIONSHIP_TYPES.includes(explicit as RelationshipType)) {
-    return explicit as RelationshipType;
-  }
-  if (input.type !== 'relational') return undefined;
-
-  const corpus = `${input.text.toLowerCase()} ${input.tags.join(' ')}`;
-  for (const entry of RELATIONSHIP_TYPE_HINTS) {
-    if (entry.hints.some(hint => corpus.includes(hint))) {
-      return entry.type;
-    }
-  }
-  return undefined;
-}
-
-function shouldPromoteRelationship(existing: RelationshipType, candidate: RelationshipType): boolean {
-  return RELATIONSHIP_STRENGTH[candidate] > RELATIONSHIP_STRENGTH[existing];
-}
-
-function normalizeCardFieldValue(card: CharacterCardV2, key: keyof CharacterCardV2['data']): string {
-  if (key === 'tags') return card.data.tags.join(', ');
-  const value = card.data[key];
-  return typeof value === 'string' ? value : '';
 }
 
 export class AdminHandlers {
@@ -613,170 +431,12 @@ export class AdminHandlers {
   }
 
   private registerAuditTimelineSources(): void {
-    this.eventBus.on('agent.tool.start', ({ toolCallId, toolName, channelId }) => {
-      this.activeToolInvocations.set(toolCallId, {
-        toolName,
-        channelId,
-        startedAt: Date.now(),
-      });
-    });
-
-    this.eventBus.on('agent.tool.end', ({ toolCallId, toolName, channelId, isError, shardId }) => {
-      const active = this.activeToolInvocations.get(toolCallId);
-      if (active) {
-        this.activeToolInvocations.delete(toolCallId);
-      }
-      const durationMs = active ? Math.max(0, Date.now() - active.startedAt) : null;
-      const decision: AdminAuditDecision = isError ? 'denied' : 'allowed';
-      const toolLabel = active?.toolName ?? toolName;
-      const channelLabel = active?.channelId ?? channelId;
-      this.appendAuditTimelineEntry(
-        'tool_invocation',
-        decision,
-        isError
-          ? `Purrsephone attempted tool "${toolLabel}" in ${channelLabel}, but it failed.`
-          : `Purrsephone completed tool "${toolLabel}" in ${channelLabel}.`,
-        [
-          `callId=${toolCallId}`,
-          shardId ? `shard=${shardId}` : null,
-          durationMs !== null ? `durationMs=${durationMs}` : null,
-        ],
-      );
-
-      if (AGENT_IDENTITY_EDIT_TOOLS.has(toolLabel)) {
-        this.appendAuditTimelineEntry(
-          'identity_edit',
-          decision,
-          isError
-            ? `Purrsephone attempted identity edit via "${toolLabel}" in ${channelLabel}, but it failed.`
-            : `Purrsephone edited identity via "${toolLabel}" in ${channelLabel}.`,
-          [
-            `callId=${toolCallId}`,
-            shardId ? `shard=${shardId}` : null,
-            durationMs !== null ? `durationMs=${durationMs}` : null,
-          ],
-        );
-      }
-    });
-
-    this.eventBus.on('memory.extraction.end', (event) => {
-      const writeCount = event.writeCount ?? 0;
-      const deduplicatedCount = event.deduplicatedCount ?? 0;
-      const supersededCount = event.supersededCount ?? 0;
-      if (writeCount <= 0 && deduplicatedCount <= 0 && supersededCount <= 0) return;
-      const decision: AdminAuditDecision = writeCount > 0 ? 'allowed' : 'denied';
-      this.appendAuditTimelineEntry(
-        'memory_mutation',
-        decision,
-        writeCount > 0
-          ? `Purrsephone mutated memory in ${event.channelId}: wrote ${writeCount} memory entries.`
-          : `Purrsephone attempted a memory mutation in ${event.channelId}, but no entries were written.`,
-        [
-          `accepted=${event.acceptedCount ?? 0}`,
-          `rejected=${event.rejectedCount ?? 0}`,
-          `deduplicated=${deduplicatedCount}`,
-          `superseded=${supersededCount}`,
-        ],
-      );
-    });
-
-    this.eventBus.on('message.sent', ({ response }) => {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'allowed',
-        `Purrsephone sent an external response to ${response.channelId}.`,
-        [
-          `model=${response.metadata.model}`,
-          `durationMs=${response.metadata.durationMs}`,
-        ],
-      );
-    });
-
-    this.eventBus.on('broadcast.approval.required', (event) => {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'denied',
-        `Broadcast draft in ${event.channelId} was held for operator approval.`,
-        [
-          `scope=${event.visibilityScope}`,
-          `signals=${event.signals.join(',') || 'none'}`,
-          `draftLength=${event.draftLength}`,
-        ],
-      );
-    });
-
-    this.eventBus.on('broadcast.provenance', (event) => {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        event.risky && !event.operatorApproval ? 'denied' : 'allowed',
-        `Broadcast provenance logged for ${event.channelId}.`,
-        [
-          `scope=${event.visibilityScope}`,
-          `signals=${event.signals.join(',') || 'none'}`,
-          `provenanceRefs=${event.provenanceRefs.length}`,
-          `contextMessages=${event.contextMessageCount}`,
-          `memoryContextChars=${event.memoryContextChars}`,
-        ],
-      );
-    });
-
-    this.eventBus.on('external.telemetry.ingested', ({ event }) => {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'allowed',
-        `External telemetry "${event.eventType}" from ${event.source} was ingested.`,
-        [
-          event.channelId ? `channelId=${event.channelId}` : null,
-          event.scope ? `scope=${event.scope}` : null,
-          `eventId=${event.id}`,
-        ],
-      );
-    });
-
-    this.eventBus.on('wyoming.session.start', (event) => {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'allowed',
-        `Wyoming session "${event.sessionId}" opened on ${event.connectionId}.`,
-        [
-          `activeSessions=${event.activeSessions}`,
-          `maxSessions=${event.maxSessions}`,
-        ],
-      );
-    });
-
-    this.eventBus.on('wyoming.session.end', (event) => {
-      const deniedReason = event.reason.includes('policy')
-        || event.reason.includes('error')
-        || event.reason.includes('timeout');
-      this.appendAuditTimelineEntry(
-        'external_action',
-        deniedReason ? 'denied' : 'allowed',
-        deniedReason
-          ? `Wyoming session "${event.sessionId}" ended with policy/error reason "${event.reason}".`
-          : `Wyoming session "${event.sessionId}" ended on ${event.connectionId}.`,
-        [
-          `reason=${event.reason}`,
-          `durationMs=${event.durationMs}`,
-          `activeSessions=${event.activeSessions}`,
-        ],
-      );
-    });
-
-    this.eventBus.on('wyoming.policy.violation', (event) => {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'denied',
-        `Wyoming policy violation ${event.code} on ${event.connectionId}.`,
-        [
-          `scope=${event.scope}`,
-          event.sessionId ? `sessionId=${event.sessionId}` : null,
-          event.eventType ? `eventType=${event.eventType}` : null,
-          event.limit !== undefined ? `limit=${event.limit}` : null,
-          event.observed !== undefined ? `observed=${event.observed}` : null,
-          `action=${event.action}`,
-        ],
-      );
+    registerAuditTimelineSources({
+      eventBus: this.eventBus,
+      activeToolInvocations: this.activeToolInvocations,
+      appendAuditTimelineEntry: (actionType, decision, narrative, details = []) => {
+        this.appendAuditTimelineEntry(actionType, decision, narrative, details);
+      },
     });
   }
 
@@ -940,56 +600,23 @@ export class AdminHandlers {
   // ── Sessions ──
 
   private normalizeSessionChannelType(channelId: string): string {
-    const parsed = this.splitSessionChannelId(channelId);
-    if (parsed.channel !== 'session') return parsed.channel;
-    if (DISCORD_CHANNEL_ID_PATTERN.test(channelId)) return 'discord';
-    return parsed.channel;
+    return normalizeSessionChannelTypeFromId(channelId);
   }
 
   private sessionMatchesConversationChannel(
     sessionChannelId: string,
     conversationChannel: ContactConversationChannelView,
   ): boolean {
-    const normalizedSession = sessionChannelId.trim().toLowerCase();
-    const normalizedChannel = conversationChannel.channel.trim().toLowerCase();
-    const normalizedChannelId = conversationChannel.channelId.trim().toLowerCase();
-    if (!normalizedChannelId) return false;
-    return normalizedSession === normalizedChannelId
-      || normalizedSession === `${normalizedChannel}:${normalizedChannelId}`;
+    return sessionMatchesConversationChannelFromId(sessionChannelId, conversationChannel);
   }
 
   private getLinkedContactForSession(channelId: string, contacts: Contact[]): Contact | undefined {
-    if (!this.contactStore || contacts.length === 0) return undefined;
-
-    const channelType = this.normalizeSessionChannelType(channelId);
-    const lastEntry = this.sessionStore.getLastEntry(channelId);
-    if (channelType !== 'session' && lastEntry?.authorId) {
-      const contactByAuthor = this.contactStore.getByChannelIdentity(channelType, lastEntry.authorId);
-      if (contactByAuthor) return contactByAuthor;
-    }
-
-    for (const contact of contacts) {
-      const persistedChannels = this.getPersistedConversationChannels(contact);
-      if (persistedChannels.some(entry => this.sessionMatchesConversationChannel(channelId, entry))) {
-        return contact;
-      }
-
-      const identities = this.getContactIdentityLinks(contact);
-      if (identities.some(identity => this.sessionMatchesIdentity(channelId, identity))) {
-        return contact;
-      }
-    }
-
-    const parsed = this.splitSessionChannelId(channelId);
-    if (channelType !== 'session') {
-      const userIdHint = parsed.channelId.split(':').pop();
-      if (userIdHint) {
-        const contactByHint = this.contactStore.getByChannelIdentity(channelType, userIdHint);
-        if (contactByHint) return contactByHint;
-      }
-    }
-
-    return undefined;
+    return getLinkedContactForSessionFromContacts({
+      channelId,
+      contacts,
+      sessionStore: this.sessionStore,
+      contactStore: this.contactStore,
+    });
   }
 
   private buildCompactionAuditViews(channelId: string): CompactionAuditView[] {
@@ -2775,127 +2402,27 @@ export class AdminHandlers {
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
-  private identityLinkKey(channel: string, userId: string): string {
-    return `${channel.trim().toLowerCase()}:${userId.trim().toLowerCase()}`;
-  }
-
   private getContactIdentityLinks(contact: Contact): ContactIdentityLinkView[] {
-    const links: ContactIdentityLinkView[] = [];
-    const seen = new Set<string>();
-
-    const addLink = (link: ContactIdentityLinkView): void => {
-      const key = this.identityLinkKey(link.channel, link.userId);
-      if (!link.channel.trim() || !link.userId.trim() || seen.has(key)) return;
-      links.push(link);
-      seen.add(key);
-    };
-
-    if (Array.isArray(contact.channels)) {
-      for (const channel of contact.channels) {
-        addLink({
-          channel: channel.channel,
-          userId: channel.userId,
-          lastSeen: channel.lastSeen,
-        });
-      }
-    }
-
-    if (Array.isArray(contact.channelIdentities)) {
-      for (const identity of contact.channelIdentities) {
-        addLink({
-          channel: identity.channel,
-          userId: identity.userId,
-          lastSeen: contact.lastSeen,
-        });
-      }
-    }
-
-    return links;
+    return getContactIdentityLinksFromContact(contact);
   }
 
   private getPersistedConversationChannels(contact: Contact): ContactConversationChannelView[] {
-    if (!Array.isArray(contact.conversationChannels) || contact.conversationChannels.length === 0) {
-      return [];
-    }
-
-    return contact.conversationChannels.map(entry => ({
-      channel: entry.channel,
-      channelId: entry.channelId,
-      lastSeen: entry.lastSeen,
-    }));
+    return getPersistedConversationChannelsFromContact(contact);
   }
 
   private splitSessionChannelId(channelId: string): { channel: string; channelId: string } {
-    const separatorIndex = channelId.indexOf(':');
-    if (separatorIndex <= 0 || separatorIndex >= channelId.length - 1) {
-      return { channel: 'session', channelId };
-    }
-
-    return {
-      channel: channelId.slice(0, separatorIndex),
-      channelId: channelId.slice(separatorIndex + 1),
-    };
+    return splitSessionChannelIdFromSession(channelId);
   }
 
   private sessionMatchesIdentity(sessionChannelId: string, identity: ContactIdentityLinkView): boolean {
-    const normalizedSession = sessionChannelId.trim().toLowerCase();
-    const normalizedChannel = identity.channel.trim().toLowerCase();
-    const normalizedUserId = identity.userId.trim().toLowerCase();
-    if (!normalizedUserId) return false;
-
-    if (normalizedSession === normalizedUserId) return true;
-    if (normalizedSession === `${normalizedChannel}:${normalizedUserId}`) return true;
-    return normalizedSession.startsWith(`${normalizedChannel}:`) && normalizedSession.endsWith(`:${normalizedUserId}`);
+    return sessionMatchesIdentityFromId(sessionChannelId, identity);
   }
 
   private buildRelatedConversationChannelMap(contacts: Contact[]): Map<string, ContactConversationChannelView[]> {
-    const sessions = this.sessionStore.listChannels();
-    const map = new Map<string, ContactConversationChannelView[]>();
-
-    for (const contact of contacts) {
-      const persistedChannels = this.getPersistedConversationChannels(contact);
-      if (persistedChannels.length > 0) {
-        map.set(contact.id, persistedChannels);
-        continue;
-      }
-
-      const identities = this.getContactIdentityLinks(contact);
-      const relatedChannels: ContactConversationChannelView[] = [];
-      const seen = new Set<string>();
-
-      for (const session of sessions) {
-        if (!identities.some(identity => this.sessionMatchesIdentity(session.channelId, identity))) continue;
-
-        const parsed = this.splitSessionChannelId(session.channelId);
-        const key = `${parsed.channel}:${parsed.channelId}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        const lastEntry = this.sessionStore.getLastEntry(session.channelId);
-        relatedChannels.push({
-          channel: parsed.channel,
-          channelId: parsed.channelId,
-          lastSeen: lastEntry ? new Date(lastEntry.timestamp).toISOString() : undefined,
-        });
-      }
-
-      if (relatedChannels.length === 0) {
-        for (const identity of identities) {
-          const key = `${identity.channel}:${identity.userId}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          relatedChannels.push({
-            channel: identity.channel,
-            channelId: identity.userId,
-            lastSeen: identity.lastSeen ?? contact.lastSeen,
-          });
-        }
-      }
-
-      map.set(contact.id, relatedChannels);
-    }
-
-    return map;
+    return buildRelatedConversationChannelMapFromContacts({
+      contacts,
+      sessionStore: this.sessionStore,
+    });
   }
 
   private updateIdentityProfile(contact: Contact, displayName: string, nickname: string | undefined): boolean {

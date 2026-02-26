@@ -1,13 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
-  appendFileSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier } from '../types.js';
@@ -19,6 +14,9 @@ import type {
 } from '../capabilities/confirmation-queue.js';
 import type { CharacterCardV2, CharacterData } from './types.js';
 import { assertValidCharacterCard, loadCharacterCard } from './loader.js';
+import { appendJsonLine } from '../persistence/jsonl.js';
+import { writeJsonAtomic } from '../utils/fs.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const MUTABLE_CARD_FIELDS = [
   'name',
@@ -241,15 +239,11 @@ export class CharacterCardVersionStore {
   }
 
   private persistCard(card: CharacterCardV2): void {
-    mkdirSync(dirname(this.cardPath), { recursive: true });
-    const tmpPath = this.cardPath + '.tmp';
-    writeFileSync(tmpPath, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
-    renameSync(tmpPath, this.cardPath);
+    writeJsonAtomic(this.cardPath, card);
   }
 
   private appendHistory(entry: CharacterCardHistoryEntry): void {
-    mkdirSync(dirname(this.historyPath), { recursive: true });
-    appendFileSync(this.historyPath, JSON.stringify(entry) + '\n', 'utf-8');
+    appendJsonLine(this.historyPath, entry);
   }
 }
 
@@ -313,7 +307,7 @@ export function createCharacterCardUpdateTool(
             `Updated character card to v${snapshot.version} (checksum: ${snapshot.checksum}).`,
           );
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = toErrorMessage(error);
           return textResult(`Character card update failed: ${message}`);
         }
       }

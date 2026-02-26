@@ -1,6 +1,7 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { EventBus } from '../event-bus.js';
 import { createComponentLogger } from '../logger.js';
+import { toErrorMessage } from '../utils/errors.js';
 import {
   readModuleRegistry,
   resolveModuleRegistryPath,
@@ -33,10 +34,6 @@ export interface ModuleLoadSummary {
   attempted: number;
   loaded: number;
   failed: number;
-}
-
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function toModuleDefinition(value: unknown): SubstrateModule {

@@ -8,6 +8,7 @@ import {
   loadOrSeedJson,
   writeJsonAtomic,
 } from './load-or-seed.js';
+import { isRecord } from '../utils/types.js';
 
 export const TRUST_POLICY_FILE_NAME = 'trust-policy.json';
 export const TRUST_POLICY_SEED_FILE_NAME = 'trust-policy.seed.json';
@@ -32,10 +33,6 @@ export interface TrustPolicyConfig {
 
 interface TrustPolicyLoadOptions {
   seedDir?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function uniqueSensitivityList(value: unknown, field: string): SensitivityLevel[] {

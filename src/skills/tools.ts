@@ -2,6 +2,7 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
 import { textResult, textResultWithError } from '../tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 interface SkillListParams {
   includeSkipped?: boolean;
@@ -165,7 +166,7 @@ export function createSkillCreateTool(runtime: SkillsRuntime): AgentTool<any> {
           path: created.relativePath,
         }, null, 2));
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = toErrorMessage(error);
         return textResultWithError(`Unable to create skill: ${message}`, true);
       }
     },
@@ -201,7 +202,7 @@ export function createSkillUpdateTool(runtime: SkillsRuntime): AgentTool<any> {
           path: updated.relativePath,
         }, null, 2));
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = toErrorMessage(error);
         return textResultWithError(`Unable to update skill: ${message}`, true);
       }
     },

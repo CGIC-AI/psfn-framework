@@ -1,10 +1,8 @@
 import {
-  appendFileSync,
   mkdirSync,
   readFileSync,
   existsSync,
   readdirSync,
-  writeFileSync,
   renameSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -35,6 +33,9 @@ import {
   type SessionHmacKeyring,
 } from './journal-utils.js';
 import { SessionSearchIndex, type SessionSearchHit } from './search-index.js';
+import { appendJsonLine } from '../persistence/jsonl.js';
+import { writeJsonAtomic } from '../utils/fs.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const log = createComponentLogger('SessionStore');
 
@@ -350,7 +351,7 @@ export class SessionStore {
         );
       } catch (error) {
         log.warn('Session search index unavailable; keyword search disabled', {
-          error: error instanceof Error ? error.message : String(error),
+          error: toErrorMessage(error),
         });
         this.searchIndex = null;
       }
@@ -408,7 +409,7 @@ export class SessionStore {
   }
 
   private appendImportManifest(manifest: LegacyChatImportManifest): void {
-    appendFileSync(this.importManifestPath, JSON.stringify(manifest) + '\n', 'utf-8');
+    appendJsonLine(this.importManifestPath, manifest);
   }
 
   private readImportManifests(): LegacyChatImportManifest[] {
@@ -498,7 +499,7 @@ export class SessionStore {
     } catch (err) {
       log.warn('Failed to parse channel index file; falling back to disk scan', {
         path: this.channelIndexPath,
-        error: err instanceof Error ? err.message : String(err),
+        error: toErrorMessage(err),
       });
     }
   }
@@ -508,9 +509,7 @@ export class SessionStore {
       version: CHANNEL_INDEX_VERSION,
       channels: Object.fromEntries(this.channelIndex.entries()),
     };
-    const tmp = this.channelIndexPath + '.tmp';
-    writeFileSync(tmp, JSON.stringify(payload, null, 2) + '\n', 'utf-8');
-    renameSync(tmp, this.channelIndexPath);
+    writeJsonAtomic(this.channelIndexPath, payload);
   }
 
   private upsertChannelIndex(channelId: string, entry: ChannelIndexEntry): void {
@@ -598,7 +597,7 @@ export class SessionStore {
     } catch (err) {
       log.debug('Failed to read first journal entry', {
         path: filePath,
-        error: err instanceof Error ? err.message : String(err),
+        error: toErrorMessage(err),
       });
       return null;
     }
@@ -731,7 +730,7 @@ export class SessionStore {
       if (!this.integrityVerifyFailureLogged) {
         this.integrityVerifyFailureLogged = true;
         log.warn('Session integrity verification unavailable; loading entry without verification', {
-          error: error instanceof Error ? error.message : String(error),
+          error: toErrorMessage(error),
         });
       }
       return entry;
@@ -883,7 +882,7 @@ export class SessionStore {
           this.searchIndexFailureLogged = true;
           log.warn('Session search index backfill failed; continuing without interruption', {
             channelId,
-            error: error instanceof Error ? error.message : String(error),
+            error: toErrorMessage(error),
           });
         }
       }
@@ -901,7 +900,7 @@ export class SessionStore {
         log.warn('Session search index write failed; continuing without interruption', {
           channelId: entry.channelId,
           messageId: entry.id,
-          error: error instanceof Error ? error.message : String(error),
+          error: toErrorMessage(error),
         });
       }
     }
@@ -981,7 +980,7 @@ export class SessionStore {
         if (!this.integritySignFailureLogged) {
           this.integritySignFailureLogged = true;
           log.warn('Session integrity signing unavailable; writing unsigned journal entry', {
-            error: error instanceof Error ? error.message : String(error),
+            error: toErrorMessage(error),
           });
         }
       }

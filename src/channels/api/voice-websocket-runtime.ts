@@ -25,6 +25,7 @@ import type {
   WebSocketVoiceServerOptions,
   WebSocketVoiceSession,
 } from '../../voice/transports/websocket/types.js';
+import { toErrorMessage } from '../../utils/errors.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
@@ -270,7 +271,7 @@ async function runAssistantTurn(params: {
 
     return response.content;
   } catch (error) {
-    const messageText = error instanceof Error ? error.message : String(error);
+    const messageText = toErrorMessage(error);
     await eventBus.emit('voice.turn.error', {
       turnId,
       channelId,

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier } from '../types.js';
+import { appendJsonLine } from '../persistence/jsonl.js';
+import { parsePositiveIntEnv } from '../utils/env.js';
 
 export type ToolReversibility = 'reversible' | 'irreversible';
 export type ExternalCommunicationChannel = 'discord' | 'email';
@@ -67,15 +68,6 @@ function normalizePositiveInt(value: number | undefined, fallback: number): numb
   return normalized > 0 ? normalized : fallback;
 }
 
-function parsePositiveIntEnv(
-  value: string | undefined,
-  fallback: number,
-): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 function cloneRecord(input: Record<string, unknown>): Record<string, unknown> {
   try {
     return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
@@ -113,8 +105,7 @@ export class SafeguardAuditTrail {
     };
     this.memoryLog.push(entry);
     if (this.filePath) {
-      mkdirSync(dirname(this.filePath), { recursive: true });
-      appendFileSync(this.filePath, `${JSON.stringify(entry)}\n`, 'utf-8');
+      appendJsonLine(this.filePath, entry);
     }
     return entry;
   }

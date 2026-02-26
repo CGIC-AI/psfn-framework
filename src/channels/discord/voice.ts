@@ -39,6 +39,7 @@ import {
   type VoiceSecurityLimits,
 } from '../../voice/policy/security.js';
 import type { MessageHandler } from '../types.js';
+import { toErrorMessage } from '../../utils/errors.js';
 
 const log = createComponentLogger('DiscordVoice');
 const CAPTURE_SILENCE_MS = 1_200;
@@ -144,7 +145,7 @@ function buildConfiguredTtsConnectors(
     } catch (error) {
       log.warn('Discord voice TTS connector initialization failed', {
         provider: providerId,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
       });
     }
   }
@@ -819,7 +820,7 @@ export class DiscordVoiceRuntime {
         throw error;
       }
 
-      const errorText = error instanceof Error ? error.message : String(error);
+      const errorText = toErrorMessage(error);
       log.warn('Streaming TTS failed, using buffered fallback', {
         provider: connector.id,
         error: errorText,
@@ -1246,7 +1247,7 @@ export class DiscordVoiceRuntime {
       await this.joinChannel(channel);
       log.info('Voice connection recovered after decrypt failures', recoveryPayload);
     } catch (error) {
-      const errorText = error instanceof Error ? error.message : String(error);
+      const errorText = toErrorMessage(error);
       log.error('Voice decrypt recovery failed', {
         guildId: channel.guild.id,
         channelId: channel.id,
@@ -1272,7 +1273,7 @@ export class DiscordVoiceRuntime {
   }
 
   private classifyTurnStatus(error: unknown): 'completed' | 'cancelled' | 'timeout' | 'error' {
-    const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    const text = (toErrorMessage(error)).toLowerCase();
     if (text.includes('timeout') || text.includes('timed out')) return 'timeout';
     if (text.includes('cancel') || text.includes('abort') || text.includes('interrupt')) return 'cancelled';
     return 'error';
@@ -1284,7 +1285,7 @@ export class DiscordVoiceRuntime {
       if (stage) return stage;
     }
 
-    const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    const text = (toErrorMessage(error)).toLowerCase();
     if (text.includes('deepgram') || text.includes('transcrib') || text.includes('stt')) return 'stt';
     if (text.includes('elevenlabs') || text.includes('synth') || text.includes('tts') || text.includes('playback')) {
       return 'tts';
@@ -1300,7 +1301,7 @@ export class DiscordVoiceRuntime {
       if (code) return code;
     }
 
-    const text = (error instanceof Error ? error.message : String(error))
+    const text = (toErrorMessage(error))
       .trim()
       .replace(/[^a-zA-Z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '')
@@ -1322,7 +1323,7 @@ export class DiscordVoiceRuntime {
       }
     }
 
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
     const wrapped = new Error(message) as StructuredVoiceError;
     wrapped.voiceStage = stage;
     wrapped.voiceCode = code;

@@ -8,6 +8,7 @@ import type { LifecycleNotifier } from '../lifecycle/notifications.js';
 import { createComponentLogger } from '../logger.js';
 import type { CapabilityTier } from '../types.js';
 import type { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const log = createComponentLogger('LifecycleTools');
 
@@ -155,7 +156,7 @@ export function createRebuildTool(
           buildSucceeded = true;
           log.info('Build complete, shutting down...');
         } catch (err) {
-          const errorText = err instanceof Error ? err.message : String(err);
+          const errorText = toErrorMessage(err);
           log.error('Build failed; aborting restart', { error: errorText });
           await notifier.notifyShutdown(`rebuild failed: ${errorText.slice(0, 160)}`);
           return;

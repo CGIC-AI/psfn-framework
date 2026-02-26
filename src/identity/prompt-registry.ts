@@ -4,16 +4,13 @@
 
 import { createHash } from 'node:crypto';
 import {
-  appendFileSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
   statSync,
-  writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
+import { appendJsonLine } from '../persistence/jsonl.js';
+import { writeJsonAtomic } from '../utils/fs.js';
 
 const log = createComponentLogger('PromptRegistry');
 
@@ -393,21 +390,17 @@ export class PromptRegistryStore {
   }
 
   private save(): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const tmpPath = this.filePath + '.tmp';
     const output = [...this.entries.values()]
       .sort((a, b) => a.key.localeCompare(b.key))
       .map(cloneEntry);
-    writeFileSync(tmpPath, JSON.stringify(output, null, 2), 'utf-8');
-    renameSync(tmpPath, this.filePath);
+    writeJsonAtomic(this.filePath, output, { trailingNewline: false });
     this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
     this.lastKnownGood = cloneMap(this.entries);
   }
 
   private appendHistory(entry: PromptRegistryHistoryEntry): void {
     try {
-      mkdirSync(dirname(this.historyPath), { recursive: true });
-      appendFileSync(this.historyPath, JSON.stringify(entry) + '\n', 'utf-8');
+      appendJsonLine(this.historyPath, entry);
     } catch (err) {
       log.error('Failed to write prompt registry history', { error: String(err) });
     }

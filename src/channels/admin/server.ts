@@ -18,6 +18,7 @@ import {
   hasCookieValue,
   isHtmxRequest,
 } from '../http/auth.js';
+import { toErrorMessage } from '../../utils/errors.js';
 import {
   readBodyWithLimit,
   sendHtml,
@@ -415,7 +416,7 @@ export class AdminServer implements Lifecycle {
               sendJson(res, 200, payload);
             } catch (error) {
               sendJson(res, 400, {
-                error: error instanceof Error ? error.message : String(error),
+                error: toErrorMessage(error),
               });
             }
           });

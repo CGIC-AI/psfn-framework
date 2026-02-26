@@ -1,4 +1,5 @@
 import type { ApiHealthSubsystemStatus } from './types.js';
+import { parsePositiveIntEnv } from '../../utils/env.js';
 
 const DEFAULT_ACTIVE_PROBES_ENABLED = true;
 const DEFAULT_ACTIVE_PROBE_TIMEOUT_MS = 2_000;
@@ -168,13 +169,6 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
   if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
   if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
   return fallback;
-}
-
-function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return parsed;
 }
 
 function parseNonNegativeIntEnv(value: string | undefined, fallback: number): number {

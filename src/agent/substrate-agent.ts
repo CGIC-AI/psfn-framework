@@ -42,6 +42,7 @@ import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { tagToolWithReversibility } from '../capabilities/safeguards.js';
+import { toErrorMessage } from '../utils/errors.js';
 import {
   classifyBroadcastDraft,
   resolveBroadcastVisibilityScope,
@@ -443,7 +444,7 @@ export class SubstrateAgent {
         } catch (error) {
           log.debug('Proactive recall skipped due to provider error', {
             channelId: message.channelId,
-            error: error instanceof Error ? error.message : String(error),
+            error: toErrorMessage(error),
           });
         }
       }
@@ -716,7 +717,7 @@ export class SubstrateAgent {
     telemetryBus.emit(event, payload).catch(error => {
       log.debug('Telemetry emit failed', {
         event,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
       });
     });
   }
@@ -1106,7 +1107,7 @@ export class SubstrateAgent {
       return lines.join('\n');
     } catch (error) {
       log.debug('Scratchpad context injection skipped due to provider error', {
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
       });
       return '';
     }
@@ -1258,7 +1259,7 @@ export class SubstrateAgent {
       log.warn('Failed to resolve contact identity for trust/context routing', {
         authorId: message.authorId,
         channelId: message.channelId,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
       });
       return {
         trustLevel: 'regular',

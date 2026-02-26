@@ -26,6 +26,7 @@ import {
   resolveSessionHistoryBudget,
   SESSION_HISTORY_MIN_MESSAGES,
 } from '../context-budget.js';
+import { toErrorMessage } from '../utils/errors.js';
 import {
   buildCompactionSourceBlock,
   buildCompactionSourceHashTag,
@@ -768,7 +769,7 @@ export class SessionManager {
           } catch (error) {
             log.warn('Pre-compaction extraction flush failed', {
               channelId,
-              error: error instanceof Error ? error.message : String(error),
+              error: toErrorMessage(error),
             });
           }
         }

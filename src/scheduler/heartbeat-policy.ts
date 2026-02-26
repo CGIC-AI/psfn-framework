@@ -3,9 +3,9 @@
 // Stores reflection templates (prompts, intervals, flags) in a JSON file.
 // PSFN can read, edit, and extend her own reflection schedule.
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../logger.js';
+import { writeJsonAtomic } from '../utils/fs.js';
 
 const log = createComponentLogger('HeartbeatPolicy');
 
@@ -256,10 +256,7 @@ export class HeartbeatPolicyStore {
   }
 
   save(policy: HeartbeatPolicy): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const tmpPath = this.filePath + '.tmp';
-    writeFileSync(tmpPath, JSON.stringify(policy, null, 2) + '\n', 'utf-8');
-    renameSync(tmpPath, this.filePath);
+    writeJsonAtomic(this.filePath, policy);
   }
 
   /** Validate proposed changes to a template */

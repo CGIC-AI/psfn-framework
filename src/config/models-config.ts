@@ -8,6 +8,7 @@ import {
   loadOrSeedJson,
   writeJsonAtomic,
 } from './load-or-seed.js';
+import { isRecord } from '../utils/types.js';
 
 export const MODELS_FILE_NAME = 'models.json';
 export const MODELS_SEED_FILE_NAME = 'models.seed.json';
@@ -20,10 +21,6 @@ export interface ModelsRuntimeConfig {
 interface ModelsRuntimeLoadOptions {
   seedDir?: string;
   defaultContextWindow?: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function validateModelsConfig(

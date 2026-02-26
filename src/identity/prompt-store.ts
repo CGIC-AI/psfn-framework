@@ -5,18 +5,13 @@
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import {
-  appendFileSync,
   closeSync,
   existsSync,
   fstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readSync,
-  renameSync,
-  writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
 import {
   PROMPT_LAYER_ROLES,
   type PromptLayer,
@@ -25,6 +20,8 @@ import {
   type PromptLayerRole,
 } from './prompt-types.js';
 import { createComponentLogger } from '../logger.js';
+import { appendJsonLine } from '../persistence/jsonl.js';
+import { writeJsonAtomic } from '../utils/fs.js';
 
 const log = createComponentLogger('PromptStore');
 const HISTORY_SCAN_CHUNK_BYTES = 32 * 1024;
@@ -91,16 +88,12 @@ export class PromptLayerStore {
   }
 
   private save(): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const tmpPath = this.filePath + '.tmp';
-    writeFileSync(tmpPath, JSON.stringify(this.layers, null, 2), 'utf-8');
-    renameSync(tmpPath, this.filePath);
+    writeJsonAtomic(this.filePath, this.layers, { trailingNewline: false });
   }
 
   private appendHistory(entry: PromptHistoryEntry): void {
     try {
-      mkdirSync(dirname(this.historyPath), { recursive: true });
-      appendFileSync(this.historyPath, JSON.stringify(entry) + '\n', 'utf-8');
+      appendJsonLine(this.historyPath, entry);
     } catch (err) {
       log.error('Failed to write prompt history', { error: String(err) });
     }

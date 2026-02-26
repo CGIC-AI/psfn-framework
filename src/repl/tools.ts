@@ -6,6 +6,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { REPLDeps } from './types.js';
 import { runRLMLoop } from './loop.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export function createThinkTool(deps: REPLDeps): AgentTool<any> {
   return {
@@ -84,7 +85,7 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
           details: {},
         };
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = toErrorMessage(error);
         return {
           content: [{ type: 'text', text: `[Think error: ${msg}]` }] satisfies TextContent[],
           details: { isError: true },

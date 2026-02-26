@@ -1,6 +1,5 @@
-import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import type Database from 'better-sqlite3';
+import { join } from 'node:path';
 import type { SubstrateConfig, Lifecycle } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
@@ -38,6 +37,7 @@ import {
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
+import { initDatabase } from './persistence/sqlite-utils.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -244,13 +244,8 @@ export class SubstrateRuntime implements Lifecycle {
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
 
-    // Ensure data directory exists
-    mkdirSync(dirname(this.config.databasePath), { recursive: true });
-
     // Open database
-    this.db = new Database(this.config.databasePath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
+    this.db = initDatabase(this.config.databasePath);
     runDatabaseIntegrityCheck(this.db);
     log.info('SQLite integrity check passed');
 

@@ -8,9 +8,10 @@ import type { TrustLevel } from '../trust/types.js';
 import { TRUST_LEVELS } from '../trust/types.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel } from './types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return toErrorMessage(error);
 }
 
 export function createContactSetTrustTool(contactStore: ContactStore): AgentTool<any> {

@@ -10,6 +10,7 @@ import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../types.js';
 import type { ApiServerHealthChecks } from './types.js';
+import { toErrorMessage } from '../../utils/errors.js';
 import type {
   VoiceWebSocketCloseReason,
   VoiceWebSocketRuntimeHooks,
@@ -170,7 +171,7 @@ async function stopServer(server: ApiServer): Promise<void> {
   try {
     await server.stop();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
     if (message.includes('ERR_SERVER_NOT_RUNNING') || message.includes('Server is not running')) return;
     throw error;
   }

@@ -21,6 +21,7 @@ import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import { classifyChannel } from '../trust/policy.js';
 import type { ChannelVisibility } from '../trust/types.js';
 import { extractBoundaryFactsFromEntries } from './boundary-log.js';
+import { toErrorMessage } from '../utils/errors.js';
 const log = createComponentLogger('Extraction');
 
 // Track last extraction per channel
@@ -944,7 +945,7 @@ export class MemoryExtractor {
     } catch (error) {
       log.warn('Failed to persist emotional baseline update', {
         canonicalContactId,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
       });
     }
   }
@@ -1007,7 +1008,7 @@ export class MemoryExtractor {
       log.warn('Failed to persist extraction marker', {
         channelId,
         coveredUpToMessageId,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
       });
     }
   }

@@ -40,6 +40,7 @@ import {
   type VoiceWebSocketRuntime,
   type VoiceWebSocketRuntimeHooks,
 } from './voice-websocket.js';
+import { toErrorMessage } from '../../utils/errors.js';
 import {
   readBodyWithLimit,
   sendEmpty,
@@ -295,7 +296,7 @@ export class ApiServer implements ChannelAdapter {
       log.error('Failed to abort active turn', {
         channelId,
         reason,
-        error: err instanceof Error ? err.message : String(err),
+        error: toErrorMessage(err),
       });
     }
   }
@@ -468,7 +469,7 @@ export class ApiServer implements ChannelAdapter {
     } catch (error) {
       return this.normalizeSubsystemHealth({
         status: 'degraded',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       }, Date.now() - startedAt);
     }
   }
@@ -498,7 +499,7 @@ export class ApiServer implements ChannelAdapter {
     } catch (err) {
       log.error('Failed reading request body', {
         path: req.url ?? '/v1/chat/completions',
-        error: err instanceof Error ? err.message : String(err),
+        error: toErrorMessage(err),
       });
       if (this.canWriteResponse(res)) {
         this.sendError(res, 500, 'internal_error', 'Internal server error');
@@ -517,7 +518,7 @@ export class ApiServer implements ChannelAdapter {
         bodySize: Buffer.byteLength(body),
         contentType: req.headers['content-type'],
         remoteAddress: req.socket.remoteAddress,
-        error: err instanceof Error ? err.message : String(err),
+        error: toErrorMessage(err),
       });
       this.sendError(res, 400, 'invalid_json', 'Request body is not valid JSON');
       return;
@@ -544,7 +545,7 @@ export class ApiServer implements ChannelAdapter {
       });
     } catch (err) {
       log.error('Failed reading telemetry body', {
-        error: err instanceof Error ? err.message : String(err),
+        error: toErrorMessage(err),
       });
       if (this.canWriteResponse(res)) {
         this.sendError(res, 500, 'internal_error', 'Internal server error');

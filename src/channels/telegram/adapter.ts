@@ -17,6 +17,7 @@ import type { EventBus } from '../../event-bus.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { TelegramChannelConfig } from '../config.js';
 import { createComponentLogger } from '../../logger.js';
+import { toErrorMessage } from '../../utils/errors.js';
 
 const log = createComponentLogger('Telegram');
 
@@ -323,7 +324,7 @@ export class TelegramAdapter implements ChannelAdapter {
           await this.callApi('deleteWebhook', { drop_pending_updates: false });
         } catch (error) {
           log.warn('Failed to delete Telegram webhook during shutdown', {
-            error: error instanceof Error ? error.message : String(error),
+            error: toErrorMessage(error),
           });
         }
       }
@@ -354,7 +355,7 @@ export class TelegramAdapter implements ChannelAdapter {
       this.activePoll = this.pollOnce()
         .catch((error: unknown) => {
           log.error('Telegram polling error', {
-            error: error instanceof Error ? error.message : String(error),
+            error: toErrorMessage(error),
           });
         })
         .finally(() => {
@@ -460,7 +461,7 @@ export class TelegramAdapter implements ChannelAdapter {
     try {
       rawBody = await this.readWebhookBody(req);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       const statusCode = message.includes('too large') ? 413 : 400;
       this.writeWebhookResponse(res, statusCode, message);
       return;
@@ -479,7 +480,7 @@ export class TelegramAdapter implements ChannelAdapter {
       this.writeWebhookResponse(res, 200, 'ok');
     } catch (error) {
       log.error('Telegram webhook update handling error', {
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
       });
       this.writeWebhookResponse(res, 500, 'error');
     }
@@ -610,7 +611,7 @@ export class TelegramAdapter implements ChannelAdapter {
     } catch (error) {
       log.error('Telegram message handling error', {
         channelId,
-        error: error instanceof Error ? error.message : String(error),
+        error: toErrorMessage(error),
       });
       await this.sendTextInternal(
         { channelId, replyToMessageId: messageId, threadId },

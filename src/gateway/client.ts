@@ -51,6 +51,7 @@ import type {
   SessionHmacVerifyResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -141,7 +142,7 @@ parentPort.on('message', async (job) => {
     const response = await requestRpc(socketPath, method, params, requestId, timeoutMs);
     writeResponse(stateBuffer, payloadBuffer, { ok: true, response });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
     writeResponse(stateBuffer, payloadBuffer, { ok: false, error: message });
   }
 });

@@ -5,7 +5,6 @@
 
 import 'dotenv/config';
 import { createInterface } from 'node:readline';
-import Database from 'better-sqlite3';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
@@ -13,9 +12,8 @@ import { LLMClient } from './llm/client.js';
 import { MemoryStore } from './memory/store.js';
 import { SalienceDecay } from './memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { loadSettings, applySettings } from './settings.js';
+import { initDatabase } from './persistence/sqlite-utils.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -36,10 +34,7 @@ async function main(): Promise<void> {
   console.log('[CLI] Initializing PSFN...');
 
   // Database for memory (L2)
-  mkdirSync(dirname(config.databasePath), { recursive: true });
-  const db = new Database(config.databasePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const db = initDatabase(config.databasePath);
 
   // Identity
   const { card, systemPrompt } = composeIdentity(config);

@@ -2,7 +2,8 @@
 // Creates pi-ai Model objects pointing at a LiteLLM proxy.
 // When LITELLM_BASE_URL is set, LLMClient uses these instead of getModel().
 
-import type { Model } from '@mariozechner/pi-ai';
+import { getModels, getProviders } from '@mariozechner/pi-ai';
+import type { Api, KnownProvider, Model } from '@mariozechner/pi-ai';
 
 export interface LiteLLMModelConfig {
   /** LiteLLM proxy base URL, e.g. http://localhost:4000/v1 */
@@ -19,6 +20,16 @@ export interface LiteLLMModelConfig {
   thinkingFormat?: 'openai' | 'zai' | 'qwen';
 }
 
+function isKnownProvider(provider: string): provider is KnownProvider {
+  const providers = getProviders();
+  return Array.isArray(providers) && providers.some((knownProvider) => knownProvider === provider);
+}
+
+export function resolveRegisteredModel(provider: string, modelId: string): Model<Api> | null {
+  if (!isKnownProvider(provider)) return null;
+  return getModels(provider).find((model) => model.id === modelId) ?? null;
+}
+
 /**
  * Create a pi-ai Model that routes through LiteLLM proxy.
  * The proxy handles real API keys — the agent only needs a virtual key.
@@ -28,7 +39,7 @@ export function createLiteLLMModel(config: LiteLLMModelConfig): Model<'openai-co
     id: config.modelId,
     name: `${config.modelId} (via LiteLLM)`,
     api: 'openai-completions',
-    provider: 'litellm' as any,
+    provider: 'litellm',
     baseUrl: config.baseUrl,
     reasoning: config.reasoning ?? false,
     input: ['text'],

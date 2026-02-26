@@ -3,6 +3,8 @@ import type { SubstrateConfig } from '../types.js';
 
 const mocks = vi.hoisted(() => ({
   getModel: vi.fn(),
+  getModels: vi.fn(),
+  getProviders: vi.fn(),
   completeSimple: vi.fn(),
   streamSimple: vi.fn(),
   getEnvApiKey: vi.fn(),
@@ -10,6 +12,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@mariozechner/pi-ai', () => ({
   getModel: mocks.getModel,
+  getModels: mocks.getModels,
+  getProviders: mocks.getProviders,
   completeSimple: mocks.completeSimple,
   streamSimple: mocks.streamSimple,
   getEnvApiKey: mocks.getEnvApiKey,
@@ -19,9 +23,9 @@ import { LLMClient, SensitiveImportRoutePolicyError } from './client.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
-    primaryModel: 'primary/model',
+    primaryModel: 'z-ai/glm-5',
     primaryProvider: 'openrouter',
-    extractionModel: 'extract/model',
+    extractionModel: 'deepseek/deepseek-v3.2',
     extractionProvider: 'openrouter',
     primaryMaxTokens: 4096,
     extractionMaxTokens: 2048,
@@ -38,13 +42,13 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
     compactionThresholdPct: 70,
     modelRoster: {
       chat: {
-        model: 'primary/model',
+        model: 'z-ai/glm-5',
         provider: 'openrouter',
         maxTokens: 4096,
         contextWindow: 128_000,
       },
       background: {
-        model: 'background/model',
+        model: 'deepseek/deepseek-v3.2',
         provider: 'openrouter',
         maxTokens: 2048,
       },
@@ -56,6 +60,8 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
 describe('LLMClient import-processing routing policy', () => {
   beforeEach(() => {
     mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
     mocks.completeSimple.mockReset();
     mocks.streamSimple.mockReset();
     mocks.getEnvApiKey.mockReset();
@@ -70,6 +76,29 @@ describe('LLMClient import-processing routing policy', () => {
       contextWindow: 128_000,
       maxTokens: 8192,
     }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockImplementation(() => [
+      {
+        id: 'z-ai/glm-5',
+        provider: 'openrouter',
+        name: 'z-ai/glm-5',
+        api: 'openai-completions',
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16384,
+      },
+      {
+        id: 'deepseek/deepseek-v3.2',
+        provider: 'openrouter',
+        name: 'deepseek/deepseek-v3.2',
+        api: 'openai-completions',
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8192,
+      },
+    ]);
     mocks.getEnvApiKey.mockReturnValue(undefined);
   });
 

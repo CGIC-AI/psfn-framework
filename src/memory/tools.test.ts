@@ -95,7 +95,7 @@ describe('createMemoryWriteTool', () => {
       text: 'V enjoys programming',
       type: 'episodic',
       importance: 0.7,
-      sourceRef: 'tool:memory_write',
+      sourceRef: 'source:tool:memory_write|invocation:call-1',
     }));
   });
 
@@ -225,13 +225,13 @@ describe('createMemoryWriteTool', () => {
     }));
   });
 
-  it('adds tool:memory_write source tag', async () => {
+  it('adds tool:memory_write provenance with invocation id', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
     await tool.execute('call-13', { text: 'Source tag test', type: 'semantic' });
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
-      sourceRef: 'tool:memory_write',
+      sourceRef: 'source:tool:memory_write|invocation:call-13',
     }));
   });
 
@@ -354,7 +354,7 @@ describe('createMemoryImportTool', () => {
     });
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
-    expect(importedRecords[0].sourceRef).toBe('tool:memory_import:voxta');
+    expect(importedRecords[0].sourceRef).toBe('source:tool:memory_import:voxta|invocation:call-2');
   });
 
   it('uses "import" as default source when not specified', async () => {
@@ -367,7 +367,7 @@ describe('createMemoryImportTool', () => {
     });
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
-    expect(importedRecords[0].sourceRef).toBe('tool:memory_import:import');
+    expect(importedRecords[0].sourceRef).toBe('source:tool:memory_import:import|invocation:call-3');
   });
 
   it('returns error for empty records array', async () => {

@@ -19,7 +19,7 @@ export { primerPage } from './templates/primer.js';
 export { confirmationsPage, confirmationQueueFragment } from './templates/confirmations.js';
 export { contactsPage, contactRow, contactEditForm, contactMutationAuditFragment } from './templates/contacts.js';
 export { chatPage } from './templates/chat.js';
-export { eventsPage, eventItem } from './templates/events.js';
+export { eventsPage, eventItem, auditTimelinePage, auditTimelineItem } from './templates/events.js';
 export {
   promptsPage,
   promptRegistryFragment,

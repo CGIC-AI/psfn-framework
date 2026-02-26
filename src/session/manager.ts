@@ -3,6 +3,7 @@ import type { LLMProvider } from '../agent-loop.js';
 import type { SessionStore } from './store.js';
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
+import type { SessionSearchHit } from './search-index.js';
 import type { EventBus } from '../event-bus.js';
 import { countMessageTokens, countTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../logger.js';
@@ -736,6 +737,10 @@ export class SessionManager {
 
   getMessageCount(channelId: string): number {
     return this.store.count(channelId);
+  }
+
+  searchTranscripts(query: string, limit?: number): SessionSearchHit[] {
+    return this.store.searchByKeywords(query, limit);
   }
 
   private entriesToMessages(

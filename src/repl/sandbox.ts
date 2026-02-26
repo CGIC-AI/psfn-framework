@@ -74,6 +74,7 @@ export class REPLSandbox {
     });
 
     const memory = createMemoryCapabilities({
+      llmProvider: this.deps.llmProvider,
       embeddingService: this.deps.embeddingService,
       memoryStore: this.deps.memoryStore,
       sessionManager: this.deps.sessionManager,
@@ -120,6 +121,7 @@ export class REPLSandbox {
       memory_import_batch: memory.memory_import_batch,
       memory_get_by_id: memory.memory_get_by_id,
       session_messages: memory.session_messages,
+      session_search: memory.session_search,
       session_append_note: memory.session_append_note,
       schedule_list: scheduler.schedule_list,
       schedule_add_every: scheduler.schedule_add_every,

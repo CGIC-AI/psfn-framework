@@ -35,6 +35,7 @@ Variables persist across iterations. When you have the answer, call FINAL().
 
 ### Session
 - \`session_messages(channelId, limit?)\` — Get recent messages from a channel, returns array of {role, content, timestamp}
+- \`await session_search(query, limit?, options?)\` — Keyword search historical transcripts, returns {summary, totalHits, gatedOutCount, hits}
 - \`session_append_note(channelId, note)\` — Inject a system note into a session
 
 ### Scheduler
@@ -112,7 +113,7 @@ export function buildRLMSystemPrompt(metadata?: ThinkContextMetadata): string {
     lines.push(`- Current channel: ${metadata.currentChannelMessages} messages`);
   }
   lines.push('');
-  lines.push('Use memory_search(query) to find relevant memories. Use session_messages(channelId) to read conversations.');
+  lines.push('Use memory_search(query) to find relevant memories. Use session_messages(channelId) / session_search(query) to inspect conversations.');
 
   return lines.join('\n');
 }

@@ -237,6 +237,35 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).toContain('Allowed memory');
   });
 
+  it('hard deny policy precedence: highest-utility denied memory is still excluded', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Top relevance but denied',
+        sensitivity: 'confidential',
+        consentFlags: { allowRecall: false },
+        similarity: 0.99,
+        importance: 1,
+        salience: 1,
+      }),
+      makeMemory({
+        text: 'Lower relevance but allowed',
+        sensitivity: 'public',
+        consentFlags: {},
+        similarity: 0.62,
+        importance: 0.8,
+        salience: 0.8,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    expect(result).not.toContain('Top relevance but denied');
+    expect(result).toContain('Lower relevance but allowed');
+  });
+
   it('no trustLevel param defaults to regular behavior', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
@@ -275,6 +304,39 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).toContain('Personal E');
     expect(result).not.toContain('Intimate D');
     expect(result).not.toContain('Confidential F');
+  });
+
+  it('applies privacy-risk penalty after hard policy gating when ranking allowed memories', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Low risk public memory',
+        sensitivity: 'public',
+        sourceRef: 'twitter:feed',
+        similarity: 0.9,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+      makeMemory({
+        text: 'Higher risk confidential memory',
+        sensitivity: 'confidential',
+        sourceRef: 'api:private',
+        tags: ['secret'],
+        similarity: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    expect(result).toContain('Low risk public memory');
+    expect(result).toContain('Higher risk confidential memory');
+    expect(result.indexOf('Low risk public memory')).toBeLessThan(
+      result.indexOf('Higher risk confidential memory'),
+    );
   });
 
   it('returns empty string when all memories are filtered out by trust', async () => {

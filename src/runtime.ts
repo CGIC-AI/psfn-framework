@@ -6,7 +6,7 @@ import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
 import { loadCharacterCard, composeSystemPrompt } from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
-import { SessionStore } from './session/store.js';
+import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
 import { SessionManager } from './session/manager.js';
 import { UserContinuityStore } from './session/continuity.js';
 import { AgentLoop } from './agent-loop.js';
@@ -53,6 +53,7 @@ import { resolveAdminChatApiBaseUrl } from './channels/admin/chat/api-base-url.j
 import { CapabilityRuntime } from './capabilities/runtime.js';
 
 const log = createComponentLogger('Runtime');
+const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 
 export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;
@@ -61,6 +62,7 @@ export class SubstrateRuntime implements Lifecycle {
   private llmClient!: LLMClient;
   private sessionStore!: SessionStore;
   private sessionManager!: SessionManager;
+  private memoryExtractor!: MemoryExtractor;
   private agentLoop!: AgentLoop;
   private discord!: DiscordAdapter;
   private memoryStore!: MemoryStore;
@@ -73,6 +75,8 @@ export class SubstrateRuntime implements Lifecycle {
   private lifecycleNotifier?: LifecycleNotifier;
   private stopVoiceObservers?: () => void;
   private stopDebugObserver?: () => void;
+  private crashRecoveryQueue: CrashRecoveryExtractionCandidate[] = [];
+  private stopping = false;
   private startTime: number;
 
   constructor(config: SubstrateConfig) {
@@ -98,6 +102,43 @@ export class SubstrateRuntime implements Lifecycle {
     const adapters = [...this.channelRegistry.values()].reverse();
     for (const adapter of adapters) {
       await adapter.gateway.stop();
+    }
+  }
+
+  private resolveExtractionDrainTimeoutMs(): number {
+    const raw = process.env.EXTRACTION_DRAIN_TIMEOUT_MS;
+    if (!raw) return DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS;
+    }
+    return parsed;
+  }
+
+  private queueCrashRecoveryExtractions(): void {
+    if (this.crashRecoveryQueue.length === 0) return;
+
+    const queued = this.crashRecoveryQueue;
+    this.crashRecoveryQueue = [];
+    const pendingEntryCount = queued.reduce(
+      (total, candidate) => total + candidate.unextractedEntries.length,
+      0,
+    );
+    log.info('Queueing crash recovery extraction', {
+      channelCount: queued.length,
+      pendingEntryCount,
+    });
+
+    for (const candidate of queued) {
+      this.memoryExtractor.queueRetroactiveExtraction(
+        candidate.channelId,
+        candidate.unextractedEntries,
+      ).catch((error) => {
+        log.error('Crash recovery extraction queue failed', {
+          channelId: candidate.channelId,
+          error: String(error),
+        });
+      });
     }
   }
 
@@ -156,6 +197,15 @@ export class SubstrateRuntime implements Lifecycle {
     this.sessionManager.continuityStore = continuityStore;
     log.info('User continuity store enabled');
 
+    const uncleanChannels = this.sessionStore.getUncleanShutdownChannels();
+    if (uncleanChannels.length > 0) {
+      log.warn('Detected unclean shutdown sessions', {
+        channelCount: uncleanChannels.length,
+        channels: uncleanChannels,
+      });
+    }
+    this.crashRecoveryQueue = this.sessionStore.getCrashRecoveryExtractionCandidates();
+
     // Embedding provider (Ollama local)
     const embeddingProvider = new EmbeddingProvider({
       ollamaUrl: process.env.OLLAMA_URL,
@@ -202,7 +252,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.config,
     );
 
-    this.agentLoop.memoryExtractor = new MemoryExtractor(
+    this.memoryExtractor = new MemoryExtractor(
       this.llmClient,
       this.sessionManager,
       this.memoryStore,
@@ -210,7 +260,9 @@ export class SubstrateRuntime implements Lifecycle {
       this.eventBus,
       this.config,
       promptRegistry,
+      this.sessionStore,
     );
+    this.agentLoop.memoryExtractor = this.memoryExtractor;
 
     this.salienceDecay = new SalienceDecay(this.memoryStore);
 
@@ -399,6 +451,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.scheduler.start();
     await this.startChannels();
     if (this.adminServer) await this.adminServer.start();
+    this.queueCrashRecoveryExtractions();
     await this.eventBus.emit('system.ready', {});
 
     // Send "I'm back" notification (fire-and-forget — don't block startup)
@@ -410,16 +463,29 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   async stop(): Promise<void> {
+    if (this.stopping) return;
+    this.stopping = true;
+
     log.info('Shutting down...');
     await this.eventBus.emit('system.shutdown', {});
     this.stopVoiceObservers?.();
     this.stopVoiceObservers = undefined;
     this.stopDebugObserver?.();
     this.stopDebugObserver = undefined;
-    this.scheduler.stop();
+    this.scheduler?.stop();
+    const drained = await this.memoryExtractor?.stop({
+      timeoutMs: this.resolveExtractionDrainTimeoutMs(),
+    });
+    if (drained === false) {
+      log.warn('Proceeding with shutdown before extraction drain completed');
+    }
+    const markedChannels = this.sessionStore?.markGracefulShutdownForActiveChannels();
+    if ((markedChannels?.length ?? 0) > 0) {
+      log.info('Wrote graceful shutdown markers', { channels: markedChannels });
+    }
     if (this.adminServer) await this.adminServer.stop();
     await this.stopChannels();
-    this.db.close();
+    this.db?.close();
     log.info('Stopped');
   }
 }

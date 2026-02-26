@@ -116,6 +116,68 @@ describe('SessionStore', () => {
     expect(summaries[0].coveredUpTo).toBe(5);
   });
 
+  it('writes graceful shutdown markers for active sessions', () => {
+    store.append({
+      channelId: 'ch1',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+    });
+    store.append({
+      channelId: 'ch2',
+      role: 'assistant',
+      content: 'world',
+      timestamp: 2_000,
+    });
+
+    const marked = store.markGracefulShutdownForActiveChannels(3_000).sort();
+    expect(marked).toEqual(['ch1', 'ch2']);
+    expect(store.markGracefulShutdownForActiveChannels(4_000)).toEqual([]);
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getUncleanShutdownChannels()).toEqual([]);
+  });
+
+  it('detects unclean shutdown and reports un-extracted recovery entries', () => {
+    const channelId = 'api:recover-extraction';
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'Message 1',
+      timestamp: 1_000,
+    });
+    store.insertExtractionMarker(channelId, 1, 1_500);
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'Message 2',
+      timestamp: 2_000,
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'Message 3',
+      timestamp: 3_000,
+    });
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getUncleanShutdownChannels()).toContain(channelId);
+
+    const candidates = reloaded.getCrashRecoveryExtractionCandidates();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].channelId).toBe(channelId);
+    expect(candidates[0].lastExtractionCoveredUpTo).toBe(1);
+    expect(candidates[0].unextractedEntries.map(entry => entry.content)).toEqual([
+      'Message 2',
+      'Message 3',
+    ]);
+
+    reloaded.markGracefulShutdownForActiveChannels(3_500);
+    const cleanReload = new SessionStore(dir);
+    expect(cleanReload.getUncleanShutdownChannels()).toEqual([]);
+    expect(cleanReload.getCrashRecoveryExtractionCandidates()).toEqual([]);
+  });
+
   it('persists data across store instances', () => {
     store.append({
       channelId: 'ch1',

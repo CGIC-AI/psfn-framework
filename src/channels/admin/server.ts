@@ -3,13 +3,16 @@
 // Uses htmx for interactivity — server returns HTML fragments.
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { Socket } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { WebSocketServer, type WebSocket } from 'ws';
 import type { Lifecycle } from '../../types.js';
 import type { AdminServerConfig } from './types.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { EventBus, EventName, EventMap } from '../../event-bus.js';
 import { AdminHandlers } from './handlers.js';
 import { buildAdminApiRoutes } from './api-routes.js';
 import { createComponentLogger } from '../../logger.js';
@@ -80,6 +83,7 @@ export class AdminServer implements Lifecycle {
   private host: string;
   private token?: string;
   private allowInsecureWithoutToken: boolean;
+  private eventBus: EventBus;
   private handlers: AdminHandlers;
   private dashboardService: AdminDashboardDataService;
   private memoryService: AdminMemoryDataService;
@@ -88,6 +92,7 @@ export class AdminServer implements Lifecycle {
   private settingsService: AdminSettingsDataService;
   private identityService: AdminIdentityDataService;
   private promptsService: AdminPromptsDataService;
+  private telemetryWebSocketServer = new WebSocketServer({ noServer: true });
   private staticFiles = new Map<string, { content: Buffer; contentType: string }>();
   private routes: AdminRoute[];
 
@@ -101,6 +106,7 @@ export class AdminServer implements Lifecycle {
     this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
     this.allowInsecureWithoutToken = config.allowInsecureWithoutToken ?? false;
+    this.eventBus = config.eventBus;
     this.handlers = new AdminHandlers({
       memoryStore: config.memoryStore,
       sessionStore: config.sessionStore,
@@ -160,6 +166,7 @@ export class AdminServer implements Lifecycle {
     });
     this.routes = this.buildRoutes();
     this.server = createServer((req, res) => this.handleRequest(req, res));
+    this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
 
   async init(): Promise<void> {
@@ -228,9 +235,11 @@ export class AdminServer implements Lifecycle {
     return new Promise((resolve, reject) => {
       // Force-close any open connections (SSE streams, etc.)
       this.server.closeAllConnections();
-      this.server.close((err) => {
-        if (err) reject(err);
-        else resolve();
+      this.telemetryWebSocketServer.close(() => {
+        this.server.close((err) => {
+          if (err) reject(err);
+          else resolve();
+        });
       });
     });
   }
@@ -269,6 +278,72 @@ export class AdminServer implements Lifecycle {
       return;
     }
     this.send404(res, path);
+  }
+
+  private handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    if (url.pathname !== '/api/admin/events') {
+      socket.write('HTTP/1.1 404 Not Found\\r\\n\\r\\n');
+      socket.destroy();
+      return;
+    }
+
+    if (!this.checkUpgradeAuth(req, url)) {
+      socket.write('HTTP/1.1 401 Unauthorized\\r\\n\\r\\n');
+      socket.destroy();
+      return;
+    }
+
+    this.telemetryWebSocketServer.handleUpgrade(req, socket, head, (ws) => {
+      this.attachTelemetryWebSocket(ws);
+    });
+  }
+
+  private checkUpgradeAuth(req: IncomingMessage, url: URL): boolean {
+    if (!this.token) return true;
+    if (hasBearerToken(req, this.token)) return true;
+    if (hasCookieValue(req, 'psfn_token', this.token)) return true;
+    const queryToken = url.searchParams.get('token') ?? url.searchParams.get('api_key');
+    return queryToken === this.token;
+  }
+
+  private attachTelemetryWebSocket(ws: WebSocket): void {
+    const telemetryEvents: EventName[] = [
+      'agent.turn.usage',
+      'agent.think.trace',
+      'agent.tool.start',
+      'agent.tool.end',
+      'memory.extraction.end',
+      'message.sent',
+      'broadcast.approval.required',
+      'broadcast.provenance',
+      'external.telemetry.ingested',
+      'wyoming.session.start',
+      'wyoming.session.end',
+      'wyoming.policy.violation',
+    ];
+
+    const unsubscribers: Array<() => void> = [];
+    for (const eventName of telemetryEvents) {
+      const unsub = this.eventBus.on(eventName, (data: EventMap[typeof eventName]) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({
+          type: eventName,
+          timestamp: Date.now(),
+          data,
+        }));
+      });
+      unsubscribers.push(unsub);
+    }
+
+    const cleanup = (): void => {
+      for (const unsub of unsubscribers) {
+        unsub();
+      }
+    };
+
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
   }
 
   private buildRoutes(): AdminRoute[] {

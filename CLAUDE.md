@@ -1,6 +1,6 @@
 # CLAUDE.md — Purrsephone Substrate Framework
 
-**Note**: This project uses [bd (beads)] for issue tracking; favor `bd` commands over markdown TODOs. See `AGENTS.md` for workflow details.
+**Note**: This project uses [bd (beads)](https://github.com/steveyegge/beads) for issue tracking; favor `bd` commands over markdown TODOs. See `AGENTS.md` for workflow details.
 
 ## What This Is
 
@@ -62,6 +62,15 @@ npm run agent:docker     # Start agent in --network=none container
 - `.env.example` is the canonical runtime env reference.
 - `src/types.ts` is the canonical parser/defaults source for runtime config.
 - When docs and code disagree, prefer `src/types.ts` and entrypoint wiring (`src/runtime.ts`, `src/agent-main.ts`, `src/gateway-main.ts`).
+
+## Voice Runtime Snapshot
+
+- Streaming TTS is provider-pluggable: `elevenlabs` and `echo` (`src/voice/connectors/tts/`).
+- `TTS_PROVIDER`/`VOICE_TTS_PROVIDER` defaults to `elevenlabs` (see `loadConfig()` in `src/types.ts`).
+- API voice websocket runtime (`src/channels/api/voice-websocket-runtime.ts`) defaults Echo config to:
+  - URL: `http://220.158.196.150:8001`
+  - Voice: `11labs-Allison`
+  - Preset: `Independent-High-Speaker-CFG`
 
 ## E2E Testing (Gateway + Agent)
 
@@ -162,7 +171,9 @@ Port from ElizaOS plugin-purrsephone (`/home/user/ai/eliza/packages/plugin-purrs
 ## Purrsephone Identity
 
 - Character card (V2 spec): `/path/to/your/character.json`
-- Voice: ElevenLabs voice ID `YOUR_VOICE_ID` (PSFN V2(B))
+- Voice: Provider-pluggable streaming TTS (`elevenlabs` or `echo`)
+- ElevenLabs voice ID (current PSFN V2(B) identity): `YOUR_VOICE_ID`
+- Echo defaults (API voice websocket runtime): `http://220.158.196.150:8001`, `11labs-Allison`, `Independent-High-Speaker-CFG`
 - Discord bot: ID YOUR_DISCORD_BOT_ID
 - Voxta history: 8,160 messages across 316 chats (importable as L0 archive)
 - Memory books: 10 entries from Voxta (importable as L2 semantic memories)
@@ -202,7 +213,7 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 
 ## Current State
 
-- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **git self-modification tools**, **layered prompt stack**, **heartbeat reflections**, **RLM evidence tracking**, **reasoning support (thinkingFormat)**, **runtime context injection**, **lazy tool loading**
+- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **provider-pluggable streaming TTS (elevenlabs + echo)**, **git self-modification tools**, **layered prompt stack**, **heartbeat reflections**, **RLM evidence tracking**, **reasoning support (thinkingFormat)**, **runtime context injection**, **lazy tool loading**
 - **Verification cadence**: use `npm test`, `npm run build`, and `npm run e2e` for current status instead of relying on static counts in docs.
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. Auto-compaction in `SessionManager.buildContext()` when context exceeds `compactionThresholdPct`. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`

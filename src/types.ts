@@ -162,6 +162,7 @@ export interface SubstrateConfig {
   memoryBudgetPct: number;
   extractionThresholdPct: number;
   compactionThresholdPct: number;
+  compactionEmotionalSalienceThresholdPct?: number;
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
@@ -314,6 +315,12 @@ export function loadConfig(): SubstrateConfig {
     memoryBudgetPct: parseInt(process.env.MEMORY_BUDGET_PCT ?? '20', 10),
     extractionThresholdPct: parseInt(process.env.EXTRACTION_THRESHOLD_PCT ?? '30', 10),
     compactionThresholdPct: parseInt(process.env.COMPACTION_THRESHOLD_PCT ?? '70', 10),
+    compactionEmotionalSalienceThresholdPct: parseBoundedIntegerEnv(
+      process.env.COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT,
+      75,
+      0,
+      100,
+    ),
     memoryExtractionMinImportance,
     memoryExtractionMinConfidence,
     memoryExtractionMinNovelty,

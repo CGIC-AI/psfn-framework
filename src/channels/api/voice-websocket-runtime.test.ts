@@ -1,0 +1,160 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentLoop } from '../../agent-loop.js';
+import type { EventBus } from '../../event-bus.js';
+import type { SubstrateConfig } from '../../types.js';
+import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
+import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
+
+const {
+  createStreamingSttConnectorMock,
+  createStreamingTtsConnectorMock,
+} = vi.hoisted(() => ({
+  createStreamingSttConnectorMock: vi.fn(),
+  createStreamingTtsConnectorMock: vi.fn(),
+}));
+
+vi.mock('../../voice/connectors/stt/index.js', () => ({
+  createStreamingSttConnector: createStreamingSttConnectorMock,
+}));
+
+vi.mock('../../voice/connectors/tts/index.js', () => ({
+  createStreamingTtsConnector: createStreamingTtsConnectorMock,
+}));
+
+import { createApiVoiceWebSocketRuntime } from './voice-websocket-runtime.js';
+
+const DEFAULT_ECHO_TTS_URL = 'http://220.158.196.150:8001';
+const DEFAULT_ECHO_TTS_VOICE = '11labs-Allison';
+const DEFAULT_ECHO_TTS_PRESET = 'Independent-High-Speaker-CFG';
+
+function createStubSttConnector(): StreamingSttConnector {
+  return {
+    id: 'deepgram-test',
+    startStream: vi.fn(async () => ({
+      transcripts: (async function* emptyTranscripts() {})(),
+      writeAudio: async () => {},
+      endInput: async () => {},
+      cancel: async () => {},
+    })),
+  };
+}
+
+function createStubTtsConnector(): StreamingTtsConnector {
+  return {
+    id: 'tts-test',
+    synthesizeStream: vi.fn(async () => ({
+      audio: (async function* emptyAudio() {})(),
+      cancel: async () => {},
+    })),
+    synthesizeBuffer: vi.fn(async () => Buffer.alloc(0)),
+  };
+}
+
+function createTestOptions(configOverrides: Partial<SubstrateConfig> = {}) {
+  const config = {
+    deepgramApiKey: 'deepgram-key',
+    deepgramModel: 'nova-3',
+    elevenLabsApiKey: 'elevenlabs-key',
+    elevenLabsVoiceId: 'voice-id',
+    elevenLabsModelId: 'eleven_turbo_v2_5',
+    ...configOverrides,
+  } as SubstrateConfig;
+
+  return {
+    agentLoop: {
+      handleMessage: vi.fn(),
+    } as unknown as AgentLoop,
+    eventBus: {
+      emit: vi.fn(async () => {}),
+    } as unknown as EventBus,
+    config,
+  };
+}
+
+describe('createApiVoiceWebSocketRuntime provider wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createStreamingSttConnectorMock.mockReturnValue(createStubSttConnector());
+    createStreamingTtsConnectorMock.mockReturnValue(createStubTtsConnector());
+  });
+
+  it('returns undefined when Deepgram credentials are missing', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      deepgramApiKey: '',
+    }));
+
+    expect(runtime).toBeUndefined();
+    expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
+    expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
+  });
+
+  it('returns undefined for elevenlabs provider when ElevenLabs credentials are missing', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      ttsProvider: 'elevenlabs',
+      elevenLabsApiKey: '',
+      elevenLabsVoiceId: '',
+    }));
+
+    expect(runtime).toBeUndefined();
+    expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
+    expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps existing behavior for elevenlabs when provider is unset', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      ttsProvider: undefined,
+      elevenLabsModelId: 'eleven_turbo_v2_5',
+    }));
+
+    expect(runtime).toBeDefined();
+    expect(createStreamingSttConnectorMock).toHaveBeenCalledWith('deepgram', {
+      apiKey: 'deepgram-key',
+      model: 'nova-3',
+    });
+    expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('elevenlabs', {
+      apiKey: 'elevenlabs-key',
+      voiceId: 'voice-id',
+      modelId: 'eleven_turbo_v2_5',
+    });
+  });
+
+  it('allows echo provider to start without explicit Echo overrides', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      ttsProvider: 'echo',
+      elevenLabsApiKey: '',
+      elevenLabsVoiceId: '',
+      echoTtsUrl: undefined,
+      echoTtsVoice: undefined,
+      echoTtsPreset: undefined,
+      echoTtsModel: undefined,
+    }));
+
+    expect(runtime).toBeDefined();
+    expect(createStreamingTtsConnectorMock).toHaveBeenCalledTimes(1);
+    expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('echo', {
+      url: DEFAULT_ECHO_TTS_URL,
+      voice: DEFAULT_ECHO_TTS_VOICE,
+      preset: DEFAULT_ECHO_TTS_PRESET,
+    });
+  });
+
+  it('passes explicit echo provider overrides through to connector config', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      ttsProvider: 'echo',
+      elevenLabsApiKey: '',
+      elevenLabsVoiceId: '',
+      echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
+      echoTtsVoice: 'echo-voice-1',
+      echoTtsPreset: 'normal',
+      echoTtsModel: 'echo-v1',
+    }));
+
+    expect(runtime).toBeDefined();
+    expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('echo', {
+      url: 'http://127.0.0.1:5050/v1/audio/speech',
+      voice: 'echo-voice-1',
+      preset: 'normal',
+      model: 'echo-v1',
+    });
+  });
+});

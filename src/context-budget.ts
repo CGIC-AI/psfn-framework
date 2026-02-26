@@ -25,6 +25,8 @@ export interface ResolvedContextBudget {
 
 export const SESSION_HISTORY_BUDGET_PCT_DEFAULT = 6;
 export const MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT = 2;
+export const SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT = 4_000;
+export const MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT = 1_000;
 
 export const SESSION_HISTORY_BUDGET_PCT_RANGE: PercentageRange = { min: 1, max: 80 };
 export const MEMORY_RETRIEVAL_BUDGET_PCT_RANGE: PercentageRange = { min: 1, max: 50 };
@@ -53,6 +55,15 @@ function resolvePct(value: number | undefined, fallback: number, range: Percenta
   const normalized = toPositiveInteger(value);
   if (normalized === undefined) return fallback;
   return clamp(normalized, range.min, range.max);
+}
+
+function resolveTokenFloor(
+  value: number | undefined,
+  fallback: number,
+  contextWindow: number,
+): number {
+  const normalized = toPositiveInteger(value) ?? fallback;
+  return clamp(normalized, 1, contextWindow);
 }
 
 function estimateCountFromBudget(
@@ -95,7 +106,12 @@ export function resolveSessionHistoryBudget(config: ContextBudgetConfigLike): Re
   const hardLimit = toPositiveInteger(config.sessionMessageLimit);
   const contextWindow = resolveChatContextWindow(config);
   const budgetPct = resolveSessionHistoryBudgetPct(config);
-  const tokenBudget = Math.max(1, Math.floor(contextWindow * (budgetPct / 100)));
+  const minTokenFloor = resolveTokenFloor(
+    config.modelRoster.chat?.contextBudget?.sessionHistoryMinTokens,
+    SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT,
+    contextWindow,
+  );
+  const tokenBudget = Math.max(minTokenFloor, Math.floor(contextWindow * (budgetPct / 100)));
   const estimatedCount = hardLimit ?? estimateCountFromBudget(
     tokenBudget,
     SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE,
@@ -117,7 +133,12 @@ export function resolveMemoryRetrievalBudget(config: ContextBudgetConfigLike): R
   const hardLimit = toPositiveInteger(config.memoryRetrievalLimit);
   const contextWindow = resolveChatContextWindow(config);
   const budgetPct = resolveMemoryRetrievalBudgetPct(config);
-  const tokenBudget = Math.max(1, Math.floor(contextWindow * (budgetPct / 100)));
+  const minTokenFloor = resolveTokenFloor(
+    config.modelRoster.chat?.contextBudget?.memoryRetrievalMinTokens,
+    MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT,
+    contextWindow,
+  );
+  const tokenBudget = Math.max(minTokenFloor, Math.floor(contextWindow * (budgetPct / 100)));
   const estimatedCount = hardLimit ?? estimateCountFromBudget(
     tokenBudget,
     MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM,

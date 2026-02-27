@@ -23,6 +23,13 @@ import { WyomingTcpServer } from './channels/wyoming/server.js';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
 import { createWyomingServiceRegistry } from './channels/wyoming/services/index.js';
 import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/handle.js';
+import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
+import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
+import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
+import {
+  createStreamingTtsConnector,
+  type StreamingTtsProvider,
+} from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import { GitOps } from './git/ops.js';
@@ -300,7 +307,47 @@ async function main(): Promise<void> {
       },
       eventBus,
     });
-    const serviceRegistry = createWyomingServiceRegistry([handleAdapter]);
+
+    const wyomingAdapters = [handleAdapter];
+
+    // ASR adapter — wired to Deepgram STT when API key is available
+    const wyomingDeepgramKey = config.deepgramApiKey;
+    if (wyomingDeepgramKey) {
+      const sttConnector = createStreamingSttConnector('deepgram', {
+        apiKey: wyomingDeepgramKey,
+        model: config.deepgramModel,
+      });
+      wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
+      log.info('Wyoming ASR adapter enabled (deepgram)');
+    }
+
+    // TTS adapter — wired to the configured TTS provider (elevenlabs or echo)
+    const wyomingTtsProvider: StreamingTtsProvider = config.ttsProvider ?? 'elevenlabs';
+    try {
+      let ttsConnector;
+      if (wyomingTtsProvider === 'echo' && config.echoTtsUrl && config.echoTtsVoice) {
+        ttsConnector = createStreamingTtsConnector('echo', {
+          url: config.echoTtsUrl,
+          voice: config.echoTtsVoice,
+          preset: config.echoTtsPreset ?? 'normal',
+          ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
+        });
+      } else if (config.elevenLabsApiKey) {
+        ttsConnector = createStreamingTtsConnector('elevenlabs', {
+          apiKey: config.elevenLabsApiKey,
+          voiceId: config.elevenLabsVoiceId ?? 'YOUR_VOICE_ID',
+          modelId: config.elevenLabsModelId,
+        });
+      }
+      if (ttsConnector) {
+        wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: ttsConnector }));
+        log.info('Wyoming TTS adapter enabled', { provider: wyomingTtsProvider });
+      }
+    } catch (error) {
+      log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+    }
+
+    const serviceRegistry = createWyomingServiceRegistry(wyomingAdapters);
 
     wyomingTcpServer = new WyomingTcpServer(
       { port: wyomingPort, host: wyomingHost, eventBus },

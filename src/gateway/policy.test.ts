@@ -95,6 +95,60 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('keeps strict default lane unchanged even when local crawler lane is enabled', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          hostAllowlist: ['localhost'],
+        },
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'web.fetch', params: { url: 'https://localhost/admin', lane: 'default' } },
+      configWithUrlPolicy,
+    )).toBe('DENY');
+  });
+
+  it('allows web.fetch local_crawler lane for explicitly allowlisted host', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          hostAllowlist: ['localhost'],
+          allowHttp: true,
+        },
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'web.fetch', params: { url: 'http://localhost:8080/fetch', lane: 'local_crawler' } },
+      configWithUrlPolicy,
+    )).toBe('ALLOW');
+  });
+
+  it('denies shell.exec when shell policy is disabled', () => {
+    expect(evaluatePolicy(
+      { method: 'shell.exec', params: { command: 'node', args: ['-v'] } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows shell.exec when shell policy is enabled', () => {
+    const configWithShell: PolicyConfig = {
+      ...policyConfig,
+      shellExec: {
+        enabled: true,
+        allowlist: ['node'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'shell.exec', params: { command: 'node', args: ['-v'] } },
+      configWithShell,
+    )).toBe('ALLOW');
+  });
+
   // ── Filesystem: workspace paths ──
 
   it('allows fs.read inside workspace', () => {

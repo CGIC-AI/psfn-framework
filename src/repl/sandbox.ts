@@ -18,6 +18,7 @@ import {
   createModuleCapabilities,
   createRepoCapabilities,
   createSchedulerCapabilities,
+  createShellCapabilities,
   createToolchainCapabilities,
   createWebCapabilities,
 } from './sandbox-capabilities/index.js';
@@ -114,6 +115,16 @@ export class REPLSandbox {
       budgetRef: this.budgetRef,
     });
 
+    const shell = createShellCapabilities({
+      gatewayCaps,
+      budgetRef: this.budgetRef,
+    });
+
+    const capabilityTier = this.deps.getCapabilityTier?.();
+    const allowShellExec = capabilityTier === undefined
+      || capabilityTier === 'autonomous'
+      || capabilityTier === 'custom';
+
     const contextValues: Record<string, unknown> = {
       // Injected functions
       print,
@@ -152,6 +163,7 @@ export class REPLSandbox {
       web_fetch: web.web_fetch,
       crawler_fetch: web.crawler_fetch,
       web_research: web.web_research,
+      ...(allowShellExec ? { shell_exec: shell.shell_exec } : {}),
 
       // Text analysis helpers
       search: helpers.search,

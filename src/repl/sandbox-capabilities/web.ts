@@ -36,7 +36,7 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
     }
 
     try {
-      const content = await options.gatewayCaps.webFetch(trimmed, prompt);
+      const content = await options.gatewayCaps.webFetch(trimmed, prompt, 'default');
       addEvidence(options.pushEvidence, {
         source: 'web_fetch',
         query: trimmed,
@@ -48,7 +48,32 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
     }
   };
 
-  const crawler_fetch = web_fetch;
+  const crawler_fetch = async (url: string, prompt?: string): Promise<string> => {
+    if (!consumeToolCallBudget(options.budgetRef)) {
+      return `[Crawler fetch error: ${TOOL_CALL_BUDGET_EXCEEDED_MESSAGE}]`;
+    }
+
+    if (typeof options.gatewayCaps.webFetch !== 'function') {
+      return '[Crawler fetch unavailable: requires gateway web.fetch policy and audit path]';
+    }
+
+    const trimmed = typeof url === 'string' ? url.trim() : '';
+    if (!trimmed) {
+      return '[Crawler fetch error: URL is required]';
+    }
+
+    try {
+      const content = await options.gatewayCaps.webFetch(trimmed, prompt, 'local_crawler');
+      addEvidence(options.pushEvidence, {
+        source: 'web_fetch',
+        query: trimmed,
+        snippet: content,
+      });
+      return content;
+    } catch (err) {
+      return `[Crawler fetch error: ${normalizeErrorMessage(err)}]`;
+    }
+  };
 
   const web_research = async (
     query: string,

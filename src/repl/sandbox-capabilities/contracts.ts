@@ -29,10 +29,26 @@ export interface GitCommitView {
   filesChanged: number;
 }
 
+export interface ShellExecView {
+  command: string;
+  args: string[];
+  cwd: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  truncated: boolean;
+  durationMs: number;
+}
+
 export type { ModuleRecord } from '../../modules/types.js';
 
 export type GatewayREPLCapabilities = {
-  webFetch?: (url: string, prompt?: string) => Promise<string>;
+  webFetch?: (
+    url: string,
+    prompt?: string,
+    lane?: 'default' | 'local_crawler',
+  ) => Promise<string>;
   gitStatus?: () => Promise<GitStatusView>;
   gitDiff?: (opts?: { staged?: boolean }) => Promise<GitDiffView>;
   gitApplyPatch?: (filePath: string, content: string) => Promise<void>;
@@ -40,6 +56,11 @@ export type GatewayREPLCapabilities = {
   fsRead?: (path: string) => Promise<string>;
   fsWrite?: (path: string, content: string) => Promise<void>;
   fsList?: (glob?: string, maxEntries?: number) => Promise<string[]>;
+  shellExec?: (
+    command: string,
+    args?: string[],
+    options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number },
+  ) => Promise<ShellExecView>;
 };
 
 export interface ScheduleView {

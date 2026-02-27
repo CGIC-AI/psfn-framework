@@ -1,9 +1,15 @@
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { readFileSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
+import { rootCertificates } from 'node:tls';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { sanitizeWebContent } from '../sanitize.js';
 import {
   evaluateUrlPolicy,
   checkResolvedIP,
   type UrlPolicyConfig,
+  type UrlPolicyLane,
 } from '../url-policy.js';
 import { GatewayErrors, type WebFetchParams } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
@@ -15,6 +21,17 @@ import {
 import { registerGatedDescriptors } from './register.js';
 
 const log = createComponentLogger('GatewayWeb');
+const tlsBundleCache = new Map<string, string>();
+
+interface ResponseLike {
+  status: number;
+  statusText: string;
+  ok: boolean;
+  headers: {
+    get(name: string): string | null;
+  };
+  text(): Promise<string>;
+}
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -67,43 +84,210 @@ function formatFetchProviderError(err: unknown): string {
   return `Fetch failed: ${details}`;
 }
 
+function toLane(value: unknown): UrlPolicyLane {
+  return value === 'local_crawler'
+    ? 'local_crawler'
+    : 'default';
+}
+
+function resolveUrlPolicyConfig(runtime: GatewayMethodRuntime): UrlPolicyConfig {
+  if (runtime.policyConfig.urlPolicy) {
+    return runtime.policyConfig.urlPolicy;
+  }
+
+  // Backward-compatible env fallback for direct gateway method registration in tests.
+  const fallback: UrlPolicyConfig = {
+    allowHttp: process.env.ALLOW_HTTP_FETCH === 'true',
+    domainAllowlist: process.env.FETCH_DOMAIN_ALLOWLIST
+      ? process.env.FETCH_DOMAIN_ALLOWLIST.split(',').map(d => d.trim()).filter(Boolean)
+      : undefined,
+  };
+  runtime.policyConfig.urlPolicy = fallback;
+  return fallback;
+}
+
+function parseCsvEnv(value: string | undefined): string[] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const parsed = [...new Set(
+    value
+      .split(',')
+      .map(entry => entry.trim())
+      .filter(Boolean),
+  )];
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+function resolveTlsCertPaths(runtime: GatewayMethodRuntime): string[] {
+  const configured = runtime.policyConfig.webFetchTlsCaCertPaths;
+  if (configured && configured.length > 0) {
+    return configured;
+  }
+
+  return parseCsvEnv(process.env.FETCH_TLS_CA_CERT_PATHS) ?? [];
+}
+
+function loadTlsBundle(paths: readonly string[]): string | undefined {
+  if (paths.length === 0) return undefined;
+
+  const normalized = paths
+    .map(path => path.trim())
+    .filter(Boolean)
+    .map(path => isAbsolute(path) ? path : resolve(process.cwd(), path));
+  if (normalized.length === 0) return undefined;
+
+  const cacheKey = normalized.join('|');
+  const cached = tlsBundleCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const certParts = normalized.map(path => readFileSync(path, 'utf8'));
+  const bundle = certParts.join('\n');
+  tlsBundleCache.set(cacheKey, bundle);
+  return bundle;
+}
+
+async function requestText(
+  url: string,
+  options: { tlsCaBundle?: string },
+): Promise<ResponseLike> {
+  const parsed = new URL(url);
+  const isHttps = parsed.protocol === 'https:';
+  const requestImpl = isHttps ? httpsRequest : httpRequest;
+
+  return await new Promise<ResponseLike>((resolveResponse, rejectResponse) => {
+    const req = requestImpl(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port ? Number.parseInt(parsed.port, 10) : undefined,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: 'GET',
+        headers: {
+          'User-Agent': WEB_FETCH_USER_AGENT,
+        },
+        ...(isHttps && options.tlsCaBundle ? {
+          ca: [...rootCertificates, options.tlsCaBundle],
+        } : {}),
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer | string) => {
+          if (typeof chunk === 'string') {
+            chunks.push(Buffer.from(chunk));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('error', rejectResponse);
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          const status = res.statusCode ?? 0;
+          const headers = new Map<string, string>();
+          for (const [name, value] of Object.entries(res.headers)) {
+            if (Array.isArray(value)) {
+              headers.set(name.toLowerCase(), value.join(', '));
+            } else if (typeof value === 'string') {
+              headers.set(name.toLowerCase(), value);
+            }
+          }
+
+          resolveResponse({
+            status,
+            statusText: res.statusMessage ?? '',
+            ok: status >= 200 && status < 300,
+            headers: {
+              get(name: string): string | null {
+                return headers.get(name.toLowerCase()) ?? null;
+              },
+            },
+            async text() {
+              return body;
+            },
+          });
+        });
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      const timeoutError = new Error(`Request timed out after ${WEB_FETCH_TIMEOUT_MS}ms`);
+      (timeoutError as { code?: string }).code = 'ETIMEDOUT';
+      req.destroy(timeoutError);
+    }, WEB_FETCH_TIMEOUT_MS);
+
+    req.on('error', (err) => {
+      clearTimeout(timeout);
+      rejectResponse(err);
+    });
+    req.on('close', () => {
+      clearTimeout(timeout);
+    });
+    req.end();
+  });
+}
+
+async function fetchWithPolicyChecks(
+  url: string,
+  lane: UrlPolicyLane,
+  urlPolicyConfig: UrlPolicyConfig,
+  tlsCaBundle: string | undefined,
+): Promise<ResponseLike> {
+  const urlCheck = evaluateUrlPolicy(url, urlPolicyConfig, lane);
+  if (!urlCheck.allowed) {
+    log.warn(`URL policy blocked fetch: ${urlCheck.reason} (${url})`);
+    throw new JSONRPCErrorException(
+      `URL blocked: ${urlCheck.reason}`,
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+
+  const parsed = new URL(url);
+  const dnsCheck = await checkResolvedIP(parsed.hostname, undefined, {
+    allowPrivateResolvedIp: lane === 'local_crawler',
+  });
+  if (!dnsCheck.allowed) {
+    log.warn(`DNS resolution blocked fetch: ${dnsCheck.reason} (${url})`);
+    throw new JSONRPCErrorException(
+      `URL blocked: ${dnsCheck.reason}`,
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+
+  try {
+    return await requestText(url, {
+      tlsCaBundle,
+    });
+  } catch (err) {
+    throw new JSONRPCErrorException(
+      formatFetchProviderError(err),
+      GatewayErrors.PROVIDER_ERROR,
+    );
+  }
+}
+
 const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'web.fetch',
     handler: async (params: WebFetchParams, runtime) => {
-      const urlPolicyConfig = runtime.policyConfig.urlPolicy ?? {};
-      const urlCheck = evaluateUrlPolicy(params.url, urlPolicyConfig);
-      if (!urlCheck.allowed) {
-        log.warn(`URL policy blocked fetch: ${urlCheck.reason} (${params.url})`);
-        throw new JSONRPCErrorException(
-          `URL blocked: ${urlCheck.reason}`,
-          GatewayErrors.POLICY_DENIED,
-        );
-      }
+      const lane = toLane(params.lane);
+      const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
 
-      const parsed = new URL(params.url);
-      const dnsCheck = await checkResolvedIP(parsed.hostname);
-      if (!dnsCheck.allowed) {
-        log.warn(`DNS resolution blocked fetch: ${dnsCheck.reason} (${params.url})`);
-        throw new JSONRPCErrorException(
-          `URL blocked: ${dnsCheck.reason}`,
-          GatewayErrors.POLICY_DENIED,
-        );
-      }
-
-      let response: Response;
+      let tlsCaBundle: string | undefined;
       try {
-        response = await fetch(params.url, {
-          headers: { 'User-Agent': WEB_FETCH_USER_AGENT },
-          signal: AbortSignal.timeout(WEB_FETCH_TIMEOUT_MS),
-          redirect: 'manual',
-        });
+        tlsCaBundle = loadTlsBundle(resolveTlsCertPaths(runtime));
       } catch (err) {
         throw new JSONRPCErrorException(
-          formatFetchProviderError(err),
+          `Fetch TLS setup failed: ${formatFetchFailureDetails(err)}`,
           GatewayErrors.PROVIDER_ERROR,
         );
       }
+
+      const response = await fetchWithPolicyChecks(
+        params.url,
+        lane,
+        urlPolicyConfig,
+        tlsCaBundle,
+      );
 
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location');
@@ -112,31 +296,12 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         }
 
         const redirectUrl = new URL(location, params.url).href;
-        const redirectCheck = evaluateUrlPolicy(redirectUrl, urlPolicyConfig);
-        if (!redirectCheck.allowed) {
-          log.warn(`Redirect URL blocked: ${redirectCheck.reason} (${redirectUrl})`);
-          throw new JSONRPCErrorException(`Redirect blocked: ${redirectCheck.reason}`, GatewayErrors.POLICY_DENIED);
-        }
-        const redirectParsed = new URL(redirectUrl);
-        const redirectDns = await checkResolvedIP(redirectParsed.hostname);
-        if (!redirectDns.allowed) {
-          log.warn(`Redirect DNS blocked: ${redirectDns.reason} (${redirectUrl})`);
-          throw new JSONRPCErrorException(`Redirect blocked: ${redirectDns.reason}`, GatewayErrors.POLICY_DENIED);
-        }
-
-        let redirectResponse: Response;
-        try {
-          redirectResponse = await fetch(redirectUrl, {
-            headers: { 'User-Agent': WEB_FETCH_USER_AGENT },
-            signal: AbortSignal.timeout(WEB_FETCH_TIMEOUT_MS),
-            redirect: 'error',
-          });
-        } catch (err) {
-          throw new JSONRPCErrorException(
-            formatFetchProviderError(err),
-            GatewayErrors.PROVIDER_ERROR,
-          );
-        }
+        const redirectResponse = await fetchWithPolicyChecks(
+          redirectUrl,
+          lane,
+          urlPolicyConfig,
+          tlsCaBundle,
+        );
         if (!redirectResponse.ok) {
           throw new JSONRPCErrorException(
             `Fetch failed after redirect: ${redirectResponse.status} ${redirectResponse.statusText}`,
@@ -165,20 +330,12 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       }
       return { content: result.content, sanitized: result.sanitized };
     },
-    summary: (p: WebFetchParams) => ({ url: p.url }),
+    summary: (p: WebFetchParams) => ({ url: p.url, lane: toLane(p.lane) }),
     approvalAction: 'fetch',
-    approvalScope: (p: WebFetchParams) => p.url,
+    approvalScope: (p: WebFetchParams) => `${toLane(p.lane)}:${p.url}`,
   },
 ];
 
 export function registerWebMethods(runtime: GatewayMethodRuntime): void {
-  const urlPolicyConfig: UrlPolicyConfig = {
-    allowHttp: process.env.ALLOW_HTTP_FETCH === 'true',
-    domainAllowlist: process.env.FETCH_DOMAIN_ALLOWLIST
-      ? process.env.FETCH_DOMAIN_ALLOWLIST.split(',').map(d => d.trim()).filter(Boolean)
-      : undefined,
-  };
-  runtime.policyConfig.urlPolicy = urlPolicyConfig;
-
   registerGatedDescriptors(runtime, webDescriptors);
 }

@@ -272,6 +272,13 @@ export interface SubstrateConfig {
   importProcessingStrictPolicy?: boolean;
   importProcessingLocalEndpointUrl?: string;
   importProcessingLocalModel?: string;
+  webFetchAllowHttp?: boolean;
+  webFetchDomainAllowlist?: string[];
+  webFetchLocalCrawlerEnabled?: boolean;
+  webFetchLocalCrawlerAllowHttp?: boolean;
+  webFetchLocalCrawlerHostAllowlist?: string[];
+  webFetchLocalCrawlerDomainAllowlist?: string[];
+  webFetchTlsCaCertPaths?: string[];
   wyomingShardRouting?: WyomingShardRoutingConfig;
 }
 
@@ -359,6 +366,13 @@ export function loadConfig(): SubstrateConfig {
   const importProcessingStrictPolicy = parseOptionalBooleanEnv(process.env.IMPORT_PROCESSING_STRICT_POLICY) ?? false;
   const importProcessingLocalEndpointUrl = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_ENDPOINT_URL);
   const importProcessingLocalModel = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_MODEL);
+  const webFetchAllowHttp = parseOptionalBooleanEnv(process.env.ALLOW_HTTP_FETCH) ?? false;
+  const webFetchDomainAllowlist = parseStringListEnv(process.env.FETCH_DOMAIN_ALLOWLIST);
+  const webFetchLocalCrawlerEnabled = parseOptionalBooleanEnv(process.env.FETCH_LOCAL_CRAWLER_ENABLED) ?? false;
+  const webFetchLocalCrawlerAllowHttp = parseOptionalBooleanEnv(process.env.FETCH_LOCAL_CRAWLER_ALLOW_HTTP) ?? false;
+  const webFetchLocalCrawlerHostAllowlist = parseStringListEnv(process.env.FETCH_LOCAL_CRAWLER_HOST_ALLOWLIST);
+  const webFetchLocalCrawlerDomainAllowlist = parseStringListEnv(process.env.FETCH_LOCAL_CRAWLER_DOMAIN_ALLOWLIST);
+  const webFetchTlsCaCertPaths = parseStringListEnv(process.env.FETCH_TLS_CA_CERT_PATHS);
   const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(process.env);
   const capabilityTier = parseCapabilityTierEnv(process.env.CAPABILITY_TIER, 'nursery');
   const shardToolsets = parseShardToolsetEnv(process.env);
@@ -474,6 +488,13 @@ export function loadConfig(): SubstrateConfig {
     importProcessingStrictPolicy,
     ...(importProcessingLocalEndpointUrl ? { importProcessingLocalEndpointUrl } : {}),
     ...(importProcessingLocalModel ? { importProcessingLocalModel } : {}),
+    webFetchAllowHttp,
+    ...(webFetchDomainAllowlist.length > 0 ? { webFetchDomainAllowlist } : {}),
+    webFetchLocalCrawlerEnabled,
+    webFetchLocalCrawlerAllowHttp,
+    ...(webFetchLocalCrawlerHostAllowlist.length > 0 ? { webFetchLocalCrawlerHostAllowlist } : {}),
+    ...(webFetchLocalCrawlerDomainAllowlist.length > 0 ? { webFetchLocalCrawlerDomainAllowlist } : {}),
+    ...(webFetchTlsCaCertPaths.length > 0 ? { webFetchTlsCaCertPaths } : {}),
     wyomingShardRouting,
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),

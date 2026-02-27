@@ -529,3 +529,23 @@ export interface TelemetryEvent {
   timestamp: number;
   data: unknown;
 }
+
+// Audit Trail (derived from telemetry events on the client)
+export type AuditActionType = 'tool_invocation' | 'identity_edit' | 'external_action' | 'memory_mutation';
+export type AuditDecision = 'allowed' | 'denied';
+export type AuditTimeRange = '15m' | '1h' | '24h' | '7d' | '30d' | 'all';
+
+export interface AuditEntry {
+  id: string;
+  timestamp: number;
+  actionType: AuditActionType;
+  decision: AuditDecision;
+  narrative: string;
+  details?: string;
+}
+
+export interface AuditFilters {
+  actionType: AuditActionType | 'all';
+  decision: AuditDecision | 'all';
+  timeRange: AuditTimeRange;
+}

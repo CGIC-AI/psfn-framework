@@ -1,7 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listPrompts, getPrompt, updatePrompt, togglePrompt, rollbackPrompt, diffPrompt } from '$lib/api/endpoints/prompts';
-  import type { PromptLayer, PromptRegistryEntry, AdminPromptDetailData } from '$lib/types';
+  import { listPrompts, getPromptDetail, updatePrompt, togglePrompt, rollbackPrompt, getPromptDiff } from '$lib/api/endpoints/prompts';
+  import type { PromptLayer, PromptRegistryEntry } from '$lib/types';
+
+  interface AdminPromptDetailData {
+    layer: Record<string, unknown>;
+    layerHistory: Array<{ version: number; timestamp: string; updatedBy: string; reason?: string }>;
+  }
+
+  async function fetchDetail(layerId: string): Promise<AdminPromptDetailData> {
+    const raw = await getPromptDetail(layerId);
+    return { layer: raw.layer as Record<string, unknown>, layerHistory: raw.history as AdminPromptDetailData['layerHistory'] };
+  }
 
   let layers = $state<PromptLayer[]>([]);
   let staticPrompts = $state<PromptRegistryEntry[]>([]);
@@ -78,7 +88,7 @@
     showDiff = false;
     saveMessage = '';
     try {
-      detailData = await getPrompt(layerId);
+      detailData = await fetchDetail(layerId);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load layer detail';
       selectedLayerId = null;
@@ -92,7 +102,7 @@
       await togglePrompt(layerId);
       await refreshList();
       if (selectedLayerId === layerId && detailData?.layer) {
-        detailData = await getPrompt(layerId);
+        detailData = await fetchDetail(layerId);
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to toggle layer';
@@ -111,7 +121,7 @@
     try {
       await updatePrompt(layerId, { content: editContent });
       await refreshList();
-      detailData = await getPrompt(layerId);
+      detailData = await fetchDetail(layerId);
       editingContent = false;
       saveMessage = 'Content saved successfully';
     } catch (e) {
@@ -125,9 +135,9 @@
     if (!confirm(`Roll back layer to version ${version}? This will replace current content.`)) return;
     rollingBack = true;
     try {
-      await rollbackPrompt(layerId, version);
+      await rollbackPrompt(layerId, { version });
       await refreshList();
-      detailData = await getPrompt(layerId);
+      detailData = await fetchDetail(layerId);
       saveMessage = `Rolled back to version ${version}`;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to rollback';
@@ -143,9 +153,10 @@
     }
     diffLoading = true;
     try {
-      const result = await diffPrompt(layerId);
-      diffOld = result.oldContent;
-      diffNew = result.newContent;
+      const result = await getPromptDiff(layerId);
+      // diff is returned as a single string; split by a delimiter or show as-is
+      diffOld = result.diff;
+      diffNew = '';
       showDiff = true;
     } catch (e) {
       error = e instanceof Error ? e.message : 'No previous version to diff';

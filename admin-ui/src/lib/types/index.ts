@@ -142,6 +142,10 @@ export interface Contact {
 
 export interface ContactProfileArtifact {
   memoryCount: number;
+  displayName?: string;
+  summary?: string;
+  updatedAt?: number;
+  sourceMemoryIds?: string[];
 }
 
 export interface ContactConversationChannelView {
@@ -154,8 +158,8 @@ export interface AdminContactListData {
   contacts: Contact[];
   profileMap: Record<string, ContactProfileArtifact>;
   relatedChannelMap: Record<string, ContactConversationChannelView[]>;
-  verifications: unknown[];
-  mutationAudits: unknown[];
+  verifications: ContactIdentityLinkVerification[];
+  mutationAudits: ContactMutationAuditEntry[];
   mutationAuditQuery: unknown;
 }
 
@@ -163,6 +167,32 @@ export interface ContactUpdateResult {
   ok: boolean;
   message: string;
   contact?: Contact;
+}
+
+export type TrustLevel = 'primary' | 'trusted' | 'regular' | 'public';
+
+export type RelationshipType = string;
+
+export interface ContactIdentityLinkVerification {
+  id: string;
+  status: string;
+  sourceChannel: string;
+  sourceUserId: string;
+  targetChannel: string;
+  targetUserId: string;
+  contactId: string;
+  nonce?: string;
+  expiresAt?: string;
+}
+
+export interface ContactMutationAuditEntry {
+  id: string;
+  contactId: string;
+  field: string;
+  actor: string;
+  oldValue?: string;
+  newValue?: string;
+  timestamp: string;
 }
 
 // Settings

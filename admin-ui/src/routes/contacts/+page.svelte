@@ -98,7 +98,7 @@
 
   function startTrustEdit(contact: Contact) {
     editingTrustId = contact.id;
-    editTrustValue = contact.trustLevel;
+    editTrustValue = contact.trustLevel as TrustLevel;
   }
 
   function cancelTrustEdit() {
@@ -457,7 +457,7 @@
                 {#each channels as ch}
                   <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono
                                bg-bark-100 dark:bg-shadow-800 text-shadow-500 dark:text-bark-400">
-                    {ch.channel}:{ch.channelId}
+                    {ch.channel}:{ch.userId}
                   </span>
                 {/each}
               </div>

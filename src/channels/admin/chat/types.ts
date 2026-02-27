@@ -23,6 +23,27 @@ export interface AdminChatBootstrapApiConfig {
   apiKey?: string;
 }
 
+export interface AdminChatRuntimeAssetConfig {
+  moduleUrl: string;
+  stylesheetUrl: string;
+}
+
+export interface AdminChatRuntimeModelConfig {
+  id: string;
+  name: string;
+  provider: string;
+  api: string;
+  baseUrl: string;
+  headers: Record<string, string>;
+}
+
+export interface AdminChatRuntimeConfig {
+  assets: AdminChatRuntimeAssetConfig;
+  transportHeaders: Record<string, string>;
+  model: AdminChatRuntimeModelConfig;
+  apiKey?: string;
+}
+
 export interface AdminChatPrivacyMetadata {
   availableLevels: ChannelPrivacyLevel[];
   selectedLevel: ChannelPrivacyLevel;
@@ -37,6 +58,7 @@ export interface AdminChatBootstrapResponse {
   selectedIdentity: AdminChatSelectedIdentity;
   privacy: AdminChatPrivacyMetadata;
   api: AdminChatBootstrapApiConfig;
+  runtime: AdminChatRuntimeConfig;
   defaultSessionId: string;
   defaultAuthorName: string;
   defaultAuthorId: string;

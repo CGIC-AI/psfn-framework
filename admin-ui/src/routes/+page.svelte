@@ -55,7 +55,7 @@
 <div class="space-y-6">
   <div>
     <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Trunk</h1>
-    <p class="text-shadow-400 text-sm mt-1">Dashboard overview</p>
+    <p class="text-shadow-600 text-sm mt-1">Dashboard overview</p>
   </div>
 
   {#if loading}
@@ -70,40 +70,40 @@
   {:else if error}
     <div class="card p-6 border-wilt-200">
       <p class="text-wilt-600 font-medium">Failed to load dashboard</p>
-      <p class="text-shadow-400 text-sm mt-1">{error}</p>
+      <p class="text-shadow-600 text-sm mt-1">{error}</p>
     </div>
   {:else if data}
     {@const stats = data.stats}
     <!-- Stat cards -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="card p-5">
-        <p class="text-xs text-shadow-400 uppercase tracking-wide font-medium">Memories</p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Memories</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.memoryTotal.toLocaleString()}</p>
-        <p class="text-xs text-shadow-400 mt-1">Avg salience: {(stats.avgSalience * 100).toFixed(0)}%</p>
+        <p class="text-sm text-shadow-600 mt-1">Avg salience: {(stats.avgSalience * 100).toFixed(0)}%</p>
       </div>
 
       <div class="card p-5">
-        <p class="text-xs text-shadow-400 uppercase tracking-wide font-medium">Sessions</p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Sessions</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.sessionCount}</p>
-        <p class="text-xs text-shadow-400 mt-1">{stats.sessionUsage.turns} turns total</p>
+        <p class="text-sm text-shadow-600 mt-1">{stats.sessionUsage.turns} turns total</p>
       </div>
 
       <div class="card p-5">
-        <p class="text-xs text-shadow-400 uppercase tracking-wide font-medium">Total Tokens</p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Total Tokens</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">
           {formatTokens(stats.sessionUsage.inputTokens + stats.sessionUsage.outputTokens)}
         </p>
-        <p class="text-xs text-shadow-400 mt-1">
+        <p class="text-sm text-shadow-600 mt-1">
           {formatTokens(stats.sessionUsage.inputTokens)} in / {formatTokens(stats.sessionUsage.outputTokens)} out
         </p>
       </div>
 
       <div class="card p-5">
-        <p class="text-xs text-shadow-400 uppercase tracking-wide font-medium">Estimated Cost</p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Estimated Cost</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">
           {formatCost(stats.sessionUsage.estimatedCostUsd)}
         </p>
-        <p class="text-xs text-shadow-400 mt-1">
+        <p class="text-sm text-shadow-600 mt-1">
           {stats.sessionUsage.llmCalls} LLM calls, {stats.sessionUsage.toolCalls} tool calls
         </p>
       </div>
@@ -126,7 +126,7 @@
                   style="width: {stats.memoryTotal > 0 ? ((count as number) / stats.memoryTotal * 100) : 0}%"
                 ></div>
               </div>
-              <span class="text-sm text-shadow-500 tabular-nums w-12 text-right">{count}</span>
+              <span class="text-sm text-shadow-700 tabular-nums w-12 text-right">{count}</span>
             </div>
           {/each}
         </div>
@@ -145,7 +145,7 @@
               <span class="text-lg">{item.icon}</span>
               <div>
                 <span class="text-sm font-medium text-shadow-700">{item.gardenName}</span>
-                <span class="text-xs text-shadow-400 ml-2">{item.technicalName}</span>
+                <span class="text-sm text-shadow-600 ml-2">{item.technicalName}</span>
               </div>
             </a>
           {/each}
@@ -161,21 +161,21 @@
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-bark-300">
-                <th class="text-left py-2 text-shadow-500 font-medium">Task</th>
-                <th class="text-right py-2 text-shadow-500 font-medium">Iterations</th>
-                <th class="text-right py-2 text-shadow-500 font-medium">Tokens</th>
-                <th class="text-right py-2 text-shadow-500 font-medium">Duration</th>
-                <th class="text-right py-2 text-shadow-500 font-medium">When</th>
+                <th class="text-left py-2 text-shadow-700 font-semibold">Task</th>
+                <th class="text-right py-2 text-shadow-700 font-semibold">Iterations</th>
+                <th class="text-right py-2 text-shadow-700 font-semibold">Tokens</th>
+                <th class="text-right py-2 text-shadow-700 font-semibold">Duration</th>
+                <th class="text-right py-2 text-shadow-700 font-semibold">When</th>
               </tr>
             </thead>
             <tbody>
               {#each stats.recentThinkTraces.slice(0, 10) as trace}
                 <tr class="border-b border-bark-200 hover:bg-bark-100 transition-colors">
                   <td class="py-2 text-shadow-700 max-w-xs truncate">{trace.task}</td>
-                  <td class="py-2 text-shadow-500 text-right tabular-nums">{trace.iterations}</td>
-                  <td class="py-2 text-shadow-500 text-right tabular-nums">{formatTokens(trace.totalTokens)}</td>
-                  <td class="py-2 text-shadow-500 text-right tabular-nums">{formatDuration(trace.durationMs)}</td>
-                  <td class="py-2 text-shadow-400 text-right text-xs">
+                  <td class="py-2 text-shadow-700 text-right tabular-nums">{trace.iterations}</td>
+                  <td class="py-2 text-shadow-700 text-right tabular-nums">{formatTokens(trace.totalTokens)}</td>
+                  <td class="py-2 text-shadow-700 text-right tabular-nums">{formatDuration(trace.durationMs)}</td>
+                  <td class="py-2 text-shadow-600 text-right text-sm">
                     {new Date(trace.timestamp).toLocaleString()}
                   </td>
                 </tr>
@@ -189,15 +189,15 @@
     <!-- Additional stats -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <div class="card p-5">
-        <p class="text-xs text-shadow-400 uppercase tracking-wide font-medium">Scheduler Tasks</p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Scheduler Tasks</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.schedulerTasks}</p>
       </div>
       <div class="card p-5">
-        <p class="text-xs text-shadow-400 uppercase tracking-wide font-medium">Active Shards</p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Active Shards</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.activeShards}</p>
       </div>
       <div class="card p-5">
-        <p class="text-xs text-shadow-400 uppercase tracking-wide font-medium">Context Utilization</p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Context Utilization</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">
           {(stats.sessionUsage.avgContextUtilization * 100).toFixed(0)}%
         </p>

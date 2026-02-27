@@ -115,7 +115,7 @@
 <div class="space-y-6">
   <div>
     <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Roots</h1>
-    <p class="text-shadow-400 text-sm mt-1">Memory Browser</p>
+    <p class="text-shadow-600 text-sm mt-1">Memory Browser</p>
   </div>
 
   <!-- Filter bar -->
@@ -140,7 +140,7 @@
           placeholder="Search memories..."
           onkeydown={(e) => { if (e.key === 'Enter') handleSearch(); }}
           class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-700
-                 placeholder:text-shadow-300 focus:outline-none focus:border-gold-400 text-sm"
+                 placeholder:text-shadow-500 focus:outline-none focus:border-gold-400 text-sm"
         />
         <button
           onclick={handleSearch}
@@ -162,11 +162,11 @@
     </div>
 
     {#if searchActive && searchResults}
-      <p class="text-sm text-shadow-400 mt-2">
+      <p class="text-sm text-shadow-700 mt-2">
         Found {searchResults.results.length} results for "{searchResults.query}"
       </p>
     {:else if data}
-      <p class="text-sm text-shadow-400 mt-2">
+      <p class="text-sm text-shadow-700 mt-2">
         Showing {data.pagination.offset + 1}--{Math.min(data.pagination.offset + data.pagination.limit, data.pagination.total)} of {data.pagination.total}
       </p>
     {/if}
@@ -211,14 +211,14 @@
                 </span>
               {/if}
               {#if memory.supersededAt}
-                <span class="px-2 py-0.5 text-xs rounded border bg-bark-200 text-shadow-400 border-bark-300 line-through">
+                <span class="px-2 py-0.5 text-xs rounded border bg-bark-200 text-shadow-600 border-bark-300 line-through">
                   superseded
                 </span>
               {/if}
             </div>
             <button
               onclick={() => expandedId = expandedId === memory.id ? null : memory.id}
-              class="text-xs text-shadow-400 hover:text-gold-600 transition-colors shrink-0"
+              class="text-sm text-shadow-600 hover:text-gold-600 transition-colors shrink-0"
             >
               {expandedId === memory.id ? 'Collapse' : 'Expand'}
             </button>
@@ -230,7 +230,7 @@
           </p>
 
           <!-- Metrics -->
-          <div class="flex items-center gap-4 mt-3 text-xs text-shadow-400">
+          <div class="flex items-center gap-4 mt-3 text-sm text-shadow-600">
             <span title="Importance">
               Imp: <span class="text-shadow-600 tabular-nums">{(memory.importance * 100).toFixed(0)}%</span>
             </span>
@@ -245,8 +245,8 @@
 
           <!-- Expanded details -->
           {#if expandedId === memory.id}
-            <div class="mt-4 pt-3 border-t border-bark-200 space-y-2 text-xs">
-              <div class="grid grid-cols-2 gap-2 text-shadow-500">
+            <div class="mt-4 pt-3 border-t border-bark-200 space-y-2 text-sm">
+              <div class="grid grid-cols-2 gap-2 text-shadow-700">
                 <span>ID: <code class="text-shadow-600">{memory.id}</code></span>
                 <span>Created: {formatDate(memory.createdAt)}</span>
                 <span>Updated: {formatDate(memory.updatedAt)}</span>
@@ -289,7 +289,7 @@
 
       {#if memories.length === 0 && !loading}
         <div class="card p-6 text-center">
-          <p class="text-shadow-400">No memories found.</p>
+          <p class="text-shadow-700">No memories found.</p>
         </div>
       {/if}
     </div>
@@ -306,7 +306,7 @@
       >
         Previous
       </button>
-      <span class="text-sm text-shadow-400">
+      <span class="text-sm text-shadow-700">
         Page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.ceil(data.pagination.total / PAGE_SIZE)}
       </span>
       <button

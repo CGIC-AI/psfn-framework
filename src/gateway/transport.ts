@@ -154,7 +154,7 @@ export function createSocketServer(
   return server;
 }
 
-// ── Client: connects to Unix socket with auto-reconnect ──
+// ── Client: connects to Unix socket with bounded startup retries ──
 
 export interface ClientConnectionOptions {
   socketPath: string;
@@ -174,49 +174,39 @@ export function createSocketClient(
   } = options;
 
   return new Promise((resolve, reject) => {
+    let settled = false;
     let attempts = 0;
 
-    function connect() {
+    const connectOnce = () => {
+      if (settled) return;
+      attempts++;
       const socket = net.createConnection(socketPath);
 
       socket.once('connect', () => {
-        log.info(`Connected to ${socketPath}`);
-        attempts = 0;
-        const conn = new NdjsonConnection(socket);
-
-        if (reconnect) {
-          conn.on('close', () => {
-            log.info('Connection lost, reconnecting...');
-            setTimeout(tryReconnect, reconnectDelayMs);
-          });
+        if (settled) {
+          socket.destroy();
+          return;
         }
-
-        resolve(conn);
+        settled = true;
+        log.info(`Connected to ${socketPath}`);
+        resolve(new NdjsonConnection(socket));
       });
 
       socket.once('error', (err) => {
         socket.destroy();
-        if (attempts === 0) {
-          // First attempt failure — reject the promise
+        if (settled) return;
+
+        if (!reconnect || attempts >= maxReconnectAttempts) {
+          settled = true;
           reject(err);
-        } else if (reconnect && attempts < maxReconnectAttempts) {
-          setTimeout(tryReconnect, reconnectDelayMs);
-        } else {
-          log.error(`Failed to connect after ${attempts} attempts`);
+          return;
         }
+
+        log.info(`Connect attempt ${attempts}/${maxReconnectAttempts} failed; retrying...`);
+        setTimeout(connectOnce, reconnectDelayMs);
       });
-    }
+    };
 
-    function tryReconnect() {
-      attempts++;
-      if (attempts > maxReconnectAttempts) {
-        log.error('Max reconnect attempts reached');
-        return;
-      }
-      log.info(`Reconnect attempt ${attempts}/${maxReconnectAttempts}...`);
-      connect();
-    }
-
-    connect();
+    connectOnce();
   });
 }

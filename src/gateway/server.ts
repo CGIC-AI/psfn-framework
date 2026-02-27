@@ -23,6 +23,7 @@ import {
   type PolicyDecision,
   type VoiceHandleMessageResult,
 } from './protocol.js';
+import type { GitOperations } from '../git/ops.js';
 import type { AuditStore } from './audit.js';
 import {
   buildSessionHmacKeyring,
@@ -81,6 +82,7 @@ export interface GatewayServerOptions {
   llmProvider: LLMProvider;
   embeddingService: EmbeddingService;
   discordAdapter: ChannelOutboundDock;
+  gitOps?: GitOperations;
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: AuditStore;
@@ -244,6 +246,7 @@ export class GatewayServer {
       llmProvider: this.options.llmProvider,
       embeddingService: this.options.embeddingService,
       discordAdapter: this.options.discordAdapter,
+      gitOps: this.options.gitOps,
       policyConfig: this.options.policyConfig,
       workspacePath: this.options.policyConfig.workspacePath,
       sessionHmacKeyring: this.sessionHmacKeyring,

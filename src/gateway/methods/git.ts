@@ -1,4 +1,5 @@
 import type {
+  GitStatusParams,
   GitDiffParams,
   GitCreateBranchParams,
   GitApplyPatchParams,
@@ -11,7 +12,7 @@ import { registerAuditedDescriptors } from './register.js';
 const gitDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'git.status',
-    handler: async (_params: Record<string, never>, runtime) => {
+    handler: async (_params: GitStatusParams, runtime) => {
       if (!runtime.gitOps) throw new Error('Git operations are not configured');
       return runtime.gitOps.status();
     },

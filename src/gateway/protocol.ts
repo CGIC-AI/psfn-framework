@@ -64,6 +64,34 @@ export interface FsListParams {
   maxEntries?: number;
 }
 
+export type GitStatusParams = Record<string, never>;
+
+export interface GitDiffParams {
+  staged?: boolean;
+}
+
+export interface GitCreateBranchParams {
+  name: string;
+  startPoint?: string;
+}
+
+export interface GitApplyPatchParams {
+  filePath: string;
+  content: string;
+}
+
+export interface GitCommitParams {
+  message: string;
+  intent: string;
+  scope?: string;
+}
+
+export interface GitOpenPRParams {
+  title: string;
+  body: string;
+  base?: string;
+}
+
 export interface ApprovalRequestParams {
   action: string;
   scope: string;
@@ -174,6 +202,38 @@ export interface FsListResult {
   paths: string[];
 }
 
+export interface GitStatusResult {
+  branch: string;
+  ahead: number;
+  behind: number;
+  staged: string[];
+  modified: string[];
+  untracked: string[];
+}
+
+export interface GitDiffResult {
+  staged: string;
+  unstaged: string;
+}
+
+export interface GitCreateBranchResult {
+  name: string;
+}
+
+export interface GitApplyPatchResult {
+  success: boolean;
+}
+
+export interface GitCommitResult {
+  hash: string;
+  message: string;
+  filesChanged: number;
+}
+
+export interface GitOpenPRResult {
+  url: string;
+}
+
 export interface ApprovalResult {
   granted: boolean;
   capabilityToken?: string;
@@ -208,6 +268,12 @@ export interface GatewayMethods {
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];
   'fs.list': [FsListParams, FsListResult];
+  'git.status': [GitStatusParams, GitStatusResult];
+  'git.diff': [GitDiffParams, GitDiffResult];
+  'git.create_branch': [GitCreateBranchParams, GitCreateBranchResult];
+  'git.apply_patch': [GitApplyPatchParams, GitApplyPatchResult];
+  'git.commit': [GitCommitParams, GitCommitResult];
+  'git.open_pr': [GitOpenPRParams, GitOpenPRResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];

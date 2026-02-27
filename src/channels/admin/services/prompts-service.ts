@@ -2,6 +2,7 @@ import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
 import {
   PROMPT_LAYER_ROLES,
+  type LayerType,
   type PromptLayerRole,
 } from '../../../identity/prompt-types.js';
 import type { PromptLayerMetadataUpdate, PromptLayerStore } from '../../../identity/prompt-store.js';
@@ -118,6 +119,72 @@ export class AdminPromptsDataService implements AdminPromptsService {
       layers: this.deps.promptStore?.getAll() ?? [],
       staticPrompts: this.deps.promptRegistry?.list() ?? [],
     };
+  }
+
+  createPromptLayer(body: string): PromptUpdateResult {
+    const promptStore = this.deps.promptStore;
+    if (!promptStore) {
+      return { ok: false, message: 'Prompt store not configured' };
+    }
+
+    const params = this.parseBody(body);
+    const name = params.get('name')?.trim();
+    const type = params.get('type')?.trim() as LayerType | undefined;
+    const content = params.get('content') ?? '';
+
+    if (!name) {
+      return { ok: false, message: 'name is required' };
+    }
+    if (!type) {
+      return { ok: false, message: 'type is required' };
+    }
+
+    const validTypes: LayerType[] = ['runtime', 'channel', 'task'];
+    if (!validTypes.includes(type)) {
+      return { ok: false, message: `type must be one of: ${validTypes.join(', ')}` };
+    }
+
+    const resolvedMetadata = this.resolvePromptLayerMetadata(params);
+    if ('error' in resolvedMetadata) {
+      return { ok: false, message: resolvedMetadata.error };
+    }
+
+    const priority = parseInt(params.get('priority') ?? '0', 10);
+    const channelType = params.get('channelType')?.trim() || undefined;
+    const taskKind = params.get('taskKind')?.trim() || undefined;
+
+    try {
+      const layer = promptStore.create({
+        type,
+        name,
+        content,
+        priority: Number.isFinite(priority) ? priority : 0,
+        channelType,
+        taskKind,
+        identifier: resolvedMetadata.metadata.identifier,
+        role: resolvedMetadata.metadata.role,
+        promptOrder: resolvedMetadata.metadata.promptOrder,
+        updatedBy: 'admin',
+      });
+
+      this.injectPromptEditSystemNote(
+        `Admin created ${layer.type} prompt layer "${layer.name}" (v${layer.version}).`,
+      );
+      this.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'allowed',
+        `Admin created ${layer.type} prompt layer "${layer.name}".`,
+        [`layerId=${layer.id}`, `version=${layer.version}`],
+      );
+
+      return {
+        ok: true,
+        message: `Created "${layer.name}" (${layer.type})`,
+        layer,
+      };
+    } catch (error) {
+      return { ok: false, message: String(error) };
+    }
   }
 
   getPromptDetail(layerId: string): AdminPromptDetailData | null {

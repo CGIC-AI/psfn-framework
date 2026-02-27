@@ -28,97 +28,114 @@
   let saveMessage = $state('');
   let saveOk = $state(true);
   let discoveredModels = $state<DiscoveredModel[]>([]);
+  let refreshingModels = $state(false);
 
-  // Simple mode fields
+  // ── Simple mode fields ──
   let primaryModel = $state('');
-  let primaryProvider = $state('');
-  let primaryMaxTokens = $state(4096);
   let extractionModel = $state('');
-  let extractionProvider = $state('');
-  let extractionMaxTokens = $state(4096);
-  let memoryRetrievalBudgetPct = $state(20);
+  let memoryBudgetPct = $state(20);
   let memoryRetrievalLimit = $state(15);
-  let extractionInterval = $state(5);
-  let sessionHistoryBudgetPct = $state(70);
-  let sessionMessageLimit = $state(50);
+  let extractionThresholdPct = $state(30);
+  let compactionThresholdPct = $state(70);
+  let maxResponseTokens = $state(4096);
   let retryMaxAttempts = $state(3);
-  let retryBaseDelayMs = $state(1000);
 
-  // Raw editor states
+  // ── Raw editor states ──
   let modelsJson = $state('');
   let skillsJson = $state('');
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
   let capabilitiesJson = $state('');
+  let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
 
-  // Advanced mode
+  // ── Advanced mode ──
   let openSections = $state(new Set<string>(['models']));
 
-  const CONFIG_SECTIONS: Array<{ title: string; keys: string[] }> = [
+  const ADVANCED_SECTIONS: Array<{ id: string; title: string; icon: string; keys: string[] }> = [
     {
+      id: 'models',
       title: 'Models & Roster',
+      icon: 'M',
       keys: [
         'primaryModel', 'primaryProvider', 'primaryMaxTokens',
         'extractionModel', 'extractionProvider', 'extractionMaxTokens',
         'reasoningModel', 'reasoningProvider', 'reasoningMaxTokens',
         'longContextModel', 'longContextProvider', 'longContextMaxTokens',
+        'backgroundModel', 'backgroundProvider', 'backgroundMaxTokens',
         'defaultContextWindow',
       ],
     },
     {
+      id: 'memory',
       title: 'Memory & Extraction',
+      icon: 'E',
       keys: [
         'memoryBudgetPct', 'memoryRetrievalLimit', 'extractionThresholdPct',
         'extractionInterval', 'salienceFloor',
       ],
     },
     {
+      id: 'sessions',
       title: 'Sessions & Compaction',
+      icon: 'S',
       keys: [
         'compactionThresholdPct', 'sessionMessageLimit', 'maxSessionTokens',
       ],
     },
     {
-      title: 'LLM Retries',
+      id: 'llm',
+      title: 'LLM Retries & Behavior',
+      icon: 'L',
       keys: [
         'retryMaxAttempts', 'retryBaseDelayMs',
       ],
     },
     {
+      id: 'think',
       title: 'Think Tool',
+      icon: 'T',
       keys: [
         'thinkMaxIterations', 'thinkMaxTokensPerIteration', 'thinkTimeout',
       ],
     },
     {
+      id: 'import',
       title: 'Import Processing',
+      icon: 'I',
       keys: [
         'importProcessingModel', 'importProcessingProvider',
         'importProcessingMaxTokens', 'importProcessingLocalApiBase',
       ],
     },
     {
+      id: 'fetch',
       title: 'Web Fetch Policy',
+      icon: 'W',
       keys: [
         'allowHttpFetch', 'fetchDomainAllowlist',
       ],
     },
   ];
 
-  function populateFields(config: Record<string, unknown>) {
+  const RAW_EDITORS = [
+    { key: 'models', label: 'models.json' },
+    { key: 'skills', label: 'skills.json' },
+    { key: 'scheduler', label: 'scheduler.json' },
+    { key: 'trust-policy', label: 'trust-policy.json' },
+    { key: 'capabilities', label: 'capabilities.json' },
+  ] as const;
+
+  // ── Helpers ──
+
+  function populateSimpleFields(config: Record<string, unknown>) {
     primaryModel = String(config.primaryModel ?? '');
-    primaryProvider = String(config.primaryProvider ?? '');
-    primaryMaxTokens = Number(config.primaryMaxTokens ?? 4096);
     extractionModel = String(config.extractionModel ?? '');
-    extractionProvider = String(config.extractionProvider ?? '');
-    extractionMaxTokens = Number(config.extractionMaxTokens ?? 4096);
-    memoryRetrievalBudgetPct = Number(config.memoryBudgetPct ?? 20);
+    memoryBudgetPct = Number(config.memoryBudgetPct ?? 20);
     memoryRetrievalLimit = Number(config.memoryRetrievalLimit ?? 15);
-    extractionInterval = Number(config.extractionInterval ?? 5);
-    sessionHistoryBudgetPct = Number(config.compactionThresholdPct ?? 70);
-    sessionMessageLimit = Number(config.sessionMessageLimit ?? 50);
+    extractionThresholdPct = Number(config.extractionThresholdPct ?? 30);
+    compactionThresholdPct = Number(config.compactionThresholdPct ?? 70);
+    maxResponseTokens = Number(config.primaryMaxTokens ?? 4096);
     retryMaxAttempts = Number(config.retryMaxAttempts ?? 3);
-    retryBaseDelayMs = Number(config.retryBaseDelayMs ?? 1000);
   }
 
   function flash(ok: boolean, msg: string) {
@@ -127,23 +144,86 @@
     setTimeout(() => { saveMessage = ''; }, 4000);
   }
 
+  function flashRaw(key: string, ok: boolean, msg: string) {
+    rawSaveStatus = { ...rawSaveStatus, [key]: { ok, msg } };
+    setTimeout(() => {
+      const next = { ...rawSaveStatus };
+      delete next[key];
+      rawSaveStatus = next;
+    }, 4000);
+  }
+
+  function configValue(key: string): unknown {
+    if (!data) return undefined;
+    return (data.config as Record<string, unknown>)[key];
+  }
+
+  function setConfigValue(key: string, value: unknown) {
+    if (!data) return;
+    (data.config as Record<string, unknown>)[key] = value;
+  }
+
+  function fieldType(value: unknown): 'text' | 'number' | 'checkbox' | 'array' | 'object' {
+    if (typeof value === 'boolean') return 'checkbox';
+    if (typeof value === 'number') return 'number';
+    if (Array.isArray(value)) return 'array';
+    if (value !== null && typeof value === 'object') return 'object';
+    return 'text';
+  }
+
+  function toggleSection(id: string) {
+    const next = new Set(openSections);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    openSections = next;
+  }
+
+  function getRawJson(key: string): string {
+    switch (key) {
+      case 'models': return modelsJson;
+      case 'skills': return skillsJson;
+      case 'scheduler': return schedulerJson;
+      case 'trust-policy': return trustPolicyJson;
+      case 'capabilities': return capabilitiesJson;
+      default: return '';
+    }
+  }
+
+  function setRawJson(key: string, val: string) {
+    switch (key) {
+      case 'models': modelsJson = val; break;
+      case 'skills': skillsJson = val; break;
+      case 'scheduler': schedulerJson = val; break;
+      case 'trust-policy': trustPolicyJson = val; break;
+      case 'capabilities': capabilitiesJson = val; break;
+    }
+  }
+
+  function getRawSaveFn(key: string): (config: unknown) => Promise<void> {
+    switch (key) {
+      case 'models': return saveModelsConfig;
+      case 'skills': return saveSkillsConfig;
+      case 'scheduler': return saveSchedulerConfig;
+      case 'trust-policy': return saveTrustPolicyConfig;
+      case 'capabilities': return saveCapabilitiesConfig;
+      default: return async () => {};
+    }
+  }
+
+  // ── Actions ──
+
   async function saveSimple() {
     saving = true;
     try {
       const result = await updateSettings({
         primaryModel,
-        primaryProvider,
-        primaryMaxTokens,
         extractionModel,
-        extractionProvider,
-        extractionMaxTokens,
-        memoryBudgetPct: memoryRetrievalBudgetPct,
+        memoryBudgetPct,
         memoryRetrievalLimit,
-        extractionInterval,
-        compactionThresholdPct: sessionHistoryBudgetPct,
-        sessionMessageLimit,
+        extractionThresholdPct,
+        compactionThresholdPct,
+        primaryMaxTokens: maxResponseTokens,
         retryMaxAttempts,
-        retryBaseDelayMs,
       });
       flash(result.ok, result.message || 'Settings saved');
       if (result.ok) {
@@ -160,8 +240,7 @@
     if (!data) return;
     saving = true;
     try {
-      const config = data.config as Record<string, unknown>;
-      const result = await updateSettings(config);
+      const result = await updateSettings(data.config as Record<string, unknown>);
       flash(result.ok, result.message || 'Settings saved');
       if (result.ok) {
         data = await getSettings();
@@ -173,59 +252,32 @@
     }
   }
 
-  async function saveRawConfig(
-    label: string,
-    jsonStr: string,
-    saveFn: (config: unknown) => Promise<void>,
-  ) {
+  async function saveRawConfig(key: string, label: string) {
     saving = true;
     try {
-      const parsed = JSON.parse(jsonStr);
-      await saveFn(parsed);
-      flash(true, `${label} saved`);
+      const parsed = JSON.parse(getRawJson(key));
+      await getRawSaveFn(key)(parsed);
+      flashRaw(key, true, `${label} saved`);
     } catch (e) {
-      flash(false, e instanceof Error ? e.message : `Failed to save ${label}`);
+      flashRaw(key, false, e instanceof Error ? e.message : `Failed to save ${label}`);
     } finally {
       saving = false;
     }
   }
 
   async function doRefreshModels() {
+    refreshingModels = true;
     try {
       discoveredModels = await refreshModels();
       flash(true, `Discovered ${discoveredModels.length} models`);
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Model refresh failed');
+    } finally {
+      refreshingModels = false;
     }
   }
 
-  function configValue(key: string): unknown {
-    if (!data) return undefined;
-    return (data.config as Record<string, unknown>)[key];
-  }
-
-  function setConfigValue(key: string, value: unknown) {
-    if (!data) return;
-    (data.config as Record<string, unknown>)[key] = value;
-  }
-
-  function renderFieldType(value: unknown): 'text' | 'number' | 'checkbox' | 'array' | 'object' {
-    if (typeof value === 'boolean') return 'checkbox';
-    if (typeof value === 'number') return 'number';
-    if (Array.isArray(value)) return 'array';
-    if (value !== null && typeof value === 'object') return 'object';
-    return 'text';
-  }
-
-  function toggleSection(title: string) {
-    const next = new Set(openSections);
-    if (next.has(title)) {
-      next.delete(title);
-    } else {
-      next.add(title);
-    }
-    openSections = next;
-  }
+  // ── Init ──
 
   onMount(async () => {
     try {
@@ -235,9 +287,8 @@
       ]);
       data = settingsData;
       discoveredModels = models;
-      populateFields(data.config as Record<string, unknown>);
+      populateSimpleFields(data.config as Record<string, unknown>);
 
-      // Load raw editor JSON
       const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([
         getModelsConfig().catch(() => ({})),
         getSkillsConfig().catch(() => ({})),
@@ -256,25 +307,35 @@
       loading = false;
     }
   });
+
+  // Input class constants
+  const INPUT_CLS = 'w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 transition-colors';
+  const LABEL_CLS = 'block text-xs font-medium text-shadow-500 dark:text-bark-400 mb-1.5';
+  const SECTION_HEADING_CLS = 'text-sm font-serif font-semibold text-shadow-800 dark:text-bark-300';
 </script>
 
+<!-- Model datalist for autocomplete -->
 <datalist id="model-list">
   {#each discoveredModels as m}
     <option value={m.id}>{m.description ?? m.id}</option>
   {/each}
 </datalist>
 
-<div class="space-y-4">
-  <div class="flex items-center justify-between">
+<div class="space-y-5">
+  <!-- ── Header ── -->
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Climate</h1>
-      <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Runtime configuration</p>
+      <h1 class="text-2xl font-serif font-bold text-shadow-900 dark:text-bark-200">The Climate</h1>
+      <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Runtime configuration and tuning</p>
     </div>
 
     <div class="flex items-center gap-3">
-      <button onclick={doRefreshModels}
-        class="px-3 py-1.5 text-xs font-medium rounded-lg border border-bark-300 dark:border-shadow-600 text-shadow-500 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-700 transition-colors">
-        Refresh Models
+      <!-- Refresh Models -->
+      <button onclick={doRefreshModels} disabled={refreshingModels}
+        class="px-3 py-1.5 text-xs font-medium rounded-lg border border-bark-300 dark:border-shadow-600
+               text-shadow-500 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-700
+               disabled:opacity-50 transition-colors">
+        {refreshingModels ? 'Refreshing...' : 'Refresh Models'}
       </button>
 
       <!-- Mode switcher -->
@@ -285,7 +346,7 @@
             class="px-3 py-1.5 text-xs font-medium capitalize transition-colors
               {mode === m
                 ? 'bg-gold-600 text-white'
-                : 'bg-bark-50 dark:bg-shadow-800 text-shadow-500 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-700'}"
+                : 'bg-white dark:bg-shadow-800 text-shadow-500 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-700'}"
           >
             {m}
           </button>
@@ -296,159 +357,216 @@
 
   <!-- Flash message -->
   {#if saveMessage}
-    <div class="px-4 py-2 rounded-lg text-sm {saveOk ? 'bg-moss-50 text-moss-700 dark:bg-moss-900/30 dark:text-moss-300' : 'bg-wilt-50 text-wilt-700 dark:bg-wilt-900/30 dark:text-wilt-300'}">
+    <div class="px-4 py-2.5 rounded-lg text-sm font-medium
+      {saveOk
+        ? 'bg-moss-50 text-moss-700 dark:bg-moss-900/30 dark:text-moss-300 border border-moss-200 dark:border-moss-800'
+        : 'bg-wilt-50 text-wilt-700 dark:bg-wilt-900/30 dark:text-wilt-300 border border-wilt-200 dark:border-wilt-800'}">
       {saveMessage}
     </div>
   {/if}
 
+  <!-- ── Loading ── -->
   {#if loading}
-    <div class="card-garden p-6 animate-pulse space-y-4">
-      {#each Array(4) as _}
-        <div class="h-10 bg-bark-200 dark:bg-shadow-700 rounded"></div>
-      {/each}
+    <div class="card-garden p-8">
+      <div class="animate-pulse space-y-4">
+        {#each Array(5) as _}
+          <div class="h-10 bg-bark-200 dark:bg-shadow-700 rounded-lg"></div>
+        {/each}
+      </div>
     </div>
+
+  <!-- ── Error ── -->
   {:else if error}
-    <div class="card-garden p-6 text-center text-wilt-600">{error}</div>
+    <div class="card-garden p-8 text-center">
+      <p class="text-wilt-600 dark:text-wilt-400 text-sm">{error}</p>
+    </div>
 
+  <!-- ════════════════════════════════════════════════ -->
+  <!--                SIMPLE MODE                       -->
+  <!-- ════════════════════════════════════════════════ -->
   {:else if mode === 'simple'}
-    <!-- ── Simple Mode ── -->
-    <div class="card-garden p-6 space-y-5">
-      <h2 class="text-sm font-serif font-semibold text-shadow-700 dark:text-bark-300 mb-2">Primary Model</h2>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Model</label>
-          <input type="text" list="model-list" bind:value={primaryModel}
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Provider</label>
-          <input type="text" bind:value={primaryProvider}
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Max Tokens</label>
-          <input type="number" bind:value={primaryMaxTokens} min="256" step="256"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
+    <div class="card-garden p-6 space-y-6">
+      <!-- Models -->
+      <div>
+        <h2 class={SECTION_HEADING_CLS}>Models</h2>
+        <hr class="divider-filigree my-3" />
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label class={LABEL_CLS}>Primary Model</label>
+            <input type="text" list="model-list" bind:value={primaryModel} class={INPUT_CLS}
+              placeholder="e.g. deepseek/deepseek-v3.2" />
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Extraction Model</label>
+            <input type="text" list="model-list" bind:value={extractionModel} class={INPUT_CLS}
+              placeholder="e.g. deepseek/deepseek-v3.2" />
+          </div>
         </div>
       </div>
 
-      <h2 class="text-sm font-serif font-semibold text-shadow-700 dark:text-bark-300 mb-2 pt-2">Extraction Model</h2>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Model</label>
-          <input type="text" list="model-list" bind:value={extractionModel}
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Provider</label>
-          <input type="text" bind:value={extractionProvider}
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Max Tokens</label>
-          <input type="number" bind:value={extractionMaxTokens} min="256" step="256"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
+      <!-- Memory Budget % -->
+      <div>
+        <h2 class={SECTION_HEADING_CLS}>Memory & Extraction</h2>
+        <hr class="divider-filigree my-3" />
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <!-- Memory Budget % -->
+          <div>
+            <label class={LABEL_CLS}>Memory Budget %</label>
+            <div class="flex items-center gap-3">
+              <input type="range" min="5" max="50" step="1" bind:value={memoryBudgetPct}
+                class="flex-1 h-2 rounded-full appearance-none bg-bark-200 dark:bg-shadow-700
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gold-500 [&::-webkit-slider-thumb]:shadow-sm
+                  [&::-webkit-slider-thumb]:cursor-pointer
+                  [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full
+                  [&::-moz-range-thumb]:bg-gold-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer" />
+              <input type="number" min="5" max="50" bind:value={memoryBudgetPct}
+                class="w-20 px-2 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-white dark:bg-shadow-800
+                  text-shadow-900 dark:text-bark-200 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gold-300" />
+            </div>
+            <p class="text-[11px] text-shadow-400 dark:text-bark-500 mt-1">% of context window reserved for memory retrieval</p>
+          </div>
+
+          <!-- Memory Retrieval Limit -->
+          <div>
+            <label class={LABEL_CLS}>Memory Retrieval Limit</label>
+            <input type="number" min="1" max="500" bind:value={memoryRetrievalLimit} class={INPUT_CLS} />
+            <p class="text-[11px] text-shadow-400 dark:text-bark-500 mt-1">Max memories returned per retrieval</p>
+          </div>
+
+          <!-- Extraction Threshold % -->
+          <div>
+            <label class={LABEL_CLS}>Extraction Threshold %</label>
+            <div class="flex items-center gap-3">
+              <input type="range" min="10" max="80" step="1" bind:value={extractionThresholdPct}
+                class="flex-1 h-2 rounded-full appearance-none bg-bark-200 dark:bg-shadow-700
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gold-500 [&::-webkit-slider-thumb]:shadow-sm
+                  [&::-webkit-slider-thumb]:cursor-pointer
+                  [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full
+                  [&::-moz-range-thumb]:bg-gold-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer" />
+              <input type="number" min="10" max="80" bind:value={extractionThresholdPct}
+                class="w-20 px-2 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-white dark:bg-shadow-800
+                  text-shadow-900 dark:text-bark-200 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gold-300" />
+            </div>
+            <p class="text-[11px] text-shadow-400 dark:text-bark-500 mt-1">Triggers extraction when session exceeds this % of context</p>
+          </div>
+
+          <!-- Compaction Threshold % -->
+          <div>
+            <label class={LABEL_CLS}>Compaction Threshold %</label>
+            <div class="flex items-center gap-3">
+              <input type="range" min="30" max="90" step="1" bind:value={compactionThresholdPct}
+                class="flex-1 h-2 rounded-full appearance-none bg-bark-200 dark:bg-shadow-700
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gold-500 [&::-webkit-slider-thumb]:shadow-sm
+                  [&::-webkit-slider-thumb]:cursor-pointer
+                  [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full
+                  [&::-moz-range-thumb]:bg-gold-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer" />
+              <input type="number" min="30" max="90" bind:value={compactionThresholdPct}
+                class="w-20 px-2 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-white dark:bg-shadow-800
+                  text-shadow-900 dark:text-bark-200 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gold-300" />
+            </div>
+            <p class="text-[11px] text-shadow-400 dark:text-bark-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
+          </div>
         </div>
       </div>
 
-      <h2 class="text-sm font-serif font-semibold text-shadow-700 dark:text-bark-300 mb-2 pt-2">Memory & Retrieval</h2>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Retrieval Budget %</label>
-          <input type="number" bind:value={memoryRetrievalBudgetPct} min="1" max="100"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Retrieval Limit</label>
-          <input type="number" bind:value={memoryRetrievalLimit} min="1" max="100"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Extraction Interval (min)</label>
-          <input type="number" bind:value={extractionInterval} min="1"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
+      <!-- Response & Retries -->
+      <div>
+        <h2 class={SECTION_HEADING_CLS}>Response & Retries</h2>
+        <hr class="divider-filigree my-3" />
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label class={LABEL_CLS}>Max Response Tokens</label>
+            <input type="number" min="256" step="256" bind:value={maxResponseTokens} class={INPUT_CLS} />
+          </div>
+          <div>
+            <label class={LABEL_CLS}>LLM Max Retries</label>
+            <input type="number" min="0" max="10" bind:value={retryMaxAttempts} class={INPUT_CLS} />
+          </div>
         </div>
       </div>
 
-      <h2 class="text-sm font-serif font-semibold text-shadow-700 dark:text-bark-300 mb-2 pt-2">Sessions</h2>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">History Budget %</label>
-          <input type="number" bind:value={sessionHistoryBudgetPct} min="10" max="100"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Message Limit</label>
-          <input type="number" bind:value={sessionMessageLimit} min="5" max="500"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-      </div>
-
-      <h2 class="text-sm font-serif font-semibold text-shadow-700 dark:text-bark-300 mb-2 pt-2">LLM Retries</h2>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Max Attempts</label>
-          <input type="number" bind:value={retryMaxAttempts} min="0" max="10"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-shadow-600 dark:text-bark-400 mb-1">Base Delay (ms)</label>
-          <input type="number" bind:value={retryBaseDelayMs} min="100" step="100"
-            class="w-full px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300" />
-        </div>
-      </div>
-
-      <div class="flex items-center gap-3 pt-3">
+      <!-- Save -->
+      <div class="flex items-center gap-3 pt-2">
         <button onclick={saveSimple} disabled={saving}
-          class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors">
+          class="px-5 py-2.5 rounded-lg bg-gold-600 text-white text-sm font-medium
+                 hover:bg-gold-700 disabled:opacity-50 transition-colors shadow-sm">
           {saving ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
     </div>
 
+  <!-- ════════════════════════════════════════════════ -->
+  <!--              ADVANCED MODE                       -->
+  <!-- ════════════════════════════════════════════════ -->
   {:else if mode === 'advanced'}
-    <!-- ── Advanced Mode ── -->
     <div class="space-y-3">
-      {#each CONFIG_SECTIONS as section}
+      {#each ADVANCED_SECTIONS as section}
         {@const sectionKeys = section.keys.filter((k) => data && k in (data.config as Record<string, unknown>))}
         {#if sectionKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button
-              onclick={() => toggleSection(section.title)}
-              class="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-bark-50 dark:hover:bg-shadow-800 transition-colors"
+              onclick={() => toggleSection(section.id)}
+              class="w-full flex items-center justify-between px-5 py-3.5 text-left
+                     hover:bg-bark-50 dark:hover:bg-shadow-800 transition-colors"
             >
-              <h2 class="text-sm font-serif font-semibold text-shadow-700 dark:text-bark-300">{section.title}</h2>
-              <span class="text-shadow-400 text-xs">{openSections.has(section.title) ? '−' : '+'}</span>
+              <div class="flex items-center gap-3">
+                <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-50 dark:bg-gold-900/20
+                             text-gold-600 dark:text-gold-400 text-xs font-bold border border-gold-200 dark:border-gold-800">
+                  {section.icon}
+                </span>
+                <h2 class={SECTION_HEADING_CLS}>{section.title}</h2>
+                <span class="text-[10px] text-shadow-400 dark:text-bark-500">({sectionKeys.length} fields)</span>
+              </div>
+              <span class="text-shadow-400 dark:text-bark-500 text-sm transition-transform {openSections.has(section.id) ? 'rotate-180' : ''}">
+                &#9660;
+              </span>
             </button>
-            {#if openSections.has(section.title)}
-              <div class="px-5 pb-4 space-y-3 border-t border-bark-100 dark:border-shadow-800 pt-3">
+            {#if openSections.has(section.id)}
+              <div class="px-5 pb-5 space-y-3 border-t border-bark-100 dark:border-shadow-800 pt-4">
                 {#each sectionKeys as key}
                   {@const value = configValue(key)}
-                  {@const fieldType = renderFieldType(value)}
+                  {@const ft = fieldType(value)}
                   <div class="flex flex-col sm:flex-row sm:items-center gap-2">
-                    <label class="text-xs font-mono text-shadow-600 dark:text-bark-400 sm:w-56 shrink-0">{key}</label>
-                    {#if fieldType === 'checkbox'}
-                      <input type="checkbox"
-                        checked={Boolean(value)}
-                        onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).checked)}
-                        class="h-4 w-4 rounded border-bark-300 text-gold-600 focus:ring-gold-300" />
-                    {:else if fieldType === 'number'}
+                    <label class="text-xs font-mono text-shadow-500 dark:text-bark-400 sm:w-60 shrink-0">{key}</label>
+                    {#if ft === 'checkbox'}
+                      <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox"
+                          checked={Boolean(value)}
+                          onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).checked)}
+                          class="sr-only peer" />
+                        <div class="w-9 h-5 bg-bark-300 rounded-full peer
+                                    peer-checked:bg-gold-500 peer-focus:ring-2 peer-focus:ring-gold-300
+                                    dark:bg-shadow-600 dark:peer-checked:bg-gold-600
+                                    after:content-[''] after:absolute after:top-0.5 after:start-[2px]
+                                    after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
+                                    peer-checked:after:translate-x-full"></div>
+                      </label>
+                    {:else if ft === 'number'}
                       <input type="number"
                         value={Number(value)}
                         onchange={(e) => setConfigValue(key, Number((e.target as HTMLInputElement).value))}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {:else if fieldType === 'array'}
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
+                               bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200
+                               text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
+                    {:else if ft === 'array'}
                       <input type="text"
                         value={Array.isArray(value) ? value.join(', ') : ''}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
+                               bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200
+                               text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
                         placeholder="comma-separated values" />
-                    {:else if fieldType === 'object'}
+                    {:else if ft === 'object'}
                       <textarea
                         value={JSON.stringify(value, null, 2)}
                         onchange={(e) => { try { setConfigValue(key, JSON.parse((e.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
                         rows="3"
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
+                               bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200
+                               text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
                         spellcheck="false"
                       ></textarea>
                     {:else}
@@ -456,7 +574,9 @@
                         value={String(value ?? '')}
                         list={key.toLowerCase().includes('model') ? 'model-list' : undefined}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value)}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
+                               bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200
+                               text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
                     {/if}
                   </div>
                 {/each}
@@ -466,55 +586,81 @@
         {/if}
       {/each}
 
-      <!-- Other Settings (uncategorized keys) -->
+      <!-- Other (uncategorized) keys -->
       {#if data}
-        {@const allCategorized = new Set(CONFIG_SECTIONS.flatMap(s => s.keys))}
+        {@const allCategorized = new Set(ADVANCED_SECTIONS.flatMap(s => s.keys))}
         {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter(k => !allCategorized.has(k))}
         {#if otherKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button
-              onclick={() => toggleSection('Other Settings')}
-              class="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-bark-50 dark:hover:bg-shadow-800 transition-colors"
+              onclick={() => toggleSection('other')}
+              class="w-full flex items-center justify-between px-5 py-3.5 text-left
+                     hover:bg-bark-50 dark:hover:bg-shadow-800 transition-colors"
             >
-              <h2 class="text-sm font-serif font-semibold text-shadow-700 dark:text-bark-300">Other Settings</h2>
-              <span class="text-shadow-400 text-xs">{openSections.has('Other Settings') ? '−' : '+'}</span>
+              <div class="flex items-center gap-3">
+                <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-100 dark:bg-shadow-800
+                             text-shadow-500 dark:text-bark-400 text-xs font-bold border border-bark-300 dark:border-shadow-600">
+                  ?
+                </span>
+                <h2 class={SECTION_HEADING_CLS}>Other Settings</h2>
+                <span class="text-[10px] text-shadow-400 dark:text-bark-500">({otherKeys.length} fields)</span>
+              </div>
+              <span class="text-shadow-400 dark:text-bark-500 text-sm transition-transform {openSections.has('other') ? 'rotate-180' : ''}">
+                &#9660;
+              </span>
             </button>
-            {#if openSections.has('Other Settings')}
-              <div class="px-5 pb-4 space-y-3 border-t border-bark-100 dark:border-shadow-800 pt-3">
+            {#if openSections.has('other')}
+              <div class="px-5 pb-5 space-y-3 border-t border-bark-100 dark:border-shadow-800 pt-4">
                 {#each otherKeys as key}
                   {@const value = configValue(key)}
-                  {@const fieldType = renderFieldType(value)}
+                  {@const ft = fieldType(value)}
                   <div class="flex flex-col sm:flex-row sm:items-center gap-2">
-                    <label class="text-xs font-mono text-shadow-600 dark:text-bark-400 sm:w-56 shrink-0">{key}</label>
-                    {#if fieldType === 'checkbox'}
-                      <input type="checkbox"
-                        checked={Boolean(value)}
-                        onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).checked)}
-                        class="h-4 w-4 rounded border-bark-300 text-gold-600 focus:ring-gold-300" />
-                    {:else if fieldType === 'number'}
+                    <label class="text-xs font-mono text-shadow-500 dark:text-bark-400 sm:w-60 shrink-0">{key}</label>
+                    {#if ft === 'checkbox'}
+                      <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox"
+                          checked={Boolean(value)}
+                          onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).checked)}
+                          class="sr-only peer" />
+                        <div class="w-9 h-5 bg-bark-300 rounded-full peer
+                                    peer-checked:bg-gold-500 peer-focus:ring-2 peer-focus:ring-gold-300
+                                    dark:bg-shadow-600 dark:peer-checked:bg-gold-600
+                                    after:content-[''] after:absolute after:top-0.5 after:start-[2px]
+                                    after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
+                                    peer-checked:after:translate-x-full"></div>
+                      </label>
+                    {:else if ft === 'number'}
                       <input type="number"
                         value={Number(value)}
                         onchange={(e) => setConfigValue(key, Number((e.target as HTMLInputElement).value))}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {:else if fieldType === 'array'}
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
+                               bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200
+                               text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
+                    {:else if ft === 'array'}
                       <input type="text"
                         value={Array.isArray(value) ? value.join(', ') : ''}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
+                               bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200
+                               text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
                         placeholder="comma-separated values" />
-                    {:else if fieldType === 'object'}
+                    {:else if ft === 'object'}
                       <textarea
                         value={JSON.stringify(value, null, 2)}
                         onchange={(e) => { try { setConfigValue(key, JSON.parse((e.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
                         rows="3"
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
+                               bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200
+                               text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
                         spellcheck="false"
                       ></textarea>
                     {:else}
                       <input type="text"
                         value={String(value ?? '')}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value)}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 bg-bark-50 dark:bg-shadow-800 text-shadow-900 dark:text-bark-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
+                               bg-white dark:bg-shadow-800 text-shadow-900 dark:text-bark-200
+                               text-xs font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
                     {/if}
                   </div>
                 {/each}
@@ -524,63 +670,98 @@
         {/if}
       {/if}
 
-      <div class="flex items-center gap-3 pt-1">
+      <!-- Global Save -->
+      <div class="flex items-center gap-3 pt-2">
         <button onclick={saveAdvanced} disabled={saving}
-          class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors">
+          class="px-5 py-2.5 rounded-lg bg-gold-600 text-white text-sm font-medium
+                 hover:bg-gold-700 disabled:opacity-50 transition-colors shadow-sm">
           {saving ? 'Saving...' : 'Save All Settings'}
         </button>
       </div>
     </div>
 
+  <!-- ════════════════════════════════════════════════ -->
+  <!--                 RAW MODE                         -->
+  <!-- ════════════════════════════════════════════════ -->
   {:else}
-    <!-- ── Raw Mode ── -->
     <div class="space-y-4">
-      {#each [
-        { label: 'models.json', get: () => modelsJson, set: (v: string) => modelsJson = v, save: saveModelsConfig },
-        { label: 'skills.json', get: () => skillsJson, set: (v: string) => skillsJson = v, save: saveSkillsConfig },
-        { label: 'scheduler.json', get: () => schedulerJson, set: (v: string) => schedulerJson = v, save: saveSchedulerConfig },
-        { label: 'trust-policy.json', get: () => trustPolicyJson, set: (v: string) => trustPolicyJson = v, save: saveTrustPolicyConfig },
-        { label: 'capability-tier.json', get: () => capabilitiesJson, set: (v: string) => capabilitiesJson = v, save: saveCapabilitiesConfig },
-      ] as editor}
-        <div class="card-garden p-4">
-          <h3 class="text-xs font-serif font-semibold text-shadow-600 dark:text-bark-400 mb-2">{editor.label}</h3>
+      <!-- Model count info -->
+      {#if discoveredModels.length > 0}
+        <div class="card-garden px-5 py-3 flex items-center justify-between">
+          <span class="text-xs text-shadow-500 dark:text-bark-400">
+            {discoveredModels.length} models discovered via proxy
+          </span>
+          <button onclick={doRefreshModels} disabled={refreshingModels}
+            class="text-xs text-gold-600 hover:text-gold-700 dark:text-gold-400 font-medium disabled:opacity-50">
+            {refreshingModels ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+      {/if}
+
+      {#each RAW_EDITORS as editor}
+        {@const status = rawSaveStatus[editor.key]}
+        <div class="card-garden overflow-hidden">
+          <div class="flex items-center justify-between px-5 py-3 border-b border-bark-100 dark:border-shadow-800">
+            <h3 class="text-sm font-serif font-semibold text-shadow-800 dark:text-bark-300">{editor.label}</h3>
+            <div class="flex items-center gap-3">
+              {#if status}
+                <span class="text-xs font-medium {status.ok ? 'text-moss-600 dark:text-moss-400' : 'text-wilt-600 dark:text-wilt-400'}">
+                  {status.msg}
+                </span>
+              {/if}
+              <button
+                onclick={() => saveRawConfig(editor.key, editor.label)}
+                disabled={saving}
+                class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-xs font-medium
+                       hover:bg-gold-700 disabled:opacity-50 transition-colors"
+              >
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
           <textarea
-            value={editor.get()}
-            oninput={(e) => editor.set((e.target as HTMLTextAreaElement).value)}
-            rows="12"
-            class="w-full font-mono text-xs text-shadow-600 dark:text-bark-400 bg-bark-50 dark:bg-shadow-900 border border-bark-200 dark:border-shadow-700 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
+            value={getRawJson(editor.key)}
+            oninput={(e) => setRawJson(editor.key, (e.target as HTMLTextAreaElement).value)}
+            rows="14"
+            class="w-full font-mono text-xs text-shadow-800 dark:text-bark-300
+                   bg-bark-50 dark:bg-shadow-900 p-4
+                   focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
+                   resize-y border-0"
             spellcheck="false"
           ></textarea>
-          <div class="flex items-center gap-3 mt-2">
-            <button
-              onclick={() => saveRawConfig(editor.label, editor.get(), editor.save)}
-              disabled={saving}
-              class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-xs font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
-            >
-              {saving ? 'Saving...' : `Save ${editor.label}`}
-            </button>
-          </div>
         </div>
       {/each}
     </div>
   {/if}
 
-  <!-- Environment info -->
+  <!-- ── Environment info (always visible) ── -->
   {#if data?.env}
-    <div class="card-garden p-5">
-      <h2 class="text-sm font-serif font-semibold text-shadow-600 dark:text-bark-400 mb-2">Environment</h2>
+    <div class="card-garden px-5 py-4">
+      <h2 class="text-xs font-serif font-semibold text-shadow-500 dark:text-bark-400 mb-2 uppercase tracking-wider">Environment</h2>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-shadow-500 dark:text-bark-400">
         {#if data.env.nodeVersion}
-          <div>Node: <span class="font-mono">{data.env.nodeVersion}</span></div>
+          <div>
+            <span class="text-shadow-400 dark:text-bark-500">Node</span>
+            <span class="font-mono ml-1 text-shadow-800 dark:text-bark-300">{data.env.nodeVersion}</span>
+          </div>
         {/if}
         {#if data.env.platform}
-          <div>Platform: <span class="font-mono">{data.env.platform}/{data.env.arch}</span></div>
+          <div>
+            <span class="text-shadow-400 dark:text-bark-500">Platform</span>
+            <span class="font-mono ml-1 text-shadow-800 dark:text-bark-300">{data.env.platform}/{data.env.arch}</span>
+          </div>
         {/if}
         {#if data.env.uptime !== undefined}
-          <div>Uptime: {Math.floor(data.env.uptime / 3600)}h {Math.floor((data.env.uptime % 3600) / 60)}m</div>
+          <div>
+            <span class="text-shadow-400 dark:text-bark-500">Uptime</span>
+            <span class="ml-1 text-shadow-800 dark:text-bark-300">{Math.floor(data.env.uptime / 3600)}h {Math.floor((data.env.uptime % 3600) / 60)}m</span>
+          </div>
         {/if}
         {#if data.env.memoryUsage}
-          <div>Heap: {(data.env.memoryUsage.heapUsed / 1_048_576).toFixed(0)}MB / {(data.env.memoryUsage.heapTotal / 1_048_576).toFixed(0)}MB</div>
+          <div>
+            <span class="text-shadow-400 dark:text-bark-500">Heap</span>
+            <span class="ml-1 text-shadow-800 dark:text-bark-300">{(data.env.memoryUsage.heapUsed / 1_048_576).toFixed(0)}MB / {(data.env.memoryUsage.heapTotal / 1_048_576).toFixed(0)}MB</span>
+          </div>
         {/if}
       </div>
     </div>

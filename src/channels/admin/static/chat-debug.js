@@ -1,3 +1,5 @@
+import './chat.js';
+
 const DEBUG_STREAM_PATH = '/api/chat/events/stream';
 const MAX_TIMELINE_EVENTS = 250;
 const MAX_VISIBLE_EVENTS = 180;

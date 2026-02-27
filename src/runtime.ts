@@ -7,6 +7,8 @@ import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
 import { SessionManager } from './session/manager.js';
+import { buildSessionHmacKeyring } from './session/journal-utils.js';
+import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { SubstrateAgent } from './agent/substrate-agent.js';
 import { DiscordAdapter } from './channels/discord/adapter.js';
 import { TelegramAdapter } from './channels/telegram/adapter.js';
@@ -261,12 +263,22 @@ export class SubstrateRuntime implements Lifecycle {
     // Initialize core components
     this.llmClient = new LLMClient(this.config);
     const sessionsDir = join(this.config.dataDir, 'sessions');
+    const sessionHmacKeyring = buildSessionHmacKeyring({
+      serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
+      singleKey: process.env.GATEWAY_SESSION_HMAC_KEY,
+      activeVersion: process.env.GATEWAY_SESSION_HMAC_ACTIVE_VERSION,
+    });
+    const sessionIntegrityProvider = createKeyringIntegrityProvider(sessionHmacKeyring);
+    if (sessionIntegrityProvider) {
+      log.info('Session HMAC integrity enabled (single-process mode)');
+    }
     const sessionComposition = composeSessionRuntime({
       config: this.config,
       eventBus: this.eventBus,
       sessionsDir,
       enableContinuity: true,
       promptRegistry,
+      sessionIntegrityProvider,
     });
     this.sessionStore = sessionComposition.sessionStore;
     this.sessionManager = sessionComposition.sessionManager;

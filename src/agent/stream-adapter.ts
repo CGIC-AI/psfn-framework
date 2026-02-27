@@ -81,6 +81,8 @@ export function resolveModel(
   }
 
   // Direct provider mode — use pi-ai's built-in registry
+  // getModel() requires KnownProvider/KnownModelId literal types; our config uses string.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const model = getModel(slot.provider as any, slot.model as any);
   if (!model) {
     throw new Error(

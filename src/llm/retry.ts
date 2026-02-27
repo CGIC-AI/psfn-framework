@@ -62,9 +62,11 @@ function toError(value: unknown): Error {
 }
 
 function parseStatusCode(error: Error): number | null {
-  const maybeStatus = (error as any).status
-    ?? (error as any).statusCode
-    ?? (error as any).response?.status;
+  const record = error as Record<string, unknown>;
+  const response = record.response as Record<string, unknown> | undefined;
+  const maybeStatus = record.status
+    ?? record.statusCode
+    ?? response?.status;
 
   if (typeof maybeStatus === 'number' && Number.isFinite(maybeStatus)) {
     return maybeStatus;

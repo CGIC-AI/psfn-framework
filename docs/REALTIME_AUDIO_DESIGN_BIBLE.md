@@ -326,10 +326,10 @@ Implementation constraints from the ADR:
 - Current parsed voice keys are ElevenLabs-centric (`DEEPGRAM_API_KEY`, `DEEPGRAM_MODEL`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL_ID`) in `src/types.ts`.
 - Planned provider-switch keys are tracked under `PSFN-mndj.2` assumptions and are documented as:
   - `TTS_PROVIDER`
-  - `ECHO_API_URL` (default: `http://220.158.196.150:8001`)
-  - `ECHO_VOICE` (default: `11labs-Allison`)
-  - `ECHO_PRESET` (default: `Independent-High-Speaker-CFG`)
-  - `ECHO_MODEL` (optional override)
+  - `ECHO_TTS_URL` (default: `http://220.158.196.150:8001`)
+  - `ECHO_TTS_VOICE` (default: `11labs-Allison`)
+  - `ECHO_TTS_PRESET` (default: `Independent-High-Speaker-CFG`)
+  - `ECHO_TTS_MODEL` (optional override)
 - Safe default for rollout remains `elevenlabs` until provider-registry wiring (`PSFN-mndj.2`, `.3`, `.4`) is merged into active runtime paths.
 
 ### 13.2 Runtime mapping (Discord/API/Wyoming)

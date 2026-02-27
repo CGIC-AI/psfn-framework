@@ -10,3 +10,12 @@ import/
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# Internal planning/audit artifacts (non-product docs)
+PSFN_*_22626.md
+ADMIN_UX_MIGRATION_RECC.md
+history/
+
+# Beads transient lock/socket files (keep .beads/issues.jsonl tracked)
+.beads/*.lock
+.beads/*.sock*

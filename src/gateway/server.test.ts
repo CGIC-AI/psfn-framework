@@ -284,9 +284,9 @@ describe('GatewayServer', () => {
       });
     });
 
-    it('returns provider error when keyring is unavailable', async () => {
+    it('degrades gracefully when keyring is unavailable', async () => {
       const { conn } = await setupServerConnection(createMinimalOptions());
-      const response = await invokeRpc(conn, 902, 'session.hmac.sign', {
+      const signResponse = await invokeRpc(conn, 902, 'session.hmac.sign', {
         entry: {
           type: 'message',
           id: 1,
@@ -298,9 +298,23 @@ describe('GatewayServer', () => {
         previousHmac: null,
       });
 
-      expect(response.error).toBeDefined();
-      expect(response.error.code).toBe(GatewayErrors.PROVIDER_ERROR);
-      expect(response.error.message).toContain('keyring');
+      expect(signResponse.error).toBeUndefined();
+      expect(signResponse.result.entry).toMatchObject({
+        type: 'message',
+        id: 1,
+        channelId: 'api:test',
+      });
+
+      const verifyResponse = await invokeRpc(conn, 903, 'session.hmac.verify', {
+        entry: signResponse.result.entry,
+        previousHmac: null,
+      });
+
+      expect(verifyResponse.error).toBeUndefined();
+      expect(verifyResponse.result).toMatchObject({
+        verified: false,
+        reason: 'hmac_keyring_unconfigured',
+      });
     });
   });
 

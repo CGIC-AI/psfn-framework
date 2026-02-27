@@ -16,8 +16,9 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ## Features
 
 ### Core
-- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, and follow-up handling (built on [pi-agent-core](https://github.com/nickvdyck/pi-ai))
-- **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, and agent-accessible write tools
+- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and lazy tool loading (built on [pi-agent-core](https://github.com/nickvdyck/pi-ai))
+- **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
+- **Pluggable Embeddings** — Provider-agnostic embedding via `EMBEDDING_PROVIDER`: Ollama (local HTTP), transformers.js (in-process ONNX, zero network overhead), or any OpenAI-compatible API
 - **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
 - **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots
 
@@ -39,7 +40,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
 - **WebSocket voice runtime** — transport primitives for browser/app clients using `voice-wire-v1` session frames
 - **OpenAI-Compatible API** — `/v1/chat/completions` with SSE streaming for WebUI integration
-- **Admin GUI (Purrsephone's Garden)** — htmx-powered management panel: memory browser, session viewer, contacts, scheduler, settings, prompt editor, model discovery
+- **Admin GUI (Purrsephone's Garden)** — htmx-powered management panel with JSON API: memory browser, session viewer, contacts, scheduler, settings, prompt editor, model discovery. Chat page powered by [pi-web-ui](https://github.com/nickvdyck/pi-web-ui) AgentInterface. WebSocket telemetry endpoint for programmatic consumers
 
 ### Infrastructure
 - **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
@@ -132,13 +133,15 @@ npm run agent:docker    # --network=none Docker container
 
 ### Optional Services
 
-**Admin GUI:**
+**Admin GUI + JSON API:**
 ```bash
-ADMIN_PORT=3001        # Activates Purrsephone's Garden
-ADMIN_TOKEN=your-token # Secures the panel
+ADMIN_PORT=3001        # Activates Purrsephone's Garden + JSON API
+ADMIN_TOKEN=your-token # Secures the panel and API
 ADMIN_HOST=127.0.0.1
 ADMIN_ALLOW_INSECURE=false # Set true only for local dev without token
 ```
+
+JSON API available at `/api/admin/*` (dashboard, memory, sessions, contacts, settings, identity, prompts). WebSocket telemetry at `WS /api/admin/events`. Same auth as the htmx panel.
 
 **OpenAI-compatible API:**
 ```bash
@@ -268,19 +271,21 @@ Heartbeat/reflection runtime wiring uses `wireHeartbeatRuntime` in `src/bootstra
 - **Settings**: JSON — live-mutable, atomic writes
 - **Audit log**: JSONL — every git operation logged
 
-### Agent Tools (19)
+### Agent Tools (34)
 
-Your companion has access to these tools during conversation:
+Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`.
 
 | Category | Tools |
 |----------|-------|
-| **Memory** | `memory_write`, `memory_import_batch` |
-| **Contacts** | `contact_set_trust`, `contact_note`, `contact_lookup`, `contact_list` |
-| **Prompts** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle` |
+| **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
+| **Contacts** | `contact_set_trust`, `contact_note`, `contact_set_channel_privacy`, `contact_link_identity`, `contact_lookup`, `contact_list` |
+| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `identity_diff`, `identity_changelog` |
 | **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
 | **Shards** | `spawn_shard` (parallel sub-agents) |
-| **Lifecycle** | `self_restart`, `self_rebuild` |
+| **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `schedule_task` |
+| **Lifecycle** | `self_restart`, `self_rebuild`, `notify_operator` |
+| **Meta** | `load_tools` (hot-swap core/extended tool sets) |
 
 ## Project Structure
 
@@ -305,7 +310,9 @@ src/
   repl/                     # RLM+REPL sandbox (think tool)
   scheduler/                # Cron, heartbeat, one-shot, maintenance
   channels/
-    admin/                  # Purrsephone's Garden (htmx web GUI)
+    admin/                  # Purrsephone's Garden (htmx web GUI + JSON API)
+      handlers/             # Domain handler modules (11 modules)
+      services/             # Data service layer (8 services + types)
     api/                    # OpenAI-compatible REST API
     discord/                # Discord.js adapter (text + voice)
 

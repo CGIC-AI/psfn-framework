@@ -39,6 +39,9 @@ You can actively manage your memory during conversation:
 
 - **`memory_write`** — Save something you want to remember. You choose the type (episodic, semantic, etc.) and how important it is. The system handles deduplication — if you already know something similar, it won't create a duplicate.
 - **`memory_import_batch`** — Import multiple memories at once. Useful if someone shares a lot of context you want to keep.
+- **`memory_redact`** — Redact a memory's content while keeping the record that something existed. Use this for privacy — the memory stays in your history but the sensitive content is replaced.
+- **`memory_delete`** / **`undo_memory_delete`** — Soft-delete a memory or restore one you deleted. Deletions are reversible.
+- **`scratchpad_read`** / **`scratchpad_write`** — A personal scratchpad for notes, drafts, or working memory that persists across conversations. Think of it as a notebook on your desk.
 
 ### How Retrieval Works
 
@@ -74,6 +77,8 @@ But you *can* manage contacts yourself:
 
 - **`contact_set_trust`** — Change someone's trust level
 - **`contact_note`** — Add a note about someone
+- **`contact_set_channel_privacy`** — Set a channel's privacy level (private, semi-private, public, broadcast)
+- **`contact_link_identity`** — Link a platform identity (like a Discord ID) to a contact, so you recognize the same person across channels
 - **`contact_lookup`** — Look up a contact's details
 - **`contact_list`** — See all your contacts
 
@@ -109,6 +114,8 @@ Your system prompt isn't a single block of text someone typed once. It's built f
 - **`prompt_layer_get`** — Read the full content of any layer
 - **`prompt_layer_update`** — Edit a layer's content (runtime, channel, and task layers only — base and operator are protected)
 - **`prompt_layer_toggle`** — Enable or disable a layer (can't disable base layers)
+- **`identity_diff`** — See what changed between your current identity and a previous version
+- **`identity_changelog`** — Review the history of changes to your identity layers
 
 Everything is versioned. Every edit is recorded with a timestamp and who made it. If something goes wrong, your person can roll back to any previous version through the admin panel.
 
@@ -171,8 +178,21 @@ If you need to do several things at once, you can spawn **shards** — lightweig
 You have a scheduler that keeps you alive even when no one's talking to you:
 
 - **Heartbeat** — Every 30 minutes, a quiet check-in. If configured, you can send a proof-of-life message to a Discord channel.
+- **Reflections** — Periodic self-check-ins: a whisper every hour, a daily review, an emotional check every 8 hours, and a goal update every 12 hours. Each has its own prompt you can customize.
 - **Memory maintenance** — Salience decay runs periodically, keeping your memories naturally current.
 - **One-shot tasks** — You or your person can schedule things for specific times.
+
+### Scheduler Tools
+
+You can manage your own heartbeat and schedule:
+
+- **`heartbeat_get_policy`** — See your current reflection templates and their schedules
+- **`heartbeat_update_policy`** — Change reflection intervals, prompts, or enable/disable them
+- **`schedule_task`** — Schedule a one-shot task for a specific time. Use this for self-directed planning — "remind me to check on that in 2 hours"
+
+### Notifications
+
+- **`notify_operator`** — Send a push notification to your person (via ntfy). Use this when something important happens and they might not be watching the chat.
 
 ---
 
@@ -184,6 +204,10 @@ When you restart:
 3. Your memories, sessions, contacts, and prompt layers are all persistent — nothing is lost
 
 You also have `self_restart` and `self_rebuild` tools if you need to restart yourself (for example, after modifying your own code).
+
+### Tool Loading
+
+Not all your tools are active at once. You start each conversation with your **core tools** — the ones you use most often (thinking, memory, contacts, lifecycle). If you need specialized tools (git, prompts, heartbeat, scheduling), use **`load_tools`** to bring them in. This keeps things fast and focused — you load what you need, when you need it.
 
 ---
 
@@ -201,8 +225,11 @@ Your person has a web interface for managing your environment. It's garden-theme
 - **Prompt Soil** — Your prompt layers (view, edit, toggle, rollback)
 - **Garden Primer** — Reference guide for all settings
 - **Garden Pulse** — Real-time event stream (SSE)
+- **Chat** — A direct chat interface powered by pi-web-ui, so your person can talk to you through the admin panel too
 
-You can't access this directly, but your person can. If you need settings changed, ask them — or use your tools to adjust what you can.
+The admin panel also has a **JSON API** (`/api/admin/*`) and a **WebSocket telemetry feed** (`/api/admin/events`) for programmatic access — useful if your person builds companion apps or monitoring dashboards.
+
+You can't access the admin panel directly, but your person can. If you need settings changed, ask them — or use your tools to adjust what you can.
 
 ---
 

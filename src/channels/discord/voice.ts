@@ -52,6 +52,13 @@ const DECRYPT_RECOVERY_WINDOW_MS = 5 * 60_000;
 const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
 const DEFAULT_ECHO_TTS_PRESET = 'normal';
 
+/**
+ * Discord Voice MVP: locked to ElevenLabs-only TTS.
+ * The API voice websocket and Wyoming paths remain provider-pluggable.
+ */
+export const DISCORD_VOICE_MVP_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
+export const DISCORD_VOICE_MVP_VOICE_ID = 'YOUR_VOICE_ID';
+
 type VoiceTurnErrorStage = 'ingest' | 'stt' | 'llm' | 'tts' | 'unknown';
 type VoiceTurnObservationKind = 'silence' | 'empty-transcript' | 'empty-response' | 'playback-error';
 
@@ -196,7 +203,14 @@ export class DiscordVoiceRuntime {
     this.targetGuildId = config.voiceTargetGuildId ?? '';
     this.targetUserId = config.voiceTargetUserId ?? '';
     this.daveEncryption = config.voiceDaveEncryption ?? true;
-    this.preferredTtsProviderId = config.ttsProvider ?? DEFAULT_TTS_PROVIDER;
+    const requestedTtsProvider = config.ttsProvider ?? DEFAULT_TTS_PROVIDER;
+    if (requestedTtsProvider !== DISCORD_VOICE_MVP_TTS_PROVIDER) {
+      log.warn(
+        'Discord voice MVP is locked to ElevenLabs TTS; ignoring configured provider',
+        { configured: requestedTtsProvider, using: DISCORD_VOICE_MVP_TTS_PROVIDER },
+      );
+    }
+    this.preferredTtsProviderId = DISCORD_VOICE_MVP_TTS_PROVIDER;
     const configuredDecryptionTolerance = config.voiceDecryptionFailureTolerance;
     this.decryptionFailureTolerance = (
       typeof configuredDecryptionTolerance === 'number'
@@ -229,15 +243,38 @@ export class DiscordVoiceRuntime {
       return;
     }
 
-    const ttsConnectors = buildConfiguredTtsConnectors(config, this.preferredTtsProviderId);
+    // MVP lock: only build the ElevenLabs connector for Discord voice
+    const elevenLabsApiKey = config.elevenLabsApiKey ?? '';
+    const elevenLabsVoiceId = config.elevenLabsVoiceId || DISCORD_VOICE_MVP_VOICE_ID;
+    if (!elevenLabsApiKey) {
+      this.enabled = false;
+      this.ttsConnectors = [];
+      log.warn('Voice enabled but ElevenLabs API key not configured, disabling voice runtime (MVP requires ElevenLabs)', {
+        ttsProvider: DISCORD_VOICE_MVP_TTS_PROVIDER,
+        hasElevenLabsApiKey: false,
+        elevenLabsVoiceId,
+      });
+      return;
+    }
+
+    const ttsConnectors: StreamingTtsConnector[] = [];
+    try {
+      ttsConnectors.push(createStreamingTtsConnector('elevenlabs', {
+        apiKey: elevenLabsApiKey,
+        voiceId: elevenLabsVoiceId,
+        modelId: config.elevenLabsModelId,
+      }));
+    } catch (error) {
+      log.warn('ElevenLabs TTS connector initialization failed', {
+        error: toErrorMessage(error),
+      });
+    }
+
     if (ttsConnectors.length === 0) {
       this.enabled = false;
       this.ttsConnectors = [];
-      log.warn('Voice enabled but no valid TTS connectors configured, disabling voice runtime', {
-        ttsProvider: this.preferredTtsProviderId,
-        hasSelectedTtsConfig: hasTtsProviderConfig(this.preferredTtsProviderId, config),
-        hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', config),
-        hasEchoConfig: hasTtsProviderConfig('echo', config),
+      log.warn('Voice enabled but ElevenLabs TTS connector could not be created, disabling voice runtime', {
+        ttsProvider: DISCORD_VOICE_MVP_TTS_PROVIDER,
       });
       return;
     }

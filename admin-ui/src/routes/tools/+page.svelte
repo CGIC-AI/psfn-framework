@@ -10,30 +10,34 @@
   }
 
   const CATEGORY_BADGE: Record<string, string> = {
-    core:      'bg-gold-100 text-gold-700',
-    memory:    'bg-moss-100 text-moss-700',
-    contact:   'bg-petal-100 text-petal-700',
-    lifecycle: 'bg-wilt-100 text-wilt-700',
-    git:       'bg-bark-200 text-shadow-800',
-    prompt:    'bg-gold-50 text-gold-600',
-    heartbeat: 'bg-moss-100 text-moss-700',
-    trust:     'bg-gold-100 text-gold-700',
-    skills:    'bg-moss-50 text-moss-700',
-    gateway:   'bg-bark-200 text-shadow-800',
+    core:       'bg-gold-100 text-gold-700',
+    memory:     'bg-moss-100 text-moss-700',
+    contact:    'bg-petal-100 text-petal-700',
+    lifecycle:  'bg-wilt-100 text-wilt-700',
+    git:        'bg-bark-200 text-shadow-800',
+    prompt:     'bg-gold-50 text-gold-600',
+    identity:   'bg-gold-50 text-gold-600',
+    settings:   'bg-bark-200 text-shadow-700',
+    heartbeat:  'bg-moss-100 text-moss-700',
+    trust:      'bg-gold-100 text-gold-700',
+    skills:     'bg-moss-50 text-moss-700',
+    gateway:    'bg-bark-200 text-shadow-800',
     scratchpad: 'bg-gold-50 text-gold-600',
   };
 
   const CATEGORY_DOT: Record<string, string> = {
-    core:      'bg-gold-400',
-    memory:    'bg-moss-400',
-    contact:   'bg-petal-400',
-    lifecycle: 'bg-wilt-400',
-    git:       'bg-shadow-600',
-    prompt:    'bg-gold-400',
-    heartbeat: 'bg-moss-400',
-    trust:     'bg-gold-500',
-    skills:    'bg-moss-500',
-    gateway:   'bg-shadow-600',
+    core:       'bg-gold-400',
+    memory:     'bg-moss-400',
+    contact:    'bg-petal-400',
+    lifecycle:  'bg-wilt-400',
+    git:        'bg-shadow-600',
+    prompt:     'bg-gold-400',
+    identity:   'bg-gold-400',
+    settings:   'bg-shadow-500',
+    heartbeat:  'bg-moss-400',
+    trust:      'bg-gold-500',
+    skills:     'bg-moss-500',
+    gateway:    'bg-shadow-600',
     scratchpad: 'bg-gold-500',
   };
 
@@ -41,9 +45,17 @@
     { name: 'think',               description: 'RLM+REPL sandbox for multi-step reasoning with code execution',  category: 'core' },
     { name: 'spawn_shard',         description: 'Launch ephemeral sub-agent for parallel work',                    category: 'core' },
     { name: 'memory_write',        description: 'Write a single memory directly to L2 store',                     category: 'memory' },
+    { name: 'memory_import_batch', description: 'Import multiple memories in a single batch',                     category: 'memory' },
+    { name: 'memory_redact',       description: 'Redact sensitive content from a memory',                         category: 'memory' },
+    { name: 'memory_delete',       description: 'Soft-delete a memory',                                           category: 'memory' },
+    { name: 'undo_memory_delete',  description: 'Restore a previously deleted memory',                            category: 'memory' },
+    { name: 'scratchpad_read',     description: 'Read from the agent scratchpad (ephemeral key-value)',            category: 'scratchpad' },
+    { name: 'scratchpad_write',    description: 'Write to the agent scratchpad (ephemeral key-value)',             category: 'scratchpad' },
     { name: 'contact_lookup',      description: 'Look up a contact by name or Discord ID',                        category: 'contact' },
     { name: 'contact_list',        description: 'List all known contacts with trust levels',                      category: 'contact' },
-    { name: 'schedule_task',       description: 'Create one-shot or recurring scheduled tasks',                    category: 'core' },
+    { name: 'self_restart',        description: 'Gracefully restart the agent process',                            category: 'lifecycle' },
+    { name: 'self_rebuild',        description: 'Trigger a rebuild and restart cycle',                             category: 'lifecycle' },
+    { name: 'notify_operator',     description: 'Send a notification to the operator via ntfy',                    category: 'lifecycle' },
     { name: 'load_tools',          description: 'Hot-swap active tool set to include extended tools',              category: 'core' },
   ];
 
@@ -51,33 +63,30 @@
     // Git
     { name: 'repo_status',            description: 'Show working tree status of the substrate repo',        category: 'git' },
     { name: 'repo_diff',              description: 'Show file diffs in the working tree',                   category: 'git' },
-    { name: 'repo_create_branch',     description: 'Create or switch branches',                             category: 'git' },
-    { name: 'repo_commit',            description: 'Stage and commit changes with audit metadata',          category: 'git' },
     { name: 'repo_apply_patch',       description: 'Apply a patch to files in allowed paths',               category: 'git' },
+    { name: 'repo_commit',            description: 'Stage and commit changes with audit metadata',          category: 'git' },
+    { name: 'repo_create_branch',     description: 'Create or switch branches',                             category: 'git' },
     { name: 'repo_open_pr',           description: 'Create a pull request from current branch',             category: 'git' },
     // Prompt
-    { name: 'prompt_list',            description: 'List all prompt layers in the stack',                   category: 'prompt' },
-    { name: 'prompt_get',             description: 'Get content of a specific prompt layer',                category: 'prompt' },
-    { name: 'prompt_update',          description: 'Update a prompt layer (agent blocks base/operator)',    category: 'prompt' },
-    { name: 'prompt_toggle',          description: 'Enable or disable a prompt layer',                      category: 'prompt' },
+    { name: 'prompt_layer_list',      description: 'List all prompt layers in the stack',                   category: 'prompt' },
+    { name: 'prompt_layer_get',       description: 'Get content of a specific prompt layer',                category: 'prompt' },
+    { name: 'prompt_layer_update',    description: 'Update a prompt layer (agent blocks base/operator)',    category: 'prompt' },
+    { name: 'prompt_layer_toggle',    description: 'Enable or disable a prompt layer',                      category: 'prompt' },
+    // Identity
+    { name: 'identity_diff',          description: 'Show identity changes between versions',                category: 'identity' },
+    { name: 'identity_changelog',     description: 'View the identity change history',                      category: 'identity' },
+    { name: 'character_card_update',  description: 'Update character card fields',                           category: 'identity' },
+    // Settings
+    { name: 'settings_get',           description: 'Read current runtime settings',                          category: 'settings' },
+    // Trust & Contacts
+    { name: 'contact_set_trust',      description: 'Change trust level for a contact',                      category: 'trust' },
+    { name: 'contact_set_channel_privacy', description: 'Set privacy level for a contact channel link',     category: 'trust' },
+    { name: 'contact_note',           description: 'Add or update notes on a contact',                      category: 'trust' },
+    { name: 'contact_link_identity',  description: 'Link two channel identities to the same contact',       category: 'trust' },
     // Heartbeat & Scheduler
     { name: 'heartbeat_get_policy',   description: 'View heartbeat reflection templates and schedules',     category: 'heartbeat' },
     { name: 'heartbeat_update_policy', description: 'Modify reflection templates or intervals',             category: 'heartbeat' },
-    // Trust & Contacts
-    { name: 'contact_set_trust',      description: 'Change trust level for a contact',                      category: 'trust' },
-    { name: 'contact_note',           description: 'Add or update notes on a contact',                      category: 'trust' },
-    { name: 'contact_set_channel_privacy', description: 'Set privacy level for a contact channel link',     category: 'trust' },
-    { name: 'contact_link_identity',  description: 'Link two channel identities to the same contact',       category: 'trust' },
-    // Memory (extended)
-    { name: 'memory_import_batch',    description: 'Import multiple memories in a single batch',            category: 'memory' },
-    { name: 'memory_redact',          description: 'Redact sensitive content from a memory',                category: 'memory' },
-    { name: 'memory_delete',          description: 'Soft-delete a memory (supersede with no replacement)',  category: 'memory' },
-    { name: 'undo_memory_delete',     description: 'Restore a previously deleted memory',                   category: 'memory' },
-    { name: 'scratchpad_read',        description: 'Read from the agent scratchpad (ephemeral key-value)',  category: 'scratchpad' },
-    { name: 'scratchpad_write',       description: 'Write to the agent scratchpad (ephemeral key-value)',   category: 'scratchpad' },
-    // Lifecycle
-    { name: 'self_restart',           description: 'Gracefully restart the agent process',                  category: 'lifecycle' },
-    { name: 'self_rebuild',           description: 'Trigger a rebuild and restart cycle',                   category: 'lifecycle' },
+    { name: 'schedule_task',          description: 'Create one-shot or recurring scheduled tasks',           category: 'heartbeat' },
     // Skills
     { name: 'skill_list',             description: 'List all loaded skill modules',                         category: 'skills' },
     { name: 'skill_view',             description: 'View details of a specific skill',                      category: 'skills' },
@@ -90,10 +99,10 @@
   // ── Grouped extended tools ──
   const gitTools = EXTENDED_TOOLS.filter(t => t.category === 'git');
   const promptTools = EXTENDED_TOOLS.filter(t => t.category === 'prompt');
+  const identityTools = EXTENDED_TOOLS.filter(t => t.category === 'identity');
+  const settingsTools = EXTENDED_TOOLS.filter(t => t.category === 'settings');
   const heartbeatTools = EXTENDED_TOOLS.filter(t => t.category === 'heartbeat');
   const trustTools = EXTENDED_TOOLS.filter(t => t.category === 'trust');
-  const memoryExtTools = EXTENDED_TOOLS.filter(t => t.category === 'memory' || t.category === 'scratchpad');
-  const lifecycleTools = EXTENDED_TOOLS.filter(t => t.category === 'lifecycle');
   const skillsTools = EXTENDED_TOOLS.filter(t => t.category === 'skills');
   const gatewayTools = EXTENDED_TOOLS.filter(t => t.category === 'gateway');
 
@@ -107,10 +116,10 @@
   const EXTENDED_GROUPS: ExtendedGroup[] = [
     { id: 'git', label: 'Git Self-Modification', dot: CATEGORY_DOT.git, tools: gitTools },
     { id: 'prompt', label: 'Prompt Stack', dot: CATEGORY_DOT.prompt, tools: promptTools },
+    { id: 'identity', label: 'Identity', dot: CATEGORY_DOT.identity, tools: identityTools },
+    { id: 'settings', label: 'Settings', dot: CATEGORY_DOT.settings, tools: settingsTools },
     { id: 'heartbeat', label: 'Heartbeat & Scheduler', dot: CATEGORY_DOT.heartbeat, tools: heartbeatTools },
     { id: 'trust', label: 'Trust & Contacts', dot: CATEGORY_DOT.trust, tools: trustTools },
-    { id: 'memory', label: 'Memory & Scratchpad', dot: CATEGORY_DOT.memory, tools: memoryExtTools },
-    { id: 'lifecycle', label: 'Lifecycle', dot: CATEGORY_DOT.lifecycle, tools: lifecycleTools },
     { id: 'skills', label: 'Skills', dot: CATEGORY_DOT.skills, tools: skillsTools },
     { id: 'gateway', label: 'Gateway', dot: CATEGORY_DOT.gateway, tools: gatewayTools },
   ].filter(g => g.tools.length > 0);
@@ -129,7 +138,7 @@
   let services = $state<ServiceStatus[]>([
     { name: 'Admin API',  description: 'Garden admin server',                              status: 'loading' },
     { name: 'LLM Proxy',  description: 'LiteLLM proxy for model routing',                  status: 'loading', expandable: true, expanded: false, models: [] },
-    { name: 'Embeddings',  description: 'Embedding service (configured via env)',            status: 'loading' },
+    { name: 'Embeddings',  description: 'Embedding model for semantic memory search',        status: 'loading' },
   ]);
 
   const STATUS_COLOR: Record<ServiceStatus['status'], string> = {

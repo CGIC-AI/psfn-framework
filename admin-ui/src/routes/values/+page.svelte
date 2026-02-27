@@ -78,14 +78,15 @@
   {:else if endpointMissing}
     <div class="card-garden p-6">
       <div class="flex items-start gap-3">
-        <svg class="w-5 h-5 text-gold-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        <svg class="w-5 h-5 text-bark-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <div>
           <p class="text-sm text-shadow-800">
-            The values JSON API endpoint (<code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">/api/admin/values</code>) is not yet available.
+            Requires gateway connection
           </p>
           <p class="text-sm text-shadow-600 mt-2">
+            The values journal is available when the agent is running with an active gateway.
             Values reflections are captured from periodic "values-reflection" heartbeats.
             Each entry records a versioned prompt and the agent's reflection on her current values and goals.
           </p>

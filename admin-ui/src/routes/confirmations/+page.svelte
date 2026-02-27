@@ -153,15 +153,15 @@
   {:else if endpointMissing}
     <div class="card-garden p-6">
       <div class="flex items-start gap-3">
-        <svg class="w-5 h-5 text-gold-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        <svg class="w-5 h-5 text-bark-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <div>
           <p class="text-sm text-shadow-800">
-            The confirmations JSON API endpoint (<code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">/api/admin/confirmations</code>) is not yet available.
+            Requires gateway connection
           </p>
           <p class="text-sm text-shadow-600 mt-2">
-            The confirmation queue requires the gateway integration to be active.
+            The confirmation queue is available when the agent is running with an active gateway.
             Actions needing approval are queued by the gateway policy engine when agent requests
             exceed workspace boundaries or touch sensitive resources.
           </p>
@@ -196,8 +196,8 @@
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
         <path d="M7 11V7a5 5 0 0110 0v4" />
       </svg>
-      <p class="font-serif text-lg text-shadow-700 mb-1">Confirmation queue unavailable</p>
-      <p class="text-sm text-shadow-600">The gateway integration is not configured. Confirmations require an active gateway connection.</p>
+      <p class="font-serif text-lg text-shadow-700 mb-1">Gateway not connected</p>
+      <p class="text-sm text-shadow-600">Confirmations require an active gateway connection. The approval queue will appear here when the agent is running with the gateway.</p>
     </div>
   {:else if entries.length === 0}
     <div class="card-garden p-12 text-center">

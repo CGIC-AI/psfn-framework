@@ -76,6 +76,11 @@ import {
 } from './bootstrap/parity.js';
 import { attachVoiceObservers } from './voice/observers/index.js';
 import { loadRuntimeChannelsConfig } from './channels/config.js';
+import { WyomingTcpServer } from './channels/wyoming/server.js';
+import { WyomingRuntime } from './channels/wyoming/runtime.js';
+import { createWyomingServiceRegistry } from './channels/wyoming/services/index.js';
+import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/handle.js';
+import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createSafeguardAuditTrail,
@@ -107,6 +112,8 @@ export class SubstrateRuntime implements Lifecycle {
   private capabilityRuntime!: CapabilityRuntime;
   private moduleLoader?: ModuleLoader;
   private adminServer?: AdminServer;
+  private wyomingTcpServer?: WyomingTcpServer;
+  private wyomingRuntime?: WyomingRuntime;
   private lifecycleNotifier?: LifecycleNotifier;
   private stopVoiceObservers?: () => void;
   private stopDebugObserver?: () => void;
@@ -748,6 +755,40 @@ export class SubstrateRuntime implements Lifecycle {
       log.info(`Admin GUI configured on port ${adminPort}`);
     }
 
+    // Wyoming voice bridge — opt-in TCP server for Home Assistant integration
+    if (this.config.wyomingEnabled) {
+      const wyomingPort = this.config.wyomingPort ?? 10400;
+      const wyomingHost = this.config.wyomingHost ?? '127.0.0.1';
+
+      const handleAdapter = createWyomingHandleServiceAdapter({
+        handleMessage: (message) => this.agentLoop.handleMessage(message),
+        eventBus: this.eventBus,
+      });
+      const serviceRegistry = createWyomingServiceRegistry([handleAdapter]);
+
+      this.wyomingTcpServer = new WyomingTcpServer(
+        { port: wyomingPort, host: wyomingHost, eventBus: this.eventBus },
+        {
+          onFrame: (session, frame) => this.wyomingRuntime!.handleFrame(session, frame),
+          onSessionClose: (session) => this.wyomingRuntime!.closeConnection(session.connectionId),
+        },
+      );
+
+      this.wyomingRuntime = new WyomingRuntime({
+        info: {
+          name: 'psfn',
+          version: '1.0.0',
+          description: 'PSFN Substrate Framework — Wyoming voice bridge',
+          services: serviceRegistry.services,
+        } as WyomingInfoData,
+        emitFrame: (session, frame) => this.wyomingTcpServer!.send(session, frame),
+        serviceRegistry,
+        eventBus: this.eventBus,
+      });
+
+      log.info(`Wyoming voice bridge configured on ${wyomingHost}:${wyomingPort}`);
+    }
+
     await this.eventBus.emit('system.init', {});
     log.info('Initialized');
   }
@@ -757,6 +798,10 @@ export class SubstrateRuntime implements Lifecycle {
     this.scheduler.start();
     await this.startChannels();
     if (this.adminServer) await this.adminServer.start();
+    if (this.wyomingTcpServer) {
+      await this.wyomingTcpServer.start();
+      log.info(`Wyoming voice bridge listening on ${this.config.wyomingHost ?? '127.0.0.1'}:${this.config.wyomingPort ?? 10400}`);
+    }
     this.queueCrashRecoveryExtractions();
     await this.eventBus.emit('system.ready', {});
 
@@ -788,6 +833,8 @@ export class SubstrateRuntime implements Lifecycle {
     if ((markedChannels?.length ?? 0) > 0) {
       log.info('Wrote graceful shutdown markers', { channels: markedChannels });
     }
+    if (this.wyomingRuntime) await this.wyomingRuntime.stop();
+    if (this.wyomingTcpServer) await this.wyomingTcpServer.stop();
     if (this.adminServer) await this.adminServer.stop();
     await this.moduleLoader?.shutdown();
     await this.stopChannels();

@@ -50,11 +50,22 @@
   let discoveredModels = $state<DiscoveredModel[]>([]);
   let refreshingModels = $state(false);
 
+  // ── Budget constants (from context-budget.ts) ──
+  const SESSION_HISTORY_TOKENS_PER_MSG = 256;
+  const MEMORY_RETRIEVAL_TOKENS_PER_ITEM = 170;
+  const SESSION_HISTORY_MIN_MESSAGES = 5;
+  const SESSION_HISTORY_MAX_MESSAGES = 400;
+  const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
+  const MEMORY_RETRIEVAL_MAX_ITEMS = 200;
+
   // ── Simple mode fields ──
   let primaryModel = $state('');
   let extractionModel = $state('');
   let memoryBudgetPct = $state(20);
   let memoryRetrievalLimit = $state(15);
+  let sessionMessageLimit = $state<number | null>(null);
+  let sessionHistoryBudgetPct = $state(6);
+  let memoryRetrievalBudgetPct = $state(2);
   let extractionThresholdPct = $state(30);
   let compactionThresholdPct = $state(70);
   let maxResponseTokens = $state(4096);
@@ -159,15 +170,26 @@
     if (!data) return { session: '', memory: '', contextWindow: '128,000' };
     const config = data.config as Record<string, unknown>;
     const ctxWindow = Number(config.defaultContextWindow ?? 128000);
-    const memPct = memoryBudgetPct / 100;
-    const memTokenBudget = Math.floor(ctxWindow * memPct);
-    const memItems = Math.min(Math.max(Math.floor(memTokenBudget / 200), 3), 100);
-    const sessPct = (100 - memoryBudgetPct - 10) / 100; // rough: leave 10% for system
-    const sessTokenBudget = Math.floor(ctxWindow * sessPct);
-    const sessMsgs = Math.min(Math.max(Math.floor(sessTokenBudget / 400), 5), 500);
+
+    // Session history budget
+    const sessTokenBudget = Math.max(4000, Math.floor(ctxWindow * (sessionHistoryBudgetPct / 100)));
+    const sessBudgetMsgs = Math.min(Math.max(Math.floor(sessTokenBudget / SESSION_HISTORY_TOKENS_PER_MSG), SESSION_HISTORY_MIN_MESSAGES), SESSION_HISTORY_MAX_MESSAGES);
+    const sessEffective = sessionMessageLimit != null ? Math.min(sessBudgetMsgs, sessionMessageLimit) : sessBudgetMsgs;
+    const sessLabel = sessionMessageLimit != null
+      ? `${sessEffective} messages (hard limit: ${sessionMessageLimit}, budget: ~${sessBudgetMsgs})`
+      : `~${sessBudgetMsgs} messages (~${(sessTokenBudget / 1000).toFixed(0)}K tokens)`;
+
+    // Memory retrieval budget
+    const memTokenBudget = Math.max(1000, Math.floor(ctxWindow * (memoryRetrievalBudgetPct / 100)));
+    const memBudgetItems = Math.min(Math.max(Math.floor(memTokenBudget / MEMORY_RETRIEVAL_TOKENS_PER_ITEM), MEMORY_RETRIEVAL_MIN_ITEMS), MEMORY_RETRIEVAL_MAX_ITEMS);
+    const memEffective = memoryRetrievalLimit != null ? Math.min(memBudgetItems, memoryRetrievalLimit) : memBudgetItems;
+    const memLabel = memoryRetrievalLimit != null
+      ? `${memEffective} memories (hard limit: ${memoryRetrievalLimit}, budget: ~${memBudgetItems})`
+      : `~${memBudgetItems} memories (~${(memTokenBudget / 1000).toFixed(0)}K tokens)`;
+
     return {
-      session: `~${sessMsgs} messages (~${(sessTokenBudget / 1000).toFixed(0)}K tokens)`,
-      memory: `~${memItems} memories (~${(memTokenBudget / 1000).toFixed(0)}K tokens)`,
+      session: sessLabel,
+      memory: memLabel,
       contextWindow: ctxWindow.toLocaleString(),
     };
   });
@@ -177,7 +199,10 @@
     primaryModel = String(config.primaryModel ?? '');
     extractionModel = String(config.extractionModel ?? '');
     memoryBudgetPct = Number(config.memoryBudgetPct ?? 20);
-    memoryRetrievalLimit = Number(config.memoryRetrievalLimit ?? 15);
+    memoryRetrievalLimit = config.memoryRetrievalLimit != null ? Number(config.memoryRetrievalLimit) : null;
+    sessionMessageLimit = config.sessionMessageLimit != null ? Number(config.sessionMessageLimit) : null;
+    sessionHistoryBudgetPct = Number(config.sessionHistoryBudgetPct ?? 6);
+    memoryRetrievalBudgetPct = Number(config.memoryRetrievalBudgetPct ?? 2);
     extractionThresholdPct = Number(config.extractionThresholdPct ?? 30);
     compactionThresholdPct = Number(config.compactionThresholdPct ?? 70);
     maxResponseTokens = Number(config.primaryMaxTokens ?? 4096);
@@ -345,7 +370,10 @@
         primaryModel,
         extractionModel,
         memoryBudgetPct,
-        memoryRetrievalLimit,
+        ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
+        ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
+        sessionHistoryBudgetPct,
+        memoryRetrievalBudgetPct,
         extractionThresholdPct,
         compactionThresholdPct,
         primaryMaxTokens: maxResponseTokens,
@@ -646,6 +674,48 @@
         </div>
       </div>
 
+      <!-- Context Budget -->
+      <div class="card-garden p-6 space-y-6">
+        <h2 class={SECTION_HEADING_CLS}>Context Budget</h2>
+        <hr class="divider-filigree" />
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label class={LABEL_CLS}>Session History Budget %</label>
+            <div class="flex items-center gap-3">
+              <input type="range" min="1" max="80" step="1" bind:value={sessionHistoryBudgetPct} class={SLIDER_CLS} />
+              <input type="number" min="1" max="80" bind:value={sessionHistoryBudgetPct} class={COMPACT_INPUT_CLS} />
+            </div>
+            <p class="text-sm text-shadow-600 mt-1">% of context window for session history (default: 6%)</p>
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Session Message Limit (hard override)</label>
+            <input type="number" min="1" max="500"
+              value={sessionMessageLimit ?? ''}
+              onchange={(e) => { const v = Number((e.target as HTMLInputElement).value); sessionMessageLimit = v > 0 ? v : null; }}
+              placeholder="auto (budget-based)"
+              class={INPUT_CLS} />
+            <p class="text-sm text-shadow-600 mt-1">Caps messages regardless of budget. Leave blank for auto.</p>
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Memory Retrieval Budget %</label>
+            <div class="flex items-center gap-3">
+              <input type="range" min="1" max="50" step="1" bind:value={memoryRetrievalBudgetPct} class={SLIDER_CLS} />
+              <input type="number" min="1" max="50" bind:value={memoryRetrievalBudgetPct} class={COMPACT_INPUT_CLS} />
+            </div>
+            <p class="text-sm text-shadow-600 mt-1">% of context window for memory retrieval (default: 2%)</p>
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Memory Retrieval Limit (hard override)</label>
+            <input type="number" min="1" max="500"
+              value={memoryRetrievalLimit ?? ''}
+              onchange={(e) => { const v = Number((e.target as HTMLInputElement).value); memoryRetrievalLimit = v > 0 ? v : null; }}
+              placeholder="auto (budget-based)"
+              class={INPUT_CLS} />
+            <p class="text-sm text-shadow-600 mt-1">Caps memories regardless of budget. Leave blank for auto.</p>
+          </div>
+        </div>
+      </div>
+
       <!-- Memory & Extraction -->
       <div class="card-garden p-6 space-y-6">
         <h2 class={SECTION_HEADING_CLS}>Memory & Extraction</h2>
@@ -657,12 +727,7 @@
               <input type="range" min="5" max="50" step="1" bind:value={memoryBudgetPct} class={SLIDER_CLS} />
               <input type="number" min="5" max="50" bind:value={memoryBudgetPct} class={COMPACT_INPUT_CLS} />
             </div>
-            <p class="text-sm text-shadow-600 mt-1">% of context window reserved for memory retrieval</p>
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Memory Retrieval Limit</label>
-            <input type="number" min="1" max="500" bind:value={memoryRetrievalLimit} class={INPUT_CLS} />
-            <p class="text-sm text-shadow-600 mt-1">Max memories returned per retrieval</p>
+            <p class="text-sm text-shadow-600 mt-1">Legacy % of context window reserved for memory (see budget % above)</p>
           </div>
           <div>
             <label class={LABEL_CLS}>Extraction Threshold %</label>
@@ -770,8 +835,37 @@
             <input type="text" bind:value={webFetchLocalCrawlerHostAllowlist} class={INPUT_CLS} placeholder="comma-separated hosts" />
           </div>
           <div>
+            <label class={LABEL_CLS}>Local Crawler Domain Allowlist</label>
+            <input type="text" bind:value={webFetchLocalCrawlerDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains" />
+          </div>
+          <div>
             <label class={LABEL_CLS}>TLS CA Cert Paths</label>
             <input type="text" bind:value={webFetchTlsCaCertPaths} class={INPUT_CLS} placeholder="comma-separated file paths" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Planned Settings (read-only placeholders) -->
+      <div class="card-garden p-6 space-y-4">
+        <h2 class={SECTION_HEADING_CLS}>Planned Settings</h2>
+        <p class="text-sm text-shadow-600">These features are configured via environment variables or are planned for future releases.</p>
+        <hr class="divider-filigree" />
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="bg-bark-100 rounded-lg p-4 border border-bark-300">
+            <h3 class="text-sm font-semibold text-shadow-800 mb-1">Embeddings / Transformers</h3>
+            <p class="text-sm text-shadow-600">Local transformers or Ollama embeddings. Configured via EMBEDDING_PROVIDER, OLLAMA_URL, and EMBEDDING_MODEL env vars.</p>
+          </div>
+          <div class="bg-bark-100 rounded-lg p-4 border border-bark-300">
+            <h3 class="text-sm font-semibold text-shadow-800 mb-1">Voice / TTS</h3>
+            <p class="text-sm text-shadow-600">Provider-pluggable streaming TTS (ElevenLabs or Echo). Configured via TTS_PROVIDER, ELEVENLABS_*, ECHO_TTS_* env vars.</p>
+          </div>
+          <div class="bg-bark-100 rounded-lg p-4 border border-bark-300">
+            <h3 class="text-sm font-semibold text-shadow-800 mb-1">Telegram Channel</h3>
+            <p class="text-sm text-shadow-600">Telegram adapter configuration. Not yet implemented in the admin UI.</p>
+          </div>
+          <div class="bg-bark-100 rounded-lg p-4 border border-bark-300">
+            <h3 class="text-sm font-semibold text-shadow-800 mb-1">Mixture of Agents (MoA)</h3>
+            <p class="text-sm text-shadow-600">Multi-model routing and consensus. See PSFN-t3vi.7 for design. Not yet implemented.</p>
           </div>
         </div>
       </div>

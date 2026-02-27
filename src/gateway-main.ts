@@ -19,6 +19,11 @@ import {
 } from './gateway/policy-config.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
+import { WyomingTcpServer } from './channels/wyoming/server.js';
+import { WyomingRuntime } from './channels/wyoming/runtime.js';
+import { createWyomingServiceRegistry } from './channels/wyoming/services/index.js';
+import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/handle.js';
+import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import { GitOps } from './git/ops.js';
 import { loadSettings, applySettings } from './settings.js';
@@ -270,6 +275,56 @@ async function main(): Promise<void> {
     log.warn('ntfy alerts disabled: both NTFY_BASE_URL and NTFY_TOPIC are required');
   }
 
+  // ── Wyoming voice bridge (opt-in) ──
+
+  let wyomingTcpServer: WyomingTcpServer | undefined;
+  let wyomingRuntime: WyomingRuntime | undefined;
+
+  if (config.wyomingEnabled) {
+    const wyomingPort = config.wyomingPort ?? 10400;
+    const wyomingHost = config.wyomingHost ?? '127.0.0.1';
+
+    const handleAdapter = createWyomingHandleServiceAdapter({
+      handleMessage: async (message) => {
+        const result = await gateway.requestAgentVoiceStream(message);
+        return {
+          content: result.content,
+          channelId: result.channelId,
+          metadata: {
+            model: result.model,
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: result.durationMs,
+          },
+        };
+      },
+      eventBus,
+    });
+    const serviceRegistry = createWyomingServiceRegistry([handleAdapter]);
+
+    wyomingTcpServer = new WyomingTcpServer(
+      { port: wyomingPort, host: wyomingHost, eventBus },
+      {
+        onFrame: (session, frame) => wyomingRuntime!.handleFrame(session, frame),
+        onSessionClose: (session) => wyomingRuntime!.closeConnection(session.connectionId),
+      },
+    );
+
+    wyomingRuntime = new WyomingRuntime({
+      info: {
+        name: 'purrsephone',
+        version: '1.0.0',
+        description: 'Purrsephone Substrate Framework — Wyoming voice bridge',
+        services: serviceRegistry.services,
+      } as WyomingInfoData,
+      emitFrame: (session, frame) => wyomingTcpServer!.send(session, frame),
+      serviceRegistry,
+      eventBus,
+    });
+
+    log.info(`Wyoming voice bridge configured on ${wyomingHost}:${wyomingPort}`);
+  }
+
   // ── Wire Discord → Agent notifications ──
 
   discord.onMessage(async (msg) => {
@@ -286,6 +341,10 @@ async function main(): Promise<void> {
   await discord.init();
   gateway.start();
   await voiceModuleHost.startAll();
+  if (wyomingTcpServer) {
+    await wyomingTcpServer.start();
+    log.info(`Wyoming voice bridge listening on ${config.wyomingHost ?? '127.0.0.1'}:${config.wyomingPort ?? 10400}`);
+  }
   await discord.start();
 
   log.info(`Ready — listening on ${socketPath}`);
@@ -296,6 +355,8 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     log.info(`Received ${signal}, shutting down...`);
     stopDebugObserver();
+    if (wyomingRuntime) await wyomingRuntime.stop();
+    if (wyomingTcpServer) await wyomingTcpServer.stop();
     await voiceModuleHost.stopAll();
     await gateway.stop();
     await discord.stop();

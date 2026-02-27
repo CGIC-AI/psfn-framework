@@ -246,6 +246,20 @@ async function main(): Promise<void> {
   log.info(`Connecting to gateway at ${socketPath}...`);
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
   log.info('Connected to gateway');
+  let shuttingDown = false;
+  let stopFn: () => Promise<void> = async () => {};
+  const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {
+    if (shuttingDown) return;
+    log.error('Gateway connection lost; shutting down agent process', {
+      source: event.source,
+      error: event.error?.message,
+    });
+    try {
+      await stopFn();
+    } finally {
+      process.exit(1);
+    }
+  });
 
   // ── Local SQLite database (sessions + memory) ──
 
@@ -662,10 +676,10 @@ async function main(): Promise<void> {
     startTime,
   });
 
-  let shuttingDown = false;
-  const stopFn = async () => {
+  stopFn = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    unregisterGatewayDisconnect();
     await eventBus.emit('system.shutdown', {});
     stopDebugObserver();
     scheduler.stop();

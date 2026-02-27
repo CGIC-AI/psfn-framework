@@ -17,6 +17,7 @@ import { resolveAllowedReadPathsFromEnv } from './gateway/policy-config.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
+import { GitOps } from './git/ops.js';
 import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
@@ -127,6 +128,9 @@ async function main(): Promise<void> {
   const llmClient = new LLMClient(config);
 
   const embeddingProvider = createEmbeddingProviderFromEnv(process.env);
+  const gitOps = new GitOps({
+    repoRoot: workspacePath,
+  });
 
   const discord = new DiscordAdapter(config, eventBus);
   const capabilityRuntime = new CapabilityRuntime({
@@ -148,6 +152,7 @@ async function main(): Promise<void> {
     llmProvider: llmClient,
     embeddingService: embeddingProvider,
     discordAdapter: discord,
+    gitOps,
     policyConfig: {
       workspacePath,
       allowedReadPaths: resolveAllowedReadPathsFromEnv(process.env, workspacePath),

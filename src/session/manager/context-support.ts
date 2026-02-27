@@ -1,0 +1,110 @@
+import type { ContextMessage } from '../../types.js';
+import type { ChannelMeta } from '../../trust/policy.js';
+import type { ChannelVisibility } from '../../trust/types.js';
+import type { UserContinuityStore } from '../continuity.js';
+import type { SessionEntry } from '../types.js';
+import {
+  isUntrustedVisibility,
+  parseChannelVisibility,
+  parseMirrorMetadata,
+  wrapUntrustedContext,
+} from '../manager-primitives.js';
+
+function continuityEntryKey(entry: SessionEntry): string {
+  return [
+    String(entry.timestamp),
+    String(entry.id),
+    entry.role,
+    entry.originChannelId ?? entry.channelId,
+    entry.authorId ?? '',
+    entry.content,
+  ].join('|');
+}
+
+export function getMergedContinuity(params: {
+  continuityStore: UserContinuityStore | null;
+  canonicalUserId: string;
+  limit: number;
+  fallbackUserIds: string[];
+  channelId: string;
+  channelMeta?: ChannelMeta;
+}): SessionEntry[] {
+  if (!params.continuityStore || !params.canonicalUserId) return [];
+
+  const candidateUserIds = [
+    params.canonicalUserId,
+    ...params.fallbackUserIds.filter(id => id && id !== params.canonicalUserId),
+  ];
+
+  const merged: SessionEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const candidateUserId of candidateUserIds) {
+    const entries = params.continuityStore.getRecent(
+      candidateUserId,
+      params.limit,
+      params.channelId,
+      params.channelId,
+      params.channelMeta,
+    );
+
+    for (const entry of entries) {
+      const key = continuityEntryKey(entry);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+
+  merged.sort((a, b) => {
+    const timestampDelta = a.timestamp - b.timestamp;
+    if (timestampDelta !== 0) return timestampDelta;
+    return a.id - b.id;
+  });
+
+  if (merged.length <= params.limit) return merged;
+  return merged.slice(-params.limit);
+}
+
+export function entriesToMessages(
+  entries: SessionEntry[],
+  defaultVisibility: ChannelVisibility,
+  includeTrustTags: boolean = true,
+): ContextMessage[] {
+  const messages: ContextMessage[] = [];
+
+  for (const entry of entries) {
+    // System notes are included as user-role messages with a marker
+    const role: 'user' | 'assistant' = entry.role === 'system' ? 'user' : entry.role as 'user' | 'assistant';
+    let content = entry.content;
+    if (entry.role === 'system') {
+      const mirror = parseMirrorMetadata(entry.metadata);
+      if (mirror) {
+        content = `[Mirror note from ${mirror.sourceChannelId}] ${entry.content}`;
+      } else {
+        content = `[System note] ${entry.content}`;
+      }
+    }
+    if (includeTrustTags) {
+      const visibility = parseChannelVisibility(entry.channelVisibility) ?? defaultVisibility;
+      if (isUntrustedVisibility(visibility)) {
+        content = wrapUntrustedContext(content);
+      }
+    }
+
+    // Merge consecutive same-role messages
+    const last = messages[messages.length - 1];
+    if (last && last.role === role) {
+      last.content += '\n' + content;
+    } else {
+      messages.push({ role, content });
+    }
+  }
+
+  // Ensure conversation starts with user message (LLM API requirement)
+  if (messages.length > 0 && messages[0].role !== 'user') {
+    messages.shift();
+  }
+
+  return messages;
+}

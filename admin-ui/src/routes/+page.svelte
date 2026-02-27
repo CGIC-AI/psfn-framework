@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
   import type { AdminDashboardData } from '$lib/types';
-  import { navItems } from '$lib/nav';
 
   let data = $state<AdminDashboardData | null>(null);
   let error = $state('');
@@ -45,11 +44,6 @@
     };
     return colors[type] ?? 'bg-bark-200 text-shadow-700 border-bark-400';
   }
-
-  // Quick-nav items (subset of main nav)
-  const quickNav = navItems.filter(n =>
-    ['/garden/memory', '/garden/sessions', '/garden/chat', '/garden/contacts', '/garden/settings'].includes(n.path)
-  );
 </script>
 
 <div class="space-y-6">
@@ -109,7 +103,7 @@
       </div>
     </div>
 
-    <!-- Memory breakdown + quick nav -->
+    <!-- Memory breakdown + Token usage -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <!-- Memory by type -->
       <div class="card-garden p-5">
@@ -132,24 +126,41 @@
         </div>
       </div>
 
-      <!-- Quick nav -->
+      <!-- Token usage breakdown (current session) -->
       <div class="card-garden p-5">
-        <h2 class="font-serif text-lg text-shadow-900 mb-3">Quick Navigation</h2>
-        <div class="grid grid-cols-1 gap-2">
-          {#each quickNav as item}
-            <a
-              href={item.path}
-              class="flex items-center gap-3 p-3 rounded-lg bg-bark-100 hover:bg-gold-50
-                     hover:border-gold-300 border border-transparent transition-colors"
-            >
-              <span class="text-lg">{item.icon}</span>
-              <div>
-                <span class="text-sm font-medium text-shadow-800">{item.gardenName}</span>
-                <span class="text-sm text-shadow-600 ml-2">{item.technicalName}</span>
+        <h2 class="font-serif text-lg text-shadow-900 mb-3">Token Usage</h2>
+        {#if stats.sessionUsage.turns > 0}
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-3">
+              <div class="bg-bark-100 rounded-lg p-3">
+                <span class="text-sm text-shadow-600 block">Input Tokens</span>
+                <span class="text-lg font-serif text-shadow-900">{formatTokens(stats.sessionUsage.inputTokens)}</span>
               </div>
-            </a>
-          {/each}
-        </div>
+              <div class="bg-bark-100 rounded-lg p-3">
+                <span class="text-sm text-shadow-600 block">Output Tokens</span>
+                <span class="text-lg font-serif text-shadow-900">{formatTokens(stats.sessionUsage.outputTokens)}</span>
+              </div>
+              <div class="bg-bark-100 rounded-lg p-3">
+                <span class="text-sm text-shadow-600 block">Cache Read Tokens</span>
+                <span class="text-lg font-serif text-shadow-900">{formatTokens(stats.sessionUsage.cacheReadTokens)}</span>
+              </div>
+              <div class="bg-bark-100 rounded-lg p-3">
+                <span class="text-sm text-shadow-600 block">Avg per Turn</span>
+                <span class="text-lg font-serif text-shadow-900">
+                  {formatTokens(Math.round((stats.sessionUsage.inputTokens + stats.sessionUsage.outputTokens) / stats.sessionUsage.turns))}
+                </span>
+              </div>
+            </div>
+            <p class="text-sm text-shadow-600">
+              Token usage tracking per model requires persistent storage (coming in a future release).
+              Current data reflects the active session since last restart.
+            </p>
+          </div>
+        {:else}
+          <div class="text-center py-6">
+            <p class="text-sm text-shadow-600">No turns recorded yet. Token usage will appear here after the first conversation turn.</p>
+          </div>
+        {/if}
       </div>
     </div>
 
@@ -198,14 +209,14 @@
       </div>
       <div class="card-garden p-5">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Context Utilization <span class="text-shadow-600 normal-case font-normal">(since restart)</span></p>
-        {#if stats.sessionUsage.avgContextUtilization > 1}
+        {#if stats.sessionUsage.avgContextUtilization > 100}
           <p class="text-2xl font-serif mt-1 text-wilt-600">
-            {(stats.sessionUsage.avgContextUtilization * 100).toFixed(0)}%
+            {stats.sessionUsage.avgContextUtilization.toFixed(0)}%
           </p>
           <p class="text-sm text-wilt-600 mt-1">Exceeds 100% -- check context window configuration</p>
         {:else}
           <p class="text-2xl font-serif mt-1 text-shadow-900">
-            {(stats.sessionUsage.avgContextUtilization * 100).toFixed(0)}%
+            {stats.sessionUsage.avgContextUtilization.toFixed(0)}%
           </p>
         {/if}
       </div>

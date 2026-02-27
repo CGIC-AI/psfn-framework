@@ -6,6 +6,7 @@ import { GatewayErrors } from '../protocol.js';
 import { isInsideAllowedPaths, type ShellExecPolicyConfig } from '../policy.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
+import { toErrorMessage } from '../../utils/errors.js';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_TIMEOUT_MS = 30_000;
@@ -219,7 +220,7 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         return await runCommandBounded(command, args, cwd, limits);
       } catch (error) {
         throw new JSONRPCErrorException(
-          `shell.exec failed: ${error instanceof Error ? error.message : String(error)}`,
+          `shell.exec failed: ${toErrorMessage(error)}`,
           GatewayErrors.PROVIDER_ERROR,
         );
       }

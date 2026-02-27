@@ -25,11 +25,9 @@ import {
 } from './protocol.js';
 import type { GitOperations } from '../git/ops.js';
 import type { AuditStore } from './audit.js';
-import {
-  buildSessionHmacKeyring,
-  type SessionHmacKeyring,
-} from '../session/journal-utils.js';
+import type { SessionHmacKeyring } from '../session/journal-utils.js';
 import { createComponentLogger } from '../logger.js';
+import { resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
 import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
@@ -61,19 +59,7 @@ export interface GatewayConfirmationConfig {
   ntfyTopic?: string;
 }
 
-const GATEWAY_SESSION_HMAC_KEYS_ENV = 'GATEWAY_SESSION_HMAC_KEYS';
-const GATEWAY_SESSION_HMAC_KEY_ENV = 'GATEWAY_SESSION_HMAC_KEY';
-const GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV = 'GATEWAY_SESSION_HMAC_ACTIVE_VERSION';
-
-export function resolveGatewaySessionHmacKeyring(
-  env: NodeJS.ProcessEnv = process.env,
-): SessionHmacKeyring | null {
-  return buildSessionHmacKeyring({
-    serializedKeys: env[GATEWAY_SESSION_HMAC_KEYS_ENV],
-    singleKey: env[GATEWAY_SESSION_HMAC_KEY_ENV],
-    activeVersion: env[GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV],
-  });
-}
+export { resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
 
 // ── Gateway Server Class ──
 

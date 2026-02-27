@@ -7,7 +7,6 @@ import type { SessionStore } from '../session/store.js';
 import type { SessionEntry } from '../session/types.js';
 import type { SubstrateConfig } from '../types.js';
 import { createComponentLogger } from '../logger.js';
-import { countMessageTokens } from '../llm/tokens.js';
 import type { MemoryStore } from './store.js';
 import type { ExtractedFact } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
@@ -36,7 +35,9 @@ import { persistEmotionalStateFromExtraction } from './extraction/emotional.js';
 import {
   emitExtractionEnd as emitExtractionEndEvent,
   emitExtractionStart as emitExtractionStartEvent,
+  evaluateExtractionTrigger,
   recordExtractionMarker as persistExtractionMarker,
+  resetLastExtractionCount,
   resolveCoveredUpToMessageId as resolveCoveredMarker,
   scheduleProfileRefresh,
 } from './extraction/runtime-helpers.js';
@@ -49,14 +50,6 @@ import {
 import { parseFactsXml } from './extraction/parser.js';
 
 const log = createComponentLogger('Extraction');
-
-const lastExtractionCount = new Map<string, number>();
-
-function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } {
-  if (entry.role === 'assistant') return { role: 'assistant', content: entry.content };
-  if (entry.role === 'system') return { role: 'user', content: `[System note] ${entry.content}` };
-  return { role: 'user', content: entry.content };
-}
 
 export class MemoryExtractor {
   private llmClient: LLMProvider;
@@ -157,51 +150,29 @@ export class MemoryExtractor {
       return;
     }
 
-    const currentCount = this.sessionManager.getMessageCount(channelId);
-    const lastCount = lastExtractionCount.get(channelId) ?? 0;
-
-    const interval = this.runtimeConfig?.extractionInterval ?? this.extractionInterval;
-    const intervalMet = currentCount - lastCount >= interval;
-
-    let thresholdMet = false;
-    let totalTokens = 0;
-    let tokenBudget = 0;
-    let thresholdPct: number | null = null;
-    if (this.runtimeConfig && !intervalMet) {
-      const chatSlot = this.runtimeConfig.modelRoster.chat;
-      const contextWindow = chatSlot?.contextWindow ?? this.runtimeConfig.defaultContextWindow;
-      thresholdPct = this.runtimeConfig.extractionThresholdPct ?? 30;
-      tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
-
-      const recent = this.sessionManager.getRecentMessages(channelId);
-      totalTokens = countMessageTokens(recent.map(toTokenMessage));
-      thresholdMet = totalTokens > tokenBudget;
-    }
-
-    if (!intervalMet && !thresholdMet) return;
-
-    const triggerReason: ExtractionTriggerReason = intervalMet && thresholdMet
-      ? 'interval_and_threshold'
-      : intervalMet
-        ? 'interval'
-        : 'context_threshold';
+    const trigger = evaluateExtractionTrigger(
+      channelId,
+      this.sessionManager,
+      this.runtimeConfig,
+      this.extractionInterval,
+    );
+    if (!trigger) return;
 
     if (this.isTelemetryEnabled()) {
       log.debug('Extraction trigger matched', {
         channelId,
-        triggerReason,
-        currentCount,
-        lastCount,
-        deltaMessages: currentCount - lastCount,
-        interval,
-        thresholdPct,
-        totalTokens,
-        tokenBudget,
+        triggerReason: trigger.triggerReason,
+        currentCount: trigger.currentCount,
+        lastCount: trigger.lastCount,
+        deltaMessages: trigger.currentCount - trigger.lastCount,
+        interval: trigger.interval,
+        thresholdPct: trigger.thresholdPct,
+        totalTokens: trigger.totalTokens,
+        tokenBudget: trigger.tokenBudget,
       });
     }
 
-    lastExtractionCount.set(channelId, currentCount);
-    await this.trackExtraction(channelId, triggerReason, canonicalContactId);
+    await this.trackExtraction(channelId, trigger.triggerReason, canonicalContactId);
   }
 
   async extract(channelId: string, canonicalContactId?: string): Promise<void> {
@@ -419,7 +390,5 @@ export const __test = {
   computeNoveltyScore,
   computeProfileNovelty,
   deriveEmotionalSignal,
-  resetLastExtractionCount: () => {
-    lastExtractionCount.clear();
-  },
+  resetLastExtractionCount,
 };

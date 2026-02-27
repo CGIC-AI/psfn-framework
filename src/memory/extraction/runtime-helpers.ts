@@ -1,8 +1,10 @@
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
+import { countMessageTokens } from '../../llm/tokens.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionEntry } from '../../session/types.js';
+import type { SubstrateConfig } from '../../types.js';
 import type {
   AcceptedFactWrite,
   ExtractionEndTelemetry,
@@ -11,6 +13,85 @@ import type {
 } from './types.js';
 
 const log = createComponentLogger('Extraction');
+
+// ── Trigger evaluation ──
+
+const lastExtractionCount = new Map<string, number>();
+
+export function resetLastExtractionCount(): void {
+  lastExtractionCount.clear();
+}
+
+function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } {
+  if (entry.role === 'assistant') return { role: 'assistant', content: entry.content };
+  if (entry.role === 'system') return { role: 'user', content: `[System note] ${entry.content}` };
+  return { role: 'user', content: entry.content };
+}
+
+export interface ExtractionTriggerResult {
+  triggerReason: ExtractionTriggerReason;
+  currentCount: number;
+  lastCount: number;
+  interval: number;
+  thresholdPct: number | null;
+  totalTokens: number;
+  tokenBudget: number;
+}
+
+/**
+ * Evaluates whether an extraction should be triggered based on message interval
+ * and/or context token threshold. Returns the trigger result, or null if no
+ * extraction is needed.
+ *
+ * Side-effect: updates lastExtractionCount when a trigger fires.
+ */
+export function evaluateExtractionTrigger(
+  channelId: string,
+  sessionManager: SessionManager,
+  runtimeConfig: SubstrateConfig | null,
+  extractionInterval: number,
+): ExtractionTriggerResult | null {
+  const currentCount = sessionManager.getMessageCount(channelId);
+  const lastCount = lastExtractionCount.get(channelId) ?? 0;
+
+  const interval = runtimeConfig?.extractionInterval ?? extractionInterval;
+  const intervalMet = currentCount - lastCount >= interval;
+
+  let thresholdMet = false;
+  let totalTokens = 0;
+  let tokenBudget = 0;
+  let thresholdPct: number | null = null;
+  if (runtimeConfig && !intervalMet) {
+    const chatSlot = runtimeConfig.modelRoster.chat;
+    const contextWindow = chatSlot?.contextWindow ?? runtimeConfig.defaultContextWindow;
+    thresholdPct = runtimeConfig.extractionThresholdPct ?? 30;
+    tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
+
+    const recent = sessionManager.getRecentMessages(channelId);
+    totalTokens = countMessageTokens(recent.map(toTokenMessage));
+    thresholdMet = totalTokens > tokenBudget;
+  }
+
+  if (!intervalMet && !thresholdMet) return null;
+
+  const triggerReason: ExtractionTriggerReason = intervalMet && thresholdMet
+    ? 'interval_and_threshold'
+    : intervalMet
+      ? 'interval'
+      : 'context_threshold';
+
+  lastExtractionCount.set(channelId, currentCount);
+
+  return {
+    triggerReason,
+    currentCount,
+    lastCount,
+    interval,
+    thresholdPct,
+    totalTokens,
+    tokenBudget,
+  };
+}
 
 export function resolveCoveredUpToMessageId(
   sessionManager: SessionManager,

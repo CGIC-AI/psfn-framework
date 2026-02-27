@@ -29,6 +29,9 @@
   let editRelationshipType = $state<RelationshipType>('acquaintance');
   let editNotes = $state('');
 
+  // Channel privacy edits (tracked per channel:userId key)
+  let channelPrivacyEdits = $state<Record<string, ChannelPrivacyLevel>>({});
+
   // Add channel form
   let showAddChannel = $state(false);
   let newChannelName = $state('');
@@ -40,6 +43,16 @@
   let showAuditTrail = $state(false);
 
   const TRUST_LEVELS: TrustLevel[] = ['primary', 'trusted', 'regular', 'public'];
+
+  const KNOWN_CHANNEL_TYPES = [
+    'discord',
+    'telegram',
+    'api',
+    'admin-chat',
+    'twitter',
+    'rss',
+    'sillytavern',
+  ];
 
   const TRUST_BADGE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
     primary:  { bg: 'background-color: #e8b931', text: 'color: #3a2e0a', label: 'Primary' },
@@ -117,6 +130,10 @@
     return rt.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
 
+  function channelKey(ch: ContactConversationChannelView): string {
+    return `${ch.channel}:${ch.userId}`;
+  }
+
   // Edit panel
 
   function startEdit(contact: Contact) {
@@ -130,10 +147,17 @@
     newChannelName = '';
     newChannelUserId = '';
     newChannelPrivacy = 'private';
+    // Initialize channel privacy edits from current values
+    channelPrivacyEdits = {};
+    const channels = getChannels(contact.id);
+    for (const ch of channels) {
+      channelPrivacyEdits[channelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
+    }
   }
 
   function cancelEdit() {
     editingContactId = null;
+    channelPrivacyEdits = {};
   }
 
   async function saveEdit(contactId: string) {
@@ -156,9 +180,33 @@
         patch.notes = editNotes;
       }
 
+      // Collect channel privacy changes
+      const channels = getChannels(contactId);
+      const privacyChanges: Array<{ channel: string; userId: string; privacyLevel: ChannelPrivacyLevel }> = [];
+      for (const ch of channels) {
+        const key = channelKey(ch);
+        const newPrivacy = channelPrivacyEdits[key];
+        if (newPrivacy && newPrivacy !== ch.privacyLevel) {
+          privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
+        }
+      }
+      if (privacyChanges.length > 0) {
+        patch.channelPrivacy = privacyChanges;
+      }
+
+      // Add new channel link if filled in
+      if (showAddChannel && newChannelName.trim() && newChannelUserId.trim()) {
+        patch.addChannel = {
+          channel: newChannelName.trim(),
+          userId: newChannelUserId.trim(),
+          privacyLevel: newChannelPrivacy,
+        };
+      }
+
       if (Object.keys(patch).length === 0) {
         flash(true, 'No changes to save');
         editingContactId = null;
+        channelPrivacyEdits = {};
         return;
       }
 
@@ -166,6 +214,7 @@
       if (result.ok) {
         data = await listContacts();
         editingContactId = null;
+        channelPrivacyEdits = {};
         flash(true, result.message || 'Contact updated');
       } else {
         flash(false, result.message || 'Update failed');
@@ -468,6 +517,7 @@
           {#if profile}
             <div class="border-t border-bark-200 pt-2">
               {#if profile.summary}
+                <p class="text-sm text-shadow-600 italic mb-1">AI-synthesized profile</p>
                 <p class="text-sm text-shadow-700 leading-relaxed mb-1.5">{profile.summary}</p>
               {/if}
               <div class="flex items-center gap-3 text-sm text-shadow-600">
@@ -487,7 +537,12 @@
                   </summary>
                   <div class="mt-1 flex flex-wrap gap-1">
                     {#each profile.sourceMemoryIds as memId}
-                      <code class="text-sm bg-bark-200 px-1.5 py-0.5 rounded text-shadow-700 break-all">{memId}</code>
+                      <a
+                        href="/garden/memory?id={encodeURIComponent(memId)}"
+                        class="text-sm bg-bark-200 px-1.5 py-0.5 rounded text-gold-700
+                               hover:bg-gold-100 hover:text-gold-800 transition-colors font-mono break-all"
+                        title="View memory {memId}"
+                      >{memId}</a>
                     {/each}
                   </div>
                 </details>
@@ -577,21 +632,20 @@
                   <p class="text-sm font-medium text-shadow-800 mb-2">Channel Privacy Levels</p>
                   <div class="space-y-2">
                     {#each channels as ch}
+                      {@const key = channelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.userId}</span>
                         <select
-                          value={ch.privacyLevel}
+                          value={channelPrivacyEdits[key] ?? ch.privacyLevel}
                           onchange={(e) => {
-                            // Privacy level changes are display-only for now (backend doesn't accept in PATCH contacts)
-                            // Show as read-only badges
+                            channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
                           }}
-                          disabled
-                          class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-bark-100 text-shadow-700">
+                          class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-white text-shadow-800
+                                 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                           {#each CHANNEL_PRIVACY_LEVELS as pl}
                             <option value={pl}>{pl.replace('_', ' ')}</option>
                           {/each}
                         </select>
-                        <span class="text-sm text-shadow-600 italic">(set via agent tools)</span>
                       </div>
                     {/each}
                   </div>
@@ -606,13 +660,28 @@
                 </button>
                 {#if showAddChannel}
                   <div class="mt-2 p-3 border border-bark-300 rounded-lg bg-bark-50 space-y-2">
-                    <p class="text-sm text-shadow-700">Channel links are created automatically when the contact interacts on a channel, or via agent identity-link tools.</p>
                     <div class="grid grid-cols-3 gap-2">
                       <div>
                         <label for="new-ch-name" class="text-sm text-shadow-700">Channel</label>
-                        <input id="new-ch-name" type="text" bind:value={newChannelName} placeholder="discord"
+                        <select id="new-ch-name"
+                          value={newChannelName}
+                          onchange={(e) => {
+                            const val = (e.target as HTMLSelectElement).value;
+                            newChannelName = val === '__custom__' ? '' : val;
+                          }}
                           class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
-                                 focus:outline-none focus:ring-1 focus:ring-gold-300" />
+                                 focus:outline-none focus:ring-1 focus:ring-gold-300">
+                          <option value="">Select...</option>
+                          {#each KNOWN_CHANNEL_TYPES as ct}
+                            <option value={ct}>{ct}</option>
+                          {/each}
+                          <option value="__custom__">Other (custom)</option>
+                        </select>
+                        {#if newChannelName === '' || !KNOWN_CHANNEL_TYPES.includes(newChannelName)}
+                          <input type="text" bind:value={newChannelName} placeholder="custom channel"
+                            class="w-full px-2 py-1 mt-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                                   focus:outline-none focus:ring-1 focus:ring-gold-300" />
+                        {/if}
                       </div>
                       <div>
                         <label for="new-ch-userid" class="text-sm text-shadow-700">User ID</label>
@@ -631,7 +700,7 @@
                         </select>
                       </div>
                     </div>
-                    <p class="text-sm text-shadow-600 italic">Note: Channel linking requires the identity-link verification flow (agent-side). This form is for reference only.</p>
+                    <p class="text-sm text-shadow-600">New channel link will be saved when you click Save Changes below.</p>
                   </div>
                 {/if}
               </div>

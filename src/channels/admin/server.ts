@@ -39,6 +39,7 @@ import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
+import { ValuesJournalStore } from '../../values/store.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -136,6 +137,10 @@ export class AdminServer implements Lifecycle {
   private settingsService: AdminSettingsDataService;
   private identityService: AdminIdentityDataService;
   private promptsService: AdminPromptsDataService;
+  private valuesJournal!: ValuesJournalStore;
+  private scheduler!: import('../../scheduler/scheduler.js').Scheduler;
+  private skillsRuntimeRef!: import('../../skills/runtime.js').SkillsRuntime | null;
+  private confirmationQueueApiRef!: import('./types.js').ConfirmationQueueAdminApi | null;
   private telemetryWebSocketServer = new WebSocketServer({ noServer: true });
   private staticFiles = new Map<string, StaticAsset>();
   private moduleAssets = new Map<string, ModuleAssetDescriptor>();
@@ -215,6 +220,10 @@ export class AdminServer implements Lifecycle {
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
     });
+    this.valuesJournal = new ValuesJournalStore(join(config.config.dataDir, 'values.jsonl'));
+    this.scheduler = config.scheduler;
+    this.skillsRuntimeRef = config.skillsRuntime ?? null;
+    this.confirmationQueueApiRef = config.confirmationQueueApi ?? null;
     this.routes = this.buildRoutes();
     this.server = createServer((req, res) => this.handleRequest(req, res));
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
@@ -1171,6 +1180,10 @@ export class AdminServer implements Lifecycle {
         settingsService: this.settingsService,
         identityService: this.identityService,
         promptsService: this.promptsService,
+        scheduler: this.scheduler,
+        skillsRuntime: this.skillsRuntimeRef,
+        confirmationQueueApi: this.confirmationQueueApiRef,
+        valuesJournal: this.valuesJournal,
         withBody: (req, res, cb) => this.withBody(req, res, cb),
       }),
     ];

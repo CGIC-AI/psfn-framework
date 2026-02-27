@@ -348,6 +348,34 @@ describe('GatewayServer', () => {
     }
   });
 
+  it('roots fs.read and fs.write relative paths to the workspace', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-rw-'));
+    const relativeReadPath = 'notes.txt';
+    const relativeWritePath = 'new-note.txt';
+    writeFileSync(join(workspace, relativeReadPath), 'hello from workspace');
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+        },
+      });
+
+      const readResponse = await invokeRpc(conn, 960, 'fs.read', { path: relativeReadPath });
+      expect(readResponse.result.content).toBe('hello from workspace');
+
+      const writeResponse = await invokeRpc(conn, 961, 'fs.write', {
+        path: relativeWritePath,
+        content: 'written in workspace',
+      });
+      expect(writeResponse.result).toEqual({ success: true });
+      expect(readFileSync(join(workspace, relativeWritePath), 'utf-8')).toBe('written in workspace');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   describe('confirmation queue', () => {
     let tempDir: string;
 

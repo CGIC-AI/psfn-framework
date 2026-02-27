@@ -3,7 +3,7 @@
 // Run: npm run gateway
 
 import 'dotenv/config';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
@@ -13,7 +13,10 @@ import { DiscordAdapter } from './channels/discord/adapter.js';
 import { EventBus } from './event-bus.js';
 import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
-import { resolveAllowedReadPathsFromEnv } from './gateway/policy-config.js';
+import {
+  resolveAllowedReadPathsFromEnv,
+  resolveTrustedModuleRegistryPathFromEnv,
+} from './gateway/policy-config.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
@@ -22,6 +25,7 @@ import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parsePositiveIntEnv } from './utils/env.js';
+import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -122,6 +126,14 @@ async function main(): Promise<void> {
 
   // Ensure gateway socket directory exists
   mkdirSync(dirname(socketPath), { recursive: true });
+  const workspaceRoot = resolveWorkspaceRoot(workspacePath);
+  mkdirSync(workspaceRoot, { recursive: true });
+
+  const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(process.env, workspaceRoot);
+  if (trustedModuleRegistryPath && !existsSync(trustedModuleRegistryPath)) {
+    mkdirSync(dirname(trustedModuleRegistryPath), { recursive: true });
+    writeFileSync(trustedModuleRegistryPath, '[]\n', 'utf-8');
+  }
 
   // ── Create providers (these hold secrets / have network access) ──
 
@@ -154,8 +166,8 @@ async function main(): Promise<void> {
     discordAdapter: discord,
     gitOps,
     policyConfig: {
-      workspacePath,
-      allowedReadPaths: resolveAllowedReadPathsFromEnv(process.env, workspacePath),
+      workspacePath: workspaceRoot,
+      allowedReadPaths: resolveAllowedReadPathsFromEnv(process.env, workspaceRoot),
     },
     ntfy: ntfyBaseUrl && ntfyTopic
       ? {
@@ -207,7 +219,7 @@ async function main(): Promise<void> {
   await discord.start();
 
   log.info(`Ready — listening on ${socketPath}`);
-  log.info(`Workspace: ${workspacePath}`);
+  log.info(`Workspace: ${workspaceRoot}`);
 
   // ── Graceful shutdown ──
 

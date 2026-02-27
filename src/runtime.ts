@@ -73,7 +73,6 @@ import {
 } from './bootstrap/parity.js';
 import { attachVoiceObservers } from './voice/observers/index.js';
 import { loadRuntimeChannelsConfig } from './channels/config.js';
-import { resolveAdminChatApiBaseUrl } from './channels/admin/chat/api-base-url.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createSafeguardAuditTrail,
@@ -526,11 +525,6 @@ export class SubstrateRuntime implements Lifecycle {
     // API server — OpenAI-compatible endpoints
     const apiHost = process.env.API_HOST || undefined;
     const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;
-    const adminChatApiBaseUrl = resolveAdminChatApiBaseUrl({
-      explicitApiBaseUrl: process.env.API_BASE_URL,
-      apiHost,
-      apiPort,
-    });
     if (apiPort) {
       const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
         agentLoop: this.agentLoop,
@@ -713,7 +707,9 @@ export class SubstrateRuntime implements Lifecycle {
         port: adminPort,
         host: process.env.ADMIN_HOST || undefined,
         token: process.env.ADMIN_TOKEN || undefined,
-        apiBaseUrl: adminChatApiBaseUrl,
+        apiBaseUrl: process.env.API_BASE_URL,
+        apiHost,
+        apiPort,
         memoryStore: this.memoryStore,
         sessionStore: this.sessionStore,
         sessionManager: this.sessionManager,

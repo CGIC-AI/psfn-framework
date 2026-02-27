@@ -365,6 +365,8 @@ export class LegacyAdminHandlers {
     skillsRuntime?: SkillsRuntime | null;
     confirmationQueueApi?: ConfirmationQueueAdminApi | null;
     apiBaseUrl?: string;
+    apiHost?: string;
+    apiPort?: number;
   }) {
     this.memoryStore = deps.memoryStore;
     this.sessionStore = deps.sessionStore;
@@ -387,6 +389,8 @@ export class LegacyAdminHandlers {
     this.confirmationQueueApi = deps.confirmationQueueApi ?? null;
     this.chatBootstrapService = new AdminChatBootstrapService(this.contactStore, {
       apiBaseUrl: deps.apiBaseUrl,
+      apiHost: deps.apiHost,
+      apiPort: deps.apiPort,
     });
     this.valuesJournal = new ValuesJournalStore(join(this.config.dataDir, 'values.jsonl'));
 
@@ -2277,8 +2281,8 @@ export class LegacyAdminHandlers {
     return this.renderConfirmationQueueFragment(result.message, isError);
   }
 
-  chatBootstrap(): AdminChatBootstrapResponse {
-    return this.chatBootstrapService.buildBootstrap();
+  chatBootstrap(requestOrigin?: string): AdminChatBootstrapResponse {
+    return this.chatBootstrapService.buildBootstrap({ requestOrigin });
   }
 
   private async renderConfirmationQueueFragment(
@@ -2316,9 +2320,10 @@ export class LegacyAdminHandlers {
   updateChatBootstrap(
     body: string,
     contentTypeHeader: string | string[] | undefined,
+    requestOrigin?: string,
   ): AdminChatBootstrapResponse {
     const update = this.parseChatBootstrapUpdate(body, contentTypeHeader);
-    return this.chatBootstrapService.updateSelection(update);
+    return this.chatBootstrapService.updateSelection(update, { requestOrigin });
   }
 
   private parseChatBootstrapUpdate(

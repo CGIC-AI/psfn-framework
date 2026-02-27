@@ -30,6 +30,8 @@ export interface AdminServerConfig {
   host?: string;
   token?: string;
   apiBaseUrl?: string;
+  apiHost?: string;
+  apiPort?: number;
   memoryStore: MemoryStore;
   sessionStore: SessionStore;
   sessionManager: SessionManager;

@@ -54,7 +54,7 @@
 <div class="space-y-6">
   <div>
     <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Trunk</h1>
-    <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">Dashboard overview of PSFN's mind</p>
+    <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Dashboard overview of PSFN's mind</p>
   </div>
 
   {#if loading}
@@ -77,29 +77,29 @@
     <!-- Stats row -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="card-garden p-5">
-        <p class="text-xs font-medium text-shadow-400 dark:text-shadow-500 uppercase tracking-wide">Total Memories</p>
+        <p class="text-xs font-medium text-shadow-400 dark:text-bark-500 uppercase tracking-wide">Total Memories</p>
         <p class="text-3xl font-serif font-bold text-shadow-800 dark:text-bark-200 mt-1">{formatNumber(stats.memoryTotal)}</p>
-        <p class="text-xs text-shadow-400 dark:text-shadow-500 mt-1">Avg salience: {(stats.avgSalience * 100).toFixed(0)}%</p>
+        <p class="text-xs text-shadow-400 dark:text-bark-500 mt-1">Avg salience: {(stats.avgSalience * 100).toFixed(0)}%</p>
       </div>
 
       <div class="card-garden p-5">
-        <p class="text-xs font-medium text-shadow-400 dark:text-shadow-500 uppercase tracking-wide">Sessions</p>
+        <p class="text-xs font-medium text-shadow-400 dark:text-bark-500 uppercase tracking-wide">Sessions</p>
         <p class="text-3xl font-serif font-bold text-shadow-800 dark:text-bark-200 mt-1">{stats.sessionCount}</p>
-        <p class="text-xs text-shadow-400 dark:text-shadow-500 mt-1">{stats.sessionUsage.turns} turns this session</p>
+        <p class="text-xs text-shadow-400 dark:text-bark-500 mt-1">{stats.sessionUsage.turns} turns this session</p>
       </div>
 
       <div class="card-garden p-5">
-        <p class="text-xs font-medium text-shadow-400 dark:text-shadow-500 uppercase tracking-wide">Token Usage</p>
+        <p class="text-xs font-medium text-shadow-400 dark:text-bark-500 uppercase tracking-wide">Token Usage</p>
         <p class="text-3xl font-serif font-bold text-shadow-800 dark:text-bark-200 mt-1">{formatNumber(stats.sessionUsage.inputTokens + stats.sessionUsage.outputTokens)}</p>
-        <p class="text-xs text-shadow-400 dark:text-shadow-500 mt-1">
+        <p class="text-xs text-shadow-400 dark:text-bark-500 mt-1">
           {formatNumber(stats.sessionUsage.inputTokens)} in / {formatNumber(stats.sessionUsage.outputTokens)} out
         </p>
       </div>
 
       <div class="card-garden p-5">
-        <p class="text-xs font-medium text-shadow-400 dark:text-shadow-500 uppercase tracking-wide">Session Cost</p>
+        <p class="text-xs font-medium text-shadow-400 dark:text-bark-500 uppercase tracking-wide">Session Cost</p>
         <p class="text-3xl font-serif font-bold text-shadow-800 dark:text-bark-200 mt-1">{formatCost(stats.sessionUsage.estimatedCostUsd)}</p>
-        <p class="text-xs text-shadow-400 dark:text-shadow-500 mt-1">
+        <p class="text-xs text-shadow-400 dark:text-bark-500 mt-1">
           {stats.sessionUsage.llmCalls} LLM calls, {stats.sessionUsage.toolCalls} tool calls
         </p>
       </div>
@@ -114,14 +114,14 @@
           {#each Object.entries(stats.memoryByType) as [type, count]}
             {@const pct = stats.memoryTotal > 0 ? (count / stats.memoryTotal) * 100 : 0}
             <div class="flex items-center gap-3">
-              <span class="text-xs font-medium w-20 text-shadow-500 dark:text-shadow-400 capitalize">{type}</span>
+              <span class="text-xs font-medium w-20 text-shadow-500 dark:text-bark-400 capitalize">{type}</span>
               <div class="flex-1 h-5 bg-bark-100 dark:bg-shadow-800 rounded-full overflow-hidden">
                 <div
                   class="h-full rounded-full transition-all duration-500 {MEMORY_TYPE_COLORS[type]?.split(' ')[0] || 'bg-bark-300'}"
                   style="width: {Math.max(pct, 2)}%"
                 ></div>
               </div>
-              <span class="text-xs text-shadow-500 dark:text-shadow-400 w-10 text-right">{count}</span>
+              <span class="text-xs text-shadow-500 dark:text-bark-400 w-10 text-right">{count}</span>
             </div>
           {/each}
         </div>
@@ -133,13 +133,13 @@
         <div class="space-y-2 max-h-64 overflow-y-auto">
           {#each getEvents().slice(-10).reverse() as event}
             <div class="flex items-start gap-2 text-xs">
-              <span class="text-shadow-300 dark:text-shadow-600 shrink-0 mt-0.5">
+              <span class="text-shadow-300 dark:text-bark-500 shrink-0 mt-0.5">
                 {new Date(event.timestamp).toLocaleTimeString()}
               </span>
-              <span class="text-shadow-600 dark:text-shadow-400 font-mono">{event.type}</span>
+              <span class="text-shadow-600 dark:text-bark-400 font-mono">{event.type}</span>
             </div>
           {:else}
-            <p class="text-xs text-shadow-400 dark:text-shadow-500 italic">No recent events — connect telemetry to see live activity</p>
+            <p class="text-xs text-shadow-400 dark:text-bark-500 italic">No recent events — connect telemetry to see live activity</p>
           {/each}
         </div>
       </div>
@@ -152,7 +152,7 @@
         {#each NAV_CARDS as card}
           <a href="{base}{card.path}" class="card-garden p-4 text-center border-l-4 {card.color} transition-colors group">
             <p class="font-serif text-sm font-medium text-shadow-700 dark:text-bark-300 group-hover:text-gold-700 dark:group-hover:text-gold-400">{card.name}</p>
-            <p class="text-[11px] text-shadow-400 dark:text-shadow-500 mt-0.5">{card.desc}</p>
+            <p class="text-[11px] text-shadow-400 dark:text-bark-500 mt-0.5">{card.desc}</p>
           </a>
         {/each}
       </div>
@@ -165,7 +165,7 @@
         <div class="overflow-x-auto">
           <table class="w-full text-xs">
             <thead>
-              <tr class="text-left text-shadow-400 dark:text-shadow-500 border-b border-bark-200 dark:border-shadow-700">
+              <tr class="text-left text-shadow-400 dark:text-bark-500 border-b border-bark-200 dark:border-shadow-700">
                 <th class="pb-2 pr-4 font-medium">Channel</th>
                 <th class="pb-2 pr-4 font-medium">Iterations</th>
                 <th class="pb-2 pr-4 font-medium">Tokens</th>
@@ -177,12 +177,12 @@
             <tbody>
               {#each stats.recentThinkTraces as trace}
                 <tr class="border-b border-bark-100 dark:border-shadow-800">
-                  <td class="py-2 pr-4 font-mono text-shadow-600 dark:text-shadow-400">{trace.channelId}</td>
+                  <td class="py-2 pr-4 font-mono text-shadow-600 dark:text-bark-400">{trace.channelId}</td>
                   <td class="py-2 pr-4">{trace.iterations}</td>
                   <td class="py-2 pr-4">{formatNumber(trace.tokens)}</td>
                   <td class="py-2 pr-4">{(trace.durationMs / 1000).toFixed(1)}s</td>
                   <td class="py-2 pr-4">{trace.evidenceCount}</td>
-                  <td class="py-2 text-shadow-400 dark:text-shadow-500">{new Date(trace.timestamp).toLocaleTimeString()}</td>
+                  <td class="py-2 text-shadow-400 dark:text-bark-500">{new Date(trace.timestamp).toLocaleTimeString()}</td>
                 </tr>
               {/each}
             </tbody>

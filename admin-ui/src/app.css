@@ -1,23 +1,21 @@
 @import 'tailwindcss';
 
 /* ── admin UI — Versailles Rococo Theme ──
-   White-bark tree with gold circuitry veins.
-   Soft warm palette, filigree elegance.
-   High contrast: dark warm text on cream backgrounds.
+   WHITE and GOLD. Like Versailles.
 */
 
 @theme {
-  /* Bark — ivory/cream backgrounds (the white bark of the tree) */
-  --color-bark-50: #fefcf8;
-  --color-bark-100: #fdf8ee;
-  --color-bark-200: #f5ecda;
-  --color-bark-300: #ebdcc0;
-  --color-bark-400: #d9c59a;
-  --color-bark-500: #c4a870;
-  --color-bark-600: #a68b50;
-  --color-bark-700: #876e3c;
-  --color-bark-800: #6b572f;
-  --color-bark-900: #504125;
+  /* Bark — backgrounds (whites and very light greys) */
+  --color-bark-50: #ffffff;
+  --color-bark-100: #fafafa;
+  --color-bark-200: #f0f0ee;
+  --color-bark-300: #e0dfdc;
+  --color-bark-400: #c5c3bf;
+  --color-bark-500: #a19e99;
+  --color-bark-600: #807d78;
+  --color-bark-700: #646260;
+  --color-bark-800: #4a4846;
+  --color-bark-900: #343230;
 
   /* Gold — gilded circuitry veins, Rococo accents */
   --color-gold-50: #fdf8eb;
@@ -55,18 +53,18 @@
   --color-petal-800: #75243b;
   --color-petal-900: #602035;
 
-  /* Shadow — warm charcoal/sepia for TEXT (NOT purple) */
-  --color-shadow-50: #f8f6f4;
-  --color-shadow-100: #ede9e4;
-  --color-shadow-200: #d9d2c9;
-  --color-shadow-300: #b8ad9f;
-  --color-shadow-400: #968978;
-  --color-shadow-500: #7a6d5d;
-  --color-shadow-600: #63574a;
-  --color-shadow-700: #50473c;
-  --color-shadow-800: #3d3630;
-  --color-shadow-900: #2c2722;
-  --color-shadow-950: #1c1916;
+  /* Shadow — neutral high-contrast greys for TEXT (NOT brown, NOT warm) */
+  --color-shadow-50: #f7f7f7;
+  --color-shadow-100: #ececec;
+  --color-shadow-200: #d9d9d8;
+  --color-shadow-300: #6b6b69;
+  --color-shadow-400: #555553;
+  --color-shadow-500: #3f3f3d;
+  --color-shadow-600: #333331;
+  --color-shadow-700: #272725;
+  --color-shadow-800: #1c1c1b;
+  --color-shadow-900: #111111;
+  --color-shadow-950: #0a0a0a;
 
   /* Wilt — amber/terracotta for errors/warnings (wilting petals) */
   --color-wilt-50: #fef5ec;
@@ -89,7 +87,7 @@
 
 body {
   font-family: var(--font-sans);
-  background-color: var(--color-bark-50);
+  background-color: #fafafa;
   color: var(--color-shadow-900);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

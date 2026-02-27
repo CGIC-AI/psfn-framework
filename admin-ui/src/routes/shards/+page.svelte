@@ -60,7 +60,7 @@
   function statusBadge(status: ShardView['status']): string {
     switch (status) {
       case 'active':    return 'bg-moss-100 text-moss-700 dark:bg-moss-900/30 dark:text-moss-300';
-      case 'completed': return 'bg-bark-200 text-shadow-500 dark:bg-shadow-800 dark:text-shadow-400';
+      case 'completed': return 'bg-bark-200 text-shadow-500 dark:bg-shadow-800 dark:text-bark-400';
       case 'failed':    return 'bg-wilt-100 text-wilt-700 dark:bg-wilt-900/30 dark:text-wilt-300';
     }
   }
@@ -74,20 +74,20 @@
   <!-- Header -->
   <div>
     <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Blooms</h1>
-    <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">Active shards — ephemeral sub-agents spawned for parallel work</p>
+    <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Active shards — ephemeral sub-agents spawned for parallel work</p>
   </div>
 
   <!-- Stats -->
   <div class="flex items-center gap-6 text-sm">
     <div class="flex items-center gap-2">
       <span class="w-2.5 h-2.5 rounded-full bg-moss-400"></span>
-      <span class="text-shadow-600 dark:text-shadow-400">{activeCount} active</span>
+      <span class="text-shadow-600 dark:text-bark-400">{activeCount} active</span>
     </div>
     <div class="flex items-center gap-2">
-      <span class="text-shadow-400 dark:text-shadow-500">{shards.length} total shards</span>
+      <span class="text-shadow-400 dark:text-bark-500">{shards.length} total shards</span>
     </div>
     <div class="flex items-center gap-2">
-      <span class="text-shadow-400 dark:text-shadow-500">{totalEvents} shard events</span>
+      <span class="text-shadow-400 dark:text-bark-500">{totalEvents} shard events</span>
     </div>
   </div>
 
@@ -97,8 +97,8 @@
       <svg class="w-16 h-16 mx-auto text-bark-300 dark:text-shadow-700 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0M12 2v4m0 12v4m10-10h-4M6 12H2m15.07-7.07l-2.83 2.83M9.76 14.24l-2.83 2.83m0-10.14l2.83 2.83m4.48 4.48l2.83 2.83" />
       </svg>
-      <p class="font-serif text-lg text-shadow-500 dark:text-shadow-400 mb-1">No active blooms</p>
-      <p class="text-sm text-shadow-400 dark:text-shadow-500">The garden rests — shards will appear here when spawned via the <code class="font-mono text-xs">spawn_shard</code> tool</p>
+      <p class="font-serif text-lg text-shadow-500 dark:text-bark-400 mb-1">No active blooms</p>
+      <p class="text-sm text-shadow-400 dark:text-bark-500">The garden rests — shards will appear here when spawned via the <code class="font-mono text-xs">spawn_shard</code> tool</p>
     </div>
   {:else}
     <!-- Shard grid -->
@@ -107,7 +107,7 @@
         <div class="card-garden p-4 {shard.status === 'active' ? 'border-l-4 border-l-moss-400' : shard.status === 'failed' ? 'border-l-4 border-l-wilt-400' : ''}">
           <!-- Header -->
           <div class="flex items-center justify-between mb-2">
-            <code class="text-xs font-mono text-shadow-400 dark:text-shadow-500 truncate" title={shard.id}>
+            <code class="text-xs font-mono text-shadow-400 dark:text-bark-500 truncate" title={shard.id}>
               {shard.id.length > 12 ? shard.id.slice(0, 12) + '...' : shard.id}
             </code>
             <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium {statusBadge(shard.status)}">
@@ -119,7 +119,7 @@
           <p class="text-sm text-shadow-700 dark:text-bark-300 mb-3 line-clamp-2">{shard.task}</p>
 
           <!-- Timing -->
-          <div class="flex items-center justify-between text-xs text-shadow-400 dark:text-shadow-500">
+          <div class="flex items-center justify-between text-xs text-shadow-400 dark:text-bark-500">
             <span>{new Date(shard.startedAt).toLocaleTimeString()}</span>
             <span class="font-mono">
               {#if shard.status === 'active'}
@@ -141,11 +141,11 @@
       <div class="space-y-1 max-h-64 overflow-y-auto font-mono text-xs">
         {#each getShardEvents().slice(-20).reverse() as event}
           <div class="flex items-start gap-3 py-1 border-b border-bark-100 dark:border-shadow-800">
-            <span class="text-shadow-300 dark:text-shadow-600 shrink-0">
+            <span class="text-shadow-300 dark:text-bark-500 shrink-0">
               {new Date(event.timestamp).toLocaleTimeString()}
             </span>
             <span class="text-petal-600 dark:text-petal-400 shrink-0">{event.type}</span>
-            <span class="text-shadow-500 dark:text-shadow-400 truncate">
+            <span class="text-shadow-500 dark:text-bark-400 truncate">
               {typeof event.data === 'string' ? event.data : JSON.stringify(event.data)}
             </span>
           </div>

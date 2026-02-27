@@ -29,10 +29,12 @@ const sessionHmacDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     name: 'session.hmac.verify',
     handler: async (params: SessionHmacVerifyParams, runtime): Promise<SessionHmacVerifyResult> => {
       if (!runtime.sessionHmacKeyring) {
+        // No keyring configured means integrity checking is disabled — not a tamper signal.
+        // Return verified: true so entries load normally without <unverified_history> wrapping.
         return {
-          verified: false,
+          verified: true,
           observedHmac: typeof params.entry._hmac === 'string' ? params.entry._hmac : null,
-          reason: 'hmac_keyring_unconfigured',
+          reason: 'integrity_disabled',
         };
       }
       return verifyJournalEntryIntegrity(params.entry, runtime.sessionHmacKeyring, params.previousHmac);

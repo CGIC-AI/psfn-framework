@@ -291,6 +291,7 @@ async function main(): Promise<void> {
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });
   const { sessionStore, sessionManager } = sessionComposition;
+  sessionManager.characterName = card.data.name;
 
   const memoryStore = new MemoryStore(db, gateway.dims);
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);

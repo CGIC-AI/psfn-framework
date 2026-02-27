@@ -7,6 +7,7 @@ import {
   DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS,
   DEFAULT_SESSION_MIRROR_MAX_CHARS,
   normalizeMirrorText,
+  resolveRoleName,
   visibilityToMirrorSensitivity,
   type MirrorEntryMetadata,
 } from '../manager-primitives.js';
@@ -55,6 +56,8 @@ export function mirrorMessageToActiveSessions(params: {
   trustLevel: TrustLevel;
   timestamp: number;
   mirrorEnabled: boolean;
+  /** Character name from identity card (e.g. 'Purrsephone'). Used for display labels. */
+  characterName?: string;
 }): void {
   if (!params.mirrorEnabled) return;
   if (!params.continuityStore || !params.continuityKey) return;
@@ -77,9 +80,10 @@ export function mirrorMessageToActiveSessions(params: {
   if (targets.length === 0) return;
 
   const sourceSensitivity = visibilityToMirrorSensitivity(params.sourceVisibility);
+  const roleNames = { charName: params.characterName };
   const sourceSpeaker = params.sourceRole === 'assistant'
-    ? 'Purrsephone'
-    : (params.sourceAuthorName ?? 'User');
+    ? resolveRoleName('assistant', roleNames)
+    : (params.sourceAuthorName ?? resolveRoleName('user', roleNames));
 
   for (const target of targets) {
     if (!isSessionMirroringEnabledForChannel(params.config, target.channelId)) continue;

@@ -4,8 +4,9 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
-import { readFileSync, realpathSync } from 'node:fs';
-import { dirname, extname, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Lifecycle } from '../../types.js';
@@ -56,6 +57,22 @@ const SUPPORTED_MODULE_EXTENSIONS = new Set([
   '.json',
   '.wasm',
 ]);
+
+// ── SvelteKit Garden UI (static SPA at /garden/*) ──
+const GARDEN_PREFIX = '/garden';
+const GARDEN_MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+const GARDEN_HTML_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
+const GARDEN_ASSET_CACHE_CONTROL = 'public, max-age=86400';
 
 type RouteParams = Record<string, string>;
 type RouteMatcher = (path: string) => RouteParams | null;
@@ -126,6 +143,7 @@ export class AdminServer implements Lifecycle {
   private moduleRouteByFilePath = new Map<string, string>();
   private moduleResolver = createRequire(import.meta.url);
   private routes: AdminRoute[];
+  private gardenBuildDir: string | null = null;
 
   constructor(config: AdminServerConfig & {
     contactStore?: ContactStore | null;
@@ -222,6 +240,7 @@ export class AdminServer implements Lifecycle {
     }
 
     this.initializePiWebUiRoutes();
+    this.initializeGardenUi();
   }
 
   async start(): Promise<void> {
@@ -285,12 +304,22 @@ export class AdminServer implements Lifecycle {
       return;
     }
 
-    // Skip auth for OPTIONS, static files, and login page
-    const skipAuth = req.method === 'OPTIONS' || path.startsWith('/static/') || path === '/login';
+    // Skip auth for OPTIONS, static files, garden SPA, and login page
+    const skipAuth = req.method === 'OPTIONS'
+      || path.startsWith('/static/')
+      || path === '/login'
+      || path === GARDEN_PREFIX
+      || path.startsWith(GARDEN_PREFIX + '/');
 
     if (!skipAuth && this.token && !this.checkAuth(req, res)) return;
 
     if (this.tryServeStaticAsset(path, res)) {
+      return;
+    }
+
+    // Serve SvelteKit garden UI static files (no auth — SPA handles its own)
+    if ((path === GARDEN_PREFIX || path.startsWith(GARDEN_PREFIX + '/')) && this.gardenBuildDir) {
+      this.serveGardenAsset(path, res);
       return;
     }
 
@@ -342,6 +371,75 @@ export class AdminServer implements Lifecycle {
     }
 
     this.registerModuleAssetRoute(PI_WEB_UI_STYLE_ROUTE, stylePath, 'text/css; charset=utf-8');
+  }
+
+  private initializeGardenUi(): void {
+    // Resolve admin-ui/build relative to project root (3 dirs up from src/channels/admin/)
+    const projectRoot = resolve(import.meta.dirname, '..', '..', '..');
+    const buildDir = join(projectRoot, 'admin-ui', 'build');
+    if (!existsSync(buildDir)) {
+      log.warn('admin-ui/build not found; /garden/* route disabled. Run "cd admin-ui && npm run build" to enable.');
+      return;
+    }
+    const indexPath = join(buildDir, 'index.html');
+    if (!existsSync(indexPath)) {
+      log.warn('admin-ui/build/index.html not found; /garden/* route disabled');
+      return;
+    }
+    this.gardenBuildDir = buildDir;
+    log.info('Garden SvelteKit UI enabled at /garden/*');
+  }
+
+  private serveGardenAsset(path: string, res: ServerResponse): void {
+    if (!this.gardenBuildDir) {
+      this.send404(res, path);
+      return;
+    }
+
+    // Strip /garden prefix; bare /garden serves index.html
+    let filePath = path === GARDEN_PREFIX ? '/' : path.slice(GARDEN_PREFIX.length);
+    if (filePath === '' || filePath === '/') {
+      filePath = '/index.html';
+    }
+
+    // Normalize and resolve within the build directory
+    const normalizedPath = normalize(filePath);
+    const fullPath = join(this.gardenBuildDir, normalizedPath);
+
+    // Prevent directory traversal: resolved path must be inside build dir
+    const resolvedPath = resolve(fullPath);
+    if (!resolvedPath.startsWith(this.gardenBuildDir)) {
+      this.send404(res, path);
+      return;
+    }
+
+    const ext = extname(resolvedPath).toLowerCase();
+    const mimeType = GARDEN_MIME_TYPES[ext];
+
+    readFile(resolvedPath)
+      .then((content) => {
+        const isHtml = ext === '.html';
+        res.writeHead(200, {
+          'Content-Type': mimeType ?? 'application/octet-stream',
+          'Cache-Control': isHtml ? GARDEN_HTML_CACHE_CONTROL : GARDEN_ASSET_CACHE_CONTROL,
+        });
+        res.end(content);
+      })
+      .catch(() => {
+        // File not found — serve index.html as SPA fallback
+        const indexPath = join(this.gardenBuildDir!, 'index.html');
+        readFile(indexPath)
+          .then((content) => {
+            res.writeHead(200, {
+              'Content-Type': 'text/html',
+              'Cache-Control': GARDEN_HTML_CACHE_CONTROL,
+            });
+            res.end(content);
+          })
+          .catch(() => {
+            this.send404(res, path);
+          });
+      });
   }
 
   private registerModuleAssetRoute(routePath: string, filePath: string, contentType?: string): string {

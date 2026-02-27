@@ -1,5 +1,5 @@
 import { apiGet, apiPost } from '$lib/api/client';
-import type { AdminIdentityData } from '$lib/types';
+import type { AdminIdentityData, CharacterCardV2 } from '$lib/types';
 
 export function getIdentity(): Promise<AdminIdentityData> {
   return apiGet<AdminIdentityData>('/api/admin/identity');
@@ -23,8 +23,14 @@ export function rollbackIdentity(
   );
 }
 
+export interface DiffPreviewResponse {
+  ok: boolean;
+  current: CharacterCardV2;
+  target: CharacterCardV2;
+}
+
 export function previewDiff(
   body: Record<string, unknown>
-): Promise<{ diff: string }> {
-  return apiPost<{ diff: string }>('/api/admin/identity/diff', body);
+): Promise<DiffPreviewResponse> {
+  return apiPost<DiffPreviewResponse>('/api/admin/identity/diff', body);
 }

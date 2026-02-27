@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
 import type { SubstrateConfig } from '../types.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
+import * as models from '../llm/models.js';
 
 // Minimal config fixture
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -202,5 +203,62 @@ describe('Agent integration', () => {
     expect(agent.state.messages).toHaveLength(0);
     // reset() clears messages and queues but preserves config (systemPrompt, model, tools)
     expect(agent.hasQueuedMessages()).toBe(false);
+  });
+});
+
+describe('resolveModel — direct-provider path', () => {
+  const savedEnv = { ...process.env };
+
+  beforeEach(() => {
+    delete process.env.LITELLM_BASE_URL;
+  });
+
+  afterEach(() => {
+    process.env = { ...savedEnv };
+  });
+
+  it('resolves model via resolveRegisteredModel for known provider+model', () => {
+    const fakeModel = {
+      id: 'test-model',
+      name: 'Test Model',
+      api: 'openai-completions' as const,
+      provider: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      reasoning: false,
+      input: ['text' as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    };
+
+    const spy = vi.spyOn(models, 'resolveRegisteredModel').mockReturnValue(fakeModel);
+
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'openrouter', maxTokens: 4096 },
+      },
+    });
+    const model = resolveModel(config, 'chat');
+
+    expect(spy).toHaveBeenCalledWith('openrouter', 'test-model');
+    expect(model.id).toBe('test-model');
+
+    spy.mockRestore();
+  });
+
+  it('throws a clear error when resolveRegisteredModel returns null', () => {
+    const spy = vi.spyOn(models, 'resolveRegisteredModel').mockReturnValue(null);
+
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'bogus-model', provider: 'fake-provider', maxTokens: 4096 },
+      },
+    });
+
+    expect(() => resolveModel(config, 'chat')).toThrow(
+      'Unknown model "bogus-model" for provider "fake-provider"',
+    );
+
+    spy.mockRestore();
   });
 });

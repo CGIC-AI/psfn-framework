@@ -1,12 +1,13 @@
 import type { TelemetryEvent } from '$lib/types';
 import { ReconnectingWebSocket } from '$lib/api/websocket';
 
-const MAX_EVENTS = 200;
+const MAX_EVENTS = 500;
 
 let events = $state<TelemetryEvent[]>([]);
 let connected = $state(false);
 let paused = $state(false);
 let ws: ReconnectingWebSocket | null = null;
+let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 export function getEvents(): TelemetryEvent[] {
   return events;
@@ -14,6 +15,10 @@ export function getEvents(): TelemetryEvent[] {
 
 export function isConnected(): boolean {
   return connected;
+}
+
+export function isPaused(): boolean {
+  return paused;
 }
 
 export function startTelemetry(): void {
@@ -24,28 +29,26 @@ export function startTelemetry(): void {
     if (paused) return;
     try {
       const parsed = JSON.parse(evt.data) as TelemetryEvent;
-      events = [parsed, ...events].slice(0, MAX_EVENTS);
+      events = [...events, parsed].slice(-MAX_EVENTS);
     } catch {
       // ignore non-JSON messages
     }
   });
 
-  // Poll connected state
-  const poll = setInterval(() => {
+  // Poll connected state from the WebSocket wrapper
+  pollInterval = setInterval(() => {
     connected = ws?.connected ?? false;
   }, 1000);
 
   ws.connect();
-
-  // store cleanup ref
-  const orig = ws;
-  return void (() => {
-    clearInterval(poll);
-    orig.close();
-  });
+  connected = ws.connected;
 }
 
 export function stopTelemetry(): void {
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
   ws?.close();
   ws = null;
   connected = false;
@@ -53,10 +56,6 @@ export function stopTelemetry(): void {
 
 export function clearEvents(): void {
   events = [];
-}
-
-export function isPaused(): boolean {
-  return paused;
 }
 
 export function pauseTelemetry(): void {

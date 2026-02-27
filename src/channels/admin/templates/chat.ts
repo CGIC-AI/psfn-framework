@@ -43,28 +43,14 @@ export function chatPage(): string {
             </div>
           </details>
           <div class="chat-contact-meta" data-chat-contact-meta></div>
+          <div class="chat-agent-context" data-chat-agent-context>Preparing session context...</div>
           <div class="chat-status" data-chat-status>Loading garden chat...</div>
         </section>
 
-        <div class="chat-surface" id="admin-chat-surface">
-          <div class="chat-thread" data-chat-thread>
-            <article class="chat-message chat-message-assistant">
-              <div class="chat-message-meta">PSFN</div>
-              <div class="chat-message-content">Preparing the garden chat bed...</div>
-            </article>
+        <div class="chat-surface chat-agent-surface" id="admin-chat-surface">
+          <div class="chat-agent-host" data-chat-agent-host>
+            <div class="chat-agent-loading">Loading AgentInterface mount...</div>
           </div>
-          <form class="chat-composer" data-chat-composer autocomplete="off">
-            <textarea
-              id="chat-composer-input"
-              data-chat-input
-              rows="3"
-              placeholder="Type a message for PSFN"
-            ></textarea>
-            <div class="chat-composer-actions">
-              <button type="submit" class="btn" data-chat-send>Send</button>
-              <button type="button" class="btn chat-clear-btn" data-chat-clear>Clear</button>
-            </div>
-          </form>
         </div>
 
         <section class="chat-debug-panel" data-chat-debug>
@@ -97,7 +83,6 @@ export function chatPage(): string {
         </section>
       </div>
     </section>
-    <script type="module" src="/static/chat.js"></script>
     <script type="module" src="/static/chat-debug.js"></script>
   `;
 }

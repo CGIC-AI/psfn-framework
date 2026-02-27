@@ -4,6 +4,7 @@
 
 import { join } from 'node:path';
 import type {
+  CapabilityTier,
   ImportProcessingRouteMode,
   ModelCatalogEntry,
   ModelContextBudgetConfig,
@@ -23,6 +24,7 @@ import {
 } from './context-budget.js';
 import { loadOrSeedJson, writeJsonAtomic } from './config/load-or-seed.js';
 import { isRecord } from './utils/types.js';
+import { isCapabilityTier } from './capabilities/tiers.js';
 
 const log = createComponentLogger('Settings');
 
@@ -102,6 +104,7 @@ export interface EditableSettings {
   webFetchLocalCrawlerHostAllowlist?: string[];
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
+  capabilityTier?: CapabilityTier;
 }
 
 export const RUNTIME_SETTINGS_KEYS = [
@@ -139,6 +142,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'webFetchLocalCrawlerHostAllowlist',
   'webFetchLocalCrawlerDomainAllowlist',
   'webFetchTlsCaCertPaths',
+  'capabilityTier',
 ] as const;
 
 export type RuntimeSettingKey = typeof RUNTIME_SETTINGS_KEYS[number];
@@ -524,6 +528,15 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.webFetchTlsCaCertPaths = toStringList(settings.webFetchTlsCaCertPaths) ?? [];
   }
 
+  if ('capabilityTier' in settings) {
+    const tier = settings.capabilityTier;
+    if (tier !== undefined && isCapabilityTier(tier)) {
+      normalized.capabilityTier = tier;
+    } else {
+      delete normalized.capabilityTier;
+    }
+  }
+
   return normalized;
 }
 
@@ -746,6 +759,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     webFetchLocalCrawlerHostAllowlist: config.webFetchLocalCrawlerHostAllowlist ?? [],
     webFetchLocalCrawlerDomainAllowlist: config.webFetchLocalCrawlerDomainAllowlist ?? [],
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
+    capabilityTier: config.capabilityTier ?? 'nursery',
   };
 }
 
@@ -849,6 +863,10 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     config.webFetchTlsCaCertPaths = settings.webFetchTlsCaCertPaths && settings.webFetchTlsCaCertPaths.length > 0
       ? [...settings.webFetchTlsCaCertPaths]
       : undefined;
+  }
+
+  if (settings.capabilityTier !== undefined && isCapabilityTier(settings.capabilityTier)) {
+    config.capabilityTier = settings.capabilityTier;
   }
 
   const shouldSyncModels = hasModelSettings(settings)
@@ -1018,6 +1036,16 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const webFetchTlsCaCertPathsRaw = params.get('webFetchTlsCaCertPaths');
   if (webFetchTlsCaCertPathsRaw !== null) {
     settings.webFetchTlsCaCertPaths = parseCsvList(webFetchTlsCaCertPathsRaw);
+  }
+
+  const capabilityTierRaw = params.get('capabilityTier');
+  if (capabilityTierRaw !== null) {
+    const tier = capabilityTierRaw.trim();
+    if (!isCapabilityTier(tier)) {
+      errors.push('capabilityTier must be one of: nursery, apprentice, autonomous, custom');
+    } else {
+      settings.capabilityTier = tier;
+    }
   }
 
   // Numeric fields

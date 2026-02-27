@@ -2482,8 +2482,11 @@ describe('AdminServer', () => {
       expect(res.body).toContain('/api/chat/bootstrap');
       expect(res.body).toContain('X-Session-ID');
       expect(res.body).toContain('agent-interface');
-      expect(res.body).toContain('PI_WEB_UI_MODULE_CANDIDATES');
-      expect(res.body).toContain('esm.sh');
+      expect(res.body).toContain('DEFAULT_PI_WEB_UI_MODULE_URL');
+      expect(res.body).toContain('/static/pi-web-ui/index.js');
+      expect(res.body).toContain('/static/pi-web-ui/app.css');
+      expect(res.body).not.toContain('esm.sh');
+      expect(res.body).not.toContain('cdn.jsdelivr.net');
       expect(res.body).not.toContain('./chat-voice.js');
     });
 

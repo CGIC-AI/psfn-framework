@@ -33,6 +33,15 @@ function prefixedParamPath(prefix: string, paramName: string): RouteMatcher {
   };
 }
 
+function paramWithSuffix(prefix: string, paramName: string, suffix: string): RouteMatcher {
+  return (path) => {
+    if (!path.startsWith(prefix) || !path.endsWith(suffix)) return null;
+    const raw = path.slice(prefix.length, path.length - suffix.length);
+    if (!raw) return null;
+    return { [paramName]: decodeURIComponent(raw) };
+  };
+}
+
 function parseAdminJsonBody(body: string): { ok: true; value: unknown } | { ok: false; error: string } {
   const trimmed = body.trim();
   if (!trimmed) return { ok: true, value: {} };
@@ -261,10 +270,91 @@ export function buildAdminApiRoutes(options: {
       },
     },
     {
+      method: 'POST',
+      match: exactPath('/api/admin/identity/rollback'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = identityService.rollbackIdentityCard(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/identity/diff'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = identityService.previewIdentityCardDiff(JSON.stringify(parsed.value));
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
       method: 'GET',
       match: exactPath('/api/admin/prompts'),
       handle: (_req, res) => {
         sendJson(res, 200, promptsService.listPrompts());
+      },
+    },
+    // Sub-path routes MUST be before generic prefixed param routes
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/prompts/', 'layerId', '/toggle'),
+      handle: (_req, res, { layerId }) => {
+        const result = promptsService.togglePromptLayer(JSON.stringify({ layerId }));
+        if (!result.ok) {
+          sendJson(res, 400, { error: result.message });
+          return;
+        }
+        sendJson(res, 200, result);
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/prompts/', 'layerId', '/rollback'),
+      handle: (req, res, { layerId }) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value && typeof parsed.value === 'object'
+            ? { ...(parsed.value as Record<string, unknown>), layerId }
+            : { layerId };
+          const result = promptsService.rollbackPromptLayer(JSON.stringify(payload));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'GET',
+      match: paramWithSuffix('/api/admin/prompts/', 'layerId', '/diff'),
+      handle: (_req, res, { layerId }) => {
+        const result = promptsService.previewPromptLayerDiff(JSON.stringify({ layerId }));
+        if (!result) {
+          sendJson(res, 404, { error: 'Prompt layer not found or no previous version' });
+          return;
+        }
+        sendJson(res, 200, result);
       },
     },
     {

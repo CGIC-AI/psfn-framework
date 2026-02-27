@@ -51,7 +51,6 @@ import {
 import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
 
 const log = createComponentLogger('Gateway');
-
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
 

@@ -853,6 +853,49 @@ describe('AdminServer', () => {
       expect(payload.defaultAuthorId).toBe('admin-user');
     });
 
+    it('uses request origin host for wildcard API bind host', async () => {
+      await server.stop();
+      server = new AdminServer({
+        port,
+        allowInsecureWithoutToken: true,
+        apiHost: '0.0.0.0',
+        apiPort: 4100,
+        memoryStore,
+        sessionStore,
+        sessionManager,
+        scheduler,
+        shardManager,
+        eventBus,
+        characterCard: testCard,
+        config: testConfig,
+        embeddingService: testEmbeddingService,
+        promptStore,
+        promptRegistry,
+        cardVersionStore,
+        skillsRuntime: {
+          getSnapshot: () => testSkillSnapshot,
+          invalidate: skillsRuntimeInvalidate,
+        } as any,
+        confirmationQueueApi: {
+          listConfirmationQueue: () => confirmationListMock(),
+          resolveConfirmationQueue: (params) => confirmationResolveMock(params),
+        },
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'GET', '/api/chat/bootstrap', undefined, {
+        Host: 'garden.example.test:3001',
+        'X-Forwarded-Proto': 'https',
+      });
+      expect(res.status).toBe(200);
+
+      const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+      expect(payload.api.chatCompletionsUrl).toBe('https://garden.example.test:4100/v1/chat/completions');
+      expect(payload.api.voiceWebSocketUrl).toBe('https://garden.example.test:4100/v1/voice/ws');
+      expect(payload.api.chatCompletionsUrl).not.toContain('0.0.0.0');
+    });
+
     it('omits api key from bootstrap when API_KEY is unset', async () => {
       const previousApiKey = process.env.API_KEY;
       delete process.env.API_KEY;

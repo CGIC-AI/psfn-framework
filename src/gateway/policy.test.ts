@@ -111,6 +111,20 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('treats fs.read relative paths as workspace-scoped', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: 'modules/test.ts' } },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('treats fs.write relative paths as workspace-scoped', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: 'notes.txt' } },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
   it('allows fs.list with workspace-relative glob', () => {
     expect(evaluatePolicy(
       { method: 'fs.list', params: { glob: 'src/**/*.ts', maxEntries: 50 } },
@@ -146,6 +160,11 @@ describe('evaluatePolicy', () => {
       { method: 'fs.read', params: { path: '/app/workspace/../../../etc/passwd' } },
       policyConfig,
     )).toBe('NEEDS_APPROVAL');
+
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: '../escape.txt' } },
+      policyConfig,
+    )).toBe('NEEDS_APPROVAL');
   });
 
   it('denies fs.list traversal and absolute glob patterns', () => {
@@ -156,6 +175,11 @@ describe('evaluatePolicy', () => {
 
     expect(evaluatePolicy(
       { method: 'fs.list', params: { glob: '/etc/*' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: 'src/..' } },
       policyConfig,
     )).toBe('DENY');
   });

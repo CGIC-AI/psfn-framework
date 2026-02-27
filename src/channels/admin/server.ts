@@ -156,6 +156,8 @@ export class AdminServer implements Lifecycle {
       skillsRuntime: config.skillsRuntime,
       confirmationQueueApi: config.confirmationQueueApi,
       apiBaseUrl: config.apiBaseUrl,
+      apiHost: config.apiHost,
+      apiPort: config.apiPort,
     });
     this.dashboardService = new AdminDashboardDataService({
       memoryStore: config.memoryStore,
@@ -747,7 +749,11 @@ export class AdminServer implements Lifecycle {
       {
         method: 'GET',
         match: exactPath('/api/chat/bootstrap'),
-        handle: (_req, res) => sendJson(res, 200, this.handlers.chatBootstrap()),
+        handle: (req, res) => sendJson(
+          res,
+          200,
+          this.handlers.chatBootstrap(this.resolveRequestOrigin(req)),
+        ),
       },
       {
         method: 'GET',
@@ -765,7 +771,11 @@ export class AdminServer implements Lifecycle {
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
             try {
-              const payload = this.handlers.updateChatBootstrap(body, req.headers['content-type']);
+              const payload = this.handlers.updateChatBootstrap(
+                body,
+                req.headers['content-type'],
+                this.resolveRequestOrigin(req),
+              );
               sendJson(res, 200, payload);
             } catch (error) {
               sendJson(res, 400, {
@@ -1092,6 +1102,28 @@ export class AdminServer implements Lifecycle {
       },
       (err) => this.send500('Request body read error', err, res),
     );
+  }
+
+  private resolveRequestOrigin(req: IncomingMessage): string | undefined {
+    const forwardedHost = req.headers['x-forwarded-host'];
+    const rawHost = (
+      Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost
+    ) ?? req.headers.host;
+    const host = rawHost?.split(',')[0]?.trim();
+    if (!host) {
+      return undefined;
+    }
+
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    const rawProto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+    const protoToken = rawProto?.split(',')[0]?.trim().toLowerCase();
+    const protocol = protoToken === 'https' ? 'https' : 'http';
+
+    try {
+      return new URL(`${protocol}://${host}`).origin;
+    } catch {
+      return undefined;
+    }
   }
 
   private send500(context: string, err: unknown, res: ServerResponse): void {

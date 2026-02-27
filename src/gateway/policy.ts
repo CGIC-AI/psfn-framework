@@ -1,8 +1,12 @@
 import { realpathSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { isAbsolute, normalize, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import type { PolicyContext, PolicyDecision } from './protocol.js';
 import { evaluateUrlPolicy, type UrlPolicyConfig } from './url-policy.js';
+import {
+  normalizeWorkspaceRelativeGlob,
+  resolveWorkspaceFsPathFromRoot,
+  resolveWorkspaceRoot,
+} from './filesystem-paths.js';
 
 export interface PolicyConfig {
   workspacePath: string;
@@ -13,7 +17,11 @@ export interface PolicyConfig {
 /** Check whether a resolved path falls inside any of the allowed prefixes */
 export function isInsideAllowedPaths(resolvedPath: string, allowedPrefixes: string[]): boolean {
   for (const prefix of allowedPrefixes) {
-    if (resolvedPath.startsWith(prefix + '/') || resolvedPath === prefix) {
+    const relativePath = relative(prefix, resolvedPath);
+    if (
+      relativePath === ''
+      || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+    ) {
       return true;
     }
   }
@@ -38,8 +46,7 @@ function resolveCanonicalPath(normalized: string, isWrite: boolean): string {
       if (isWrite) {
         try {
           const parentReal = realpathSync(dirname(normalized));
-          const basename = normalized.slice(normalized.lastIndexOf('/') + 1);
-          return resolve(parentReal, basename);
+          return resolve(parentReal, basename(normalized));
         } catch {
           // Parent doesn't exist either — use normalized path (will fail at write time)
           return normalized;
@@ -78,29 +85,33 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
     case 'fs.read':
     case 'fs.write': {
-      const path = (params as Record<string, unknown>).path as string;
-      const normalized = resolve(normalize(path));
-      const workspace = resolve(normalize(policyConfig.workspacePath));
+      const path = (params as Record<string, unknown>).path;
+      if (typeof path !== 'string' || path.trim().length === 0) {
+        return 'DENY';
+      }
+
+      const workspaceRoot = resolveWorkspaceRoot(policyConfig.workspacePath);
+      const normalizedPath = resolveWorkspaceFsPathFromRoot(path, workspaceRoot);
 
       // Build list of all allowed prefixes for this operation
-      const allowedPrefixes = [workspace];
+      const allowedPrefixes = [workspaceRoot];
       if (method === 'fs.read' && policyConfig.allowedReadPaths) {
         for (const allowed of policyConfig.allowedReadPaths) {
-          allowedPrefixes.push(resolve(normalize(allowed)));
+          allowedPrefixes.push(resolveWorkspaceFsPathFromRoot(allowed, workspaceRoot));
         }
       }
 
       // Step 1: Check normalized path (string prefix match)
-      if (!isInsideAllowedPaths(normalized, allowedPrefixes)) {
+      if (!isInsideAllowedPaths(normalizedPath, allowedPrefixes)) {
         return 'NEEDS_APPROVAL';
       }
 
       // Step 2: Resolve symlinks and check canonical path
       const isWrite = method === 'fs.write';
-      const canonical = resolveCanonicalPath(normalized, isWrite);
+      const canonical = resolveCanonicalPath(normalizedPath, isWrite);
 
       // If canonical differs from normalized (symlink), re-check against allowed prefixes
-      if (canonical !== normalized && !isInsideAllowedPaths(canonical, allowedPrefixes)) {
+      if (canonical !== normalizedPath && !isInsideAllowedPaths(canonical, allowedPrefixes)) {
         return 'DENY';
       }
 
@@ -109,24 +120,11 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
     case 'fs.list': {
       const glob = (params as Record<string, unknown>).glob;
-      if (glob !== undefined) {
-        if (typeof glob !== 'string') {
-          return 'DENY';
-        }
-        const trimmed = glob.trim();
-        if (!trimmed || trimmed.length > 512 || trimmed.includes('\0')) {
-          return 'DENY';
-        }
-
-        const normalizedGlob = normalize(trimmed).replace(/\\/g, '/');
-        if (
-          isAbsolute(trimmed) ||
-          normalizedGlob === '..' ||
-          normalizedGlob.startsWith('../') ||
-          normalizedGlob.includes('/../')
-        ) {
-          return 'DENY';
-        }
+      if (glob !== undefined && typeof glob !== 'string') {
+        return 'DENY';
+      }
+      if (!normalizeWorkspaceRelativeGlob(glob as string | undefined)) {
+        return 'DENY';
       }
 
       const maxEntries = (params as Record<string, unknown>).maxEntries;

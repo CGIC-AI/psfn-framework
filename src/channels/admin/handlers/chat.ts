@@ -1,5 +1,5 @@
 import type { ServerResponse } from 'node:http';
-import type { AdminChatBootstrapResponse, AdminChatBootstrapUpdateInput } from '../chat/index.js';
+import type { AdminChatBootstrapResponse } from '../chat/index.js';
 import type { AdminChatDebugStreamOptions } from '../types.js';
 import type { LegacyAdminHandlers } from '../handlers-legacy.js';
 
@@ -10,12 +10,16 @@ export class AdminChatHandlers {
     return this.legacy.chatPage();
   }
 
-  chatBootstrap(): AdminChatBootstrapResponse {
-    return this.legacy.chatBootstrap();
+  chatBootstrap(requestOrigin?: string): AdminChatBootstrapResponse {
+    return this.legacy.chatBootstrap(requestOrigin);
   }
 
-  updateChatBootstrap(body: string, contentTypeHeader: string | string[] | undefined): AdminChatBootstrapUpdateInput {
-    return this.legacy.updateChatBootstrap(body, contentTypeHeader);
+  updateChatBootstrap(
+    body: string,
+    contentTypeHeader: string | string[] | undefined,
+    requestOrigin?: string,
+  ): AdminChatBootstrapResponse {
+    return this.legacy.updateChatBootstrap(body, contentTypeHeader, requestOrigin);
   }
 
   setupChatDebugSSE(

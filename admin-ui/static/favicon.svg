@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- Trunk -->
+  <rect x="10.5" y="14" width="3" height="8" rx="0.5" fill="#7a6438"/>
+  <!-- Canopy -->
+  <circle cx="12" cy="10" r="8" fill="#4f8c36"/>
+  <!-- Gold vein accents -->
+  <circle cx="12" cy="10" r="5.5" fill="none" stroke="#c4a35a" stroke-width="0.8" opacity="0.6"/>
+  <circle cx="12" cy="10" r="3" fill="none" stroke="#d4a72e" stroke-width="0.6" opacity="0.4"/>
+  <!-- Gold highlight -->
+  <circle cx="9.5" cy="7.5" r="1.5" fill="#e8c24e" opacity="0.35"/>
+</svg>

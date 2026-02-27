@@ -10,13 +10,15 @@
   let searchResults = $state<AdminMemorySearchResult | null>(null);
   let error = $state('');
   let loading = $state(true);
+  let actionMessage = $state('');
+  let actionOk = $state(true);
 
   let typeFilter = $state('');
   let searchQuery = $state('');
   let searchActive = $state(false);
   let offset = $state(0);
   let expandedId = $state<string | null>(null);
-  let deleteConfirmId = $state<string | null>(null);
+  let supersedeConfirmId = $state<string | null>(null);
 
   let contactsById = $derived<Record<string, AdminMemoryContactSummary>>(
     searchActive && searchResults ? searchResults.contactsById :
@@ -28,19 +30,50 @@
     data ? data.memories : []
   );
 
+  // Memory type badge colors (from htmx admin)
+  const TYPE_COLORS: Record<string, { bg: string; text: string }> = {
+    episodic:    { bg: '#8B7355', text: 'white' },
+    semantic:    { bg: '#4A7C59', text: 'white' },
+    emotional:   { bg: '#C44569', text: 'white' },
+    procedural:  { bg: '#6C5B7B', text: 'white' },
+    reflection:  { bg: '#F7B731', text: '#3a2e0a' },
+    relational:  { bg: '#4A5C8B', text: 'white' },
+  };
+
+  // Memory sensitivity badge colors
+  const SENSITIVITY_COLORS: Record<string, { bg: string; text: string }> = {
+    public:       { bg: '#4A5C8B', text: 'white' },
+    personal:     { bg: '#6C5B7B', text: 'white' },
+    intimate:     { bg: '#C44569', text: 'white' },
+    confidential: { bg: '#8F3B3B', text: 'white' },
+  };
+
+  function flash(ok: boolean, msg: string) {
+    actionOk = ok;
+    actionMessage = msg;
+    setTimeout(() => { actionMessage = ''; }, 4000);
+  }
+
   async function loadMemories() {
     loading = true;
     error = '';
     searchActive = false;
     searchResults = null;
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       data = await listMemories({
         type: typeFilter || undefined,
         limit: PAGE_SIZE,
         offset,
       });
+      clearTimeout(timeoutId);
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load memories';
+      if (e instanceof Error && e.name === 'AbortError') {
+        error = 'Request timed out (10s). The server may be slow or unresponsive.';
+      } else {
+        error = e instanceof Error ? e.message : 'Failed to load memories';
+      }
     } finally {
       loading = false;
     }
@@ -64,13 +97,14 @@
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleSupersede(id: string) {
     try {
       await deleteMemory(id);
-      deleteConfirmId = null;
+      supersedeConfirmId = null;
+      flash(true, 'Memory superseded successfully');
       await loadMemories();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Delete failed';
+      flash(false, e instanceof Error ? e.message : 'Supersede failed');
     }
   }
 
@@ -88,16 +122,16 @@
     }
   }
 
-  function typeColor(type: string): string {
-    const colors: Record<string, string> = {
-      episodic: 'bg-moss-50 text-moss-600 border-moss-200',
-      semantic: 'bg-gold-50 text-gold-700 border-gold-200',
-      emotional: 'bg-petal-50 text-petal-500 border-petal-200',
-      procedural: 'bg-bark-200 text-shadow-600 border-bark-300',
-      reflection: 'bg-shadow-50 text-shadow-500 border-shadow-200',
-      relational: 'bg-petal-100 text-petal-400 border-petal-200',
-    };
-    return colors[type] ?? 'bg-bark-200 text-shadow-500 border-bark-300';
+  function typeBadgeStyle(type: string): string {
+    const c = TYPE_COLORS[type];
+    if (!c) return 'background-color: #a19e99; color: white';
+    return `background-color: ${c.bg}; color: ${c.text}`;
+  }
+
+  function sensitivityBadgeStyle(sensitivity: string): string {
+    const c = SENSITIVITY_COLORS[sensitivity];
+    if (!c) return 'background-color: #a19e99; color: white';
+    return `background-color: ${c.bg}; color: ${c.text}`;
   }
 
   function formatDate(ts: number): string {
@@ -118,14 +152,24 @@
     <p class="text-shadow-600 text-sm mt-1">Memory Browser</p>
   </div>
 
+  <!-- Flash message -->
+  {#if actionMessage}
+    <div class="px-4 py-2.5 rounded-lg text-sm font-medium
+      {actionOk
+        ? 'bg-moss-50 text-moss-700 border border-moss-200'
+        : 'bg-wilt-50 text-wilt-600 border border-wilt-200'}">
+      {actionMessage}
+    </div>
+  {/if}
+
   <!-- Filter bar -->
-  <div class="card p-4">
+  <div class="card-garden p-4">
     <div class="flex flex-col sm:flex-row gap-3">
       <select
         bind:value={typeFilter}
         onchange={() => { offset = 0; loadMemories(); }}
-        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-700
-               focus:outline-none focus:border-gold-400 text-sm"
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
+               focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
       >
         <option value="">All Types</option>
         {#each MEMORY_TYPES.filter(t => t) as t}
@@ -139,20 +183,20 @@
           bind:value={searchQuery}
           placeholder="Search memories..."
           onkeydown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-          class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-700
-                 placeholder:text-shadow-500 focus:outline-none focus:border-gold-400 text-sm"
+          class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
+                 placeholder:text-shadow-400 focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
         />
         <button
           onclick={handleSearch}
-          class="px-4 py-2 rounded-lg bg-gold-400 text-bark-50 text-sm font-medium
-                 hover:bg-gold-500 transition-colors"
+          class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium
+                 hover:bg-gold-700 transition-colors"
         >
           Search
         </button>
         {#if searchActive}
           <button
             onclick={() => { searchQuery = ''; searchActive = false; searchResults = null; loadMemories(); }}
-            class="px-3 py-2 rounded-lg border border-bark-300 text-shadow-500 text-sm
+            class="px-3 py-2 rounded-lg border border-bark-300 text-shadow-700 text-sm
                    hover:bg-bark-200 transition-colors"
           >
             Clear
@@ -174,8 +218,9 @@
 
   <!-- Error -->
   {#if error}
-    <div class="card p-4 border-wilt-200">
+    <div class="card-garden p-4 border-wilt-200">
       <p class="text-wilt-600 text-sm">{error}</p>
+      <button onclick={() => error = ''} class="text-sm text-shadow-600 hover:text-shadow-800 mt-1">Dismiss</button>
     </div>
   {/if}
 
@@ -183,7 +228,7 @@
   {#if loading}
     <div class="space-y-3">
       {#each Array(5) as _}
-        <div class="card p-4 animate-pulse">
+        <div class="card-garden p-4 animate-pulse">
           <div class="h-4 bg-bark-200 rounded w-32 mb-2"></div>
           <div class="h-3 bg-bark-200 rounded w-full mb-1"></div>
           <div class="h-3 bg-bark-200 rounded w-3/4"></div>
@@ -193,92 +238,101 @@
   {:else}
     <div class="space-y-3">
       {#each memories as memory (memory.id)}
-        <div class="card p-4">
+        <div class="card-garden p-4">
           <!-- Header -->
           <div class="flex items-start justify-between gap-3">
             <div class="flex items-center gap-2 flex-wrap">
-              <span class="px-2 py-0.5 text-xs rounded border {typeColor(memory.type)}">
+              <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={typeBadgeStyle(memory.type)}>
                 {memory.type}
               </span>
               {#if memory.sensitivity && memory.sensitivity !== 'public'}
-                <span class="px-2 py-0.5 text-xs rounded border bg-wilt-50 text-wilt-600 border-wilt-200">
+                <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={sensitivityBadgeStyle(memory.sensitivity)}>
                   {memory.sensitivity}
                 </span>
               {/if}
               {#if memory.contactId && contactsById[memory.contactId]}
-                <span class="px-2 py-0.5 text-xs rounded border bg-bark-200 text-shadow-500 border-bark-300">
+                <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-800 border-bark-300">
                   {contactsById[memory.contactId].displayName}
                 </span>
               {/if}
               {#if memory.supersededAt}
-                <span class="px-2 py-0.5 text-xs rounded border bg-bark-200 text-shadow-600 border-bark-300 line-through">
+                <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-600 border-bark-300 line-through">
                   superseded
                 </span>
               {/if}
             </div>
             <button
               onclick={() => expandedId = expandedId === memory.id ? null : memory.id}
-              class="text-sm text-shadow-600 hover:text-gold-600 transition-colors shrink-0"
+              class="text-sm text-gold-700 hover:text-gold-600 transition-colors shrink-0 font-medium"
             >
               {expandedId === memory.id ? 'Collapse' : 'Expand'}
             </button>
           </div>
 
           <!-- Content preview -->
-          <p class="text-shadow-700 text-sm mt-2 leading-relaxed">
+          <p class="text-shadow-800 text-sm mt-2 leading-relaxed">
             {expandedId === memory.id ? memory.content : memory.content.slice(0, 200) + (memory.content.length > 200 ? '...' : '')}
           </p>
 
           <!-- Metrics -->
           <div class="flex items-center gap-4 mt-3 text-sm text-shadow-600">
             <span title="Importance">
-              Imp: <span class="text-shadow-600 tabular-nums">{(memory.importance * 100).toFixed(0)}%</span>
+              Imp: <span class="text-shadow-800 tabular-nums font-medium">{(memory.importance * 100).toFixed(0)}%</span>
             </span>
             <span title="Salience">
-              Sal: <span class="text-shadow-600 tabular-nums">{(memory.salience * 100).toFixed(0)}%</span>
+              Sal: <span class="text-shadow-800 tabular-nums font-medium">{(memory.salience * 100).toFixed(0)}%</span>
             </span>
             <span title="Emotional Weight">
-              Emo: <span class="text-shadow-600 tabular-nums">{(memory.emotionalWeight * 100).toFixed(0)}%</span>
+              Emo: <span class="text-shadow-800 tabular-nums font-medium">{(memory.emotionalWeight * 100).toFixed(0)}%</span>
             </span>
-            <span class="ml-auto">{formatDate(memory.createdAt)}</span>
+            <span class="ml-auto text-shadow-700">{formatDate(memory.createdAt)}</span>
           </div>
 
           <!-- Expanded details -->
           {#if expandedId === memory.id}
-            <div class="mt-4 pt-3 border-t border-bark-200 space-y-2 text-sm">
+            <div class="mt-4 pt-3 border-t border-bark-200 space-y-3 text-sm">
               <div class="grid grid-cols-2 gap-2 text-shadow-700">
-                <span>ID: <code class="text-shadow-600">{memory.id}</code></span>
-                <span>Created: {formatDate(memory.createdAt)}</span>
-                <span>Updated: {formatDate(memory.updatedAt)}</span>
+                <span>ID: <code class="text-shadow-800 bg-bark-200 px-1 rounded">{memory.id}</code></span>
+                <span>Created: <span class="text-shadow-800">{formatDate(memory.createdAt)}</span></span>
+                <span>Updated: <span class="text-shadow-800">{formatDate(memory.updatedAt)}</span></span>
                 {#if memory.supersededAt}
-                  <span>Superseded: {formatDate(memory.supersededAt)}</span>
+                  <span>Superseded: <span class="text-shadow-800">{formatDate(memory.supersededAt)}</span></span>
+                {/if}
+                {#if memory.sourceRef}
+                  <span>Source: <code class="text-shadow-800 bg-bark-200 px-1 rounded">{memory.sourceRef}</code></span>
+                {/if}
+                {#if memory.tags}
+                  <span>Tags: <span class="text-shadow-800">{memory.tags}</span></span>
                 {/if}
               </div>
 
-              <!-- Delete button -->
+              <!-- Supersede button (not "Delete" — backend calls supersedeMemory) -->
               <div class="flex justify-end pt-2">
-                {#if deleteConfirmId === memory.id}
+                {#if supersedeConfirmId === memory.id}
                   <div class="flex items-center gap-2">
-                    <span class="text-wilt-600">Are you sure?</span>
+                    <span class="text-shadow-700">
+                      Supersede this memory? It won't be deleted, but marked as replaced.
+                    </span>
                     <button
-                      onclick={() => handleDelete(memory.id)}
-                      class="px-3 py-1 rounded bg-wilt-400 text-bark-50 hover:bg-wilt-600 transition-colors"
+                      onclick={() => handleSupersede(memory.id)}
+                      class="px-3 py-1 rounded bg-wilt-400 text-white hover:bg-wilt-600 transition-colors text-sm font-medium"
                     >
-                      Yes, Delete
+                      Yes, Supersede
                     </button>
                     <button
-                      onclick={() => deleteConfirmId = null}
-                      class="px-3 py-1 rounded border border-bark-300 text-shadow-500 hover:bg-bark-200 transition-colors"
+                      onclick={() => supersedeConfirmId = null}
+                      class="px-3 py-1 rounded border border-bark-300 text-shadow-700 hover:bg-bark-200 transition-colors text-sm"
                     >
                       Cancel
                     </button>
                   </div>
                 {:else}
                   <button
-                    onclick={() => deleteConfirmId = memory.id}
-                    class="px-3 py-1 rounded border border-wilt-200 text-wilt-600 hover:bg-wilt-50 transition-colors"
+                    onclick={() => supersedeConfirmId = memory.id}
+                    class="px-3 py-1 rounded border border-wilt-200 text-wilt-600 hover:bg-wilt-50 transition-colors text-sm font-medium"
+                    title="Mark this memory as superseded (replaced). The original is preserved but hidden from active retrieval."
                   >
-                    Delete
+                    Supersede
                   </button>
                 {/if}
               </div>
@@ -288,8 +342,8 @@
       {/each}
 
       {#if memories.length === 0 && !loading}
-        <div class="card p-6 text-center">
-          <p class="text-shadow-700">No memories found.</p>
+        <div class="card-garden p-6 text-center">
+          <p class="text-shadow-600 text-sm">No memories found.</p>
         </div>
       {/if}
     </div>
@@ -301,18 +355,18 @@
       <button
         onclick={prevPage}
         disabled={!data.pagination.hasPrevious}
-        class="px-4 py-2 rounded-lg border border-bark-300 text-shadow-600 text-sm
+        class="px-4 py-2 rounded-lg border border-bark-300 text-shadow-800 text-sm font-medium
                hover:bg-bark-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
         Previous
       </button>
       <span class="text-sm text-shadow-700">
-        Page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.ceil(data.pagination.total / PAGE_SIZE)}
+        Page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.max(1, Math.ceil((data.pagination.total || 1) / PAGE_SIZE))}
       </span>
       <button
         onclick={nextPage}
         disabled={!data.pagination.hasNext}
-        class="px-4 py-2 rounded-lg border border-bark-300 text-shadow-600 text-sm
+        class="px-4 py-2 rounded-lg border border-bark-300 text-shadow-800 text-sm font-medium
                hover:bg-bark-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
         Next

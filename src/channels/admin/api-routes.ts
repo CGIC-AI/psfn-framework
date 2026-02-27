@@ -316,6 +316,25 @@ export function buildAdminApiRoutes(options: {
       },
     },
     {
+      method: 'PATCH',
+      match: exactPath('/api/admin/identity/fields'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = identityService.updateIdentityField(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
       method: 'POST',
       match: exactPath('/api/admin/identity/diff'),
       handle: (req, res) => {
@@ -335,6 +354,25 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/prompts'),
       handle: (_req, res) => {
         sendJson(res, 200, promptsService.listPrompts());
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/prompts'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = promptsService.createPromptLayer(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 201, result);
+        });
       },
     },
     // Sub-path routes MUST be before generic prefixed param routes

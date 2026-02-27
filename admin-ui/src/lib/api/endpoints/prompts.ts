@@ -10,6 +10,12 @@ export function listPrompts(): Promise<AdminPromptListData> {
   return apiGet<AdminPromptListData>('/api/admin/prompts');
 }
 
+export function createPromptLayer(
+  body: Record<string, unknown>
+): Promise<PromptUpdateResult> {
+  return apiPost<PromptUpdateResult>('/api/admin/prompts', body);
+}
+
 export function getPromptDetail(
   id: string
 ): Promise<AdminPromptDetailData> {

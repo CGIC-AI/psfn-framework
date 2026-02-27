@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import {
     listPrompts,
+    createPromptLayer,
     getPromptDetail,
     updatePrompt,
     togglePrompt,
@@ -438,11 +439,6 @@
 
   // ── Drag-and-drop reorder ──
   function onDragStart(e: DragEvent, idx: number) {
-    const layer = sortedLayers[idx];
-    if (isProtected(layer)) {
-      e.preventDefault();
-      return;
-    }
     dragSourceIdx = idx;
     isDragging = true;
     if (e.dataTransfer) {
@@ -472,7 +468,7 @@
 
     const sourceLayer = sortedLayers[dragSourceIdx];
     const targetLayer = sortedLayers[targetIdx];
-    if (!sourceLayer || !targetLayer || isProtected(targetLayer)) {
+    if (!sourceLayer || !targetLayer) {
       dragSourceIdx = null;
       return;
     }
@@ -508,7 +504,7 @@
     if (swapIdx < 0 || swapIdx >= sortedLayers.length) return;
     const current = sortedLayers[idx];
     const target = sortedLayers[swapIdx];
-    if (isProtected(current) || isProtected(target)) return;
+    if (!current || !target) return;
     try {
       await Promise.all([
         updatePrompt(current.id, { priority: target.priority }),
@@ -522,6 +518,57 @@
 
   // Section tab state for structured editing
   let activeSectionTab = $state<StructuredSectionKey>('system_prompt');
+
+  // ── New layer form ──
+  let showNewLayerForm = $state(false);
+  let newLayerName = $state('');
+  let newLayerType = $state<'runtime' | 'channel' | 'task'>('runtime');
+  let newLayerContent = $state('');
+  let newLayerPriority = $state(10);
+  let newLayerChannelType = $state('');
+  let newLayerTaskKind = $state('');
+  let creatingLayer = $state(false);
+
+  function resetNewLayerForm() {
+    newLayerName = '';
+    newLayerType = 'runtime';
+    newLayerContent = '';
+    newLayerPriority = 10;
+    newLayerChannelType = '';
+    newLayerTaskKind = '';
+  }
+
+  async function handleCreateLayer() {
+    if (!newLayerName.trim()) return;
+    creatingLayer = true;
+    try {
+      const body: Record<string, unknown> = {
+        name: newLayerName.trim(),
+        type: newLayerType,
+        content: newLayerContent,
+        priority: newLayerPriority,
+      };
+      if (newLayerType === 'channel' && newLayerChannelType.trim()) {
+        body.channelType = newLayerChannelType.trim();
+      }
+      if (newLayerType === 'task' && newLayerTaskKind.trim()) {
+        body.taskKind = newLayerTaskKind.trim();
+      }
+      const result = await createPromptLayer(body);
+      if (result.ok) {
+        showToast(result.message || 'Layer created');
+        showNewLayerForm = false;
+        resetNewLayerForm();
+        await refreshList();
+      } else {
+        error = result.message || 'Failed to create layer';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to create layer';
+    } finally {
+      creatingLayer = false;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -573,10 +620,91 @@
   {:else}
     <!-- ─── Prompt Composition Stack ─── -->
     <div>
-      <div class="flex items-center gap-3 mb-3">
-        <h2 class="text-base font-serif font-semibold text-shadow-800">Composition Stack</h2>
-        <span class="text-sm text-shadow-600">Drag to reorder. Click to expand.</span>
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-3">
+          <h2 class="text-base font-serif font-semibold text-shadow-800">Composition Stack</h2>
+          <span class="text-sm text-shadow-600">Drag to reorder. Click to expand.</span>
+        </div>
+        <button
+          onclick={() => { showNewLayerForm = !showNewLayerForm; if (!showNewLayerForm) resetNewLayerForm(); }}
+          class="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 hover:bg-bark-100 hover:border-gold-300 transition-colors font-medium"
+        >
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          {showNewLayerForm ? 'Cancel' : 'New Layer'}
+        </button>
       </div>
+
+      <!-- New Layer Form -->
+      {#if showNewLayerForm}
+        <div class="card-garden p-5 mb-3 filigree-border-strong">
+          <h3 class="text-sm font-serif font-semibold text-shadow-800 mb-3">Create New Prompt Layer</h3>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            <label class="block">
+              <span class="block text-sm font-medium text-shadow-700 mb-1">Name <span class="text-wilt-500">*</span></span>
+              <input type="text" bind:value={newLayerName} placeholder="My Custom Layer"
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+            </label>
+            <label class="block">
+              <span class="block text-sm font-medium text-shadow-700 mb-1">Type <span class="text-wilt-500">*</span></span>
+              <select bind:value={newLayerType}
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
+                <option value="runtime">Runtime</option>
+                <option value="channel">Channel</option>
+                <option value="task">Task</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="block text-sm font-medium text-shadow-700 mb-1">Priority</span>
+              <input type="number" min="0" step="1" bind:value={newLayerPriority}
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+            </label>
+          </div>
+
+          {#if newLayerType === 'channel'}
+            <label class="block mb-3">
+              <span class="block text-sm font-medium text-shadow-700 mb-1">Channel Type <span class="text-shadow-500">(optional -- e.g. discord_text, api, admin)</span></span>
+              <input type="text" bind:value={newLayerChannelType} placeholder="discord_text"
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+            </label>
+          {/if}
+          {#if newLayerType === 'task'}
+            <label class="block mb-3">
+              <span class="block text-sm font-medium text-shadow-700 mb-1">Task Kind <span class="text-shadow-500">(optional -- e.g. heartbeat, reflection)</span></span>
+              <input type="text" bind:value={newLayerTaskKind} placeholder="heartbeat"
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+            </label>
+          {/if}
+
+          <label class="block mb-3">
+            <span class="block text-sm font-medium text-shadow-700 mb-1">Content</span>
+            <textarea
+              bind:value={newLayerContent}
+              rows={6}
+              placeholder="Enter prompt content..."
+              class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+            ></textarea>
+            <span class="text-sm text-shadow-600 mt-1">{newLayerContent.length} chars | ~{formatTokenCount(estimateTokens(newLayerContent))} tokens</span>
+          </label>
+
+          <div class="flex items-center gap-2">
+            <button
+              onclick={handleCreateLayer}
+              disabled={creatingLayer || !newLayerName.trim()}
+              class="px-4 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+            >
+              {creatingLayer ? 'Creating...' : 'Create Layer'}
+            </button>
+            <button
+              onclick={() => { showNewLayerForm = false; resetNewLayerForm(); }}
+              class="px-3 py-1.5 rounded-lg text-shadow-700 text-sm hover:bg-bark-200 transition-colors border border-bark-300"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      {/if}
 
       <div class="space-y-1">
         {#each stackEntries as entry}
@@ -606,7 +734,7 @@
                 {isExpanded ? 'filigree-border-strong ring-1 ring-gold-300' : ''}
                 {isDragSource ? 'opacity-50 scale-[0.98]' : ''}
                 {isDragTarget ? 'ring-2 ring-gold-400 ring-offset-1' : ''}"
-              draggable={!locked}
+              draggable={layers.length > 1}
               ondragstart={(e) => onDragStart(e, idx)}
               ondragover={(e) => onDragOver(e, idx)}
               ondragleave={() => onDragLeave()}
@@ -621,16 +749,16 @@
                 onclick={() => toggleExpand(layer.id)}
                 onkeydown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpand(layer.id); }
-                  if (!locked && e.key === 'ArrowUp' && e.altKey) { e.preventDefault(); moveLayer(layer.id, 'up'); }
-                  if (!locked && e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); moveLayer(layer.id, 'down'); }
+                  if (e.key === 'ArrowUp' && e.altKey) { e.preventDefault(); moveLayer(layer.id, 'up'); }
+                  if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); moveLayer(layer.id, 'down'); }
                 }}
                 role="button"
                 tabindex="0"
               >
                 <!-- Drag handle -->
                 <span
-                  class="flex items-center justify-center w-6 h-6 shrink-0 rounded text-shadow-500 {locked ? 'cursor-not-allowed opacity-30' : 'cursor-grab hover:text-gold-600 hover:bg-bark-200'}"
-                  title={locked ? 'Protected layer (cannot reorder)' : 'Drag to reorder'}
+                  class="flex items-center justify-center w-6 h-6 shrink-0 rounded text-shadow-500 cursor-grab hover:text-gold-600 hover:bg-bark-200"
+                  title="Drag to reorder"
                 >
                   <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                     <rect x="4" y="5" width="16" height="2" rx="1"/>

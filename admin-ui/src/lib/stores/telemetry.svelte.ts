@@ -5,6 +5,7 @@ const MAX_EVENTS = 200;
 
 let events = $state<TelemetryEvent[]>([]);
 let connected = $state(false);
+let paused = $state(false);
 let ws: ReconnectingWebSocket | null = null;
 
 export function getEvents(): TelemetryEvent[] {
@@ -20,6 +21,7 @@ export function startTelemetry(): void {
   ws = new ReconnectingWebSocket('/api/admin/events');
 
   ws.onMessage((evt) => {
+    if (paused) return;
     try {
       const parsed = JSON.parse(evt.data) as TelemetryEvent;
       events = [parsed, ...events].slice(0, MAX_EVENTS);
@@ -51,4 +53,30 @@ export function stopTelemetry(): void {
 
 export function clearEvents(): void {
   events = [];
+}
+
+export function isPaused(): boolean {
+  return paused;
+}
+
+export function pauseTelemetry(): void {
+  paused = true;
+}
+
+export function resumeTelemetry(): void {
+  paused = false;
+}
+
+/** Alias for startTelemetry */
+export function connectTelemetry(): void {
+  startTelemetry();
+}
+
+/** Alias for stopTelemetry */
+export function disconnectTelemetry(): void {
+  stopTelemetry();
+}
+
+export function filterEvents(prefix: string): TelemetryEvent[] {
+  return events.filter(e => e.type.startsWith(prefix));
 }

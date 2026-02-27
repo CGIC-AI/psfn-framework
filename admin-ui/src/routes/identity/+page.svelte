@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getIdentity, importIdentityCard, rollbackIdentityCard, previewIdentityCardDiff } from '$lib/api/endpoints/identity';
+  import { getIdentity, importIdentity, rollbackIdentity, previewDiff } from '$lib/api/endpoints/identity';
   import type { AdminIdentityData, CharacterCardV2 } from '$lib/types';
 
   let data = $state<AdminIdentityData | null>(null);
@@ -21,8 +21,7 @@
   // Diff
   let diffVersion = $state<number | null>(null);
   let diffLoading = $state(false);
-  let diffCurrent = $state<CharacterCardV2 | null>(null);
-  let diffTarget = $state<CharacterCardV2 | null>(null);
+  let diffText = $state<string>('');
 
   // Creator notes collapsible
   let creatorNotesOpen = $state(false);
@@ -43,7 +42,7 @@
     importMessage = '';
     importSuccess = false;
     try {
-      const result = await importIdentityCard(importPath.trim());
+      const result = await importIdentity({ path: importPath.trim() });
       importMessage = result.message || 'Import successful';
       importSuccess = true;
       data = await getIdentity();
@@ -61,7 +60,7 @@
     rollingBack = version;
     rollbackMessage = '';
     try {
-      const result = await rollbackIdentityCard(version);
+      const result = await rollbackIdentity({ version });
       rollbackMessage = result.message || 'Rollback successful';
       data = await getIdentity();
     } catch (e) {
@@ -74,16 +73,14 @@
   async function showDiff(version: number) {
     if (diffVersion === version) {
       diffVersion = null;
-      diffCurrent = null;
-      diffTarget = null;
+      diffText = '';
       return;
     }
     diffVersion = version;
     diffLoading = true;
     try {
-      const result = await previewIdentityCardDiff(version);
-      diffCurrent = result.current;
-      diffTarget = result.target;
+      const result = await previewDiff({ version });
+      diffText = result.diff;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load diff';
       diffVersion = null;
@@ -97,23 +94,6 @@
   function isPlaceholder(value: string | undefined): boolean {
     if (!value || !value.trim()) return true;
     return PLACEHOLDER_VALUES.some(p => value.trim().toLowerCase() === p);
-  }
-
-  const DIFF_FIELDS: Array<{ key: keyof CharacterCardV2['data']; label: string }> = [
-    { key: 'name', label: 'Name' },
-    { key: 'description', label: 'Description' },
-    { key: 'personality', label: 'Personality' },
-    { key: 'scenario', label: 'Scenario' },
-    { key: 'first_mes', label: 'First Message' },
-    { key: 'mes_example', label: 'Example Dialogue' },
-    { key: 'system_prompt', label: 'System Prompt' },
-    { key: 'post_history_instructions', label: 'Post-History Instructions' },
-  ];
-
-  function fieldsDiffer(a: CharacterCardV2, b: CharacterCardV2, key: keyof CharacterCardV2['data']): boolean {
-    const va = String(a.data[key] ?? '');
-    const vb = String(b.data[key] ?? '');
-    return va !== vb;
   }
 
   let card = $derived(data?.card ?? null);
@@ -383,32 +363,11 @@
                           <div class="h-4 bg-bark-200 dark:bg-shadow-700 rounded w-1/3"></div>
                           <div class="h-4 bg-bark-200 dark:bg-shadow-700 rounded w-2/3"></div>
                         </div>
-                      {:else if diffCurrent && diffTarget}
+                      {:else if diffText}
                         <p class="text-xs text-shadow-500 dark:text-bark-400 mb-3">
                           Comparing <span class="font-medium text-shadow-800 dark:text-bark-300">current (v{data.version})</span> with <span class="font-medium text-shadow-800 dark:text-bark-300">v{entry.version}</span>
                         </p>
-                        {@const changedFields = DIFF_FIELDS.filter(df => fieldsDiffer(diffCurrent!, diffTarget!, df.key))}
-                        {#if changedFields.length === 0}
-                          <p class="text-xs text-shadow-400 dark:text-bark-500 italic">No field differences detected.</p>
-                        {:else}
-                          <div class="space-y-4">
-                            {#each changedFields as df (df.key)}
-                              <div>
-                                <p class="text-xs font-medium text-shadow-800 dark:text-bark-300 mb-2">{df.label}</p>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                  <div class="rounded-lg border border-bark-200 dark:border-shadow-700 p-3 bg-bark-50 dark:bg-shadow-900">
-                                    <p class="text-[10px] font-medium text-shadow-400 dark:text-bark-500 uppercase tracking-wider mb-1.5">Current (v{data.version})</p>
-                                    <pre class="text-xs font-mono text-shadow-800 dark:text-bark-300 whitespace-pre-wrap max-h-48 overflow-y-auto">{String(diffCurrent!.data[df.key] ?? '')}</pre>
-                                  </div>
-                                  <div class="rounded-lg border border-gold-200 dark:border-gold-800 p-3 bg-gold-50 dark:bg-gold-900/10">
-                                    <p class="text-[10px] font-medium text-gold-600 dark:text-gold-400 uppercase tracking-wider mb-1.5">Target (v{entry.version})</p>
-                                    <pre class="text-xs font-mono text-shadow-800 dark:text-bark-300 whitespace-pre-wrap max-h-48 overflow-y-auto">{String(diffTarget!.data[df.key] ?? '')}</pre>
-                                  </div>
-                                </div>
-                              </div>
-                            {/each}
-                          </div>
-                        {/if}
+                        <pre class="text-xs font-mono text-shadow-800 dark:text-bark-300 whitespace-pre-wrap bg-bark-50 dark:bg-shadow-900 p-3 rounded-lg max-h-64 overflow-y-auto leading-relaxed">{diffText}</pre>
                       {:else}
                         <p class="text-xs text-shadow-400 dark:text-bark-500 italic">Unable to load diff.</p>
                       {/if}

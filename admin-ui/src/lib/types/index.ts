@@ -104,9 +104,12 @@ export interface ChannelInfo {
 export interface SessionEntry {
   role: string;
   content: string;
+  authorName?: string;
+  authorId?: string;
   timestamp?: string;
   toolCalls?: unknown[];
   originChannelId?: string;
+  channelVisibility?: string;
 }
 
 export interface CompactionAuditView {
@@ -282,11 +285,46 @@ export interface PromptLayer {
   priority: number;
   identifier?: string;
   role?: string;
-  version?: number;
-  updatedAt?: string;
-  updatedBy?: string;
-  checksum?: string;
-  metadata?: Record<string, unknown>;
+  promptOrder?: number;
+  channelType?: string;
+  taskKind?: string;
+  version: number;
+  updatedAt: string;
+  updatedBy: string;
+  checksum: string;
+}
+
+export interface PromptHistoryEntry {
+  layerId: string;
+  layerName: string;
+  previousContent: string;
+  previousChecksum: string;
+  newContent: string;
+  newChecksum: string;
+  updatedBy: string;
+  reason?: string;
+  timestamp: string;
+  version: number;
+}
+
+export interface AdminPromptDetailData {
+  layer?: PromptLayer;
+  layerHistory?: PromptHistoryEntry[];
+  staticPrompt?: PromptRegistryEntry;
+  staticPromptHistory?: PromptRegistryHistoryEntry[];
+}
+
+export interface PromptRegistryHistoryEntry {
+  version: number;
+  updatedBy: string;
+  timestamp: string;
+  previousChecksum: string;
+  previousText: string;
+}
+
+export interface PromptDiffResult {
+  oldContent: string;
+  newContent: string;
 }
 
 export interface PromptRegistryEntry {

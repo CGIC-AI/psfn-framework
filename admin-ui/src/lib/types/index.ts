@@ -240,7 +240,7 @@ export interface AdminIdentityData {
   config: Record<string, unknown>;
   version: number;
   checksum?: string;
-  history: Array<{ version: number; timestamp: string; checksum?: string }>;
+  history: Array<{ version: number; timestamp: string; checksum?: string; changedBy?: string }>;
   intakeReview: unknown;
 }
 
@@ -252,6 +252,12 @@ export interface PromptLayer {
   content: string;
   enabled: boolean;
   priority: number;
+  identifier?: string;
+  role?: string;
+  version?: number;
+  updatedAt?: string;
+  updatedBy?: string;
+  checksum?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -260,6 +266,11 @@ export interface PromptRegistryEntry {
   name: string;
   content: string;
   description?: string;
+  version?: number;
+  enabled?: boolean;
+  category?: string;
+  updatedAt?: string;
+  identifier?: string;
 }
 
 export interface AdminPromptListData {

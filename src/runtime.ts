@@ -40,6 +40,7 @@ import {
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
+import { parseOptionalPositiveIntEnv } from './utils/env.js';
 import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -537,7 +538,7 @@ export class SubstrateRuntime implements Lifecycle {
 
     // API server — OpenAI-compatible endpoints
     const apiHost = process.env.API_HOST || undefined;
-    const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;
+    const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
     if (apiPort) {
       const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
         agentLoop: this.agentLoop,
@@ -714,7 +715,7 @@ export class SubstrateRuntime implements Lifecycle {
       : null;
 
     // Admin GUI — admin UI
-    const adminPort = process.env.ADMIN_PORT ? parseInt(process.env.ADMIN_PORT, 10) : undefined;
+    const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
     if (adminPort) {
       this.adminServer = new AdminServer({
         port: adminPort,

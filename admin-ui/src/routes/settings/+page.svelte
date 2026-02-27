@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     getSettings,
     updateSettings,
@@ -39,6 +39,17 @@
     { value: 'local_endpoint', label: 'Local Endpoint Only' },
   ] as const;
 
+  // ── Budget constants (from context-budget.ts) ──
+  const SESSION_HISTORY_TOKENS_PER_MSG = 256;
+  const MEMORY_RETRIEVAL_TOKENS_PER_ITEM = 170;
+  const SESSION_HISTORY_MIN_MESSAGES = 5;
+  const SESSION_HISTORY_MAX_MESSAGES = 400;
+  const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
+  const MEMORY_RETRIEVAL_MAX_ITEMS = 200;
+  const SESSION_HISTORY_MIN_TOKENS_FLOOR = 4_000;
+  const MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR = 1_000;
+  const SYSTEM_PROMPT_ESTIMATE_TOKENS = 2_500;
+
   // ── Core state ──
   let data = $state<AdminSettingsData | null>(null);
   let loading = $state(true);
@@ -50,19 +61,43 @@
   let discoveredModels = $state<DiscoveredModel[]>([]);
   let refreshingModels = $state(false);
 
-  // ── Budget constants (from context-budget.ts) ──
-  const SESSION_HISTORY_TOKENS_PER_MSG = 256;
-  const MEMORY_RETRIEVAL_TOKENS_PER_ITEM = 170;
-  const SESSION_HISTORY_MIN_MESSAGES = 5;
-  const SESSION_HISTORY_MAX_MESSAGES = 400;
-  const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
-  const MEMORY_RETRIEVAL_MAX_ITEMS = 200;
+  // ── Dirty tracking ──
+  let initialSnapshot = $state('');
+  let dirty = $state(false);
+
+  function computeSnapshot(): string {
+    return JSON.stringify({
+      primaryModel, extractionModel, memoryBudgetPct,
+      memoryRetrievalLimit, sessionMessageLimit,
+      sessionHistoryBudgetPct, memoryRetrievalBudgetPct,
+      extractionThresholdPct, compactionThresholdPct,
+      maxResponseTokens, retryMaxAttempts, retryBaseDelayMs,
+      importRouteMode, importStrictPolicy,
+      importLocalEndpointUrl, importLocalModel,
+      openRouterProviderOrder, allowHttpFetch,
+      webFetchDomainAllowlist, webFetchLocalCrawlerHostAllowlist,
+      webFetchLocalCrawlerDomainAllowlist, webFetchTlsCaCertPaths,
+      capabilityTier, catalogSlots, purposeMappings,
+    });
+  }
+
+  $effect(() => {
+    if (initialSnapshot) {
+      dirty = computeSnapshot() !== initialSnapshot;
+    }
+  });
+
+  function handleBeforeUnload(e: BeforeUnloadEvent) {
+    if (dirty) {
+      e.preventDefault();
+    }
+  }
 
   // ── Simple mode fields ──
   let primaryModel = $state('');
   let extractionModel = $state('');
   let memoryBudgetPct = $state(20);
-  let memoryRetrievalLimit = $state(15);
+  let memoryRetrievalLimit = $state<number | null>(null);
   let sessionMessageLimit = $state<number | null>(null);
   let sessionHistoryBudgetPct = $state(6);
   let memoryRetrievalBudgetPct = $state(2);
@@ -103,12 +138,21 @@
   let capabilitiesJson = $state('');
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
 
-  // ── Advanced mode ──
+  // ── Collapsible sections ──
   let openSections = $state(new Set<string>(['models']));
 
-  const ADVANCED_SECTIONS: Array<{ id: string; title: string; icon: string; keys: string[] }> = [
+  // ── Section definitions ──
+  interface SectionDef {
+    id: string;
+    title: string;
+    icon: string;
+    keys: string[];
+    summary: () => string;
+  }
+
+  const SECTIONS: SectionDef[] = [
     {
-      id: 'models', title: 'Models & Roster', icon: 'M',
+      id: 'models', title: 'Models & Routing', icon: 'M',
       keys: [
         'primaryModel', 'primaryProvider', 'primaryMaxTokens',
         'extractionModel', 'extractionProvider', 'extractionMaxTokens',
@@ -117,25 +161,42 @@
         'backgroundModel', 'backgroundProvider', 'backgroundMaxTokens',
         'defaultContextWindow',
       ],
+      summary: () => {
+        const slots = catalogSlots.filter(s => s.slotKey && s.model);
+        if (slots.length === 0) return 'No models configured';
+        return slots.map(s => `${s.slotKey}: ${s.model.split('/').pop()}`).join(', ');
+      },
+    },
+    {
+      id: 'budget', title: 'Context Budget', icon: 'B',
+      keys: [
+        'sessionHistoryBudgetPct', 'memoryRetrievalBudgetPct',
+        'sessionMessageLimit', 'memoryRetrievalLimit',
+      ],
+      summary: () => `Session ${sessionHistoryBudgetPct}%, Memory ${memoryRetrievalBudgetPct}%`,
     },
     {
       id: 'memory', title: 'Memory & Extraction', icon: 'E',
       keys: [
-        'memoryBudgetPct', 'memoryRetrievalLimit', 'extractionThresholdPct',
+        'memoryBudgetPct', 'extractionThresholdPct',
         'extractionInterval', 'salienceFloor',
       ],
+      summary: () => `Budget ${memoryBudgetPct}%, Extract at ${extractionThresholdPct}%, Compact at ${compactionThresholdPct}%`,
     },
     {
       id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
       keys: ['compactionThresholdPct', 'sessionMessageLimit', 'maxSessionTokens'],
+      summary: () => `Compaction at ${compactionThresholdPct}%${sessionMessageLimit != null ? `, max ${sessionMessageLimit} msgs` : ''}`,
+    },
+    {
+      id: 'trust', title: 'Trust & Capabilities', icon: 'T',
+      keys: ['capabilityTier'],
+      summary: () => `Tier: ${capabilityTier}`,
     },
     {
       id: 'llm', title: 'LLM Retries & Behavior', icon: 'L',
-      keys: ['retryMaxAttempts', 'retryBaseDelayMs'],
-    },
-    {
-      id: 'think', title: 'Think Tool', icon: 'T',
-      keys: ['thinkMaxIterations', 'thinkMaxTokensPerIteration', 'thinkTimeout'],
+      keys: ['retryMaxAttempts', 'retryBaseDelayMs', 'primaryMaxTokens'],
+      summary: () => `Max retries: ${retryMaxAttempts}, Response: ${maxResponseTokens.toLocaleString()} tokens`,
     },
     {
       id: 'import', title: 'Import Processing', icon: 'I',
@@ -144,6 +205,7 @@
         'importProcessingLocalEndpointUrl', 'importProcessingLocalModel',
         'openRouterProviderOrder',
       ],
+      summary: () => `Route: ${importRouteMode}${importStrictPolicy ? ' (strict)' : ''}`,
     },
     {
       id: 'fetch', title: 'Web Fetch Policy', icon: 'W',
@@ -152,6 +214,22 @@
         'webFetchLocalCrawlerHostAllowlist', 'webFetchLocalCrawlerDomainAllowlist',
         'webFetchTlsCaCertPaths',
       ],
+      summary: () => allowHttpFetch ? 'Enabled' : 'Disabled',
+    },
+    {
+      id: 'voice', title: 'Voice & TTS', icon: 'V',
+      keys: [],
+      summary: () => 'Configured via environment variables',
+    },
+    {
+      id: 'channels', title: 'Channels', icon: 'C',
+      keys: [],
+      summary: () => 'Discord, API, Admin — env var config',
+    },
+    {
+      id: 'think', title: 'Think Tool', icon: 'R',
+      keys: ['thinkMaxIterations', 'thinkMaxTokensPerIteration', 'thinkTimeout'],
+      summary: () => 'RLM sandbox parameters',
     },
   ];
 
@@ -163,34 +241,93 @@
     { key: 'capabilities', label: 'capabilities.json' },
   ] as const;
 
+  // ── Source attribution ──
+  type SettingSource = 'default' | 'settings.json' | 'env var';
+
+  function getSource(key: string): SettingSource {
+    if (!data) return 'default';
+    const env = data.env as Record<string, unknown> | undefined;
+    // Check if env object has a related key
+    const envMap: Record<string, string> = {
+      'primaryModel': 'primaryModel',
+      'extractionModel': 'extractionModel',
+      'allowHttpFetch': 'allowHttpFetch',
+    };
+    if (env && envMap[key] && env[envMap[key]] !== undefined) return 'env var';
+    const config = data.config as Record<string, unknown>;
+    if (config[key] !== undefined) return 'settings.json';
+    return 'default';
+  }
+
   // ── Derived ──
   let slotKeys = $derived(catalogSlots.map(s => s.slotKey).filter(Boolean));
 
+  function clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
+  }
+
   let budgetPreview = $derived.by(() => {
-    if (!data) return { session: '', memory: '', contextWindow: '128,000' };
+    if (!data) return null;
     const config = data.config as Record<string, unknown>;
     const ctxWindow = Number(config.defaultContextWindow ?? 128000);
 
-    // Session history budget
-    const sessTokenBudget = Math.max(4000, Math.floor(ctxWindow * (sessionHistoryBudgetPct / 100)));
-    const sessBudgetMsgs = Math.min(Math.max(Math.floor(sessTokenBudget / SESSION_HISTORY_TOKENS_PER_MSG), SESSION_HISTORY_MIN_MESSAGES), SESSION_HISTORY_MAX_MESSAGES);
-    const sessEffective = sessionMessageLimit != null ? Math.min(sessBudgetMsgs, sessionMessageLimit) : sessBudgetMsgs;
-    const sessLabel = sessionMessageLimit != null
-      ? `${sessEffective} messages (hard limit: ${sessionMessageLimit}, budget: ~${sessBudgetMsgs})`
-      : `~${sessBudgetMsgs} messages (~${(sessTokenBudget / 1000).toFixed(0)}K tokens)`;
+    // Session history budget (matches context-budget.ts exactly)
+    const sessTokenBudget = Math.max(SESSION_HISTORY_MIN_TOKENS_FLOOR, Math.floor(ctxWindow * (sessionHistoryBudgetPct / 100)));
+    const sessBudgetMsgs = clamp(
+      Math.floor(sessTokenBudget / SESSION_HISTORY_TOKENS_PER_MSG),
+      SESSION_HISTORY_MIN_MESSAGES,
+      SESSION_HISTORY_MAX_MESSAGES,
+    );
+    const sessEffective = sessionMessageLimit != null
+      ? Math.min(sessBudgetMsgs, sessionMessageLimit)
+      : sessBudgetMsgs;
+    const sessEffectiveTokens = sessEffective * SESSION_HISTORY_TOKENS_PER_MSG;
 
-    // Memory retrieval budget
-    const memTokenBudget = Math.max(1000, Math.floor(ctxWindow * (memoryRetrievalBudgetPct / 100)));
-    const memBudgetItems = Math.min(Math.max(Math.floor(memTokenBudget / MEMORY_RETRIEVAL_TOKENS_PER_ITEM), MEMORY_RETRIEVAL_MIN_ITEMS), MEMORY_RETRIEVAL_MAX_ITEMS);
-    const memEffective = memoryRetrievalLimit != null ? Math.min(memBudgetItems, memoryRetrievalLimit) : memBudgetItems;
-    const memLabel = memoryRetrievalLimit != null
-      ? `${memEffective} memories (hard limit: ${memoryRetrievalLimit}, budget: ~${memBudgetItems})`
-      : `~${memBudgetItems} memories (~${(memTokenBudget / 1000).toFixed(0)}K tokens)`;
+    // Memory retrieval budget (matches context-budget.ts exactly)
+    const memTokenBudget = Math.max(MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR, Math.floor(ctxWindow * (memoryRetrievalBudgetPct / 100)));
+    const memBudgetItems = clamp(
+      Math.floor(memTokenBudget / MEMORY_RETRIEVAL_TOKENS_PER_ITEM),
+      MEMORY_RETRIEVAL_MIN_ITEMS,
+      MEMORY_RETRIEVAL_MAX_ITEMS,
+    );
+    const memEffective = memoryRetrievalLimit != null
+      ? Math.min(memBudgetItems, memoryRetrievalLimit)
+      : memBudgetItems;
+    const memEffectiveTokens = memEffective * MEMORY_RETRIEVAL_TOKENS_PER_ITEM;
+
+    // Allocations
+    const systemPromptTokens = SYSTEM_PROMPT_ESTIMATE_TOKENS;
+    const allocated = systemPromptTokens + sessEffectiveTokens + memEffectiveTokens + maxResponseTokens;
+    const remaining = Math.max(0, ctxWindow - allocated);
+
+    // Percentages for bar chart
+    const sysPct = (systemPromptTokens / ctxWindow) * 100;
+    const sessPct = (sessEffectiveTokens / ctxWindow) * 100;
+    const memPct = (memEffectiveTokens / ctxWindow) * 100;
+    const respPct = (maxResponseTokens / ctxWindow) * 100;
+    const remainPct = (remaining / ctxWindow) * 100;
 
     return {
-      session: sessLabel,
-      memory: memLabel,
-      contextWindow: ctxWindow.toLocaleString(),
+      contextWindow: ctxWindow,
+      systemPromptTokens,
+      sessEffective,
+      sessBudgetMsgs,
+      sessEffectiveTokens,
+      sessTokenBudget,
+      sessMode: sessionMessageLimit != null ? 'hard_limit' as const : 'budget' as const,
+      memEffective,
+      memBudgetItems,
+      memEffectiveTokens,
+      memTokenBudget,
+      memMode: memoryRetrievalLimit != null ? 'hard_limit' as const : 'budget' as const,
+      maxResponseTokens,
+      allocated,
+      remaining,
+      sysPct,
+      sessPct,
+      memPct,
+      respPct,
+      remainPct,
     };
   });
 
@@ -249,6 +386,9 @@
         slotKey: p === 'chat' || p === 'summary' || p === 'reasoning' || p === 'longContext' ? 'primary' : 'extraction',
       }));
     }
+
+    // Set initial snapshot for dirty tracking
+    initialSnapshot = computeSnapshot();
   }
 
   function tryPrettyPrint(raw: string): string {
@@ -314,6 +454,11 @@
       case 'trust-policy': trustPolicyJson = val; break;
       case 'capabilities': capabilitiesJson = val; break;
     }
+  }
+
+  function fmtTokens(n: number): string {
+    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
+    return String(n);
   }
 
   // ── Catalog actions ──
@@ -386,11 +531,17 @@
         openRouterProviderOrder: openRouterProviderOrder.split(',').map(s => s.trim()).filter(Boolean),
         allowHttpFetch: allowHttpFetch,
         webFetchDomainAllowlist: webFetchDomainAllowlist.split(',').map(s => s.trim()).filter(Boolean),
+        webFetchLocalCrawlerHostAllowlist: webFetchLocalCrawlerHostAllowlist.split(',').map(s => s.trim()).filter(Boolean),
+        webFetchLocalCrawlerDomainAllowlist: webFetchLocalCrawlerDomainAllowlist.split(',').map(s => s.trim()).filter(Boolean),
+        webFetchTlsCaCertPaths: webFetchTlsCaCertPaths.split(',').map(s => s.trim()).filter(Boolean),
         capabilityTier,
         ...catalogPayload,
       });
       flash(result.ok, result.message || 'Settings saved');
-      if (result.ok) { data = await getSettings(); }
+      if (result.ok) {
+        data = await getSettings();
+        populateSimpleFields(data.config as Record<string, unknown>);
+      }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
     } finally {
@@ -441,6 +592,7 @@
 
   // ── Init ──
   onMount(async () => {
+    window.addEventListener('beforeunload', handleBeforeUnload);
     try {
       const [settingsData, models] = await Promise.all([
         getSettings(),
@@ -469,9 +621,15 @@
     }
   });
 
+  onDestroy(() => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    }
+  });
+
+  // ── Style constants ──
   const INPUT_CLS = 'w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 transition-colors';
   const LABEL_CLS = 'block text-sm font-medium text-shadow-700 mb-1.5';
-  const SECTION_HEADING_CLS = 'text-sm font-serif font-semibold text-shadow-800';
   const SLIDER_CLS = 'flex-1 h-2 rounded-full appearance-none bg-bark-300 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gold-500 [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-gold-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer';
   const COMPACT_INPUT_CLS = 'w-20 px-2 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gold-300';
 </script>
@@ -486,9 +644,16 @@
 <div class="space-y-5">
   <!-- Header -->
   <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Climate</h1>
-      <p class="text-sm text-shadow-600 mt-1">Runtime configuration and tuning</p>
+    <div class="flex items-center gap-3">
+      <div>
+        <h1 class="text-2xl font-serif font-bold text-shadow-900">The Climate</h1>
+        <p class="text-sm text-shadow-600 mt-1">Runtime configuration and tuning</p>
+      </div>
+      {#if dirty}
+        <span class="px-2.5 py-1 rounded-full text-sm font-medium bg-gold-100 text-gold-700 border border-gold-300">
+          Unsaved changes
+        </span>
+      {/if}
     </div>
 
     <div class="flex items-center gap-3">
@@ -537,155 +702,155 @@
       <p class="text-wilt-600 text-sm">{error}</p>
     </div>
 
-  <!-- ════════════ SIMPLE MODE ════════════ -->
+  <!-- ════════════════════ SIMPLE MODE ════════════════════ -->
   {:else if mode === 'simple'}
     <div class="space-y-5">
-      <!-- Model Catalog -->
+      <!-- Primary models (quick-access) -->
       <div class="card-garden p-6 space-y-4">
-        <div class="flex items-center justify-between">
-          <h2 class={SECTION_HEADING_CLS}>Model Catalog</h2>
-          <button onclick={addCatalogSlot}
-            class="px-3 py-1 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors">
-            + Add Slot
-          </button>
-        </div>
-        <p class="text-sm text-shadow-600">Define reusable model slots, then map purposes to slots below. Discovery metadata auto-fills defaults.</p>
-        <hr class="divider-filigree" />
-
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm min-w-[800px]">
-            <thead>
-              <tr class="border-b border-bark-300">
-                <th class="text-left py-2 px-2 text-shadow-700 font-medium">Slot Key</th>
-                <th class="text-left py-2 px-2 text-shadow-700 font-medium">Model</th>
-                <th class="text-left py-2 px-2 text-shadow-700 font-medium">Provider</th>
-                <th class="text-right py-2 px-2 text-shadow-700 font-medium">Default Max Tokens</th>
-                <th class="text-right py-2 px-2 text-shadow-700 font-medium">Default Context</th>
-                <th class="text-right py-2 px-2 text-shadow-700 font-medium">Override Max Tokens</th>
-                <th class="text-right py-2 px-2 text-shadow-700 font-medium">Override Context</th>
-                <th class="py-2 px-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each catalogSlots as slot, i}
-                <tr class="border-b border-bark-200">
-                  <td class="py-1.5 px-2">
-                    <input type="text" bind:value={slot.slotKey} placeholder="primary"
-                      class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                  </td>
-                  <td class="py-1.5 px-2">
-                    <input type="text" list="model-list" bind:value={slot.model} placeholder="provider/model"
-                      class="w-48 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                  </td>
-                  <td class="py-1.5 px-2">
-                    <input type="text" bind:value={slot.provider} placeholder="openrouter"
-                      class="w-28 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                  </td>
-                  <td class="py-1.5 px-2 text-right">
-                    <input type="number" min="1"
-                      value={slot.defaultMaxTokens ?? ''}
-                      onchange={(e) => { slot.defaultMaxTokens = Number((e.target as HTMLInputElement).value) || null; }}
-                      placeholder="auto"
-                      class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                  </td>
-                  <td class="py-1.5 px-2 text-right">
-                    <input type="number" min="1"
-                      value={slot.defaultContextWindow ?? ''}
-                      onchange={(e) => { slot.defaultContextWindow = Number((e.target as HTMLInputElement).value) || null; }}
-                      placeholder="auto"
-                      class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                  </td>
-                  <td class="py-1.5 px-2 text-right">
-                    <input type="number" min="1"
-                      value={slot.overrideMaxTokens ?? ''}
-                      onchange={(e) => { slot.overrideMaxTokens = Number((e.target as HTMLInputElement).value) || null; }}
-                      placeholder="optional"
-                      class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                  </td>
-                  <td class="py-1.5 px-2 text-right">
-                    <input type="number" min="1"
-                      value={slot.overrideContextWindow ?? ''}
-                      onchange={(e) => { slot.overrideContextWindow = Number((e.target as HTMLInputElement).value) || null; }}
-                      placeholder="optional"
-                      class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                  </td>
-                  <td class="py-1.5 px-2">
-                    <button onclick={() => removeCatalogSlot(i)}
-                      class="text-sm text-wilt-600 hover:text-wilt-400 font-medium">Remove</button>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Purpose Mappings -->
-      <div class="card-garden p-6 space-y-4">
-        <div class="flex items-center justify-between">
-          <h2 class={SECTION_HEADING_CLS}>Purpose Mappings</h2>
-          <button onclick={addPurposeMapping}
-            class="px-3 py-1 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors">
-            + Add Mapping
-          </button>
-        </div>
-        <p class="text-sm text-shadow-600">Map each purpose to a model slot from the catalog above.</p>
-        <hr class="divider-filigree" />
-
-        <div class="space-y-2">
-          {#each purposeMappings as mapping, i}
-            <div class="flex items-center gap-3">
-              <input type="text" bind:value={mapping.purpose} placeholder="chat"
-                class="w-40 px-3 py-1.5 text-sm rounded border border-bark-300 bg-white text-shadow-800 font-mono focus:ring-1 focus:ring-gold-300" />
-              <svg class="w-4 h-4 text-shadow-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-4-4l4 4-4 4"/></svg>
-              <select bind:value={mapping.slotKey}
-                class="flex-1 px-3 py-1.5 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300">
-                {#each slotKeys as key}
-                  <option value={key}>{key}</option>
-                {/each}
-                {#if !slotKeys.includes(mapping.slotKey) && mapping.slotKey}
-                  <option value={mapping.slotKey}>{mapping.slotKey} (missing)</option>
-                {/if}
-              </select>
-              <button onclick={() => removePurposeMapping(i)}
-                class="text-sm text-wilt-600 hover:text-wilt-400 font-medium shrink-0">Remove</button>
-            </div>
-          {/each}
-        </div>
-      </div>
-
-      <!-- Live Budget Preview -->
-      <div class="card-garden p-5">
-        <h2 class={SECTION_HEADING_CLS}>Live Budget Preview</h2>
-        <hr class="divider-filigree my-3" />
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div class="bg-bark-100 rounded-lg p-3">
-            <span class="text-shadow-600 block mb-1">Context Window</span>
-            <span class="text-shadow-900 font-mono font-medium">{budgetPreview.contextWindow} tokens</span>
-          </div>
-          <div class="bg-moss-50 rounded-lg p-3">
-            <span class="text-shadow-600 block mb-1">Session History</span>
-            <span class="text-shadow-900 font-medium">{budgetPreview.session}</span>
-          </div>
-          <div class="bg-gold-50 rounded-lg p-3">
-            <span class="text-shadow-600 block mb-1">Memory Retrieval</span>
-            <span class="text-shadow-900 font-medium">{budgetPreview.memory}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Context Budget -->
-      <div class="card-garden p-6 space-y-6">
-        <h2 class={SECTION_HEADING_CLS}>Context Budget</h2>
+        <h2 class="text-sm font-serif font-semibold text-shadow-800">Quick Model Selection</h2>
         <hr class="divider-filigree" />
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
-            <label class={LABEL_CLS}>Session History Budget %</label>
+            <label class={LABEL_CLS}>
+              Primary Model
+              <span class="text-shadow-400 font-normal ml-1">({getSource('primaryModel')})</span>
+            </label>
+            <input type="text" list="model-list" bind:value={primaryModel} placeholder="provider/model"
+              class={INPUT_CLS} />
+          </div>
+          <div>
+            <label class={LABEL_CLS}>
+              Extraction Model
+              <span class="text-shadow-400 font-normal ml-1">({getSource('extractionModel')})</span>
+            </label>
+            <input type="text" list="model-list" bind:value={extractionModel} placeholder="provider/model"
+              class={INPUT_CLS} />
+          </div>
+        </div>
+      </div>
+
+      <!-- Budget Preview with bar chart -->
+      {#if budgetPreview}
+        <div class="card-garden p-6 space-y-4">
+          <h2 class="text-sm font-serif font-semibold text-shadow-800">Context Window Allocation</h2>
+          <hr class="divider-filigree" />
+
+          <!-- Visual bar chart -->
+          <div class="space-y-2">
+            <div class="flex rounded-lg overflow-hidden h-8 border border-bark-300">
+              {#if budgetPreview.sysPct > 0}
+                <div class="bg-bark-400 flex items-center justify-center text-white text-sm font-medium min-w-0 overflow-hidden"
+                  style="width: {budgetPreview.sysPct}%"
+                  title="System prompt: ~{fmtTokens(budgetPreview.systemPromptTokens)} tokens">
+                  {#if budgetPreview.sysPct > 4}<span class="truncate px-1">Sys</span>{/if}
+                </div>
+              {/if}
+              {#if budgetPreview.sessPct > 0}
+                <div class="bg-moss-400 flex items-center justify-center text-white text-sm font-medium min-w-0 overflow-hidden"
+                  style="width: {budgetPreview.sessPct}%"
+                  title="Session history: ~{fmtTokens(budgetPreview.sessEffectiveTokens)} tokens ({budgetPreview.sessEffective} messages)">
+                  {#if budgetPreview.sessPct > 4}<span class="truncate px-1">Session</span>{/if}
+                </div>
+              {/if}
+              {#if budgetPreview.memPct > 0}
+                <div class="bg-gold-400 flex items-center justify-center text-white text-sm font-medium min-w-0 overflow-hidden"
+                  style="width: {budgetPreview.memPct}%"
+                  title="Memory retrieval: ~{fmtTokens(budgetPreview.memEffectiveTokens)} tokens ({budgetPreview.memEffective} memories)">
+                  {#if budgetPreview.memPct > 4}<span class="truncate px-1">Memory</span>{/if}
+                </div>
+              {/if}
+              {#if budgetPreview.respPct > 0}
+                <div class="bg-petal-400 flex items-center justify-center text-white text-sm font-medium min-w-0 overflow-hidden"
+                  style="width: {budgetPreview.respPct}%"
+                  title="Max response: ~{fmtTokens(budgetPreview.maxResponseTokens)} tokens">
+                  {#if budgetPreview.respPct > 6}<span class="truncate px-1">Response</span>{/if}
+                </div>
+              {/if}
+              {#if budgetPreview.remainPct > 0}
+                <div class="bg-bark-200 flex items-center justify-center text-shadow-600 text-sm font-medium min-w-0 overflow-hidden flex-1"
+                  title="Remaining: ~{fmtTokens(budgetPreview.remaining)} tokens">
+                  {#if budgetPreview.remainPct > 8}<span class="truncate px-1">Free</span>{/if}
+                </div>
+              {/if}
+            </div>
+
+            <!-- Legend -->
+            <div class="flex flex-wrap gap-x-5 gap-y-1 text-sm">
+              <span class="flex items-center gap-1.5">
+                <span class="w-3 h-3 rounded-sm bg-bark-400 inline-block"></span>
+                <span class="text-shadow-700">System: ~{fmtTokens(budgetPreview.systemPromptTokens)}</span>
+              </span>
+              <span class="flex items-center gap-1.5">
+                <span class="w-3 h-3 rounded-sm bg-moss-400 inline-block"></span>
+                <span class="text-shadow-700">Session: {budgetPreview.sessEffective} msgs (~{fmtTokens(budgetPreview.sessEffectiveTokens)})</span>
+              </span>
+              <span class="flex items-center gap-1.5">
+                <span class="w-3 h-3 rounded-sm bg-gold-400 inline-block"></span>
+                <span class="text-shadow-700">Memory: {budgetPreview.memEffective} items (~{fmtTokens(budgetPreview.memEffectiveTokens)})</span>
+              </span>
+              <span class="flex items-center gap-1.5">
+                <span class="w-3 h-3 rounded-sm bg-petal-400 inline-block"></span>
+                <span class="text-shadow-700">Response: {fmtTokens(budgetPreview.maxResponseTokens)}</span>
+              </span>
+              <span class="flex items-center gap-1.5">
+                <span class="w-3 h-3 rounded-sm bg-bark-200 border border-bark-300 inline-block"></span>
+                <span class="text-shadow-700">Free: {fmtTokens(budgetPreview.remaining)}</span>
+              </span>
+            </div>
+          </div>
+
+          <!-- Detail cards -->
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+            <div class="bg-bark-100 rounded-lg p-3 border border-bark-200">
+              <span class="text-shadow-600 block mb-1">Context Window</span>
+              <span class="text-shadow-900 font-mono font-semibold">{budgetPreview.contextWindow.toLocaleString()}</span>
+              <span class="text-shadow-600"> tokens</span>
+            </div>
+            <div class="bg-moss-50 rounded-lg p-3 border border-moss-200">
+              <span class="text-shadow-600 block mb-1">Session History</span>
+              <span class="text-shadow-900 font-semibold">{budgetPreview.sessEffective} messages</span>
+              {#if budgetPreview.sessMode === 'hard_limit'}
+                <span class="text-shadow-500 block text-sm">hard limit: {sessionMessageLimit}, budget: ~{budgetPreview.sessBudgetMsgs}</span>
+              {:else}
+                <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.sessTokenBudget)} token budget</span>
+              {/if}
+            </div>
+            <div class="bg-gold-50 rounded-lg p-3 border border-gold-200">
+              <span class="text-shadow-600 block mb-1">Memory Retrieval</span>
+              <span class="text-shadow-900 font-semibold">{budgetPreview.memEffective} memories</span>
+              {#if budgetPreview.memMode === 'hard_limit'}
+                <span class="text-shadow-500 block text-sm">hard limit: {memoryRetrievalLimit}, budget: ~{budgetPreview.memBudgetItems}</span>
+              {:else}
+                <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.memTokenBudget)} token budget</span>
+              {/if}
+            </div>
+            <div class="rounded-lg p-3 border {budgetPreview.remaining < 0 ? 'bg-wilt-50 border-wilt-400' : 'bg-bark-100 border-bark-200'}">
+              <span class="text-shadow-600 block mb-1">Remaining</span>
+              <span class="{budgetPreview.remaining < 0 ? 'text-wilt-600' : 'text-shadow-900'} font-mono font-semibold">{fmtTokens(budgetPreview.remaining)}</span>
+              <span class="text-shadow-600"> tokens</span>
+              {#if budgetPreview.remaining < 0}
+                <span class="text-wilt-600 block text-sm font-medium">Over budget!</span>
+              {/if}
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Context Budget controls -->
+      <div class="card-garden p-6 space-y-6">
+        <h2 class="text-sm font-serif font-semibold text-shadow-800">Context Budget</h2>
+        <hr class="divider-filigree" />
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label class={LABEL_CLS}>
+              Session History Budget %
+              <span class="text-shadow-400 font-normal ml-1">({getSource('sessionHistoryBudgetPct')})</span>
+            </label>
             <div class="flex items-center gap-3">
               <input type="range" min="1" max="80" step="1" bind:value={sessionHistoryBudgetPct} class={SLIDER_CLS} />
               <input type="number" min="1" max="80" bind:value={sessionHistoryBudgetPct} class={COMPACT_INPUT_CLS} />
             </div>
-            <p class="text-sm text-shadow-600 mt-1">% of context window for session history (default: 6%)</p>
+            <p class="text-sm text-shadow-500 mt-1">% of context window for session history (default: 6%)</p>
           </div>
           <div>
             <label class={LABEL_CLS}>Session Message Limit (hard override)</label>
@@ -694,15 +859,18 @@
               onchange={(e) => { const v = Number((e.target as HTMLInputElement).value); sessionMessageLimit = v > 0 ? v : null; }}
               placeholder="auto (budget-based)"
               class={INPUT_CLS} />
-            <p class="text-sm text-shadow-600 mt-1">Caps messages regardless of budget. Leave blank for auto.</p>
+            <p class="text-sm text-shadow-500 mt-1">Caps messages regardless of budget. Leave blank for auto.</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Memory Retrieval Budget %</label>
+            <label class={LABEL_CLS}>
+              Memory Retrieval Budget %
+              <span class="text-shadow-400 font-normal ml-1">({getSource('memoryRetrievalBudgetPct')})</span>
+            </label>
             <div class="flex items-center gap-3">
               <input type="range" min="1" max="50" step="1" bind:value={memoryRetrievalBudgetPct} class={SLIDER_CLS} />
               <input type="number" min="1" max="50" bind:value={memoryRetrievalBudgetPct} class={COMPACT_INPUT_CLS} />
             </div>
-            <p class="text-sm text-shadow-600 mt-1">% of context window for memory retrieval (default: 2%)</p>
+            <p class="text-sm text-shadow-500 mt-1">% of context window for memory retrieval (default: 2%)</p>
           </div>
           <div>
             <label class={LABEL_CLS}>Memory Retrieval Limit (hard override)</label>
@@ -711,214 +879,511 @@
               onchange={(e) => { const v = Number((e.target as HTMLInputElement).value); memoryRetrievalLimit = v > 0 ? v : null; }}
               placeholder="auto (budget-based)"
               class={INPUT_CLS} />
-            <p class="text-sm text-shadow-600 mt-1">Caps memories regardless of budget. Leave blank for auto.</p>
+            <p class="text-sm text-shadow-500 mt-1">Caps memories regardless of budget. Leave blank for auto.</p>
           </div>
         </div>
       </div>
 
       <!-- Memory & Extraction -->
       <div class="card-garden p-6 space-y-6">
-        <h2 class={SECTION_HEADING_CLS}>Memory & Extraction</h2>
+        <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory & Extraction</h2>
         <hr class="divider-filigree" />
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
-            <label class={LABEL_CLS}>Memory Budget %</label>
+            <label class={LABEL_CLS}>
+              Memory Budget %
+              <span class="text-shadow-400 font-normal ml-1">({getSource('memoryBudgetPct')})</span>
+            </label>
             <div class="flex items-center gap-3">
               <input type="range" min="5" max="50" step="1" bind:value={memoryBudgetPct} class={SLIDER_CLS} />
               <input type="number" min="5" max="50" bind:value={memoryBudgetPct} class={COMPACT_INPUT_CLS} />
             </div>
-            <p class="text-sm text-shadow-600 mt-1">Legacy % of context window reserved for memory (see budget % above)</p>
+            <p class="text-sm text-shadow-500 mt-1">Legacy % of context window reserved for memory (see budget % above)</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Extraction Threshold %</label>
+            <label class={LABEL_CLS}>
+              Extraction Threshold %
+              <span class="text-shadow-400 font-normal ml-1">({getSource('extractionThresholdPct')})</span>
+            </label>
             <div class="flex items-center gap-3">
               <input type="range" min="10" max="80" step="1" bind:value={extractionThresholdPct} class={SLIDER_CLS} />
               <input type="number" min="10" max="80" bind:value={extractionThresholdPct} class={COMPACT_INPUT_CLS} />
             </div>
-            <p class="text-sm text-shadow-600 mt-1">Triggers extraction when session exceeds this % of context</p>
+            <p class="text-sm text-shadow-500 mt-1">Triggers extraction when session exceeds this % of context</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Compaction Threshold %</label>
+            <label class={LABEL_CLS}>
+              Compaction Threshold %
+              <span class="text-shadow-400 font-normal ml-1">({getSource('compactionThresholdPct')})</span>
+            </label>
             <div class="flex items-center gap-3">
               <input type="range" min="30" max="90" step="1" bind:value={compactionThresholdPct} class={SLIDER_CLS} />
               <input type="number" min="30" max="90" bind:value={compactionThresholdPct} class={COMPACT_INPUT_CLS} />
             </div>
-            <p class="text-sm text-shadow-600 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
+            <p class="text-sm text-shadow-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
           </div>
-        </div>
-      </div>
-
-      <!-- Response, Retries, Capability -->
-      <div class="card-garden p-6 space-y-6">
-        <h2 class={SECTION_HEADING_CLS}>Response, Retries & Capability</h2>
-        <hr class="divider-filigree" />
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
             <label class={LABEL_CLS}>Max Response Tokens</label>
             <input type="number" min="256" step="256" bind:value={maxResponseTokens} class={INPUT_CLS} />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>LLM Max Retries</label>
-            <input type="number" min="0" max="10" bind:value={retryMaxAttempts} class={INPUT_CLS} />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Retry Base Delay (ms)</label>
-            <input type="number" min="100" step="100" bind:value={retryBaseDelayMs} class={INPUT_CLS} />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Capability Tier</label>
-            <select bind:value={capabilityTier} class={INPUT_CLS}>
-              {#each CAPABILITY_TIERS as tier}
-                <option value={tier}>{tier}</option>
-              {/each}
-            </select>
-            <p class="text-sm text-shadow-600 mt-1">Controls agent autonomy level</p>
+            <p class="text-sm text-shadow-500 mt-1">Maximum tokens in LLM response</p>
           </div>
         </div>
       </div>
 
-      <!-- Import Processing -->
-      <div class="card-garden p-6 space-y-6">
-        <h2 class={SECTION_HEADING_CLS}>Import Processing</h2>
-        <hr class="divider-filigree" />
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <label class={LABEL_CLS}>Route Mode</label>
-            <select bind:value={importRouteMode} class={INPUT_CLS}>
-              {#each IMPORT_ROUTE_MODES as opt}
-                <option value={opt.value}>{opt.label}</option>
-              {/each}
-            </select>
+      <!-- Model Catalog (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('models')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">M</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Catalog</h2>
+            <span class="text-sm text-shadow-500">{catalogSlots.filter(s => s.slotKey).length} slots</span>
           </div>
-          <div>
-            <label class={LABEL_CLS}>Strict Policy</label>
-            <label class="flex items-center gap-2 mt-2 cursor-pointer">
-              <input type="checkbox" bind:checked={importStrictPolicy}
-                class="w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300" />
-              <span class="text-sm text-shadow-700">Enforce strict ZDR compliance</span>
-            </label>
+          <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('models') ? 'rotate-180' : ''}">&#9660;</span>
+        </button>
+        {#if !openSections.has('models')}
+          <div class="px-5 pb-3 text-sm text-shadow-500">
+            {catalogSlots.filter(s => s.slotKey && s.model).map(s => `${s.slotKey}: ${s.model.split('/').pop()}`).join(', ') || 'No models configured'}
           </div>
-          <div>
-            <label class={LABEL_CLS}>OpenRouter Provider Order</label>
-            <input type="text" bind:value={openRouterProviderOrder} class={INPUT_CLS} placeholder="comma-separated providers" />
+        {/if}
+        {#if openSections.has('models')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4 space-y-4">
+            <div class="flex items-center justify-between">
+              <p class="text-sm text-shadow-600">Define reusable model slots, then map purposes to slots below.</p>
+              <button onclick={addCatalogSlot}
+                class="px-3 py-1 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors">
+                + Add Slot
+              </button>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm min-w-[800px]">
+                <thead>
+                  <tr class="border-b border-bark-300">
+                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Slot Key</th>
+                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Model</th>
+                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Provider</th>
+                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Def. Max Tokens</th>
+                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Def. Context</th>
+                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Ovr. Max Tokens</th>
+                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Ovr. Context</th>
+                    <th class="py-2 px-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each catalogSlots as slot, i}
+                    <tr class="border-b border-bark-200">
+                      <td class="py-1.5 px-2">
+                        <input type="text" bind:value={slot.slotKey} placeholder="primary"
+                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
+                      </td>
+                      <td class="py-1.5 px-2">
+                        <input type="text" list="model-list" bind:value={slot.model} placeholder="provider/model"
+                          class="w-48 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
+                      </td>
+                      <td class="py-1.5 px-2">
+                        <input type="text" bind:value={slot.provider} placeholder="openrouter"
+                          class="w-28 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
+                      </td>
+                      <td class="py-1.5 px-2 text-right">
+                        <input type="number" min="1"
+                          value={slot.defaultMaxTokens ?? ''}
+                          onchange={(e) => { slot.defaultMaxTokens = Number((e.target as HTMLInputElement).value) || null; }}
+                          placeholder="auto"
+                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
+                      </td>
+                      <td class="py-1.5 px-2 text-right">
+                        <input type="number" min="1"
+                          value={slot.defaultContextWindow ?? ''}
+                          onchange={(e) => { slot.defaultContextWindow = Number((e.target as HTMLInputElement).value) || null; }}
+                          placeholder="auto"
+                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
+                      </td>
+                      <td class="py-1.5 px-2 text-right">
+                        <input type="number" min="1"
+                          value={slot.overrideMaxTokens ?? ''}
+                          onchange={(e) => { slot.overrideMaxTokens = Number((e.target as HTMLInputElement).value) || null; }}
+                          placeholder="optional"
+                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
+                      </td>
+                      <td class="py-1.5 px-2 text-right">
+                        <input type="number" min="1"
+                          value={slot.overrideContextWindow ?? ''}
+                          onchange={(e) => { slot.overrideContextWindow = Number((e.target as HTMLInputElement).value) || null; }}
+                          placeholder="optional"
+                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
+                      </td>
+                      <td class="py-1.5 px-2">
+                        <button onclick={() => removeCatalogSlot(i)}
+                          class="text-sm text-wilt-600 hover:text-wilt-400 font-medium">Remove</button>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Purpose Mappings -->
+            <div class="pt-2 space-y-3">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-medium text-shadow-700">Purpose Mappings</h3>
+                <button onclick={addPurposeMapping}
+                  class="px-3 py-1 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors">
+                  + Add Mapping
+                </button>
+              </div>
+              <div class="space-y-2">
+                {#each purposeMappings as mapping, i}
+                  <div class="flex items-center gap-3">
+                    <input type="text" bind:value={mapping.purpose} placeholder="chat"
+                      class="w-40 px-3 py-1.5 text-sm rounded border border-bark-300 bg-white text-shadow-800 font-mono focus:ring-1 focus:ring-gold-300" />
+                    <svg class="w-4 h-4 text-shadow-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-4-4l4 4-4 4"/></svg>
+                    <select bind:value={mapping.slotKey}
+                      class="flex-1 px-3 py-1.5 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300">
+                      {#each slotKeys as key}
+                        <option value={key}>{key}</option>
+                      {/each}
+                      {#if !slotKeys.includes(mapping.slotKey) && mapping.slotKey}
+                        <option value={mapping.slotKey}>{mapping.slotKey} (missing)</option>
+                      {/if}
+                    </select>
+                    <button onclick={() => removePurposeMapping(i)}
+                      class="text-sm text-wilt-600 hover:text-wilt-400 font-medium shrink-0">Remove</button>
+                  </div>
+                {/each}
+              </div>
+            </div>
           </div>
-          <div>
-            <label class={LABEL_CLS}>Local Endpoint URL</label>
-            <input type="text" bind:value={importLocalEndpointUrl} class={INPUT_CLS} placeholder="http://localhost:8080" />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Local Model</label>
-            <input type="text" bind:value={importLocalModel} class={INPUT_CLS} placeholder="model name" />
-          </div>
-        </div>
+        {/if}
       </div>
 
-      <!-- Gateway Web Fetch -->
-      <div class="card-garden p-6 space-y-6">
-        <h2 class={SECTION_HEADING_CLS}>Gateway Web Fetch</h2>
-        <hr class="divider-filigree" />
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <label class={LABEL_CLS}>Allow HTTP Fetch</label>
-            <label class="flex items-center gap-2 mt-2 cursor-pointer">
-              <input type="checkbox" bind:checked={allowHttpFetch}
-                class="w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300" />
-              <span class="text-sm text-shadow-700">Enable web fetch in gateway</span>
-            </label>
+      <!-- Response, Retries, Capability (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('llm')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">L</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">LLM Retries & Capability</h2>
           </div>
-          <div>
-            <label class={LABEL_CLS}>Domain Allowlist</label>
-            <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains" />
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('llm')}
+              <span class="text-sm text-shadow-500">Retries: {retryMaxAttempts}, Tier: {capabilityTier}</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('llm') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
-          <div>
-            <label class={LABEL_CLS}>Local Crawler Host Allowlist</label>
-            <input type="text" bind:value={webFetchLocalCrawlerHostAllowlist} class={INPUT_CLS} placeholder="comma-separated hosts" />
+        </button>
+        {#if openSections.has('llm')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>LLM Max Retries</label>
+                <input type="number" min="0" max="10" bind:value={retryMaxAttempts} class={INPUT_CLS} />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Retry Base Delay (ms)</label>
+                <input type="number" min="100" step="100" bind:value={retryBaseDelayMs} class={INPUT_CLS} />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Capability Tier</label>
+                <select bind:value={capabilityTier} class={INPUT_CLS}>
+                  {#each CAPABILITY_TIERS as tier}
+                    <option value={tier}>{tier}</option>
+                  {/each}
+                </select>
+                <p class="text-sm text-shadow-500 mt-1">Controls agent autonomy level</p>
+              </div>
+            </div>
           </div>
-          <div>
-            <label class={LABEL_CLS}>Local Crawler Domain Allowlist</label>
-            <input type="text" bind:value={webFetchLocalCrawlerDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains" />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>TLS CA Cert Paths</label>
-            <input type="text" bind:value={webFetchTlsCaCertPaths} class={INPUT_CLS} placeholder="comma-separated file paths" />
-          </div>
-        </div>
+        {/if}
       </div>
 
-      <!-- Planned Settings (read-only placeholders) -->
-      <div class="card-garden p-6 space-y-4">
-        <h2 class={SECTION_HEADING_CLS}>Planned Settings</h2>
-        <p class="text-sm text-shadow-600">These features are configured via environment variables or are planned for future releases.</p>
-        <hr class="divider-filigree" />
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="bg-bark-100 rounded-lg p-4 border border-bark-300">
-            <h3 class="text-sm font-semibold text-shadow-800 mb-1">Embeddings / Transformers</h3>
-            <p class="text-sm text-shadow-600">Local transformers or Ollama embeddings. Configured via EMBEDDING_PROVIDER, OLLAMA_URL, and EMBEDDING_MODEL env vars.</p>
+      <!-- Import Processing (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('import')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">I</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Import Processing</h2>
           </div>
-          <div class="bg-bark-100 rounded-lg p-4 border border-bark-300">
-            <h3 class="text-sm font-semibold text-shadow-800 mb-1">Voice / TTS</h3>
-            <p class="text-sm text-shadow-600">Provider-pluggable streaming TTS (ElevenLabs or Echo). Configured via TTS_PROVIDER, ELEVENLABS_*, ECHO_TTS_* env vars.</p>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('import')}
+              <span class="text-sm text-shadow-500">Route: {importRouteMode}{importStrictPolicy ? ' (strict)' : ''}</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('import') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
-          <div class="bg-bark-100 rounded-lg p-4 border border-bark-300">
-            <h3 class="text-sm font-semibold text-shadow-800 mb-1">Telegram Channel</h3>
-            <p class="text-sm text-shadow-600">Telegram adapter configuration. Not yet implemented in the admin UI.</p>
+        </button>
+        {#if openSections.has('import')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Route Mode</label>
+                <select bind:value={importRouteMode} class={INPUT_CLS}>
+                  {#each IMPORT_ROUTE_MODES as opt}
+                    <option value={opt.value}>{opt.label}</option>
+                  {/each}
+                </select>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Strict Policy</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={importStrictPolicy}
+                    class="w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300" />
+                  <span class="text-sm text-shadow-700">Enforce strict ZDR compliance</span>
+                </label>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>OpenRouter Provider Order</label>
+                <input type="text" bind:value={openRouterProviderOrder} class={INPUT_CLS} placeholder="comma-separated providers" />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Local Endpoint URL</label>
+                <input type="text" bind:value={importLocalEndpointUrl} class={INPUT_CLS} placeholder="http://localhost:8080" />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Local Model</label>
+                <input type="text" bind:value={importLocalModel} class={INPUT_CLS} placeholder="model name" />
+              </div>
+            </div>
           </div>
-          <div class="bg-bark-100 rounded-lg p-4 border border-bark-300">
-            <h3 class="text-sm font-semibold text-shadow-800 mb-1">Mixture of Agents (MoA)</h3>
-            <p class="text-sm text-shadow-600">Multi-model routing and consensus. See PSFN-t3vi.7 for design. Not yet implemented.</p>
+        {/if}
+      </div>
+
+      <!-- Gateway Web Fetch (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('fetch')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">W</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Gateway Web Fetch</h2>
           </div>
-        </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('fetch')}
+              <span class="text-sm text-shadow-500">{allowHttpFetch ? 'Enabled' : 'Disabled'}</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('fetch') ? 'rotate-180' : ''}">&#9660;</span>
+          </div>
+        </button>
+        {#if openSections.has('fetch')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Allow HTTP Fetch</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={allowHttpFetch}
+                    class="w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300" />
+                  <span class="text-sm text-shadow-700">Enable web fetch in gateway</span>
+                </label>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Domain Allowlist</label>
+                <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains" />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Local Crawler Host Allowlist</label>
+                <input type="text" bind:value={webFetchLocalCrawlerHostAllowlist} class={INPUT_CLS} placeholder="comma-separated hosts" />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Local Crawler Domain Allowlist</label>
+                <input type="text" bind:value={webFetchLocalCrawlerDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains" />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>TLS CA Cert Paths</label>
+                <input type="text" bind:value={webFetchTlsCaCertPaths} class={INPUT_CLS} placeholder="comma-separated file paths" />
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Voice & TTS (collapsible, env-var only) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('voice')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">V</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Voice & TTS</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('voice')}
+              <span class="text-sm text-shadow-500">Configured via env vars</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('voice') ? 'rotate-180' : ''}">&#9660;</span>
+          </div>
+        </button>
+        {#if openSections.has('voice')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+                <h3 class="text-sm font-semibold text-shadow-800 mb-1">ElevenLabs TTS</h3>
+                <p class="text-sm text-shadow-600">Provider-pluggable streaming TTS. Configured via <span class="font-mono">TTS_PROVIDER</span>, <span class="font-mono">ELEVENLABS_API_KEY</span>, <span class="font-mono">ELEVENLABS_VOICE_ID</span> env vars.</p>
+                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
+              </div>
+              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Echo TTS</h3>
+                <p class="text-sm text-shadow-600">Local TTS server. Configured via <span class="font-mono">ECHO_TTS_URL</span>, <span class="font-mono">ECHO_TTS_VOICE</span>, <span class="font-mono">ECHO_TTS_PRESET</span> env vars.</p>
+                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Channels (collapsible, env-var only) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('channels')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">C</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Channels</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('channels')}
+              <span class="text-sm text-shadow-500">Discord, API, Admin, Telegram</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('channels') ? 'rotate-180' : ''}">&#9660;</span>
+          </div>
+        </button>
+        {#if openSections.has('channels')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Discord</h3>
+                <p class="text-sm text-shadow-600">Discord adapter with voice reverse RPC. Configured via <span class="font-mono">DISCORD_TOKEN</span>, <span class="font-mono">DISCORD_HEARTBEAT_CHANNEL</span> env vars.</p>
+                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
+              </div>
+              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+                <h3 class="text-sm font-semibold text-shadow-800 mb-1">OpenAI API</h3>
+                <p class="text-sm text-shadow-600">OpenAI-compatible REST API on <span class="font-mono">API_PORT</span>. Auth via <span class="font-mono">API_KEY</span> Bearer token.</p>
+                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
+              </div>
+              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Admin GUI</h3>
+                <p class="text-sm text-shadow-600">This panel. Configured via <span class="font-mono">ADMIN_PORT</span>, <span class="font-mono">ADMIN_TOKEN</span>, <span class="font-mono">ADMIN_HOST</span> env vars.</p>
+                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
+              </div>
+              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Telegram</h3>
+                <p class="text-sm text-shadow-600">Telegram adapter. Not yet implemented.</p>
+                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">planned</span>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Planned settings (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('planned')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">+</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Planned Settings</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('planned')}
+              <span class="text-sm text-shadow-500">Embeddings, Transformers, MoA</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('planned') ? 'rotate-180' : ''}">&#9660;</span>
+          </div>
+        </button>
+        {#if openSections.has('planned')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Embeddings / Transformers</h3>
+                <p class="text-sm text-shadow-600">Local transformers or Ollama embeddings. Configured via <span class="font-mono">EMBEDDING_PROVIDER</span>, <span class="font-mono">OLLAMA_URL</span>, <span class="font-mono">EMBEDDING_MODEL</span> env vars.</p>
+                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
+              </div>
+              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Mixture of Agents (MoA)</h3>
+                <p class="text-sm text-shadow-600">Multi-model routing and consensus. Not yet implemented.</p>
+                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">planned</span>
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
 
       <!-- Secrets display -->
       {#if data?.env}
         {@const env = data.env as Record<string, unknown>}
-        <div class="card-garden p-6 space-y-4">
-          <h2 class={SECTION_HEADING_CLS}>Secrets (Read-Only)</h2>
-          <hr class="divider-filigree" />
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-              <thead>
-                <tr class="border-b border-bark-300">
-                  <th class="text-left py-2 text-shadow-700 font-medium">Key</th>
-                  <th class="text-left py-2 text-shadow-700 font-medium">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each [
-                  ['DISCORD_TOKEN', env.discordToken],
-                  ['API_KEY', env.apiKey],
-                  ['ADMIN_TOKEN', env.adminToken],
-                  ['OPENROUTER_API_KEY', env.openrouterApiKey],
-                  ['LITELLM_BASE_URL', env.litellmBaseUrl],
-                  ['LITELLM_API_KEY', env.litellmApiKey],
-                  ['OLLAMA_URL', env.ollamaUrl],
-                ] as pair}
-                  <tr class="border-b border-bark-200">
-                    <td class="py-2 font-mono text-shadow-700">{pair[0]}</td>
-                    <td class="py-2 font-mono text-shadow-600">{String(pair[1] ?? '(not set)')}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+        <div class="card-garden overflow-hidden">
+          <button
+            onclick={() => toggleSection('secrets')}
+            class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+          >
+            <div class="flex items-center gap-3">
+              <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">K</span>
+              <h2 class="text-sm font-serif font-semibold text-shadow-800">Secrets (Read-Only)</h2>
+            </div>
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('secrets') ? 'rotate-180' : ''}">&#9660;</span>
+          </button>
+          {#if openSections.has('secrets')}
+            <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-bark-300">
+                      <th class="text-left py-2 text-shadow-700 font-medium">Key</th>
+                      <th class="text-left py-2 text-shadow-700 font-medium">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each [
+                      ['DISCORD_TOKEN', env.discordToken],
+                      ['API_KEY', env.apiKey],
+                      ['ADMIN_TOKEN', env.adminToken],
+                      ['OPENROUTER_API_KEY', env.openrouterApiKey],
+                      ['LITELLM_BASE_URL', env.litellmBaseUrl],
+                      ['LITELLM_API_KEY', env.litellmApiKey],
+                      ['OLLAMA_URL', env.ollamaUrl],
+                    ] as pair}
+                      <tr class="border-b border-bark-200">
+                        <td class="py-2 font-mono text-shadow-700">{pair[0]}</td>
+                        <td class="py-2 font-mono text-shadow-600">{String(pair[1] ?? '(not set)')}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {/if}
         </div>
       {/if}
 
       <!-- Save -->
       <div class="flex items-center gap-3 pt-2">
-        <button onclick={saveSimple} disabled={saving}
-          class="px-5 py-2.5 rounded-lg bg-gold-600 text-white text-sm font-medium
-                 hover:bg-gold-700 disabled:opacity-50 transition-colors shadow-sm">
+        <button onclick={saveSimple} disabled={saving || !dirty}
+          class="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-sm
+            {dirty
+              ? 'bg-gold-600 text-white hover:bg-gold-700'
+              : 'bg-bark-300 text-shadow-500 cursor-not-allowed'}"
+        >
           {saving ? 'Saving...' : 'Save Settings'}
         </button>
+        {#if dirty}
+          <span class="text-sm text-shadow-500">You have unsaved changes</span>
+        {/if}
       </div>
     </div>
 
-  <!-- ════════════ ADVANCED MODE ════════════ -->
+  <!-- ════════════════════ ADVANCED MODE ════════════════════ -->
   {:else if mode === 'advanced'}
     <div class="space-y-3">
-      {#each ADVANCED_SECTIONS as section}
+      {#each SECTIONS as section}
         {@const sectionKeys = section.keys.filter((k) => data && k in (data.config as Record<string, unknown>))}
         {#if sectionKeys.length > 0}
           <div class="card-garden overflow-hidden">
@@ -930,12 +1395,17 @@
                 <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">
                   {section.icon}
                 </span>
-                <h2 class={SECTION_HEADING_CLS}>{section.title}</h2>
-                <span class="text-sm text-shadow-600">({sectionKeys.length} fields)</span>
+                <h2 class="text-sm font-serif font-semibold text-shadow-800">{section.title}</h2>
+                <span class="text-sm text-shadow-500">({sectionKeys.length} fields)</span>
               </div>
-              <span class="text-shadow-600 text-sm transition-transform {openSections.has(section.id) ? 'rotate-180' : ''}">
-                &#9660;
-              </span>
+              <div class="flex items-center gap-3">
+                {#if !openSections.has(section.id)}
+                  <span class="text-sm text-shadow-500 hidden md:inline">{section.summary()}</span>
+                {/if}
+                <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has(section.id) ? 'rotate-180' : ''}">
+                  &#9660;
+                </span>
+              </div>
             </button>
             {#if openSections.has(section.id)}
               <div class="px-5 pb-5 space-y-3 border-t border-bark-300 pt-4">
@@ -943,7 +1413,10 @@
                   {@const value = configValue(key)}
                   {@const ft = fieldType(value)}
                   <div class="flex flex-col sm:flex-row sm:items-center gap-2">
-                    <label class="text-sm font-mono text-shadow-700 sm:w-60 shrink-0">{key}</label>
+                    <div class="sm:w-60 shrink-0 flex items-center gap-2">
+                      <label class="text-sm font-mono text-shadow-700">{key}</label>
+                      <span class="text-shadow-400 text-sm">({getSource(key)})</span>
+                    </div>
                     {#if ft === 'checkbox'}
                       <label class="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox"
@@ -992,7 +1465,7 @@
 
       <!-- Other (uncategorized) keys -->
       {#if data}
-        {@const allCategorized = new Set(ADVANCED_SECTIONS.flatMap(s => s.keys))}
+        {@const allCategorized = new Set(SECTIONS.flatMap(s => s.keys))}
         {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter(k => !allCategorized.has(k))}
         {#if otherKeys.length > 0}
           <div class="card-garden overflow-hidden">
@@ -1001,13 +1474,13 @@
               class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
             >
               <div class="flex items-center gap-3">
-                <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-700 text-sm font-bold border border-bark-400">
+                <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">
                   ?
                 </span>
-                <h2 class={SECTION_HEADING_CLS}>Other Settings</h2>
-                <span class="text-sm text-shadow-600">({otherKeys.length} fields)</span>
+                <h2 class="text-sm font-serif font-semibold text-shadow-800">Other Settings</h2>
+                <span class="text-sm text-shadow-500">({otherKeys.length} fields)</span>
               </div>
-              <span class="text-shadow-600 text-sm transition-transform {openSections.has('other') ? 'rotate-180' : ''}">
+              <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('other') ? 'rotate-180' : ''}">
                 &#9660;
               </span>
             </button>
@@ -1017,7 +1490,10 @@
                   {@const value = configValue(key)}
                   {@const ft = fieldType(value)}
                   <div class="flex flex-col sm:flex-row sm:items-center gap-2">
-                    <label class="text-sm font-mono text-shadow-700 sm:w-60 shrink-0">{key}</label>
+                    <div class="sm:w-60 shrink-0 flex items-center gap-2">
+                      <label class="text-sm font-mono text-shadow-700">{key}</label>
+                      <span class="text-shadow-400 text-sm">({getSource(key)})</span>
+                    </div>
                     {#if ft === 'checkbox'}
                       <label class="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox"
@@ -1072,7 +1548,7 @@
       </div>
     </div>
 
-  <!-- ════════════ RAW MODE ════════════ -->
+  <!-- ════════════════════ RAW MODE ════════════════════ -->
   {:else}
     <div class="space-y-4">
       {#if discoveredModels.length > 0}
@@ -1112,7 +1588,7 @@
             value={getRawJson(editor.key)}
             oninput={(e) => setRawJson(editor.key, (e.target as HTMLTextAreaElement).value)}
             rows="14"
-            class="w-full font-mono text-sm text-shadow-800 bg-bark-100 p-4
+            class="w-full font-mono text-sm text-shadow-800 bg-white p-4
                    focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
                    resize-y border-0"
             spellcheck="false"
@@ -1130,26 +1606,26 @@
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-shadow-700">
         {#if env.nodeVersion}
           <div>
-            <span class="text-shadow-600">Node</span>
+            <span class="text-shadow-500">Node</span>
             <span class="font-mono ml-1 text-shadow-800">{env.nodeVersion}</span>
           </div>
         {/if}
         {#if env.platform}
           <div>
-            <span class="text-shadow-600">Platform</span>
+            <span class="text-shadow-500">Platform</span>
             <span class="font-mono ml-1 text-shadow-800">{env.platform}/{env.arch}</span>
           </div>
         {/if}
         {#if env.uptime !== undefined}
           <div>
-            <span class="text-shadow-600">Uptime</span>
+            <span class="text-shadow-500">Uptime</span>
             <span class="ml-1 text-shadow-800">{Math.floor(Number(env.uptime) / 3600)}h {Math.floor((Number(env.uptime) % 3600) / 60)}m</span>
           </div>
         {/if}
         {#if env.memoryUsage && typeof env.memoryUsage === 'object'}
           {@const mem = env.memoryUsage as Record<string, number>}
           <div>
-            <span class="text-shadow-600">Heap</span>
+            <span class="text-shadow-500">Heap</span>
             <span class="ml-1 text-shadow-800">{(mem.heapUsed / 1_048_576).toFixed(0)}MB / {(mem.heapTotal / 1_048_576).toFixed(0)}MB</span>
           </div>
         {/if}

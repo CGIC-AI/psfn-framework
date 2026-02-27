@@ -33,6 +33,20 @@
   let showAlternateGreetings = $state(false);
   let showCreatorNotes = $state(false);
   let showRuntimeConfig = $state(false);
+  let showVersionHistory = $state(false);
+  let showMetadata = $state(false);
+
+  // Export
+  function exportAsJson() {
+    if (!card) return;
+    const blob = new Blob([JSON.stringify(card, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${cardData?.name ?? 'character'}-v${data?.version ?? 1}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   onMount(async () => {
     try {
@@ -204,19 +218,31 @@
       <p class="text-sm text-shadow-600 mt-1">Character identity and card data</p>
     </div>
     {#if data}
-      <button
-        onclick={() => showJson = !showJson}
-        class="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 hover:bg-bark-100 hover:border-gold-300 transition-colors"
-      >
-        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          {#if showJson}
-            <path d="M4 6h16M4 12h16M4 18h16" />
-          {:else}
-            <path d="M8 2v4l-4 6 4 6v4M16 2v4l4 6-4 6v4" />
-          {/if}
-        </svg>
-        {showJson ? 'Card View' : 'Raw JSON'}
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          onclick={exportAsJson}
+          class="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 hover:bg-bark-100 hover:border-gold-300 transition-colors"
+          title="Export character card as JSON"
+        >
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+          </svg>
+          Export
+        </button>
+        <button
+          onclick={() => showJson = !showJson}
+          class="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 hover:bg-bark-100 hover:border-gold-300 transition-colors"
+        >
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            {#if showJson}
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            {:else}
+              <path d="M8 2v4l-4 6 4 6v4M16 2v4l4 6-4 6v4" />
+            {/if}
+          </svg>
+          {showJson ? 'Card View' : 'Raw JSON'}
+        </button>
+      </div>
     {/if}
   </div>
 
@@ -299,6 +325,70 @@
           </div>
         </div>
 
+        <!-- Metadata section (collapsible) -->
+        <div class="card-garden overflow-hidden">
+          <button
+            class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
+            onclick={() => showMetadata = !showMetadata}
+          >
+            <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Metadata</h3>
+            <div class="flex items-center gap-3">
+              <span class="text-sm text-shadow-600">
+                {cardData.creator ? `by ${cardData.creator}` : ''}
+                {cardData.character_version ? ` (${cardData.character_version})` : ''}
+                {cardData.tags && cardData.tags.length > 0 ? ` | ${cardData.tags.length} tags` : ''}
+              </span>
+              <svg class="w-4 h-4 text-shadow-600 transition-transform {showMetadata ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </button>
+          {#if showMetadata}
+            <div class="border-t border-bark-300 p-5 space-y-4">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p class="text-sm font-medium text-shadow-700 mb-1">Creator</p>
+                  <p class="text-sm text-shadow-800">{cardData.creator || '(not set)'}</p>
+                </div>
+                <div>
+                  <p class="text-sm font-medium text-shadow-700 mb-1">Character Version</p>
+                  <p class="text-sm text-shadow-800">{cardData.character_version || '(not set)'}</p>
+                </div>
+                <div>
+                  <p class="text-sm font-medium text-shadow-700 mb-1">Spec</p>
+                  <p class="text-sm text-shadow-800 font-mono">{card.spec ?? ''} {card.spec_version ?? ''}</p>
+                </div>
+                <div>
+                  <p class="text-sm font-medium text-shadow-700 mb-1">Card Version</p>
+                  <p class="text-sm text-shadow-800">v{data.version ?? 1}
+                    {#if data.checksum}
+                      <span class="text-shadow-600 font-mono ml-1">({data.checksum.slice(0, 12)})</span>
+                    {/if}
+                  </p>
+                </div>
+              </div>
+
+              {#if cardData.tags && cardData.tags.length > 0}
+                <div>
+                  <p class="text-sm font-medium text-shadow-700 mb-2">Tags</p>
+                  <div class="flex flex-wrap gap-2">
+                    {#each cardData.tags as tag}
+                      <span class="px-3 py-1 rounded-full text-sm font-medium bg-bark-200 text-shadow-800 border border-bark-300">{tag}</span>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              {#if cardData.creator_notes && cardData.creator_notes.trim()}
+                <div>
+                  <p class="text-sm font-medium text-shadow-700 mb-2">Creator Notes</p>
+                  <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed bg-bark-100 p-3 rounded-lg max-h-48 overflow-y-auto">{cardData.creator_notes}</div>
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+
         <!-- Import card -->
         <div class="card-garden p-5">
           <h3 class="text-sm font-serif font-semibold text-shadow-800 mb-3">Import Character Card</h3>
@@ -367,38 +457,6 @@
             </div>
           {/if}
         {/each}
-
-        <!-- Tags -->
-        {#if cardData.tags && cardData.tags.length > 0}
-          <div class="card-garden p-5">
-            <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider mb-3">Tags</h3>
-            <div class="flex flex-wrap gap-2">
-              {#each cardData.tags as tag}
-                <span class="px-3 py-1 rounded-full text-sm font-medium bg-bark-200 text-shadow-800 border border-bark-300">{tag}</span>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        <!-- Creator Notes (collapsible) -->
-        {#if cardData.creator_notes && cardData.creator_notes.trim()}
-          <div class="card-garden overflow-hidden">
-            <button
-              class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
-              onclick={() => showCreatorNotes = !showCreatorNotes}
-            >
-              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Creator Notes</h3>
-              <svg class="w-4 h-4 text-shadow-600 transition-transform {showCreatorNotes ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {#if showCreatorNotes}
-              <div class="border-t border-bark-300 p-5">
-                <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">{cardData.creator_notes}</div>
-              </div>
-            {/if}
-          </div>
-        {/if}
 
         <!-- Alternate Greetings (collapsible) -->
         {#if cardData.alternate_greetings && (cardData.alternate_greetings as string[]).length > 0}
@@ -485,24 +543,31 @@
         <!-- Version History -->
         {#if data.history && data.history.length > 0}
           <div class="card-garden overflow-hidden">
-            <div class="p-5 pb-0">
-              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider mb-1">Card Version History</h3>
-              <p class="text-sm text-shadow-600 mb-2">
-                Current version: <span class="font-medium text-shadow-800">v{data.version ?? 1}</span>
-                {#if data.checksum}
+            <button
+              class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
+              onclick={() => showVersionHistory = !showVersionHistory}
+            >
+              <div>
+                <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Version History</h3>
+                <p class="text-sm text-shadow-600 mt-0.5">
+                  Current: <span class="font-medium text-shadow-800">v{data.version ?? 1}</span>
                   <span class="mx-1 text-shadow-500">|</span>
-                  Checksum: <code class="font-mono text-shadow-700">{data.checksum.slice(0, 12)}</code>
-                {/if}
-              </p>
-              <p class="text-sm text-shadow-600 mb-4">{data.history.length} version{data.history.length === 1 ? '' : 's'} recorded</p>
-            </div>
+                  {data.history.length} version{data.history.length === 1 ? '' : 's'} recorded
+                </p>
+              </div>
+              <svg class="w-4 h-4 text-shadow-600 transition-transform {showVersionHistory ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
 
+            {#if showVersionHistory}
+            <div class="border-t border-bark-300">
             {#if rollbackMessage}
-              <div class="mx-5 mb-3 px-3 py-2 rounded-lg bg-moss-50 text-sm text-moss-600 border border-moss-200">{rollbackMessage}</div>
+              <div class="mx-5 mt-3 mb-3 px-3 py-2 rounded-lg bg-moss-50 text-sm text-moss-600 border border-moss-200">{rollbackMessage}</div>
             {/if}
 
             <!-- Version history table -->
-            <div class="px-5 pb-5">
+            <div class="px-5 pb-5 pt-3">
               <div class="overflow-x-auto border border-bark-300 rounded-lg">
                 <table class="w-full text-sm">
                   <thead>
@@ -608,6 +673,8 @@
                 </table>
               </div>
             </div>
+            </div>
+            {/if}
           </div>
         {/if}
       </div>

@@ -17,4 +17,9 @@ export const navItems: NavItem[] = [
   { path: '/garden/telemetry', gardenName: 'The Sap', technicalName: 'Events', icon: '\u{1F4A7}' },
   { path: '/garden/tools', gardenName: 'The Shed', technicalName: 'Tools', icon: '\u{1F527}' },
   { path: '/garden/shards', gardenName: 'The Blooms', technicalName: 'Shards', icon: '\u{1F338}' },
+  { path: '/garden/scheduler', gardenName: 'The Rhythms', technicalName: 'Scheduler', icon: '\u{23F0}' },
+  { path: '/garden/skills', gardenName: 'The Crafts', technicalName: 'Skills', icon: '\u{2728}' },
+  { path: '/garden/confirmations', gardenName: 'The Gate', technicalName: 'Confirmations', icon: '\u{1F512}' },
+  { path: '/garden/values', gardenName: 'The Journal', technicalName: 'Values', icon: '\u{1F4D6}' },
+  { path: '/garden/primer', gardenName: 'The Almanac', technicalName: 'Primer', icon: '\u{1F4DA}' },
 ];

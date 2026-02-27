@@ -95,6 +95,13 @@ export interface EditableSettings {
   importProcessingStrictPolicy?: boolean;
   importProcessingLocalEndpointUrl?: string;
   importProcessingLocalModel?: string;
+  webFetchAllowHttp?: boolean;
+  webFetchDomainAllowlist?: string[];
+  webFetchLocalCrawlerEnabled?: boolean;
+  webFetchLocalCrawlerAllowHttp?: boolean;
+  webFetchLocalCrawlerHostAllowlist?: string[];
+  webFetchLocalCrawlerDomainAllowlist?: string[];
+  webFetchTlsCaCertPaths?: string[];
 }
 
 export const RUNTIME_SETTINGS_KEYS = [
@@ -125,6 +132,13 @@ export const RUNTIME_SETTINGS_KEYS = [
   'importProcessingStrictPolicy',
   'importProcessingLocalEndpointUrl',
   'importProcessingLocalModel',
+  'webFetchAllowHttp',
+  'webFetchDomainAllowlist',
+  'webFetchLocalCrawlerEnabled',
+  'webFetchLocalCrawlerAllowHttp',
+  'webFetchLocalCrawlerHostAllowlist',
+  'webFetchLocalCrawlerDomainAllowlist',
+  'webFetchTlsCaCertPaths',
 ] as const;
 
 export type RuntimeSettingKey = typeof RUNTIME_SETTINGS_KEYS[number];
@@ -480,6 +494,36 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
         : '';
   }
 
+  if ('webFetchAllowHttp' in settings) {
+    normalized.webFetchAllowHttp = toBoolean(settings.webFetchAllowHttp) ?? false;
+  }
+
+  if ('webFetchDomainAllowlist' in settings) {
+    normalized.webFetchDomainAllowlist = toStringList(settings.webFetchDomainAllowlist) ?? [];
+  }
+
+  if ('webFetchLocalCrawlerEnabled' in settings) {
+    normalized.webFetchLocalCrawlerEnabled = toBoolean(settings.webFetchLocalCrawlerEnabled) ?? false;
+  }
+
+  if ('webFetchLocalCrawlerAllowHttp' in settings) {
+    normalized.webFetchLocalCrawlerAllowHttp = toBoolean(settings.webFetchLocalCrawlerAllowHttp) ?? false;
+  }
+
+  if ('webFetchLocalCrawlerHostAllowlist' in settings) {
+    normalized.webFetchLocalCrawlerHostAllowlist =
+      toStringList(settings.webFetchLocalCrawlerHostAllowlist) ?? [];
+  }
+
+  if ('webFetchLocalCrawlerDomainAllowlist' in settings) {
+    normalized.webFetchLocalCrawlerDomainAllowlist =
+      toStringList(settings.webFetchLocalCrawlerDomainAllowlist) ?? [];
+  }
+
+  if ('webFetchTlsCaCertPaths' in settings) {
+    normalized.webFetchTlsCaCertPaths = toStringList(settings.webFetchTlsCaCertPaths) ?? [];
+  }
+
   return normalized;
 }
 
@@ -695,6 +739,13 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     importProcessingStrictPolicy: config.importProcessingStrictPolicy ?? false,
     importProcessingLocalEndpointUrl: config.importProcessingLocalEndpointUrl ?? null,
     importProcessingLocalModel: config.importProcessingLocalModel ?? null,
+    webFetchAllowHttp: config.webFetchAllowHttp ?? false,
+    webFetchDomainAllowlist: config.webFetchDomainAllowlist ?? [],
+    webFetchLocalCrawlerEnabled: config.webFetchLocalCrawlerEnabled ?? false,
+    webFetchLocalCrawlerAllowHttp: config.webFetchLocalCrawlerAllowHttp ?? false,
+    webFetchLocalCrawlerHostAllowlist: config.webFetchLocalCrawlerHostAllowlist ?? [],
+    webFetchLocalCrawlerDomainAllowlist: config.webFetchLocalCrawlerDomainAllowlist ?? [],
+    webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
   };
 }
 
@@ -768,6 +819,37 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     const trimmed = settings.importProcessingLocalModel?.trim() ?? '';
     config.importProcessingLocalModel = trimmed || undefined;
   }
+  if ('webFetchAllowHttp' in settings) {
+    config.webFetchAllowHttp = settings.webFetchAllowHttp ?? false;
+  }
+  if ('webFetchDomainAllowlist' in settings) {
+    config.webFetchDomainAllowlist = settings.webFetchDomainAllowlist && settings.webFetchDomainAllowlist.length > 0
+      ? [...settings.webFetchDomainAllowlist]
+      : undefined;
+  }
+  if ('webFetchLocalCrawlerEnabled' in settings) {
+    config.webFetchLocalCrawlerEnabled = settings.webFetchLocalCrawlerEnabled ?? false;
+  }
+  if ('webFetchLocalCrawlerAllowHttp' in settings) {
+    config.webFetchLocalCrawlerAllowHttp = settings.webFetchLocalCrawlerAllowHttp ?? false;
+  }
+  if ('webFetchLocalCrawlerHostAllowlist' in settings) {
+    config.webFetchLocalCrawlerHostAllowlist =
+      settings.webFetchLocalCrawlerHostAllowlist && settings.webFetchLocalCrawlerHostAllowlist.length > 0
+        ? [...settings.webFetchLocalCrawlerHostAllowlist]
+        : undefined;
+  }
+  if ('webFetchLocalCrawlerDomainAllowlist' in settings) {
+    config.webFetchLocalCrawlerDomainAllowlist =
+      settings.webFetchLocalCrawlerDomainAllowlist && settings.webFetchLocalCrawlerDomainAllowlist.length > 0
+        ? [...settings.webFetchLocalCrawlerDomainAllowlist]
+        : undefined;
+  }
+  if ('webFetchTlsCaCertPaths' in settings) {
+    config.webFetchTlsCaCertPaths = settings.webFetchTlsCaCertPaths && settings.webFetchTlsCaCertPaths.length > 0
+      ? [...settings.webFetchTlsCaCertPaths]
+      : undefined;
+  }
 
   const shouldSyncModels = hasModelSettings(settings)
     || config.modelCatalog !== undefined
@@ -822,6 +904,12 @@ export const SETTINGS_VALIDATION = {
 export function parseSettingsForm(params: URLSearchParams): [EditableSettings, string[]] {
   const settings: EditableSettings = {};
   const errors: string[] = [];
+  const parseCsvList = (value: string): string[] => [...new Set(
+    value
+      .split(',')
+      .map(entry => entry.trim())
+      .filter(Boolean),
+  )];
 
   // String fields
   const primaryModel = params.get('primaryModel')?.trim();
@@ -838,12 +926,7 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
 
   const openRouterProviderOrderRaw = params.get('openRouterProviderOrder');
   if (openRouterProviderOrderRaw !== null) {
-    settings.openRouterProviderOrder = [...new Set(
-      openRouterProviderOrderRaw
-        .split(',')
-        .map(value => value.trim())
-        .filter(Boolean),
-    )];
+    settings.openRouterProviderOrder = parseCsvList(openRouterProviderOrderRaw);
   }
 
   const importProcessingRouteModeRaw = params.get('importProcessingRouteMode');
@@ -885,6 +968,56 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const importProcessingLocalModelRaw = params.get('importProcessingLocalModel');
   if (importProcessingLocalModelRaw !== null) {
     settings.importProcessingLocalModel = importProcessingLocalModelRaw.trim();
+  }
+
+  const webFetchAllowHttpRaw = params.get('webFetchAllowHttp');
+  if (webFetchAllowHttpRaw !== null) {
+    const allowHttp = toBoolean(webFetchAllowHttpRaw);
+    if (allowHttp === undefined) {
+      errors.push('webFetchAllowHttp must be true or false');
+    } else {
+      settings.webFetchAllowHttp = allowHttp;
+    }
+  }
+
+  const webFetchDomainAllowlistRaw = params.get('webFetchDomainAllowlist');
+  if (webFetchDomainAllowlistRaw !== null) {
+    settings.webFetchDomainAllowlist = parseCsvList(webFetchDomainAllowlistRaw);
+  }
+
+  const webFetchLocalCrawlerEnabledRaw = params.get('webFetchLocalCrawlerEnabled');
+  if (webFetchLocalCrawlerEnabledRaw !== null) {
+    const enabled = toBoolean(webFetchLocalCrawlerEnabledRaw);
+    if (enabled === undefined) {
+      errors.push('webFetchLocalCrawlerEnabled must be true or false');
+    } else {
+      settings.webFetchLocalCrawlerEnabled = enabled;
+    }
+  }
+
+  const webFetchLocalCrawlerAllowHttpRaw = params.get('webFetchLocalCrawlerAllowHttp');
+  if (webFetchLocalCrawlerAllowHttpRaw !== null) {
+    const allowHttp = toBoolean(webFetchLocalCrawlerAllowHttpRaw);
+    if (allowHttp === undefined) {
+      errors.push('webFetchLocalCrawlerAllowHttp must be true or false');
+    } else {
+      settings.webFetchLocalCrawlerAllowHttp = allowHttp;
+    }
+  }
+
+  const webFetchLocalCrawlerHostAllowlistRaw = params.get('webFetchLocalCrawlerHostAllowlist');
+  if (webFetchLocalCrawlerHostAllowlistRaw !== null) {
+    settings.webFetchLocalCrawlerHostAllowlist = parseCsvList(webFetchLocalCrawlerHostAllowlistRaw);
+  }
+
+  const webFetchLocalCrawlerDomainAllowlistRaw = params.get('webFetchLocalCrawlerDomainAllowlist');
+  if (webFetchLocalCrawlerDomainAllowlistRaw !== null) {
+    settings.webFetchLocalCrawlerDomainAllowlist = parseCsvList(webFetchLocalCrawlerDomainAllowlistRaw);
+  }
+
+  const webFetchTlsCaCertPathsRaw = params.get('webFetchTlsCaCertPaths');
+  if (webFetchTlsCaCertPathsRaw !== null) {
+    settings.webFetchTlsCaCertPaths = parseCsvList(webFetchTlsCaCertPathsRaw);
   }
 
   // Numeric fields
@@ -951,6 +1084,14 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     }
     if (!settings.importProcessingLocalModel) {
       errors.push('importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint');
+    }
+  }
+
+  if (settings.webFetchLocalCrawlerEnabled) {
+    const hasHostAllowlist = (settings.webFetchLocalCrawlerHostAllowlist?.length ?? 0) > 0;
+    const hasDomainAllowlist = (settings.webFetchLocalCrawlerDomainAllowlist?.length ?? 0) > 0;
+    if (!hasHostAllowlist && !hasDomainAllowlist) {
+      errors.push('webFetchLocalCrawlerEnabled requires host/domain allowlist');
     }
   }
 

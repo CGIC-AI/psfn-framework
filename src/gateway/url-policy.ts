@@ -28,9 +28,17 @@ export function isPrivateIP(ip: string): boolean {
   return PRIVATE_RANGES.some(r => r.test(ip));
 }
 
+export type UrlPolicyLane = 'default' | 'local_crawler';
+
 export interface UrlPolicyConfig {
   allowHttp?: boolean;           // default false (require HTTPS)
   domainAllowlist?: string[];    // if set, only these domains allowed
+  localCrawlerLane?: {
+    enabled?: boolean;
+    allowHttp?: boolean;
+    domainAllowlist?: string[];
+    hostAllowlist?: string[];
+  };
 }
 
 export interface UrlPolicyResult {
@@ -38,7 +46,35 @@ export interface UrlPolicyResult {
   reason?: string;
 }
 
-export function evaluateUrlPolicy(urlString: string, config: UrlPolicyConfig = {}): UrlPolicyResult {
+function toLowerList(values: readonly string[] | undefined): string[] {
+  if (!values || values.length === 0) return [];
+  return values
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function matchesDomainAllowlist(hostname: string, allowlist: readonly string[]): boolean {
+  const lower = hostname.toLowerCase();
+  return allowlist.some(domain => lower === domain || lower.endsWith('.' + domain));
+}
+
+function normalizeHostname(parsed: URL): string {
+  const rawHostname = parsed.hostname;
+  const hostname = rawHostname.startsWith('[') && rawHostname.endsWith(']')
+    ? rawHostname.slice(1, -1)
+    : rawHostname;
+  return hostname.toLowerCase();
+}
+
+function isLocalhostHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === 'localhost.localdomain' || hostname.endsWith('.localhost');
+}
+
+export function evaluateUrlPolicy(
+  urlString: string,
+  config: UrlPolicyConfig = {},
+  lane: UrlPolicyLane = 'default',
+): UrlPolicyResult {
   let parsed: URL;
   try {
     parsed = new URL(urlString);
@@ -46,37 +82,59 @@ export function evaluateUrlPolicy(urlString: string, config: UrlPolicyConfig = {
     return { allowed: false, reason: 'Invalid URL' };
   }
 
+  const isLocalCrawlerLane = lane === 'local_crawler';
+  const localCrawler = config.localCrawlerLane;
+  if (isLocalCrawlerLane && localCrawler?.enabled !== true) {
+    return { allowed: false, reason: 'Local crawler lane is not enabled' };
+  }
+
+  const allowHttp = isLocalCrawlerLane
+    ? localCrawler?.allowHttp === true
+    : config.allowHttp === true;
+  const domainAllowlist = toLowerList(isLocalCrawlerLane
+    ? localCrawler?.domainAllowlist
+    : config.domainAllowlist);
+  const hostAllowlist = toLowerList(isLocalCrawlerLane
+    ? localCrawler?.hostAllowlist
+    : undefined);
+
   // Protocol check
-  if (parsed.protocol === 'http:' && !config.allowHttp) {
+  if (parsed.protocol === 'http:' && !allowHttp) {
     return { allowed: false, reason: 'HTTP not allowed (use HTTPS)' };
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return { allowed: false, reason: `Protocol ${parsed.protocol} not allowed` };
   }
 
-  // Domain allowlist
-  if (config.domainAllowlist && config.domainAllowlist.length > 0) {
-    const hostname = parsed.hostname.toLowerCase();
-    if (!config.domainAllowlist.some(d => hostname === d.toLowerCase() || hostname.endsWith('.' + d.toLowerCase()))) {
-      return { allowed: false, reason: `Domain ${hostname} not in allowlist` };
+  const hostname = normalizeHostname(parsed);
+
+  if (isLocalCrawlerLane) {
+    if (domainAllowlist.length === 0 && hostAllowlist.length === 0) {
+      return { allowed: false, reason: 'Local crawler lane requires host or domain allowlist' };
     }
+
+    const hostAllowed = hostAllowlist.includes(hostname);
+    const domainAllowed = matchesDomainAllowlist(hostname, domainAllowlist);
+    if (!hostAllowed && !domainAllowed) {
+      return { allowed: false, reason: `Host ${hostname} not allowlisted for local crawler lane` };
+    }
+
+    // Local crawler lane is explicit opt-in. Do not apply the strict private-host default checks.
+    return { allowed: true };
+  }
+
+  // Domain allowlist
+  if (domainAllowlist.length > 0 && !matchesDomainAllowlist(hostname, domainAllowlist)) {
+    return { allowed: false, reason: `Domain ${hostname} not in allowlist` };
   }
 
   // Check if hostname is a raw IP
-  // URL parser wraps IPv6 in brackets (e.g. "[::1]"), strip them for isIP check
-  const rawHostname = parsed.hostname;
-  const hostname = rawHostname.startsWith('[') && rawHostname.endsWith(']')
-    ? rawHostname.slice(1, -1)
-    : rawHostname;
-  if (isIP(hostname)) {
-    if (isPrivateIP(hostname)) {
-      return { allowed: false, reason: `Private IP ${hostname} blocked` };
-    }
+  if (isIP(hostname) && isPrivateIP(hostname)) {
+    return { allowed: false, reason: `Private IP ${hostname} blocked` };
   }
 
   // Check for localhost variants
-  const lower = hostname.toLowerCase();
-  if (lower === 'localhost' || lower === 'localhost.localdomain' || lower.endsWith('.localhost')) {
+  if (isLocalhostHost(hostname)) {
     return { allowed: false, reason: 'localhost blocked' };
   }
 
@@ -94,6 +152,7 @@ export type DnsResolver = (hostname: string) => Promise<{ address: string; famil
 export async function checkResolvedIP(
   hostname: string,
   resolver: DnsResolver = lookup,
+  options: { allowPrivateResolvedIp?: boolean } = {},
 ): Promise<UrlPolicyResult> {
   // Strip IPv6 brackets if present (URL parser adds them)
   const bare = hostname.startsWith('[') && hostname.endsWith(']')
@@ -107,7 +166,7 @@ export async function checkResolvedIP(
 
   try {
     const result = await resolver(bare);
-    if (isPrivateIP(result.address)) {
+    if (isPrivateIP(result.address) && !options.allowPrivateResolvedIp) {
       return { allowed: false, reason: `DNS resolved ${bare} to private IP ${result.address}` };
     }
     return { allowed: true };

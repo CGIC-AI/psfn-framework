@@ -28,6 +28,7 @@ import type {
   LLMEmbedResult,
   DiscordSendResult,
   WebFetchResult,
+  ShellExecResult,
   FsReadResult,
   FsWriteResult,
   FsListResult,
@@ -466,12 +467,33 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   // ── Web fetch ──
 
-  async webFetch(url: string, prompt?: string): Promise<string> {
+  async webFetch(
+    url: string,
+    prompt?: string,
+    lane: 'default' | 'local_crawler' = 'default',
+  ): Promise<string> {
     const result = await this.rpcInstance.request('web.fetch', {
       url,
       prompt,
+      lane,
     }) as WebFetchResult;
     return result.content;
+  }
+
+  async shellExec(
+    command: string,
+    args: string[] = [],
+    options: {
+      cwd?: string;
+      timeoutMs?: number;
+      maxOutputChars?: number;
+    } = {},
+  ): Promise<ShellExecResult> {
+    return await this.rpcInstance.request('shell.exec', {
+      command,
+      args,
+      ...options,
+    }) as ShellExecResult;
   }
 
   // ── Filesystem ──

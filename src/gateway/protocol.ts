@@ -48,6 +48,7 @@ export interface DiscordTypingParams {
 export interface WebFetchParams {
   url: string;
   prompt?: string;
+  lane?: 'default' | 'local_crawler';
 }
 
 export interface FsReadParams {
@@ -90,6 +91,14 @@ export interface GitOpenPRParams {
   title: string;
   body: string;
   base?: string;
+}
+
+export interface ShellExecParams {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  maxOutputChars?: number;
 }
 
 export interface ApprovalRequestParams {
@@ -234,6 +243,18 @@ export interface GitOpenPRResult {
   url: string;
 }
 
+export interface ShellExecResult {
+  command: string;
+  args: string[];
+  cwd: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  truncated: boolean;
+  durationMs: number;
+}
+
 export interface ApprovalResult {
   granted: boolean;
   capabilityToken?: string;
@@ -265,6 +286,7 @@ export interface GatewayMethods {
   'discord.send': [DiscordSendParams, DiscordSendResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
+  'shell.exec': [ShellExecParams, ShellExecResult];
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];
   'fs.list': [FsListParams, FsListResult];

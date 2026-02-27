@@ -32,6 +32,10 @@ const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
+const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;
+const DEFAULT_SHELL_EXEC_OUTPUT_CHARS = 20_000;
+const DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP = 100_000;
 
 interface GatewayVoiceModuleContext {
   gateway: GatewayServer;
@@ -98,6 +102,25 @@ function createDiscordReverseRpcVoiceModule(): GatewayVoiceModule {
   };
 }
 
+function parseStringListEnv(value: string | undefined): string[] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const parsed = [...new Set(
+    value
+      .split(',')
+      .map(entry => entry.trim())
+      .filter(Boolean),
+  )];
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
+  return fallback;
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const savedSettings = loadSettings(config.dataDir);
@@ -119,6 +142,25 @@ async function main(): Promise<void> {
   );
   const confirmationOperatorDiscordChannelId = process.env.CONFIRMATION_OPERATOR_DISCORD_CHANNEL_ID?.trim() || undefined;
   const confirmationNtfyTopic = process.env.CONFIRMATION_NTFY_TOPIC?.trim() || undefined;
+  const shellExecEnabled = parseBooleanEnv(process.env.SHELL_EXEC_ENABLED, false);
+  const shellExecAllowlist = parseStringListEnv(process.env.SHELL_EXEC_ALLOWLIST);
+  const shellExecAllowedCwd = parseStringListEnv(process.env.SHELL_EXEC_ALLOWED_CWD);
+  const shellExecDefaultTimeoutMs = parsePositiveIntEnv(
+    process.env.SHELL_EXEC_DEFAULT_TIMEOUT_MS,
+    DEFAULT_SHELL_EXEC_TIMEOUT_MS,
+  );
+  const shellExecMaxTimeoutMs = parsePositiveIntEnv(
+    process.env.SHELL_EXEC_MAX_TIMEOUT_MS,
+    DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS,
+  );
+  const shellExecDefaultMaxOutputChars = parsePositiveIntEnv(
+    process.env.SHELL_EXEC_DEFAULT_MAX_OUTPUT_CHARS,
+    DEFAULT_SHELL_EXEC_OUTPUT_CHARS,
+  );
+  const shellExecMaxOutputChars = parsePositiveIntEnv(
+    process.env.SHELL_EXEC_MAX_OUTPUT_CHARS,
+    DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
+  );
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
@@ -141,7 +183,7 @@ async function main(): Promise<void> {
 
   const embeddingProvider = createEmbeddingProviderFromEnv(process.env);
   const gitOps = new GitOps({
-    repoRoot: workspacePath,
+    repoRoot: workspaceRoot,
   });
 
   const discord = new DiscordAdapter(config, eventBus);
@@ -168,6 +210,34 @@ async function main(): Promise<void> {
     policyConfig: {
       workspacePath: workspaceRoot,
       allowedReadPaths: resolveAllowedReadPathsFromEnv(process.env, workspaceRoot),
+      urlPolicy: {
+        allowHttp: config.webFetchAllowHttp === true,
+        ...(config.webFetchDomainAllowlist && config.webFetchDomainAllowlist.length > 0
+          ? { domainAllowlist: config.webFetchDomainAllowlist }
+          : {}),
+        localCrawlerLane: {
+          enabled: config.webFetchLocalCrawlerEnabled === true,
+          allowHttp: config.webFetchLocalCrawlerAllowHttp === true,
+          ...(config.webFetchLocalCrawlerHostAllowlist && config.webFetchLocalCrawlerHostAllowlist.length > 0
+            ? { hostAllowlist: config.webFetchLocalCrawlerHostAllowlist }
+            : {}),
+          ...(config.webFetchLocalCrawlerDomainAllowlist && config.webFetchLocalCrawlerDomainAllowlist.length > 0
+            ? { domainAllowlist: config.webFetchLocalCrawlerDomainAllowlist }
+            : {}),
+        },
+      },
+      ...(config.webFetchTlsCaCertPaths && config.webFetchTlsCaCertPaths.length > 0
+        ? { webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths }
+        : {}),
+      shellExec: {
+        enabled: shellExecEnabled,
+        ...(shellExecAllowlist ? { allowlist: shellExecAllowlist } : {}),
+        ...(shellExecAllowedCwd ? { allowedCwd: shellExecAllowedCwd } : {}),
+        defaultTimeoutMs: shellExecDefaultTimeoutMs,
+        maxTimeoutMs: shellExecMaxTimeoutMs,
+        defaultMaxOutputChars: shellExecDefaultMaxOutputChars,
+        maxOutputChars: shellExecMaxOutputChars,
+      },
     },
     ntfy: ntfyBaseUrl && ntfyTopic
       ? {

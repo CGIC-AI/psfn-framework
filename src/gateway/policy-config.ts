@@ -27,9 +27,9 @@ export function resolveAllowedReadPathsFromEnv(
 ): string[] | undefined {
   const allowedReadPaths = splitAllowedReadPaths(env.ALLOWED_READ_PATHS);
 
-  if (parseBooleanTrue(env.MODULE_REGISTRY_TRUSTED_READ)) {
-    const moduleRegistryPath = env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH;
-    allowedReadPaths.push(resolve(workspacePath, moduleRegistryPath));
+  const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(env, workspacePath);
+  if (trustedModuleRegistryPath) {
+    allowedReadPaths.push(trustedModuleRegistryPath);
   }
 
   if (allowedReadPaths.length === 0) {
@@ -37,4 +37,15 @@ export function resolveAllowedReadPathsFromEnv(
   }
 
   return [...new Set(allowedReadPaths)];
+}
+
+export function resolveTrustedModuleRegistryPathFromEnv(
+  env: GatewayPolicyEnv,
+  workspacePath: string,
+): string | undefined {
+  if (!parseBooleanTrue(env.MODULE_REGISTRY_TRUSTED_READ)) {
+    return undefined;
+  }
+  const moduleRegistryPath = env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH;
+  return resolve(workspacePath, moduleRegistryPath);
 }

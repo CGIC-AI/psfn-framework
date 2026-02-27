@@ -46,6 +46,12 @@ interface SelectionState {
 interface AdminChatBootstrapServiceOptions {
   apiKey?: string;
   apiBaseUrl?: string;
+  apiHost?: string;
+  apiPort?: number;
+}
+
+interface AdminChatBootstrapRuntimeOptions {
+  requestOrigin?: string;
 }
 
 function normalizeTrimmed(value: string | undefined): string | undefined {
@@ -69,25 +75,30 @@ function isSameIdentity(
 export class AdminChatBootstrapService {
   private readonly contactStore: ContactStore | null;
   private readonly configuredApiKey?: string;
-  private readonly apiBaseUrl: string;
+  private readonly configuredApiBaseUrl?: string;
+  private readonly configuredApiHost?: string;
+  private readonly configuredApiPort?: number;
   private selection: SelectionState = {};
 
   constructor(contactStore?: ContactStore | null, options: AdminChatBootstrapServiceOptions = {}) {
     this.contactStore = contactStore ?? null;
     this.configuredApiKey = normalizeTrimmed(options.apiKey);
-    this.apiBaseUrl = resolveAdminChatApiBaseUrl({
-      explicitApiBaseUrl: options.apiBaseUrl,
-    });
+    this.configuredApiBaseUrl = normalizeTrimmed(options.apiBaseUrl);
+    this.configuredApiHost = normalizeTrimmed(options.apiHost);
+    this.configuredApiPort = options.apiPort;
   }
 
-  buildBootstrap(): AdminChatBootstrapResponse {
-    return this.composeBootstrap();
+  buildBootstrap(options: AdminChatBootstrapRuntimeOptions = {}): AdminChatBootstrapResponse {
+    return this.composeBootstrap(options);
   }
 
-  updateSelection(input: AdminChatBootstrapUpdateInput): AdminChatBootstrapResponse {
+  updateSelection(
+    input: AdminChatBootstrapUpdateInput,
+    options: AdminChatBootstrapRuntimeOptions = {},
+  ): AdminChatBootstrapResponse {
     this.applySelectionInput(input);
     this.persistSelectionMapping(input);
-    return this.composeBootstrap();
+    return this.composeBootstrap(options);
   }
 
   private applySelectionInput(input: AdminChatBootstrapUpdateInput): void {
@@ -168,7 +179,7 @@ export class AdminChatBootstrapService {
     }
   }
 
-  private composeBootstrap(): AdminChatBootstrapResponse {
+  private composeBootstrap(options: AdminChatBootstrapRuntimeOptions): AdminChatBootstrapResponse {
     const contacts = this.loadContacts();
     const selectedContact = this.resolveSelectedContact(contacts, this.selection.canonicalContactId);
     const selectedIdentity = this.resolveSelectedIdentity(
@@ -176,6 +187,12 @@ export class AdminChatBootstrapService {
       this.selection.channel,
       this.selection.userId,
     );
+    const apiBaseUrl = resolveAdminChatApiBaseUrl({
+      explicitApiBaseUrl: this.configuredApiBaseUrl,
+      apiHost: this.configuredApiHost,
+      apiPort: this.configuredApiPort,
+      browserOrigin: options.requestOrigin,
+    });
     const selectedLinkedChannels = this.withSelectedIdentity(
       selectedContact.linkedChannels,
       selectedIdentity,
@@ -192,9 +209,9 @@ export class AdminChatBootstrapService {
     const defaultSessionId = `${selectedIdentity.channel}:${selectedIdentity.userId}`;
     const apiKey = this.resolveApiKey();
     const transportHeaders = this.buildTransportHeaders(defaultSessionId, defaultAuthorId, defaultAuthorName);
-    const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, this.apiBaseUrl);
-    const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, this.apiBaseUrl);
-    const openAiBaseUrl = buildAbsoluteAdminChatApiUrl(OPENAI_API_BASE_PATH, this.apiBaseUrl);
+    const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);
+    const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, apiBaseUrl);
+    const openAiBaseUrl = buildAbsoluteAdminChatApiUrl(OPENAI_API_BASE_PATH, apiBaseUrl);
 
     return {
       contactOptions: contacts.map(contact => ({

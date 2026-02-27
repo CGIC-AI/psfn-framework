@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAllowedReadPathsFromEnv } from './policy-config.js';
+import {
+  resolveAllowedReadPathsFromEnv,
+  resolveTrustedModuleRegistryPathFromEnv,
+} from './policy-config.js';
 
 describe('resolveAllowedReadPathsFromEnv', () => {
   const workspacePath = '/app/workspace';
@@ -32,5 +35,21 @@ describe('resolveAllowedReadPathsFromEnv', () => {
     }, workspacePath);
 
     expect(value).toEqual(['/app/identity', '/app/workspace/custom/modules.json']);
+  });
+
+  it('resolves trusted module registry path when enabled', () => {
+    const value = resolveTrustedModuleRegistryPathFromEnv({
+      MODULE_REGISTRY_TRUSTED_READ: 'true',
+    }, workspacePath);
+
+    expect(value).toBe('/app/workspace/psfn/modules/repl-registry.json');
+  });
+
+  it('returns undefined trusted module registry path when disabled', () => {
+    const value = resolveTrustedModuleRegistryPathFromEnv({
+      MODULE_REGISTRY_TRUSTED_READ: 'false',
+    }, workspacePath);
+
+    expect(value).toBeUndefined();
   });
 });

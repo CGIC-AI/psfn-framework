@@ -73,7 +73,6 @@ import {
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
-import { resolveAdminChatApiBaseUrl } from './channels/admin/chat/api-base-url.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createSafeguardAuditTrail,
@@ -447,11 +446,6 @@ async function main(): Promise<void> {
   let apiServer: ApiServer | undefined;
   const apiHost = process.env.API_HOST || undefined;
   const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;
-  const adminChatApiBaseUrl = resolveAdminChatApiBaseUrl({
-    explicitApiBaseUrl: process.env.API_BASE_URL,
-    apiHost,
-    apiPort,
-  });
   if (apiPort) {
     const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
     const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
@@ -639,7 +633,9 @@ async function main(): Promise<void> {
       host: process.env.ADMIN_HOST || undefined,
       token: adminToken,
       allowInsecureWithoutToken,
-      apiBaseUrl: adminChatApiBaseUrl,
+      apiBaseUrl: process.env.API_BASE_URL,
+      apiHost,
+      apiPort,
       memoryStore,
       sessionStore,
       sessionManager,

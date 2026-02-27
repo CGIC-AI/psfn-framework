@@ -529,11 +529,13 @@ export class MemoryStore {
     stmt.run(...values);
   }
 
-  getAllActiveMemories(): PurrMemory[] {
+  getAllActiveMemories(limit: number = 10_000): PurrMemory[] {
+    const safeLimit = Math.max(1, Math.min(100_000, Math.floor(limit)));
     const stmt = this.db.prepare(`
       SELECT * FROM l2_memories WHERE superseded_by IS NULL AND deleted_at IS NULL
+      LIMIT ?
     `);
-    const rows = stmt.all() as MemoryRow[];
+    const rows = stmt.all(safeLimit) as MemoryRow[];
     return rows.map(mapMemoryRow);
   }
 

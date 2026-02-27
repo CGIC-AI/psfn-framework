@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getIdentity, importIdentity, rollbackIdentity, previewDiff } from '$lib/api/endpoints/identity';
+  import { getIdentity, importIdentity, rollbackIdentity, previewDiff, updateIdentityField } from '$lib/api/endpoints/identity';
   import type { DiffPreviewResponse } from '$lib/api/endpoints/identity';
   import type { AdminIdentityData, CharacterCardV2, CharacterCardHistoryEntry } from '$lib/types';
 
@@ -158,9 +158,27 @@
     editFieldValue = '';
   }
 
-  function saveFieldEdit() {
-    error = 'Per-field editing is not yet supported by the API. Use Import or Rollback to update the character card.';
-    editingField = null;
+  let savingField = $state(false);
+
+  async function saveFieldEdit() {
+    if (!editingField) return;
+    savingField = true;
+    error = '';
+    try {
+      const result = await updateIdentityField(editingField, editFieldValue);
+      if (result.ok) {
+        // Refresh the identity data to show updated values
+        data = await getIdentity();
+        editingField = null;
+        editFieldValue = '';
+      } else {
+        error = result.message || 'Failed to save field';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to save field';
+    } finally {
+      savingField = false;
+    }
   }
 
   let card = $derived(data?.card ?? null);
@@ -425,11 +443,13 @@
                 {#if editingField === field.key}
                   <div class="flex gap-1.5">
                     <button onclick={saveFieldEdit}
-                      class="px-2.5 py-1 text-sm font-medium rounded bg-gold-600 text-white hover:bg-gold-700 transition-colors">
-                      Save
+                      disabled={savingField}
+                      class="px-2.5 py-1 text-sm font-medium rounded bg-gold-600 text-white hover:bg-gold-700 disabled:opacity-50 transition-colors">
+                      {savingField ? 'Saving...' : 'Save'}
                     </button>
                     <button onclick={cancelFieldEdit}
-                      class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 transition-colors border border-bark-300">
+                      disabled={savingField}
+                      class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 disabled:opacity-50 transition-colors border border-bark-300">
                       Cancel
                     </button>
                   </div>

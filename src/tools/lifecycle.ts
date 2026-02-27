@@ -8,6 +8,7 @@ import type { LifecycleNotifier } from '../lifecycle/notifications.js';
 import { createComponentLogger } from '../logger.js';
 import type { CapabilityTier } from '../types.js';
 import type { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
+import { textResultWithError } from './results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 const log = createComponentLogger('LifecycleTools');
@@ -15,13 +16,6 @@ const log = createComponentLogger('LifecycleTools');
 interface LifecycleToolOptions {
   restartSafeguard?: LifecycleRestartSafeguard;
   getCapabilityTier?: () => CapabilityTier;
-}
-
-function blockResult(message: string): AgentToolResult<{ isError?: boolean }> {
-  return {
-    content: [{ type: 'text', text: message }] satisfies TextContent[],
-    details: { isError: true },
-  };
 }
 
 /**
@@ -56,7 +50,7 @@ export function createRestartTool(
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const reason = params.reason?.trim();
       if (!reason) {
-        return blockResult('Restart blocked: reason is required.');
+        return textResultWithError('Restart blocked: reason is required.', true);
       }
       const tier = options.getCapabilityTier?.() ?? 'autonomous';
       if (options.restartSafeguard) {
@@ -66,7 +60,7 @@ export function createRestartTool(
           tier,
         });
         if (!decision.allowed) {
-          return blockResult(decision.reason);
+          return textResultWithError(decision.reason, true);
         }
       }
 
@@ -122,7 +116,7 @@ export function createRebuildTool(
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const reason = params.reason?.trim();
       if (!reason) {
-        return blockResult('Rebuild blocked: reason is required.');
+        return textResultWithError('Rebuild blocked: reason is required.', true);
       }
       const tier = options.getCapabilityTier?.() ?? 'autonomous';
       if (options.restartSafeguard) {
@@ -132,7 +126,7 @@ export function createRebuildTool(
           tier,
         });
         if (!decision.allowed) {
-          return blockResult(decision.reason);
+          return textResultWithError(decision.reason, true);
         }
       }
       const fullReason = `rebuild: ${reason}`;

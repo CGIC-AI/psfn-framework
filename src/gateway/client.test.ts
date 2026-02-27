@@ -29,9 +29,21 @@ function createMockConnection() {
     _emit(message: unknown): void {
       emitter.emit('message', message);
     },
+    _emitClose(): void {
+      emitter.emit('close');
+    },
+    _emitError(error: Error): void {
+      emitter.emit('error', error);
+    },
   };
 
-  return { conn: conn as unknown as NdjsonConnection, sent, _emit: conn._emit };
+  return {
+    conn: conn as unknown as NdjsonConnection,
+    sent,
+    _emit: conn._emit,
+    _emitClose: conn._emitClose,
+    _emitError: conn._emitError,
+  };
 }
 
 function getRpcResponse(sent: unknown[], id: number): any {
@@ -709,5 +721,124 @@ describe('GatewayClient session integrity RPC', () => {
       content: 'hello',
       timestamp: 1_000,
     }, null)).toThrow('requires a gateway socket path');
+  });
+});
+
+describe('GatewayClient git RPC wrappers', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('routes git.status and git.diff with typed payloads', async () => {
+    const statusPromise = client.gitStatus();
+    const statusReq = conn.sent[0] as { id: number; method: string; params: Record<string, never> };
+    expect(statusReq.method).toBe('git.status');
+    expect(statusReq.params).toEqual({});
+    conn._emit({
+      jsonrpc: '2.0',
+      id: statusReq.id,
+      result: {
+        branch: 'main',
+        ahead: 1,
+        behind: 0,
+        staged: ['src/a.ts'],
+        modified: ['src/b.ts'],
+        untracked: ['src/c.ts'],
+      },
+    });
+    await expect(statusPromise).resolves.toMatchObject({ branch: 'main', ahead: 1 });
+
+    const diffPromise = client.gitDiff({ staged: false });
+    const diffReq = conn.sent[1] as { id: number; method: string; params: { staged: boolean } };
+    expect(diffReq.method).toBe('git.diff');
+    expect(diffReq.params).toEqual({ staged: false });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: diffReq.id,
+      result: {
+        staged: '',
+        unstaged: 'diff',
+      },
+    });
+    await expect(diffPromise).resolves.toEqual({ staged: '', unstaged: 'diff' });
+  });
+
+  it('routes git write wrappers and maps structured responses', async () => {
+    const createBranchPromise = client.gitCreateBranch('feature/test', 'main');
+    const createBranchReq = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: { name: string; startPoint: string };
+    };
+    expect(createBranchReq.method).toBe('git.create_branch');
+    expect(createBranchReq.params).toEqual({ name: 'feature/test', startPoint: 'main' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: createBranchReq.id,
+      result: { name: 'feature/test' },
+    });
+    await expect(createBranchPromise).resolves.toBe('feature/test');
+
+    const applyPatchPromise = client.gitApplyPatch('src/x.ts', 'export const x = 1;');
+    const applyPatchReq = conn.sent[1] as {
+      id: number;
+      method: string;
+      params: { filePath: string; content: string };
+    };
+    expect(applyPatchReq.method).toBe('git.apply_patch');
+    expect(applyPatchReq.params.filePath).toBe('src/x.ts');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: applyPatchReq.id,
+      result: { success: true },
+    });
+    await expect(applyPatchPromise).resolves.toBeUndefined();
+
+    const commitPromise = client.gitCommit('msg', 'intent', 'scope');
+    const commitReq = conn.sent[2] as { id: number; method: string; params: Record<string, unknown> };
+    expect(commitReq.method).toBe('git.commit');
+    expect(commitReq.params).toEqual({ message: 'msg', intent: 'intent', scope: 'scope' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: commitReq.id,
+      result: { hash: 'abc', message: 'msg', filesChanged: 2 },
+    });
+    await expect(commitPromise).resolves.toMatchObject({ hash: 'abc', filesChanged: 2 });
+
+    const openPrPromise = client.gitOpenPR('Title', 'Body', 'main');
+    const openPrReq = conn.sent[3] as { id: number; method: string; params: Record<string, unknown> };
+    expect(openPrReq.method).toBe('git.open_pr');
+    expect(openPrReq.params).toEqual({ title: 'Title', body: 'Body', base: 'main' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: openPrReq.id,
+      result: { url: 'https://example.test/pr/1' },
+    });
+    await expect(openPrPromise).resolves.toBe('https://example.test/pr/1');
+  });
+});
+
+describe('GatewayClient connection lifecycle', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('emits disconnect once when the gateway connection closes', () => {
+    const handler = vi.fn();
+    client.onDisconnect(handler);
+
+    conn._emitClose();
+    conn._emitError(new Error('late error'));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({ source: 'close' });
   });
 });

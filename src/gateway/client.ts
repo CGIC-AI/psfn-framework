@@ -49,6 +49,13 @@ import type {
   VoiceStreamCancelResult,
   SessionHmacSignResult,
   SessionHmacVerifyResult,
+  GitDiffParams,
+  GitDiffResult,
+  GitStatusResult,
+  GitCreateBranchResult,
+  GitApplyPatchResult,
+  GitCommitResult,
+  GitOpenPRResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -259,11 +266,17 @@ interface VoiceStreamState {
   cancelled: boolean;
 }
 
+export interface GatewayConnectionCloseEvent {
+  source: 'close' | 'error';
+  error?: Error;
+}
+
 export class GatewayClient implements LLMProvider, EmbeddingService {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: NdjsonConnection;
   private embeddingDims: number;
   private notificationHandlers = new Map<string, Array<(params: unknown) => void>>();
+  private connectionCloseHandlers = new Set<(event: GatewayConnectionCloseEvent) => void>();
   private chunkHandlers = new Map<string, (text: string) => void>();
   private requestCounter = 0;
   private reverseMethodsRegistered = false;
@@ -275,6 +288,8 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   private readonly sessionIntegrityRpcTimeoutMs: number;
   private sessionIntegrityWorker: Worker | null = null;
   private sessionIntegrityRequestCounter = 0;
+  private closedNotified = false;
+  private isDestroying = false;
 
   constructor(conn: NdjsonConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -318,6 +333,14 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
       // Everything else: responses to our requests + incoming RPC requests from gateway
       this.rpcInstance.receiveAndSend(msg as any);
+    });
+
+    this.conn.on('close', () => {
+      this.emitConnectionClose({ source: 'close' });
+    });
+    this.conn.on('error', (error: unknown) => {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      this.emitConnectionClose({ source: 'error', error: normalized });
     });
   }
 
@@ -470,6 +493,37 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     return result.paths;
   }
 
+  // ── Git operations ──
+
+  async gitStatus(): Promise<GitStatusResult> {
+    return await this.rpcInstance.request('git.status', {}) as GitStatusResult;
+  }
+
+  async gitDiff(opts: GitDiffParams = {}): Promise<GitDiffResult> {
+    return await this.rpcInstance.request('git.diff', opts) as GitDiffResult;
+  }
+
+  async gitCreateBranch(name: string, startPoint?: string): Promise<string> {
+    const result = await this.rpcInstance.request('git.create_branch', {
+      name,
+      startPoint,
+    }) as GitCreateBranchResult;
+    return result.name;
+  }
+
+  async gitApplyPatch(filePath: string, content: string): Promise<void> {
+    await this.rpcInstance.request('git.apply_patch', { filePath, content }) as GitApplyPatchResult;
+  }
+
+  async gitCommit(message: string, intent: string, scope?: string): Promise<GitCommitResult> {
+    return await this.rpcInstance.request('git.commit', { message, intent, scope }) as GitCommitResult;
+  }
+
+  async gitOpenPR(title: string, body: string, base?: string): Promise<string> {
+    const result = await this.rpcInstance.request('git.open_pr', { title, body, base }) as GitOpenPRResult;
+    return result.url;
+  }
+
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
     return await this.rpcInstance.request('notify.ntfy', params) as NotifyNtfyResult;
   }
@@ -526,6 +580,13 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       const notification = params as DiscordMessageNotification;
       handler(notification.message);
     });
+  }
+
+  onDisconnect(handler: (event: GatewayConnectionCloseEvent) => void): () => void {
+    this.connectionCloseHandlers.add(handler);
+    return () => {
+      this.connectionCloseHandlers.delete(handler);
+    };
   }
 
   private async requestWithAbortSignal<T>(
@@ -807,6 +868,20 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     }
   }
 
+  private emitConnectionClose(event: GatewayConnectionCloseEvent): void {
+    if (this.isDestroying || this.closedNotified) {
+      return;
+    }
+    this.closedNotified = true;
+    for (const handler of this.connectionCloseHandlers) {
+      try {
+        handler(event);
+      } catch (error) {
+        log.error('Disconnect handler error', { error: toErrorMessage(error) });
+      }
+    }
+  }
+
   private ensureSessionIntegrityWorker(): Worker {
     if (this.sessionIntegrityWorker) return this.sessionIntegrityWorker;
     if (!this.sessionIntegritySocketPath) {
@@ -877,7 +952,10 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   // ── Lifecycle ──
 
   destroy(): void {
+    if (this.isDestroying) return;
+    this.isDestroying = true;
     this.voiceStreams.clear();
+    this.connectionCloseHandlers.clear();
     if (this.sessionIntegrityWorker) {
       void this.sessionIntegrityWorker.terminate();
       this.sessionIntegrityWorker = null;

@@ -1,6 +1,4 @@
-import { JSONRPCErrorException } from 'json-rpc-2.0';
 import {
-  GatewayErrors,
   type SessionHmacSignParams,
   type SessionHmacSignResult,
   type SessionHmacVerifyParams,
@@ -15,10 +13,7 @@ const sessionHmacDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     name: 'session.hmac.sign',
     handler: async (params: SessionHmacSignParams, runtime): Promise<SessionHmacSignResult> => {
       if (!runtime.sessionHmacKeyring) {
-        throw new JSONRPCErrorException(
-          'Gateway session HMAC keyring is not configured',
-          GatewayErrors.PROVIDER_ERROR,
-        );
+        return { entry: params.entry };
       }
       return {
         entry: signJournalEntry(params.entry, runtime.sessionHmacKeyring, params.previousHmac),
@@ -34,10 +29,11 @@ const sessionHmacDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     name: 'session.hmac.verify',
     handler: async (params: SessionHmacVerifyParams, runtime): Promise<SessionHmacVerifyResult> => {
       if (!runtime.sessionHmacKeyring) {
-        throw new JSONRPCErrorException(
-          'Gateway session HMAC keyring is not configured',
-          GatewayErrors.PROVIDER_ERROR,
-        );
+        return {
+          verified: false,
+          observedHmac: typeof params.entry._hmac === 'string' ? params.entry._hmac : null,
+          reason: 'hmac_keyring_unconfigured',
+        };
       }
       return verifyJournalEntryIntegrity(params.entry, runtime.sessionHmacKeyring, params.previousHmac);
     },

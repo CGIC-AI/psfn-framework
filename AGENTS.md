@@ -182,6 +182,9 @@ For example: `bd create --help` shows `--parent`, `--deps`, `--assignee`, etc.
 - ✅ Always use `--json` flag for programmatic use
 - ✅ Link discovered work with `discovered-from` dependencies
 - ✅ Check `bd ready` before asking "what should I work on?"
+- ✅ Wire new code to a real runtime entrypoint (or explicit registry path); do not leave implementation-only modules unwired
+- ✅ Before closing work, verify no newly introduced orphan/unreachable production modules
+- ✅ Prove wiring with either a smoke test or an import/reachability check, and include the result in handoff notes
 
 ## Code Structure Requirements
 

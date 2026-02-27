@@ -66,6 +66,15 @@ if (!parentPort) {
   throw new Error('Session integrity worker requires a parent port');
 }
 
+function errorMessage(error) {
+  if (error && typeof error.message === 'string') return error.message;
+  try {
+    return String(error);
+  } catch {
+    return 'unknown session integrity worker error';
+  }
+}
+
 function writeResponse(stateBuffer, payloadBuffer, payload) {
   const state = new Int32Array(stateBuffer);
   const view = new Uint8Array(payloadBuffer);
@@ -79,58 +88,138 @@ function writeResponse(stateBuffer, payloadBuffer, payload) {
   Atomics.notify(state, 0);
 }
 
-function requestRpc(socketPath, method, params, id, timeoutMs) {
-  return new Promise((resolve, reject) => {
+let activeSocket = null;
+let activeSocketPath = null;
+let connectPromise = null;
+let buffer = '';
+const pendingById = new Map();
+
+function rejectPending(error) {
+  for (const [id, pending] of pendingById.entries()) {
+    clearTimeout(pending.timer);
+    pending.reject(error);
+    pendingById.delete(id);
+  }
+}
+
+function resetSocket(error) {
+  if (activeSocket) {
+    activeSocket.removeAllListeners();
+    activeSocket.destroy();
+  }
+  activeSocket = null;
+  activeSocketPath = null;
+  connectPromise = null;
+  buffer = '';
+  rejectPending(error);
+}
+
+function wireSocket(socket) {
+  socket.on('data', (chunk) => {
+    buffer += chunk.toString('utf8');
+    while (true) {
+      const newline = buffer.indexOf('\\n');
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const pending = message && pendingById.get(message.id);
+      if (!pending) continue;
+
+      clearTimeout(pending.timer);
+      pending.resolve(message);
+      pendingById.delete(message.id);
+    }
+  });
+
+  socket.on('error', (error) => {
+    resetSocket(error instanceof Error ? error : new Error(errorMessage(error)));
+  });
+  socket.on('close', () => {
+    resetSocket(new Error('Session integrity RPC connection closed'));
+  });
+}
+
+async function ensureSocket(socketPath) {
+  if (
+    activeSocket
+    && !activeSocket.destroyed
+    && activeSocketPath === socketPath
+  ) {
+    return activeSocket;
+  }
+
+  if (connectPromise) {
+    return await connectPromise;
+  }
+
+  if (activeSocket && activeSocketPath !== socketPath) {
+    resetSocket(new Error('Session integrity socket path changed'));
+  }
+
+  connectPromise = new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let settled = false;
-    let buffer = '';
-    const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\\n';
 
-    const finish = (kind, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.destroy();
-      if (kind === 'resolve') resolve(value);
-      else reject(value);
+    const cleanup = () => {
+      socket.removeListener('connect', onConnect);
+      socket.removeListener('error', onError);
     };
 
+    const onConnect = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      activeSocket = socket;
+      activeSocketPath = socketPath;
+      wireSocket(socket);
+      resolve(socket);
+    };
+
+    const onError = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.destroy();
+      reject(error instanceof Error ? error : new Error(errorMessage(error)));
+    };
+
+    socket.once('connect', onConnect);
+    socket.once('error', onError);
+  }).finally(() => {
+    connectPromise = null;
+  });
+
+  return await connectPromise;
+}
+
+function requestRpc(socketPath, method, params, id, timeoutMs) {
+  return ensureSocket(socketPath).then((socket) => new Promise((resolve, reject) => {
+    const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\\n';
+
     const timer = setTimeout(() => {
-      finish('reject', new Error('Session integrity RPC timed out'));
+      pendingById.delete(id);
+      reject(new Error('Session integrity RPC timed out'));
     }, timeoutMs);
 
-    socket.on('connect', () => {
+    pendingById.set(id, { resolve, reject, timer });
+
+    try {
       socket.write(request);
-    });
-
-    socket.on('data', (chunk) => {
-      buffer += chunk.toString('utf8');
-      while (true) {
-        const newline = buffer.indexOf('\\n');
-        if (newline < 0) break;
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (!line) continue;
-        let message;
-        try {
-          message = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (message && message.id === id) {
-          finish('resolve', message);
-          return;
-        }
-      }
-    });
-
-    socket.on('error', (error) => finish('reject', error));
-    socket.on('close', () => {
-      if (!settled) {
-        finish('reject', new Error('Session integrity RPC connection closed before response'));
-      }
-    });
-  });
+    } catch (error) {
+      clearTimeout(timer);
+      pendingById.delete(id);
+      reject(error instanceof Error ? error : new Error(errorMessage(error)));
+    }
+  }));
 }
 
 parentPort.on('message', async (job) => {
@@ -142,9 +231,13 @@ parentPort.on('message', async (job) => {
     const response = await requestRpc(socketPath, method, params, requestId, timeoutMs);
     writeResponse(stateBuffer, payloadBuffer, { ok: true, response });
   } catch (error) {
-    const message = toErrorMessage(error);
+    const message = errorMessage(error);
     writeResponse(stateBuffer, payloadBuffer, { ok: false, error: message });
   }
+});
+
+parentPort.on('close', () => {
+  resetSocket(new Error('Session integrity worker closed'));
 });
 `;
 

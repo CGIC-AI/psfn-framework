@@ -160,8 +160,7 @@ vi.mock('../../voice/policy/security.js', () => {
 
 import {
   DiscordVoiceRuntime,
-  DISCORD_VOICE_MVP_TTS_PROVIDER,
-  DISCORD_VOICE_MVP_VOICE_ID,
+  DISCORD_VOICE_DEFAULT_VOICE_ID,
 } from './voice.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
@@ -501,7 +500,7 @@ describe('DiscordVoiceRuntime', () => {
     }));
   });
 
-  it('builds only ElevenLabs TTS connector regardless of configured provider (MVP lock)', () => {
+  it('builds both echo and elevenlabs TTS connectors when echo is configured', () => {
     const echoConnector = createMockTtsConnector('echo');
     const elevenLabsConnector = createMockTtsConnector('elevenlabs');
     connectorMocks.createStreamingTtsConnector.mockImplementation((provider: string) => {
@@ -524,18 +523,20 @@ describe('DiscordVoiceRuntime', () => {
       getHandler: () => null,
     });
 
-    // MVP lock: only ElevenLabs connector should be created, echo is ignored
-    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledTimes(1);
-    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledWith('elevenlabs', {
-      apiKey: 'elevenlabs-key',
-      voiceId: 'voice-id',
-      modelId: undefined,
-    });
+    // Both echo (preferred) and elevenlabs (fallback) connectors should be created
+    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledTimes(2);
+    const calls = connectorMocks.createStreamingTtsConnector.mock.calls;
+    const providers = calls.map((call: unknown[]) => call[0]);
+    expect(providers[0]).toBe('echo');
+    expect(providers[1]).toBe('elevenlabs');
   });
 
-  it('uses ElevenLabs TTS even when echo is configured (MVP lock)', async () => {
+  it('uses echo TTS when echo is configured as provider', async () => {
+    const echoConnector = createMockTtsConnector('echo');
     const elevenLabsConnector = createMockTtsConnector('elevenlabs');
-    connectorMocks.createStreamingTtsConnector.mockImplementation(() => elevenLabsConnector);
+    connectorMocks.createStreamingTtsConnector.mockImplementation((provider: string) => {
+      return provider === 'echo' ? echoConnector : elevenLabsConnector;
+    });
 
     const runtime = new DiscordVoiceRuntime({
       client: {
@@ -558,9 +559,8 @@ describe('DiscordVoiceRuntime', () => {
 
     await (runtime as any).speakText('hello world');
 
-    // MVP lock: fallback order always uses elevenlabs
-    expect(reliabilityMocks.buildFallbackOrder).toHaveBeenCalledWith('elevenlabs', ['elevenlabs']);
-    expect(elevenLabsConnector.synthesizeStream).toHaveBeenCalledTimes(1);
+    // Echo should be the preferred provider
+    expect(reliabilityMocks.buildFallbackOrder).toHaveBeenCalledWith('echo', ['echo', 'elevenlabs']);
   });
 
   it('emits partial transcript events and uses streaming TTS playback', async () => {
@@ -1187,27 +1187,42 @@ describe('DiscordVoiceRuntime', () => {
     expect((runtime as any).capturing).toBe(true);
   });
 
-  describe('Discord voice MVP TTS provider lock', () => {
-    it('exports the correct MVP TTS provider constant', () => {
-      expect(DISCORD_VOICE_MVP_TTS_PROVIDER).toBe('elevenlabs');
+  describe('Discord voice TTS provider config', () => {
+    it('exports the default voice ID constant', () => {
+      expect(DISCORD_VOICE_DEFAULT_VOICE_ID).toBe('YOUR_VOICE_ID');
     });
 
-    it('exports the correct MVP voice ID constant', () => {
-      expect(DISCORD_VOICE_MVP_VOICE_ID).toBe('YOUR_VOICE_ID');
-    });
-
-    it('overrides echo provider config to elevenlabs', () => {
+    it('honors echo provider config instead of overriding to elevenlabs', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       const runtime = new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
-        config: makeConfig({ ttsProvider: 'echo' }),
+        config: makeConfig({
+          ttsProvider: 'echo',
+          echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
+          echoTtsVoice: 'echo-voice-1',
+        }),
+        eventBus: new EventBus(),
+        getHandler: () => null,
+      });
+
+      expect((runtime as any).preferredTtsProviderId).toBe('echo');
+      const calls = connectorMocks.createStreamingTtsConnector.mock.calls;
+      const providers = calls.map((call) => call[0]);
+      expect(providers[0]).toBe('echo');
+    });
+
+    it('defaults to elevenlabs when no provider is configured', () => {
+      connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
+
+      const runtime = new DiscordVoiceRuntime({
+        client: { on: vi.fn(), off: vi.fn() } as any,
+        config: makeConfig(),
         eventBus: new EventBus(),
         getHandler: () => null,
       });
 
       expect((runtime as any).preferredTtsProviderId).toBe('elevenlabs');
-      expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledWith('elevenlabs', expect.any(Object));
     });
 
     it('uses default voice ID when none is explicitly configured', () => {
@@ -1223,7 +1238,7 @@ describe('DiscordVoiceRuntime', () => {
       });
 
       expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledWith('elevenlabs', expect.objectContaining({
-        voiceId: DISCORD_VOICE_MVP_VOICE_ID,
+        voiceId: DISCORD_VOICE_DEFAULT_VOICE_ID,
       }));
     });
 
@@ -1244,11 +1259,16 @@ describe('DiscordVoiceRuntime', () => {
       }));
     });
 
-    it('disables voice runtime when ElevenLabs API key is missing', () => {
+    it('disables voice runtime when no TTS connectors can be created', () => {
+      connectorMocks.createStreamingTtsConnector.mockImplementation(() => {
+        throw new Error('no config');
+      });
+
       const runtime = new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
         config: makeConfig({
           elevenLabsApiKey: '',
+          elevenLabsVoiceId: '',
         }),
         eventBus: new EventBus(),
         getHandler: () => null,
@@ -1257,7 +1277,7 @@ describe('DiscordVoiceRuntime', () => {
       expect((runtime as any).enabled).toBe(false);
     });
 
-    it('never creates an echo TTS connector in the Discord voice path', () => {
+    it('builds both echo and elevenlabs connectors when both are configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       new DiscordVoiceRuntime({
@@ -1266,6 +1286,8 @@ describe('DiscordVoiceRuntime', () => {
           ttsProvider: 'echo',
           echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
           echoTtsVoice: 'echo-voice-1',
+          elevenLabsApiKey: 'elevenlabs-key',
+          elevenLabsVoiceId: 'voice-id',
         }),
         eventBus: new EventBus(),
         getHandler: () => null,
@@ -1273,8 +1295,8 @@ describe('DiscordVoiceRuntime', () => {
 
       const calls = connectorMocks.createStreamingTtsConnector.mock.calls;
       const providers = calls.map((call) => call[0]);
-      expect(providers).not.toContain('echo');
-      expect(providers).toEqual(['elevenlabs']);
+      expect(providers).toContain('echo');
+      expect(providers).toContain('elevenlabs');
     });
   });
 });

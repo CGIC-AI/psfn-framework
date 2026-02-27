@@ -23,11 +23,11 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Seeds</h1>
-      <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">Character identity and card data</p>
+      <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Character identity and card data</p>
     </div>
     <button
       onclick={() => showJson = !showJson}
-      class="text-xs px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 text-shadow-500 dark:text-shadow-400 hover:bg-bark-100 dark:hover:bg-shadow-800 transition-colors"
+      class="text-xs px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600 text-shadow-500 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-800 transition-colors"
     >
       {showJson ? 'Card View' : 'Raw JSON'}
     </button>
@@ -44,7 +44,7 @@
   {:else if data}
     {#if showJson}
       <div class="card-garden p-4">
-        <pre class="text-xs font-mono text-shadow-600 dark:text-shadow-400 overflow-x-auto whitespace-pre-wrap">{JSON.stringify(data.card, null, 2)}</pre>
+        <pre class="text-xs font-mono text-shadow-600 dark:text-bark-400 overflow-x-auto whitespace-pre-wrap">{JSON.stringify(data.card, null, 2)}</pre>
       </div>
     {:else}
       <div class="space-y-4">
@@ -56,7 +56,7 @@
             </div>
             <div>
               <h2 class="text-xl font-serif font-bold text-shadow-800 dark:text-bark-200">{data.card.data.name}</h2>
-              <p class="text-xs text-shadow-400 dark:text-shadow-500">
+              <p class="text-xs text-shadow-400 dark:text-bark-500">
                 v{data.version} &middot; {data.card.spec} {data.card.spec_version}
                 {#if data.checksum}
                   &middot; <span class="font-mono">{data.checksum.slice(0, 8)}</span>
@@ -78,7 +78,7 @@
         ] as field}
           {#if field.value && field.value.trim()}
             <div class="card-garden p-5">
-              <h3 class="text-sm font-serif font-semibold text-shadow-600 dark:text-shadow-400 mb-2">{field.label}</h3>
+              <h3 class="text-sm font-serif font-semibold text-shadow-600 dark:text-bark-400 mb-2">{field.label}</h3>
               <div class="text-sm text-shadow-800 dark:text-bark-200 whitespace-pre-wrap leading-relaxed">{field.value}</div>
             </div>
           {/if}
@@ -87,10 +87,10 @@
         <!-- Tags -->
         {#if data.card.data.tags && data.card.data.tags.length > 0}
           <div class="card-garden p-5">
-            <h3 class="text-sm font-serif font-semibold text-shadow-600 dark:text-shadow-400 mb-2">Tags</h3>
+            <h3 class="text-sm font-serif font-semibold text-shadow-600 dark:text-bark-400 mb-2">Tags</h3>
             <div class="flex flex-wrap gap-2">
               {#each data.card.data.tags as tag}
-                <span class="px-2.5 py-1 rounded-full text-xs bg-bark-100 dark:bg-shadow-800 text-shadow-600 dark:text-shadow-400">{tag}</span>
+                <span class="px-2.5 py-1 rounded-full text-xs bg-bark-100 dark:bg-shadow-800 text-shadow-600 dark:text-bark-400">{tag}</span>
               {/each}
             </div>
           </div>
@@ -99,13 +99,13 @@
         <!-- Version history -->
         {#if data.history && data.history.length > 0}
           <div class="card-garden p-5">
-            <h3 class="text-sm font-serif font-semibold text-shadow-600 dark:text-shadow-400 mb-2">Version History</h3>
+            <h3 class="text-sm font-serif font-semibold text-shadow-600 dark:text-bark-400 mb-2">Version History</h3>
             <div class="space-y-2">
               {#each data.history as entry}
-                <div class="flex items-center gap-3 text-xs text-shadow-500 dark:text-shadow-400">
+                <div class="flex items-center gap-3 text-xs text-shadow-500 dark:text-bark-400">
                   <span class="font-mono">v{entry.version}</span>
                   <span>{new Date(entry.timestamp).toLocaleString()}</span>
-                  <span class="text-shadow-300 dark:text-shadow-600">{entry.changedBy}</span>
+                  <span class="text-shadow-300 dark:text-bark-500">{entry.changedBy}</span>
                 </div>
               {/each}
             </div>

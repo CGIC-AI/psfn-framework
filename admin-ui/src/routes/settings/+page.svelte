@@ -73,7 +73,7 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Climate</h1>
-      <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">Runtime configuration</p>
+      <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Runtime configuration</p>
     </div>
 
     <!-- Mode switcher -->
@@ -84,7 +84,7 @@
           class="px-3 py-1.5 text-xs font-medium capitalize transition-colors
             {mode === m
               ? 'bg-gold-600 text-white'
-              : 'bg-bark-50 dark:bg-shadow-800 text-shadow-500 dark:text-shadow-400 hover:bg-bark-100 dark:hover:bg-shadow-700'}"
+              : 'bg-bark-50 dark:bg-shadow-800 text-shadow-500 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-700'}"
         >
           {m}
         </button>
@@ -137,14 +137,14 @@
     </div>
   {:else if mode === 'advanced'}
     <div class="card-garden p-6">
-      <p class="text-sm text-shadow-500 dark:text-shadow-400 mb-4">
+      <p class="text-sm text-shadow-500 dark:text-bark-400 mb-4">
         Full settings organized by category. Use the Raw JSON tab to view and edit the complete config.
       </p>
       {#if data}
         {#each Object.entries(data.config as Record<string, unknown>) as [key, value]}
           <div class="flex items-center justify-between py-2 border-b border-bark-100 dark:border-shadow-800">
-            <span class="text-xs font-mono text-shadow-600 dark:text-shadow-400">{key}</span>
-            <span class="text-xs text-shadow-500 dark:text-shadow-400 max-w-xs truncate">{JSON.stringify(value)}</span>
+            <span class="text-xs font-mono text-shadow-600 dark:text-bark-400">{key}</span>
+            <span class="text-xs text-shadow-500 dark:text-bark-400 max-w-xs truncate">{JSON.stringify(value)}</span>
           </div>
         {/each}
       {/if}
@@ -154,7 +154,7 @@
       <textarea
         bind:value={rawJson}
         rows="30"
-        class="w-full font-mono text-xs text-shadow-600 dark:text-shadow-400 bg-bark-50 dark:bg-shadow-900 border border-bark-200 dark:border-shadow-700 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
+        class="w-full font-mono text-xs text-shadow-600 dark:text-bark-400 bg-bark-50 dark:bg-shadow-900 border border-bark-200 dark:border-shadow-700 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
         spellcheck="false"
       ></textarea>
       <div class="flex items-center gap-3 mt-3">
@@ -172,8 +172,8 @@
   <!-- Environment info -->
   {#if data?.env}
     <div class="card-garden p-5">
-      <h2 class="text-sm font-serif font-semibold text-shadow-600 dark:text-shadow-400 mb-2">Environment</h2>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-shadow-500 dark:text-shadow-400">
+      <h2 class="text-sm font-serif font-semibold text-shadow-600 dark:text-bark-400 mb-2">Environment</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-shadow-500 dark:text-bark-400">
         <div>Node: <span class="font-mono">{data.env.nodeVersion}</span></div>
         <div>Platform: <span class="font-mono">{data.env.platform}/{data.env.arch}</span></div>
         <div>Uptime: {Math.floor(data.env.uptime / 3600)}h {Math.floor((data.env.uptime % 3600) / 60)}m</div>

@@ -49,7 +49,7 @@
 <div class="space-y-4">
   <div>
     <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Visitors</h1>
-    <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">Contacts and trust management</p>
+    <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Contacts and trust management</p>
   </div>
 
   {#if loading}
@@ -72,7 +72,7 @@
             <div>
               <h3 class="text-base font-serif font-semibold text-shadow-800 dark:text-bark-200">{contact.displayName}</h3>
               {#if contact.nickname}
-                <p class="text-xs text-shadow-400 dark:text-shadow-500">aka {contact.nickname}</p>
+                <p class="text-xs text-shadow-400 dark:text-bark-500">aka {contact.nickname}</p>
               {/if}
             </div>
             {#if editingContact === contact.id}
@@ -105,24 +105,24 @@
             {/if}
           </div>
 
-          <div class="text-xs text-shadow-500 dark:text-shadow-400 space-y-1">
+          <div class="text-xs text-shadow-500 dark:text-bark-400 space-y-1">
             <p>Relationship: <span class="capitalize">{contact.relationshipType.replace('_', ' ')}</span></p>
             <p>First seen: {new Date(contact.firstSeen).toLocaleDateString()}</p>
             <p>Last seen: {new Date(contact.lastSeen).toLocaleDateString()}</p>
           </div>
 
           {#if contact.notes}
-            <p class="text-xs text-shadow-600 dark:text-shadow-400 italic border-t border-bark-100 dark:border-shadow-800 pt-2">{contact.notes}</p>
+            <p class="text-xs text-shadow-600 dark:text-bark-400 italic border-t border-bark-100 dark:border-shadow-800 pt-2">{contact.notes}</p>
           {/if}
 
           {#if data.profileMap[contact.id]}
-            <div class="text-[11px] text-shadow-400 dark:text-shadow-500">
+            <div class="text-[11px] text-shadow-400 dark:text-bark-500">
               {data.profileMap[contact.id].memoryCount} linked memories
             </div>
           {/if}
         </div>
       {:else}
-        <div class="col-span-full card-garden p-8 text-center text-shadow-400 dark:text-shadow-500 italic">
+        <div class="col-span-full card-garden p-8 text-center text-shadow-400 dark:text-bark-500 italic">
           No contacts found
         </div>
       {/each}

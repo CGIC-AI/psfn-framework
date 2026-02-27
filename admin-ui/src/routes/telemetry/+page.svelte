@@ -16,7 +16,7 @@
     if (type.startsWith('tool.'))    return 'text-amber-600 dark:text-amber-400';
     if (type.startsWith('error'))    return 'text-wilt-600 dark:text-wilt-400';
     if (type.startsWith('session.')) return 'text-purple-600 dark:text-purple-400';
-    return 'text-shadow-500 dark:text-shadow-400';
+    return 'text-shadow-500 dark:text-bark-400';
   }
 
   function eventBadgeColor(type: string): string {
@@ -27,7 +27,7 @@
     if (type.startsWith('tool.'))    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
     if (type.startsWith('error'))    return 'bg-wilt-100 text-wilt-700 dark:bg-wilt-900/30 dark:text-wilt-300';
     if (type.startsWith('session.')) return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300';
-    return 'bg-bark-100 text-shadow-600 dark:bg-shadow-800 dark:text-shadow-400';
+    return 'bg-bark-100 text-shadow-600 dark:bg-shadow-800 dark:text-bark-400';
   }
 
   function formatTime(ts: number): string {
@@ -69,7 +69,7 @@
   <div class="flex items-center justify-between flex-wrap gap-3">
     <div>
       <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Sap</h1>
-      <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">Real-time telemetry flowing through the substrate</p>
+      <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Real-time telemetry flowing through the substrate</p>
     </div>
 
     <div class="flex items-center gap-2">
@@ -100,7 +100,7 @@
       <button
         onclick={clearEvents}
         class="text-sm px-3 py-1.5 rounded-lg border border-bark-200 dark:border-shadow-700
-               text-shadow-600 dark:text-shadow-400 hover:bg-bark-100 dark:hover:bg-shadow-800 transition-colors"
+               text-shadow-600 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-800 transition-colors"
       >
         Clear
       </button>
@@ -108,7 +108,7 @@
   </div>
 
   <!-- Status bar -->
-  <div class="flex items-center gap-4 text-xs text-shadow-400 dark:text-shadow-500">
+  <div class="flex items-center gap-4 text-xs text-shadow-400 dark:text-bark-500">
     <span>{filteredEvents().length} events</span>
     {#if filterType}
       <span>Filtered: <code class="font-mono text-gold-600 dark:text-gold-400">{filterType}*</code></span>
@@ -137,14 +137,14 @@
   >
     {#if filteredEvents().length === 0}
       <div class="p-8 text-center">
-        <p class="text-shadow-400 dark:text-shadow-500 italic font-sans text-sm">
+        <p class="text-shadow-400 dark:text-bark-500 italic font-sans text-sm">
           No sap flows yet — events will appear as the substrate runs
         </p>
       </div>
     {:else}
       <table class="w-full">
         <thead class="sticky top-0 bg-white dark:bg-shadow-900 border-b border-bark-200 dark:border-shadow-700">
-          <tr class="text-left text-shadow-400 dark:text-shadow-500">
+          <tr class="text-left text-shadow-400 dark:text-bark-500">
             <th class="px-3 py-2 font-medium w-28">Time</th>
             <th class="px-3 py-2 font-medium w-48">Type</th>
             <th class="px-3 py-2 font-medium">Data</th>
@@ -153,7 +153,7 @@
         <tbody>
           {#each filteredEvents() as event, i}
             <tr class="border-b border-bark-100 dark:border-shadow-800 hover:bg-bark-50 dark:hover:bg-shadow-800/50 transition-colors">
-              <td class="px-3 py-1.5 text-shadow-300 dark:text-shadow-600 whitespace-nowrap">
+              <td class="px-3 py-1.5 text-shadow-300 dark:text-bark-500 whitespace-nowrap">
                 {formatTime(event.timestamp)}
               </td>
               <td class="px-3 py-1.5">
@@ -161,7 +161,7 @@
                   {event.type}
                 </span>
               </td>
-              <td class="px-3 py-1.5 text-shadow-500 dark:text-shadow-400 truncate max-w-md" title={typeof event.data === 'string' ? event.data : JSON.stringify(event.data)}>
+              <td class="px-3 py-1.5 text-shadow-500 dark:text-bark-400 truncate max-w-md" title={typeof event.data === 'string' ? event.data : JSON.stringify(event.data)}>
                 {previewData(event.data)}
               </td>
             </tr>

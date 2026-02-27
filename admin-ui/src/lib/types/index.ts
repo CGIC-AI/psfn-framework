@@ -46,22 +46,32 @@ export interface AdminDashboardData {
   stats: DashboardStats;
 }
 
-// Memory
+// Memory -- mirrors backend PurrMemory from src/memory/types.ts
 export interface PurrMemory {
   id: string;
+  text: string;
   type: string;
-  content: string;
   importance: number;
+  confidence: number;
+  emotionalValence: number;
   salience: number;
-  emotionalWeight: number;
+  sourceRef: string;
+  extractedAt: number;
+  lastAccessed: number;
+  accessCount: number;
+  tags: string[];
+  provenanceRefs?: string[];
   sensitivity?: string;
+  consentFlags?: Record<string, unknown>;
   contactId?: string;
-  sourceRef?: string;
-  tags?: string;
-  createdAt: number;
-  updatedAt: number;
-  supersededAt?: number;
   supersededBy?: string;
+  deletedAt?: number;
+  // Legacy compat fields (old frontend code may reference these)
+  content?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  emotionalWeight?: number;
+  supersededAt?: number;
 }
 
 export interface AdminMemoryContactSummary {
@@ -266,12 +276,26 @@ export interface CharacterCardV2 {
   };
 }
 
+export interface CharacterCardHistoryEntry {
+  version: number;
+  timestamp: string;
+  updatedBy: string;
+  reason?: string;
+  previousChecksum: string;
+  newChecksum: string;
+  previousCard?: CharacterCardV2;
+  newCard?: CharacterCardV2;
+  // Legacy compat -- old API responses used changedBy instead of updatedBy
+  changedBy?: string;
+  checksum?: string;
+}
+
 export interface AdminIdentityData {
   card: CharacterCardV2;
   config: Record<string, unknown>;
   version: number;
   checksum?: string;
-  history: Array<{ version: number; timestamp: string; checksum?: string; changedBy?: string }>;
+  history: CharacterCardHistoryEntry[];
   intakeReview: unknown;
 }
 
@@ -329,13 +353,17 @@ export interface PromptDiffResult {
 
 export interface PromptRegistryEntry {
   key: string;
-  name: string;
-  content: string;
+  name?: string;
+  content?: string;
+  text?: string; // Backend uses `text`, not `content`
   description?: string;
+  consumers?: string[];
   version?: number;
   enabled?: boolean;
   category?: string;
   updatedAt?: string;
+  updatedBy?: string;
+  checksum?: string;
   identifier?: string;
 }
 

@@ -1,10 +1,12 @@
 import type { CharacterCardVersionStore } from '../../../identity/card-versioning.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { SubstrateConfig } from '../../../types.js';
+import { extractCardPatchFromRecord } from '../../../identity/card-versioning.js';
 import type {
   AdminIdentityData,
   AdminIdentityService,
   DiffPreviewResult,
+  FieldUpdateResult,
   ImportResult,
   IntakeCommitResult,
   IntakeStageResult,
@@ -164,5 +166,37 @@ export class AdminIdentityDataService implements AdminIdentityService {
       current,
       target: entry?.card ?? current,
     };
+  }
+
+  updateIdentityField(body: string): FieldUpdateResult {
+    const cardVersionStore = this.deps.cardVersionStore;
+    if (!cardVersionStore) {
+      return { ok: false, message: 'Card versioning store is not configured' };
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(body) as Record<string, unknown>;
+    } catch {
+      return { ok: false, message: 'Request body must be valid JSON' };
+    }
+
+    const field = typeof payload.field === 'string' ? payload.field.trim() : '';
+    const value = typeof payload.value === 'string' ? payload.value : '';
+
+    if (!field) {
+      return { ok: false, message: 'field is required' };
+    }
+
+    const patch = extractCardPatchFromRecord({ [field]: value });
+    try {
+      const snapshot = cardVersionStore.updateData(patch, 'admin:api', `Admin edited field: ${field}`);
+      // Also update the in-memory character card reference
+      const current = snapshot.card;
+      Object.assign(this.deps.characterCard, current);
+      return { ok: true, message: `Updated "${field}" to v${snapshot.version}` };
+    } catch (error) {
+      return { ok: false, message: String(error) };
+    }
   }
 }

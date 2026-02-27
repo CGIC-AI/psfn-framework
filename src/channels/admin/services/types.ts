@@ -136,6 +136,11 @@ export interface DiffPreviewResult {
   target: CharacterCardV2;
 }
 
+export interface FieldUpdateResult {
+  ok: boolean;
+  message: string;
+}
+
 export interface AdminIdentityService {
   getIdentityData(): AdminIdentityData;
   importIdentityCard(body: string): Promise<ImportResult>;
@@ -143,6 +148,7 @@ export interface AdminIdentityService {
   commitIdentityIntake(body: string): Promise<IntakeCommitResult>;
   rollbackIdentityCard(body: string): RollbackResult;
   previewIdentityCardDiff(body: string): DiffPreviewResult;
+  updateIdentityField(body: string): FieldUpdateResult;
 }
 
 export interface SettingsConfigEditors {
@@ -225,6 +231,7 @@ export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
   getPromptDetail(layerId: string): AdminPromptDetailData | null;
   getStaticPromptDetail(key: string): AdminPromptDetailData | null;
+  createPromptLayer(body: string): PromptUpdateResult;
   updatePromptLayer(body: string): PromptUpdateResult;
   updatePromptRegistry(body: string): PromptUpdateResult;
   togglePromptLayer(body: string): PromptUpdateResult;

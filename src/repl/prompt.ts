@@ -65,9 +65,10 @@ Variables persist across iterations. When you have the answer, call FINAL().
 - \`await write_file(path, content)\` — Write file content through gateway fs policy checks
 - \`await list_files(glob?, maxEntries?)\` — List workspace-relative files via gateway glob policy
 - \`await web_fetch(url, prompt?)\` — Guarded web fetch via gateway SSRF defenses
+- \`await shell_exec(command, args?, options?)\` — Capability-gated shell command runner via gateway policy/audit
 
 ### Research
-- \`await crawler_fetch(url, prompt?)\` — Alias of \`web_fetch\` (kept for compatibility)
+- \`await crawler_fetch(url, prompt?)\` — Uses the \`local_crawler\` web lane (must be explicitly enabled by policy)
 - \`await web_research(query, maxUrls?)\` — Discover and fetch a small URL set for a research question
 
 ### Text analysis

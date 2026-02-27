@@ -3,5 +3,6 @@ export { createMemoryCapabilities } from './memory.js';
 export { createModuleCapabilities } from './modules.js';
 export { createRepoCapabilities } from './repo.js';
 export { createSchedulerCapabilities } from './scheduler.js';
+export { createShellCapabilities } from './shell.js';
 export { createToolchainCapabilities } from './toolchain.js';
 export { createWebCapabilities } from './web.js';

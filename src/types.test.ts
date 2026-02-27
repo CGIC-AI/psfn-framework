@@ -43,6 +43,26 @@ describe('loadConfig voice DAVE options', () => {
     expect(config.importProcessingLocalEndpointUrl).toBe('http://localhost:11434/v1');
     expect(config.importProcessingLocalModel).toBe('llama3.2:latest');
   });
+
+  it('parses web fetch lane env values', () => {
+    process.env.ALLOW_HTTP_FETCH = 'true';
+    process.env.FETCH_DOMAIN_ALLOWLIST = 'example.com,docs.example.com';
+    process.env.FETCH_LOCAL_CRAWLER_ENABLED = 'true';
+    process.env.FETCH_LOCAL_CRAWLER_ALLOW_HTTP = 'true';
+    process.env.FETCH_LOCAL_CRAWLER_HOST_ALLOWLIST = 'localhost,127.0.0.1';
+    process.env.FETCH_LOCAL_CRAWLER_DOMAIN_ALLOWLIST = 'crawler.local';
+    process.env.FETCH_TLS_CA_CERT_PATHS = '/etc/ssl/root.pem,/etc/ssl/intermediate.pem';
+
+    const config = loadConfig();
+
+    expect(config.webFetchAllowHttp).toBe(true);
+    expect(config.webFetchDomainAllowlist).toEqual(['example.com', 'docs.example.com']);
+    expect(config.webFetchLocalCrawlerEnabled).toBe(true);
+    expect(config.webFetchLocalCrawlerAllowHttp).toBe(true);
+    expect(config.webFetchLocalCrawlerHostAllowlist).toEqual(['localhost', '127.0.0.1']);
+    expect(config.webFetchLocalCrawlerDomainAllowlist).toEqual(['crawler.local']);
+    expect(config.webFetchTlsCaCertPaths).toEqual(['/etc/ssl/root.pem', '/etc/ssl/intermediate.pem']);
+  });
 });
 
 describe('loadConfig TTS provider options', () => {

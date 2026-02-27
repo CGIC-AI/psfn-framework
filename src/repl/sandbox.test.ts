@@ -306,6 +306,7 @@ describe('REPLSandbox', () => {
     expect(result.output).toContain('2');
     expect(result.output).toContain('https://example.com/a');
     expect((llm as any).webFetch).toHaveBeenCalledTimes(3);
+    expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com/a', undefined, 'local_crawler');
   });
 
   it('read_file/write_file/list_files/web_fetch helpers call gateway RPC capabilities', async () => {
@@ -337,7 +338,47 @@ describe('REPLSandbox', () => {
     expect((llm as any).fsRead).toHaveBeenCalledWith('/app/workspace/a.txt');
     expect((llm as any).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');
     expect((llm as any).fsList).toHaveBeenCalledWith('src/**/*.ts', 10);
-    expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com', undefined);
+    expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com', undefined, 'default');
+  });
+
+  it('shell_exec helper calls gateway shellExec capability when allowed', async () => {
+    const llm = {
+      ...mockLLM(),
+      shellExec: vi.fn(async () => ({
+        command: 'node',
+        args: ['-v'],
+        cwd: '/app/workspace',
+        exitCode: 0,
+        stdout: 'v22.0.0',
+        stderr: '',
+        timedOut: false,
+        truncated: false,
+        durationMs: 12,
+      })),
+    } as unknown as LLMProvider;
+    const sandbox = new REPLSandbox(nullDeps(llm));
+
+    const result = await sandbox.execute(
+      'const r = await shell_exec("node", ["-v"]); print(r.ok, r.stdout);',
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('true v22.0.0');
+    expect((llm as any).shellExec).toHaveBeenCalledWith('node', ['-v'], {});
+  });
+
+  it('omits shell_exec helper for non-autonomous capability tiers', async () => {
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      getCapabilityTier: () => 'nursery',
+    });
+    const result = await sandbox.execute(
+      'print(typeof shell_exec);',
+      5000,
+      8192,
+    );
+    expect(result.output).toBe('undefined');
   });
 
   it('enforces max tool calls across read_file/write_file/list_files/web_fetch', async () => {
@@ -715,6 +756,7 @@ describe('REPLSandbox', () => {
     expect(locals.web_fetch).toBeUndefined();
     expect(locals.crawler_fetch).toBeUndefined();
     expect(locals.web_research).toBeUndefined();
+    expect(locals.shell_exec).toBeUndefined();
   });
 
   it('tracks new variable creation in variablesChanged', async () => {

@@ -184,14 +184,39 @@ function slotSelectOptions(models: DiscoveredModel[], selected: string): string 
   return `${fallback}${options}`;
 }
 
-function renderCatalogRow(row: CatalogRowView): string {
+function providerSelectOptions(models: DiscoveredModel[]): string {
+  const providers = [...new Set(models.flatMap(model => model.providerHints ?? []))]
+    .map(provider => provider.trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  return providers
+    .map(provider => `<option value="${escapeHtml(provider)}">${escapeHtml(provider)}</option>`)
+    .join('');
+}
+
+function renderCatalogRow(
+  row: CatalogRowView,
+  options: {
+    providerListId: string;
+    showProviderHintInput: boolean;
+  },
+): string {
+  const providerListAttr = options.showProviderHintInput
+    ? ''
+    : ` list="${escapeHtml(options.providerListId)}"`;
+  const providerHintStyle = options.showProviderHintInput
+    ? 'display:block;margin-top:0.35rem;font-size:0.75rem'
+    : 'display:none';
   return `
     <tr data-model-slot-row>
       <td><input type="text" data-slot-key value="${escapeHtml(row.slotKey)}" placeholder="primary"></td>
       <td>
         <input type="text" data-model-id value="${escapeHtml(row.model)}" placeholder="provider/model" list="settings-model-list">
       </td>
-      <td><input type="text" data-provider value="${escapeHtml(row.provider)}" placeholder="openrouter"></td>
+      <td>
+        <input type="text" data-provider value="${escapeHtml(row.provider)}" placeholder="openrouter"${providerListAttr}>
+        <input type="text" data-provider-hint-copy value="" readonly placeholder="provider hint" style="${providerHintStyle}">
+      </td>
       <td><input type="number" data-default-max-tokens value="${escapeHtml(row.defaultMaxTokens)}" min="1" placeholder="metadata"></td>
       <td><input type="number" data-default-context-window value="${escapeHtml(row.defaultContextWindow)}" min="1" placeholder="metadata"></td>
       <td><input type="number" data-override-max-tokens value="${escapeHtml(row.overrideMaxTokens)}" min="1" placeholder="optional"></td>
@@ -304,6 +329,10 @@ export function settingsPage(
   const openRouterProviderOrderText = (config.openRouterProviderOrder ?? []).join(', ');
   const importLocalEndpointUrl = config.importProcessingLocalEndpointUrl ?? '';
   const importLocalModel = config.importProcessingLocalModel ?? '';
+  const webFetchDomainAllowlistText = (config.webFetchDomainAllowlist ?? []).join(', ');
+  const webFetchLocalCrawlerHostAllowlistText = (config.webFetchLocalCrawlerHostAllowlist ?? []).join(', ');
+  const webFetchLocalCrawlerDomainAllowlistText = (config.webFetchLocalCrawlerDomainAllowlist ?? []).join(', ');
+  const webFetchTlsCaCertPathsText = (config.webFetchTlsCaCertPaths ?? []).join(', ');
 
   const secretKeys: Array<[string, string]> = [
     ['DISCORD_TOKEN', envInfo.discordToken],
@@ -326,8 +355,13 @@ export function settingsPage(
       contextLength: model.contextLength,
       maxCompletionTokens: model.maxCompletionTokens,
       description: model.description,
+      providerHints: model.providerHints ?? [],
+      pricing: model.pricing,
     },
   ]));
+  const providerListId = 'settings-provider-list';
+  const providerOptionsHtml = providerSelectOptions(availableModels);
+  const showProviderHintInput = providerOptionsHtml.length === 0;
 
   return `
     <form hx-post="/api/settings" hx-target="#settings-result" hx-swap="innerHTML" data-settings-form>
@@ -348,6 +382,7 @@ export function settingsPage(
           </p>
           <div style="overflow-x:auto">
             <datalist id="settings-model-list">${slotSelectOptions(availableModels, '')}</datalist>
+            <datalist id="${escapeHtml(providerListId)}">${providerOptionsHtml}</datalist>
             <table class="config-table" style="margin-bottom:0.75rem;min-width:980px">
               <thead>
                 <tr>
@@ -362,7 +397,10 @@ export function settingsPage(
                 </tr>
               </thead>
               <tbody data-model-catalog-body>
-                ${catalogRows.map(row => renderCatalogRow(row)).join('')}
+                ${catalogRows.map(row => renderCatalogRow(row, {
+                  providerListId,
+                  showProviderHintInput,
+                })).join('')}
               </tbody>
             </table>
           </div>
@@ -514,6 +552,78 @@ export function settingsPage(
       </div>
 
       <div class="card">
+        <h3 style="margin-bottom:0.75rem">Gateway Web Fetch Policy</h3>
+        <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
+          Default lane stays strict (HTTPS + SSRF protections). Local crawler lane is opt-in and requires host/domain allowlist.
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Default Lane: Allow HTTP</label>
+            <select name="webFetchAllowHttp">
+              <option value="false"${config.webFetchAllowHttp ? '' : ' selected'}>Disabled (HTTPS only)</option>
+              <option value="true"${config.webFetchAllowHttp ? ' selected' : ''}>Enabled</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Default Lane Domain Allowlist (comma-separated)</label>
+            <input
+              type="text"
+              name="webFetchDomainAllowlist"
+              value="${escapeHtml(webFetchDomainAllowlistText)}"
+              placeholder="example.com, docs.crawl4ai.com"
+            >
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Local Crawler Lane Enabled</label>
+            <select name="webFetchLocalCrawlerEnabled">
+              <option value="false"${config.webFetchLocalCrawlerEnabled ? '' : ' selected'}>Disabled</option>
+              <option value="true"${config.webFetchLocalCrawlerEnabled ? ' selected' : ''}>Enabled</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Local Crawler Lane: Allow HTTP</label>
+            <select name="webFetchLocalCrawlerAllowHttp">
+              <option value="false"${config.webFetchLocalCrawlerAllowHttp ? '' : ' selected'}>Disabled</option>
+              <option value="true"${config.webFetchLocalCrawlerAllowHttp ? ' selected' : ''}>Enabled</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Local Crawler Host Allowlist (comma-separated)</label>
+            <input
+              type="text"
+              name="webFetchLocalCrawlerHostAllowlist"
+              value="${escapeHtml(webFetchLocalCrawlerHostAllowlistText)}"
+              placeholder="localhost, 127.0.0.1, crawler.local"
+            >
+          </div>
+          <div class="form-group">
+            <label>Local Crawler Domain Allowlist (comma-separated)</label>
+            <input
+              type="text"
+              name="webFetchLocalCrawlerDomainAllowlist"
+              value="${escapeHtml(webFetchLocalCrawlerDomainAllowlistText)}"
+              placeholder="internal.example, local"
+            >
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>TLS CA Cert Paths (comma-separated)</label>
+            <input
+              type="text"
+              name="webFetchTlsCaCertPaths"
+              value="${escapeHtml(webFetchTlsCaCertPathsText)}"
+              placeholder="/etc/ssl/local-root.pem,/etc/ssl/local-intermediate.pem"
+            >
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h3 style="margin-bottom:0.75rem">Capability Tier</h3>
         <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
           Controls which capability tokens are granted at runtime. Save Settings applies tier changes immediately.
@@ -596,7 +706,10 @@ export function settingsPage(
         <td>
           <input type="text" data-model-id placeholder="provider/model" list="settings-model-list">
         </td>
-        <td><input type="text" data-provider placeholder="openrouter"></td>
+        <td>
+          <input type="text" data-provider placeholder="openrouter"${showProviderHintInput ? '' : ` list="${escapeHtml(providerListId)}"`}>
+          <input type="text" data-provider-hint-copy value="" readonly placeholder="provider hint" style="${showProviderHintInput ? 'display:block;margin-top:0.35rem;font-size:0.75rem' : 'display:none'}">
+        </td>
         <td><input type="number" data-default-max-tokens min="1" placeholder="metadata"></td>
         <td><input type="number" data-default-context-window min="1" placeholder="metadata"></td>
         <td><input type="number" data-override-max-tokens min="1" placeholder="optional"></td>
@@ -662,6 +775,7 @@ export function settingsPage(
         } catch {
           modelMeta = {};
         }
+        const providerDatalistAvailable = ${showProviderHintInput ? 'false' : 'true'};
 
         const DEFAULT_CONTEXT_WINDOW = ${config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow};
         const DEFAULT_SESSION_BUDGET_PCT = ${config.sessionHistoryBudgetPct ?? SESSION_HISTORY_BUDGET_PCT_DEFAULT};
@@ -747,6 +861,10 @@ export function settingsPage(
           const meta = modelMeta[modelId] || {};
           const defaultMax = row.querySelector('[data-default-max-tokens]');
           const defaultContext = row.querySelector('[data-default-context-window]');
+          const providerInput = row.querySelector('[data-provider]');
+          const providerHints = Array.isArray(meta.providerHints)
+            ? meta.providerHints.map((value) => String(value || '').trim()).filter(Boolean)
+            : [];
           if (defaultMax && !String(defaultMax.value || '').trim()) {
             const value = toPositiveInt(meta.maxCompletionTokens);
             if (value !== undefined) defaultMax.value = String(value);
@@ -755,6 +873,30 @@ export function settingsPage(
             const value = toPositiveInt(meta.contextLength);
             if (value !== undefined) defaultContext.value = String(value);
           }
+          if (providerInput && !String(providerInput.value || '').trim() && providerHints.length === 1) {
+            providerInput.value = providerHints[0];
+          }
+        };
+
+        const updateProviderGuidance = (row) => {
+          const modelId = getInputValue(row, '[data-model-id]');
+          const hintInput = row.querySelector('[data-provider-hint-copy]');
+          if (!hintInput) return;
+          if (providerDatalistAvailable) {
+            hintInput.style.display = 'none';
+            hintInput.value = '';
+            return;
+          }
+          const meta = modelId && Object.prototype.hasOwnProperty.call(modelMeta, modelId)
+            ? (modelMeta[modelId] || {})
+            : {};
+          const providerHints = Array.isArray(meta.providerHints)
+            ? meta.providerHints.map((value) => String(value || '').trim()).filter(Boolean)
+            : [];
+          hintInput.style.display = 'block';
+          hintInput.value = providerHints.length > 0
+            ? providerHints.join(', ')
+            : 'No provider hint available';
         };
 
         const buildCatalog = () => {
@@ -962,11 +1104,13 @@ export function settingsPage(
           if (modelInput) {
             modelInput.addEventListener('change', () => {
               applyMetadataDefaults(row);
+              updateProviderGuidance(row);
               updateBudgetPreviews();
             });
           }
           row.addEventListener('input', () => updateBudgetPreviews());
           applyMetadataDefaults(row);
+          updateProviderGuidance(row);
         };
 
         const bindPurposeRow = (row) => {

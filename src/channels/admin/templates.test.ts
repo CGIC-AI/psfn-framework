@@ -29,6 +29,7 @@ import {
   promptDetailPage,
   sessionListPage,
   sessionMessagesPage,
+  settingsPage,
   valuesTimelinePage,
 } from './templates.js';
 
@@ -41,6 +42,119 @@ describe('admin templates', () => {
     expect(html).toContain('href="/skills"');
     expect(html).toContain('href="/confirmations"');
     expect(html).toContain('href="/values"');
+  });
+
+  it('renders settings provider guidance and gateway web fetch controls', () => {
+    const html = settingsPage(
+      {
+        primaryModel: 'z-ai/glm-5',
+        primaryProvider: 'openrouter',
+        extractionModel: 'deepseek/deepseek-v3.2',
+        extractionProvider: 'openrouter',
+        primaryMaxTokens: 8192,
+        extractionMaxTokens: 2048,
+        sessionHistoryBudgetPct: 6,
+        memoryRetrievalBudgetPct: 2,
+        extractionInterval: 5,
+        maintenanceIntervalMs: 300_000,
+        defaultContextWindow: 128_000,
+        memoryBudgetPct: 20,
+        extractionThresholdPct: 30,
+        compactionThresholdPct: 70,
+        dataDir: '/tmp/test',
+        databasePath: '/tmp/test.db',
+        characterCardPath: '/tmp/card.json',
+        discordToken: '',
+        discordBotId: '123',
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 8192, contextWindow: 128_000 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          extraction: 'primary',
+          background: 'primary',
+        },
+        modelRoster: {
+          chat: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            maxTokens: 8192,
+            contextWindow: 128_000,
+          },
+        },
+        webFetchAllowHttp: false,
+        webFetchLocalCrawlerEnabled: true,
+        webFetchLocalCrawlerAllowHttp: true,
+        webFetchLocalCrawlerHostAllowlist: ['localhost'],
+        webFetchTlsCaCertPaths: ['/etc/ssl/local-ca.pem'],
+      } as SubstrateConfig,
+      {
+        salienceFloor: 0.45,
+        maintenanceIntervalMs: 300_000,
+        discordToken: '[not set]',
+        apiKey: '[not set]',
+        adminToken: '[not set]',
+        openrouterApiKey: '[set]',
+        litellmBaseUrl: '[set]',
+        litellmApiKey: '[set]',
+        ollamaUrl: '[set]',
+        importProcessingLocalApiKey: '[not set]',
+      },
+      {
+        models: { modelCatalog: {}, modelRoleAssignments: {}, modelRoster: {} },
+        skills: { enabled: true, directories: ['skills'], maxLoadedSkills: 32, maxSkillChars: 24_000 },
+        scheduler: { tickIntervalMs: 1000, heartbeatIntervalMs: 1000, salienceDecayIntervalMs: 300_000 },
+        trustPolicy: {
+          trustCeiling: {
+            primary: ['public', 'personal', 'intimate', 'confidential'],
+            trusted: ['public', 'personal'],
+            regular: ['public'],
+            public: ['public'],
+          },
+          visibilityAllowed: {
+            private: ['public', 'personal', 'intimate', 'confidential'],
+            semi_private: ['public', 'personal'],
+            public: ['public'],
+            broadcast: ['public'],
+          },
+          channelClassification: {
+            privatePrefixes: [],
+            broadcastPrefixes: [],
+            defaultVisibility: 'private',
+            visibilityOverrides: {
+              exact: {},
+              prefix: {},
+            },
+          },
+        },
+        capabilities: {
+          tier: 'nursery',
+          customTokens: [],
+        },
+      },
+      [
+        {
+          id: 'z-ai/glm-5',
+          description: 'GLM-5',
+          providerHints: ['openrouter', 'z-ai'],
+          contextLength: 128_000,
+          maxCompletionTokens: 32_000,
+          pricing: { prompt: '0.001', completion: '0.002' },
+        },
+      ],
+    );
+
+    expect(html).toContain('id="settings-provider-list"');
+    expect(html).toContain('data-provider-hint-copy');
+    expect(html).toContain('name="webFetchAllowHttp"');
+    expect(html).toContain('name="webFetchLocalCrawlerEnabled"');
+    expect(html).toContain('name="webFetchTlsCaCertPaths"');
+    expect(html).toContain('&quot;providerHints&quot;:[&quot;openrouter&quot;,&quot;z-ai&quot;]');
+    expect(html).toContain('&quot;pricing&quot;:{&quot;prompt&quot;:&quot;0.001&quot;,&quot;completion&quot;:&quot;0.002&quot;}');
   });
 
   it('renders confirmation queue fragments with review controls', () => {

@@ -1,17 +1,29 @@
 import { realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import type { PolicyContext, PolicyDecision } from './protocol.js';
-import { evaluateUrlPolicy, type UrlPolicyConfig } from './url-policy.js';
+import { evaluateUrlPolicy, type UrlPolicyConfig, type UrlPolicyLane } from './url-policy.js';
 import {
   normalizeWorkspaceRelativeGlob,
   resolveWorkspaceFsPathFromRoot,
   resolveWorkspaceRoot,
 } from './filesystem-paths.js';
 
+export interface ShellExecPolicyConfig {
+  enabled?: boolean;
+  allowlist?: string[];
+  allowedCwd?: string[];
+  defaultTimeoutMs?: number;
+  maxTimeoutMs?: number;
+  defaultMaxOutputChars?: number;
+  maxOutputChars?: number;
+}
+
 export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
   urlPolicy?: UrlPolicyConfig;
+  webFetchTlsCaCertPaths?: string[];
+  shellExec?: ShellExecPolicyConfig;
 }
 
 /** Check whether a resolved path falls inside any of the allowed prefixes */
@@ -74,11 +86,22 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
     case 'web.fetch': {
       // Synchronous URL policy check so the audit log reflects the real decision
       const url = (params as Record<string, unknown>).url as string | undefined;
+      const laneValue = (params as Record<string, unknown>).lane;
+      const lane: UrlPolicyLane = laneValue === 'local_crawler'
+        ? 'local_crawler'
+        : 'default';
       if (url && policyConfig.urlPolicy) {
-        const urlCheck = evaluateUrlPolicy(url, policyConfig.urlPolicy);
+        const urlCheck = evaluateUrlPolicy(url, policyConfig.urlPolicy, lane);
         if (!urlCheck.allowed) {
           return 'DENY';
         }
+      }
+      return 'ALLOW';
+    }
+
+    case 'shell.exec': {
+      if (!policyConfig.shellExec?.enabled) {
+        return 'DENY';
       }
       return 'ALLOW';
     }

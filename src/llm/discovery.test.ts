@@ -14,7 +14,12 @@ describe('ModelDiscovery', () => {
     vi.unstubAllGlobals();
   });
 
-  function litellmResponse(models: Array<{ id: string }>) {
+  function litellmResponse(models: Array<{
+    id: string;
+    litellm_provider?: string;
+    owned_by?: string;
+    model_info?: { providers?: string[] };
+  }>) {
     return {
       ok: true,
       json: async () => ({ data: models }),
@@ -23,11 +28,12 @@ describe('ModelDiscovery', () => {
 
   function openRouterResponse(models: Array<{
     id: string;
+    canonical_slug?: string;
     name?: string;
     description?: string;
     context_length?: number;
-    top_provider?: { max_completion_tokens?: number };
-    pricing?: { prompt?: string; completion?: string };
+    top_provider?: { context_length?: number; max_completion_tokens?: number };
+    pricing?: Record<string, string | undefined>;
   }>) {
     return {
       ok: true,
@@ -51,7 +57,7 @@ describe('ModelDiscovery', () => {
       }
       if (url.includes('localhost')) {
         return Promise.resolve(litellmResponse([
-          { id: 'z-ai/glm-5' },
+          { id: 'z-ai/glm-5', litellm_provider: 'openrouter' },
           { id: 'deepseek/deepseek-v3.2' },
         ]));
       }
@@ -66,10 +72,49 @@ describe('ModelDiscovery', () => {
     expect(models[0].description).toBe('A great model');
     expect(models[0].contextLength).toBe(128000);
     expect(models[0].maxCompletionTokens).toBe(16384);
+    expect(models[0].providerHints).toContain('openrouter');
+    expect(models[0].providerHints).toContain('z-ai');
     expect(models[0].pricing).toEqual({ prompt: '0.001', completion: '0.002' });
     // Second model has no OpenRouter metadata
     expect(models[1].id).toBe('deepseek/deepseek-v3.2');
     expect(models[1].description).toBeUndefined();
+  });
+
+  it('prefers top_provider context length and preserves pricing keys', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('openrouter.ai')) {
+        return Promise.resolve(openRouterResponse([
+          {
+            id: 'meta/provider',
+            context_length: 64_000,
+            top_provider: { context_length: 131_072, max_completion_tokens: 4096 },
+            pricing: {
+              prompt: '0.0001',
+              completion: '0.0002',
+              request: '0.001',
+            },
+          },
+        ]));
+      }
+      return Promise.resolve(litellmResponse([
+        {
+          id: 'meta/provider',
+          model_info: { providers: ['openrouter', 'proxy'] },
+        },
+      ]));
+    });
+
+    const discovery = new ModelDiscovery('http://localhost:4000/v1');
+    const models = await discovery.getAvailableModels();
+    expect(models).toHaveLength(1);
+    expect(models[0].contextLength).toBe(131_072);
+    expect(models[0].maxCompletionTokens).toBe(4096);
+    expect(models[0].pricing).toEqual({
+      prompt: '0.0001',
+      completion: '0.0002',
+      request: '0.001',
+    });
+    expect(models[0].providerHints).toEqual(['openrouter', 'proxy', 'meta']);
   });
 
   it('uses cached results within TTL', async () => {

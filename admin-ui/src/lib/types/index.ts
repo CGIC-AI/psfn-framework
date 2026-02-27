@@ -56,6 +56,8 @@ export interface PurrMemory {
   emotionalWeight: number;
   sensitivity?: string;
   contactId?: string;
+  sourceRef?: string;
+  tags?: string;
   createdAt: number;
   updatedAt: number;
   supersededAt?: number;
@@ -129,12 +131,29 @@ export interface AdminSessionMessagesData {
 }
 
 // Contacts
+export interface ContactChannelIdentity {
+  channel: string;
+  userId: string;
+}
+
+export interface ContactChannelLink extends ContactChannelIdentity {
+  privacyLevel: ChannelPrivacyLevel;
+  firstSeen?: string;
+  lastSeen?: string;
+}
+
+export type ChannelPrivacyLevel = 'private' | 'semi_private' | 'public' | 'broadcast';
+
 export interface Contact {
   id: string;
   displayName: string;
   nickname?: string;
+  discordUserId?: string;
   trustLevel: string;
   relationshipType: string;
+  channelIdentities?: ContactChannelIdentity[];
+  channels?: ContactChannelLink[];
+  emotionalBaseline?: Record<string, number>;
   firstSeen: string;
   lastSeen: string;
   notes?: string;
@@ -167,11 +186,20 @@ export interface ContactUpdateResult {
   ok: boolean;
   message: string;
   contact?: Contact;
+  relatedChannels?: ContactConversationChannelView[];
 }
 
 export type TrustLevel = 'primary' | 'trusted' | 'regular' | 'public';
 
-export type RelationshipType = string;
+export type RelationshipType = 'partner' | 'family' | 'friend' | 'acquaintance' | 'stranger' | 'ai_companion';
+
+export const RELATIONSHIP_TYPES: RelationshipType[] = [
+  'partner', 'family', 'friend', 'acquaintance', 'stranger', 'ai_companion',
+];
+
+export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
+  'private', 'semi_private', 'public', 'broadcast',
+];
 
 export interface ContactIdentityLinkVerification {
   id: string;

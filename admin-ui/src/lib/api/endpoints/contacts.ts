@@ -5,9 +5,17 @@ export function listContacts(): Promise<AdminContactListData> {
   return apiGet<AdminContactListData>('/api/admin/contacts');
 }
 
+export interface ContactUpdatePayload {
+  displayName?: string;
+  nickname?: string;
+  trustLevel?: string;
+  relationshipType?: string;
+  notes?: string;
+}
+
 export function updateContact(
   id: string,
-  patch: Record<string, unknown>
+  patch: ContactUpdatePayload
 ): Promise<ContactUpdateResult> {
   return apiPatch<ContactUpdateResult>(
     `/api/admin/contacts/${encodeURIComponent(id)}`,

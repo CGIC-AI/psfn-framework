@@ -30,10 +30,28 @@ export interface BroadcastRoutingMetadata {
   visibilityScope?: 'public_only' | 'approved_private_context';
 }
 
+export interface MessageModelOverride {
+  provider: string;
+  model: string;
+  maxTokens?: number;
+  contextWindow?: number;
+  slotKey?: string;
+  purpose?: string;
+}
+
+export type MessagePromptOverrideMode = 'default' | 'none' | 'custom';
+
+export interface MessagePromptOverride {
+  mode: MessagePromptOverrideMode;
+  systemPrompt?: string;
+}
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'unknown';
   wyoming?: WyomingRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
+  modelOverride?: MessageModelOverride;
+  promptOverride?: MessagePromptOverride;
 }
 
 export interface SubstrateMessage {

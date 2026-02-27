@@ -7,7 +7,12 @@ import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
-import type { SubstrateMessage } from '../../types.js';
+import type {
+  MessageModelOverride,
+  MessagePromptOverride,
+  MessageRoutingMetadata,
+  SubstrateMessage,
+} from '../../types.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
@@ -58,6 +63,7 @@ const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
   'external.telemetry.status',
   'external.telemetry.incident',
 ]);
+const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google']);
 
 const IDENTITY_CLAIM_HEADERS = {
   canonicalContactId: 'x-canonical-contact-id',
@@ -101,6 +107,11 @@ interface PendingTurn {
 interface PreparedTurn {
   channelId: string;
   turnPromise: Promise<AgentTurnResult>;
+}
+
+interface TurnRoutingOverrides {
+  modelOverride?: MessageModelOverride;
+  promptOverride?: MessagePromptOverride;
 }
 
 interface IdentityClaimHeaders {
@@ -638,6 +649,7 @@ export class ApiServer implements ChannelAdapter {
     authorId: string,
     authorName: string,
     req: IncomingMessage,
+    overrides: TurnRoutingOverrides,
   ): SubstrateMessage {
     const approvalToken = this.clampHeader(
       this.singleHeader(req.headers['x-broadcast-approval-token']),
@@ -650,6 +662,20 @@ export class ApiServer implements ChannelAdapter {
     const visibilityScope = requestedScope === 'public_only' || requestedScope === 'approved_private_context'
       ? requestedScope
       : undefined;
+    const routing: MessageRoutingMetadata = {
+      source: 'api',
+      ...(approvalToken || visibilityScope
+        ? {
+          broadcast: {
+            ...(approvalToken ? { approvalToken } : {}),
+            ...(visibilityScope ? { visibilityScope } : {}),
+          },
+        }
+        : {}),
+      ...(overrides.modelOverride ? { modelOverride: overrides.modelOverride } : {}),
+      ...(overrides.promptOverride ? { promptOverride: overrides.promptOverride } : {}),
+    };
+    const hasRouting = routing.broadcast || routing.modelOverride || routing.promptOverride;
 
     return {
       id: `api-${randomUUID()}`,
@@ -658,17 +684,7 @@ export class ApiServer implements ChannelAdapter {
       authorId,
       authorName,
       content,
-      ...(approvalToken || visibilityScope
-        ? {
-          routing: {
-            source: 'api' as const,
-            broadcast: {
-              ...(approvalToken ? { approvalToken } : {}),
-              ...(visibilityScope ? { visibilityScope } : {}),
-            },
-          },
-        }
-        : {}),
+      ...(hasRouting ? { routing } : {}),
       timestamp: new Date(),
     };
   }
@@ -733,6 +749,78 @@ export class ApiServer implements ChannelAdapter {
       if (messages[i].role === 'user') return messages[i].content;
     }
     return messages[messages.length - 1].content;
+  }
+
+  private parseTurnRoutingOverrides(
+    request: ChatCompletionRequest,
+  ): { ok: true; value: TurnRoutingOverrides } | { ok: false; error: string } {
+    const provider = typeof request.provider === 'string'
+      ? request.provider.trim().toLowerCase()
+      : '';
+    const model = typeof request.model === 'string'
+      ? request.model.trim()
+      : '';
+
+    let modelOverride: MessageModelOverride | undefined;
+    if (provider) {
+      if (!model) {
+        return {
+          ok: false,
+          error: 'provider override requires a non-empty model field',
+        };
+      }
+      if (!DIRECT_PROVIDER_OVERRIDE_ALLOWLIST.has(provider)) {
+        return {
+          ok: false,
+          error: `provider override must be one of ${Array.from(DIRECT_PROVIDER_OVERRIDE_ALLOWLIST).join(', ')}`,
+        };
+      }
+
+      const maxTokens = typeof request.max_tokens === 'number' && Number.isFinite(request.max_tokens)
+        ? Math.max(1, Math.trunc(request.max_tokens))
+        : undefined;
+
+      modelOverride = {
+        provider,
+        model,
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
+      };
+    }
+
+    const modeRaw = typeof request.system_prompt_mode === 'string'
+      ? request.system_prompt_mode.trim().toLowerCase()
+      : '';
+    const systemPrompt = typeof request.system_prompt === 'string'
+      ? request.system_prompt.trim()
+      : '';
+
+    let promptOverride: MessagePromptOverride | undefined;
+    if (!modeRaw && modelOverride) {
+      promptOverride = { mode: 'none' };
+    } else if (modeRaw) {
+      if (modeRaw !== 'default' && modeRaw !== 'none' && modeRaw !== 'custom') {
+        return {
+          ok: false,
+          error: 'system_prompt_mode must be one of: default, none, custom',
+        };
+      }
+      if (modeRaw === 'custom') {
+        if (!systemPrompt) {
+          return { ok: false, error: 'system_prompt is required when system_prompt_mode=custom' };
+        }
+        promptOverride = { mode: 'custom', systemPrompt };
+      } else if (modeRaw === 'none') {
+        promptOverride = { mode: 'none' };
+      }
+    }
+
+    return {
+      ok: true,
+      value: {
+        ...(modelOverride ? { modelOverride } : {}),
+        ...(promptOverride ? { promptOverride } : {}),
+      },
+    };
   }
 
   private readIdentityClaimHeaders(req: IncomingMessage): IdentityClaimHeaders | null {
@@ -970,6 +1058,12 @@ export class ApiServer implements ChannelAdapter {
     req: IncomingMessage,
     res: ServerResponse,
   ): PendingTurn | null {
+    const routingOverrides = this.parseTurnRoutingOverrides(request);
+    if (!routingOverrides.ok) {
+      this.sendError(res, 400, 'invalid_request', routingOverrides.error);
+      return null;
+    }
+
     const channelId = this.deriveChannelId(req);
     const claimToken = this.claimChannel(channelId);
     if (!claimToken) {
@@ -985,7 +1079,14 @@ export class ApiServer implements ChannelAdapter {
     this.seedSession(channelId, request.messages, authorId, authorName);
 
     const lastUserMsg = this.getLastUserMessage(request.messages);
-    const substrateMsg = this.buildSubstrateMessage(channelId, lastUserMsg, authorId, authorName, req);
+    const substrateMsg = this.buildSubstrateMessage(
+      channelId,
+      lastUserMsg,
+      authorId,
+      authorName,
+      req,
+      routingOverrides.value,
+    );
     return { channelId, claimToken, substrateMsg };
   }
 

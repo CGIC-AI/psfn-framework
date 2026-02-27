@@ -1,32 +1,27 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, dirname, resolve } from 'node:path';
 import { MODULE_REGISTRY_PATH } from '../security/policy-constants.js';
+import { isRecord } from '../utils/types.js';
 import type { ModuleRecord } from './types.js';
 
 function toErrorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { code?: unknown }).code;
+  if (isRecord(error) && 'code' in error) {
+    const code = error.code;
     if (typeof code === 'string') return code;
   }
   return undefined;
 }
 
-function toRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
 export function isModuleRecord(value: unknown): value is ModuleRecord {
-  const record = toRecord(value);
-  if (!record) return false;
+  if (!isRecord(value)) return false;
 
-  return typeof record.id === 'string'
-    && typeof record.name === 'string'
-    && typeof record.source === 'string'
-    && typeof record.enabled === 'boolean'
-    && typeof record.installedAt === 'number'
-    && typeof record.updatedAt === 'number'
-    && typeof record.version === 'number';
+  return typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.source === 'string'
+    && typeof value.enabled === 'boolean'
+    && typeof value.installedAt === 'number'
+    && typeof value.updatedAt === 'number'
+    && typeof value.version === 'number';
 }
 
 export function resolveModuleRegistryPath(

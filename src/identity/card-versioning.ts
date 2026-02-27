@@ -6,7 +6,7 @@ import {
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier } from '../types.js';
-import { textResult } from '../tools/results.js';
+import { textResult, textResultWithError } from '../tools/results.js';
 import { withCapabilityRequirement } from '../capabilities/requirements.js';
 import type {
   ConfirmationQueue,
@@ -291,10 +291,10 @@ export function createCharacterCardUpdateTool(
       _toolCallId: string,
       params: Record<string, unknown>,
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, never>>> => {
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const patch = extractCardPatchFromRecord(params);
       if (!hasPatchFields(patch)) {
-        return textResult('Provide at least one character card field to update.');
+        return textResultWithError('Provide at least one character card field to update.', true);
       }
 
       const reason = typeof params.reason === 'string' ? params.reason : undefined;
@@ -308,13 +308,14 @@ export function createCharacterCardUpdateTool(
           );
         } catch (error) {
           const message = toErrorMessage(error);
-          return textResult(`Character card update failed: ${message}`);
+          return textResultWithError(`Character card update failed: ${message}`, true);
         }
       }
 
       if (!confirmationQueue) {
-        return textResult(
+        return textResultWithError(
           `Character card updates in ${tier} tier require confirmation queue support, but no queue is configured.`,
+          true,
         );
       }
 

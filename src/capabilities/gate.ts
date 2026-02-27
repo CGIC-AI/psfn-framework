@@ -66,6 +66,8 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
         }
       }
 
+      // params is unknown from the gated wrapper; tool.execute expects Static<TSchema>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return tool.execute(toolCallId, params as any, signal);
     },
   } as T;

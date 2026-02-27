@@ -285,6 +285,8 @@ export class GatewayServer {
       this.rpcClients.set(conn, serverAndClient);
 
       conn.onMessage(async (message) => {
+        // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await serverAndClient.receiveAndSend(message as any);
       });
 

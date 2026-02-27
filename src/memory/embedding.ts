@@ -1,6 +1,16 @@
 import type { EmbeddingService } from '../agent/contracts.js';
+import { createComponentLogger } from '../logger.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
+
+/** Callable feature-extraction pipeline from @huggingface/transformers. */
+interface FeatureExtractionPipelineType {
+  (texts: string | string[], options?: { pooling?: string; normalize?: boolean }): Promise<{
+    data: Float32Array;
+    dims: number[];
+  }>;
+  dispose?(): Promise<void>;
+}
 
 export interface EmbeddingRuntimeProvider extends EmbeddingService {
   readonly kind: EmbeddingProviderKind;
@@ -13,10 +23,9 @@ export interface EmbeddingConfig {
 }
 
 export interface TransformersEmbeddingConfig {
-  endpoint: string;
-  model?: string;
-  apiKey?: string;
+  model: string;
   dims: number;
+  cacheDir?: string;
 }
 
 export interface ApiEmbeddingConfig {
@@ -33,10 +42,8 @@ export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
 };
 
 export const DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG: TransformersEmbeddingConfig = {
-  endpoint: 'http://localhost:8080/embed',
-  model: DEFAULT_EMBEDDING_CONFIG.model,
-  apiKey: undefined,
-  dims: DEFAULT_EMBEDDING_CONFIG.dims,
+  model: 'Xenova/all-MiniLM-L6-v2',
+  dims: 384,
 };
 
 export const DEFAULT_API_EMBEDDING_CONFIG: ApiEmbeddingConfig = {
@@ -192,19 +199,25 @@ export class OllamaEmbeddingProvider extends HttpEmbeddingProvider {
   }
 }
 
-export class TransformersEmbeddingProvider extends HttpEmbeddingProvider {
+/**
+ * In-process embedding provider using @huggingface/transformers (ONNX Runtime).
+ * Models are auto-downloaded on first use and cached to disk.
+ * The pipeline is lazily initialized to avoid blocking startup.
+ */
+export class TransformersEmbeddingProvider implements EmbeddingRuntimeProvider {
   readonly kind = 'transformers' as const;
   private readonly config: TransformersEmbeddingConfig;
+  private pipelineInstance: FeatureExtractionPipelineType | null = null;
+  private initPromise: Promise<FeatureExtractionPipelineType> | null = null;
+  private readonly log = createComponentLogger('TransformersEmbedding');
 
   constructor(config?: Partial<TransformersEmbeddingConfig>) {
-    super();
     const merged = { ...DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG, ...config };
-    const model = merged.model?.trim();
+    const model = (merged.model ?? DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.model).trim();
     this.config = {
-      endpoint: (merged.endpoint ?? DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.endpoint).trim(),
-      model: model && model.length > 0 ? model : undefined,
-      apiKey: merged.apiKey?.trim(),
+      model: model.length > 0 ? model : DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.model,
       dims: merged.dims ?? DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.dims,
+      cacheDir: merged.cacheDir?.trim() || undefined,
     };
   }
 
@@ -212,33 +225,68 @@ export class TransformersEmbeddingProvider extends HttpEmbeddingProvider {
     return this.config.dims;
   }
 
-  protected async embedInternal(texts: string[], options: EmbedOptions): Promise<Float32Array[]> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.config.apiKey) {
-      headers.Authorization = `Bearer ${this.config.apiKey}`;
+  private async getPipeline(): Promise<FeatureExtractionPipelineType> {
+    if (this.pipelineInstance) return this.pipelineInstance;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = (async () => {
+      this.log.info(`Loading transformers.js model: ${this.config.model}`);
+      const { pipeline, env } = await import('@huggingface/transformers');
+
+      if (this.config.cacheDir) {
+        env.cacheDir = this.config.cacheDir;
+      }
+
+      const extractor = await pipeline('feature-extraction', this.config.model, {
+        dtype: 'fp32',
+      });
+
+      this.pipelineInstance = extractor as unknown as FeatureExtractionPipelineType;
+      this.log.info(`Model loaded: ${this.config.model}`);
+      return this.pipelineInstance;
+    })();
+
+    try {
+      return await this.initPromise;
+    } catch (err) {
+      // Allow retry on next call if init fails
+      this.initPromise = null;
+      throw err;
+    }
+  }
+
+  async embed(text: string, options: EmbedOptions = {}): Promise<Float32Array> {
+    const results = await this.embedBatch([text], options);
+    return results[0];
+  }
+
+  async embedBatch(texts: string[], options: EmbedOptions = {}): Promise<Float32Array[]> {
+    if (texts.length === 0) return [];
+
+    if (options.signal?.aborted) {
+      throw new DOMException('Embedding aborted', 'AbortError');
     }
 
-    const payload: Record<string, unknown> = {
-      inputs: texts,
-    };
-    if (this.config.model) {
-      payload.model = this.config.model;
+    const extractor = await this.getPipeline();
+
+    const output = await extractor(texts, { pooling: 'mean', normalize: true });
+
+    // output is a Tensor with shape [N, D] and data as a flat typed array
+    const tensorData = output.data as Float32Array;
+    const embeddingDim = output.dims[1];
+    const count = output.dims[0];
+
+    if (count !== texts.length) {
+      throw new Error(
+        `transformers embedding response count mismatch: expected ${texts.length}, got ${count}`,
+      );
     }
 
-    const response = await fetch(this.config.endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Transformers embedding error ${response.status}: ${body}`);
+    const results: Float32Array[] = [];
+    for (let i = 0; i < count; i++) {
+      results.push(new Float32Array(tensorData.buffer, tensorData.byteOffset + i * embeddingDim * 4, embeddingDim));
     }
-
-    const json = await response.json() as unknown;
-    return toFloat32Embeddings(json);
+    return results;
   }
 }
 
@@ -317,17 +365,27 @@ function resolveOllamaProvider(env: NodeJS.ProcessEnv): OllamaEmbeddingProvider 
 }
 
 function resolveTransformersProvider(env: NodeJS.ProcessEnv): TransformersEmbeddingProvider {
+  const log = createComponentLogger('TransformersEmbedding');
+
+  // Deprecation warnings for old HTTP-based env vars
+  if (env.TRANSFORMERS_EMBEDDING_URL || env.TRANSFORMERS_API_KEY) {
+    log.warn(
+      'TRANSFORMERS_EMBEDDING_URL and TRANSFORMERS_API_KEY are deprecated. ' +
+      'TransformersEmbeddingProvider now runs in-process via @huggingface/transformers. ' +
+      'Use TRANSFORMERS_MODEL and TRANSFORMERS_CACHE_DIR instead.',
+    );
+  }
+
   const dims = parsePositiveInt(env.TRANSFORMERS_EMBEDDING_DIMS)
     ?? parsePositiveInt(env.EMBEDDING_DIMS);
+  const model = env.TRANSFORMERS_MODEL
+    ?? env.TRANSFORMERS_EMBEDDING_MODEL
+    ?? env.EMBEDDING_MODEL;
+
   return new TransformersEmbeddingProvider({
-    ...(env.TRANSFORMERS_EMBEDDING_URL ? { endpoint: env.TRANSFORMERS_EMBEDDING_URL } : {}),
-    ...(
-      env.TRANSFORMERS_EMBEDDING_MODEL || env.EMBEDDING_MODEL
-        ? { model: env.TRANSFORMERS_EMBEDDING_MODEL ?? env.EMBEDDING_MODEL }
-        : {}
-    ),
-    ...(env.TRANSFORMERS_API_KEY ? { apiKey: env.TRANSFORMERS_API_KEY } : {}),
+    ...(model ? { model } : {}),
     ...(dims ? { dims } : {}),
+    ...(env.TRANSFORMERS_CACHE_DIR ? { cacheDir: env.TRANSFORMERS_CACHE_DIR } : {}),
   });
 }
 

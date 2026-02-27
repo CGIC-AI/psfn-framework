@@ -1,11 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EmbeddingProvider,
+  TransformersEmbeddingProvider,
   createEmbeddingProviderFromEnv,
 } from './embedding.js';
 
 const fetchMock = vi.fn();
 const originalEnv = { ...process.env };
+
+// Mock for @huggingface/transformers
+const mockExtractor = vi.fn();
+const mockPipeline = vi.fn();
+const mockEnv = { cacheDir: './.cache' };
+
+vi.mock('@huggingface/transformers', () => ({
+  pipeline: (...args: unknown[]) => mockPipeline(...args),
+  env: mockEnv,
+}));
 
 function restoreEnv(): void {
   for (const key of Object.keys(process.env)) {
@@ -37,6 +48,9 @@ describe('embedding providers', () => {
     restoreEnv();
     vi.stubGlobal('fetch', fetchMock);
     fetchMock.mockReset();
+    mockPipeline.mockReset();
+    mockExtractor.mockReset();
+    mockEnv.cacheDir = './.cache';
   });
 
   afterEach(() => {
@@ -97,16 +111,18 @@ describe('embedding providers', () => {
     });
   });
 
-  it('selects transformers provider and sends transformer payload', async () => {
+  it('selects transformers provider and runs in-process inference', async () => {
     process.env.EMBEDDING_PROVIDER = 'transformers';
-    process.env.TRANSFORMERS_EMBEDDING_URL = 'http://localhost:8080/embed';
-    process.env.TRANSFORMERS_EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2';
+    process.env.TRANSFORMERS_MODEL = 'Xenova/all-MiniLM-L6-v2';
     process.env.TRANSFORMERS_EMBEDDING_DIMS = '2';
-    process.env.TRANSFORMERS_API_KEY = 'transformers-key';
-    fetchMock.mockResolvedValue(okJson([
-      [0.5, 0.6],
-      [0.7, 0.8],
-    ]));
+
+    // Mock pipeline: returns a callable extractor
+    const tensorData = new Float32Array([0.5, 0.6, 0.7, 0.8]);
+    mockExtractor.mockResolvedValue({
+      data: tensorData,
+      dims: [2, 2],
+    });
+    mockPipeline.mockResolvedValue(mockExtractor);
 
     const provider = createEmbeddingProviderFromEnv();
 
@@ -114,20 +130,96 @@ describe('embedding providers', () => {
     expect(provider.dims).toBe(2);
 
     const vectors = await provider.embedBatch(['alpha', 'beta']);
-    expect(vectors).toEqual([
-      new Float32Array([0.5, 0.6]),
-      new Float32Array([0.7, 0.8]),
-    ]);
+    expect(vectors[0]).toEqual(new Float32Array([0.5, 0.6]));
+    expect(vectors[1]).toEqual(new Float32Array([0.7, 0.8]));
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('http://localhost:8080/embed');
-    expect(init.method).toBe('POST');
-    const headers = init.headers as Record<string, string>;
-    expect(headers.Authorization).toBe('Bearer transformers-key');
-    expect(JSON.parse(String(init.body))).toEqual({
-      inputs: ['alpha', 'beta'],
-      model: 'sentence-transformers/all-MiniLM-L6-v2',
+    // Should NOT have called fetch — this is in-process
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Should have called pipeline() for initialization
+    expect(mockPipeline).toHaveBeenCalledWith(
+      'feature-extraction',
+      'Xenova/all-MiniLM-L6-v2',
+      expect.objectContaining({ dtype: 'fp32' }),
+    );
+
+    // Should have called the extractor with pooling and normalize
+    expect(mockExtractor).toHaveBeenCalledWith(
+      ['alpha', 'beta'],
+      { pooling: 'mean', normalize: true },
+    );
+  });
+
+  it('lazily initializes the pipeline on first embed call', async () => {
+    const tensorData = new Float32Array([1, 2, 3]);
+    mockExtractor.mockResolvedValue({
+      data: tensorData,
+      dims: [1, 3],
     });
+    mockPipeline.mockResolvedValue(mockExtractor);
+
+    const provider = new TransformersEmbeddingProvider({ model: 'test-model', dims: 3 });
+
+    // Pipeline not created yet
+    expect(mockPipeline).not.toHaveBeenCalled();
+
+    // First call initializes
+    await provider.embed('hello');
+    expect(mockPipeline).toHaveBeenCalledTimes(1);
+
+    // Second call reuses the cached pipeline
+    await provider.embed('world');
+    expect(mockPipeline).toHaveBeenCalledTimes(1);
+    expect(mockExtractor).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses TRANSFORMERS_MODEL env var for model name', async () => {
+    process.env.EMBEDDING_PROVIDER = 'transformers';
+    process.env.TRANSFORMERS_MODEL = 'custom/my-embedding-model';
+
+    const tensorData = new Float32Array([1]);
+    mockExtractor.mockResolvedValue({ data: tensorData, dims: [1, 1] });
+    mockPipeline.mockResolvedValue(mockExtractor);
+
+    const provider = createEmbeddingProviderFromEnv();
+    await provider.embed('test');
+
+    expect(mockPipeline).toHaveBeenCalledWith(
+      'feature-extraction',
+      'custom/my-embedding-model',
+      expect.any(Object),
+    );
+  });
+
+  it('sets cacheDir from TRANSFORMERS_CACHE_DIR env var', async () => {
+    process.env.EMBEDDING_PROVIDER = 'transformers';
+    process.env.TRANSFORMERS_CACHE_DIR = '/tmp/hf-cache';
+    mockEnv.cacheDir = './.cache'; // Reset
+
+    const tensorData = new Float32Array([1]);
+    mockExtractor.mockResolvedValue({ data: tensorData, dims: [1, 1] });
+    mockPipeline.mockResolvedValue(mockExtractor);
+
+    const provider = createEmbeddingProviderFromEnv();
+    await provider.embed('test');
+
+    expect(mockEnv.cacheDir).toBe('/tmp/hf-cache');
+  });
+
+  it('returns empty array for empty batch', async () => {
+    const provider = new TransformersEmbeddingProvider({ dims: 3 });
+    const result = await provider.embedBatch([]);
+    expect(result).toEqual([]);
+    expect(mockPipeline).not.toHaveBeenCalled();
+  });
+
+  it('throws on AbortSignal already aborted', async () => {
+    const provider = new TransformersEmbeddingProvider({ dims: 3 });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(provider.embed('test', { signal: controller.signal }))
+      .rejects.toThrow('Embedding aborted');
   });
 
   it('selects api provider and parses openai-style responses', async () => {

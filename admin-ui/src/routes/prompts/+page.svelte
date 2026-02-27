@@ -137,7 +137,8 @@
       description: '', personality: '', system_prompt: '',
       post_history_instructions: '', scenario: '', mes_example: '', first_mes: '',
     };
-    const lines = content.replace(/\r\n?/g, '\n').split('\n');
+    if (!content) return { sections, isStructured: false };
+    const lines = (content ?? '').replace(/\r\n?/g, '\n').split('\n');
     const hasHeadings = lines.some(l => /^###\s+[a-z_]+\s*$/.test(l.trim()));
     if (!hasHeadings) {
       sections.system_prompt = content.trim();
@@ -209,8 +210,8 @@
   onMount(async () => {
     try {
       const data = await listPrompts();
-      layers = data.layers;
-      staticPrompts = data.staticPrompts;
+      layers = data?.layers ?? [];
+      staticPrompts = data?.staticPrompts ?? [];
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load prompts';
     } finally {
@@ -220,8 +221,8 @@
 
   async function refreshList() {
     const data = await listPrompts();
-    layers = data.layers;
-    staticPrompts = data.staticPrompts;
+    layers = data?.layers ?? [];
+    staticPrompts = data?.staticPrompts ?? [];
   }
 
   // ── Layer actions ──
@@ -370,6 +371,15 @@
   function truncate(text: string, len: number): string {
     if (text.length <= len) return text;
     return text.slice(0, len) + '...';
+  }
+
+  // Backend static prompts use `text` not `content`, and may lack `name`
+  function spContent(sp: PromptRegistryEntry): string {
+    return sp.content ?? sp.text ?? '';
+  }
+
+  function spName(sp: PromptRegistryEntry): string {
+    return sp.name ?? sp.key ?? 'unnamed';
   }
 </script>
 
@@ -576,15 +586,15 @@
                         </div>
                         <div>
                           <span class="text-shadow-600">Updated</span>
-                          <p class="text-shadow-800 mt-0.5">{new Date(dl.updatedAt).toLocaleString()}</p>
+                          <p class="text-shadow-800 mt-0.5">{dl.updatedAt ? new Date(dl.updatedAt).toLocaleString() : 'unknown'}</p>
                         </div>
                         <div>
                           <span class="text-shadow-600">By</span>
-                          <p class="text-shadow-800 mt-0.5">{dl.updatedBy}</p>
+                          <p class="text-shadow-800 mt-0.5">{dl.updatedBy ?? 'unknown'}</p>
                         </div>
                         <div>
                           <span class="text-shadow-600">Checksum</span>
-                          <p class="font-mono text-shadow-700 mt-0.5">{dl.checksum.slice(0, 12)}</p>
+                          <p class="font-mono text-shadow-700 mt-0.5">{dl.checksum ? dl.checksum.slice(0, 12) : 'n/a'}</p>
                         </div>
                         <div>
                           <span class="text-shadow-600">Enabled</span>
@@ -742,8 +752,8 @@
                               Protected
                             </div>
                           {/if}
-                          <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-100 p-3 rounded-lg max-h-72 overflow-y-auto leading-relaxed {locked ? 'border border-bark-300' : ''}">{dl.content}</pre>
-                          <span class="block text-sm text-shadow-600 mt-1 text-right">{dl.content.length} characters</span>
+                          <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-100 p-3 rounded-lg max-h-72 overflow-y-auto leading-relaxed {locked ? 'border border-bark-300' : ''}">{dl.content ?? ''}</pre>
+                          <span class="block text-sm text-shadow-600 mt-1 text-right">{(dl.content ?? '').length} characters</span>
                         </div>
                       {/if}
 
@@ -753,7 +763,7 @@
                     </div>
 
                     <!-- Version history + rollback -->
-                    {#if detailData.layerHistory && detailData.layerHistory.length > 0}
+                    {#if detailData?.layerHistory && detailData.layerHistory.length > 0}
                       <div>
                         <span class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Version History</span>
                         <p class="text-sm text-shadow-600 mt-0.5 mb-2">{detailData.layerHistory.length} version{detailData.layerHistory.length === 1 ? '' : 's'}</p>
@@ -762,8 +772,8 @@
                             {@const isCurrent = entry.version === dl.version}
                             <div class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm {isCurrent ? 'bg-gold-50 border border-gold-300' : 'bg-bark-100'}">
                               <span class="font-mono font-medium {isCurrent ? 'text-gold-700' : 'text-shadow-800'}">v{entry.version}</span>
-                              <span class="text-shadow-700">{new Date(entry.timestamp).toLocaleString()}</span>
-                              <span class="text-shadow-600">{entry.updatedBy}</span>
+                              <span class="text-shadow-700">{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : 'unknown'}</span>
+                              <span class="text-shadow-600">{entry.updatedBy ?? 'unknown'}</span>
                               {#if entry.reason}
                                 <span class="text-shadow-600 italic truncate max-w-48">{entry.reason}</span>
                               {/if}
@@ -822,13 +832,13 @@
                 <span class="px-2 py-0.5 rounded text-sm font-bold uppercase tracking-wide bg-bark-200 text-shadow-700">
                   static
                 </span>
-                <span class="font-serif font-medium text-sm text-shadow-800">{sp.name}</span>
+                <span class="font-serif font-medium text-sm text-shadow-800">{spName(sp)}</span>
                 <span class="text-sm font-mono text-shadow-600">{sp.key}</span>
                 <span class="flex-1"></span>
                 {#if sp.category}
                   <span class="text-sm px-1.5 py-0.5 rounded-full bg-bark-200 text-shadow-700">{sp.category}</span>
                 {/if}
-                <span class="text-sm text-shadow-600">v{sp.version}</span>
+                <span class="text-sm text-shadow-600">v{sp.version ?? 1}</span>
                 <svg class="w-4 h-4 text-shadow-600 transition-transform {isExpanded ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M19 9l-7 7-7-7" />
                 </svg>
@@ -847,8 +857,8 @@
                       <span class="text-shadow-600">{sp.description}</span>
                     {/if}
                   </div>
-                  <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-100 p-3 rounded-lg max-h-64 overflow-y-auto leading-relaxed">{sp.content}</pre>
-                  <span class="block text-sm text-shadow-600 text-right">{sp.content.length} characters</span>
+                  <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-100 p-3 rounded-lg max-h-64 overflow-y-auto leading-relaxed">{spContent(sp)}</pre>
+                  <span class="block text-sm text-shadow-600 text-right">{spContent(sp).length} characters</span>
                 </div>
               {/if}
             </div>

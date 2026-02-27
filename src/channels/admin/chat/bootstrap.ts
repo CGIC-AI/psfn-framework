@@ -19,6 +19,11 @@ import {
 
 const CHAT_COMPLETIONS_PATH = '/v1/chat/completions';
 const VOICE_WEBSOCKET_PATH = '/v1/voice/ws';
+const OPENAI_API_BASE_PATH = '/v1';
+const PI_WEB_UI_MODULE_ROUTE = '/static/pi-web-ui/index.js';
+const PI_WEB_UI_STYLESHEET_ROUTE = '/static/pi-web-ui/app.css';
+const DEFAULT_RUNTIME_MODEL_ID = 'psfn-admin-chat';
+const DEFAULT_RUNTIME_MODEL_NAME = 'PSFN Garden Chat';
 const SYNTHETIC_CONTACT_ID = 'admin.synthetic.default';
 const SYNTHETIC_DISPLAY_NAME = 'Primary Contact';
 const SYNTHETIC_CHANNEL = 'api';
@@ -184,6 +189,12 @@ export class AdminChatBootstrapService {
     const defaultAuthorId = this.selection.defaultAuthorId ?? selectedIdentity.userId;
     this.selection.defaultAuthorName = defaultAuthorName;
     this.selection.defaultAuthorId = defaultAuthorId;
+    const defaultSessionId = `${selectedIdentity.channel}:${selectedIdentity.userId}`;
+    const apiKey = this.resolveApiKey();
+    const transportHeaders = this.buildTransportHeaders(defaultSessionId, defaultAuthorId, defaultAuthorName);
+    const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, this.apiBaseUrl);
+    const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, this.apiBaseUrl);
+    const openAiBaseUrl = buildAbsoluteAdminChatApiUrl(OPENAI_API_BASE_PATH, this.apiBaseUrl);
 
     return {
       contactOptions: contacts.map(contact => ({
@@ -209,11 +220,27 @@ export class AdminChatBootstrapService {
         selectedLevel: selectedIdentity.privacyLevel,
       },
       api: {
-        chatCompletionsUrl: buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, this.apiBaseUrl),
-        voiceWebSocketUrl: buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, this.apiBaseUrl),
-        apiKey: this.resolveApiKey(),
+        chatCompletionsUrl,
+        voiceWebSocketUrl,
+        apiKey,
       },
-      defaultSessionId: `${selectedIdentity.channel}:${selectedIdentity.userId}`,
+      runtime: {
+        assets: {
+          moduleUrl: PI_WEB_UI_MODULE_ROUTE,
+          stylesheetUrl: PI_WEB_UI_STYLESHEET_ROUTE,
+        },
+        transportHeaders,
+        model: {
+          id: DEFAULT_RUNTIME_MODEL_ID,
+          name: DEFAULT_RUNTIME_MODEL_NAME,
+          provider: 'openai',
+          api: 'openai-completions',
+          baseUrl: openAiBaseUrl,
+          headers: transportHeaders,
+        },
+        apiKey,
+      },
+      defaultSessionId,
       defaultAuthorName,
       defaultAuthorId,
     };
@@ -221,6 +248,18 @@ export class AdminChatBootstrapService {
 
   private resolveApiKey(): string | undefined {
     return this.configuredApiKey ?? normalizeTrimmed(process.env.API_KEY);
+  }
+
+  private buildTransportHeaders(
+    defaultSessionId: string,
+    defaultAuthorId: string,
+    defaultAuthorName: string,
+  ): Record<string, string> {
+    return {
+      'X-Session-ID': defaultSessionId,
+      'X-User-ID': defaultAuthorId,
+      'X-User-Name': defaultAuthorName,
+    };
   }
 
   private withSelectedIdentity(

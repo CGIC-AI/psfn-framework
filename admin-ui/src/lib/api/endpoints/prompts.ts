@@ -1,5 +1,10 @@
 import { apiGet, apiPatch, apiPost } from '$lib/api/client';
-import type { AdminPromptListData, PromptUpdateResult } from '$lib/types';
+import type {
+  AdminPromptListData,
+  AdminPromptDetailData,
+  PromptUpdateResult,
+  PromptDiffResult,
+} from '$lib/types';
 
 export function listPrompts(): Promise<AdminPromptListData> {
   return apiGet<AdminPromptListData>('/api/admin/prompts');
@@ -7,8 +12,8 @@ export function listPrompts(): Promise<AdminPromptListData> {
 
 export function getPromptDetail(
   id: string
-): Promise<{ layer: unknown; history: unknown[] }> {
-  return apiGet<{ layer: unknown; history: unknown[] }>(
+): Promise<AdminPromptDetailData> {
+  return apiGet<AdminPromptDetailData>(
     `/api/admin/prompts/${encodeURIComponent(id)}`
   );
 }
@@ -43,8 +48,8 @@ export function rollbackPrompt(
 
 export function getPromptDiff(
   id: string
-): Promise<{ diff: string }> {
-  return apiGet<{ diff: string }>(
+): Promise<PromptDiffResult> {
+  return apiGet<PromptDiffResult>(
     `/api/admin/prompts/${encodeURIComponent(id)}/diff`
   );
 }

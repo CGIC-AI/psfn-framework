@@ -206,6 +206,7 @@ export class AdminServer implements Lifecycle {
     const staticAssets = [
       { file: 'htmx.min.js', contentType: 'application/javascript' },
       { file: 'sse.js', contentType: 'application/javascript' },
+      { file: 'chat.js', contentType: 'application/javascript' },
       { file: 'chat-debug.js', contentType: 'application/javascript' },
       { file: 'admin.css', contentType: 'text/css; charset=utf-8' },
     ];
@@ -275,6 +276,12 @@ export class AdminServer implements Lifecycle {
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
+    const isLegacyChatRuntimePath = path === '/static/chat.js';
+
+    if (isLegacyChatRuntimePath && this.token && !this.hasRequestAuthCredentials(req)) {
+      this.send404(res, path);
+      return;
+    }
 
     // Skip auth for OPTIONS, static files, and login page
     const skipAuth = req.method === 'OPTIONS' || path.startsWith('/static/') || path === '/login';
@@ -520,8 +527,7 @@ export class AdminServer implements Lifecycle {
 
   private checkUpgradeAuth(req: IncomingMessage, url: URL): boolean {
     if (!this.token) return true;
-    if (hasBearerToken(req, this.token)) return true;
-    if (hasCookieValue(req, 'psfn_token', this.token)) return true;
+    if (this.hasRequestAuthCredentials(req)) return true;
     const queryToken = url.searchParams.get('token') ?? url.searchParams.get('api_key');
     return queryToken === this.token;
   }
@@ -1040,10 +1046,7 @@ export class AdminServer implements Lifecycle {
 
   private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
     if (!this.token) return true;
-    if (hasBearerToken(req, this.token)) {
-      return true;
-    }
-    if (hasCookieValue(req, 'psfn_token', this.token)) {
+    if (this.hasRequestAuthCredentials(req)) {
       return true;
     }
 
@@ -1054,6 +1057,12 @@ export class AdminServer implements Lifecycle {
       sendText(res, 401, 'Unauthorized');
     }
     return false;
+  }
+
+  private hasRequestAuthCredentials(req: IncomingMessage): boolean {
+    if (!this.token) return true;
+    if (hasBearerToken(req, this.token)) return true;
+    return hasCookieValue(req, 'psfn_token', this.token);
   }
 
   private sendHtml(res: ServerResponse, html: string): void {

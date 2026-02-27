@@ -10,6 +10,25 @@ import type {
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
+import type { ScheduledTask } from '../../scheduler/types.js';
+import type { SkillSnapshot } from '../../skills/types.js';
+import type { ConfirmationQueueAdminApi } from './types.js';
+import type { ValuesJournalEntry } from '../../values/store.js';
+
+/** Minimal scheduler interface for JSON API routes. */
+export interface AdminSchedulerApi {
+  listTasks(): ScheduledTask[];
+}
+
+/** Minimal skills runtime interface for JSON API routes. */
+export interface AdminSkillsApi {
+  getSnapshot(): SkillSnapshot;
+}
+
+/** Minimal values journal interface for JSON API routes. */
+export interface AdminValuesJournalApi {
+  list(options?: { limit?: number }): ValuesJournalEntry[];
+}
 
 type RouteParams = Record<string, string>;
 type RouteMatcher = (path: string) => RouteParams | null;
@@ -67,6 +86,10 @@ export function buildAdminApiRoutes(options: {
   settingsService: AdminSettingsService;
   identityService: AdminIdentityService;
   promptsService: AdminPromptsService;
+  scheduler?: AdminSchedulerApi | null;
+  skillsRuntime?: AdminSkillsApi | null;
+  confirmationQueueApi?: ConfirmationQueueAdminApi | null;
+  valuesJournal?: AdminValuesJournalApi | null;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AdminApiRoute[] {
   const {
@@ -77,6 +100,10 @@ export function buildAdminApiRoutes(options: {
     settingsService,
     identityService,
     promptsService,
+    scheduler,
+    skillsRuntime,
+    confirmationQueueApi,
+    valuesJournal,
     withBody,
   } = options;
 
@@ -389,6 +416,130 @@ export function buildAdminApiRoutes(options: {
           }
           sendJson(res, 200, result);
         });
+      },
+    },
+    // ── Scheduler ──
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/scheduler'),
+      handle: (_req, res) => {
+        if (!scheduler) {
+          sendJson(res, 200, { tasks: [] });
+          return;
+        }
+        const tasks = scheduler.listTasks().map(task => ({
+          id: task.id,
+          name: task.name,
+          type: task.type,
+          intervalMs: task.intervalMs,
+          runAt: task.runAt,
+          state: task.state,
+        }));
+        sendJson(res, 200, { tasks });
+      },
+    },
+    // ── Skills ──
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/skills'),
+      handle: (_req, res) => {
+        if (!skillsRuntime) {
+          sendJson(res, 200, { snapshot: null });
+          return;
+        }
+        const snapshot = skillsRuntime.getSnapshot();
+        sendJson(res, 200, { snapshot });
+      },
+    },
+    // ── Confirmations ──
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/confirmations'),
+      handle: (_req, res) => {
+        if (!confirmationQueueApi) {
+          sendJson(res, 200, {
+            entries: [],
+            available: false,
+            message: 'Confirmation queue is unavailable (gateway integration not configured).',
+          });
+          return;
+        }
+        confirmationQueueApi.listConfirmationQueue().then(
+          (result) => {
+            sendJson(res, 200, {
+              entries: result.entries,
+              available: true,
+            });
+          },
+          (error) => {
+            sendJson(res, 200, {
+              entries: [],
+              available: true,
+              message: `Unable to load confirmation queue: ${String(error)}`,
+            });
+          },
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/confirmations/resolve'),
+      handle: (req, res) => {
+        if (!confirmationQueueApi) {
+          sendJson(res, 400, { ok: false, message: 'Confirmation queue is unavailable' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { ok: false, message: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const id = (typeof payload.id === 'string' ? payload.id : '').trim();
+          const decision = (typeof payload.decision === 'string' ? payload.decision : '').trim();
+
+          if (!id) {
+            sendJson(res, 400, { ok: false, message: 'Confirmation ID is required' });
+            return;
+          }
+          if (decision !== 'approve' && decision !== 'deny' && decision !== 'modify') {
+            sendJson(res, 400, { ok: false, message: 'Invalid decision (must be approve, deny, or modify)' });
+            return;
+          }
+
+          const resolveParams: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> } = { id, decision };
+          if (decision === 'modify' && payload.modifiedParams && typeof payload.modifiedParams === 'object') {
+            resolveParams.modifiedParams = payload.modifiedParams as Record<string, unknown>;
+          }
+
+          confirmationQueueApi!.resolveConfirmationQueue(resolveParams).then(
+            (result) => {
+              sendJson(res, 200, {
+                ok: result.status === 'approved' || result.status === 'modified',
+                message: result.message,
+                status: result.status,
+                executed: result.executed,
+              });
+            },
+            (error) => {
+              sendJson(res, 500, { ok: false, message: `Confirmation resolve failed: ${String(error)}` });
+            },
+          );
+        });
+      },
+    },
+    // ── Values Timeline ──
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/values'),
+      handle: (_req, res) => {
+        if (!valuesJournal) {
+          sendJson(res, 200, { entries: [] });
+          return;
+        }
+        const entries = valuesJournal.list({ limit: 250 });
+        sendJson(res, 200, { entries });
       },
     },
   ];

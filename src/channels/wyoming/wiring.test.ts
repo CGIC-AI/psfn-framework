@@ -4,6 +4,10 @@ import { WyomingTcpServer } from './server.js';
 import { WyomingRuntime } from './runtime.js';
 import { createWyomingServiceRegistry } from './services/index.js';
 import { createWyomingHandleServiceAdapter } from './services/handle.js';
+import { createWyomingAsrServiceAdapter } from './services/asr.js';
+import { createWyomingTtsServiceAdapter } from './services/tts.js';
+import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
+import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
 
 /**
  * Tests that verify Wyoming voice bridge production wiring:
@@ -85,6 +89,135 @@ describe('Wyoming production wiring', () => {
     expect(registry.services[0]!.supports).toContain('handle');
     expect(registry.services[0]!.supports).toContain('transcript');
     expect(registry.services[0]!.supports).toContain('text');
+  });
+
+  it('service registry advertises all 3 families when ASR and TTS adapters are registered', () => {
+    const handleAdapter = createWyomingHandleServiceAdapter({
+      handleMessage: vi.fn().mockResolvedValue({
+        content: '',
+        channelId: '',
+        metadata: { model: '', inputTokens: 0, outputTokens: 0, durationMs: 0 },
+      }),
+    });
+
+    const mockSttConnector: StreamingSttConnector = {
+      id: 'deepgram',
+      startStream: vi.fn(),
+    };
+    const asrAdapter = createWyomingAsrServiceAdapter({ stt: mockSttConnector });
+
+    const mockTtsConnector: StreamingTtsConnector = {
+      id: 'elevenlabs',
+      synthesizeStream: vi.fn(),
+      synthesizeBuffer: vi.fn(),
+    };
+    const ttsAdapter = createWyomingTtsServiceAdapter({ tts: mockTtsConnector });
+
+    const registry = createWyomingServiceRegistry([handleAdapter, asrAdapter, ttsAdapter]);
+
+    expect(registry.services).toHaveLength(3);
+    const serviceNames = registry.services.map((s) => s.name);
+    expect(serviceNames).toContain('handle');
+    expect(serviceNames).toContain('asr');
+    expect(serviceNames).toContain('tts');
+  });
+
+  it('ASR adapter service info contains expected event types', () => {
+    const mockSttConnector: StreamingSttConnector = {
+      id: 'deepgram',
+      startStream: vi.fn(),
+    };
+    const asrAdapter = createWyomingAsrServiceAdapter({ stt: mockSttConnector });
+
+    expect(asrAdapter.family).toBe('asr');
+    expect(asrAdapter.service.name).toBe('asr');
+    expect(asrAdapter.eventTypes).toContain('transcribe');
+    expect(asrAdapter.eventTypes).toContain('audio-chunk');
+    expect(asrAdapter.eventTypes).toContain('audio-stop');
+  });
+
+  it('TTS adapter service info contains expected event types', () => {
+    const mockTtsConnector: StreamingTtsConnector = {
+      id: 'echo',
+      synthesizeStream: vi.fn(),
+      synthesizeBuffer: vi.fn(),
+    };
+    const ttsAdapter = createWyomingTtsServiceAdapter({ tts: mockTtsConnector });
+
+    expect(ttsAdapter.family).toBe('tts');
+    expect(ttsAdapter.service.name).toBe('tts');
+    expect(ttsAdapter.eventTypes).toContain('synthesize');
+    expect(ttsAdapter.eventTypes).toContain('synthesize-start');
+    expect(ttsAdapter.eventTypes).toContain('synthesize-stop');
+  });
+
+  it('registry dispatch routes to correct adapter by event type', async () => {
+    const handleAdapter = createWyomingHandleServiceAdapter({
+      handleMessage: vi.fn().mockResolvedValue({
+        content: 'test-response',
+        channelId: 'test-ch',
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 0 },
+      }),
+    });
+
+    const mockSttConnector: StreamingSttConnector = {
+      id: 'deepgram',
+      startStream: vi.fn(),
+    };
+    const asrAdapter = createWyomingAsrServiceAdapter({ stt: mockSttConnector });
+
+    const mockTtsConnector: StreamingTtsConnector = {
+      id: 'elevenlabs',
+      synthesizeStream: vi.fn(),
+      synthesizeBuffer: vi.fn(),
+    };
+    const ttsAdapter = createWyomingTtsServiceAdapter({ tts: mockTtsConnector });
+
+    const registry = createWyomingServiceRegistry([handleAdapter, asrAdapter, ttsAdapter]);
+
+    // Handle event should be routed to handle adapter
+    const handleResult = await registry.dispatch({
+      frame: {
+        type: 'handle',
+        data: {
+          session_id: 's1',
+          text: 'hello',
+          site_id: 'ha-main',
+          satellite_id: 'test-sat',
+        },
+      },
+      sessionId: 's1',
+      transportSession: { id: 'conn1', connectionId: 'conn1', openedAtMs: 0, lastSeenAtMs: 0 },
+    });
+    expect(handleResult).toBeDefined();
+
+    // Synthesize event should be routed to tts adapter
+    const ttsResult = await registry.dispatch({
+      frame: {
+        type: 'synthesize',
+        data: {
+          session_id: 's1',
+          text: 'say something',
+        },
+      },
+      sessionId: 's1',
+      transportSession: { id: 'conn1', connectionId: 'conn1', openedAtMs: 0, lastSeenAtMs: 0 },
+    });
+    expect(ttsResult).toBeDefined();
+
+    // Transcribe event should be routed to asr adapter
+    const asrResult = await registry.dispatch({
+      frame: {
+        type: 'transcribe',
+        data: {
+          session_id: 's1',
+          sample_rate: 16000,
+        },
+      },
+      sessionId: 's1',
+      transportSession: { id: 'conn1', connectionId: 'conn1', openedAtMs: 0, lastSeenAtMs: 0 },
+    });
+    expect(asrResult).toBeDefined();
   });
 
   it('does NOT start Wyoming when config is disabled', () => {

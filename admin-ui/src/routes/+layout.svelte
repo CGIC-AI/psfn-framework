@@ -72,7 +72,7 @@
           <h1 class="text-lg font-serif font-bold text-shadow-800 dark:text-bark-200">
             Purrsephone's Garden
           </h1>
-          <p class="text-xs text-shadow-400 dark:text-shadow-500 mt-0.5">Substrate Admin</p>
+          <p class="text-xs text-shadow-400 dark:text-bark-500 mt-0.5">Substrate Admin</p>
         </a>
       </div>
 
@@ -84,7 +84,7 @@
             class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors
               {isActive(item.path)
                 ? 'bg-gold-50 dark:bg-gold-900/20 text-gold-800 dark:text-gold-300 font-medium filigree-border'
-                : 'text-shadow-600 dark:text-shadow-400 hover:bg-bark-100 dark:hover:bg-shadow-800 hover:text-shadow-900 dark:hover:text-bark-200'
+                : 'text-shadow-600 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-800 hover:text-shadow-900 dark:hover:text-bark-200'
               }"
             onclick={() => sidebarOpen = false}
           >
@@ -93,7 +93,7 @@
             </svg>
             <span class="flex flex-col leading-tight">
               <span class="font-serif text-[13px]">{item.gardenName}</span>
-              <span class="text-[10px] text-shadow-400 dark:text-shadow-500">{item.techName}</span>
+              <span class="text-[10px] text-shadow-400 dark:text-bark-500">{item.techName}</span>
             </span>
           </a>
         {/each}
@@ -101,14 +101,14 @@
 
       <!-- Footer -->
       <div class="px-4 py-3 border-t border-bark-200 dark:border-shadow-700 flex items-center justify-between">
-        <div class="flex items-center gap-2 text-xs text-shadow-400 dark:text-shadow-500">
+        <div class="flex items-center gap-2 text-xs text-shadow-400 dark:text-bark-500">
           <span class="w-2 h-2 rounded-full {isConnected() ? 'bg-moss-400' : 'bg-wilt-400'}"></span>
           {isConnected() ? 'Connected' : 'Disconnected'}
         </div>
 
         <button
           onclick={toggleTheme}
-          class="p-1.5 rounded-md hover:bg-bark-100 dark:hover:bg-shadow-800 text-shadow-400 dark:text-shadow-500 transition-colors"
+          class="p-1.5 rounded-md hover:bg-bark-100 dark:hover:bg-shadow-800 text-shadow-400 dark:text-bark-500 transition-colors"
           title="Toggle dark mode"
         >
           {#if isDark()}
@@ -129,22 +129,22 @@
           onclick={() => sidebarOpen = !sidebarOpen}
           aria-label="Toggle sidebar"
         >
-          <svg class="w-5 h-5 text-shadow-600 dark:text-shadow-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+          <svg class="w-5 h-5 text-shadow-600 dark:text-bark-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
         </button>
 
-        <nav class="text-sm text-shadow-500 dark:text-shadow-400">
+        <nav class="text-sm text-shadow-500 dark:text-bark-400">
           {#each NAV_ITEMS as item}
             {#if isActive(item.path)}
               <span class="font-serif text-shadow-800 dark:text-bark-200">{item.gardenName}</span>
-              <span class="text-shadow-300 dark:text-shadow-600 mx-1">/</span>
-              <span class="text-shadow-400 dark:text-shadow-500">{item.techName}</span>
+              <span class="text-bark-400 dark:text-bark-500 mx-1">/</span>
+              <span class="text-shadow-400 dark:text-bark-500">{item.techName}</span>
             {/if}
           {/each}
         </nav>
 
         <div class="flex-1"></div>
 
-        <a href="/" target="_blank" class="text-xs text-shadow-400 dark:text-shadow-500 hover:text-gold-600 dark:hover:text-gold-400 transition-colors">
+        <a href="/" target="_blank" class="text-xs text-shadow-400 dark:text-bark-500 hover:text-gold-600 dark:hover:text-gold-400 transition-colors">
           Classic UI
         </a>
       </header>

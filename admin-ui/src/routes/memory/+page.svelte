@@ -114,7 +114,7 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Roots</h1>
-      <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">Memory browser — {data?.pagination.total ?? 0} memories</p>
+      <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Memory browser — {data?.pagination.total ?? 0} memories</p>
     </div>
   </div>
 
@@ -186,7 +186,7 @@
             </div>
             <div class="flex-1 min-w-0">
               <p class="text-sm text-shadow-800 dark:text-bark-200 leading-relaxed">{truncate(memory.text, 200)}</p>
-              <div class="flex items-center gap-4 mt-2 text-[11px] text-shadow-400 dark:text-shadow-500">
+              <div class="flex items-center gap-4 mt-2 text-[11px] text-shadow-400 dark:text-bark-500">
                 <span>Salience: {(memory.salience * 100).toFixed(0)}%</span>
                 <span>Importance: {(memory.importance * 100).toFixed(0)}%</span>
                 <span>{formatDate(memory.extractedAt)}</span>
@@ -210,46 +210,46 @@
               <div class="text-sm text-shadow-800 dark:text-bark-200 whitespace-pre-wrap">{memory.text}</div>
               <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                 <div>
-                  <span class="text-shadow-400 dark:text-shadow-500">ID</span>
-                  <p class="font-mono text-shadow-600 dark:text-shadow-400 break-all">{memory.id}</p>
+                  <span class="text-shadow-400 dark:text-bark-500">ID</span>
+                  <p class="font-mono text-shadow-600 dark:text-bark-400 break-all">{memory.id}</p>
                 </div>
                 <div>
-                  <span class="text-shadow-400 dark:text-shadow-500">Source</span>
-                  <p class="text-shadow-600 dark:text-shadow-400">{memory.sourceRef}</p>
+                  <span class="text-shadow-400 dark:text-bark-500">Source</span>
+                  <p class="text-shadow-600 dark:text-bark-400">{memory.sourceRef}</p>
                 </div>
                 <div>
-                  <span class="text-shadow-400 dark:text-shadow-500">Confidence</span>
+                  <span class="text-shadow-400 dark:text-bark-500">Confidence</span>
                   <p>{(memory.confidence * 100).toFixed(0)}%</p>
                 </div>
                 <div>
-                  <span class="text-shadow-400 dark:text-shadow-500">Emotional Valence</span>
+                  <span class="text-shadow-400 dark:text-bark-500">Emotional Valence</span>
                   <p>{memory.emotionalValence.toFixed(2)}</p>
                 </div>
                 <div>
-                  <span class="text-shadow-400 dark:text-shadow-500">Access Count</span>
+                  <span class="text-shadow-400 dark:text-bark-500">Access Count</span>
                   <p>{memory.accessCount}</p>
                 </div>
                 <div>
-                  <span class="text-shadow-400 dark:text-shadow-500">Last Accessed</span>
+                  <span class="text-shadow-400 dark:text-bark-500">Last Accessed</span>
                   <p>{formatDate(memory.lastAccessed)}</p>
                 </div>
                 <div>
-                  <span class="text-shadow-400 dark:text-shadow-500">Retention</span>
+                  <span class="text-shadow-400 dark:text-bark-500">Retention</span>
                   <p>{memory.retentionClass ?? 'standard'}</p>
                 </div>
                 {#if memory.contactId}
                   <div>
-                    <span class="text-shadow-400 dark:text-shadow-500">Contact</span>
+                    <span class="text-shadow-400 dark:text-bark-500">Contact</span>
                     <p>{data.contactsById[memory.contactId]?.displayName ?? memory.contactId}</p>
                   </div>
                 {/if}
               </div>
               {#if memory.tags.length > 0}
                 <div>
-                  <span class="text-xs text-shadow-400 dark:text-shadow-500">Tags</span>
+                  <span class="text-xs text-shadow-400 dark:text-bark-500">Tags</span>
                   <div class="flex flex-wrap gap-1 mt-1">
                     {#each memory.tags as tag}
-                      <span class="bg-bark-100 dark:bg-shadow-800 px-2 py-0.5 rounded text-xs text-shadow-600 dark:text-shadow-400">{tag}</span>
+                      <span class="bg-bark-100 dark:bg-shadow-800 px-2 py-0.5 rounded text-xs text-shadow-600 dark:text-bark-400">{tag}</span>
                     {/each}
                   </div>
                 </div>
@@ -267,7 +267,7 @@
         </button>
       {:else}
         <div class="card-garden p-8 text-center">
-          <p class="text-shadow-400 dark:text-shadow-500 italic">No memories found</p>
+          <p class="text-shadow-400 dark:text-bark-500 italic">No memories found</p>
         </div>
       {/each}
     </div>
@@ -278,17 +278,17 @@
         <button
           onclick={prevPage}
           disabled={!data.pagination.hasPrevious}
-          class="px-3 py-1.5 text-sm text-shadow-600 dark:text-shadow-400 hover:bg-bark-100 dark:hover:bg-shadow-800 rounded-lg disabled:opacity-30 transition-colors"
+          class="px-3 py-1.5 text-sm text-shadow-600 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-800 rounded-lg disabled:opacity-30 transition-colors"
         >
           Previous
         </button>
-        <span class="text-xs text-shadow-400 dark:text-shadow-500">
+        <span class="text-xs text-shadow-400 dark:text-bark-500">
           {currentOffset + 1}–{Math.min(currentOffset + pageSize, data.pagination.total)} of {data.pagination.total}
         </span>
         <button
           onclick={nextPage}
           disabled={!data.pagination.hasNext}
-          class="px-3 py-1.5 text-sm text-shadow-600 dark:text-shadow-400 hover:bg-bark-100 dark:hover:bg-shadow-800 rounded-lg disabled:opacity-30 transition-colors"
+          class="px-3 py-1.5 text-sm text-shadow-600 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-800 rounded-lg disabled:opacity-30 transition-colors"
         >
           Next
         </button>

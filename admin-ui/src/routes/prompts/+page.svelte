@@ -47,7 +47,7 @@
 <div class="space-y-4">
   <div>
     <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Soil</h1>
-    <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">Layered prompt stack — {layers.length} layers</p>
+    <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">Layered prompt stack — {layers.length} layers</p>
   </div>
 
   {#if loading}
@@ -72,9 +72,9 @@
             </span>
             <span class="flex-1 text-sm font-medium text-shadow-700 dark:text-bark-300">{layer.name}</span>
             {#if layer.identifier}
-              <span class="text-[11px] font-mono text-shadow-300 dark:text-shadow-600">{layer.identifier}</span>
+              <span class="text-[11px] font-mono text-shadow-300 dark:text-bark-500">{layer.identifier}</span>
             {/if}
-            <span class="text-[11px] text-shadow-400 dark:text-shadow-500">p{layer.priority}</span>
+            <span class="text-[11px] text-shadow-400 dark:text-bark-500">p{layer.priority}</span>
             {#if !isProtected(layer)}
               <button
                 onclick={(e) => { e.stopPropagation(); handleToggle(layer.id); }}
@@ -83,7 +83,7 @@
                 {layer.enabled ? 'ON' : 'OFF'}
               </button>
             {:else}
-              <svg class="w-4 h-4 text-shadow-300 dark:text-shadow-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg class="w-4 h-4 text-shadow-300 dark:text-bark-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
             {/if}
@@ -91,8 +91,8 @@
 
           {#if expandedLayer === layer.id}
             <div class="px-4 pb-4 border-t border-bark-100 dark:border-shadow-800">
-              <pre class="mt-3 text-xs font-mono text-shadow-600 dark:text-shadow-400 whitespace-pre-wrap bg-bark-50 dark:bg-shadow-900 p-3 rounded-lg max-h-64 overflow-y-auto">{layer.content}</pre>
-              <div class="flex items-center gap-4 mt-3 text-[11px] text-shadow-400 dark:text-shadow-500">
+              <pre class="mt-3 text-xs font-mono text-shadow-600 dark:text-bark-400 whitespace-pre-wrap bg-bark-50 dark:bg-shadow-900 p-3 rounded-lg max-h-64 overflow-y-auto">{layer.content}</pre>
+              <div class="flex items-center gap-4 mt-3 text-[11px] text-shadow-400 dark:text-bark-500">
                 <span>v{layer.version}</span>
                 <span>Updated {new Date(layer.updatedAt).toLocaleString()}</span>
                 <span>by {layer.updatedBy}</span>
@@ -113,9 +113,9 @@
             <div class="card-garden px-4 py-3 {!sp.enabled ? 'opacity-50' : ''}">
               <div class="flex items-center gap-3">
                 <span class="text-sm font-medium text-shadow-700 dark:text-bark-300">{sp.name}</span>
-                <span class="text-[11px] font-mono text-shadow-300 dark:text-shadow-600">{sp.key}</span>
+                <span class="text-[11px] font-mono text-shadow-300 dark:text-bark-500">{sp.key}</span>
                 <div class="flex-1"></div>
-                <span class="text-[11px] text-shadow-400 dark:text-shadow-500">v{sp.version}</span>
+                <span class="text-[11px] text-shadow-400 dark:text-bark-500">v{sp.version}</span>
               </div>
             </div>
           {/each}

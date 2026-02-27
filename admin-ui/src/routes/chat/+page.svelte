@@ -46,7 +46,7 @@
   <!-- Header -->
   <div>
     <h1 class="text-2xl font-serif font-bold text-shadow-800 dark:text-bark-200">The Canopy</h1>
-    <p class="text-sm text-shadow-400 dark:text-shadow-500 mt-1">
+    <p class="text-sm text-shadow-400 dark:text-bark-500 mt-1">
       {#if bootstrap}
         Conversation with {bootstrap.agentName}
       {:else}
@@ -62,7 +62,7 @@
         <div class="animate-pulse text-gold-600 dark:text-gold-400 font-serif text-lg mb-2">
           Reaching into the canopy...
         </div>
-        <p class="text-xs text-shadow-400 dark:text-shadow-500">Loading chat configuration</p>
+        <p class="text-xs text-shadow-400 dark:text-bark-500">Loading chat configuration</p>
       </div>
     </div>
   {:else if error}
@@ -70,7 +70,7 @@
     <div class="card-garden flex-1 flex items-center justify-center">
       <div class="text-center p-6">
         <p class="text-wilt-600 dark:text-wilt-400 mb-2">{error}</p>
-        <p class="text-xs text-shadow-400 dark:text-shadow-500 mb-4">
+        <p class="text-xs text-shadow-400 dark:text-bark-500 mb-4">
           Ensure the substrate agent is running and the admin API is accessible.
         </p>
         <button
@@ -96,8 +96,8 @@
     <!-- Script not loaded yet -->
     <div class="card-garden flex-1 flex items-center justify-center">
       <div class="text-center p-6">
-        <p class="text-shadow-500 dark:text-shadow-400 mb-2">Chat component could not be loaded.</p>
-        <p class="text-xs text-shadow-400 dark:text-shadow-500">
+        <p class="text-shadow-500 dark:text-bark-400 mb-2">Chat component could not be loaded.</p>
+        <p class="text-xs text-shadow-400 dark:text-bark-500">
           The pi-web-ui module was not found at <code class="font-mono">/static/pi-web-ui/index.js</code>.
         </p>
       </div>

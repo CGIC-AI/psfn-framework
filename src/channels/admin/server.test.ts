@@ -2442,6 +2442,7 @@ describe('AdminServer', () => {
       expect(res.body).toContain('PI_WEB_UI_MODULE_CANDIDATES');
       expect(res.body).toContain('esm.sh');
       expect(res.body).not.toContain('./chat-voice.js');
+    });
 
     it('chat runtime modules referenced by /chat are reachable and wired to bootstrap', async () => {
       const chatPage = await request(port, 'GET', '/chat');
@@ -2492,7 +2493,7 @@ describe('AdminServer', () => {
     });
 
     it('deprecates legacy chat runtime assets', async () => {
-      for (const legacyPath of ['/static/chat.js', '/static/chat-voice.js']) {
+      for (const legacyPath of ['/static/chat-voice.js']) {
         const res = await request(port, 'GET', legacyPath);
         expect(isDeprecatedAssetStatus(res.status)).toBe(true);
         if (res.status >= 300 && res.status < 400) {

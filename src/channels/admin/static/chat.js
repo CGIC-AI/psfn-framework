@@ -5,19 +5,13 @@ const DEFAULT_SYSTEM_PROMPT = 'You are PSFN speaking through the garden chat can
 const PROVIDER_KEY_PLACEHOLDER = 'admin-chat-local-key';
 const MAX_CONTEXT_MESSAGES = 40;
 
-const PI_WEB_UI_MODULE_CANDIDATES = [
-  'https://esm.sh/@mariozechner/pi-web-ui@0.52.12?target=es2022',
-  'https://cdn.jsdelivr.net/npm/@mariozechner/pi-web-ui@0.52.12/+esm',
-];
-
-const PI_WEB_UI_STYLESHEET_CANDIDATES = [
-  'https://esm.sh/@mariozechner/pi-web-ui@0.52.12/app.css',
-  'https://cdn.jsdelivr.net/npm/@mariozechner/pi-web-ui@0.52.12/dist/app.css',
-];
+const DEFAULT_PI_WEB_UI_MODULE_URL = '/static/pi-web-ui/index.js';
+const DEFAULT_PI_WEB_UI_STYLESHEET_URL = '/static/pi-web-ui/app.css';
 
 const PLACEHOLDER_TOKENS = new Set([PROVIDER_KEY_PLACEHOLDER]);
 
 let piWebUiModulePromise = null;
+let piWebUiModuleUrl = '';
 
 function requiredElement(root, selector) {
   const element = root.querySelector(selector);
@@ -35,6 +29,39 @@ function normalizeText(value) {
 function formatError(error) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function toLocalAssetUrl(candidate, fallback, assetName) {
+  const normalized = normalizeText(candidate);
+  if (!normalized) return fallback;
+
+  try {
+    const parsed = new URL(normalized, window.location.origin);
+    if (parsed.origin !== window.location.origin) {
+      console.warn(`[admin/chat] ignoring non-local ${assetName} URL`, { url: normalized });
+      return fallback;
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    console.warn(`[admin/chat] ignoring invalid ${assetName} URL`, { url: normalized });
+    return fallback;
+  }
+}
+
+function resolvePiWebUiAssets(bootstrap) {
+  const runtimeAssets = bootstrap?.runtime?.assets ?? {};
+  return {
+    moduleUrl: toLocalAssetUrl(
+      runtimeAssets.moduleUrl,
+      DEFAULT_PI_WEB_UI_MODULE_URL,
+      'pi-web-ui module',
+    ),
+    stylesheetUrl: toLocalAssetUrl(
+      runtimeAssets.stylesheetUrl,
+      DEFAULT_PI_WEB_UI_STYLESHEET_URL,
+      'pi-web-ui stylesheet',
+    ),
+  };
 }
 
 function setStatus(dom, message, isError = false) {
@@ -606,39 +633,29 @@ function loadStylesheet(href) {
   });
 }
 
-async function ensurePiWebUiStylesheets() {
-  let lastError = null;
-
-  for (const href of PI_WEB_UI_STYLESHEET_CANDIDATES) {
-    try {
-      await loadStylesheet(href);
-      return;
-    } catch (error) {
-      lastError = error;
-    }
+async function ensurePiWebUiStylesheet(href) {
+  try {
+    await loadStylesheet(href);
+  } catch (error) {
+    throw new Error(`Unable to load pi-web-ui stylesheet ${href}: ${formatError(error)}`);
   }
-
-  throw new Error(`Unable to load pi-web-ui stylesheets: ${formatError(lastError)}`);
 }
 
-async function importPiWebUiModule() {
-  let lastError = null;
-
-  for (const url of PI_WEB_UI_MODULE_CANDIDATES) {
-    try {
-      return await import(url);
-    } catch (error) {
-      lastError = error;
-      console.warn('[admin/chat] failed module import', { url, error: formatError(error) });
-    }
+async function importPiWebUiModule(url) {
+  try {
+    return await import(url);
+  } catch (error) {
+    throw new Error(`Unable to load pi-web-ui module ${url}: ${formatError(error)}`);
   }
-
-  throw new Error(`Unable to load pi-web-ui module: ${formatError(lastError)}`);
 }
 
-function loadPiWebUiModule() {
-  if (!piWebUiModulePromise) {
-    piWebUiModulePromise = importPiWebUiModule();
+function loadPiWebUiModule(url) {
+  if (!piWebUiModulePromise || piWebUiModuleUrl !== url) {
+    piWebUiModuleUrl = url;
+    piWebUiModulePromise = importPiWebUiModule(url).catch((error) => {
+      piWebUiModulePromise = null;
+      throw error;
+    });
   }
   return piWebUiModulePromise;
 }
@@ -699,8 +716,9 @@ async function persistControlChanges(context, changedField) {
 async function mountAgentInterface(context) {
   setStatus(context.dom, 'Loading AgentInterface runtime...');
 
-  const module = await loadPiWebUiModule();
-  await ensurePiWebUiStylesheets();
+  const assets = resolvePiWebUiAssets(context.bootstrap);
+  const module = await loadPiWebUiModule(assets.moduleUrl);
+  await ensurePiWebUiStylesheet(assets.stylesheetUrl);
 
   const stores = createRuntimeStores(resolveClientApiKey(context.bootstrap));
   module.setAppStorage(stores.appStorage);

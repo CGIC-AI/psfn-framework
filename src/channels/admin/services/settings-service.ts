@@ -32,6 +32,7 @@ import {
   CAPABILITY_TIER_VALUES,
   isCapabilityTier,
 } from '../../../capabilities/tiers.js';
+import { toErrorMessage } from '../../../utils/errors.js';
 import type {
   AdminSettingsData,
   AdminSettingsService,
@@ -77,10 +78,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
     return JSON.parse(body);
   }
 
-  private formatConfigError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
-
   async getSettingsData(): Promise<AdminSettingsData> {
     await loadSettings(this.deps.config.dataDir);
     return {
@@ -108,7 +105,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       applySettings(this.deps.config, next);
       return { ok: true, message: 'Settings updated' };
     } catch (error) {
-      return { ok: false, message: this.formatConfigError(error) };
+      return { ok: false, message: toErrorMessage(error) };
     }
   }
 
@@ -118,7 +115,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       saveModelsConfig(this.deps.config.dataDir, parsed);
       return { ok: true, message: 'models.json updated' };
     } catch (error) {
-      return { ok: false, message: this.formatConfigError(error) };
+      return { ok: false, message: toErrorMessage(error) };
     }
   }
 
@@ -129,7 +126,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       this.deps.skillsRuntime?.invalidateCache();
       return { ok: true, message: 'skills.json updated' };
     } catch (error) {
-      return { ok: false, message: this.formatConfigError(error) };
+      return { ok: false, message: toErrorMessage(error) };
     }
   }
 
@@ -142,7 +139,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       this.deps.config.extractionInterval = runtimeScheduler.extractionIntervalMinutes;
       return { ok: true, message: 'scheduler.json updated' };
     } catch (error) {
-      return { ok: false, message: this.formatConfigError(error) };
+      return { ok: false, message: toErrorMessage(error) };
     }
   }
 
@@ -154,7 +151,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       setRuntimeTrustPolicy(runtimeTrustPolicy);
       return { ok: true, message: 'trust-policy.json updated' };
     } catch (error) {
-      return { ok: false, message: this.formatConfigError(error) };
+      return { ok: false, message: toErrorMessage(error) };
     }
   }
 
@@ -172,7 +169,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       }
       return { ok: true, message: 'capability-tier.json updated' };
     } catch (error) {
-      return { ok: false, message: this.formatConfigError(error) };
+      return { ok: false, message: toErrorMessage(error) };
     }
   }
 }

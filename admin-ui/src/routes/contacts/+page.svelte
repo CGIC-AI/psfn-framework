@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listContacts, updateContact } from '$lib/api/endpoints/contacts';
+  import type { ContactUpdatePayload } from '$lib/api/endpoints/contacts';
   import type {
     Contact,
     AdminContactListData,
@@ -163,12 +164,15 @@
   async function saveEdit(contactId: string) {
     saving = true;
     try {
-      const patch: Record<string, unknown> = {};
+      const patch: ContactUpdatePayload = {};
       const contact = data?.contacts.find(c => c.id === contactId);
       if (!contact) throw new Error('Contact not found');
 
       if (editDisplayName.trim() !== contact.displayName) {
         patch.displayName = editDisplayName.trim();
+      }
+      if (editNickname.trim() !== (contact.nickname ?? '')) {
+        patch.nickname = editNickname.trim();
       }
       if (editTrustLevel !== contact.trustLevel) {
         patch.trustLevel = editTrustLevel;

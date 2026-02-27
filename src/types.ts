@@ -280,6 +280,9 @@ export interface SubstrateConfig {
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   wyomingShardRouting?: WyomingShardRoutingConfig;
+  wyomingEnabled?: boolean;
+  wyomingHost?: string;
+  wyomingPort?: number;
 }
 
 export function loadConfig(): SubstrateConfig {
@@ -374,6 +377,9 @@ export function loadConfig(): SubstrateConfig {
   const webFetchLocalCrawlerDomainAllowlist = parseStringListEnv(process.env.FETCH_LOCAL_CRAWLER_DOMAIN_ALLOWLIST);
   const webFetchTlsCaCertPaths = parseStringListEnv(process.env.FETCH_TLS_CA_CERT_PATHS);
   const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(process.env);
+  const wyomingEnabled = parseOptionalBooleanEnv(process.env.WYOMING_ENABLED) ?? false;
+  const wyomingHost = parseOptionalStringEnv(process.env.WYOMING_HOST) ?? '127.0.0.1';
+  const wyomingPort = parseOptionalIntegerEnv(process.env.WYOMING_PORT, 1);
   const capabilityTier = parseCapabilityTierEnv(process.env.CAPABILITY_TIER, 'nursery');
   const shardToolsets = parseShardToolsetEnv(process.env);
   const sessionMirrorEnabled = parseOptionalBooleanEnv(process.env.SESSION_MIRROR_ENABLED);
@@ -496,6 +502,9 @@ export function loadConfig(): SubstrateConfig {
     ...(webFetchLocalCrawlerDomainAllowlist.length > 0 ? { webFetchLocalCrawlerDomainAllowlist } : {}),
     ...(webFetchTlsCaCertPaths.length > 0 ? { webFetchTlsCaCertPaths } : {}),
     wyomingShardRouting,
+    wyomingEnabled,
+    wyomingHost,
+    ...(wyomingPort !== undefined ? { wyomingPort } : {}),
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
   };

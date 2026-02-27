@@ -385,6 +385,8 @@ export class ShardManager {
       ...tool,
       execute: async (toolCallId, params, signal) => {
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
+        // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return tool.execute(toolCallId, scopedParams as any, signal);
       },
     };

@@ -57,9 +57,9 @@ TTS_PROVIDER=elevenlabs
 
 # Planned Echo mode
 TTS_PROVIDER=echo
-ECHO_API_URL=http://220.158.196.150:8001
-ECHO_VOICE=11labs-Allison
-ECHO_PRESET=Independent-High-Speaker-CFG
+ECHO_TTS_URL=http://220.158.196.150:8001
+ECHO_TTS_VOICE=11labs-Allison
+ECHO_TTS_PRESET=Independent-High-Speaker-CFG
 ```
 
 ## 3) Startup Order (Operator Flow)

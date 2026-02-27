@@ -333,6 +333,8 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       }
 
       // Everything else: responses to our requests + incoming RPC requests from gateway
+      // json-rpc-2.0 receiveAndSend() payload param is typed as `any`
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.rpcInstance.receiveAndSend(msg as any);
     });
 

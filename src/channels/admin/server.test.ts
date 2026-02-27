@@ -2488,6 +2488,25 @@ describe('AdminServer', () => {
       expect(res.body).not.toContain('esm.sh');
       expect(res.body).not.toContain('cdn.jsdelivr.net');
       expect(res.body).not.toContain('./chat-voice.js');
+
+      // Streaming: uses stream: true (not false)
+      expect(res.body).toContain('stream: true');
+      expect(res.body).not.toContain('stream: false');
+      expect(res.body).toContain('streamChatCompletion');
+      expect(res.body).toContain('message_update');
+      expect(res.body).toContain('text_delta');
+
+      // Session persistence via localStorage
+      expect(res.body).toContain('createLocalStorageSessions');
+      expect(res.body).not.toContain('sessions: null');
+      expect(res.body).toContain('psfn-garden-chat-sessions');
+
+      // Debug SSE stream wiring for thinking/tool events
+      expect(res.body).toContain('connectDebugStream');
+      expect(res.body).toContain('/api/chat/events/stream');
+      expect(res.body).toContain('thinking_delta');
+      expect(res.body).toContain('tool_execution_start');
+      expect(res.body).toContain('tool_execution_end');
     });
 
     it('chat runtime modules referenced by /chat are reachable and wired to bootstrap', async () => {

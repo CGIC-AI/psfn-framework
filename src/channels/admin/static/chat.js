@@ -302,19 +302,6 @@ function parseMessageContentText(content) {
   return '';
 }
 
-function parseCompletionText(payload) {
-  const choice = payload?.choices?.[0];
-  if (!choice) return '';
-
-  const fromMessage = parseMessageContentText(choice?.message?.content);
-  if (fromMessage) return fromMessage;
-
-  const fromDelta = parseMessageContentText(choice?.delta?.content);
-  if (fromDelta) return fromDelta;
-
-  return '';
-}
-
 function buildApiMessages(history, systemPrompt) {
   const recent = history
     .filter((message) => message.role === 'user' || message.role === 'assistant')
@@ -385,11 +372,28 @@ function isAbortError(error) {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
-async function requestChatCompletion({ bootstrap, modelId, history, systemPrompt, signal }) {
+/**
+ * Parse a single SSE line into its field name and value.
+ * Returns null for comment lines or empty lines.
+ */
+function parseSseLine(line) {
+  if (!line || line.startsWith(':')) return null;
+  const colonIndex = line.indexOf(':');
+  if (colonIndex < 0) return { field: line, value: '' };
+  const field = line.slice(0, colonIndex);
+  const value = line.slice(colonIndex + 1).replace(/^ /, '');
+  return { field, value };
+}
+
+/**
+ * Stream a chat completion request via SSE. Calls onDelta for each text chunk
+ * and returns the final usage payload (if any) when the stream completes.
+ */
+async function streamChatCompletion({ bootstrap, modelId, history, systemPrompt, signal, onDelta }) {
   const endpointUrl = new URL(bootstrap.api.chatCompletionsUrl, window.location.origin);
   const apiKey = resolveClientApiKey(bootstrap);
   const headers = {
-    Accept: 'application/json',
+    Accept: 'text/event-stream',
     'Content-Type': 'application/json',
     ...buildTransportHeaders(bootstrap),
   };
@@ -404,7 +408,7 @@ async function requestChatCompletion({ bootstrap, modelId, history, systemPrompt
     signal,
     body: JSON.stringify({
       model: modelId,
-      stream: false,
+      stream: true,
       messages: buildApiMessages(history, systemPrompt),
     }),
   });
@@ -415,8 +419,49 @@ async function requestChatCompletion({ bootstrap, modelId, history, systemPrompt
     throw new Error(`Completion request failed: ${reason}`);
   }
 
-  return readJsonBody(response);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let lastUsage = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const parsed = parseSseLine(line);
+      if (!parsed || parsed.field !== 'data') continue;
+
+      const dataValue = parsed.value.trim();
+      if (dataValue === '[DONE]') continue;
+      if (!dataValue) continue;
+
+      let chunk;
+      try {
+        chunk = JSON.parse(dataValue);
+      } catch {
+        continue;
+      }
+
+      const choice = chunk?.choices?.[0];
+      if (choice?.delta?.content) {
+        onDelta(choice.delta.content);
+      }
+
+      if (chunk?.usage) {
+        lastUsage = chunk.usage;
+      }
+    }
+  }
+
+  return lastUsage;
 }
+
+const DEBUG_SSE_PATH = '/api/chat/events/stream';
 
 class AgentInterfaceSession {
   constructor(options) {
@@ -424,6 +469,7 @@ class AgentInterfaceSession {
     this.listeners = new Set();
     this.abortController = null;
     this.streamFn = null;
+    this.debugEventSource = null;
     this.getApiKey = async (provider) => this.options.providerKeys.get(provider);
     this.state = {
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -436,6 +482,93 @@ class AgentInterfaceSession {
       pendingToolCalls: new Set(),
       error: undefined,
     };
+  }
+
+  /**
+   * Connect to the debug SSE stream to receive thinking and tool execution events.
+   * These are forwarded to the AgentInterface via message_update / tool_execution_* events.
+   */
+  connectDebugStream() {
+    if (this.debugEventSource) return;
+
+    const url = new URL(DEBUG_SSE_PATH, window.location.origin);
+    const source = new EventSource(url, { withCredentials: true });
+
+    source.addEventListener('chat-debug', (event) => {
+      let payload;
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+
+      if (!payload || typeof payload !== 'object') return;
+      // Only forward events while we are streaming (i.e., during a prompt)
+      if (!this.state.isStreaming) return;
+
+      const streamMsg = this.state.streamMessage;
+      if (!streamMsg) return;
+
+      switch (payload.event) {
+        case 'agent.stream.thinking': {
+          const thinkingText = typeof payload.message === 'string' ? payload.message : '';
+          if (!thinkingText) break;
+          this.emit({
+            type: 'message_update',
+            message: streamMsg,
+            assistantMessageEvent: {
+              type: 'thinking_delta',
+              contentIndex: 0,
+              delta: thinkingText,
+              partial: streamMsg,
+            },
+          });
+          break;
+        }
+        case 'agent.tool.start': {
+          const details = payload.details || {};
+          const toolName = details.toolName || 'unknown';
+          const toolCallId = details.toolCallId || `tool-${Date.now()}`;
+          this.state.pendingToolCalls.add(toolCallId);
+          this.emit({
+            type: 'tool_execution_start',
+            toolCallId,
+            toolName,
+            args: {},
+          });
+          break;
+        }
+        case 'agent.tool.end': {
+          const details = payload.details || {};
+          const toolName = details.toolName || 'unknown';
+          const toolCallId = details.toolCallId || '';
+          this.state.pendingToolCalls.delete(toolCallId);
+          this.emit({
+            type: 'tool_execution_end',
+            toolCallId,
+            toolName,
+            result: {},
+            isError: details.isError === true || details.isError === 'true',
+          });
+          break;
+        }
+        default:
+          break;
+      }
+    });
+
+    source.onerror = () => {
+      // Auto-reconnect is handled by EventSource
+    };
+
+    this.debugEventSource = source;
+  }
+
+  disconnectDebugStream() {
+    if (this.debugEventSource) {
+      this.debugEventSource.close();
+      this.debugEventSource = null;
+    }
   }
 
   subscribe(listener) {
@@ -508,25 +641,47 @@ class AgentInterfaceSession {
     this.abortController = new AbortController();
 
     try {
-      const completion = await requestChatCompletion({
+      // Create a streaming assistant message that accumulates content
+      let accumulatedText = '';
+      const streamingMessage = createAssistantMessage('', null, this.state.model);
+      this.state.streamMessage = streamingMessage;
+      this.emit({ type: 'message_start', message: streamingMessage });
+
+      const usage = await streamChatCompletion({
         bootstrap: this.options.getBootstrap(),
         modelId: this.state.model?.id || DEFAULT_MODEL_ID,
         history: this.state.messages,
         systemPrompt: this.state.systemPrompt,
         signal: this.abortController.signal,
+        onDelta: (delta) => {
+          accumulatedText += delta;
+          // Update content as an array with a TextContent block for pi-web-ui compatibility
+          streamingMessage.content = [{ type: 'text', text: accumulatedText }];
+          this.emit({
+            type: 'message_update',
+            message: streamingMessage,
+            assistantMessageEvent: {
+              type: 'text_delta',
+              contentIndex: 0,
+              delta,
+              partial: streamingMessage,
+            },
+          });
+        },
       });
 
-      const assistantText = parseCompletionText(completion);
-      if (!assistantText) {
-        throw new Error('Completion payload did not include assistant text');
+      if (!accumulatedText) {
+        throw new Error('Completion stream did not produce any text');
       }
 
-      assistantMessage = createAssistantMessage(assistantText, completion, this.state.model);
+      // Finalize the assistant message with plain text content and usage
+      assistantMessage = createAssistantMessage(accumulatedText, { usage }, this.state.model);
       this.state.messages.push(assistantMessage);
-      this.emit({ type: 'message_start', message: assistantMessage });
+      this.state.streamMessage = null;
       this.emit({ type: 'message_end', message: assistantMessage });
       this.options.onStatus('Garden chat is ready.');
     } catch (error) {
+      this.state.streamMessage = null;
       if (isAbortError(error)) {
         this.options.onStatus('Request aborted.');
       } else {
@@ -573,6 +728,126 @@ function createMemoryStore(initialEntries = []) {
   };
 }
 
+const SESSIONS_STORAGE_KEY = 'psfn-garden-chat-sessions';
+const SESSION_META_STORAGE_KEY = 'psfn-garden-chat-sessions-meta';
+
+/**
+ * Create a localStorage-backed sessions store that implements enough of the
+ * SessionsStore interface for pi-web-ui to persist and restore chat sessions.
+ */
+function createLocalStorageSessions() {
+  function readMap(storageKey) {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return {};
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+
+  function writeMap(storageKey, map) {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(map));
+    } catch (error) {
+      console.warn('[admin/chat] localStorage write failed', error);
+    }
+  }
+
+  return {
+    getConfig() {
+      return { name: 'sessions', keyPath: 'id' };
+    },
+    static: {
+      getMetadataConfig() {
+        return { name: 'sessions-metadata', keyPath: 'id' };
+      },
+    },
+    async save(data, metadata) {
+      const sessions = readMap(SESSIONS_STORAGE_KEY);
+      sessions[data.id] = data;
+      writeMap(SESSIONS_STORAGE_KEY, sessions);
+      const metaMap = readMap(SESSION_META_STORAGE_KEY);
+      metaMap[metadata.id] = metadata;
+      writeMap(SESSION_META_STORAGE_KEY, metaMap);
+    },
+    async get(id) {
+      const sessions = readMap(SESSIONS_STORAGE_KEY);
+      return sessions[id] || null;
+    },
+    async getMetadata(id) {
+      const metaMap = readMap(SESSION_META_STORAGE_KEY);
+      return metaMap[id] || null;
+    },
+    async getAllMetadata() {
+      const metaMap = readMap(SESSION_META_STORAGE_KEY);
+      return Object.values(metaMap).sort(
+        (a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''),
+      );
+    },
+    async delete(id) {
+      const sessions = readMap(SESSIONS_STORAGE_KEY);
+      delete sessions[id];
+      writeMap(SESSIONS_STORAGE_KEY, sessions);
+      const metaMap = readMap(SESSION_META_STORAGE_KEY);
+      delete metaMap[id];
+      writeMap(SESSION_META_STORAGE_KEY, metaMap);
+    },
+    async deleteSession(id) {
+      return this.delete(id);
+    },
+    async updateTitle(id, title) {
+      const metaMap = readMap(SESSION_META_STORAGE_KEY);
+      if (metaMap[id]) {
+        metaMap[id].title = title;
+        writeMap(SESSION_META_STORAGE_KEY, metaMap);
+      }
+    },
+    async getQuotaInfo() {
+      return { usage: 0, quota: 5 * 1024 * 1024, percent: 0 };
+    },
+    async requestPersistence() {
+      return true;
+    },
+    async saveSession(id, state, metadata, title) {
+      const now = new Date().toISOString();
+      const data = {
+        id,
+        title: title || metadata?.title || 'Garden Chat',
+        model: state.model,
+        thinkingLevel: state.thinkingLevel,
+        messages: state.messages,
+        createdAt: metadata?.createdAt || now,
+        lastModified: now,
+      };
+      const meta = metadata || {
+        id,
+        title: title || 'Garden Chat',
+        createdAt: now,
+        lastModified: now,
+        messageCount: state.messages.length,
+        usage: {
+          input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+          totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        thinkingLevel: state.thinkingLevel,
+        preview: '',
+      };
+      meta.lastModified = now;
+      meta.messageCount = state.messages.length;
+      await this.save(data, meta);
+    },
+    async loadSession(id) {
+      return this.get(id);
+    },
+    async getLatestSessionId() {
+      const allMeta = await this.getAllMetadata();
+      return allMeta.length > 0 ? allMeta[0].id : null;
+    },
+    setBackend() {},
+  };
+}
+
 function createRuntimeStores(initialApiKey) {
   const normalizedApiKey = normalizeText(initialApiKey);
   const providerEntries = normalizedApiKey
@@ -591,17 +866,19 @@ function createRuntimeStores(initialApiKey) {
     },
   };
 
+  const sessions = createLocalStorageSessions();
+
   const appStorage = {
     settings,
     providerKeys,
     customProviders,
-    sessions: null,
+    sessions,
     backend: {
       async getQuotaInfo() {
-        return null;
+        return { usage: 0, quota: 5 * 1024 * 1024, percent: 0 };
       },
       async requestPersistence() {
-        return false;
+        return true;
       },
     },
   };
@@ -742,6 +1019,9 @@ async function mountAgentInterface(context) {
     seedProviderKey: context.seedProviderKey,
   });
   context.session = session;
+
+  // Connect to debug SSE stream for thinking/tool events
+  session.connectDebugStream();
 
   await context.seedProviderKey(session.state.model.provider);
   updateViewFromBootstrap(context);

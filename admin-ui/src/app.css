@@ -1,0 +1,166 @@
+@import 'tailwindcss';
+
+/* ── Garden Theme (Tailwind v4 CSS-first config) ── */
+
+@theme {
+  /* Bark — warm whites/creams for backgrounds */
+  --color-bark-50: #fefdfb;
+  --color-bark-100: #fdf9f0;
+  --color-bark-200: #f8f0de;
+  --color-bark-300: #f0e4c8;
+  --color-bark-400: #e5d3a8;
+  --color-bark-500: #d4bc82;
+  --color-bark-600: #b99d60;
+  --color-bark-700: #9a7f48;
+  --color-bark-800: #7a6438;
+  --color-bark-900: #5e4d2d;
+
+  /* Gold — gilded accents, circuitry veins */
+  --color-gold-50: #fdf8e8;
+  --color-gold-100: #f9edc4;
+  --color-gold-200: #f2d98a;
+  --color-gold-300: #e8c24e;
+  --color-gold-400: #d4a72e;
+  --color-gold-500: #c4a35a;
+  --color-gold-600: #a88620;
+  --color-gold-700: #8b6914;
+  --color-gold-800: #6e530f;
+  --color-gold-900: #52400d;
+
+  /* Moss — greens for healthy/active states */
+  --color-moss-50: #f3f8f0;
+  --color-moss-100: #e2efda;
+  --color-moss-200: #c3deb3;
+  --color-moss-300: #98c67d;
+  --color-moss-400: #6faa50;
+  --color-moss-500: #4f8c36;
+  --color-moss-600: #3c6f29;
+  --color-moss-700: #305822;
+  --color-moss-800: #28461d;
+  --color-moss-900: #1e351a;
+
+  /* Petal — soft pinks/roses for emotional/relational */
+  --color-petal-50: #fdf4f6;
+  --color-petal-100: #fbe8ed;
+  --color-petal-200: #f6cdd8;
+  --color-petal-300: #efa8ba;
+  --color-petal-400: #e57c96;
+  --color-petal-500: #d45474;
+  --color-petal-600: #b83a5a;
+  --color-petal-700: #9a2d49;
+  --color-petal-800: #7e2840;
+  --color-petal-900: #6a2539;
+
+  /* Shadow — deep purples/charcoals for text */
+  --color-shadow-50: #f6f5f8;
+  --color-shadow-100: #eae8ef;
+  --color-shadow-200: #d4d0de;
+  --color-shadow-300: #b3abC4;
+  --color-shadow-400: #8c80a6;
+  --color-shadow-500: #6e5f8a;
+  --color-shadow-600: #594c72;
+  --color-shadow-700: #483d5d;
+  --color-shadow-800: #3a3249;
+  --color-shadow-900: #2a2535;
+  --color-shadow-950: #1a1720;
+
+  /* Wilt — amber/red for errors/warnings */
+  --color-wilt-50: #fef6ee;
+  --color-wilt-100: #fdebd5;
+  --color-wilt-200: #fad3a8;
+  --color-wilt-300: #f4b270;
+  --color-wilt-400: #ec8839;
+  --color-wilt-500: #e06a18;
+  --color-wilt-600: #c54e10;
+  --color-wilt-700: #a33910;
+  --color-wilt-800: #842f14;
+  --color-wilt-900: #6c2914;
+
+  /* Typography */
+  --font-serif: 'Playfair Display', 'Georgia', serif;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* ── Base Styles ── */
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-bark-50);
+  color: var(--color-shadow-900);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+}
+
+/* ── Filigree Utilities ── */
+
+.filigree-border {
+  border: 1px solid var(--color-gold-200);
+  box-shadow: 0 0 0 1px var(--color-gold-100), 0 1px 3px rgba(196, 163, 90, 0.08);
+}
+
+.filigree-border-strong {
+  border: 1px solid var(--color-gold-400);
+  box-shadow: 0 0 0 1px var(--color-gold-200), 0 2px 8px rgba(196, 163, 90, 0.15);
+}
+
+.card-garden {
+  background: white;
+  border: 1px solid var(--color-bark-200);
+  border-radius: 0.75rem;
+  box-shadow: 0 1px 3px rgba(42, 37, 53, 0.04), 0 0 0 1px var(--color-bark-100);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.card-garden:hover {
+  border-color: var(--color-gold-200);
+  box-shadow: 0 2px 8px rgba(196, 163, 90, 0.1), 0 0 0 1px var(--color-gold-100);
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bark-100);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bark-400);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gold-500);
+}
+
+/* ── Dark Mode ── */
+:root.dark body {
+  background-color: var(--color-shadow-950);
+  color: var(--color-bark-200);
+}
+
+:root.dark .card-garden {
+  background: var(--color-shadow-900);
+  border-color: var(--color-shadow-700);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+:root.dark .card-garden:hover {
+  border-color: var(--color-gold-700);
+  box-shadow: 0 2px 8px rgba(196, 163, 90, 0.15);
+}
+
+:root.dark ::-webkit-scrollbar-track {
+  background: var(--color-shadow-900);
+}
+
+:root.dark ::-webkit-scrollbar-thumb {
+  background: var(--color-shadow-600);
+}

@@ -1,6 +1,7 @@
 import type { ContactStore } from '../../../contacts/store.js';
 import type { MemoryStore } from '../../../memory/store.js';
 import type {
+  ChannelPrivacyLevel,
   Contact,
   ContactIdentityLinkVerification,
   ContactMutationAuditEntry,
@@ -10,7 +11,10 @@ import type {
 } from '../../../contacts/types.js';
 import type { TrustLevel } from '../../../trust/types.js';
 import { TRUST_LEVELS } from '../../../trust/types.js';
-import { VALID_RELATIONSHIP_TYPES } from '../../../contacts/types.js';
+import {
+  CHANNEL_PRIVACY_LEVELS,
+  VALID_RELATIONSHIP_TYPES,
+} from '../../../contacts/types.js';
 import {
   buildRelatedConversationChannelMap,
 } from './contact-session-linker.js';
@@ -22,11 +26,25 @@ import type {
 } from './types.js';
 import type { SessionStore } from '../../../session/store.js';
 
+interface ChannelPrivacyUpdate {
+  channel: string;
+  userId: string;
+  privacyLevel: ChannelPrivacyLevel;
+}
+
+interface AddChannelLink {
+  channel: string;
+  userId: string;
+  privacyLevel?: ChannelPrivacyLevel;
+}
+
 interface ContactUpdatePayload {
   displayName?: string;
   trustLevel?: TrustLevel;
   relationshipType?: RelationshipType;
   notes?: string;
+  channelPrivacy?: ChannelPrivacyUpdate[];
+  addChannel?: AddChannelLink;
 }
 
 export class AdminContactsDataService implements AdminContactsService {
@@ -207,6 +225,48 @@ export class AdminContactsDataService implements AdminContactsService {
 
     if (payload.notes !== undefined) {
       contactStore.updateNotes(contactId, payload.notes, 'admin:api');
+    }
+
+    // Apply channel privacy updates
+    if (Array.isArray(payload.channelPrivacy)) {
+      for (const cp of payload.channelPrivacy) {
+        if (!cp.channel?.trim() || !cp.userId?.trim()) continue;
+        if (!CHANNEL_PRIVACY_LEVELS.includes(cp.privacyLevel)) {
+          return { ok: false, message: `Invalid privacy level: ${cp.privacyLevel}` };
+        }
+        const updated = contactStore.setChannelPrivacy(
+          contactId,
+          cp.channel.trim(),
+          cp.userId.trim(),
+          cp.privacyLevel,
+        );
+        if (!updated) {
+          return { ok: false, message: `Unable to update privacy for ${cp.channel}:${cp.userId}` };
+        }
+      }
+    }
+
+    // Add new channel link
+    if (payload.addChannel) {
+      const ch = payload.addChannel;
+      if (!ch.channel?.trim() || !ch.userId?.trim()) {
+        return { ok: false, message: 'Channel and userId are required for addChannel' };
+      }
+      if (ch.privacyLevel && !CHANNEL_PRIVACY_LEVELS.includes(ch.privacyLevel)) {
+        return { ok: false, message: `Invalid privacy level for new channel: ${ch.privacyLevel}` };
+      }
+      const linkResult = contactStore.linkChannelIdentity(
+        contactId,
+        ch.channel.trim(),
+        ch.userId.trim(),
+        { privacyLevel: ch.privacyLevel },
+      );
+      if (linkResult === 'identity_conflict') {
+        return { ok: false, message: `Identity ${ch.channel}:${ch.userId} is already linked to another contact` };
+      }
+      if (linkResult === 'contact_not_found') {
+        return { ok: false, message: `Contact ${contactId} was not found` };
+      }
     }
 
     const updated = contactStore.getById(contactId);

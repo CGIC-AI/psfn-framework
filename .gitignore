@@ -19,3 +19,8 @@ history/
 # Beads transient lock/socket files (keep .beads/issues.jsonl tracked)
 .beads/*.lock
 .beads/*.sock*
+
+# SvelteKit admin UI
+admin-ui/node_modules/
+admin-ui/build/
+admin-ui/.svelte-kit/

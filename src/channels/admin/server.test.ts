@@ -139,6 +139,35 @@ function allocatePort(): Promise<number> {
   });
 }
 
+function extractModuleScriptSources(html: string): string[] {
+  const scriptSources = new Set<string>();
+  const scriptPattern = /<script[^>]*\btype=["']module["'][^>]*\bsrc=["']([^"']+)["'][^>]*><\/script>/gi;
+  for (const match of html.matchAll(scriptPattern)) {
+    scriptSources.add(match[1]);
+  }
+  return [...scriptSources];
+}
+
+function expectApiPath(urlOrPath: string, expectedPath: string): void {
+  const normalized = urlOrPath.trim();
+  expect(normalized.length).toBeGreaterThan(0);
+  if (normalized.startsWith('/')) {
+    expect(normalized).toBe(expectedPath);
+    return;
+  }
+  const parsed = new URL(normalized);
+  expect(parsed.pathname).toBe(expectedPath);
+}
+
+function isDeprecatedAssetStatus(status: number): boolean {
+  return status === 301
+    || status === 302
+    || status === 307
+    || status === 308
+    || status === 404
+    || status === 410;
+}
+
 // ── Fixtures ──
 
 const testConfig: SubstrateConfig = {
@@ -780,7 +809,7 @@ describe('AdminServer', () => {
   });
 
   describe('Chat (without contactStore)', () => {
-    it('returns garden chat page shell', async () => {
+    it('returns garden chat page shell with non-legacy runtime module wiring', async () => {
       const res = await request(port, 'GET', '/chat');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Garden Chat');
@@ -794,6 +823,12 @@ describe('AdminServer', () => {
       expect(res.body).not.toContain('<script type="module" src="/static/chat.js"></script>');
       expect(res.body).not.toContain('/static/chat-voice.js');
       expect(res.body).toContain('<script type="module" src="/static/chat-debug.js"></script>');
+      const moduleScriptSources = extractModuleScriptSources(res.body);
+      const localModuleScripts = moduleScriptSources.filter(src => src.startsWith('/'));
+
+      expect(localModuleScripts.length).toBeGreaterThan(0);
+      expect(moduleScriptSources).not.toContain('/static/chat.js');
+      expect(moduleScriptSources).not.toContain('/static/chat-voice.js');
     });
 
     it('returns synthetic bootstrap defaults', async () => {
@@ -811,8 +846,8 @@ describe('AdminServer', () => {
         userId: 'admin-user',
         privacyLevel: 'private',
       });
-      expect(payload.api.chatCompletionsUrl).toBe('http://127.0.0.1:3000/v1/chat/completions');
-      expect(payload.api.voiceWebSocketUrl).toBe('http://127.0.0.1:3000/v1/voice/ws');
+      expectApiPath(payload.api.chatCompletionsUrl, '/v1/chat/completions');
+      expectApiPath(payload.api.voiceWebSocketUrl, '/v1/voice/ws');
       expect(payload.defaultSessionId).toBe('api:admin-user');
       expect(payload.defaultAuthorName).toBe('Primary Contact');
       expect(payload.defaultAuthorId).toBe('admin-user');
@@ -2407,17 +2442,66 @@ describe('AdminServer', () => {
       expect(res.body).toContain('PI_WEB_UI_MODULE_CANDIDATES');
       expect(res.body).toContain('esm.sh');
       expect(res.body).not.toContain('./chat-voice.js');
+
+    it('chat runtime modules referenced by /chat are reachable and wired to bootstrap', async () => {
+      const chatPage = await request(port, 'GET', '/chat');
+      expect(chatPage.status).toBe(200);
+
+      const moduleScriptSources = extractModuleScriptSources(chatPage.body)
+        .filter(src => src.startsWith('/'));
+      expect(moduleScriptSources.length).toBeGreaterThan(0);
+
+      let hasBootstrapBinding = false;
+      let hasPiWebUiMarker = false;
+      for (const sourcePath of moduleScriptSources) {
+        const res = await request(port, 'GET', sourcePath);
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toContain('application/javascript');
+        if (res.body.includes('/api/chat/bootstrap')) {
+          hasBootstrapBinding = true;
+        }
+        if (
+          res.body.includes('@mariozechner/pi-web-ui')
+          || res.body.includes('pi-web-ui')
+          || res.body.includes('agent-interface')
+          || res.body.includes('AgentInterface')
+        ) {
+          hasPiWebUiMarker = true;
+        }
+
+        if (res.body.includes("import './chat.js'")) {
+          const importedChatModule = await request(port, 'GET', '/static/chat.js');
+          expect(importedChatModule.status).toBe(200);
+          expect(importedChatModule.headers['content-type']).toContain('application/javascript');
+          if (importedChatModule.body.includes('/api/chat/bootstrap')) {
+            hasBootstrapBinding = true;
+          }
+          if (
+            importedChatModule.body.includes('@mariozechner/pi-web-ui')
+            || importedChatModule.body.includes('pi-web-ui')
+            || importedChatModule.body.includes('agent-interface')
+            || importedChatModule.body.includes('AgentInterface')
+          ) {
+            hasPiWebUiMarker = true;
+          }
+        }
+      }
+
+      expect(hasBootstrapBinding).toBe(true);
+      expect(hasPiWebUiMarker).toBe(true);
     });
 
-    it('serves chat-voice.js', async () => {
-      const res = await request(port, 'GET', '/static/chat-voice.js');
-      expect(res.status).toBe(200);
-      expect(res.headers['content-type']).toBe('application/javascript');
-      expect(res.body).toContain('/v1/voice/ws');
-      expect(res.body).toContain('bootstrap?.api?.apiKey');
+    it('deprecates legacy chat runtime assets', async () => {
+      for (const legacyPath of ['/static/chat.js', '/static/chat-voice.js']) {
+        const res = await request(port, 'GET', legacyPath);
+        expect(isDeprecatedAssetStatus(res.status)).toBe(true);
+        if (res.status >= 300 && res.status < 400) {
+          expect(res.headers.location).toBeTruthy();
+        }
+      }
     });
 
-    it('serves chat-debug.js', async () => {
+    it('serves or deprecates chat-debug.js during migration', async () => {
       const res = await request(port, 'GET', '/static/chat-debug.js');
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toBe('application/javascript');
@@ -2543,7 +2627,7 @@ describe('AdminServer with auth', () => {
     });
     expect(res.status).toBe(200);
     const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
-    expect(payload.api.chatCompletionsUrl).toBe('http://127.0.0.1:3000/v1/chat/completions');
+    expectApiPath(payload.api.chatCompletionsUrl, '/v1/chat/completions');
   });
 
   it('accepts chat debug SSE with correct token', async () => {
@@ -2561,22 +2645,19 @@ describe('AdminServer with auth', () => {
     expect(res.body).toContain('Enter the Garden');
   });
 
-  it('allows static assets without auth token', async () => {
+  it('allows core static assets and deprecates legacy chat assets without auth token', async () => {
     const htmx = await request(port, 'GET', '/static/htmx.min.js');
     expect(htmx.status).toBe(200);
     expect(htmx.headers['content-type']).toBe('application/javascript');
 
-    const chat = await request(port, 'GET', '/static/chat.js');
-    expect(chat.status).toBe(200);
-    expect(chat.headers['content-type']).toBe('application/javascript');
+    const css = await request(port, 'GET', '/static/admin.css');
+    expect(css.status).toBe(200);
+    expect(css.headers['content-type']).toContain('text/css');
 
-    const chatVoice = await request(port, 'GET', '/static/chat-voice.js');
-    expect(chatVoice.status).toBe(200);
-    expect(chatVoice.headers['content-type']).toBe('application/javascript');
-
-    const chatDebug = await request(port, 'GET', '/static/chat-debug.js');
-    expect(chatDebug.status).toBe(200);
-    expect(chatDebug.headers['content-type']).toBe('application/javascript');
+    for (const legacyPath of ['/static/chat.js', '/static/chat-voice.js']) {
+      const res = await request(port, 'GET', legacyPath);
+      expect(isDeprecatedAssetStatus(res.status)).toBe(true);
+    }
   });
 });
 

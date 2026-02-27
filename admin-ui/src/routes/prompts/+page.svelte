@@ -38,6 +38,10 @@
   let diffNew = $state('');
   let diffLoading = $state(false);
 
+  // Priority editing
+  let editingPriorityId = $state<string | null>(null);
+  let editPriorityValue = $state(0);
+
   // Static prompt expansion
   let expandedStatic = $state<string | null>(null);
 
@@ -165,6 +169,46 @@
     }
   }
 
+  function startPriorityEdit(layer: PromptLayer) {
+    editingPriorityId = layer.id;
+    editPriorityValue = layer.priority;
+  }
+
+  async function savePriority(layerId: string) {
+    try {
+      await updatePrompt(layerId, { priority: editPriorityValue });
+      await refreshList();
+      editingPriorityId = null;
+      if (selectedLayerId === layerId && detailData?.layer) {
+        detailData = await fetchDetail(layerId);
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to update priority';
+    }
+  }
+
+  async function moveLayer(layerId: string, direction: 'up' | 'down') {
+    const idx = sortedLayers.findIndex(l => l.id === layerId);
+    if (idx < 0) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sortedLayers.length) return;
+
+    const current = sortedLayers[idx];
+    const target = sortedLayers[swapIdx];
+    if (isProtected(current) || isProtected(target)) return;
+
+    // Swap priorities
+    try {
+      await Promise.all([
+        updatePrompt(current.id, { priority: target.priority }),
+        updatePrompt(target.id, { priority: current.priority }),
+      ]);
+      await refreshList();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to reorder';
+    }
+  }
+
   function isProtected(layer: PromptLayer): boolean {
     return layer.type === 'base' || layer.type === 'operator';
   }
@@ -242,8 +286,50 @@
               <!-- Spacer -->
               <span class="flex-1"></span>
 
-              <!-- Priority -->
-              <span class="text-[11px] text-shadow-400 dark:text-bark-500 font-mono shrink-0">p{layer.priority}</span>
+              <!-- Move buttons (non-protected only) -->
+              {#if !locked}
+                <div class="flex items-center gap-0.5 shrink-0" onclick={(e) => e.stopPropagation()}>
+                  <button
+                    onclick={() => moveLayer(layer.id, 'up')}
+                    disabled={sortedLayers.indexOf(layer) === 0}
+                    class="w-5 h-5 flex items-center justify-center rounded text-shadow-400 hover:text-gold-600 hover:bg-bark-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Move up (lower priority number)"
+                  >
+                    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+                  </button>
+                  <button
+                    onclick={() => moveLayer(layer.id, 'down')}
+                    disabled={sortedLayers.indexOf(layer) === sortedLayers.length - 1}
+                    class="w-5 h-5 flex items-center justify-center rounded text-shadow-400 hover:text-gold-600 hover:bg-bark-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Move down (higher priority number)"
+                  >
+                    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+                  </button>
+                </div>
+              {/if}
+
+              <!-- Priority (clickable to edit) -->
+              {#if editingPriorityId === layer.id}
+                <div class="flex items-center gap-1 shrink-0" onclick={(e) => e.stopPropagation()}>
+                  <input
+                    type="number"
+                    min="0"
+                    max="999"
+                    bind:value={editPriorityValue}
+                    onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); savePriority(layer.id); } if (e.key === 'Escape') editingPriorityId = null; }}
+                    class="w-14 px-1.5 py-0.5 text-[11px] font-mono rounded border border-gold-300 bg-white text-shadow-900 text-center focus:outline-none focus:ring-1 focus:ring-gold-400"
+                  />
+                  <button onclick={() => savePriority(layer.id)} class="text-[10px] text-gold-600 hover:text-gold-700 font-medium">OK</button>
+                </div>
+              {:else}
+                <button
+                  onclick={(e) => { e.stopPropagation(); if (!locked) startPriorityEdit(layer); }}
+                  class="text-[11px] text-shadow-400 font-mono shrink-0 {locked ? 'cursor-default' : 'hover:text-gold-600 cursor-pointer'}"
+                  title={locked ? `Priority: ${layer.priority}` : 'Click to edit priority'}
+                >
+                  p{layer.priority}
+                </button>
+              {/if}
 
               <!-- Content preview -->
               <span class="text-[11px] text-shadow-400 dark:text-bark-500 truncate max-w-32 hidden md:inline">{truncate(layer.content, 60)}</span>

@@ -1,4 +1,5 @@
 import { apiGet, apiPatch, apiPost, apiPostForm } from '$lib/api/client';
+import { getToken } from '$lib/stores/auth.svelte';
 import type {
   AdminSettingsData,
   ConfigUpdateResult,
@@ -15,8 +16,17 @@ export function updateSettings(
   return apiPatch<ConfigUpdateResult>('/api/admin/settings', patch);
 }
 
-export function getSubConfig(key: string): Promise<string> {
-  return apiGet<string>(`/api/settings/${encodeURIComponent(key)}`);
+/** Fetch sub-config as raw JSON text (not parsed). Server returns JSON with text/json content type. */
+export async function getSubConfig(key: string): Promise<string> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`/api/settings/${encodeURIComponent(key)}`, {
+    headers,
+    credentials: 'include',
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.text();
 }
 
 export function saveSubConfig(key: string, json: string): Promise<string> {

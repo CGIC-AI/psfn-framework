@@ -132,11 +132,19 @@ export interface ThinkTraceView {
   timestamp: number;
 }
 
+export type CompactionAuditVerification = 'verified' | 'mismatch' | 'missing_hash' | 'missing_source';
+
 export interface CompactionAuditView {
-  timestamp: string;
-  beforeCount: number;
-  afterCount: number;
+  id: number;
+  createdAt: number;
+  coveredUpTo: number;
   summary: string;
+  sourceHash: string | null;
+  sourceFirstMessageId: number | null;
+  sourceLastMessageId: number | null;
+  sourceMessageCount: number | null;
+  verification: CompactionAuditVerification;
+  verificationDetail: string;
 }
 
 export interface CharacterCardV2 {
@@ -162,6 +170,11 @@ export interface ContactProfileArtifact {
   contactId: string;
   displayName: string;
   memoryCount: number;
+  summary?: string;
+  sourceMemoryIds?: string[];
+  confidenceScore?: number;
+  noveltyScore?: number;
+  updatedAt?: number;
 }
 
 export interface ContactConversationChannelView {
@@ -178,9 +191,13 @@ export interface ContactIdentityLinkVerification {
   sourceUserId: string;
   targetChannel: string;
   targetUserId: string;
+  nonce?: string;
+  expiresAt?: string;
   status: 'pending' | 'verified' | 'failed' | 'expired';
   createdAt: string;
   updatedAt: string;
+  verifiedAt?: string;
+  failureReason?: string;
 }
 
 export interface ContactMutationAuditEntry {

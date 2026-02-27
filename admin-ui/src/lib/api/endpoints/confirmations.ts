@@ -9,8 +9,7 @@ import type {
  * Fetch pending confirmations from the admin API.
  * Endpoint: GET /api/admin/confirmations
  *
- * Note: This endpoint must be added to the backend api-routes.ts.
- * Until then, the page will show a "no data" state.
+ * When the gateway is not connected, the backend returns { available: false }.
  */
 export function getConfirmations(): Promise<AdminConfirmationsData> {
   return apiGet<AdminConfirmationsData>('/api/admin/confirmations');

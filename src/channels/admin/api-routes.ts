@@ -337,6 +337,25 @@ export function buildAdminApiRoutes(options: {
         sendJson(res, 200, promptsService.listPrompts());
       },
     },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/prompts'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = promptsService.createPromptLayer(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 201, result);
+        });
+      },
+    },
     // Sub-path routes MUST be before generic prefixed param routes
     {
       method: 'POST',

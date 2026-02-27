@@ -225,6 +225,7 @@ export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
   getPromptDetail(layerId: string): AdminPromptDetailData | null;
   getStaticPromptDetail(key: string): AdminPromptDetailData | null;
+  createPromptLayer(body: string): PromptUpdateResult;
   updatePromptLayer(body: string): PromptUpdateResult;
   updatePromptRegistry(body: string): PromptUpdateResult;
   togglePromptLayer(body: string): PromptUpdateResult;

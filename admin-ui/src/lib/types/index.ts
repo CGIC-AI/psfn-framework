@@ -349,6 +349,114 @@ export interface DiscoveredModel {
   pricing?: { prompt?: number; completion?: number };
 }
 
+// Scheduler
+export type TaskType = 'every' | 'one-shot';
+export type TaskState = 'idle' | 'active' | 'paused' | 'complete';
+
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  type: TaskType;
+  intervalMs: number;
+  runAt?: number;
+  state: TaskState;
+}
+
+export interface AdminSchedulerData {
+  tasks: ScheduledTask[];
+}
+
+// Skills
+export interface SkillRequirements {
+  binaries: string[];
+  env: string[];
+  config: string[];
+}
+
+export interface SkillEntry {
+  id: string;
+  name: string;
+  description: string;
+  category?: string;
+  relativePath: string;
+  source: string;
+  always: boolean;
+  requires: SkillRequirements;
+  content: string;
+  size: number;
+}
+
+export interface SkillSkipRecord {
+  kind: string;
+  name: string;
+  relativePath: string;
+  source: string;
+  reason: string;
+  details?: string[];
+}
+
+export interface SkillDirectorySpec {
+  relativePath: string;
+  source: string;
+}
+
+export interface SkillSnapshot {
+  generatedAt: string;
+  signature: string;
+  configEnabled: boolean;
+  budget: { maxSkills: number; maxChars: number };
+  directories: SkillDirectorySpec[];
+  scannedFiles: number;
+  loadedSkills: number;
+  includedSkills: SkillEntry[];
+  promptXml: string;
+  skipped: SkillSkipRecord[];
+}
+
+export interface AdminSkillsData {
+  snapshot: SkillSnapshot;
+}
+
+// Confirmations
+export type ConfirmationDecision = 'approve' | 'deny' | 'modify';
+
+export interface ConfirmationQueueEntry {
+  id: string;
+  method: string;
+  action: string;
+  scope: string;
+  params: Record<string, unknown>;
+  companionReason: string;
+  requestedAt: number;
+  expiresAt: number;
+}
+
+export interface AdminConfirmationsData {
+  entries: ConfirmationQueueEntry[];
+  available: boolean;
+  message?: string;
+}
+
+export interface ConfirmationResolveResult {
+  ok: boolean;
+  message?: string;
+}
+
+// Values Timeline
+export interface ValuesJournalEntry {
+  id: string;
+  version: number;
+  templateId: string;
+  templateName: string;
+  prompt: string;
+  reflection: string;
+  createdAt: string;
+}
+
+export interface AdminValuesData {
+  entries: ValuesJournalEntry[];
+}
+
 // Telemetry
 export interface TelemetryEvent {
   type: string;

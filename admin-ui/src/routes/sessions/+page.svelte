@@ -12,6 +12,7 @@
   let loadingMessages = $state(false);
 
   let expandedToolCall = $state<number | null>(null);
+  let channelLastActivity = $state<Map<string, string>>(new Map());
 
   // Channel type labels matching the htmx admin
   const CHANNEL_TYPE_LABELS: Record<string, string> = {
@@ -71,6 +72,19 @@
       const data = await getSessionMessages(channelId);
       messages = data.messages;
       compactionAudits = data.compactionAuditViews ?? [];
+
+      // Track last activity from the most recent message timestamp
+      if (messages.length > 0) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg?.timestamp) {
+          const formatted = formatTimestamp(lastMsg.timestamp);
+          if (formatted) {
+            const next = new Map(channelLastActivity);
+            next.set(channelId, formatted);
+            channelLastActivity = next;
+          }
+        }
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load messages';
     } finally {
@@ -167,6 +181,7 @@
           </div>
         {:else}
           {#each channels as ch (ch.channelId)}
+            {@const lastActivity = channelLastActivity.get(ch.channelId)}
             <button
               onclick={() => selectChannel(ch.channelId)}
               class="w-full text-left px-3 py-2.5 border-b border-bark-200 hover:bg-bark-100
@@ -183,12 +198,20 @@
                   {channelSubLabel(ch)}
                 </span>
               {/if}
-              <span class="text-sm text-shadow-600">
-                {ch.messageCount} messages
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-sm text-shadow-600">
+                  {ch.messageCount} messages
+                </span>
                 {#if ch.linkedContactName}
-                  &middot; <span class="text-moss-700">{ch.linkedContactName}</span>
+                  <span class="text-sm text-shadow-600">&middot;</span>
+                  <span class="text-sm text-moss-700">{ch.linkedContactName}</span>
                 {/if}
-              </span>
+              </div>
+              {#if lastActivity}
+                <span class="text-sm text-shadow-600 block mt-0.5">
+                  Last: {lastActivity}
+                </span>
+              {/if}
             </button>
           {/each}
           {#if channels.length === 0}

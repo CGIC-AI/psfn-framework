@@ -18,6 +18,9 @@
     prompt:    'bg-gold-50 text-gold-600',
     heartbeat: 'bg-moss-100 text-moss-700',
     trust:     'bg-gold-100 text-gold-700',
+    skills:    'bg-moss-50 text-moss-700',
+    gateway:   'bg-bark-200 text-shadow-800',
+    scratchpad: 'bg-gold-50 text-gold-600',
   };
 
   const CATEGORY_DOT: Record<string, string> = {
@@ -29,37 +32,88 @@
     prompt:    'bg-gold-400',
     heartbeat: 'bg-moss-400',
     trust:     'bg-gold-500',
+    skills:    'bg-moss-500',
+    gateway:   'bg-shadow-600',
+    scratchpad: 'bg-gold-500',
   };
 
   const CORE_TOOLS: ToolInfo[] = [
     { name: 'think',               description: 'RLM+REPL sandbox for multi-step reasoning with code execution',  category: 'core' },
     { name: 'spawn_shard',         description: 'Launch ephemeral sub-agent for parallel work',                    category: 'core' },
     { name: 'memory_write',        description: 'Write a single memory directly to L2 store',                     category: 'memory' },
-    { name: 'memory_import_batch', description: 'Import multiple memories in a single batch',                     category: 'memory' },
     { name: 'contact_lookup',      description: 'Look up a contact by name or Discord ID',                        category: 'contact' },
     { name: 'contact_list',        description: 'List all known contacts with trust levels',                      category: 'contact' },
-    { name: 'self_restart',        description: 'Gracefully restart the agent process',                            category: 'lifecycle' },
-    { name: 'self_rebuild',        description: 'Trigger a rebuild and restart cycle',                             category: 'lifecycle' },
+    { name: 'schedule_task',       description: 'Create one-shot or recurring scheduled tasks',                    category: 'core' },
     { name: 'load_tools',          description: 'Hot-swap active tool set to include extended tools',              category: 'core' },
   ];
 
   const EXTENDED_TOOLS: ToolInfo[] = [
-    { name: 'git_status',              description: 'Show working tree status of the substrate repo',        category: 'git' },
-    { name: 'git_diff',                description: 'Show file diffs in the working tree',                   category: 'git' },
-    { name: 'git_branch',              description: 'Create or switch branches',                             category: 'git' },
-    { name: 'git_commit',              description: 'Stage and commit changes with audit metadata',          category: 'git' },
-    { name: 'git_patch',               description: 'Apply a patch to files in allowed paths',               category: 'git' },
-    { name: 'git_pr',                  description: 'Create a pull request from current branch',             category: 'git' },
-    { name: 'prompt_list',             description: 'List all prompt layers in the stack',                   category: 'prompt' },
-    { name: 'prompt_get',              description: 'Get content of a specific prompt layer',                category: 'prompt' },
-    { name: 'prompt_update',           description: 'Update a prompt layer (agent blocks base/operator)',    category: 'prompt' },
-    { name: 'prompt_toggle',           description: 'Enable or disable a prompt layer',                      category: 'prompt' },
-    { name: 'heartbeat_get_policy',    description: 'View heartbeat reflection templates and schedules',     category: 'heartbeat' },
-    { name: 'heartbeat_update_policy', description: 'Modify reflection templates or intervals',              category: 'heartbeat' },
-    { name: 'schedule_task',           description: 'Create one-shot scheduled tasks',                       category: 'heartbeat' },
-    { name: 'contact_set_trust',       description: 'Change trust level for a contact',                      category: 'trust' },
-    { name: 'contact_note',            description: 'Add or update notes on a contact',                      category: 'trust' },
+    // Git
+    { name: 'repo_status',            description: 'Show working tree status of the substrate repo',        category: 'git' },
+    { name: 'repo_diff',              description: 'Show file diffs in the working tree',                   category: 'git' },
+    { name: 'repo_create_branch',     description: 'Create or switch branches',                             category: 'git' },
+    { name: 'repo_commit',            description: 'Stage and commit changes with audit metadata',          category: 'git' },
+    { name: 'repo_apply_patch',       description: 'Apply a patch to files in allowed paths',               category: 'git' },
+    { name: 'repo_open_pr',           description: 'Create a pull request from current branch',             category: 'git' },
+    // Prompt
+    { name: 'prompt_list',            description: 'List all prompt layers in the stack',                   category: 'prompt' },
+    { name: 'prompt_get',             description: 'Get content of a specific prompt layer',                category: 'prompt' },
+    { name: 'prompt_update',          description: 'Update a prompt layer (agent blocks base/operator)',    category: 'prompt' },
+    { name: 'prompt_toggle',          description: 'Enable or disable a prompt layer',                      category: 'prompt' },
+    // Heartbeat & Scheduler
+    { name: 'heartbeat_get_policy',   description: 'View heartbeat reflection templates and schedules',     category: 'heartbeat' },
+    { name: 'heartbeat_update_policy', description: 'Modify reflection templates or intervals',             category: 'heartbeat' },
+    // Trust & Contacts
+    { name: 'contact_set_trust',      description: 'Change trust level for a contact',                      category: 'trust' },
+    { name: 'contact_note',           description: 'Add or update notes on a contact',                      category: 'trust' },
+    { name: 'contact_set_channel_privacy', description: 'Set privacy level for a contact channel link',     category: 'trust' },
+    { name: 'contact_link_identity',  description: 'Link two channel identities to the same contact',       category: 'trust' },
+    // Memory (extended)
+    { name: 'memory_import_batch',    description: 'Import multiple memories in a single batch',            category: 'memory' },
+    { name: 'memory_redact',          description: 'Redact sensitive content from a memory',                category: 'memory' },
+    { name: 'memory_delete',          description: 'Soft-delete a memory (supersede with no replacement)',  category: 'memory' },
+    { name: 'undo_memory_delete',     description: 'Restore a previously deleted memory',                   category: 'memory' },
+    { name: 'scratchpad_read',        description: 'Read from the agent scratchpad (ephemeral key-value)',  category: 'scratchpad' },
+    { name: 'scratchpad_write',       description: 'Write to the agent scratchpad (ephemeral key-value)',   category: 'scratchpad' },
+    // Lifecycle
+    { name: 'self_restart',           description: 'Gracefully restart the agent process',                  category: 'lifecycle' },
+    { name: 'self_rebuild',           description: 'Trigger a rebuild and restart cycle',                   category: 'lifecycle' },
+    // Skills
+    { name: 'skill_list',             description: 'List all loaded skill modules',                         category: 'skills' },
+    { name: 'skill_view',             description: 'View details of a specific skill',                      category: 'skills' },
+    { name: 'skill_create',           description: 'Create a new skill module',                             category: 'skills' },
+    { name: 'skill_update',           description: 'Update an existing skill module',                       category: 'skills' },
+    // Gateway
+    { name: 'shell.exec',             description: 'Execute a shell command via gateway (policy-gated)',    category: 'gateway' },
   ];
+
+  // ── Grouped extended tools ──
+  const gitTools = EXTENDED_TOOLS.filter(t => t.category === 'git');
+  const promptTools = EXTENDED_TOOLS.filter(t => t.category === 'prompt');
+  const heartbeatTools = EXTENDED_TOOLS.filter(t => t.category === 'heartbeat');
+  const trustTools = EXTENDED_TOOLS.filter(t => t.category === 'trust');
+  const memoryExtTools = EXTENDED_TOOLS.filter(t => t.category === 'memory' || t.category === 'scratchpad');
+  const lifecycleTools = EXTENDED_TOOLS.filter(t => t.category === 'lifecycle');
+  const skillsTools = EXTENDED_TOOLS.filter(t => t.category === 'skills');
+  const gatewayTools = EXTENDED_TOOLS.filter(t => t.category === 'gateway');
+
+  interface ExtendedGroup {
+    id: string;
+    label: string;
+    dot: string;
+    tools: ToolInfo[];
+  }
+
+  const EXTENDED_GROUPS: ExtendedGroup[] = [
+    { id: 'git', label: 'Git Self-Modification', dot: CATEGORY_DOT.git, tools: gitTools },
+    { id: 'prompt', label: 'Prompt Stack', dot: CATEGORY_DOT.prompt, tools: promptTools },
+    { id: 'heartbeat', label: 'Heartbeat & Scheduler', dot: CATEGORY_DOT.heartbeat, tools: heartbeatTools },
+    { id: 'trust', label: 'Trust & Contacts', dot: CATEGORY_DOT.trust, tools: trustTools },
+    { id: 'memory', label: 'Memory & Scratchpad', dot: CATEGORY_DOT.memory, tools: memoryExtTools },
+    { id: 'lifecycle', label: 'Lifecycle', dot: CATEGORY_DOT.lifecycle, tools: lifecycleTools },
+    { id: 'skills', label: 'Skills', dot: CATEGORY_DOT.skills, tools: skillsTools },
+    { id: 'gateway', label: 'Gateway', dot: CATEGORY_DOT.gateway, tools: gatewayTools },
+  ].filter(g => g.tools.length > 0);
 
   // ── Service health state ──
   interface ServiceStatus {
@@ -67,12 +121,15 @@
     description: string;
     status: 'healthy' | 'degraded' | 'unavailable' | 'loading';
     detail?: string;
+    expandable?: boolean;
+    expanded?: boolean;
+    models?: Array<{ id: string; description?: string }>;
   }
 
   let services = $state<ServiceStatus[]>([
     { name: 'Admin API',  description: 'Garden admin server',                              status: 'loading' },
-    { name: 'LLM Proxy',  description: 'LiteLLM proxy for model routing',                  status: 'loading' },
-    { name: 'Embeddings',  description: 'Embedding service (snowflake-arctic-embed2)',         status: 'loading' },
+    { name: 'LLM Proxy',  description: 'LiteLLM proxy for model routing',                  status: 'loading', expandable: true, expanded: false, models: [] },
+    { name: 'Embeddings',  description: 'Embedding service (configured via env)',            status: 'loading' },
   ]);
 
   const STATUS_COLOR: Record<ServiceStatus['status'], string> = {
@@ -119,11 +176,14 @@
     try {
       const res = await fetch('/api/models');
       if (res.ok) {
-        const data = await res.json() as unknown[];
+        const data = await res.json() as Array<{ id: string; description?: string }>;
+        const modelList = Array.isArray(data) ? data : [];
         services[1] = {
           ...services[1],
           status: 'healthy',
-          detail: `${Array.isArray(data) ? data.length : 0} models discovered`,
+          detail: `${modelList.length} models discovered`,
+          expandable: true,
+          models: modelList,
         };
       } else {
         services[1] = { ...services[1], status: 'degraded', detail: `HTTP ${res.status}` };
@@ -155,11 +215,9 @@
     return `${h}h ${m}m`;
   }
 
-  // ── Grouped extended tools ──
-  const gitTools = EXTENDED_TOOLS.filter(t => t.category === 'git');
-  const promptTools = EXTENDED_TOOLS.filter(t => t.category === 'prompt');
-  const heartbeatTools = EXTENDED_TOOLS.filter(t => t.category === 'heartbeat');
-  const trustTools = EXTENDED_TOOLS.filter(t => t.category === 'trust');
+  function toggleModelList(idx: number) {
+    services[idx] = { ...services[idx], expanded: !services[idx].expanded };
+  }
 
   let refreshing = $state(false);
 
@@ -221,85 +279,26 @@
       <span class="text-sm font-sans text-shadow-600">{EXTENDED_TOOLS.length} tools -- loaded on demand via <code class="font-mono text-gold-600">load_tools</code></span>
     </div>
 
-    <!-- Git tools -->
-    <div class="mb-5">
-      <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
-        <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT.git}"></span>
-        Git Self-Modification
-        <span class="text-sm font-normal text-shadow-600">({gitTools.length})</span>
-      </h3>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {#each gitTools as tool}
-          <div class="card-garden p-4">
-            <div class="flex items-center gap-2.5 mb-2">
-              <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
-              <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE.git}">git</span>
+    {#each EXTENDED_GROUPS as group}
+      <div class="mb-5">
+        <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
+          <span class="inline-block w-2 h-2 rounded-full {group.dot}"></span>
+          {group.label}
+          <span class="text-sm font-normal text-shadow-600">({group.tools.length})</span>
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {#each group.tools as tool}
+            <div class="card-garden p-4">
+              <div class="flex items-center gap-2.5 mb-2">
+                <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
+                <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
+              </div>
+              <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
             </div>
-            <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
-          </div>
-        {/each}
+          {/each}
+        </div>
       </div>
-    </div>
-
-    <!-- Prompt tools -->
-    <div class="mb-5">
-      <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
-        <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT.prompt}"></span>
-        Prompt Stack
-        <span class="text-sm font-normal text-shadow-600">({promptTools.length})</span>
-      </h3>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {#each promptTools as tool}
-          <div class="card-garden p-4">
-            <div class="flex items-center gap-2.5 mb-2">
-              <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
-              <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE.prompt}">prompt</span>
-            </div>
-            <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
-          </div>
-        {/each}
-      </div>
-    </div>
-
-    <!-- Heartbeat / Scheduler tools -->
-    <div class="mb-5">
-      <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
-        <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT.heartbeat}"></span>
-        Heartbeat & Scheduler
-        <span class="text-sm font-normal text-shadow-600">({heartbeatTools.length})</span>
-      </h3>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {#each heartbeatTools as tool}
-          <div class="card-garden p-4">
-            <div class="flex items-center gap-2.5 mb-2">
-              <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
-              <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE.heartbeat}">scheduler</span>
-            </div>
-            <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
-          </div>
-        {/each}
-      </div>
-    </div>
-
-    <!-- Trust tools -->
-    <div class="mb-5">
-      <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
-        <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT.trust}"></span>
-        Trust & Contacts
-        <span class="text-sm font-normal text-shadow-600">({trustTools.length})</span>
-      </h3>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {#each trustTools as tool}
-          <div class="card-garden p-4">
-            <div class="flex items-center gap-2.5 mb-2">
-              <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
-              <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE.trust}">trust</span>
-            </div>
-            <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
-          </div>
-        {/each}
-      </div>
-    </div>
+    {/each}
   </div>
 
   <!-- Service Health -->
@@ -321,7 +320,7 @@
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {#each services as service}
+      {#each services as service, i}
         <div class="card-garden p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-semibold text-shadow-900">{service.name}</h3>
@@ -332,7 +331,34 @@
           </div>
           <p class="text-sm text-shadow-700 mb-2">{service.description}</p>
           {#if service.detail}
-            <p class="text-sm font-mono text-shadow-800 bg-bark-100 rounded px-2 py-1">{service.detail}</p>
+            {#if service.expandable && service.models && service.models.length > 0}
+              <button
+                onclick={() => toggleModelList(i)}
+                class="text-sm font-mono text-shadow-800 bg-bark-100 rounded px-2 py-1 hover:bg-bark-200 transition-colors cursor-pointer w-full text-left"
+              >
+                {service.detail} {service.expanded ? '(click to collapse)' : '(click to expand)'}
+              </button>
+              {#if service.expanded}
+                <div class="mt-2 max-h-60 overflow-y-auto bg-bark-100 rounded border border-bark-300 p-2">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="border-b border-bark-300">
+                        <th class="text-left py-1 text-shadow-700 font-medium">Model ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each service.models as model}
+                        <tr class="border-b border-bark-200">
+                          <td class="py-1 font-mono text-shadow-800 text-sm">{model.id}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            {:else}
+              <p class="text-sm font-mono text-shadow-800 bg-bark-100 rounded px-2 py-1">{service.detail}</p>
+            {/if}
           {/if}
         </div>
       {/each}

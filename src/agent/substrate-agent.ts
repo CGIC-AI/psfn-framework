@@ -43,6 +43,7 @@ import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { tagToolWithReversibility } from '../capabilities/safeguards.js';
+import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import {
   classifyBroadcastDraft,
@@ -327,13 +328,13 @@ export class SubstrateAgent {
           ...self.extendedTools.filter(t => self.loadedExtended.has(t.name)),
         ];
         self.agent.setTools(self.withCapabilityGates(active));
-        const text = matched.length
-          ? `Loaded ${matched.length} tools: ${matched.map(t => t.name).join(', ')}`
-          : `No matching tools found. Available: ${self.extendedTools.map(t => t.name).join(', ')}`;
-        return {
-          content: [{ type: 'text' as const, text }],
-          details: {},
-        };
+        if (matched.length) {
+          return textResult(`Loaded ${matched.length} tools: ${matched.map(t => t.name).join(', ')}`);
+        }
+        return textResultWithError(
+          `No matching tools found. Available: ${self.extendedTools.map(t => t.name).join(', ')}`,
+          true,
+        );
       },
     };
   }

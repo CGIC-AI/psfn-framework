@@ -18,6 +18,7 @@ import {
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
 } from './compaction-audit.js';
+import { resolveRoleName } from './manager-primitives.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
@@ -975,5 +976,104 @@ describe('SessionManager', () => {
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
     expect(call.systemPrompt).not.toContain('{{current_datetime}}');
     expect(call.systemPrompt).toMatch(/Summarize at \d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('uses character name in continuity block instead of hardcoded label', async () => {
+    const config = makeConfig();
+    const continuityDir = join(dir, 'continuity');
+    const continuityStore = new UserContinuityStore(continuityDir);
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = continuityStore;
+    mgr.characterName = 'TestBot';
+
+    // Use api: prefix channels which are classified as 'private' and share continuity
+    continuityStore.append('user1', {
+      channelId: 'api:other',
+      role: 'assistant',
+      content: 'I helped with something.',
+      timestamp: 1000,
+      originChannelId: 'api:other',
+      channelVisibility: 'private',
+    });
+    continuityStore.append('user1', {
+      channelId: 'api:other',
+      role: 'user',
+      content: 'Thanks!',
+      authorName: 'Alice',
+      timestamp: 2000,
+      originChannelId: 'api:other',
+      channelVisibility: 'private',
+    });
+
+    // Add a message to the main channel so buildContext has content
+    mgr.recordUserMessage('api:main', 'Hello', 'user1', 'Alice');
+    mgr.recordAssistantMessage('api:main', 'Hi there');
+
+    const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1');
+    const systemPrompt = ctx.systemPrompt;
+
+    // The continuity block should use the configured character name, not 'Purrsephone'
+    expect(systemPrompt).toContain('TestBot');
+    expect(systemPrompt).not.toContain('Purrsephone');
+  });
+
+  it('falls back to "Assistant" when characterName is not set', async () => {
+    const config = makeConfig();
+    const continuityDir = join(dir, 'continuity');
+    const continuityStore = new UserContinuityStore(continuityDir);
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = continuityStore;
+    // characterName is NOT set
+
+    // Use api: prefix channels which are classified as 'private' and share continuity
+    continuityStore.append('user1', {
+      channelId: 'api:other',
+      role: 'assistant',
+      content: 'I helped with something.',
+      timestamp: 1000,
+      originChannelId: 'api:other',
+      channelVisibility: 'private',
+    });
+
+    mgr.recordUserMessage('api:main', 'Hello', 'user1', 'Alice');
+    mgr.recordAssistantMessage('api:main', 'Hi there');
+
+    const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1');
+
+    // With no characterName set, should fall back to 'Assistant'
+    expect(ctx.systemPrompt).toContain('Assistant');
+    expect(ctx.systemPrompt).not.toContain('Purrsephone');
+  });
+});
+
+describe('resolveRoleName', () => {
+  it('maps assistant to configured character name', () => {
+    expect(resolveRoleName('assistant', { charName: 'Purrsephone' })).toBe('Purrsephone');
+  });
+
+  it('maps user to configured user name', () => {
+    expect(resolveRoleName('user', { userName: 'Alice' })).toBe('Alice');
+  });
+
+  it('falls back to "Assistant" when charName is undefined', () => {
+    expect(resolveRoleName('assistant', {})).toBe('Assistant');
+  });
+
+  it('falls back to "User" when userName is undefined', () => {
+    expect(resolveRoleName('user', {})).toBe('User');
+  });
+
+  it('falls back to "Assistant" when charName is empty', () => {
+    expect(resolveRoleName('assistant', { charName: '' })).toBe('Assistant');
+    expect(resolveRoleName('assistant', { charName: '  ' })).toBe('Assistant');
+  });
+
+  it('falls back to "User" when userName is empty', () => {
+    expect(resolveRoleName('user', { userName: '' })).toBe('User');
+    expect(resolveRoleName('user', { userName: '  ' })).toBe('User');
+  });
+
+  it('passes through unknown roles unchanged', () => {
+    expect(resolveRoleName('system', { charName: 'Bot' })).toBe('system');
   });
 });

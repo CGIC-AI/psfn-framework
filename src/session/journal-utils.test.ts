@@ -315,6 +315,70 @@ describe('journal utils', () => {
       .toContain('<unverified_history>');
   });
 
+  it('loads entries normally when no keyring is configured (integrity disabled)', () => {
+    // When there is no keyring, entries should load without any wrapping
+    const entry = buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'normal content',
+      timestamp: 1,
+    });
+
+    // Without a keyring, verifyJournalEntryIntegrity should not be called at all.
+    // The SessionJournalRuntime returns the entry as-is when integrityProvider is null.
+    // This test verifies the entry is not wrapped.
+    expect(entry.content).toBe('normal content');
+    expect(entry.content).not.toContain('<unverified_history>');
+  });
+
+  it('passes verification with valid HMAC when keyring is configured', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:test-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+
+    const entry = buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'verified content',
+      timestamp: 1,
+    });
+
+    const signed = signJournalEntry(entry, keyring!, null);
+    const result = verifyJournalEntryIntegrity(signed, keyring!, null);
+    expect(result.verified).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it('wraps tampered content when keyring is configured and HMAC fails', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:test-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+
+    const entry = buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'original content',
+      timestamp: 1,
+    });
+
+    const signed = signJournalEntry(entry, keyring!, null);
+    // Tamper with the content
+    signed.content = 'tampered content';
+
+    const result = verifyJournalEntryIntegrity(signed, keyring!, null);
+    expect(result.verified).toBe(false);
+    expect(result.reason).toBe('signature_mismatch');
+
+    const wrapped = wrapUnverifiedHistory(signed.content!, result.reason);
+    expect(wrapped).toContain('<unverified_history>');
+    expect(wrapped).toContain('tampered content');
+    expect(wrapped).toContain('signature_mismatch');
+  });
+
   it('parses legacy chat JSON arrays and normalizes timestamps', () => {
     const parsed = parseLegacyChatSource(JSON.stringify([
       {

@@ -25,6 +25,7 @@ import {
   isUntrustedVisibility,
   parseChannelVisibility,
   resolveEmotionalSalienceThreshold,
+  resolveRoleName,
   trimRecentEntriesToTokenBudget,
   withRetry,
   wrapUntrustedContext,
@@ -48,6 +49,8 @@ interface BuildSessionContextParams {
   promptRegistry: PromptRegistryStore | null;
   preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   continuityStore: UserContinuityStore | null;
+  /** Character name from identity card (e.g. 'Purrsephone'). Used for display labels. */
+  characterName?: string;
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
@@ -212,10 +215,13 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     });
 
     if (crossChannel.length > 0) {
+      const roleNames = { charName: params.characterName };
       const continuityBlock = crossChannel
         .map(e => {
           const origin = e.originChannelId ? ` [from ${e.originChannelId}]` : '';
-          const speaker = e.role === 'user' ? (e.authorName ?? 'User') : 'Purrsephone';
+          const speaker = e.role === 'user'
+            ? (e.authorName ?? resolveRoleName('user', roleNames))
+            : resolveRoleName('assistant', roleNames);
           const rawContent = `${speaker}${origin}: ${e.content}`;
           const originVisibility = parseChannelVisibility(e.channelVisibility)
             ?? classifyChannel(e.originChannelId ?? e.channelId);

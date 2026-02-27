@@ -1,4 +1,5 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
+import { isRecord } from '../utils/types.js';
 import type { CapabilityToken } from './tokens.js';
 
 export type CapabilityRequirement = CapabilityToken | readonly CapabilityToken[];
@@ -49,10 +50,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
 };
 
 function toRecord(value: unknown): Record<string, unknown> {
-  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
+  return isRecord(value) ? value : {};
 }
 
 function normalizeRequirement(input: CapabilityRequirement | null | undefined): CapabilityToken[] {

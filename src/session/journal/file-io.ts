@@ -1,5 +1,4 @@
 import {
-  appendFileSync,
   closeSync,
   existsSync,
   fstatSync,
@@ -10,6 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import type { JournalEntry } from '../types.js';
+import { appendJsonLine } from '../../persistence/jsonl.js';
 import { toErrorMessage } from '../../utils/errors.js';
 import type {
   JournalFileMetadata,
@@ -361,5 +361,5 @@ export function readJournalTailEntries(
 }
 
 export function appendJournalEntry(filePath: string, entry: JournalEntry): void {
-  appendFileSync(filePath, JSON.stringify(entry) + '\n');
+  appendJsonLine(filePath, entry);
 }

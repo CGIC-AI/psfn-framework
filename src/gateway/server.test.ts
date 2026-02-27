@@ -311,9 +311,10 @@ describe('GatewayServer', () => {
       });
 
       expect(verifyResponse.error).toBeUndefined();
+      // When no keyring is configured, integrity is disabled — entries load normally (verified: true)
       expect(verifyResponse.result).toMatchObject({
-        verified: false,
-        reason: 'hmac_keyring_unconfigured',
+        verified: true,
+        reason: 'integrity_disabled',
       });
     });
   });

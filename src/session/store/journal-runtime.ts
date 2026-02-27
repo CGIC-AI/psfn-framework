@@ -33,6 +33,11 @@ export class SessionJournalRuntime {
 
   constructor(integrityProvider: SessionIntegrityProvider | null) {
     this.integrityProvider = integrityProvider;
+    if (integrityProvider) {
+      log.info('Session integrity mode: enabled (HMAC verification active)');
+    } else {
+      log.info('Session integrity mode: disabled (no keyring configured, entries load without verification)');
+    }
   }
 
   verifyAndNormalizeEntry(entry: JournalEntry, previousHmac: string | null): JournalEntry {

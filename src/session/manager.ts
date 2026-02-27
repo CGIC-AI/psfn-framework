@@ -58,6 +58,8 @@ export class SessionManager {
   private promptRegistry: PromptRegistryStore | null;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   continuityStore: UserContinuityStore | null = null;
+  /** Character name from identity card (e.g. 'PSFN'). Used for display labels in context. */
+  characterName: string | undefined;
 
   constructor(
     store: SessionStore,
@@ -179,6 +181,7 @@ export class SessionManager {
       config: this.config,
       store: this.store,
       continuityStore: this.continuityStore,
+      characterName: this.characterName,
       ...params,
     });
   }
@@ -206,6 +209,7 @@ export class SessionManager {
       promptRegistry: this.promptRegistry,
       preCompactionExtractionHandler: this.preCompactionExtractionHandler,
       continuityStore: this.continuityStore,
+      characterName: this.characterName,
     });
   }
 

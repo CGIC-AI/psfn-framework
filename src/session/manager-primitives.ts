@@ -6,6 +6,20 @@ import type { SessionEntry } from './types.js';
 
 /** Default number of cross-channel continuity messages to include in context. */
 export const DEFAULT_CONTINUITY_CONTEXT_LIMIT = 10;
+
+/**
+ * Resolve a display name for a message role.
+ * Maps 'assistant' to the configured character name and 'user' to the configured user name.
+ * The actual message role field (sent to LLMs) is never changed — this is purely for display.
+ */
+export function resolveRoleName(
+  role: string,
+  config: { charName?: string; userName?: string },
+): string {
+  if (role === 'assistant') return config.charName?.trim() || 'Assistant';
+  if (role === 'user') return config.userName?.trim() || 'User';
+  return role;
+}
 export const DEFAULT_SESSION_MIRROR_MAX_CHARS = 220;
 export const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 30 * 60 * 1000;
 const DEFAULT_IMPORT_BOOTSTRAP_MAX_TOKENS = 50_000;

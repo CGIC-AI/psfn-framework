@@ -819,6 +819,28 @@ describe('SessionStore', () => {
     const entries = reloaded.getRecent('api:provider', 10);
     expect(entries.map(entry => entry.content)).toEqual(['hello', 'world']);
   });
+
+  it('loads entries without unverified wrapping when no keyring is configured (integrity disabled)', () => {
+    // Write entries WITH an HMAC keyring
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:some-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    signedStore.append({
+      channelId: 'api:no-keyring-test',
+      role: 'user',
+      content: 'signed content',
+      timestamp: 1000,
+    });
+
+    // Reload WITHOUT any keyring — should load entries normally, not wrap them
+    const noKeyringStore = new SessionStore(dir);
+    const entries = noKeyringStore.getRecent('api:no-keyring-test', 10);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toBe('signed content');
+    expect(entries[0].content).not.toContain('<unverified_history>');
+  });
 });
 
 describe('sanitizeChannelId / unsanitizeChannelId', () => {

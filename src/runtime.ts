@@ -270,6 +270,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
     this.sessionStore = sessionComposition.sessionStore;
     this.sessionManager = sessionComposition.sessionManager;
+    this.sessionManager.characterName = card.data.name;
     if (sessionComposition.continuityStore) {
       log.info('User continuity store enabled');
     }

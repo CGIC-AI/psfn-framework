@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { getIdentity, importIdentity, rollbackIdentity, previewDiff } from '$lib/api/endpoints/identity';
   import type { DiffPreviewResponse } from '$lib/api/endpoints/identity';
-  import type { AdminIdentityData, CharacterCardV2 } from '$lib/types';
+  import type { AdminIdentityData, CharacterCardV2, CharacterCardHistoryEntry } from '$lib/types';
 
   let data = $state<AdminIdentityData | null>(null);
   let loading = $state(true);
@@ -32,6 +32,7 @@
   let showExtensions = $state(false);
   let showAlternateGreetings = $state(false);
   let showCreatorNotes = $state(false);
+  let showRuntimeConfig = $state(false);
 
   onMount(async () => {
     try {
@@ -77,7 +78,7 @@
     }
   }
 
-  async function showDiff(version: number) {
+  async function handleShowDiff(version: number) {
     if (diffVersion === version) {
       diffVersion = null;
       diffData = null;
@@ -96,61 +97,33 @@
     }
   }
 
-  // Compute diff lines between two string values
-  function computeFieldDiff(current: string, target: string): Array<{ type: 'same' | 'add' | 'remove'; text: string }> {
-    const currentLines = current.split('\n');
-    const targetLines = target.split('\n');
-    const result: Array<{ type: 'same' | 'add' | 'remove'; text: string }> = [];
+  // Build structured diff for two card objects -- compares ALL standard fields
+  const DIFF_FIELDS = [
+    { key: 'name', label: 'Name' },
+    { key: 'description', label: 'Description' },
+    { key: 'personality', label: 'Personality' },
+    { key: 'scenario', label: 'Scenario' },
+    { key: 'first_mes', label: 'First Message' },
+    { key: 'mes_example', label: 'Message Example' },
+    { key: 'system_prompt', label: 'System Prompt' },
+    { key: 'post_history_instructions', label: 'Post-History Instructions' },
+    { key: 'creator', label: 'Creator' },
+    { key: 'creator_notes', label: 'Creator Notes' },
+    { key: 'character_version', label: 'Character Version' },
+  ] as const;
 
-    // Simple line-by-line comparison
-    const maxLen = Math.max(currentLines.length, targetLines.length);
-    const currentSet = new Set(currentLines);
-    const targetSet = new Set(targetLines);
-
-    // Lines removed from current (in current but not in target)
-    for (const line of currentLines) {
-      if (!targetSet.has(line)) {
-        result.push({ type: 'remove', text: line });
-      }
-    }
-    // Lines added in target (in target but not in current)
-    for (const line of targetLines) {
-      if (!currentSet.has(line)) {
-        result.push({ type: 'add', text: line });
-      }
-    }
-    // Lines unchanged
-    for (const line of currentLines) {
-      if (targetSet.has(line)) {
-        result.push({ type: 'same', text: line });
-      }
-    }
-
-    return result;
-  }
-
-  // Build structured diff for two card objects
-  function buildCardDiff(current: CharacterCardV2, target: CharacterCardV2): Array<{ field: string; current: string; target: string }> {
-    const fields = [
-      'name', 'description', 'personality', 'scenario', 'first_mes',
-      'mes_example', 'system_prompt', 'post_history_instructions',
-      'creator', 'creator_notes', 'character_version',
-    ];
-    const diffs: Array<{ field: string; current: string; target: string }> = [];
-    for (const f of fields) {
-      const cv = String(current.data[f] ?? '');
-      const tv = String(target.data[f] ?? '');
-      if (cv !== tv) {
-        diffs.push({ field: f, current: cv, target: tv });
-      }
+  function buildCardDiff(current: CharacterCardV2, target: CharacterCardV2): Array<{ field: string; label: string; current: string; target: string; changed: boolean }> {
+    const results: Array<{ field: string; label: string; current: string; target: string; changed: boolean }> = [];
+    for (const f of DIFF_FIELDS) {
+      const cv = String(current?.data?.[f.key] ?? '');
+      const tv = String(target?.data?.[f.key] ?? '');
+      results.push({ field: f.key, label: f.label, current: cv, target: tv, changed: cv !== tv });
     }
     // Check tags
-    const cTags = (current.data.tags ?? []).join(', ');
-    const tTags = (target.data.tags ?? []).join(', ');
-    if (cTags !== tTags) {
-      diffs.push({ field: 'tags', current: cTags, target: tTags });
-    }
-    return diffs;
+    const cTags = (current?.data?.tags ?? []).join(', ');
+    const tTags = (target?.data?.tags ?? []).join(', ');
+    results.push({ field: 'tags', label: 'Tags', current: cTags, target: tTags, changed: cTags !== tTags });
+    return results;
   }
 
   const PLACEHOLDER_VALUES = ['sytem prompt', 'system prompt', 'post history', 'post_history_instructions'];
@@ -171,11 +144,7 @@
     editFieldValue = '';
   }
 
-  // Note: The backend identity update endpoint currently only supports import/rollback,
-  // not per-field PATCH. So inline editing shows the textarea but save is via re-import.
-  // We show the edit UI for reference/preparation of future API support.
   function saveFieldEdit() {
-    // For now, flash info that per-field editing requires re-import
     error = 'Per-field editing is not yet supported by the API. Use Import or Rollback to update the character card.';
     editingField = null;
   }
@@ -200,6 +169,31 @@
     { key: 'mes_example', label: 'Example Dialogue', rows: 7, mono: true },
     { key: 'first_mes', label: 'First Message', rows: 4 },
   ];
+
+  // Runtime config fields to display
+  function getConfigFields(config: Record<string, unknown>): Array<{ label: string; value: string }> {
+    const fields: Array<{ label: string; value: string }> = [];
+    const map: Array<[string, string]> = [
+      ['primaryModel', 'Primary Model'],
+      ['extractionModel', 'Extraction Model'],
+      ['discordBotId', 'Discord Bot ID'],
+      ['dataDir', 'Data Dir'],
+      ['characterCardPath', 'Character Card Path'],
+      ['sessionHistoryBudgetPct', 'Session History Budget %'],
+      ['sessionMessageLimit', 'Session Message Hard Override'],
+      ['memoryBudgetPct', 'Memory Retrieval Budget %'],
+      ['memoryRetrievalLimit', 'Memory Retrieval Hard Override'],
+    ];
+    for (const [key, label] of map) {
+      const val = config?.[key];
+      if (val !== undefined && val !== null) {
+        fields.push({ label, value: String(val) });
+      } else if (key === 'sessionMessageLimit' || key === 'memoryRetrievalLimit') {
+        fields.push({ label, value: 'auto' });
+      }
+    }
+    return fields;
+  }
 </script>
 
 <div class="space-y-6">
@@ -265,7 +259,7 @@
         <div class="flex items-center justify-between mb-3">
           <span class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Raw Character Card</span>
           <span class="text-sm font-mono text-shadow-600">
-            {card.spec} {card.spec_version}
+            {card.spec ?? ''} {card.spec_version ?? ''}
           </span>
         </div>
         <pre class="text-sm font-mono text-shadow-800 bg-bark-100 p-4 rounded-lg overflow-x-auto whitespace-pre-wrap max-h-[600px] overflow-y-auto leading-relaxed">{JSON.stringify(card, null, 2)}</pre>
@@ -278,16 +272,16 @@
         <div class="card-garden p-6">
           <div class="flex items-center gap-5">
             <div class="w-16 h-16 rounded-full bg-gold-50 border-2 border-gold-300 flex items-center justify-center shrink-0">
-              <span class="text-2xl font-serif font-bold text-gold-700">{cardData.name[0]}</span>
+              <span class="text-2xl font-serif font-bold text-gold-700">{(cardData.name ?? '?')[0]}</span>
             </div>
             <div class="min-w-0">
-              <h2 class="text-xl font-serif font-bold text-shadow-900">{cardData.name}</h2>
+              <h2 class="text-xl font-serif font-bold text-shadow-900">{cardData.name ?? 'Unknown'}</h2>
               <div class="flex flex-wrap items-center gap-2 mt-1">
                 <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium bg-gold-50 text-gold-700 border border-gold-300">
-                  v{data.version}
+                  v{data.version ?? 1}
                 </span>
                 <span class="text-sm text-shadow-600">
-                  {card.spec} {card.spec_version}
+                  {card.spec ?? ''} {card.spec_version ?? ''}
                 </span>
                 {#if data.checksum}
                   <span class="text-sm font-mono text-shadow-600">{data.checksum.slice(0, 12)}</span>
@@ -308,6 +302,7 @@
         <!-- Import card -->
         <div class="card-garden p-5">
           <h3 class="text-sm font-serif font-semibold text-shadow-800 mb-3">Import Character Card</h3>
+          <p class="text-sm text-shadow-600 mb-3">Import from JSON, PNG, or CharX using a local filesystem path.</p>
           <form onsubmit={(e) => { e.preventDefault(); handleImport(); }} class="flex gap-2">
             <input
               type="text"
@@ -330,7 +325,7 @@
           {/if}
         </div>
 
-        <!-- Card fields — each is click-to-edit -->
+        <!-- Card fields -- each is click-to-edit -->
         {#each CARD_FIELDS as field}
           {@const value = cardData[field.key] as string | undefined}
           {#if !isPlaceholder(value)}
@@ -365,9 +360,9 @@
                          focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                 ></textarea>
               {:else if field.mono}
-                <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap leading-relaxed bg-bark-100 p-3 rounded-lg max-h-64 overflow-y-auto">{value}</pre>
+                <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap leading-relaxed bg-bark-100 p-3 rounded-lg max-h-64 overflow-y-auto">{value ?? ''}</pre>
               {:else}
-                <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">{value}</div>
+                <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">{value ?? ''}</div>
               {/if}
             </div>
           {/if}
@@ -393,7 +388,9 @@
               onclick={() => showCreatorNotes = !showCreatorNotes}
             >
               <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Creator Notes</h3>
-              <span class="text-shadow-600 text-sm transition-transform {showCreatorNotes ? 'rotate-180' : ''}">&#9660;</span>
+              <svg class="w-4 h-4 text-shadow-600 transition-transform {showCreatorNotes ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 9l-7 7-7-7" />
+              </svg>
             </button>
             {#if showCreatorNotes}
               <div class="border-t border-bark-300 p-5">
@@ -411,7 +408,9 @@
               onclick={() => showAlternateGreetings = !showAlternateGreetings}
             >
               <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Alternate Greetings</h3>
-              <span class="text-shadow-600 text-sm transition-transform {showAlternateGreetings ? 'rotate-180' : ''}">&#9660;</span>
+              <svg class="w-4 h-4 text-shadow-600 transition-transform {showAlternateGreetings ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 9l-7 7-7-7" />
+              </svg>
             </button>
             {#if showAlternateGreetings}
               <div class="border-t border-bark-300 p-5 space-y-3">
@@ -434,7 +433,9 @@
               onclick={() => showExtensions = !showExtensions}
             >
               <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Extensions</h3>
-              <span class="text-shadow-600 text-sm transition-transform {showExtensions ? 'rotate-180' : ''}">&#9660;</span>
+              <svg class="w-4 h-4 text-shadow-600 transition-transform {showExtensions ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 9l-7 7-7-7" />
+              </svg>
             </button>
             {#if showExtensions}
               <div class="border-t border-bark-300 p-5">
@@ -444,93 +445,168 @@
           </div>
         {/if}
 
+        <!-- Runtime Configuration -->
+        {#if data.config}
+          <div class="card-garden overflow-hidden">
+            <button
+              class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
+              onclick={() => showRuntimeConfig = !showRuntimeConfig}
+            >
+              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Runtime Configuration</h3>
+              <svg class="w-4 h-4 text-shadow-600 transition-transform {showRuntimeConfig ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {#if showRuntimeConfig}
+              <div class="border-t border-bark-300 p-5">
+                <div class="overflow-x-auto">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="border-b border-bark-300">
+                        <th class="text-left px-3 py-2 text-shadow-700 font-medium">Setting</th>
+                        <th class="text-left px-3 py-2 text-shadow-700 font-medium">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each getConfigFields(data.config) as cf}
+                        <tr class="border-b border-bark-200 hover:bg-bark-50 transition-colors">
+                          <td class="px-3 py-2 text-shadow-700 font-medium">{cf.label}</td>
+                          <td class="px-3 py-2 text-shadow-800 font-mono">{cf.value}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
         <!-- Version History -->
         {#if data.history && data.history.length > 0}
           <div class="card-garden overflow-hidden">
             <div class="p-5 pb-0">
-              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider mb-1">Version History</h3>
+              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider mb-1">Card Version History</h3>
+              <p class="text-sm text-shadow-600 mb-2">
+                Current version: <span class="font-medium text-shadow-800">v{data.version ?? 1}</span>
+                {#if data.checksum}
+                  <span class="mx-1 text-shadow-500">|</span>
+                  Checksum: <code class="font-mono text-shadow-700">{data.checksum.slice(0, 12)}</code>
+                {/if}
+              </p>
               <p class="text-sm text-shadow-600 mb-4">{data.history.length} version{data.history.length === 1 ? '' : 's'} recorded</p>
             </div>
 
             {#if rollbackMessage}
-              <div class="mx-5 mb-3 px-3 py-2 rounded-lg bg-moss-50 text-sm text-moss-600">{rollbackMessage}</div>
+              <div class="mx-5 mb-3 px-3 py-2 rounded-lg bg-moss-50 text-sm text-moss-600 border border-moss-200">{rollbackMessage}</div>
             {/if}
 
-            <div class="px-5 pb-5 space-y-2">
-              {#each data.history as entry (entry.version)}
-                {@const isCurrent = entry.version === data.version}
-                <div class="rounded-lg border overflow-hidden {isCurrent ? 'border-gold-300' : 'border-bark-300'}">
-                  <div class="flex items-center gap-3 px-4 py-2.5 {isCurrent ? 'bg-gold-50' : 'bg-bark-100'}">
-                    <span class="font-mono text-sm font-medium {isCurrent ? 'text-gold-700' : 'text-shadow-800'}">v{entry.version}</span>
-                    <span class="text-sm text-shadow-700">{new Date(entry.timestamp).toLocaleString()}</span>
-                    <span class="text-sm text-shadow-600">{entry.changedBy}</span>
-                    {#if isCurrent}
-                      <span class="ml-auto px-2 py-0.5 rounded-full text-sm font-medium bg-gold-100 text-gold-700 border border-gold-300">current</span>
-                    {:else}
-                      <div class="ml-auto flex gap-1.5">
-                        <button
-                          onclick={() => showDiff(entry.version)}
-                          class="px-2.5 py-1 text-sm font-medium rounded border border-bark-300 text-shadow-700 hover:bg-bark-200 hover:border-gold-300 transition-colors"
-                        >
-                          {diffVersion === entry.version ? 'Hide Diff' : 'Diff'}
-                        </button>
-                        <button
-                          onclick={() => handleRollback(entry.version)}
-                          disabled={rollingBack === entry.version}
-                          class="px-2.5 py-1 text-sm font-medium rounded border border-wilt-200 text-wilt-600 hover:bg-wilt-50 transition-colors disabled:opacity-50"
-                        >
-                          {rollingBack === entry.version ? 'Rolling back...' : 'Rollback'}
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
-
-                  <!-- Diff panel with proper red/green highlighting -->
-                  {#if diffVersion === entry.version}
-                    <div class="border-t border-bark-300 p-4">
-                      {#if diffLoading}
-                        <div class="animate-pulse space-y-2">
-                          <div class="h-4 bg-bark-200 rounded w-1/3"></div>
-                          <div class="h-4 bg-bark-200 rounded w-2/3"></div>
-                        </div>
-                      {:else if diffData && diffData.ok}
-                        {@const fieldDiffs = buildCardDiff(diffData.current, diffData.target)}
-                        <p class="text-sm text-shadow-700 mb-3">
-                          Comparing <span class="font-medium text-shadow-900">current (v{data.version})</span> with <span class="font-medium text-shadow-900">v{entry.version}</span>
-                          {#if fieldDiffs.length === 0}
-                            <span class="text-shadow-600 ml-1">(no differences)</span>
-                          {/if}
-                        </p>
-                        {#if fieldDiffs.length > 0}
-                          <div class="space-y-3">
-                            {#each fieldDiffs as fd}
-                              <div>
-                                <p class="text-sm font-medium text-shadow-800 mb-1">{fd.field}</p>
-                                <div class="text-sm font-mono leading-relaxed rounded-lg overflow-hidden border border-bark-300">
-                                  {#if fd.current.trim()}
-                                    <div class="bg-red-50 p-2 border-b border-bark-200">
-                                      <span class="text-red-800 select-none mr-1">-</span>
-                                      <span class="text-red-800 whitespace-pre-wrap">{fd.current}</span>
-                                    </div>
-                                  {/if}
-                                  {#if fd.target.trim()}
-                                    <div class="bg-green-50 p-2">
-                                      <span class="text-green-800 select-none mr-1">+</span>
-                                      <span class="text-green-800 whitespace-pre-wrap">{fd.target}</span>
-                                    </div>
-                                  {/if}
-                                </div>
-                              </div>
-                            {/each}
+            <!-- Version history table -->
+            <div class="px-5 pb-5">
+              <div class="overflow-x-auto border border-bark-300 rounded-lg">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="bg-bark-100 border-b border-bark-300">
+                      <th class="text-left px-3 py-2.5 text-shadow-700 font-medium">Version</th>
+                      <th class="text-left px-3 py-2.5 text-shadow-700 font-medium">Changed By</th>
+                      <th class="text-left px-3 py-2.5 text-shadow-700 font-medium">Timestamp</th>
+                      <th class="text-left px-3 py-2.5 text-shadow-700 font-medium">Previous Checksum</th>
+                      <th class="text-left px-3 py-2.5 text-shadow-700 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each [...data.history].reverse().slice(0, 20) as entry (entry.version)}
+                      {@const isCurrent = entry.version === (data.version ?? 1) - 1}
+                      <tr class="border-b border-bark-200 hover:bg-bark-50 transition-colors {isCurrent ? 'bg-gold-50' : ''}">
+                        <td class="px-3 py-2 font-mono text-shadow-800 font-medium">
+                          v{entry.version} &rarr; v{entry.version + 1}
+                        </td>
+                        <td class="px-3 py-2 text-shadow-700">{entry.updatedBy ?? entry.changedBy ?? 'unknown'}</td>
+                        <td class="px-3 py-2 text-shadow-700">{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : 'unknown'}</td>
+                        <td class="px-3 py-2">
+                          <code class="font-mono text-shadow-600 text-sm">{(entry.previousChecksum ?? entry.checksum ?? 'n/a').slice(0, 12)}</code>
+                        </td>
+                        <td class="px-3 py-2">
+                          <div class="flex gap-1.5">
+                            <button
+                              onclick={() => handleShowDiff(entry.version)}
+                              class="px-2.5 py-1 text-sm font-medium rounded border border-bark-300 text-shadow-700 hover:bg-bark-200 hover:border-gold-300 transition-colors"
+                            >
+                              {diffVersion === entry.version ? 'Hide' : 'Diff'}
+                            </button>
+                            <button
+                              onclick={() => handleRollback(entry.version)}
+                              disabled={rollingBack === entry.version}
+                              class="px-2.5 py-1 text-sm font-medium rounded border border-wilt-200 text-wilt-600 hover:bg-wilt-50 transition-colors disabled:opacity-50"
+                            >
+                              {rollingBack === entry.version ? '...' : 'Restore'}
+                            </button>
                           </div>
-                        {/if}
-                      {:else}
-                        <p class="text-sm text-shadow-600 italic">Unable to load diff.</p>
+                        </td>
+                      </tr>
+
+                      <!-- Inline diff panel -->
+                      {#if diffVersion === entry.version}
+                        <tr>
+                          <td colspan="5" class="p-0">
+                            <div class="p-4 border-t border-bark-200 bg-bark-50">
+                              {#if diffLoading}
+                                <div class="animate-pulse space-y-2">
+                                  <div class="h-4 bg-bark-200 rounded w-1/3"></div>
+                                  <div class="h-4 bg-bark-200 rounded w-2/3"></div>
+                                </div>
+                              {:else if diffData && diffData.ok}
+                                {@const allFields = buildCardDiff(diffData.current, diffData.target)}
+                                <p class="text-sm text-shadow-700 mb-3">
+                                  Comparing <span class="font-medium text-shadow-900">current (v{data.version})</span>
+                                  with <span class="font-medium text-shadow-900">v{entry.version}</span>
+                                  {#if allFields.every(f => !f.changed)}
+                                    <span class="text-shadow-600 ml-1">(no differences)</span>
+                                  {/if}
+                                </p>
+
+                                <!-- Side-by-side diff table for ALL fields -->
+                                <div class="overflow-x-auto border border-bark-300 rounded-lg">
+                                  <table class="w-full text-sm">
+                                    <thead>
+                                      <tr class="bg-bark-100 border-b border-bark-300">
+                                        <th class="text-left px-3 py-2 text-shadow-700 font-medium w-36">Field</th>
+                                        <th class="text-left px-3 py-2 text-shadow-700 font-medium">Current</th>
+                                        <th class="text-left px-3 py-2 text-shadow-700 font-medium">v{entry.version}</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {#each allFields as fd}
+                                        <tr class="border-b border-bark-200 {fd.changed ? '' : ''}">
+                                          <td class="px-3 py-2 font-medium text-shadow-800 align-top">{fd.label}</td>
+                                          <td
+                                            class="px-3 py-2 align-top font-mono text-sm whitespace-pre-wrap max-w-xs overflow-hidden"
+                                            style={fd.changed ? 'background-color: #FFF9E6; border-left: 3px solid #E8C766;' : ''}
+                                          >
+                                            <div class="max-h-32 overflow-y-auto text-shadow-800">{fd.current || '(empty)'}</div>
+                                          </td>
+                                          <td
+                                            class="px-3 py-2 align-top font-mono text-sm whitespace-pre-wrap max-w-xs overflow-hidden"
+                                            style={fd.changed ? 'background-color: #FFF9E6; border-left: 3px solid #E8C766;' : ''}
+                                          >
+                                            <div class="max-h-32 overflow-y-auto text-shadow-800">{fd.target || '(empty)'}</div>
+                                          </td>
+                                        </tr>
+                                      {/each}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              {:else}
+                                <p class="text-sm text-shadow-600">Unable to load diff for this version.</p>
+                              {/if}
+                            </div>
+                          </td>
+                        </tr>
                       {/if}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         {/if}

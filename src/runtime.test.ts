@@ -1,10 +1,49 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { SubstrateRuntime } from './runtime.js';
+import { buildSessionHmacKeyring } from './session/journal-utils.js';
+import { createKeyringIntegrityProvider } from './session/store-primitives.js';
+import { composeSessionRuntime } from './bootstrap/composition.js';
+import { SessionStore } from './session/store.js';
+import { SessionManager } from './session/manager.js';
 
 function makeRuntime(): SubstrateRuntime {
   return new SubstrateRuntime({
     dataDir: '/tmp/psfn-runtime-test',
   } as any);
+}
+
+function makeMinimalConfig(overrides?: Record<string, unknown>) {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test',
+    extractionModel: 'test-model',
+    extractionProvider: 'test',
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir: './data',
+    databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
+    sessionMessageLimit: 50,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    primaryMaxTokens: 16384,
+    extractionMaxTokens: 8192,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    memoryBudgetPct: 20,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
+    modelRoster: {
+      chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 1000 },
+    },
+    ...overrides,
+  } as any;
 }
 
 describe('SubstrateRuntime crash recovery wiring', () => {
@@ -160,5 +199,166 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     runtime.agentLoop = { setChannelRegistry: vi.fn() };
 
     await expect(runtime.startChannels()).rejects.toThrow('No channel adapters started successfully');
+  });
+});
+
+describe('Single-process session HMAC integrity wiring', () => {
+  let dir: string;
+  const envBackup: Record<string, string | undefined> = {};
+  const hmacEnvVars = [
+    'GATEWAY_SESSION_HMAC_KEYS',
+    'GATEWAY_SESSION_HMAC_KEY',
+    'GATEWAY_SESSION_HMAC_ACTIVE_VERSION',
+  ];
+
+  function saveAndClearEnv(): void {
+    for (const key of hmacEnvVars) {
+      envBackup[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
+
+  function restoreEnv(): void {
+    for (const key of hmacEnvVars) {
+      if (envBackup[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = envBackup[key];
+      }
+    }
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'psfn-runtime-hmac-'));
+    saveAndClearEnv();
+  });
+
+  afterEach(() => {
+    restoreEnv();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('builds keyring from single key and passes to composeSessionRuntime', () => {
+    const keyring = buildSessionHmacKeyring({
+      singleKey: 'test-secret-key',
+    });
+    expect(keyring).not.toBeNull();
+    expect(keyring!.activeVersion).toBe('v1');
+    expect(keyring!.keys['v1']).toBe('test-secret-key');
+
+    const provider = createKeyringIntegrityProvider(keyring);
+    expect(provider).not.toBeNull();
+
+    const sessionsDir = join(dir, 'sessions');
+    const composition = composeSessionRuntime({
+      config: makeMinimalConfig(),
+      sessionsDir,
+      sessionIntegrityProvider: provider,
+    });
+
+    // Write an entry and read it back -- the entry should have an HMAC signature
+    composition.sessionStore.append({
+      channelId: 'dm:test',
+      role: 'user',
+      content: 'Signed message',
+      authorId: 'u1',
+      authorName: 'User',
+      timestamp: Date.now(),
+    });
+
+    // Create a second store with the same keyring to verify the signature survives round-trip
+    const verifyStore = new SessionStore(sessionsDir, { integrityKeyring: keyring });
+    const entries = verifyStore.getRecent('dm:test', 10);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toBe('Signed message');
+  });
+
+  it('returns null keyring when no HMAC env vars are set', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: undefined,
+      singleKey: undefined,
+      activeVersion: undefined,
+    });
+    expect(keyring).toBeNull();
+
+    const provider = createKeyringIntegrityProvider(keyring);
+    expect(provider).toBeNull();
+  });
+
+  it('resolves keyring from versioned keys matching gateway pattern', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:first-key,v2:second-key',
+      activeVersion: 'v2',
+    });
+    expect(keyring).not.toBeNull();
+    expect(keyring!.activeVersion).toBe('v2');
+    expect(Object.keys(keyring!.keys)).toEqual(['v1', 'v2']);
+
+    const provider = createKeyringIntegrityProvider(keyring);
+    expect(provider).not.toBeNull();
+  });
+
+  it('detects tampered entries when verified with mismatched keyring', async () => {
+    const keyring = buildSessionHmacKeyring({ singleKey: 'integrity-test' });
+    const provider = createKeyringIntegrityProvider(keyring);
+
+    const sessionsDir = join(dir, 'sessions');
+    const composition = composeSessionRuntime({
+      config: makeMinimalConfig(),
+      sessionsDir,
+      sessionIntegrityProvider: provider,
+    });
+
+    composition.sessionStore.append({
+      channelId: 'dm:integrity',
+      role: 'user',
+      content: 'First signed entry',
+      authorId: 'u1',
+      authorName: 'User',
+      timestamp: Date.now(),
+    });
+    composition.sessionStore.append({
+      channelId: 'dm:integrity',
+      role: 'assistant',
+      content: 'Signed reply',
+      timestamp: Date.now(),
+    });
+
+    // Verify with a mismatched keyring -- should produce unverified entries
+    const wrongKeyring = buildSessionHmacKeyring({ singleKey: 'wrong-key' });
+    const wrongStore = new SessionStore(sessionsDir, { integrityKeyring: wrongKeyring });
+    const manager = new SessionManager(wrongStore, makeMinimalConfig());
+
+    const ctx = await manager.buildContext(
+      'dm:integrity',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      { isDirectMessage: true },
+    );
+    // With a mismatched key, the content should be wrapped in unverified tags
+    expect(ctx.messages.some(m => m.content.includes('<unverified_history>'))).toBe(true);
+  });
+
+  it('composeSessionRuntime works without integrity provider (existing behavior)', () => {
+    const sessionsDir = join(dir, 'sessions-no-hmac');
+    const composition = composeSessionRuntime({
+      config: makeMinimalConfig(),
+      sessionsDir,
+    });
+
+    composition.sessionStore.append({
+      channelId: 'ch:plain',
+      role: 'user',
+      content: 'Unsigned message',
+      authorId: 'u1',
+      authorName: 'User',
+      timestamp: Date.now(),
+    });
+
+    const entries = composition.sessionStore.getRecent('ch:plain', 10);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toBe('Unsigned message');
   });
 });

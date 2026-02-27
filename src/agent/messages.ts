@@ -64,24 +64,30 @@ declare module '@mariozechner/pi-agent-core' {
 
 // ── Type guards ──
 
+/** Narrow AgentMessage to a record so we can check arbitrary properties without `as any`. */
+function hasCustomRole(m: AgentMessage): m is AgentMessage & { role: 'custom'; type: string } {
+  const record = m as Record<string, unknown>;
+  return record.role === 'custom';
+}
+
 export function isCompactionMessage(m: AgentMessage): m is CompactionMessage {
-  return (m as any).role === 'custom' && (m as any).type === 'compaction';
+  return hasCustomRole(m) && m.type === 'compaction';
 }
 
 export function isSystemNoteMessage(m: AgentMessage): m is SystemNoteMessage {
-  return (m as any).role === 'custom' && (m as any).type === 'systemNote';
+  return hasCustomRole(m) && m.type === 'systemNote';
 }
 
 export function isContinuityMessage(m: AgentMessage): m is ContinuityMessage {
-  return (m as any).role === 'custom' && (m as any).type === 'continuity';
+  return hasCustomRole(m) && m.type === 'continuity';
 }
 
 export function isMirrorMessage(m: AgentMessage): m is MirrorMessage {
-  return (m as any).role === 'custom' && (m as any).type === 'mirror';
+  return hasCustomRole(m) && m.type === 'mirror';
 }
 
 export function isCustomMessage(m: AgentMessage): boolean {
-  return (m as any).role === 'custom';
+  return hasCustomRole(m);
 }
 
 // ── convertToLlm ──

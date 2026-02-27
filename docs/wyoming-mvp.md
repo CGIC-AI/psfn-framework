@@ -47,15 +47,14 @@ The objective is to prove both:
 
 ### 2.3 TTS provider compatibility snapshot (Echo + ElevenLabs)
 
-- As of 2026-02-26, active Discord/API voice runtime constructors in this repo still instantiate ElevenLabs directly (`src/channels/discord/voice.ts`, `src/channels/api/voice-websocket-runtime.ts`).
-- Wyoming `tts` adapter is provider-agnostic (`StreamingTtsConnector` in `src/channels/wyoming/services/tts.ts`) but requires runtime wiring to pass the selected connector.
-- Provider-switch env names below follow `PSFN-mndj.2` assumptions and may be ignored on branches where that wiring is not merged yet.
+- The Discord voice runtime, API voice websocket, and Wyoming paths are all provider-pluggable via `TTS_PROVIDER` (`elevenlabs` or `echo`).
+- Wyoming `asr` and `tts` adapters are registered alongside `handle` when their respective connectors are configured (Deepgram API key for ASR, ElevenLabs or Echo config for TTS).
 
 ```bash
-# Safe default / compatibility mode
+# ElevenLabs (default)
 TTS_PROVIDER=elevenlabs
 
-# Planned Echo mode
+# Echo mode
 TTS_PROVIDER=echo
 ECHO_TTS_URL=http://220.158.196.150:8001
 ECHO_TTS_VOICE=11labs-Allison
@@ -137,12 +136,11 @@ Use these utterances during live Voice PE validation:
 | Interruption still returns full response | Cancellation hook not applied in runtime integration | Validate onSessionEnd wiring and request cancellation propagation |
 | `audio-chunk` frames arrive but playback fails | Encoding mismatch between TTS output and HA/Wyoming consumer expectations | Explicitly set synthesis `encoding` (`mp3` vs `pcm_s16le`) and verify decoder support on the receiving side |
 | First audio byte is consistently slow | Provider cold start, upstream queueing, or network jitter | Capture first-byte timing (`voice.tts.first-byte` where emitted), compare against stage budgets, and keep HA fallback enabled |
-| Echo vars are set but behavior is still ElevenLabs | Provider-switch config not wired in current runtime build | Verify branch includes `PSFN-mndj.2/.3/.4` wiring; until then, treat Echo vars as documentation only |
+| Echo vars are set but behavior is still ElevenLabs | Provider config not taking effect | Verify `TTS_PROVIDER=echo` is set along with `ECHO_TTS_URL` and `ECHO_TTS_VOICE`; restart the runtime after config changes |
 
 ## 8) Known Limitations and Fallback Guidance
 
 - This smoke harness validates Wyoming runtime contract behavior in-process; it does not replace full hardware-in-the-loop evidence.
 - MVP identity mapping currently follows `api:wyoming:<siteId>:<satelliteId>` as defined in `docs/architecture/wyoming-mvp-adr.md`.
-- Optional Wyoming `asr`/`tts` families may be disabled; `handle` is the required MVP surface.
+- Wyoming `asr` and `tts` adapters are conditionally registered when their dependencies are configured (Deepgram key for ASR, TTS provider config for TTS); `handle` is the required MVP surface.
 - Keep HA local/default fallback pipeline configured so Voice PE remains usable during gateway outages/timeouts.
-- Provider-switch env names for Echo are documented for operational readiness, but branches without `PSFN-mndj` runtime wiring will continue to run ElevenLabs-only constructors.

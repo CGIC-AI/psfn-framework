@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendJson } from '../http/primitives.js';
+import { parseJsonBody, sendJson } from '../http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
 import type {
   AdminContactsService,
@@ -33,20 +33,12 @@ function prefixedParamPath(prefix: string, paramName: string): RouteMatcher {
   };
 }
 
-function parseJsonBody(body: string): { ok: true; value: unknown } | { ok: false; error: string } {
+function parseAdminJsonBody(body: string): { ok: true; value: unknown } | { ok: false; error: string } {
   const trimmed = body.trim();
   if (!trimmed) return { ok: true, value: {} };
-  try {
-    return {
-      ok: true,
-      value: JSON.parse(trimmed),
-    };
-  } catch {
-    return {
-      ok: false,
-      error: 'Invalid JSON payload',
-    };
-  }
+  const result = parseJsonBody(trimmed);
+  if (!result.ok) return { ok: false, error: 'Invalid JSON payload' };
+  return { ok: true, value: result.value };
 }
 
 function toMemoryType(value: string | null): MemoryType | undefined {
@@ -195,7 +187,7 @@ export function buildAdminApiRoutes(options: {
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (req, res, { id }) => {
         withBody(req, res, (body) => {
-          const parsed = parseJsonBody(body);
+          const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;
@@ -224,7 +216,7 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/settings'),
       handle: (req, res) => {
         withBody(req, res, (body) => {
-          const parsed = parseJsonBody(body);
+          const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;
@@ -250,7 +242,7 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/identity/import'),
       handle: (req, res) => {
         withBody(req, res, (body) => {
-          const parsed = parseJsonBody(body);
+          const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;
@@ -292,7 +284,7 @@ export function buildAdminApiRoutes(options: {
       match: prefixedParamPath('/api/admin/prompts/', 'layerId'),
       handle: (req, res, { layerId }) => {
         withBody(req, res, (body) => {
-          const parsed = parseJsonBody(body);
+          const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;

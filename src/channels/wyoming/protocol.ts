@@ -126,9 +126,7 @@ export class WyomingServerError extends Error {
   }
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
+export { isRecord } from '../../utils/types.js';
 
 export function normalizeSessionId(frame: WyomingFrame): string | undefined {
   const data = frame.data;

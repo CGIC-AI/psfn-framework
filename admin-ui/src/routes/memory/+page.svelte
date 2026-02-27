@@ -109,14 +109,14 @@
   }
 
   function nextPage() {
-    if (data?.pagination.hasNext) {
+    if (data?.pagination?.hasNext) {
       offset += PAGE_SIZE;
       loadMemories();
     }
   }
 
   function prevPage() {
-    if (data?.pagination.hasPrevious) {
+    if (data?.pagination?.hasPrevious) {
       offset = Math.max(0, offset - PAGE_SIZE);
       loadMemories();
     }
@@ -134,11 +134,43 @@
     return `background-color: ${c.bg}; color: ${c.text}`;
   }
 
-  function formatDate(ts: number): string {
+  function formatDate(ts: number | undefined): string {
+    if (ts === undefined || ts === null) return 'unknown';
     return new Date(ts).toLocaleDateString(undefined, {
       year: 'numeric', month: 'short', day: 'numeric',
       hour: '2-digit', minute: '2-digit',
     });
+  }
+
+  // Backend uses `text`, old frontend used `content` -- handle both
+  function memText(m: PurrMemory): string {
+    return m.text ?? m.content ?? '';
+  }
+
+  // Backend uses `extractedAt`, old frontend used `createdAt`
+  function memCreated(m: PurrMemory): number | undefined {
+    return m.extractedAt ?? m.createdAt;
+  }
+
+  // Backend uses `lastAccessed`, old frontend used `updatedAt`
+  function memUpdated(m: PurrMemory): number | undefined {
+    return m.lastAccessed ?? m.updatedAt;
+  }
+
+  // Backend uses `emotionalValence`, old frontend used `emotionalWeight`
+  function memEmotion(m: PurrMemory): number {
+    return m.emotionalValence ?? m.emotionalWeight ?? 0;
+  }
+
+  // Backend uses `deletedAt` for superseded, old frontend used `supersededAt`
+  function memSuperseded(m: PurrMemory): number | undefined {
+    return m.deletedAt ?? m.supersededAt;
+  }
+
+  // Tags are array in backend, string in old frontend
+  function memTags(m: PurrMemory): string {
+    if (Array.isArray(m.tags)) return m.tags.join(', ');
+    return String(m.tags ?? '');
   }
 
   onMount(() => {
@@ -207,11 +239,11 @@
 
     {#if searchActive && searchResults}
       <p class="text-sm text-shadow-700 mt-2">
-        Found {searchResults.results.length} results for "{searchResults.query}"
+        Found {searchResults.results?.length ?? 0} results for "{searchResults.query}"
       </p>
-    {:else if data}
+    {:else if data?.pagination}
       <p class="text-sm text-shadow-700 mt-2">
-        Showing {data.pagination.offset + 1}--{Math.min(data.pagination.offset + data.pagination.limit, data.pagination.total)} of {data.pagination.total}
+        Showing {(data.pagination.offset ?? 0) + 1}--{Math.min((data.pagination.offset ?? 0) + (data.pagination.limit ?? PAGE_SIZE), data.pagination.total ?? 0)} of {data.pagination.total ?? 0}
       </p>
     {/if}
   </div>
@@ -242,8 +274,8 @@
           <!-- Header -->
           <div class="flex items-start justify-between gap-3">
             <div class="flex items-center gap-2 flex-wrap">
-              <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={typeBadgeStyle(memory.type)}>
-                {memory.type}
+              <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={typeBadgeStyle(memory.type ?? 'unknown')}>
+                {memory.type ?? 'unknown'}
               </span>
               {#if memory.sensitivity && memory.sensitivity !== 'public'}
                 <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={sensitivityBadgeStyle(memory.sensitivity)}>
@@ -255,7 +287,7 @@
                   {contactsById[memory.contactId].displayName}
                 </span>
               {/if}
-              {#if memory.supersededAt}
+              {#if memSuperseded(memory)}
                 <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-600 border-bark-300 line-through">
                   superseded
                 </span>
@@ -271,21 +303,25 @@
 
           <!-- Content preview -->
           <p class="text-shadow-800 text-sm mt-2 leading-relaxed">
-            {expandedId === memory.id ? memory.content : memory.content.slice(0, 200) + (memory.content.length > 200 ? '...' : '')}
+            {#if expandedId === memory.id}
+              {memText(memory)}
+            {:else}
+              {memText(memory).slice(0, 200)}{memText(memory).length > 200 ? '...' : ''}
+            {/if}
           </p>
 
           <!-- Metrics -->
           <div class="flex items-center gap-4 mt-3 text-sm text-shadow-600">
             <span title="Importance">
-              Imp: <span class="text-shadow-800 tabular-nums font-medium">{(memory.importance * 100).toFixed(0)}%</span>
+              Imp: <span class="text-shadow-800 tabular-nums font-medium">{((memory.importance ?? 0) * 100).toFixed(0)}%</span>
             </span>
             <span title="Salience">
-              Sal: <span class="text-shadow-800 tabular-nums font-medium">{(memory.salience * 100).toFixed(0)}%</span>
+              Sal: <span class="text-shadow-800 tabular-nums font-medium">{((memory.salience ?? 0) * 100).toFixed(0)}%</span>
             </span>
-            <span title="Emotional Weight">
-              Emo: <span class="text-shadow-800 tabular-nums font-medium">{(memory.emotionalWeight * 100).toFixed(0)}%</span>
+            <span title="Emotional Valence">
+              Emo: <span class="text-shadow-800 tabular-nums font-medium">{(memEmotion(memory) * 100).toFixed(0)}%</span>
             </span>
-            <span class="ml-auto text-shadow-700">{formatDate(memory.createdAt)}</span>
+            <span class="ml-auto text-shadow-700">{formatDate(memCreated(memory))}</span>
           </div>
 
           <!-- Expanded details -->
@@ -293,16 +329,22 @@
             <div class="mt-4 pt-3 border-t border-bark-200 space-y-3 text-sm">
               <div class="grid grid-cols-2 gap-2 text-shadow-700">
                 <span>ID: <code class="text-shadow-800 bg-bark-200 px-1 rounded">{memory.id}</code></span>
-                <span>Created: <span class="text-shadow-800">{formatDate(memory.createdAt)}</span></span>
-                <span>Updated: <span class="text-shadow-800">{formatDate(memory.updatedAt)}</span></span>
-                {#if memory.supersededAt}
-                  <span>Superseded: <span class="text-shadow-800">{formatDate(memory.supersededAt)}</span></span>
+                <span>Extracted: <span class="text-shadow-800">{formatDate(memCreated(memory))}</span></span>
+                <span>Last Accessed: <span class="text-shadow-800">{formatDate(memUpdated(memory))}</span></span>
+                {#if memory.confidence !== undefined}
+                  <span>Confidence: <span class="text-shadow-800">{((memory.confidence ?? 0) * 100).toFixed(0)}%</span></span>
+                {/if}
+                {#if memSuperseded(memory)}
+                  <span>Superseded: <span class="text-shadow-800">{formatDate(memSuperseded(memory))}</span></span>
                 {/if}
                 {#if memory.sourceRef}
-                  <span>Source: <code class="text-shadow-800 bg-bark-200 px-1 rounded">{memory.sourceRef}</code></span>
+                  <span class="col-span-2">Source: <code class="text-shadow-800 bg-bark-200 px-1 rounded text-sm break-all">{memory.sourceRef}</code></span>
                 {/if}
-                {#if memory.tags}
-                  <span>Tags: <span class="text-shadow-800">{memory.tags}</span></span>
+                {#if memTags(memory)}
+                  <span class="col-span-2">Tags: <span class="text-shadow-800">{memTags(memory)}</span></span>
+                {/if}
+                {#if memory.accessCount !== undefined}
+                  <span>Access Count: <span class="text-shadow-800">{memory.accessCount}</span></span>
                 {/if}
               </div>
 
@@ -354,18 +396,18 @@
     <div class="flex items-center justify-between">
       <button
         onclick={prevPage}
-        disabled={!data.pagination.hasPrevious}
+        disabled={!data.pagination?.hasPrevious}
         class="px-4 py-2 rounded-lg border border-bark-300 text-shadow-800 text-sm font-medium
                hover:bg-bark-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
         Previous
       </button>
       <span class="text-sm text-shadow-700">
-        Page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.max(1, Math.ceil((data.pagination.total || 1) / PAGE_SIZE))}
+        Page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.max(1, Math.ceil(((data.pagination?.total ?? 0) || 1) / PAGE_SIZE))}
       </span>
       <button
         onclick={nextPage}
-        disabled={!data.pagination.hasNext}
+        disabled={!data.pagination?.hasNext}
         class="px-4 py-2 rounded-lg border border-bark-300 text-shadow-800 text-sm font-medium
                hover:bg-bark-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >

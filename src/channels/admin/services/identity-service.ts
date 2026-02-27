@@ -123,7 +123,7 @@ export class AdminIdentityDataService implements AdminIdentityService {
     }
 
     try {
-      const snapshot = cardVersionStore.rollbackToVersion(version, 'admin:api');
+      const snapshot = cardVersionStore.rollback(version, 'admin:api');
       return {
         ok: true,
         message: `Rolled back to version ${version}`,
@@ -159,12 +159,12 @@ export class AdminIdentityDataService implements AdminIdentityService {
     }
 
     const version = Number(payload.version);
-    const entry = Number.isInteger(version) ? cardVersionStore.findVersion(version) : undefined;
+    const entry = Number.isInteger(version) ? cardVersionStore.getHistoryEntry(version) : undefined;
     const current = cardVersionStore.getCurrent()?.card ?? this.deps.characterCard;
     return {
       ok: Boolean(entry),
       current,
-      target: entry?.card ?? current,
+      target: entry?.newCard ?? current,
     };
   }
 

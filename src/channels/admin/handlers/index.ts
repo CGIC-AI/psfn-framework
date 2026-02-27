@@ -11,6 +11,7 @@ import { AdminChatHandlers } from './chat.js';
 import { AdminConfirmationsHandlers } from './confirmations.js';
 import { AdminEventsHandlers } from './events.js';
 import type { AdminChatBootstrapResponse } from '../chat/index.js';
+import type { AdminModelRoomBootstrapResponse } from '../chat/index.js';
 import type { AdminChatDebugStreamOptions } from '../types.js';
 
 export type AdminHandlersDeps = ConstructorParameters<typeof LegacyAdminHandlers>[0];
@@ -188,6 +189,10 @@ export class AdminHandlers {
 
   chatBootstrap(requestOrigin?: string): AdminChatBootstrapResponse {
     return this.chatHandlers.chatBootstrap(requestOrigin);
+  }
+
+  chatModelRoomBootstrap(requestOrigin?: string): AdminModelRoomBootstrapResponse {
+    return this.chatHandlers.chatModelRoomBootstrap(requestOrigin);
   }
 
   setupChatDebugSSE(

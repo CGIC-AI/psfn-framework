@@ -8,10 +8,13 @@ export interface OpenAIMessage {
 
 export interface ChatCompletionRequest {
   model: string;
+  provider?: string;
   messages: OpenAIMessage[];
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
+  system_prompt_mode?: 'default' | 'none' | 'custom';
+  system_prompt?: string;
   // Accept-and-ignore for compatibility
   top_p?: number;
   n?: number;

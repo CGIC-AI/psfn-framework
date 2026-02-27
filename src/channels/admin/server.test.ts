@@ -22,7 +22,10 @@ import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
 import type { SkillSnapshot } from '../../skills/types.js';
-import type { AdminChatBootstrapResponse } from './chat/index.js';
+import type {
+  AdminChatBootstrapResponse,
+  AdminModelRoomBootstrapResponse,
+} from './chat/index.js';
 import { classifyChannel } from '../../trust/policy.js';
 import { resetRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
 import type { ConfirmationQueueEntry, ConfirmationResolveParams } from '../../gateway/protocol.js';
@@ -930,6 +933,87 @@ describe('AdminServer', () => {
           process.env.API_KEY = previousApiKey;
         }
       }
+    });
+
+    it('returns model-room bootstrap payload', async () => {
+      const res = await request(port, 'GET', '/api/chat/model-room/bootstrap');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('application/json');
+
+      const payload = JSON.parse(res.body) as AdminModelRoomBootstrapResponse;
+      expectApiPath(payload.api.chatCompletionsUrl, '/v1/chat/completions');
+      expect(payload.defaultRoomId).toBe('garden-model-room');
+      expect(payload.psfn.id).toBe('psfn');
+      expect(payload.constraints.allowedProviders).toEqual(['anthropic', 'openai', 'google']);
+      expect(payload.constraints.deniedProviders).toContain('openrouter');
+      expect(Array.isArray(payload.participants)).toBe(true);
+    });
+
+    it('exposes only direct-provider model-catalog entries in model-room bootstrap', async () => {
+      await server.stop();
+      const roomConfig: SubstrateConfig = {
+        ...testConfig,
+        modelCatalog: {
+          claude_friend: {
+            model: 'claude-opus-4',
+            provider: 'anthropic',
+            defaults: { maxTokens: 8192 },
+          },
+          chatgpt_friend: {
+            model: 'gpt-5-mini',
+            provider: 'openai',
+            defaults: { maxTokens: 4096 },
+          },
+          routed_model: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 4096 },
+          },
+        },
+        modelRoleAssignments: {
+          'model_room.claude': 'claude_friend',
+        },
+      };
+
+      server = new AdminServer({
+        port,
+        allowInsecureWithoutToken: true,
+        memoryStore,
+        sessionStore,
+        sessionManager,
+        scheduler,
+        shardManager,
+        eventBus,
+        characterCard: testCard,
+        config: roomConfig,
+        embeddingService: testEmbeddingService,
+        promptStore,
+        promptRegistry,
+        cardVersionStore,
+        skillsRuntime: {
+          getSnapshot: () => testSkillSnapshot,
+          invalidate: skillsRuntimeInvalidate,
+        } as any,
+        confirmationQueueApi: {
+          listConfirmationQueue: () => confirmationListMock(),
+          resolveConfirmationQueue: (params) => confirmationResolveMock(params),
+        },
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'GET', '/api/chat/model-room/bootstrap');
+      expect(res.status).toBe(200);
+
+      const payload = JSON.parse(res.body) as AdminModelRoomBootstrapResponse;
+      expect(payload.participants).toHaveLength(2);
+      expect(payload.participants.map(participant => participant.slotKey)).toEqual([
+        'chatgpt_friend',
+        'claude_friend',
+      ]);
+      expect(payload.participants.every(participant => participant.provider !== 'openrouter')).toBe(true);
+      expect(payload.participants.find(participant => participant.slotKey === 'claude_friend')?.purpose)
+        .toBe('model_room.claude');
     });
 
     it('updates selected identity and author defaults via bootstrap POST', async () => {

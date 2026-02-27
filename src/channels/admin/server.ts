@@ -864,6 +864,15 @@ export class AdminServer implements Lifecycle {
       },
       {
         method: 'GET',
+        match: exactPath('/api/chat/model-room/bootstrap'),
+        handle: (req, res) => sendJson(
+          res,
+          200,
+          this.handlers.chatModelRoomBootstrap(this.resolveRequestOrigin(req)),
+        ),
+      },
+      {
+        method: 'GET',
         match: exactPath('/api/chat/events/stream'),
         handle: (req, res) => {
           const url = new URL(req.url ?? '/api/chat/events/stream', `http://${req.headers.host ?? 'localhost'}`);

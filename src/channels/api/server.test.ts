@@ -456,6 +456,49 @@ describe('ApiServer', () => {
       expect(call.authorName).toBe('V');
     });
 
+    it('passes direct-provider model override and prompt mode to substrate messages', async () => {
+      await server.stop();
+      const mockAgent = createMockAgentLoop(eventBus);
+      server = new ApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'claude-opus-4',
+        provider: 'anthropic',
+        system_prompt_mode: 'none',
+        messages: [{ role: 'user', content: 'Talk with PSFN.' }],
+      });
+      expect(res.status).toBe(200);
+
+      const call = (mockAgent.handleMessage as any).mock.calls[0][0] as SubstrateMessage;
+      expect(call.routing?.modelOverride).toEqual({
+        provider: 'anthropic',
+        model: 'claude-opus-4',
+      });
+      expect(call.routing?.promptOverride).toEqual({
+        mode: 'none',
+      });
+    });
+
+    it('rejects provider overrides outside the direct-provider allowlist', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'deepseek/deepseek-v3.2',
+        provider: 'openrouter',
+        messages: [{ role: 'user', content: 'This should be rejected.' }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('provider override must be one of');
+    });
+
     it('returns explicit verification challenge and does not link unverified identity claims', async () => {
       const db = new Database(':memory:');
       const contactStore = new ContactStore(db);

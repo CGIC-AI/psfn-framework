@@ -72,3 +72,37 @@ export interface AdminChatBootstrapUpdateInput {
   defaultAuthorName?: string;
   defaultAuthorId?: string;
 }
+
+export interface AdminModelRoomParticipant {
+  id: string;
+  slotKey: string;
+  purpose: string;
+  displayName: string;
+  provider: string;
+  model: string;
+  maxTokens?: number;
+  contextWindow?: number;
+  defaultSystemPrompt?: string;
+}
+
+export interface AdminModelRoomBootstrapApiConfig {
+  chatCompletionsUrl: string;
+  apiKey?: string;
+}
+
+export interface AdminModelRoomPSFNConfig {
+  id: string;
+  displayName: string;
+  defaultSystemPromptMode: 'default';
+}
+
+export interface AdminModelRoomBootstrapResponse {
+  api: AdminModelRoomBootstrapApiConfig;
+  defaultRoomId: string;
+  psfn: AdminModelRoomPSFNConfig;
+  participants: AdminModelRoomParticipant[];
+  constraints: {
+    allowedProviders: string[];
+    deniedProviders: string[];
+  };
+}

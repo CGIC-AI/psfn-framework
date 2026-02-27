@@ -102,6 +102,7 @@ import {
   AdminChatBootstrapService,
   type AdminChatBootstrapResponse,
   type AdminChatBootstrapUpdateInput,
+  type AdminModelRoomBootstrapResponse,
 } from './chat/index.js';
 import type {
   ConfirmationResolveParams,
@@ -2283,6 +2284,10 @@ export class LegacyAdminHandlers {
 
   chatBootstrap(requestOrigin?: string): AdminChatBootstrapResponse {
     return this.chatBootstrapService.buildBootstrap({ requestOrigin });
+  }
+
+  chatModelRoomBootstrap(requestOrigin?: string): AdminModelRoomBootstrapResponse {
+    return this.chatBootstrapService.buildModelRoomBootstrap(this.config, { requestOrigin });
   }
 
   private async renderConfirmationQueueFragment(

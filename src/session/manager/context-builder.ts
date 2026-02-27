@@ -1,39 +1,26 @@
 import type { LLMProvider } from '../../agent/contracts.js';
-import { countMessageTokens, countTokens } from '../../llm/tokens.js';
-import { createComponentLogger } from '../../logger.js';
+import { countTokens } from '../../llm/tokens.js';
 import type { ContextMessage, LLMContext, SubstrateConfig } from '../../types.js';
 import { resolveSessionHistoryBudget } from '../../context-budget.js';
 import type { EventBus } from '../../event-bus.js';
-import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../../identity/prompt-registry.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import {
   classifyChannel,
   type ChannelMeta,
 } from '../../trust/policy.js';
-import { toErrorMessage } from '../../utils/errors.js';
-import {
-  buildCompactionSourceBlock,
-  buildCompactionSourceHashTag,
-} from '../compaction-audit.js';
 import type { SessionStore } from '../store.js';
 import type { UserContinuityStore } from '../continuity.js';
 import {
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
-  appendCompactionMetadataBlocks,
-  buildCompactionPreservedTagBlock,
   isUntrustedVisibility,
   parseChannelVisibility,
-  resolveEmotionalSalienceThreshold,
   resolveRoleName,
   trimRecentEntriesToTokenBudget,
-  withRetry,
   wrapUntrustedContext,
 } from '../manager-primitives.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages, getMergedContinuity } from './context-support.js';
-
-const log = createComponentLogger('SessionManager');
+import { runAutoCompaction } from './compaction-service.js';
 
 interface BuildSessionContextParams {
   channelId: string;
@@ -62,128 +49,22 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   }
 
   // Auto-compaction: when total context tokens exceed threshold, compact oldest half
-  if (params.llmProvider && recent.length > 4) {
-    const chatSlot = params.config.modelRoster.chat;
-    const contextWindow = chatSlot?.contextWindow ?? params.config.defaultContextWindow;
-    const thresholdPct = params.config.compactionThresholdPct ?? 70;
-    const tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
-
+  if (params.llmProvider) {
     const systemTokens = countTokens(params.systemPrompt) + countTokens(params.memoriesBlock);
-    const messageTokens = countMessageTokens(entriesToMessages(recent, channelVisibility, false));
-    const totalTokens = systemTokens + messageTokens;
-
-    if (totalTokens > tokenBudget) {
-      // Compact oldest 50% of messages
-      const splitPoint = Math.ceil(recent.length / 2);
-      const toCompact = recent.slice(0, splitPoint);
-      const toKeep = recent.slice(splitPoint);
-      const compactText = buildCompactionSourceBlock(toCompact);
-      const sourceHashTag = buildCompactionSourceHashTag(toCompact);
-      const emotionalSalienceThreshold = resolveEmotionalSalienceThreshold(params.config);
-      const preservedTagBlock = buildCompactionPreservedTagBlock(
-        toCompact,
-        emotionalSalienceThreshold,
-      );
-
-      log.info('Auto-compacting session', { channelId: params.channelId, totalTokens, budget: tokenBudget });
-      await params.eventBus?.emit('agent.compaction.start', {
-        channelId: params.channelId,
-        reason: 'threshold',
-        tokensBefore: totalTokens,
-        tokenBudget,
-      });
-
-      if (toCompact.length > 0 && params.preCompactionExtractionHandler) {
-        try {
-          await params.preCompactionExtractionHandler({
-            channelId: params.channelId,
-            entries: [...toCompact],
-            canonicalContactId: params.userId,
-          });
-        } catch (error) {
-          log.warn('Pre-compaction extraction flush failed', {
-            channelId: params.channelId,
-            error: toErrorMessage(error),
-          });
-        }
-      }
-
-      let tokensAfter = totalTokens;
-      let sawRetry = false;
-      let lastRetryAttempt = 1;
-      const retryMaxRetries = 2;
-      const retryMaxAttempts = retryMaxRetries + 1;
-      try {
-        const compactionPrompt = params.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
-          ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
-        const runtimeCompactionPrompt = injectPromptRuntimeTokens(compactionPrompt);
-        const summaryResponse = await withRetry(
-          () => params.llmProvider!.complete(
-            {
-              systemPrompt: runtimeCompactionPrompt,
-              messages: [{ role: 'user', content: compactText }],
-            },
-            'background',
-          ),
-          { maxRetries: retryMaxRetries, baseDelayMs: 250 },
-          {
-            onRetry: async ({ attempt, delayMs, error }) => {
-              sawRetry = true;
-              lastRetryAttempt = attempt + 1;
-              await params.eventBus?.emit('agent.retry.start', {
-                channelId: params.channelId,
-                attempt: lastRetryAttempt,
-                maxAttempts: retryMaxAttempts,
-                delayMs,
-                error: error.message,
-              });
-            },
-          },
-        );
-
-        // Store compaction summary
-        const compactionSummary = appendCompactionMetadataBlocks(summaryResponse.content, [
-          sourceHashTag,
-          preservedTagBlock,
-        ]);
-        const coveredUpTo = toCompact[toCompact.length - 1].id;
-        params.store.insertCompaction(params.channelId, compactionSummary, coveredUpTo);
-        const keepTokens = countMessageTokens(entriesToMessages(toKeep, channelVisibility, false));
-        const summaryTokens = countTokens(compactionSummary);
-        tokensAfter = systemTokens + keepTokens + summaryTokens;
-
-        // Use only the kept (recent) messages going forward
-        recent = toKeep;
-        if (sawRetry) {
-          await params.eventBus?.emit('agent.retry.end', {
-            channelId: params.channelId,
-            success: true,
-            attempt: lastRetryAttempt,
-          });
-        }
-        await params.eventBus?.emit('session.compacted', {
-          channelId: params.channelId,
-          before: totalTokens,
-          after: tokensAfter,
-        });
-        log.info('Compaction complete', { compacted: toCompact.length, kept: toKeep.length });
-      } catch (err) {
-        if (sawRetry) {
-          await params.eventBus?.emit('agent.retry.end', {
-            channelId: params.channelId,
-            success: false,
-            attempt: lastRetryAttempt,
-          });
-        }
-        log.error('Auto-compaction failed, using full context', { error: String(err) });
-      } finally {
-        await params.eventBus?.emit('agent.compaction.end', {
-          channelId: params.channelId,
-          tokensBefore: totalTokens,
-          tokensAfter,
-        });
-      }
-    }
+    const result = await runAutoCompaction({
+      channelId: params.channelId,
+      recent,
+      channelVisibility,
+      systemTokens,
+      llmProvider: params.llmProvider,
+      store: params.store,
+      config: params.config,
+      eventBus: params.eventBus,
+      promptRegistry: params.promptRegistry,
+      preCompactionExtractionHandler: params.preCompactionExtractionHandler,
+      userId: params.userId,
+    });
+    recent = result.recent;
   }
 
   // Build system prompt with memories

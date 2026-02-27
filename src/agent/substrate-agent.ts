@@ -19,6 +19,8 @@ import type {
   AgentResponse,
   CapabilityTier,
   ContextMessage,
+  MessageModelOverride,
+  MessagePromptOverride,
   SubstrateConfig,
   SubstrateMessage,
   TurnUsage,
@@ -31,7 +33,11 @@ import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
 import type { ComposeContext, ComposeSplitResult } from '../identity/prompt-types.js';
-import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
+import {
+  createSubstrateStreamFn,
+  resolveExplicitModel,
+  resolveModel,
+} from './stream-adapter.js';
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
@@ -169,8 +175,8 @@ export class SubstrateAgent {
   }
 
   /** Ensure the model is resolved before calling agent.prompt() */
-  private ensureModel(): void {
-    this.refreshModelFromConfig('turn-start');
+  private ensureModel(message?: SubstrateMessage): void {
+    this.refreshModelFromConfig('turn-start', message);
   }
 
   /**
@@ -249,20 +255,65 @@ export class SubstrateAgent {
     return `${provider}::${model}::${maxTokens}::${contextWindow}`;
   }
 
-  private refreshModelFromConfig(reason: 'startup' | 'turn-start' | 'settings-update'): void {
-    const nextSignature = this.getChatModelSignature();
+  private normalizeTurnModelOverride(message?: SubstrateMessage): MessageModelOverride | null {
+    const raw = message?.routing?.modelOverride;
+    if (!raw) return null;
+    const provider = raw.provider.trim().toLowerCase();
+    const model = raw.model.trim();
+    if (!provider || !model) return null;
+
+    return {
+      provider,
+      model,
+      ...(raw.maxTokens !== undefined ? { maxTokens: raw.maxTokens } : {}),
+      ...(raw.contextWindow !== undefined ? { contextWindow: raw.contextWindow } : {}),
+      ...(raw.slotKey ? { slotKey: raw.slotKey } : {}),
+      ...(raw.purpose ? { purpose: raw.purpose } : {}),
+    };
+  }
+
+  private normalizeTurnPromptOverride(message: SubstrateMessage): MessagePromptOverride {
+    const raw = message.routing?.promptOverride;
+    if (!raw) {
+      return { mode: 'default' };
+    }
+
+    if (raw.mode === 'none') return { mode: 'none' };
+    if (raw.mode === 'custom') {
+      const prompt = raw.systemPrompt?.trim();
+      if (prompt) return { mode: 'custom', systemPrompt: prompt };
+      return { mode: 'none' };
+    }
+    return { mode: 'default' };
+  }
+
+  private getTurnModelSignature(message?: SubstrateMessage): string {
+    const override = this.normalizeTurnModelOverride(message);
+    if (!override) return this.getChatModelSignature();
+    return `override::${override.provider}::${override.model}::${override.maxTokens ?? ''}::${override.contextWindow ?? ''}`;
+  }
+
+  private refreshModelFromConfig(
+    reason: 'startup' | 'turn-start' | 'settings-update',
+    message?: SubstrateMessage,
+  ): void {
+    const override = this.normalizeTurnModelOverride(message);
+    const nextSignature = this.getTurnModelSignature(message);
     if (this.modelResolved && this.modelSignature === nextSignature && this.agent.state.model) {
       return;
     }
 
     try {
-      const resolved = resolveModel(this.config);
+      const resolved = override
+        ? resolveExplicitModel(override)
+        : resolveModel(this.config);
       this.agent.setModel(resolved);
       this.modelResolved = true;
       this.modelSignature = nextSignature;
       log.info('Resolved runtime chat model', {
         reason,
         model: resolved.id,
+        override: Boolean(override),
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -467,12 +518,11 @@ export class SubstrateAgent {
         scratchpadIncluded: scratchpadBlock.length > 0,
       });
 
-      // Compose system prompt as static prefix + dynamic suffix.
+      // Compose prompt context (default system prompt pipeline or per-turn override).
       const channelType = this.resolveChannelType(message);
       const taskKind = this.resolveTaskKind(message);
-      const promptSections = this.composePromptSections({ channelType, taskKind });
-
       const runtimeNow = new Date();
+      const promptOverride = this.normalizeTurnPromptOverride(message);
       const templateVariables = this.buildPromptTemplateVariables(
         message,
         trustLevel,
@@ -480,31 +530,6 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         runtimeNow,
       );
-      const staticCacheKey = this.buildPromptPrefixCacheKey(
-        message,
-        channelType,
-        authorContext.canonicalContactKey,
-      );
-      const staticSettingsHash = this.buildStaticPromptSettingsHash(templateVariables);
-      const staticPrefix = this.resolveStaticPromptPrefix({
-        cacheKey: staticCacheKey,
-        staticPrefixTemplate: promptSections.staticPrefix,
-        staticHash: promptSections.staticHash,
-        settingsHash: staticSettingsHash,
-        now: runtimeNow,
-        variables: templateVariables,
-      });
-      const personaHint = this.getPersonaAdaptation(trustLevel);
-      const dynamicSuffixTemplate = [promptSections.dynamicSuffix, personaHint]
-        .map(section => section?.trim() ?? '')
-        .filter(section => section.length > 0)
-        .join('\n\n');
-      const dynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
-        now: runtimeNow,
-        variables: templateVariables,
-      });
-
-      // Runtime context — date/time, channel, user, model info
       const runtimeContext = this.buildRuntimeContext(
         message,
         trustLevel,
@@ -512,10 +537,46 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         runtimeNow,
       );
-      const fullPrompt = [staticPrefix, dynamicSuffix, runtimeContext, scratchpadBlock]
-        .map(section => section.trim())
-        .filter(section => section.length > 0)
-        .join('\n\n');
+      let fullPrompt = '';
+
+      if (promptOverride.mode === 'default') {
+        const promptSections = this.composePromptSections({ channelType, taskKind });
+        const staticCacheKey = this.buildPromptPrefixCacheKey(
+          message,
+          channelType,
+          authorContext.canonicalContactKey,
+        );
+        const staticSettingsHash = this.buildStaticPromptSettingsHash(templateVariables);
+        const staticPrefix = this.resolveStaticPromptPrefix({
+          cacheKey: staticCacheKey,
+          staticPrefixTemplate: promptSections.staticPrefix,
+          staticHash: promptSections.staticHash,
+          settingsHash: staticSettingsHash,
+          now: runtimeNow,
+          variables: templateVariables,
+        });
+        const personaHint = this.getPersonaAdaptation(trustLevel);
+        const dynamicSuffixTemplate = [promptSections.dynamicSuffix, personaHint]
+          .map(section => section?.trim() ?? '')
+          .filter(section => section.length > 0)
+          .join('\n\n');
+        const dynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
+          now: runtimeNow,
+          variables: templateVariables,
+        });
+        fullPrompt = [staticPrefix, dynamicSuffix, runtimeContext, scratchpadBlock]
+          .map(section => section.trim())
+          .filter(section => section.length > 0)
+          .join('\n\n');
+      } else {
+        const customPrompt = promptOverride.mode === 'custom'
+          ? (promptOverride.systemPrompt ?? '')
+          : '';
+        fullPrompt = [customPrompt, runtimeContext, scratchpadBlock]
+          .map(section => section.trim())
+          .filter(section => section.length > 0)
+          .join('\n\n');
+      }
 
       // Build context (with auto-compaction + cross-channel continuity)
       const contextStageStart = Date.now();
@@ -532,10 +593,11 @@ export class SubstrateAgent {
         durationMs: Date.now() - contextStageStart,
         contextMessages: context.messages.length,
         systemPromptChars: context.systemPrompt.length,
+        promptMode: promptOverride.mode,
       });
 
       // Configure pi-agent-core Agent for this turn
-      this.ensureModel();
+      this.ensureModel(message);
       this.agent.setSystemPrompt(context.systemPrompt);
       this.loadedExtended.clear();
       this.agent.setTools(this.withCapabilityGates(this.coreTools));
@@ -949,7 +1011,16 @@ export class SubstrateAgent {
   }
 
   private resolveContextWindow(): number {
-    return this.config.modelRoster.chat?.contextWindow ?? this.config.defaultContextWindow;
+    // Config-level contextWindow takes precedence (user-configured via settings).
+    // Only fall back to model-object contextWindow for per-turn overrides,
+    // since LiteLLM models always bake in a 128k default.
+    const configWindow = this.config.modelRoster.chat?.contextWindow ?? this.config.defaultContextWindow;
+    if (configWindow > 0) return configWindow;
+    const runtimeWindow = (this.agent.state.model as { contextWindow?: unknown } | undefined)?.contextWindow;
+    if (typeof runtimeWindow === 'number' && Number.isFinite(runtimeWindow) && runtimeWindow > 0) {
+      return runtimeWindow;
+    }
+    return 128_000; // sensible fallback
   }
 
   private isAssistantAgentMessage(message: AgentMessage): message is AssistantMessage {

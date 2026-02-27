@@ -10,6 +10,7 @@ export const navItems: NavItem[] = [
   { path: '/garden/memory', gardenName: 'The Roots', technicalName: 'Memory', icon: '\u{1F33F}' },
   { path: '/garden/sessions', gardenName: 'The Branches', technicalName: 'Sessions', icon: '\u{1F332}' },
   { path: '/garden/chat', gardenName: 'The Canopy', technicalName: 'Chat', icon: '\u{1F4AC}' },
+  { path: '/garden/model-room', gardenName: 'The Atrium', technicalName: 'Model Room', icon: '\u{1F9E0}' },
   { path: '/garden/contacts', gardenName: 'The Visitors', technicalName: 'Contacts', icon: '\u{1F6AA}' },
   { path: '/garden/identity', gardenName: 'The Seeds', technicalName: 'Identity', icon: '\u{1F331}' },
   { path: '/garden/prompts', gardenName: 'The Soil', technicalName: 'Prompts', icon: '\u{1FAB4}' },

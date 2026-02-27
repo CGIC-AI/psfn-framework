@@ -6,7 +6,11 @@
 import { streamSimple, getEnvApiKey } from '@mariozechner/pi-ai';
 import type { Model } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
-import type { SubstrateConfig, ModelPurpose } from '../types.js';
+import type {
+  MessageModelOverride,
+  ModelPurpose,
+  SubstrateConfig,
+} from '../types.js';
 import { createModel, resolveRegisteredModel } from '../llm/models.js';
 import { withRetry } from '../llm/retry.js';
 import { llmRetryConfig } from '../llm/retry-config.js';
@@ -27,9 +31,11 @@ export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
 
   return (model, context, options) => {
+    const modelProvider = resolveModelProvider(model);
     // Resolve API key: prefer caller's, then LiteLLM key, then provider env key
     const apiKey = options?.apiKey
       ?? (litellmBaseUrl ? process.env.LITELLM_API_KEY : undefined)
+      ?? (modelProvider ? getEnvApiKey(modelProvider) : undefined)
       ?? getEnvApiKey(config.primaryProvider)
       ?? undefined;
 
@@ -52,6 +58,13 @@ export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
       },
     );
   };
+}
+
+function resolveModelProvider(model: Model<any>): string | undefined {
+  const provider = (model as { provider?: unknown }).provider;
+  return typeof provider === 'string' && provider.trim().length > 0
+    ? provider
+    : undefined;
 }
 
 /**
@@ -90,4 +103,28 @@ export function resolveModel(
     );
   }
   return model;
+}
+
+export function resolveExplicitModel(
+  selection: MessageModelOverride,
+): Model<any> {
+  const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
+
+  if (litellmBaseUrl) {
+    return createModel(litellmBaseUrl, selection.model, selection.maxTokens);
+  }
+
+  const registered = resolveRegisteredModel(selection.provider, selection.model);
+  if (!registered) {
+    throw new Error(
+      `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
+      'Use a known direct provider model or configure LiteLLM.',
+    );
+  }
+
+  return {
+    ...registered,
+    ...(selection.maxTokens !== undefined ? { maxTokens: selection.maxTokens } : {}),
+    ...(selection.contextWindow !== undefined ? { contextWindow: selection.contextWindow } : {}),
+  };
 }

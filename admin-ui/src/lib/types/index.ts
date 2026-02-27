@@ -434,6 +434,36 @@ export interface AdminChatBootstrapResponse {
   defaultAuthorId: string;
 }
 
+export interface AdminModelRoomParticipant {
+  id: string;
+  slotKey: string;
+  purpose: string;
+  displayName: string;
+  provider: string;
+  model: string;
+  maxTokens?: number;
+  contextWindow?: number;
+  defaultSystemPrompt?: string;
+}
+
+export interface AdminModelRoomBootstrapResponse {
+  api: {
+    chatCompletionsUrl: string;
+    apiKey?: string;
+  };
+  defaultRoomId: string;
+  purrsephone: {
+    id: string;
+    displayName: string;
+    defaultSystemPromptMode: 'default';
+  };
+  participants: AdminModelRoomParticipant[];
+  constraints: {
+    allowedProviders: string[];
+    deniedProviders: string[];
+  };
+}
+
 // Models
 export interface DiscoveredModel {
   id: string;

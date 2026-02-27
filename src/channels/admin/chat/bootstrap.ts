@@ -7,10 +7,16 @@ import type {
 } from '../../../contacts/types.js';
 import { CHANNEL_PRIVACY_LEVELS } from '../../../contacts/types.js';
 import type {
+  ModelCatalogEntry,
+  SubstrateConfig,
+} from '../../../types.js';
+import type {
   AdminChatBootstrapResponse,
   AdminChatBootstrapUpdateInput,
   AdminChatContactOption,
   AdminChatLinkedChannelOption,
+  AdminModelRoomBootstrapResponse,
+  AdminModelRoomParticipant,
 } from './types.js';
 import {
   buildAbsoluteAdminChatApiUrl,
@@ -28,6 +34,8 @@ const SYNTHETIC_CONTACT_ID = 'admin.synthetic.default';
 const SYNTHETIC_DISPLAY_NAME = 'Primary Contact';
 const SYNTHETIC_CHANNEL = 'api';
 const SYNTHETIC_USER_ID = 'admin-user';
+const DEFAULT_MODEL_ROOM_ID = 'garden-model-room';
+const MODEL_ROOM_DIRECT_PROVIDERS = new Set(['anthropic', 'openai', 'google']);
 
 interface ContactCandidate extends AdminChatContactOption {
   trustLevel: TrustLevel;
@@ -72,6 +80,27 @@ function isSameIdentity(
   return left.channel === right.channel && left.userId === right.userId;
 }
 
+function sanitizePurposeSuffix(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '_');
+}
+
+function humanizeSlotKey(slotKey: string): string {
+  const text = slotKey
+    .replace(/[_./-]+/g, ' ')
+    .trim();
+  if (!text) return 'Model Participant';
+  return text
+    .split(/\s+/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
+function resolveParticipantDisplayName(slotKey: string, entry: ModelCatalogEntry): string {
+  const described = entry.defaults?.description?.trim();
+  if (described) return described;
+  return humanizeSlotKey(slotKey);
+}
+
 export class AdminChatBootstrapService {
   private readonly contactStore: ContactStore | null;
   private readonly configuredApiKey?: string;
@@ -99,6 +128,38 @@ export class AdminChatBootstrapService {
     this.applySelectionInput(input);
     this.persistSelectionMapping(input);
     return this.composeBootstrap(options);
+  }
+
+  buildModelRoomBootstrap(
+    config: SubstrateConfig,
+    options: AdminChatBootstrapRuntimeOptions = {},
+  ): AdminModelRoomBootstrapResponse {
+    const apiBaseUrl = resolveAdminChatApiBaseUrl({
+      explicitApiBaseUrl: this.configuredApiBaseUrl,
+      apiHost: this.configuredApiHost,
+      apiPort: this.configuredApiPort,
+      browserOrigin: options.requestOrigin,
+    });
+    const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);
+    const participants = this.resolveModelRoomParticipants(config);
+
+    return {
+      api: {
+        chatCompletionsUrl,
+        apiKey: this.resolveApiKey(),
+      },
+      defaultRoomId: DEFAULT_MODEL_ROOM_ID,
+      purrsephone: {
+        id: 'purrsephone',
+        displayName: 'Purrsephone',
+        defaultSystemPromptMode: 'default',
+      },
+      participants,
+      constraints: {
+        allowedProviders: [...MODEL_ROOM_DIRECT_PROVIDERS],
+        deniedProviders: ['openrouter'],
+      },
+    };
   }
 
   private applySelectionInput(input: AdminChatBootstrapUpdateInput): void {
@@ -261,6 +322,41 @@ export class AdminChatBootstrapService {
       defaultAuthorName,
       defaultAuthorId,
     };
+  }
+
+  private resolveModelRoomParticipants(config: SubstrateConfig): AdminModelRoomParticipant[] {
+    const catalog = config.modelCatalog ?? {};
+    const assignments = config.modelRoleAssignments ?? {};
+    const purposeBySlot = new Map<string, string>();
+    for (const [purpose, slotKey] of Object.entries(assignments)) {
+      if (!purpose || !slotKey) continue;
+      if (!purposeBySlot.has(slotKey)) {
+        purposeBySlot.set(slotKey, purpose);
+      }
+    }
+
+    const participants: AdminModelRoomParticipant[] = [];
+    for (const [slotKey, entry] of Object.entries(catalog)) {
+      const provider = entry.provider.trim().toLowerCase();
+      if (!MODEL_ROOM_DIRECT_PROVIDERS.has(provider)) continue;
+      participants.push({
+        id: slotKey,
+        slotKey,
+        purpose: purposeBySlot.get(slotKey) ?? `model_room.${sanitizePurposeSuffix(slotKey)}`,
+        displayName: resolveParticipantDisplayName(slotKey, entry),
+        provider,
+        model: entry.model,
+        ...(entry.overrides?.maxTokens !== undefined
+          ? { maxTokens: entry.overrides.maxTokens }
+          : (entry.defaults?.maxTokens !== undefined ? { maxTokens: entry.defaults.maxTokens } : {})),
+        ...(entry.overrides?.contextWindow !== undefined
+          ? { contextWindow: entry.overrides.contextWindow }
+          : (entry.defaults?.contextWindow !== undefined ? { contextWindow: entry.defaults.contextWindow } : {})),
+        defaultSystemPrompt: '',
+      });
+    }
+
+    return participants.sort((left, right) => left.displayName.localeCompare(right.displayName));
   }
 
   private resolveApiKey(): string | undefined {

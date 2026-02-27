@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { getChatBootstrap, updateChatBootstrap } from '$lib/api/endpoints/chat';
+  import { getSessionMessages } from '$lib/api/endpoints/sessions';
   import { getToken } from '$lib/stores/auth.svelte';
-  import type { AdminChatBootstrapResponse } from '$lib/types';
+  import type { AdminChatBootstrapResponse, SessionEntry } from '$lib/types';
 
   // ── State ──
   let bootstrap = $state<AdminChatBootstrapResponse | null>(null);
@@ -29,10 +30,55 @@
   let streamingThinking = $state('');
   let pendingToolCalls = $state<Array<{ name: string; id: string; args: string; result?: string; isError?: boolean }>>([]);
 
-  // Contact/privacy selectors
+  // Contact/privacy/identity selectors
   let selectedContactId = $state('');
   let selectedPrivacyLevel = $state('');
+  let selectedChannelIdentity = $state(''); // "channel:userId" composite key
   let showIdentityDetails = $state(false);
+
+  // Computed channel options for the identity selector
+  const GARDEN_CHAT_CHANNEL = 'api';
+  const GARDEN_CHAT_USER_ID = 'admin-user';
+  const GARDEN_CHAT_KEY = `${GARDEN_CHAT_CHANNEL}:${GARDEN_CHAT_USER_ID}`;
+
+  interface ChannelOption {
+    key: string;        // "channel:userId"
+    channel: string;
+    userId: string;
+    label: string;
+    privacyLevel: string;
+  }
+
+  function buildChannelOptions(bs: AdminChatBootstrapResponse): ChannelOption[] {
+    const opts: ChannelOption[] = [];
+    const seen = new Set<string>();
+
+    // Always offer Garden Chat (admin-native api channel) first
+    opts.push({
+      key: GARDEN_CHAT_KEY,
+      channel: GARDEN_CHAT_CHANNEL,
+      userId: GARDEN_CHAT_USER_ID,
+      label: 'Garden Chat (admin)',
+      privacyLevel: 'private',
+    });
+    seen.add(GARDEN_CHAT_KEY);
+
+    // Add linked channels from the selected contact
+    for (const lc of bs.linkedChannels) {
+      const key = `${lc.channel}:${lc.userId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      opts.push({
+        key,
+        channel: lc.channel,
+        userId: lc.userId,
+        label: `${lc.channel} (${lc.userId})`,
+        privacyLevel: lc.privacyLevel,
+      });
+    }
+
+    return opts;
+  }
 
   // Message area refs
   let messagesContainer: HTMLDivElement | undefined = $state(undefined);
@@ -57,12 +103,56 @@
 
   // ── Lifecycle ──
 
+  // ── Load existing session messages ──
+
+  async function loadSessionHistory(sessionId: string) {
+    try {
+      const data = await getSessionMessages(sessionId);
+      if (data.messages && data.messages.length > 0) {
+        const loaded: ChatMessage[] = [];
+        for (const entry of data.messages) {
+          // Skip system/compaction messages, only load user + assistant
+          if (entry.role !== 'user' && entry.role !== 'assistant') continue;
+          loaded.push({
+            id: `hist-${loaded.length}-${Date.now()}`,
+            role: entry.role as 'user' | 'assistant',
+            content: entry.content || '',
+            timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
+          });
+        }
+        if (loaded.length > 0) {
+          messages = loaded;
+          await scrollToBottom();
+        }
+      }
+    } catch {
+      // Session may not exist yet — that's fine, start fresh
+    }
+  }
+
   onMount(async () => {
     try {
       bootstrap = await getChatBootstrap();
       selectedContactId = bootstrap.canonicalContactId;
       selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+
+      // Default to Garden Chat (api:admin-user) instead of whatever channel the contact has
+      const currentIdentityKey = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+      if (currentIdentityKey !== GARDEN_CHAT_KEY) {
+        // Switch to admin-native channel
+        await updateChatBootstrap({
+          canonicalContactId: selectedContactId,
+          privacyLevel: selectedPrivacyLevel,
+          channel: GARDEN_CHAT_CHANNEL,
+          userId: GARDEN_CHAT_USER_ID,
+        });
+        bootstrap = await getChatBootstrap();
+      }
+      selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+
       await checkConnection();
+      // Load existing session history
+      await loadSessionHistory(bootstrap.defaultSessionId);
       healthInterval = setInterval(checkConnection, 30_000);
       connectDebugStream();
     } catch (e) {
@@ -311,13 +401,20 @@
     if (!bootstrap || saving) return;
     saving = true;
     try {
+      // When switching contacts, default to Garden Chat channel
       await updateChatBootstrap({
         canonicalContactId: selectedContactId,
         privacyLevel: selectedPrivacyLevel,
+        channel: GARDEN_CHAT_CHANNEL,
+        userId: GARDEN_CHAT_USER_ID,
       });
       bootstrap = await getChatBootstrap();
       selectedContactId = bootstrap.canonicalContactId;
       selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+      // Reload session history for the new identity
+      messages = [];
+      await loadSessionHistory(bootstrap.defaultSessionId);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update chat settings';
     } finally {
@@ -338,6 +435,34 @@
       selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update privacy level';
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function onChannelIdentityChange() {
+    if (!bootstrap || saving) return;
+    const parts = selectedChannelIdentity.split(':');
+    if (parts.length < 2) return;
+    const channel = parts[0];
+    const userId = parts.slice(1).join(':'); // userId may contain colons
+    saving = true;
+    try {
+      await updateChatBootstrap({
+        canonicalContactId: selectedContactId,
+        privacyLevel: selectedPrivacyLevel,
+        channel,
+        userId,
+      });
+      bootstrap = await getChatBootstrap();
+      selectedContactId = bootstrap.canonicalContactId;
+      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+      // Reload session history for the new channel
+      messages = [];
+      await loadSessionHistory(bootstrap.defaultSessionId);
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to switch channel identity';
     } finally {
       saving = false;
     }
@@ -449,18 +574,38 @@
           </select>
         </div>
 
+        <!-- Channel Identity Selector -->
+        <div class="flex flex-col gap-1">
+          <label for="chat-channel" class="text-sm font-semibold text-shadow-800">Channel</label>
+          <select
+            id="chat-channel"
+            bind:value={selectedChannelIdentity}
+            onchange={onChannelIdentityChange}
+            disabled={saving}
+            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+                   focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
+                   disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {#each buildChannelOptions(bootstrap) as opt}
+              <option value={opt.key}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+
         <!-- Identity Summary -->
         <div class="flex-1 min-w-0">
           <p class="text-sm text-shadow-800 truncate">
-            <span class="font-medium">{bootstrap.displayName}</span>
+            Chatting as <span class="font-medium">{bootstrap.displayName}</span>
             {#if bootstrap.nickname}
               <span class="text-shadow-600">({bootstrap.nickname})</span>
             {/if}
-            <span class="text-shadow-600 mx-1">|</span>
-            <span class="text-shadow-600 font-mono text-sm">{bootstrap.selectedIdentity.channel}:{bootstrap.selectedIdentity.userId}</span>
           </p>
           <p class="text-sm text-shadow-600 truncate">
             Model: {bootstrap.runtime.model.name}
+            {#if messages.length > 0}
+              <span class="text-shadow-500 mx-1">|</span>
+              {messages.length} messages loaded
+            {/if}
           </p>
         </div>
 
@@ -514,8 +659,11 @@
       {#if messages.length === 0 && !isStreaming}
         <div class="flex items-center justify-center h-full">
           <div class="text-center">
-            <p class="text-shadow-600 text-sm">No messages yet.</p>
-            <p class="text-shadow-500 text-sm mt-1">Type a message below to start chatting.</p>
+            <p class="text-shadow-700 text-sm font-medium">No messages in this session yet.</p>
+            <p class="text-shadow-500 text-sm mt-1">Type a message below to start chatting with Purrsephone.</p>
+            {#if bootstrap}
+              <p class="text-shadow-400 text-sm mt-2 font-mono">{bootstrap.defaultSessionId}</p>
+            {/if}
           </div>
         </div>
       {:else}

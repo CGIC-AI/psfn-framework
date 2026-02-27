@@ -288,7 +288,9 @@ export class GitOps implements GitOperations {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (err) {
-      const msg = err instanceof Error ? (err as any).stderr || err.message : String(err);
+      const record = err as Record<string, unknown>;
+      const stderr = typeof record?.stderr === 'string' ? record.stderr : undefined;
+      const msg = stderr || (err instanceof Error ? err.message : String(err));
       throw new Error(`Git command failed: ${msg}`);
     }
   }

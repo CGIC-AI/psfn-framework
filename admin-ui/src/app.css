@@ -1,82 +1,86 @@
 @import 'tailwindcss';
 
-/* ── Garden Theme (Tailwind v4 CSS-first config) ── */
+/* ── admin UI — Versailles Rococo Theme ──
+   White-bark tree with gold circuitry veins.
+   Soft warm palette, filigree elegance.
+   High contrast: dark warm text on cream backgrounds.
+*/
 
 @theme {
-  /* Bark — warm whites/creams for backgrounds */
-  --color-bark-50: #fefdfb;
-  --color-bark-100: #fdf9f0;
-  --color-bark-200: #f8f0de;
-  --color-bark-300: #f0e4c8;
-  --color-bark-400: #e5d3a8;
-  --color-bark-500: #d4bc82;
-  --color-bark-600: #b99d60;
-  --color-bark-700: #9a7f48;
-  --color-bark-800: #7a6438;
-  --color-bark-900: #5e4d2d;
+  /* Bark — ivory/cream backgrounds (the white bark of the tree) */
+  --color-bark-50: #fefcf8;
+  --color-bark-100: #fdf8ee;
+  --color-bark-200: #f5ecda;
+  --color-bark-300: #ebdcc0;
+  --color-bark-400: #d9c59a;
+  --color-bark-500: #c4a870;
+  --color-bark-600: #a68b50;
+  --color-bark-700: #876e3c;
+  --color-bark-800: #6b572f;
+  --color-bark-900: #504125;
 
-  /* Gold — gilded accents, circuitry veins */
-  --color-gold-50: #fdf8e8;
-  --color-gold-100: #f9edc4;
-  --color-gold-200: #f2d98a;
-  --color-gold-300: #e8c24e;
-  --color-gold-400: #d4a72e;
-  --color-gold-500: #c4a35a;
-  --color-gold-600: #a88620;
-  --color-gold-700: #8b6914;
-  --color-gold-800: #6e530f;
-  --color-gold-900: #52400d;
+  /* Gold — gilded circuitry veins, Rococo accents */
+  --color-gold-50: #fdf8eb;
+  --color-gold-100: #f9ecc6;
+  --color-gold-200: #f0d685;
+  --color-gold-300: #e4bc44;
+  --color-gold-400: #d4a520;
+  --color-gold-500: #b8901a;
+  --color-gold-600: #977414;
+  --color-gold-700: #7a5d10;
+  --color-gold-800: #5e470d;
+  --color-gold-900: #43340a;
 
-  /* Moss — greens for healthy/active states */
-  --color-moss-50: #f3f8f0;
-  --color-moss-100: #e2efda;
-  --color-moss-200: #c3deb3;
-  --color-moss-300: #98c67d;
-  --color-moss-400: #6faa50;
-  --color-moss-500: #4f8c36;
-  --color-moss-600: #3c6f29;
-  --color-moss-700: #305822;
-  --color-moss-800: #28461d;
-  --color-moss-900: #1e351a;
+  /* Moss — garden greens, healthy/active states */
+  --color-moss-50: #f0f7ec;
+  --color-moss-100: #dcefd2;
+  --color-moss-200: #b8dea5;
+  --color-moss-300: #88c56c;
+  --color-moss-400: #5fa843;
+  --color-moss-500: #478c30;
+  --color-moss-600: #367024;
+  --color-moss-700: #2b591d;
+  --color-moss-800: #234619;
+  --color-moss-900: #1b3514;
 
-  /* Petal — soft pinks/roses for emotional/relational */
-  --color-petal-50: #fdf4f6;
-  --color-petal-100: #fbe8ed;
-  --color-petal-200: #f6cdd8;
-  --color-petal-300: #efa8ba;
-  --color-petal-400: #e57c96;
-  --color-petal-500: #d45474;
-  --color-petal-600: #b83a5a;
-  --color-petal-700: #9a2d49;
-  --color-petal-800: #7e2840;
-  --color-petal-900: #6a2539;
+  /* Petal — rose/blush, emotional/relational warmth */
+  --color-petal-50: #fdf3f5;
+  --color-petal-100: #fbe5eb;
+  --color-petal-200: #f5c7d4;
+  --color-petal-300: #eca3b6;
+  --color-petal-400: #df7491;
+  --color-petal-500: #cc4d6e;
+  --color-petal-600: #ad3555;
+  --color-petal-700: #902946;
+  --color-petal-800: #75243b;
+  --color-petal-900: #602035;
 
-  /* Shadow — deep purples/charcoals for text */
-  --color-shadow-50: #f6f5f8;
-  --color-shadow-100: #eae8ef;
-  --color-shadow-200: #d4d0de;
-  --color-shadow-300: #b3abC4;
-  --color-shadow-400: #8c80a6;
-  --color-shadow-500: #6e5f8a;
-  --color-shadow-600: #594c72;
-  --color-shadow-700: #483d5d;
-  --color-shadow-800: #3a3249;
-  --color-shadow-900: #2a2535;
-  --color-shadow-950: #1a1720;
+  /* Shadow — warm charcoal/sepia for TEXT (NOT purple) */
+  --color-shadow-50: #f8f6f4;
+  --color-shadow-100: #ede9e4;
+  --color-shadow-200: #d9d2c9;
+  --color-shadow-300: #b8ad9f;
+  --color-shadow-400: #968978;
+  --color-shadow-500: #7a6d5d;
+  --color-shadow-600: #63574a;
+  --color-shadow-700: #50473c;
+  --color-shadow-800: #3d3630;
+  --color-shadow-900: #2c2722;
+  --color-shadow-950: #1c1916;
 
-  /* Wilt — amber/red for errors/warnings */
-  --color-wilt-50: #fef6ee;
-  --color-wilt-100: #fdebd5;
-  --color-wilt-200: #fad3a8;
-  --color-wilt-300: #f4b270;
-  --color-wilt-400: #ec8839;
-  --color-wilt-500: #e06a18;
-  --color-wilt-600: #c54e10;
-  --color-wilt-700: #a33910;
-  --color-wilt-800: #842f14;
-  --color-wilt-900: #6c2914;
+  /* Wilt — amber/terracotta for errors/warnings (wilting petals) */
+  --color-wilt-50: #fef5ec;
+  --color-wilt-100: #fce8d0;
+  --color-wilt-200: #f8cda0;
+  --color-wilt-300: #f1aa64;
+  --color-wilt-400: #e88832;
+  --color-wilt-500: #d06b16;
+  --color-wilt-600: #b05210;
+  --color-wilt-700: #903e10;
+  --color-wilt-800: #743214;
+  --color-wilt-900: #5f2a13;
 
-  /* Typography */
+  /* Typography — serif Playfair for headings, Inter for body */
   --font-serif: 'Playfair Display', 'Georgia', serif;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 }
@@ -94,34 +98,60 @@ body {
 h1, h2, h3, h4 {
   font-family: var(--font-serif);
   font-weight: 600;
+  color: var(--color-shadow-900);
 }
 
-/* ── Filigree Utilities ── */
+/* ── Rococo Filigree Utilities ── */
 
 .filigree-border {
-  border: 1px solid var(--color-gold-200);
-  box-shadow: 0 0 0 1px var(--color-gold-100), 0 1px 3px rgba(196, 163, 90, 0.08);
+  border: 1px solid var(--color-gold-300);
+  box-shadow:
+    0 0 0 1px rgba(212, 165, 32, 0.1),
+    0 1px 3px rgba(184, 144, 26, 0.08);
 }
 
 .filigree-border-strong {
   border: 1px solid var(--color-gold-400);
-  box-shadow: 0 0 0 1px var(--color-gold-200), 0 2px 8px rgba(196, 163, 90, 0.15);
+  box-shadow:
+    0 0 0 1px rgba(212, 165, 32, 0.15),
+    0 2px 8px rgba(184, 144, 26, 0.12),
+    inset 0 1px 0 rgba(253, 248, 235, 0.5);
 }
 
 .card-garden {
   background: white;
   border: 1px solid var(--color-bark-200);
   border-radius: 0.75rem;
-  box-shadow: 0 1px 3px rgba(42, 37, 53, 0.04), 0 0 0 1px var(--color-bark-100);
+  box-shadow:
+    0 1px 2px rgba(44, 39, 34, 0.04),
+    0 0 0 1px rgba(245, 236, 218, 0.5);
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .card-garden:hover {
-  border-color: var(--color-gold-200);
-  box-shadow: 0 2px 8px rgba(196, 163, 90, 0.1), 0 0 0 1px var(--color-gold-100);
+  border-color: var(--color-gold-300);
+  box-shadow:
+    0 2px 8px rgba(184, 144, 26, 0.08),
+    0 0 0 1px rgba(212, 165, 32, 0.12);
 }
 
-/* ── Scrollbar ── */
+/* Rococo ornamental divider */
+.divider-filigree {
+  border: none;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-gold-300) 20%,
+    var(--color-gold-400) 50%,
+    var(--color-gold-300) 80%,
+    transparent
+  );
+  opacity: 0.5;
+}
+
+/* ── Scrollbar (gilded) ── */
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -140,21 +170,42 @@ h1, h2, h3, h4 {
   background: var(--color-gold-500);
 }
 
-/* ── Dark Mode ── */
+/* ── Dark Mode — Twilight Garden ──
+   Deep warm charcoal, not purple. Gold accents glow.
+*/
+
 :root.dark body {
   background-color: var(--color-shadow-950);
   color: var(--color-bark-200);
 }
 
+:root.dark h1, :root.dark h2, :root.dark h3, :root.dark h4 {
+  color: var(--color-bark-100);
+}
+
 :root.dark .card-garden {
   background: var(--color-shadow-900);
   border-color: var(--color-shadow-700);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 :root.dark .card-garden:hover {
   border-color: var(--color-gold-700);
-  box-shadow: 0 2px 8px rgba(196, 163, 90, 0.15);
+  box-shadow:
+    0 2px 8px rgba(184, 144, 26, 0.1),
+    0 0 0 1px rgba(122, 93, 16, 0.2);
+}
+
+:root.dark .filigree-border {
+  border-color: var(--color-gold-700);
+  box-shadow: 0 0 0 1px rgba(122, 93, 16, 0.2);
+}
+
+:root.dark .filigree-border-strong {
+  border-color: var(--color-gold-600);
+  box-shadow:
+    0 0 0 1px rgba(151, 116, 20, 0.2),
+    0 2px 8px rgba(184, 144, 26, 0.08);
 }
 
 :root.dark ::-webkit-scrollbar-track {
@@ -163,4 +214,15 @@ h1, h2, h3, h4 {
 
 :root.dark ::-webkit-scrollbar-thumb {
   background: var(--color-shadow-600);
+}
+
+:root.dark .divider-filigree {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-gold-700) 20%,
+    var(--color-gold-600) 50%,
+    var(--color-gold-700) 80%,
+    transparent
+  );
 }

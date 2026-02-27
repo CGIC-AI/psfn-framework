@@ -25,10 +25,10 @@ export class SalienceDecay {
   }
 
   run(): void {
-    this.memoryStore.runInTransaction(() => {
-      const now = Date.now();
-      const memories = this.memoryStore.getAllActiveMemories();
+    const now = Date.now();
+    const memories = this.memoryStore.getAllActiveMemories();
 
+    this.memoryStore.runInTransaction(() => {
       for (const memory of memories) {
         const profile = getMemoryDecayProfile(memory);
         const halflife = DECAY_HALFLIFE[memory.type as MemoryType] * profile.halflifeMultiplier;

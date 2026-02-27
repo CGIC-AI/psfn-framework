@@ -38,7 +38,7 @@ import {
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
-import { parsePositiveIntEnv } from './utils/env.js';
+import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from './utils/env.js';
 import { MemoryWriter } from './memory/writer.js';
 import {
   createMemoryWriteTool,
@@ -238,9 +238,7 @@ async function main(): Promise<void> {
 
   // ── Connect to gateway ──
 
-  const embeddingDims = process.env.EMBEDDING_DIMS
-    ? parseInt(process.env.EMBEDDING_DIMS, 10)
-    : 1024;
+  const embeddingDims = parsePositiveIntEnv(process.env.EMBEDDING_DIMS, 1024);
 
   log.info(`Connecting to gateway at ${socketPath}...`);
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
@@ -446,7 +444,7 @@ async function main(): Promise<void> {
 
   let apiServer: ApiServer | undefined;
   const apiHost = process.env.API_HOST || undefined;
-  const apiPort = process.env.API_PORT ? parseInt(process.env.API_PORT, 10) : undefined;
+  const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
   if (apiPort) {
     const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
     const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
@@ -607,7 +605,7 @@ async function main(): Promise<void> {
   // ── Admin GUI (optional) ──
 
   let adminServer: AdminServer | undefined;
-  const adminPort = process.env.ADMIN_PORT ? parseInt(process.env.ADMIN_PORT, 10) : undefined;
+  const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (adminPort) {
     const adminToken = process.env.ADMIN_TOKEN || undefined;
     const allowInsecureWithoutToken = isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE);

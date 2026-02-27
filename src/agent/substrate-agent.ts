@@ -37,6 +37,7 @@ import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
+import { ReflectionNudgeTracker, type TurnToolSummary } from '../skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';
 import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
 import { CapabilityRuntime } from '../capabilities/runtime.js';
@@ -114,6 +115,7 @@ export class SubstrateAgent {
   private capabilityRuntime: CapabilityRuntime | null = null;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
   private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
+  private reflectionNudge = new ReflectionNudgeTracker();
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -654,6 +656,15 @@ export class SubstrateAgent {
         );
       }
 
+      // Self-reflection nudge: after complex multi-tool turns, suggest saving as a skill
+      if (this.skillsRuntime) {
+        const toolSummary = this.buildTurnToolSummary(turnMessages);
+        const nudge = this.reflectionNudge.evaluate(toolSummary);
+        if (nudge) {
+          this.sessionManager.appendSystemNote(message.channelId, nudge);
+        }
+      }
+
       const agentResponse: AgentResponse = {
         content: safeResponseText,
         channelId: message.channelId,
@@ -947,6 +958,20 @@ export class SubstrateAgent {
 
   private isToolResultAgentMessage(message: AgentMessage): message is ToolResultMessage {
     return (message as { role?: string }).role === 'toolResult';
+  }
+
+  private buildTurnToolSummary(turnMessages: AgentMessage[]): TurnToolSummary {
+    let toolCalls = 0;
+    let usedThinkTool = false;
+    for (const msg of turnMessages) {
+      if (this.isToolResultAgentMessage(msg)) {
+        toolCalls += 1;
+        if (msg.toolName === 'think') {
+          usedThinkTool = true;
+        }
+      }
+    }
+    return { toolCalls, usedThinkTool };
   }
 
   /** Extract text from the last assistant message in Agent state */

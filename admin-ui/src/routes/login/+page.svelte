@@ -47,7 +47,7 @@
       <h1 class="font-serif text-3xl text-gold-600 font-semibold">
         Purrsephone's Garden
       </h1>
-      <p class="text-shadow-400 mt-2 text-sm">
+      <p class="text-shadow-700 mt-2 text-sm">
         Enter your admin token to continue
       </p>
     </div>
@@ -63,7 +63,7 @@
           bind:value={tokenInput}
           placeholder="Enter ADMIN_TOKEN..."
           class="w-full px-4 py-2.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
-                 placeholder:text-shadow-300 focus:outline-none focus:border-gold-400 focus:ring-2
+                 placeholder:text-shadow-500 focus:outline-none focus:border-gold-400 focus:ring-2
                  focus:ring-gold-200 transition-colors"
           disabled={loading}
         />
@@ -90,8 +90,8 @@
       </button>
     </form>
 
-    <p class="text-center text-xs text-shadow-400 mt-6">
-      Token is configured via <code class="px-1.5 py-0.5 bg-bark-200 rounded text-shadow-500">ADMIN_TOKEN</code> env var
+    <p class="text-center text-sm text-shadow-600 mt-6">
+      Token is configured via <code class="px-1.5 py-0.5 bg-bark-200 rounded text-shadow-800">ADMIN_TOKEN</code> env var
     </p>
   </div>
 </div>

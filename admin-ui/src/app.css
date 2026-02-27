@@ -73,8 +73,14 @@
 
 body {
   font-family: var(--font-sans);
+  font-size: 16px;
   background-color: #fafafa;
   color: var(--color-shadow-800);
+}
+
+/* Muted text utility for secondary content */
+.text-muted {
+  color: var(--color-shadow-600);
 }
 
 h1, h2, h3, h4 { font-family: var(--font-serif); }
@@ -86,6 +92,7 @@ h1, h2, h3, h4 { font-family: var(--font-serif); }
   border: 1px solid var(--color-bark-300);
   border-radius: 0.75rem;
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  color: var(--color-shadow-800);
 }
 .card:hover,
 .card-garden:hover {

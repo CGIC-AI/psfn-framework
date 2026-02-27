@@ -91,7 +91,7 @@
 <div class="space-y-6">
   <div>
     <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Canopy</h1>
-    <p class="text-shadow-400 text-sm mt-1">Chat Interface</p>
+    <p class="text-shadow-600 text-sm mt-1">Chat Interface</p>
   </div>
 
   {#if loading}
@@ -102,8 +102,8 @@
   {:else if error}
     <div class="card p-6 border-wilt-200">
       <p class="text-wilt-600 font-medium">Failed to load chat</p>
-      <p class="text-shadow-400 text-sm mt-1">{error}</p>
-      <p class="text-shadow-400 text-sm mt-3">
+      <p class="text-shadow-600 text-sm mt-1">{error}</p>
+      <p class="text-shadow-600 text-sm mt-3">
         Make sure the admin server is running and the chat bootstrap endpoint is available.
       </p>
     </div>
@@ -114,7 +114,7 @@
         <!-- Fallback: link to existing chat page -->
         <div class="flex flex-col items-center justify-center h-full bg-bark-50 p-8">
           <p class="text-shadow-600 text-lg font-serif mb-4">Chat widget loading...</p>
-          <p class="text-shadow-400 text-sm mb-6 text-center max-w-md">
+          <p class="text-shadow-700 text-sm mb-6 text-center max-w-md">
             If the embedded chat does not load, you can open the standalone chat interface:
           </p>
           <a
@@ -140,50 +140,50 @@
       </summary>
       <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
         <div>
-          <h3 class="text-xs text-shadow-400 uppercase tracking-wide mb-1">Identity</h3>
+          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Identity</h3>
           <p class="text-shadow-700">{bootstrap.displayName}
             {#if bootstrap.nickname}
-              <span class="text-shadow-400">({bootstrap.nickname})</span>
+              <span class="text-shadow-600">({bootstrap.nickname})</span>
             {/if}
           </p>
-          <p class="text-xs text-shadow-400 mt-1">Contact: {bootstrap.canonicalContactId}</p>
+          <p class="text-sm text-shadow-600 mt-1">Contact: {bootstrap.canonicalContactId}</p>
         </div>
 
         <div>
-          <h3 class="text-xs text-shadow-400 uppercase tracking-wide mb-1">Session</h3>
+          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Session</h3>
           <p class="text-shadow-700">{bootstrap.defaultSessionId}</p>
-          <p class="text-xs text-shadow-400 mt-1">
+          <p class="text-sm text-shadow-600 mt-1">
             Author: {bootstrap.defaultAuthorName} ({bootstrap.defaultAuthorId})
           </p>
         </div>
 
         <div>
-          <h3 class="text-xs text-shadow-400 uppercase tracking-wide mb-1">API</h3>
-          <p class="text-shadow-600 text-xs font-mono break-all">{bootstrap.api.chatCompletionsUrl}</p>
+          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">API</h3>
+          <p class="text-shadow-800 text-sm font-mono break-all">{bootstrap.api.chatCompletionsUrl}</p>
           {#if bootstrap.api.voiceWebSocketUrl}
-            <p class="text-shadow-600 text-xs font-mono break-all mt-1">{bootstrap.api.voiceWebSocketUrl}</p>
+            <p class="text-shadow-800 text-sm font-mono break-all mt-1">{bootstrap.api.voiceWebSocketUrl}</p>
           {/if}
         </div>
 
         <div>
-          <h3 class="text-xs text-shadow-400 uppercase tracking-wide mb-1">Model</h3>
+          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Model</h3>
           <p class="text-shadow-700">{bootstrap.runtime.model.name}</p>
-          <p class="text-xs text-shadow-400 mt-1">
+          <p class="text-sm text-shadow-600 mt-1">
             {bootstrap.runtime.model.provider} / {bootstrap.runtime.model.api}
           </p>
         </div>
 
         <div>
-          <h3 class="text-xs text-shadow-400 uppercase tracking-wide mb-1">Privacy</h3>
+          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Privacy</h3>
           <p class="text-shadow-700">Level: {bootstrap.privacy.selectedLevel}</p>
-          <p class="text-xs text-shadow-400 mt-1">
+          <p class="text-sm text-shadow-600 mt-1">
             Available: {bootstrap.privacy.availableLevels.join(', ')}
           </p>
         </div>
 
         {#if bootstrap.contactOptions.length > 1}
           <div>
-            <h3 class="text-xs text-shadow-400 uppercase tracking-wide mb-1">Contact Options</h3>
+            <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Contact Options</h3>
             {#each bootstrap.contactOptions as opt}
               <p class="text-shadow-700 text-xs">{opt.displayName} ({opt.canonicalContactId})</p>
             {/each}

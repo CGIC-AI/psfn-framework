@@ -74,10 +74,27 @@
       maxResponseTokens, retryMaxAttempts, retryBaseDelayMs,
       importRouteMode, importStrictPolicy,
       importLocalEndpointUrl, importLocalModel,
-      openRouterProviderOrder, allowHttpFetch,
-      webFetchDomainAllowlist, webFetchLocalCrawlerHostAllowlist,
+      openRouterProviderOrder, webFetchAllowHttp,
+      webFetchDomainAllowlist, webFetchLocalCrawlerEnabled,
+      webFetchLocalCrawlerAllowHttp,
+      webFetchLocalCrawlerHostAllowlist,
       webFetchLocalCrawlerDomainAllowlist, webFetchTlsCaCertPaths,
       capabilityTier, catalogSlots, purposeMappings,
+      // Memory & Extraction
+      extractionInterval, compactionEmotionalSalienceThresholdPct,
+      defaultContextWindow, maintenanceIntervalMs,
+      // Memory Extraction Tuning
+      memoryExtractionMinImportance, memoryExtractionMinConfidence,
+      memoryExtractionMinNovelty, memoryExtractionMaxWrites,
+      memoryExtractionTelemetryEnabled, memoryRetrievalTelemetryEnabled,
+      // Profile Synthesis
+      profileSynthesisEnabled, profileSynthesisRefreshIntervalMs,
+      profileSynthesisCooldownMs, profileSynthesisMinWrites,
+      profileSynthesisMinImportance, profileSynthesisMinConfidence,
+      profileSynthesisMinNovelty, profileSynthesisSourceMemoryLimit,
+      profileSynthesisMinSourceMemories,
+      // Think Tool
+      thinkMaxTokens, thinkMaxWallTimeMs, thinkMaxSubQueries,
     });
   }
 
@@ -118,8 +135,10 @@
   let openRouterProviderOrder = $state('');
 
   // ── Gateway web fetch ──
-  let allowHttpFetch = $state(false);
+  let webFetchAllowHttp = $state(false);
   let webFetchDomainAllowlist = $state('');
+  let webFetchLocalCrawlerEnabled = $state(false);
+  let webFetchLocalCrawlerAllowHttp = $state(false);
   let webFetchLocalCrawlerHostAllowlist = $state('');
   let webFetchLocalCrawlerDomainAllowlist = $state('');
   let webFetchTlsCaCertPaths = $state('');
@@ -129,6 +148,36 @@
 
   // ── LLM retries ──
   let retryBaseDelayMs = $state(2000);
+
+  // ── Memory & Extraction ──
+  let extractionInterval = $state(5);
+  let compactionEmotionalSalienceThresholdPct = $state(75);
+  let defaultContextWindow = $state(128000);
+  let maintenanceIntervalMs = $state(300000);
+
+  // ── Memory Extraction Tuning ──
+  let memoryExtractionMinImportance = $state(0.3);
+  let memoryExtractionMinConfidence = $state(0.4);
+  let memoryExtractionMinNovelty = $state(0.1);
+  let memoryExtractionMaxWrites = $state(20);
+  let memoryExtractionTelemetryEnabled = $state(true);
+  let memoryRetrievalTelemetryEnabled = $state(true);
+
+  // ── Profile Synthesis ──
+  let profileSynthesisEnabled = $state(true);
+  let profileSynthesisRefreshIntervalMs = $state(3600000);
+  let profileSynthesisCooldownMs = $state(300000);
+  let profileSynthesisMinWrites = $state(1);
+  let profileSynthesisMinImportance = $state(0.65);
+  let profileSynthesisMinConfidence = $state(0.7);
+  let profileSynthesisMinNovelty = $state(0.12);
+  let profileSynthesisSourceMemoryLimit = $state(16);
+  let profileSynthesisMinSourceMemories = $state(2);
+
+  // ── Think Tool ──
+  let thinkMaxTokens = $state(50000);
+  let thinkMaxWallTimeMs = $state(120000);
+  let thinkMaxSubQueries = $state(10);
 
   // ── Raw editor states ──
   let modelsJson = $state('');
@@ -141,7 +190,7 @@
   // ── Collapsible sections ──
   let openSections = $state(new Set<string>(['models']));
 
-  // ── Section definitions ──
+  // ── Section definitions for advanced mode ──
   interface SectionDef {
     id: string;
     title: string;
@@ -156,9 +205,6 @@
       keys: [
         'primaryModel', 'primaryProvider', 'primaryMaxTokens',
         'extractionModel', 'extractionProvider', 'extractionMaxTokens',
-        'reasoningModel', 'reasoningProvider', 'reasoningMaxTokens',
-        'longContextModel', 'longContextProvider', 'longContextMaxTokens',
-        'backgroundModel', 'backgroundProvider', 'backgroundMaxTokens',
         'defaultContextWindow',
       ],
       summary: () => {
@@ -179,14 +225,39 @@
       id: 'memory', title: 'Memory & Extraction', icon: 'E',
       keys: [
         'memoryBudgetPct', 'extractionThresholdPct',
-        'extractionInterval', 'salienceFloor',
+        'extractionInterval', 'compactionEmotionalSalienceThresholdPct',
       ],
-      summary: () => `Budget ${memoryBudgetPct}%, Extract at ${extractionThresholdPct}%, Compact at ${compactionThresholdPct}%`,
+      summary: () => `Budget ${memoryBudgetPct}%, Extract at ${extractionThresholdPct}%`,
     },
     {
       id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
-      keys: ['compactionThresholdPct', 'sessionMessageLimit', 'maxSessionTokens'],
-      summary: () => `Compaction at ${compactionThresholdPct}%${sessionMessageLimit != null ? `, max ${sessionMessageLimit} msgs` : ''}`,
+      keys: ['compactionThresholdPct', 'maintenanceIntervalMs'],
+      summary: () => `Compaction at ${compactionThresholdPct}%, Maintenance ${Math.round(maintenanceIntervalMs / 1000)}s`,
+    },
+    {
+      id: 'extraction-tuning', title: 'Memory Extraction Tuning', icon: 'X',
+      keys: [
+        'memoryExtractionMinImportance', 'memoryExtractionMinConfidence',
+        'memoryExtractionMinNovelty', 'memoryExtractionMaxWrites',
+        'memoryExtractionTelemetryEnabled', 'memoryRetrievalTelemetryEnabled',
+      ],
+      summary: () => `Min importance: ${memoryExtractionMinImportance}, Max writes: ${memoryExtractionMaxWrites}`,
+    },
+    {
+      id: 'profile', title: 'Profile Synthesis', icon: 'P',
+      keys: [
+        'profileSynthesisEnabled', 'profileSynthesisRefreshIntervalMs',
+        'profileSynthesisCooldownMs', 'profileSynthesisMinWrites',
+        'profileSynthesisMinImportance', 'profileSynthesisMinConfidence',
+        'profileSynthesisMinNovelty', 'profileSynthesisSourceMemoryLimit',
+        'profileSynthesisMinSourceMemories',
+      ],
+      summary: () => profileSynthesisEnabled ? `Enabled, refresh ${Math.round(profileSynthesisRefreshIntervalMs / 60000)}min` : 'Disabled',
+    },
+    {
+      id: 'think', title: 'Think Tool', icon: 'R',
+      keys: ['thinkMaxTokens', 'thinkMaxWallTimeMs', 'thinkMaxSubQueries'],
+      summary: () => `Max tokens: ${thinkMaxTokens.toLocaleString()}, Wall time: ${Math.round(thinkMaxWallTimeMs / 1000)}s`,
     },
     {
       id: 'trust', title: 'Trust & Capabilities', icon: 'T',
@@ -195,8 +266,8 @@
     },
     {
       id: 'llm', title: 'LLM Retries & Behavior', icon: 'L',
-      keys: ['retryMaxAttempts', 'retryBaseDelayMs', 'primaryMaxTokens'],
-      summary: () => `Max retries: ${retryMaxAttempts}, Response: ${maxResponseTokens.toLocaleString()} tokens`,
+      keys: ['retryMaxAttempts', 'retryBaseDelayMs'],
+      summary: () => `Max retries: ${retryMaxAttempts}, Base delay: ${retryBaseDelayMs}ms`,
     },
     {
       id: 'import', title: 'Import Processing', icon: 'I',
@@ -210,26 +281,12 @@
     {
       id: 'fetch', title: 'Web Fetch Policy', icon: 'W',
       keys: [
-        'allowHttpFetch', 'webFetchDomainAllowlist',
+        'webFetchAllowHttp', 'webFetchDomainAllowlist',
+        'webFetchLocalCrawlerEnabled', 'webFetchLocalCrawlerAllowHttp',
         'webFetchLocalCrawlerHostAllowlist', 'webFetchLocalCrawlerDomainAllowlist',
         'webFetchTlsCaCertPaths',
       ],
-      summary: () => allowHttpFetch ? 'Enabled' : 'Disabled',
-    },
-    {
-      id: 'voice', title: 'Voice & TTS', icon: 'V',
-      keys: [],
-      summary: () => 'Configured via environment variables',
-    },
-    {
-      id: 'channels', title: 'Channels', icon: 'C',
-      keys: [],
-      summary: () => 'Discord, API, Admin — env var config',
-    },
-    {
-      id: 'think', title: 'Think Tool', icon: 'R',
-      keys: ['thinkMaxIterations', 'thinkMaxTokensPerIteration', 'thinkTimeout'],
-      summary: () => 'RLM sandbox parameters',
+      summary: () => webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only',
     },
   ];
 
@@ -247,11 +304,10 @@
   function getSource(key: string): SettingSource {
     if (!data) return 'default';
     const env = data.env as Record<string, unknown> | undefined;
-    // Check if env object has a related key
     const envMap: Record<string, string> = {
       'primaryModel': 'primaryModel',
       'extractionModel': 'extractionModel',
-      'allowHttpFetch': 'allowHttpFetch',
+      'webFetchAllowHttp': 'webFetchAllowHttp',
     };
     if (env && envMap[key] && env[envMap[key]] !== undefined) return 'env var';
     const config = data.config as Record<string, unknown>;
@@ -268,10 +324,8 @@
 
   let budgetPreview = $derived.by(() => {
     if (!data) return null;
-    const config = data.config as Record<string, unknown>;
-    const ctxWindow = Number(config.defaultContextWindow ?? 128000);
+    const ctxWindow = defaultContextWindow;
 
-    // Session history budget (matches context-budget.ts exactly)
     const sessTokenBudget = Math.max(SESSION_HISTORY_MIN_TOKENS_FLOOR, Math.floor(ctxWindow * (sessionHistoryBudgetPct / 100)));
     const sessBudgetMsgs = clamp(
       Math.floor(sessTokenBudget / SESSION_HISTORY_TOKENS_PER_MSG),
@@ -283,7 +337,6 @@
       : sessBudgetMsgs;
     const sessEffectiveTokens = sessEffective * SESSION_HISTORY_TOKENS_PER_MSG;
 
-    // Memory retrieval budget (matches context-budget.ts exactly)
     const memTokenBudget = Math.max(MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR, Math.floor(ctxWindow * (memoryRetrievalBudgetPct / 100)));
     const memBudgetItems = clamp(
       Math.floor(memTokenBudget / MEMORY_RETRIEVAL_TOKENS_PER_ITEM),
@@ -295,12 +348,10 @@
       : memBudgetItems;
     const memEffectiveTokens = memEffective * MEMORY_RETRIEVAL_TOKENS_PER_ITEM;
 
-    // Allocations
     const systemPromptTokens = SYSTEM_PROMPT_ESTIMATE_TOKENS;
     const allocated = systemPromptTokens + sessEffectiveTokens + memEffectiveTokens + maxResponseTokens;
     const remaining = Math.max(0, ctxWindow - allocated);
 
-    // Percentages for bar chart
     const sysPct = (systemPromptTokens / ctxWindow) * 100;
     const sessPct = (sessEffectiveTokens / ctxWindow) * 100;
     const memPct = (memEffectiveTokens / ctxWindow) * 100;
@@ -350,12 +401,44 @@
     importLocalEndpointUrl = String(config.importProcessingLocalEndpointUrl ?? '');
     importLocalModel = String(config.importProcessingLocalModel ?? '');
     openRouterProviderOrder = Array.isArray(config.openRouterProviderOrder) ? config.openRouterProviderOrder.join(', ') : '';
-    allowHttpFetch = Boolean(config.allowHttpFetch);
+    webFetchAllowHttp = Boolean(config.webFetchAllowHttp);
     webFetchDomainAllowlist = Array.isArray(config.webFetchDomainAllowlist) ? config.webFetchDomainAllowlist.join(', ') : '';
+    webFetchLocalCrawlerEnabled = Boolean(config.webFetchLocalCrawlerEnabled);
+    webFetchLocalCrawlerAllowHttp = Boolean(config.webFetchLocalCrawlerAllowHttp);
     webFetchLocalCrawlerHostAllowlist = Array.isArray(config.webFetchLocalCrawlerHostAllowlist) ? config.webFetchLocalCrawlerHostAllowlist.join(', ') : '';
     webFetchLocalCrawlerDomainAllowlist = Array.isArray(config.webFetchLocalCrawlerDomainAllowlist) ? config.webFetchLocalCrawlerDomainAllowlist.join(', ') : '';
     webFetchTlsCaCertPaths = Array.isArray(config.webFetchTlsCaCertPaths) ? config.webFetchTlsCaCertPaths.join(', ') : '';
     capabilityTier = String(config.capabilityTier ?? 'apprentice');
+
+    // Memory & Extraction
+    extractionInterval = Number(config.extractionInterval ?? 5);
+    compactionEmotionalSalienceThresholdPct = Number(config.compactionEmotionalSalienceThresholdPct ?? 75);
+    defaultContextWindow = Number(config.defaultContextWindow ?? 128000);
+    maintenanceIntervalMs = Number(config.maintenanceIntervalMs ?? 300000);
+
+    // Memory Extraction Tuning
+    memoryExtractionMinImportance = Number(config.memoryExtractionMinImportance ?? 0.3);
+    memoryExtractionMinConfidence = Number(config.memoryExtractionMinConfidence ?? 0.4);
+    memoryExtractionMinNovelty = Number(config.memoryExtractionMinNovelty ?? 0.1);
+    memoryExtractionMaxWrites = Number(config.memoryExtractionMaxWrites ?? 20);
+    memoryExtractionTelemetryEnabled = config.memoryExtractionTelemetryEnabled !== false;
+    memoryRetrievalTelemetryEnabled = config.memoryRetrievalTelemetryEnabled !== false;
+
+    // Profile Synthesis
+    profileSynthesisEnabled = config.profileSynthesisEnabled !== false;
+    profileSynthesisRefreshIntervalMs = Number(config.profileSynthesisRefreshIntervalMs ?? 3600000);
+    profileSynthesisCooldownMs = Number(config.profileSynthesisCooldownMs ?? 300000);
+    profileSynthesisMinWrites = Number(config.profileSynthesisMinWrites ?? 1);
+    profileSynthesisMinImportance = Number(config.profileSynthesisMinImportance ?? 0.65);
+    profileSynthesisMinConfidence = Number(config.profileSynthesisMinConfidence ?? 0.7);
+    profileSynthesisMinNovelty = Number(config.profileSynthesisMinNovelty ?? 0.12);
+    profileSynthesisSourceMemoryLimit = Number(config.profileSynthesisSourceMemoryLimit ?? 16);
+    profileSynthesisMinSourceMemories = Number(config.profileSynthesisMinSourceMemories ?? 2);
+
+    // Think Tool
+    thinkMaxTokens = Number(config.thinkMaxTokens ?? 50000);
+    thinkMaxWallTimeMs = Number(config.thinkMaxWallTimeMs ?? 120000);
+    thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 10);
 
     // Populate catalog slots
     const catalog = config.modelCatalog as Record<string, Record<string, unknown>> | undefined;
@@ -461,6 +544,11 @@
     return String(n);
   }
 
+  function fmtMs(ms: number): string {
+    if (ms >= 60000) return `${(ms / 60000).toFixed(1)}min`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+
   // ── Catalog actions ──
   function addCatalogSlot() {
     catalogSlots = [...catalogSlots, {
@@ -507,6 +595,10 @@
     return { modelCatalog: catalog, modelRoleAssignments: assignments };
   }
 
+  function splitCsv(str: string): string[] {
+    return str.split(',').map(s => s.trim()).filter(Boolean);
+  }
+
   async function saveSimple() {
     saving = true;
     try {
@@ -528,13 +620,41 @@
         importProcessingStrictPolicy: importStrictPolicy,
         importProcessingLocalEndpointUrl: importLocalEndpointUrl,
         importProcessingLocalModel: importLocalModel,
-        openRouterProviderOrder: openRouterProviderOrder.split(',').map(s => s.trim()).filter(Boolean),
-        allowHttpFetch: allowHttpFetch,
-        webFetchDomainAllowlist: webFetchDomainAllowlist.split(',').map(s => s.trim()).filter(Boolean),
-        webFetchLocalCrawlerHostAllowlist: webFetchLocalCrawlerHostAllowlist.split(',').map(s => s.trim()).filter(Boolean),
-        webFetchLocalCrawlerDomainAllowlist: webFetchLocalCrawlerDomainAllowlist.split(',').map(s => s.trim()).filter(Boolean),
-        webFetchTlsCaCertPaths: webFetchTlsCaCertPaths.split(',').map(s => s.trim()).filter(Boolean),
+        openRouterProviderOrder: splitCsv(openRouterProviderOrder),
+        webFetchAllowHttp,
+        webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
+        webFetchLocalCrawlerEnabled,
+        webFetchLocalCrawlerAllowHttp,
+        webFetchLocalCrawlerHostAllowlist: splitCsv(webFetchLocalCrawlerHostAllowlist),
+        webFetchLocalCrawlerDomainAllowlist: splitCsv(webFetchLocalCrawlerDomainAllowlist),
+        webFetchTlsCaCertPaths: splitCsv(webFetchTlsCaCertPaths),
         capabilityTier,
+        // Memory & Extraction
+        extractionInterval,
+        compactionEmotionalSalienceThresholdPct,
+        defaultContextWindow,
+        maintenanceIntervalMs,
+        // Memory Extraction Tuning
+        memoryExtractionMinImportance,
+        memoryExtractionMinConfidence,
+        memoryExtractionMinNovelty,
+        memoryExtractionMaxWrites,
+        memoryExtractionTelemetryEnabled,
+        memoryRetrievalTelemetryEnabled,
+        // Profile Synthesis
+        profileSynthesisEnabled,
+        profileSynthesisRefreshIntervalMs,
+        profileSynthesisCooldownMs,
+        profileSynthesisMinWrites,
+        profileSynthesisMinImportance,
+        profileSynthesisMinConfidence,
+        profileSynthesisMinNovelty,
+        profileSynthesisSourceMemoryLimit,
+        profileSynthesisMinSourceMemories,
+        // Think Tool
+        thinkMaxTokens,
+        thinkMaxWallTimeMs,
+        thinkMaxSubQueries,
         ...catalogPayload,
       });
       flash(result.ok, result.message || 'Settings saved');
@@ -632,6 +752,7 @@
   const LABEL_CLS = 'block text-sm font-medium text-shadow-700 mb-1.5';
   const SLIDER_CLS = 'flex-1 h-2 rounded-full appearance-none bg-bark-300 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gold-500 [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-gold-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer';
   const COMPACT_INPUT_CLS = 'w-20 px-2 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gold-300';
+  const TOGGLE_CLS = 'w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300';
 </script>
 
 <!-- Model datalist for autocomplete -->
@@ -702,7 +823,7 @@
       <p class="text-wilt-600 text-sm">{error}</p>
     </div>
 
-  <!-- ════════════════════ SIMPLE MODE ════════════════════ -->
+  <!-- SIMPLE MODE -->
   {:else if mode === 'simple'}
     <div class="space-y-5">
       <!-- Primary models (quick-access) -->
@@ -725,6 +846,16 @@
             </label>
             <input type="text" list="model-list" bind:value={extractionModel} placeholder="provider/model"
               class={INPUT_CLS} />
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Default Context Window</label>
+            <input type="number" min="4096" step="1024" bind:value={defaultContextWindow} class={INPUT_CLS} />
+            <p class="text-sm text-shadow-500 mt-1">Context window size in tokens (default: 128,000)</p>
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Max Response Tokens</label>
+            <input type="number" min="256" max="1000000" step="256" bind:value={maxResponseTokens} class={INPUT_CLS} />
+            <p class="text-sm text-shadow-500 mt-1">Maximum tokens in LLM response (256-1,000,000)</p>
           </div>
         </div>
       </div>
@@ -912,6 +1043,27 @@
             <p class="text-sm text-shadow-500 mt-1">Triggers extraction when session exceeds this % of context</p>
           </div>
           <div>
+            <label class={LABEL_CLS}>Extraction Interval (messages)</label>
+            <input type="number" min="1" max="50" bind:value={extractionInterval} class={INPUT_CLS} />
+            <p class="text-sm text-shadow-500 mt-1">Run extraction every N messages (1-50)</p>
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Emotional Salience Threshold %</label>
+            <div class="flex items-center gap-3">
+              <input type="range" min="0" max="100" step="1" bind:value={compactionEmotionalSalienceThresholdPct} class={SLIDER_CLS} />
+              <input type="number" min="0" max="100" bind:value={compactionEmotionalSalienceThresholdPct} class={COMPACT_INPUT_CLS} />
+            </div>
+            <p class="text-sm text-shadow-500 mt-1">Preserve messages above this emotional salience during compaction (0-100)</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sessions & Compaction -->
+      <div class="card-garden p-6 space-y-6">
+        <h2 class="text-sm font-serif font-semibold text-shadow-800">Sessions & Compaction</h2>
+        <hr class="divider-filigree" />
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
             <label class={LABEL_CLS}>
               Compaction Threshold %
               <span class="text-shadow-400 font-normal ml-1">({getSource('compactionThresholdPct')})</span>
@@ -923,11 +1075,182 @@
             <p class="text-sm text-shadow-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Max Response Tokens</label>
-            <input type="number" min="256" step="256" bind:value={maxResponseTokens} class={INPUT_CLS} />
-            <p class="text-sm text-shadow-500 mt-1">Maximum tokens in LLM response</p>
+            <label class={LABEL_CLS}>Maintenance Interval (ms)</label>
+            <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
+            <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
           </div>
         </div>
+      </div>
+
+      <!-- Memory Extraction Tuning (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('extraction-tuning')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">X</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory Extraction Tuning</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('extraction-tuning')}
+              <span class="text-sm text-shadow-500">Min importance: {memoryExtractionMinImportance}, Max writes: {memoryExtractionMaxWrites}</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('extraction-tuning') ? 'rotate-180' : ''}">&#9660;</span>
+          </div>
+        </button>
+        {#if openSections.has('extraction-tuning')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Min Importance</label>
+                <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinImportance} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum importance score to write a memory (0-1)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Min Confidence</label>
+                <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinConfidence} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum confidence score to write a memory (0-1)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Min Novelty</label>
+                <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinNovelty} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum novelty score to write a memory (0-1)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Max Writes per Extraction</label>
+                <input type="number" min="1" max="100" step="1" bind:value={memoryExtractionMaxWrites} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Maximum memories written per extraction cycle</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Extraction Telemetry</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={memoryExtractionTelemetryEnabled} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Log extraction telemetry data</span>
+                </label>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Retrieval Telemetry</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={memoryRetrievalTelemetryEnabled} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Log retrieval telemetry data</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Profile Synthesis (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('profile')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">P</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Profile Synthesis</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('profile')}
+              <span class="text-sm text-shadow-500">{profileSynthesisEnabled ? 'Enabled' : 'Disabled'}</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('profile') ? 'rotate-180' : ''}">&#9660;</span>
+          </div>
+        </button>
+        {#if openSections.has('profile')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Enabled</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={profileSynthesisEnabled} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Enable automatic profile synthesis</span>
+                </label>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Refresh Interval (ms)</label>
+                <input type="number" min="60000" step="60000" bind:value={profileSynthesisRefreshIntervalMs} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">How often to refresh profiles ({fmtMs(profileSynthesisRefreshIntervalMs)})</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Cooldown (ms)</label>
+                <input type="number" min="10000" step="10000" bind:value={profileSynthesisCooldownMs} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum wait between profile updates ({fmtMs(profileSynthesisCooldownMs)})</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Min Writes</label>
+                <input type="number" min="1" max="100" step="1" bind:value={profileSynthesisMinWrites} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum memory writes before triggering synthesis</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Min Importance</label>
+                <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinImportance} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum importance for source memories (0-1)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Min Confidence</label>
+                <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinConfidence} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum confidence for source memories (0-1)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Min Novelty</label>
+                <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinNovelty} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum novelty for source memories (0-1)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Source Memory Limit</label>
+                <input type="number" min="1" max="200" step="1" bind:value={profileSynthesisSourceMemoryLimit} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Max source memories to consider per synthesis</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Min Source Memories</label>
+                <input type="number" min="1" max="50" step="1" bind:value={profileSynthesisMinSourceMemories} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Minimum source memories required to run synthesis</p>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Think Tool (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('think')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">R</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Think Tool (RLM Sandbox)</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('think')}
+              <span class="text-sm text-shadow-500">Max: {fmtTokens(thinkMaxTokens)} tokens, {fmtMs(thinkMaxWallTimeMs)}, {thinkMaxSubQueries} queries</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('think') ? 'rotate-180' : ''}">&#9660;</span>
+          </div>
+        </button>
+        {#if openSections.has('think')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Max Tokens</label>
+                <input type="number" min="1000" max="1000000" step="1000" bind:value={thinkMaxTokens} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Max tokens for RLM sandbox (1K-1M)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Max Wall Time (ms)</label>
+                <input type="number" min="5000" max="600000" step="1000" bind:value={thinkMaxWallTimeMs} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Max wall-clock time ({fmtMs(thinkMaxWallTimeMs)})</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Max Sub-Queries</label>
+                <input type="number" min="1" max="100" step="1" bind:value={thinkMaxSubQueries} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Max LLM sub-queries per think (1-100)</p>
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
 
       <!-- Model Catalog (collapsible) -->
@@ -1058,7 +1381,41 @@
         {/if}
       </div>
 
-      <!-- Response, Retries, Capability (collapsible) -->
+      <!-- Trust & Capability (collapsible) -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('trust')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">T</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Trust & Capabilities</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('trust')}
+              <span class="text-sm text-shadow-500">Tier: {capabilityTier}</span>
+            {/if}
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('trust') ? 'rotate-180' : ''}">&#9660;</span>
+          </div>
+        </button>
+        {#if openSections.has('trust')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Capability Tier</label>
+                <select bind:value={capabilityTier} class={INPUT_CLS}>
+                  {#each CAPABILITY_TIERS as tier}
+                    <option value={tier}>{tier}</option>
+                  {/each}
+                </select>
+                <p class="text-sm text-shadow-500 mt-1">Controls agent autonomy level</p>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- LLM Retries (collapsible) -->
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('llm')}
@@ -1066,11 +1423,11 @@
         >
           <div class="flex items-center gap-3">
             <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">L</span>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">LLM Retries & Capability</h2>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">LLM Retries & Behavior</h2>
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('llm')}
-              <span class="text-sm text-shadow-500">Retries: {retryMaxAttempts}, Tier: {capabilityTier}</span>
+              <span class="text-sm text-shadow-500">Retries: {retryMaxAttempts}, Delay: {retryBaseDelayMs}ms</span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('llm') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
@@ -1081,19 +1438,12 @@
               <div>
                 <label class={LABEL_CLS}>LLM Max Retries</label>
                 <input type="number" min="0" max="10" bind:value={retryMaxAttempts} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Maximum retry attempts (0-10)</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>Retry Base Delay (ms)</label>
-                <input type="number" min="100" step="100" bind:value={retryBaseDelayMs} class={INPUT_CLS} />
-              </div>
-              <div>
-                <label class={LABEL_CLS}>Capability Tier</label>
-                <select bind:value={capabilityTier} class={INPUT_CLS}>
-                  {#each CAPABILITY_TIERS as tier}
-                    <option value={tier}>{tier}</option>
-                  {/each}
-                </select>
-                <p class="text-sm text-shadow-500 mt-1">Controls agent autonomy level</p>
+                <input type="number" min="500" max="30000" step="100" bind:value={retryBaseDelayMs} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Base delay between retries (500-30,000ms)</p>
               </div>
             </div>
           </div>
@@ -1131,8 +1481,7 @@
               <div>
                 <label class={LABEL_CLS}>Strict Policy</label>
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={importStrictPolicy}
-                    class="w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300" />
+                  <input type="checkbox" bind:checked={importStrictPolicy} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Enforce strict ZDR compliance</span>
                 </label>
               </div>
@@ -1161,11 +1510,11 @@
         >
           <div class="flex items-center gap-3">
             <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">W</span>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Gateway Web Fetch</h2>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Web Fetch Policy</h2>
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('fetch')}
-              <span class="text-sm text-shadow-500">{allowHttpFetch ? 'Enabled' : 'Disabled'}</span>
+              <span class="text-sm text-shadow-500">{webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only'}{webFetchLocalCrawlerEnabled ? ', crawler on' : ''}</span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('fetch') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
@@ -1176,14 +1525,27 @@
               <div>
                 <label class={LABEL_CLS}>Allow HTTP Fetch</label>
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={allowHttpFetch}
-                    class="w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300" />
-                  <span class="text-sm text-shadow-700">Enable web fetch in gateway</span>
+                  <input type="checkbox" bind:checked={webFetchAllowHttp} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Allow non-HTTPS web fetch requests</span>
                 </label>
               </div>
               <div>
                 <label class={LABEL_CLS}>Domain Allowlist</label>
                 <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains" />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Local Crawler Enabled</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={webFetchLocalCrawlerEnabled} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Enable local web crawler</span>
+                </label>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Local Crawler Allow HTTP</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={webFetchLocalCrawlerAllowHttp} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Allow HTTP for local crawler</span>
+                </label>
               </div>
               <div>
                 <label class={LABEL_CLS}>Local Crawler Host Allowlist</label>
@@ -1202,115 +1564,82 @@
         {/if}
       </div>
 
-      <!-- Voice & TTS (collapsible, env-var only) -->
+      <!-- Voice & TTS (informational) -->
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('voice')}
           class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
         >
           <div class="flex items-center gap-3">
-            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">V</span>
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">V</span>
             <h2 class="text-sm font-serif font-semibold text-shadow-800">Voice & TTS</h2>
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('voice')}
-              <span class="text-sm text-shadow-500">Configured via env vars</span>
+              <span class="text-sm text-shadow-500">Requires server restart to change</span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('voice') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
         </button>
         {#if openSections.has('voice')}
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
-                <h3 class="text-sm font-semibold text-shadow-800 mb-1">ElevenLabs TTS</h3>
-                <p class="text-sm text-shadow-600">Provider-pluggable streaming TTS. Configured via <span class="font-mono">TTS_PROVIDER</span>, <span class="font-mono">ELEVENLABS_API_KEY</span>, <span class="font-mono">ELEVENLABS_VOICE_ID</span> env vars.</p>
-                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
-              </div>
-              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
-                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Echo TTS</h3>
-                <p class="text-sm text-shadow-600">Local TTS server. Configured via <span class="font-mono">ECHO_TTS_URL</span>, <span class="font-mono">ECHO_TTS_VOICE</span>, <span class="font-mono">ECHO_TTS_PRESET</span> env vars.</p>
-                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
+            <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+              <p class="text-sm text-shadow-700">
+                Voice and TTS settings contain API keys and provider credentials that are configured at the server level.
+                These settings require a server restart to take effect.
+              </p>
+              <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="text-sm">
+                  <span class="font-medium text-shadow-800">ElevenLabs TTS:</span>
+                  <span class="text-shadow-600 ml-1 font-mono">TTS_PROVIDER, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID</span>
+                </div>
+                <div class="text-sm">
+                  <span class="font-medium text-shadow-800">Echo TTS:</span>
+                  <span class="text-shadow-600 ml-1 font-mono">ECHO_TTS_URL, ECHO_TTS_VOICE, ECHO_TTS_PRESET</span>
+                </div>
               </div>
             </div>
           </div>
         {/if}
       </div>
 
-      <!-- Channels (collapsible, env-var only) -->
+      <!-- Channels (informational) -->
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('channels')}
           class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
         >
           <div class="flex items-center gap-3">
-            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">C</span>
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">C</span>
             <h2 class="text-sm font-serif font-semibold text-shadow-800">Channels</h2>
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('channels')}
-              <span class="text-sm text-shadow-500">Discord, API, Admin, Telegram</span>
+              <span class="text-sm text-shadow-500">Requires server restart to change</span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('channels') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
         </button>
         {#if openSections.has('channels')}
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
-                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Discord</h3>
-                <p class="text-sm text-shadow-600">Discord adapter with voice reverse RPC. Configured via <span class="font-mono">DISCORD_TOKEN</span>, <span class="font-mono">DISCORD_HEARTBEAT_CHANNEL</span> env vars.</p>
-                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
-              </div>
-              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
-                <h3 class="text-sm font-semibold text-shadow-800 mb-1">OpenAI API</h3>
-                <p class="text-sm text-shadow-600">OpenAI-compatible REST API on <span class="font-mono">API_PORT</span>. Auth via <span class="font-mono">API_KEY</span> Bearer token.</p>
-                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
-              </div>
-              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
-                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Admin GUI</h3>
-                <p class="text-sm text-shadow-600">This panel. Configured via <span class="font-mono">ADMIN_PORT</span>, <span class="font-mono">ADMIN_TOKEN</span>, <span class="font-mono">ADMIN_HOST</span> env vars.</p>
-                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
-              </div>
-              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
-                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Telegram</h3>
-                <p class="text-sm text-shadow-600">Telegram adapter. Not yet implemented.</p>
-                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">planned</span>
-              </div>
-            </div>
-          </div>
-        {/if}
-      </div>
-
-      <!-- Planned settings (collapsible) -->
-      <div class="card-garden overflow-hidden">
-        <button
-          onclick={() => toggleSection('planned')}
-          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
-        >
-          <div class="flex items-center gap-3">
-            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">+</span>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Planned Settings</h2>
-          </div>
-          <div class="flex items-center gap-3">
-            {#if !openSections.has('planned')}
-              <span class="text-sm text-shadow-500">Embeddings, Transformers, MoA</span>
-            {/if}
-            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('planned') ? 'rotate-180' : ''}">&#9660;</span>
-          </div>
-        </button>
-        {#if openSections.has('planned')}
-          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
-                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Embeddings / Transformers</h3>
-                <p class="text-sm text-shadow-600">Local transformers or Ollama embeddings. Configured via <span class="font-mono">EMBEDDING_PROVIDER</span>, <span class="font-mono">OLLAMA_URL</span>, <span class="font-mono">EMBEDDING_MODEL</span> env vars.</p>
-                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">env var</span>
-              </div>
-              <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
-                <h3 class="text-sm font-semibold text-shadow-800 mb-1">Mixture of Agents (MoA)</h3>
-                <p class="text-sm text-shadow-600">Multi-model routing and consensus. Not yet implemented.</p>
-                <span class="inline-block mt-2 px-2 py-0.5 text-sm rounded bg-bark-200 text-shadow-600 border border-bark-300">planned</span>
+            <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+              <p class="text-sm text-shadow-700">
+                Channel bindings (ports, tokens, host addresses) are security-sensitive settings configured at the server level.
+                These settings are set at startup and require a server restart to change.
+              </p>
+              <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="text-sm">
+                  <span class="font-medium text-shadow-800">Discord:</span>
+                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_HEARTBEAT_CHANNEL</span>
+                </div>
+                <div class="text-sm">
+                  <span class="font-medium text-shadow-800">OpenAI API:</span>
+                  <span class="text-shadow-600 ml-1 font-mono">API_PORT, API_HOST, API_KEY</span>
+                </div>
+                <div class="text-sm">
+                  <span class="font-medium text-shadow-800">Admin GUI:</span>
+                  <span class="text-shadow-600 ml-1 font-mono">ADMIN_PORT, ADMIN_HOST, ADMIN_TOKEN</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1380,7 +1709,7 @@
       </div>
     </div>
 
-  <!-- ════════════════════ ADVANCED MODE ════════════════════ -->
+  <!-- ADVANCED MODE -->
   {:else if mode === 'advanced'}
     <div class="space-y-3">
       {#each SECTIONS as section}
@@ -1548,7 +1877,7 @@
       </div>
     </div>
 
-  <!-- ════════════════════ RAW MODE ════════════════════ -->
+  <!-- RAW MODE -->
   {:else}
     <div class="space-y-4">
       {#if discoveredModels.length > 0}

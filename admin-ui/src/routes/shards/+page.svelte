@@ -99,9 +99,9 @@
   };
 
   const STATUS_BADGE: Record<ShardView['status'], string> = {
-    active:    'bg-gold-100 text-gold-700 dark:bg-gold-900/30 dark:text-gold-300',
-    completed: 'bg-moss-100 text-moss-700 dark:bg-moss-900/30 dark:text-moss-300',
-    failed:    'bg-wilt-100 text-wilt-700 dark:bg-wilt-900/30 dark:text-wilt-300',
+    active:    'bg-gold-100 text-gold-700',
+    completed: 'bg-moss-100 text-moss-700',
+    failed:    'bg-wilt-100 text-wilt-700',
   };
 
   const STATUS_DOT: Record<ShardView['status'], string> = {
@@ -132,91 +132,91 @@
 <div class="space-y-6">
   <!-- Header -->
   <div>
-    <h1 class="text-2xl font-serif font-bold text-shadow-900 dark:text-bark-200">The Blooms</h1>
-    <p class="text-sm text-shadow-500 dark:text-bark-500 mt-1">Active shards -- ephemeral sub-agents spawned for parallel work</p>
+    <h1 class="text-2xl font-serif font-bold text-shadow-900">The Blooms</h1>
+    <p class="text-sm text-shadow-700 mt-1">Active shards -- ephemeral sub-agents spawned for parallel work</p>
   </div>
 
   <!-- Active Shards Counter -->
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <!-- Main counter -->
     <div class="card-garden p-6 text-center md:col-span-1">
-      <p class="text-xs font-medium text-shadow-400 dark:text-bark-500 uppercase tracking-wide mb-2">Active Blooms</p>
+      <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-2">Active Blooms</p>
       {#if dashboardLoading}
         <div class="h-16 flex items-center justify-center">
-          <div class="w-8 h-8 rounded-full bg-bark-200 dark:bg-shadow-700 animate-pulse"></div>
+          <div class="w-8 h-8 rounded-full bg-bark-200 animate-pulse"></div>
         </div>
       {:else}
-        <p class="text-5xl font-serif font-bold text-gold-600 dark:text-gold-400">{displayCount}</p>
+        <p class="text-5xl font-serif font-bold text-gold-600">{displayCount}</p>
         {#if displayCount > 0}
           <div class="flex justify-center gap-1 mt-3">
             {#each Array(Math.min(displayCount, 5)) as _, i}
               <span class="inline-block w-3 h-3 rounded-full bg-gold-400 animate-pulse" style="animation-delay: {i * 200}ms"></span>
             {/each}
             {#if displayCount > 5}
-              <span class="text-xs text-shadow-400 dark:text-bark-500 self-center ml-1">+{displayCount - 5}</span>
+              <span class="text-xs text-shadow-600 self-center ml-1">+{displayCount - 5}</span>
             {/if}
           </div>
         {:else}
-          <p class="text-xs text-shadow-400 dark:text-bark-500 mt-2">The garden rests</p>
+          <p class="text-xs text-shadow-600 mt-2">The garden rests</p>
         {/if}
       {/if}
     </div>
 
     <!-- Stats summary -->
     <div class="card-garden p-6 md:col-span-2">
-      <p class="text-xs font-medium text-shadow-400 dark:text-bark-500 uppercase tracking-wide mb-3">Shard Overview</p>
+      <p class="text-xs font-medium text-shadow-600 uppercase tracking-wide mb-3">Shard Overview</p>
       <div class="grid grid-cols-3 gap-4">
         <div>
           <div class="flex items-center gap-2 mb-1">
             <span class="w-2.5 h-2.5 rounded-full bg-gold-400 animate-pulse"></span>
-            <span class="text-sm font-medium text-shadow-800 dark:text-bark-200">Active</span>
+            <span class="text-sm font-medium text-shadow-800">Active</span>
           </div>
-          <p class="text-2xl font-serif font-bold text-shadow-900 dark:text-bark-200 pl-[18px]">{activeShards.length}</p>
+          <p class="text-2xl font-serif font-bold text-shadow-900 pl-[18px]">{activeShards.length}</p>
         </div>
         <div>
           <div class="flex items-center gap-2 mb-1">
             <span class="w-2.5 h-2.5 rounded-full bg-moss-400"></span>
-            <span class="text-sm font-medium text-shadow-800 dark:text-bark-200">Completed</span>
+            <span class="text-sm font-medium text-shadow-800">Completed</span>
           </div>
-          <p class="text-2xl font-serif font-bold text-shadow-900 dark:text-bark-200 pl-[18px]">{completedShards.length}</p>
+          <p class="text-2xl font-serif font-bold text-shadow-900 pl-[18px]">{completedShards.length}</p>
         </div>
         <div>
           <div class="flex items-center gap-2 mb-1">
             <span class="w-2.5 h-2.5 rounded-full bg-wilt-400"></span>
-            <span class="text-sm font-medium text-shadow-800 dark:text-bark-200">Failed</span>
+            <span class="text-sm font-medium text-shadow-800">Failed</span>
           </div>
-          <p class="text-2xl font-serif font-bold text-shadow-900 dark:text-bark-200 pl-[18px]">{failedShards.length}</p>
+          <p class="text-2xl font-serif font-bold text-shadow-900 pl-[18px]">{failedShards.length}</p>
         </div>
       </div>
-      <p class="text-xs text-shadow-400 dark:text-bark-500 mt-3">{shardEvents.length} shard events captured from telemetry</p>
+      <p class="text-xs text-shadow-600 mt-3">{shardEvents.length} shard events captured from telemetry</p>
     </div>
   </div>
 
   <!-- Shard cards -->
   {#if shards.length === 0}
     <div class="card-garden p-12 text-center">
-      <svg class="w-16 h-16 mx-auto text-bark-300 dark:text-shadow-700 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+      <svg class="w-16 h-16 mx-auto text-bark-300 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3" />
         <path d="M12 2v4m0 12v4m10-10h-4M6 12H2m15.07-7.07l-2.83 2.83M9.76 14.24l-2.83 2.83m0-10.14l2.83 2.83m4.48 4.48l2.83 2.83" />
       </svg>
-      <p class="font-serif text-lg text-shadow-500 dark:text-bark-400 mb-1">No blooms in the garden</p>
-      <p class="text-sm text-shadow-400 dark:text-bark-500">
-        Shards will appear here when spawned via the <code class="font-mono text-xs bg-bark-100 dark:bg-shadow-800 px-1.5 py-0.5 rounded text-gold-700 dark:text-gold-400">spawn_shard</code> tool.
+      <p class="font-serif text-lg text-shadow-700 mb-1">No blooms in the garden</p>
+      <p class="text-sm text-shadow-600">
+        Shards will appear here when spawned via the <code class="font-mono text-xs bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">spawn_shard</code> tool.
         Connect telemetry to see real-time shard events.
       </p>
     </div>
   {:else}
     <div>
-      <h2 class="text-base font-serif font-semibold text-shadow-900 dark:text-bark-300 mb-3">Bloom Cards</h2>
+      <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">Bloom Cards</h2>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {#each shards as shard (shard.id)}
           <div class="card-garden p-4 {STATUS_BORDER[shard.status]}">
             <!-- Header row -->
             <div class="flex items-center justify-between mb-2">
-              <code class="text-xs font-mono text-shadow-400 dark:text-bark-500" title={shard.id}>
+              <code class="text-xs font-mono text-shadow-600" title={shard.id}>
                 {shortId(shard.id)}
               </code>
-              <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium {STATUS_BADGE[shard.status]}">
+              <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-sm font-medium {STATUS_BADGE[shard.status]}">
                 {#if shard.status === 'active'}
                   <span class="w-1.5 h-1.5 rounded-full {STATUS_DOT.active} animate-pulse"></span>
                 {/if}
@@ -225,14 +225,14 @@
             </div>
 
             <!-- Task description -->
-            <p class="text-sm text-shadow-800 dark:text-bark-200 mb-3 line-clamp-2 leading-relaxed">{shard.task}</p>
+            <p class="text-sm text-shadow-800 mb-3 line-clamp-2 leading-relaxed">{shard.task}</p>
 
             <!-- Footer: timing -->
-            <div class="flex items-center justify-between text-xs text-shadow-400 dark:text-bark-500 pt-2 border-t border-bark-100 dark:border-shadow-800">
+            <div class="flex items-center justify-between text-xs text-shadow-600 pt-2 border-t border-bark-100">
               <span>{formatTime(shard.startedAt)}</span>
               <span class="font-mono">
                 {#if shard.status === 'active'}
-                  <span class="text-gold-600 dark:text-gold-400 font-medium">{elapsed(shard.startedAt)}</span>
+                  <span class="text-gold-600 font-medium">{elapsed(shard.startedAt)}</span>
                 {:else}
                   {elapsed(shard.startedAt, shard.completedAt)}
                 {/if}
@@ -247,10 +247,10 @@
   <!-- Shard Event Log -->
   {#if shardEvents.length > 0}
     <div class="card-garden p-5">
-      <h2 class="text-base font-serif font-semibold text-shadow-900 dark:text-bark-300 mb-3">Shard Event Log</h2>
+      <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">Shard Event Log</h2>
       <div class="space-y-0.5 max-h-80 overflow-y-auto">
-        <div class="sticky top-0 bg-white dark:bg-shadow-900 z-10 pb-2 mb-1 border-b border-bark-200 dark:border-shadow-700">
-          <div class="flex items-center gap-4 text-[11px] font-medium text-shadow-400 dark:text-bark-500 uppercase tracking-wide px-1">
+        <div class="sticky top-0 bg-white z-10 pb-2 mb-1 border-b border-bark-200">
+          <div class="flex items-center gap-4 text-sm font-medium text-shadow-600 uppercase tracking-wide px-1">
             <span class="w-20">Time</span>
             <span class="w-36">Event</span>
             <span class="flex-1">Details</span>
@@ -259,20 +259,20 @@
         {#each [...shardEvents].reverse().slice(0, 50) as event}
           {@const data = event.data as Record<string, unknown> | null}
           {@const shardId = data && typeof data === 'object' ? ((data.shardId as string) || (data.id as string) || '') : ''}
-          <div class="flex items-start gap-4 py-1.5 px-1 text-xs font-mono border-b border-bark-50 dark:border-shadow-800 hover:bg-bark-50 dark:hover:bg-shadow-800/50 transition-colors">
-            <span class="text-shadow-400 dark:text-bark-500 shrink-0 w-20">
+          <div class="flex items-start gap-4 py-1.5 px-1 text-xs font-mono border-b border-bark-50 hover:bg-bark-50 transition-colors">
+            <span class="text-shadow-600 shrink-0 w-20">
               {formatTime(event.timestamp)}
             </span>
             <span class="shrink-0 w-36">
-              <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-petal-100 text-petal-700 dark:bg-petal-900/30 dark:text-petal-300">
+              <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium bg-petal-100 text-petal-700">
                 {event.type}
               </span>
             </span>
-            <span class="text-shadow-500 dark:text-bark-400 truncate flex-1" title={typeof event.data === 'string' ? event.data : JSON.stringify(event.data)}>
+            <span class="text-shadow-700 truncate flex-1" title={typeof event.data === 'string' ? event.data : JSON.stringify(event.data)}>
               {#if shardId}
-                <span class="text-shadow-800 dark:text-bark-300">{shortId(shardId)}</span>
+                <span class="text-shadow-800">{shortId(shardId)}</span>
                 {#if data?.task}
-                  <span class="text-shadow-400 dark:text-bark-500"> -- </span>{data.task}
+                  <span class="text-shadow-600"> -- </span>{data.task}
                 {/if}
               {:else}
                 {typeof event.data === 'string' ? event.data : JSON.stringify(event.data)}

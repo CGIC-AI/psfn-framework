@@ -12,25 +12,25 @@
   type ToolCategory = 'core' | 'memory' | 'contact' | 'lifecycle' | 'git' | 'prompt' | 'heartbeat' | 'trust';
 
   const CATEGORY_BADGE: Record<string, string> = {
-    core:      'bg-gold-100 text-gold-700 dark:bg-gold-900/30 dark:text-gold-300',
-    memory:    'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
-    contact:   'bg-petal-100 text-petal-700 dark:bg-petal-900/30 dark:text-petal-300',
-    lifecycle: 'bg-wilt-100 text-wilt-700 dark:bg-wilt-900/30 dark:text-wilt-300',
-    git:       'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
-    prompt:    'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
-    heartbeat: 'bg-moss-100 text-moss-700 dark:bg-moss-900/30 dark:text-moss-300',
-    trust:     'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+    core:      'bg-gold-100 text-gold-700',
+    memory:    'bg-moss-100 text-moss-700',
+    contact:   'bg-petal-100 text-petal-700',
+    lifecycle: 'bg-wilt-100 text-wilt-700',
+    git:       'bg-bark-200 text-shadow-800',
+    prompt:    'bg-gold-50 text-gold-600',
+    heartbeat: 'bg-moss-100 text-moss-700',
+    trust:     'bg-gold-100 text-gold-700',
   };
 
   const CATEGORY_DOT: Record<string, string> = {
     core:      'bg-gold-400',
-    memory:    'bg-emerald-400',
+    memory:    'bg-moss-400',
     contact:   'bg-petal-400',
     lifecycle: 'bg-wilt-400',
-    git:       'bg-blue-400',
-    prompt:    'bg-purple-400',
+    git:       'bg-shadow-600',
+    prompt:    'bg-gold-400',
     heartbeat: 'bg-moss-400',
-    trust:     'bg-amber-400',
+    trust:     'bg-gold-500',
   };
 
   const CORE_TOOLS: ToolInfo[] = [
@@ -92,10 +92,10 @@
   };
 
   const STATUS_TEXT: Record<ServiceStatus['status'], string> = {
-    healthy:     'text-moss-700 dark:text-moss-400',
-    degraded:    'text-gold-700 dark:text-gold-400',
-    unavailable: 'text-wilt-600 dark:text-wilt-400',
-    loading:     'text-shadow-400 dark:text-bark-500',
+    healthy:     'text-moss-700',
+    degraded:    'text-gold-700',
+    unavailable: 'text-wilt-600',
+    loading:     'text-shadow-700',
   };
 
   async function checkHealth() {
@@ -180,8 +180,8 @@
 <div class="space-y-8">
   <!-- Header -->
   <div>
-    <h1 class="text-2xl font-serif font-bold text-shadow-900 dark:text-bark-200">The Shed</h1>
-    <p class="text-sm text-shadow-500 dark:text-bark-500 mt-1">Tools and services available to the substrate agent</p>
+    <h1 class="text-2xl font-serif font-bold text-shadow-900">The Shed</h1>
+    <p class="text-sm text-shadow-700 mt-1">Tools and services available to the substrate agent</p>
   </div>
 
   <!-- Tool loading info -->
@@ -190,8 +190,8 @@
       <svg class="w-5 h-5 text-gold-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M9.663 17h4.674M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
       </svg>
-      <div class="text-sm text-shadow-800 dark:text-bark-400">
-        <p><strong class="text-shadow-900 dark:text-bark-200">Lazy loading:</strong> Only <strong>{CORE_TOOLS.length} core tools</strong> are active by default each turn. The agent calls <code class="font-mono text-xs bg-bark-100 dark:bg-shadow-800 px-1.5 py-0.5 rounded text-gold-700 dark:text-gold-400">load_tools</code> to activate the <strong>{EXTENDED_TOOLS.length} extended tools</strong> when needed. Tools reset to core-only at the start of each turn.</p>
+      <div class="text-sm text-shadow-800">
+        <p><strong class="text-shadow-900">Lazy loading:</strong> Only <strong>{CORE_TOOLS.length} core tools</strong> are active by default each turn. The agent calls <code class="font-mono text-xs bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">load_tools</code> to activate the <strong>{EXTENDED_TOOLS.length} extended tools</strong> when needed. Tools reset to core-only at the start of each turn.</p>
       </div>
     </div>
   </div>
@@ -199,18 +199,18 @@
   <!-- Core Tools -->
   <div>
     <div class="flex items-baseline gap-3 mb-4">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900 dark:text-bark-300">Core Tools</h2>
-      <span class="text-xs font-sans text-shadow-400 dark:text-bark-500">{CORE_TOOLS.length} tools -- always available</span>
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Core Tools</h2>
+      <span class="text-sm font-sans text-shadow-600">{CORE_TOOLS.length} tools -- always available</span>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
       {#each CORE_TOOLS as tool}
         <div class="card-garden p-4">
           <div class="flex items-center gap-2.5 mb-2">
             <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT[tool.category] || 'bg-bark-400'}"></span>
-            <code class="text-sm font-mono font-medium text-shadow-900 dark:text-bark-200">{tool.name}</code>
-            <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
+            <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
+            <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
           </div>
-          <p class="text-xs text-shadow-500 dark:text-bark-400 leading-relaxed pl-[18px]">{tool.description}</p>
+          <p class="text-sm text-shadow-700 leading-relaxed pl-[18px]">{tool.description}</p>
         </div>
       {/each}
     </div>
@@ -219,25 +219,25 @@
   <!-- Extended Tools -->
   <div>
     <div class="flex items-baseline gap-3 mb-4">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900 dark:text-bark-300">Extended Tools</h2>
-      <span class="text-xs font-sans text-shadow-400 dark:text-bark-500">{EXTENDED_TOOLS.length} tools -- loaded on demand via <code class="font-mono text-gold-600 dark:text-gold-400">load_tools</code></span>
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Extended Tools</h2>
+      <span class="text-sm font-sans text-shadow-600">{EXTENDED_TOOLS.length} tools -- loaded on demand via <code class="font-mono text-gold-600">load_tools</code></span>
     </div>
 
     <!-- Git tools -->
     <div class="mb-5">
-      <h3 class="text-sm font-semibold text-shadow-800 dark:text-bark-300 mb-2 flex items-center gap-2">
+      <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
         <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT.git}"></span>
         Git Self-Modification
-        <span class="text-xs font-normal text-shadow-400 dark:text-bark-500">({gitTools.length})</span>
+        <span class="text-sm font-normal text-shadow-600">({gitTools.length})</span>
       </h3>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {#each gitTools as tool}
           <div class="card-garden p-4">
             <div class="flex items-center gap-2.5 mb-2">
-              <code class="text-sm font-mono font-medium text-shadow-900 dark:text-bark-200">{tool.name}</code>
-              <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium {CATEGORY_BADGE.git}">git</span>
+              <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
+              <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE.git}">git</span>
             </div>
-            <p class="text-xs text-shadow-500 dark:text-bark-400 leading-relaxed">{tool.description}</p>
+            <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
           </div>
         {/each}
       </div>
@@ -245,19 +245,19 @@
 
     <!-- Prompt tools -->
     <div class="mb-5">
-      <h3 class="text-sm font-semibold text-shadow-800 dark:text-bark-300 mb-2 flex items-center gap-2">
+      <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
         <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT.prompt}"></span>
         Prompt Stack
-        <span class="text-xs font-normal text-shadow-400 dark:text-bark-500">({promptTools.length})</span>
+        <span class="text-sm font-normal text-shadow-600">({promptTools.length})</span>
       </h3>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {#each promptTools as tool}
           <div class="card-garden p-4">
             <div class="flex items-center gap-2.5 mb-2">
-              <code class="text-sm font-mono font-medium text-shadow-900 dark:text-bark-200">{tool.name}</code>
-              <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium {CATEGORY_BADGE.prompt}">prompt</span>
+              <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
+              <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE.prompt}">prompt</span>
             </div>
-            <p class="text-xs text-shadow-500 dark:text-bark-400 leading-relaxed">{tool.description}</p>
+            <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
           </div>
         {/each}
       </div>
@@ -265,19 +265,19 @@
 
     <!-- Heartbeat / Scheduler tools -->
     <div class="mb-5">
-      <h3 class="text-sm font-semibold text-shadow-800 dark:text-bark-300 mb-2 flex items-center gap-2">
+      <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
         <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT.heartbeat}"></span>
         Heartbeat & Scheduler
-        <span class="text-xs font-normal text-shadow-400 dark:text-bark-500">({heartbeatTools.length})</span>
+        <span class="text-sm font-normal text-shadow-600">({heartbeatTools.length})</span>
       </h3>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {#each heartbeatTools as tool}
           <div class="card-garden p-4">
             <div class="flex items-center gap-2.5 mb-2">
-              <code class="text-sm font-mono font-medium text-shadow-900 dark:text-bark-200">{tool.name}</code>
-              <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium {CATEGORY_BADGE.heartbeat}">scheduler</span>
+              <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
+              <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE.heartbeat}">scheduler</span>
             </div>
-            <p class="text-xs text-shadow-500 dark:text-bark-400 leading-relaxed">{tool.description}</p>
+            <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
           </div>
         {/each}
       </div>
@@ -285,19 +285,19 @@
 
     <!-- Trust tools -->
     <div class="mb-5">
-      <h3 class="text-sm font-semibold text-shadow-800 dark:text-bark-300 mb-2 flex items-center gap-2">
+      <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
         <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT.trust}"></span>
         Trust & Contacts
-        <span class="text-xs font-normal text-shadow-400 dark:text-bark-500">({trustTools.length})</span>
+        <span class="text-sm font-normal text-shadow-600">({trustTools.length})</span>
       </h3>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {#each trustTools as tool}
           <div class="card-garden p-4">
             <div class="flex items-center gap-2.5 mb-2">
-              <code class="text-sm font-mono font-medium text-shadow-900 dark:text-bark-200">{tool.name}</code>
-              <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium {CATEGORY_BADGE.trust}">trust</span>
+              <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
+              <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE.trust}">trust</span>
             </div>
-            <p class="text-xs text-shadow-500 dark:text-bark-400 leading-relaxed">{tool.description}</p>
+            <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
           </div>
         {/each}
       </div>
@@ -308,14 +308,14 @@
   <div>
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-baseline gap-3">
-        <h2 class="text-lg font-serif font-semibold text-shadow-900 dark:text-bark-300">Service Health</h2>
-        <span class="text-xs font-sans text-shadow-400 dark:text-bark-500">{services.length} services</span>
+        <h2 class="text-lg font-serif font-semibold text-shadow-900">Service Health</h2>
+        <span class="text-sm font-sans text-shadow-600">{services.length} services</span>
       </div>
       <button
         onclick={refreshHealth}
         disabled={refreshing}
-        class="text-sm px-3 py-1.5 rounded-lg border border-bark-300 dark:border-shadow-600
-               text-shadow-600 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-800
+        class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
+               text-shadow-600 hover:bg-bark-100
                transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
       >
         {refreshing ? 'Checking...' : 'Refresh'}
@@ -326,15 +326,15 @@
       {#each services as service}
         <div class="card-garden p-5">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-semibold text-shadow-900 dark:text-bark-200">{service.name}</h3>
+            <h3 class="text-sm font-semibold text-shadow-900">{service.name}</h3>
             <span class="flex items-center gap-1.5">
               <span class="inline-block w-2.5 h-2.5 rounded-full {STATUS_COLOR[service.status]}"></span>
-              <span class="text-xs font-medium {STATUS_TEXT[service.status]}">{STATUS_LABEL[service.status]}</span>
+              <span class="text-sm font-medium {STATUS_TEXT[service.status]}">{STATUS_LABEL[service.status]}</span>
             </span>
           </div>
-          <p class="text-xs text-shadow-500 dark:text-bark-400 mb-2">{service.description}</p>
+          <p class="text-sm text-shadow-700 mb-2">{service.description}</p>
           {#if service.detail}
-            <p class="text-xs font-mono text-shadow-800 dark:text-bark-300 bg-bark-100 dark:bg-shadow-800 rounded px-2 py-1">{service.detail}</p>
+            <p class="text-sm font-mono text-shadow-800 bg-bark-100 rounded px-2 py-1">{service.detail}</p>
           {/if}
         </div>
       {/each}

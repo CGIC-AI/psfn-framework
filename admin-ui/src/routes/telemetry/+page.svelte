@@ -54,12 +54,12 @@
   }
 
   const CATEGORY_BADGE: Record<Category, string> = {
-    agent:    'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
-    memory:   'bg-gold-100 text-gold-700 dark:bg-gold-900/30 dark:text-gold-300',
-    schedule: 'bg-moss-100 text-moss-700 dark:bg-moss-900/30 dark:text-moss-300',
-    wyoming:  'bg-petal-100 text-petal-700 dark:bg-petal-900/30 dark:text-petal-300',
-    system:   'bg-wilt-100 text-wilt-700 dark:bg-wilt-900/30 dark:text-wilt-300',
-    other:    'bg-bark-200 text-shadow-600 dark:bg-shadow-800 dark:text-bark-400',
+    agent:    'bg-gold-100 text-gold-700',
+    memory:   'bg-moss-100 text-moss-700',
+    schedule: 'bg-bark-200 text-shadow-800',
+    wyoming:  'bg-petal-100 text-petal-700',
+    system:   'bg-wilt-100 text-wilt-700',
+    other:    'bg-bark-200 text-shadow-800',
   };
 
   const CATEGORY_LABEL: Record<Category, string> = {
@@ -170,8 +170,8 @@
   <!-- Header -->
   <div class="flex items-center justify-between flex-wrap gap-3">
     <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900 dark:text-bark-200">The Sap</h1>
-      <p class="text-sm text-shadow-500 dark:text-bark-500 mt-1">Real-time telemetry flowing through the substrate</p>
+      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Sap</h1>
+      <p class="text-sm text-shadow-700 mt-1">Real-time telemetry flowing through the substrate</p>
     </div>
 
     <!-- Connection indicator -->
@@ -182,10 +182,10 @@
             <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-moss-400 opacity-75"></span>
             <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-moss-500"></span>
           </span>
-          <span class="text-sm text-moss-700 dark:text-moss-400 font-medium">Connected</span>
+          <span class="text-sm text-moss-700 font-medium">Connected</span>
         {:else}
           <span class="inline-flex rounded-full h-2.5 w-2.5 bg-wilt-500"></span>
-          <span class="text-sm text-wilt-600 dark:text-wilt-400 font-medium">Disconnected</span>
+          <span class="text-sm text-wilt-600 font-medium">Disconnected</span>
         {/if}
       </div>
     </div>
@@ -199,8 +199,7 @@
         <button
           onclick={handleDisconnect}
           class="text-sm px-4 py-2 rounded-lg border border-wilt-300 bg-wilt-50 text-wilt-700
-                 hover:bg-wilt-100 dark:border-wilt-700 dark:bg-wilt-900/20 dark:text-wilt-400
-                 dark:hover:bg-wilt-900/30 font-medium transition-colors"
+                 hover:bg-wilt-100 font-medium transition-colors"
         >
           Disconnect
         </button>
@@ -208,8 +207,7 @@
         <button
           onclick={handleConnect}
           class="text-sm px-4 py-2 rounded-lg border border-moss-300 bg-moss-50 text-moss-700
-                 hover:bg-moss-100 dark:border-moss-700 dark:bg-moss-900/20 dark:text-moss-400
-                 dark:hover:bg-moss-900/30 font-medium transition-colors"
+                 hover:bg-moss-100 font-medium transition-colors"
         >
           Connect
         </button>
@@ -221,8 +219,8 @@
         disabled={!isConnected()}
         class="text-sm px-4 py-2 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed
                {isPaused()
-                 ? 'border-gold-300 bg-gold-50 text-gold-700 hover:bg-gold-100 dark:border-gold-700 dark:bg-gold-900/20 dark:text-gold-400 dark:hover:bg-gold-900/30'
-                 : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-100 dark:border-shadow-600 dark:bg-shadow-800 dark:text-bark-400 dark:hover:bg-shadow-700'
+                 ? 'border-gold-300 bg-gold-50 text-gold-700 hover:bg-gold-100'
+                 : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-100'
                } font-medium"
       >
         {isPaused() ? 'Resume' : 'Pause'}
@@ -231,8 +229,8 @@
       <!-- Clear -->
       <button
         onclick={clearEvents}
-        class="text-sm px-4 py-2 rounded-lg border border-bark-300 dark:border-shadow-600
-               text-shadow-600 dark:text-bark-400 hover:bg-bark-100 dark:hover:bg-shadow-800
+        class="text-sm px-4 py-2 rounded-lg border border-bark-300
+               text-shadow-600 hover:bg-bark-100
                font-medium transition-colors"
       >
         Clear
@@ -245,72 +243,72 @@
         type="text"
         bind:value={filterText}
         placeholder="Filter by type prefix..."
-        class="text-sm px-3 py-2 rounded-lg border border-bark-300 dark:border-shadow-600
-               bg-bark-50 dark:bg-shadow-800 text-shadow-800 dark:text-bark-200
-               placeholder:text-shadow-400 dark:placeholder:text-shadow-500
+        class="text-sm px-3 py-2 rounded-lg border border-bark-300
+               bg-bark-50 text-shadow-800
+               placeholder:text-shadow-600
                focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 w-52"
       />
     </div>
 
     <!-- Category filter checkboxes -->
-    <div class="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-bark-200 dark:border-shadow-700">
-      <span class="text-xs text-shadow-400 dark:text-bark-500 font-medium uppercase tracking-wide">Categories:</span>
+    <div class="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-bark-200">
+      <span class="text-xs text-shadow-600 font-medium uppercase tracking-wide">Categories:</span>
 
       <label class="inline-flex items-center gap-1.5 cursor-pointer">
         <input type="checkbox" bind:checked={catAgent} class="rounded text-blue-600 border-bark-300 focus:ring-blue-300" />
-        <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium {CATEGORY_BADGE.agent}">{CATEGORY_LABEL.agent}</span>
+        <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {CATEGORY_BADGE.agent}">{CATEGORY_LABEL.agent}</span>
       </label>
 
       <label class="inline-flex items-center gap-1.5 cursor-pointer">
         <input type="checkbox" bind:checked={catMemory} class="rounded text-gold-600 border-bark-300 focus:ring-gold-300" />
-        <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium {CATEGORY_BADGE.memory}">{CATEGORY_LABEL.memory}</span>
+        <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {CATEGORY_BADGE.memory}">{CATEGORY_LABEL.memory}</span>
       </label>
 
       <label class="inline-flex items-center gap-1.5 cursor-pointer">
         <input type="checkbox" bind:checked={catSchedule} class="rounded text-moss-600 border-bark-300 focus:ring-moss-300" />
-        <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium {CATEGORY_BADGE.schedule}">{CATEGORY_LABEL.schedule}</span>
+        <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {CATEGORY_BADGE.schedule}">{CATEGORY_LABEL.schedule}</span>
       </label>
 
       <label class="inline-flex items-center gap-1.5 cursor-pointer">
         <input type="checkbox" bind:checked={catWyoming} class="rounded text-petal-600 border-bark-300 focus:ring-petal-300" />
-        <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium {CATEGORY_BADGE.wyoming}">{CATEGORY_LABEL.wyoming}</span>
+        <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {CATEGORY_BADGE.wyoming}">{CATEGORY_LABEL.wyoming}</span>
       </label>
 
       <label class="inline-flex items-center gap-1.5 cursor-pointer">
         <input type="checkbox" bind:checked={catSystem} class="rounded text-wilt-600 border-bark-300 focus:ring-wilt-300" />
-        <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium {CATEGORY_BADGE.system}">{CATEGORY_LABEL.system}</span>
+        <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {CATEGORY_BADGE.system}">{CATEGORY_LABEL.system}</span>
       </label>
 
       <label class="inline-flex items-center gap-1.5 cursor-pointer">
-        <input type="checkbox" bind:checked={catOther} class="rounded text-shadow-500 border-bark-300 focus:ring-shadow-300" />
-        <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium {CATEGORY_BADGE.other}">{CATEGORY_LABEL.other}</span>
+        <input type="checkbox" bind:checked={catOther} class="rounded text-shadow-700 border-bark-300 focus:ring-shadow-300" />
+        <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {CATEGORY_BADGE.other}">{CATEGORY_LABEL.other}</span>
       </label>
     </div>
   </div>
 
   <!-- Stats bar -->
-  <div class="flex items-center gap-6 text-xs text-shadow-500 dark:text-bark-500">
+  <div class="flex items-center gap-6 text-xs text-shadow-700">
     <span class="flex items-center gap-1.5">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" /></svg>
-      <strong class="text-shadow-800 dark:text-bark-300">{totalCount}</strong> events
+      <strong class="text-shadow-800">{totalCount}</strong> events
     </span>
     <span class="flex items-center gap-1.5">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" /></svg>
-      <strong class="text-shadow-800 dark:text-bark-300">{eventsPerMinute}</strong>/min
+      <strong class="text-shadow-800">{eventsPerMinute}</strong>/min
     </span>
     <span class="flex items-center gap-1.5">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-      Uptime: <strong class="text-shadow-800 dark:text-bark-300">{uptimeDisplay}</strong>
+      Uptime: <strong class="text-shadow-800">{uptimeDisplay}</strong>
     </span>
 
     {#if filterText}
-      <span class="text-gold-600 dark:text-gold-400">
+      <span class="text-gold-600">
         Filtered: <code class="font-mono">{filterText}*</code>
       </span>
     {/if}
 
     {#if isPaused()}
-      <span class="flex items-center gap-1.5 text-wilt-600 dark:text-wilt-400">
+      <span class="flex items-center gap-1.5 text-wilt-600">
         <span class="w-2 h-2 rounded-full bg-wilt-400 animate-pulse"></span>
         Paused
       </span>
@@ -321,7 +319,7 @@
     {#if !autoScroll}
       <button
         onclick={() => { autoScroll = true; if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight; }}
-        class="text-gold-600 dark:text-gold-400 hover:underline font-medium"
+        class="text-gold-600 hover:underline font-medium"
       >
         Scroll to latest
       </button>
@@ -336,16 +334,16 @@
   >
     {#if filteredEvents.length === 0}
       <div class="p-12 text-center">
-        <svg class="w-12 h-12 mx-auto text-bark-300 dark:text-shadow-700 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+        <svg class="w-12 h-12 mx-auto text-bark-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
           <path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 20.25a.375.375 0 11-.75 0 .375.375 0 01.75 0v.001" />
         </svg>
-        <p class="text-shadow-500 dark:text-bark-400 italic font-sans text-sm">
+        <p class="text-shadow-700 italic font-sans text-sm">
           No sap flows yet -- events will appear as the substrate runs
         </p>
         {#if !isConnected()}
           <button
             onclick={handleConnect}
-            class="mt-3 text-sm font-sans text-gold-600 hover:text-gold-700 dark:text-gold-400 dark:hover:text-gold-300 font-medium"
+            class="mt-3 text-sm font-sans text-gold-600 hover:text-gold-700 font-medium"
           >
             Connect to start
           </button>
@@ -353,31 +351,31 @@
       </div>
     {:else}
       <table class="w-full">
-        <thead class="sticky top-0 bg-white dark:bg-shadow-900 border-b border-bark-200 dark:border-shadow-700 z-10">
+        <thead class="sticky top-0 bg-white border-b border-bark-200 z-10">
           <tr class="text-left">
-            <th class="px-3 py-2 font-medium text-shadow-400 dark:text-bark-500 w-28">Time</th>
-            <th class="px-3 py-2 font-medium text-shadow-400 dark:text-bark-500 w-52">Type</th>
-            <th class="px-3 py-2 font-medium text-shadow-400 dark:text-bark-500">Data</th>
+            <th class="px-3 py-2 font-medium text-shadow-600 w-28">Time</th>
+            <th class="px-3 py-2 font-medium text-shadow-600 w-52">Type</th>
+            <th class="px-3 py-2 font-medium text-shadow-600">Data</th>
           </tr>
         </thead>
         <tbody>
           {#each filteredEvents as event, i (event.timestamp.toString() + event.type + i)}
             {@const cat = categorize(event.type)}
             <tr
-              class="border-b border-bark-100 dark:border-shadow-800 hover:bg-bark-50 dark:hover:bg-shadow-800/50 transition-colors cursor-pointer"
+              class="border-b border-bark-100 hover:bg-bark-50 transition-colors cursor-pointer"
               onclick={() => expandedIdx = expandedIdx === i ? null : i}
             >
-              <td class="px-3 py-1.5 text-shadow-400 dark:text-bark-500 whitespace-nowrap align-top">
+              <td class="px-3 py-1.5 text-shadow-600 whitespace-nowrap align-top">
                 {formatTime(event.timestamp)}
               </td>
               <td class="px-3 py-1.5 align-top">
-                <span class="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium {CATEGORY_BADGE[cat]}">
+                <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {CATEGORY_BADGE[cat]}">
                   {event.type}
                 </span>
               </td>
-              <td class="px-3 py-1.5 text-shadow-500 dark:text-bark-400 align-top">
+              <td class="px-3 py-1.5 text-shadow-700 align-top">
                 {#if expandedIdx === i}
-                  <pre class="whitespace-pre-wrap text-shadow-800 dark:text-bark-200 font-mono text-[11px] bg-bark-100 dark:bg-shadow-800 rounded-lg p-3 mt-1 mb-1 max-h-64 overflow-y-auto">{formatJson(event.data)}</pre>
+                  <pre class="whitespace-pre-wrap text-shadow-800 font-mono text-sm bg-bark-100 rounded-lg p-3 mt-1 mb-1 max-h-64 overflow-y-auto">{formatJson(event.data)}</pre>
                 {:else}
                   <span class="truncate block max-w-md" title={typeof event.data === 'string' ? event.data : JSON.stringify(event.data)}>
                     {previewData(event.data)}

@@ -55,8 +55,8 @@
     switch (role) {
       case 'user': return 'text-moss-600';
       case 'assistant': return 'text-gold-700';
-      case 'system': return 'text-shadow-400';
-      default: return 'text-shadow-500';
+      case 'system': return 'text-shadow-700';
+      default: return 'text-shadow-700';
     }
   }
 
@@ -83,7 +83,7 @@
 <div class="space-y-6">
   <div>
     <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Branches</h1>
-    <p class="text-shadow-400 text-sm mt-1">Session Browser</p>
+    <p class="text-shadow-600 text-sm mt-1">Session Browser</p>
   </div>
 
   {#if error}
@@ -118,7 +118,7 @@
               <span class="text-sm text-shadow-700 block truncate" title={ch.channelId}>
                 {channelLabel(ch)}
               </span>
-              <span class="text-xs text-shadow-400">
+              <span class="text-sm text-shadow-600">
                 {ch.messageCount} messages
                 {#if ch.linkedContactName}
                   &middot; {ch.linkedContactName}
@@ -127,7 +127,7 @@
             </button>
           {/each}
           {#if channels.length === 0}
-            <p class="p-4 text-shadow-400 text-sm text-center">No sessions found.</p>
+            <p class="p-4 text-shadow-700 text-sm text-center">No sessions found.</p>
           {/if}
         {/if}
       </div>
@@ -137,26 +137,26 @@
     <div class="flex-1 card overflow-hidden flex flex-col">
       {#if !selectedChannel}
         <div class="flex-1 flex items-center justify-center">
-          <p class="text-shadow-400">Select a channel to view messages</p>
+          <p class="text-shadow-700">Select a channel to view messages</p>
         </div>
       {:else}
         <div class="p-3 border-b border-bark-300 bg-bark-100 flex items-center justify-between">
           <h2 class="text-sm font-medium text-shadow-600 truncate" title={selectedChannel}>
             {selectedChannel}
           </h2>
-          <span class="text-xs text-shadow-400">{messages.length} messages</span>
+          <span class="text-sm text-shadow-600">{messages.length} messages</span>
         </div>
 
         <!-- Compaction audits -->
         {#if compactionAudits.length > 0}
           <div class="p-2 bg-bark-200 border-b border-bark-300">
             <details>
-              <summary class="text-xs text-shadow-500 cursor-pointer hover:text-gold-600">
+              <summary class="text-sm text-shadow-700 cursor-pointer hover:text-gold-600">
                 {compactionAudits.length} compaction(s)
               </summary>
               <div class="mt-2 space-y-1">
                 {#each compactionAudits as audit}
-                  <div class="text-xs text-shadow-400 bg-bark-50 p-2 rounded">
+                  <div class="text-sm text-shadow-600 bg-bark-50 p-2 rounded">
                     <span class="font-medium">{audit.verification}</span>
                     &mdash; {audit.summary.slice(0, 120)}{audit.summary.length > 120 ? '...' : ''}
                   </div>
@@ -177,9 +177,9 @@
             {#each messages as msg, i}
               <div class="rounded-lg border p-3 {roleColor(msg.role)}">
                 <div class="flex items-center justify-between mb-1">
-                  <span class="text-xs font-medium uppercase {roleLabelColor(msg.role)}">{msg.role}</span>
+                  <span class="text-sm font-medium uppercase {roleLabelColor(msg.role)}">{msg.role}</span>
                   {#if msg.timestamp}
-                    <span class="text-xs text-shadow-400">{formatTimestamp(msg.timestamp)}</span>
+                    <span class="text-sm text-shadow-600">{formatTimestamp(msg.timestamp)}</span>
                   {/if}
                 </div>
                 <p class="text-sm text-shadow-700 whitespace-pre-wrap leading-relaxed">
@@ -195,13 +195,13 @@
                       {expandedToolCall === i ? 'Hide' : 'Show'} {msg.toolCalls.length} tool call(s)
                     </button>
                     {#if expandedToolCall === i}
-                      <pre class="mt-1 text-xs bg-bark-50 p-2 rounded overflow-x-auto text-shadow-600 border border-bark-300">{JSON.stringify(msg.toolCalls, null, 2)}</pre>
+                      <pre class="mt-1 text-sm bg-bark-50 p-2 rounded overflow-x-auto text-shadow-800 border border-bark-300">{JSON.stringify(msg.toolCalls, null, 2)}</pre>
                     {/if}
                   </div>
                 {/if}
 
                 {#if msg.originChannelId}
-                  <p class="text-xs text-shadow-400 mt-1">
+                  <p class="text-sm text-shadow-600 mt-1">
                     from: {msg.originChannelId}
                   </p>
                 {/if}
@@ -209,7 +209,7 @@
             {/each}
 
             {#if messages.length === 0}
-              <p class="text-shadow-400 text-sm text-center py-8">No messages in this session.</p>
+              <p class="text-shadow-700 text-sm text-center py-8">No messages in this session.</p>
             {/if}
           {/if}
         </div>

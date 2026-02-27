@@ -54,7 +54,7 @@
           <h1 class="font-serif text-xl text-gold-600 font-semibold leading-tight">
             Purrsephone's Garden
           </h1>
-          <p class="text-xs text-shadow-400 mt-1">Admin Console</p>
+          <p class="text-sm text-shadow-600 mt-1">Admin Console</p>
         {:else}
           <span class="text-gold-500 text-xl block text-center" title="Purrsephone's Garden">
             &#x2727;
@@ -83,7 +83,7 @@
                 >
                   {item.gardenName}
                 </span>
-                <span class="text-xs text-shadow-400 block">
+                <span class="text-sm text-shadow-600 block">
                   {item.technicalName}
                 </span>
               </div>
@@ -97,7 +97,7 @@
         <div class="flex items-center gap-2">
           <button
             onclick={() => (sidebarOpen = !sidebarOpen)}
-            class="p-1.5 rounded hover:bg-bark-200 text-shadow-400 transition-colors"
+            class="p-1.5 rounded hover:bg-bark-200 text-shadow-700 transition-colors"
             title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
           >
             <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -111,7 +111,7 @@
           {#if sidebarOpen}
             <button
               onclick={handleLogout}
-              class="ml-auto text-xs text-shadow-400 hover:text-wilt-600 transition-colors"
+              class="ml-auto text-sm text-shadow-600 hover:text-wilt-600 transition-colors"
             >
               Logout
             </button>

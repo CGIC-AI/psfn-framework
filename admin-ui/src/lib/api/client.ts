@@ -107,6 +107,26 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** POST with URL-encoded form body. Returns raw response text (not JSON). */
+export async function apiPostForm(path: string, params: URLSearchParams): Promise<string> {
+  const res = await fetch(baseUrl() + path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...authHeaders(),
+    },
+    credentials: 'include',
+    body: params.toString(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => undefined);
+    throw new ApiError(res.status, res.statusText, text);
+  }
+
+  return res.text();
+}
+
 export async function apiDelete<T = { ok: boolean }>(path: string): Promise<T> {
   const res = await fetch(baseUrl() + path, {
     method: 'DELETE',

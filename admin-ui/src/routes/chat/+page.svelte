@@ -1,97 +1,157 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { getChatBootstrap } from '$lib/api/endpoints/chat';
+  import { onMount, onDestroy } from 'svelte';
+  import { getChatBootstrap, updateChatBootstrap } from '$lib/api/endpoints/chat';
   import type { AdminChatBootstrapResponse } from '$lib/types';
 
   let bootstrap = $state<AdminChatBootstrapResponse | null>(null);
   let error = $state('');
   let loading = $state(true);
-  let chatLoaded = $state(false);
+  let saving = $state(false);
+  let connectionStatus = $state<'connecting' | 'connected' | 'error'>('connecting');
+  let statusDetail = $state('');
+  let iframeEl = $state<HTMLIFrameElement | null>(null);
+
+  // Form state
+  let selectedContactId = $state('');
+  let selectedPrivacyLevel = $state('');
+  let showIdentityDetails = $state(false);
+
+  // Health check interval
+  let healthInterval: ReturnType<typeof setInterval> | undefined;
 
   onMount(async () => {
     try {
       bootstrap = await getChatBootstrap();
-      await loadChatWidget();
+      selectedContactId = bootstrap.canonicalContactId;
+      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      await checkConnection();
+      healthInterval = setInterval(checkConnection, 30_000);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load chat bootstrap';
+      connectionStatus = 'error';
     } finally {
       loading = false;
     }
   });
 
-  async function loadChatWidget() {
-    if (!bootstrap) return;
+  onDestroy(() => {
+    if (healthInterval) clearInterval(healthInterval);
+  });
 
+  async function checkConnection() {
     try {
-      // Load the stylesheet from the runtime assets
-      if (bootstrap.runtime.assets.stylesheetUrl) {
-        const link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = bootstrap.runtime.assets.stylesheetUrl;
-        document.head.appendChild(link);
-      }
-
-      // Load the module script from the runtime assets
-      if (bootstrap.runtime.assets.moduleUrl) {
-        const script = document.createElement('script');
-        script.type = 'module';
-        script.src = bootstrap.runtime.assets.moduleUrl;
-        document.head.appendChild(script);
-
-        // Wait for the custom element to be defined
-        script.onload = () => {
-          setupChatElement();
-        };
-
-        // Also try after a short delay in case the element registers async
-        setTimeout(() => {
-          if (!chatLoaded) setupChatElement();
-        }, 2000);
+      const res = await fetch('/health');
+      if (res.ok) {
+        connectionStatus = 'connected';
+        const data = await res.json() as { status?: string; uptime?: number };
+        statusDetail = data.uptime ? `Uptime: ${formatUptime(data.uptime)}` : 'Connected';
+      } else {
+        connectionStatus = 'error';
+        statusDetail = `HTTP ${res.status}`;
       }
     } catch {
-      // Widget loading failed; fall back to iframe approach
+      connectionStatus = 'error';
+      statusDetail = 'Admin server unreachable';
     }
   }
 
-  function setupChatElement() {
-    if (!bootstrap || chatLoaded) return;
+  function formatUptime(seconds: number): string {
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return `${h}h ${m}m`;
+  }
 
-    const container = document.getElementById('chat-container');
-    if (!container) return;
-
-    // Check if the custom element is registered
-    if (customElements.get('agent-interface')) {
-      const el = document.createElement('agent-interface');
-
-      // Configure the element with bootstrap data
-      el.setAttribute('data-session-id', bootstrap.defaultSessionId);
-      el.setAttribute('data-author-name', bootstrap.defaultAuthorName);
-      el.setAttribute('data-author-id', bootstrap.defaultAuthorId);
-
-      // Set API configuration
-      if (bootstrap.api.chatCompletionsUrl) {
-        el.setAttribute('data-completions-url', bootstrap.api.chatCompletionsUrl);
-      }
-      if (bootstrap.api.apiKey) {
-        el.setAttribute('data-api-key', bootstrap.api.apiKey);
-      }
-
-      // Set model info
-      if (bootstrap.runtime.model) {
-        el.setAttribute('data-model-id', bootstrap.runtime.model.id);
-      }
-
-      container.innerHTML = '';
-      container.appendChild(el);
-      chatLoaded = true;
+  async function onContactChange() {
+    if (!bootstrap || saving) return;
+    saving = true;
+    try {
+      const result = await updateChatBootstrap({
+        canonicalContactId: selectedContactId,
+        privacyLevel: selectedPrivacyLevel,
+      });
+      // Re-fetch bootstrap to get updated state
+      bootstrap = await getChatBootstrap();
+      selectedContactId = bootstrap.canonicalContactId;
+      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      // Reload iframe to pick up new identity
+      reloadIframe();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to update chat settings';
+    } finally {
+      saving = false;
     }
   }
+
+  async function onPrivacyChange() {
+    if (!bootstrap || saving) return;
+    saving = true;
+    try {
+      await updateChatBootstrap({
+        canonicalContactId: selectedContactId,
+        privacyLevel: selectedPrivacyLevel,
+      });
+      bootstrap = await getChatBootstrap();
+      selectedContactId = bootstrap.canonicalContactId;
+      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      reloadIframe();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to update privacy level';
+    } finally {
+      saving = false;
+    }
+  }
+
+  function reloadIframe() {
+    if (iframeEl) {
+      // Force reload by re-assigning src
+      const src = iframeEl.src;
+      iframeEl.src = '';
+      requestAnimationFrame(() => {
+        if (iframeEl) iframeEl.src = src;
+      });
+    }
+  }
+
+  function contactLabel(opt: AdminChatBootstrapResponse['contactOptions'][0]): string {
+    return opt.nickname ? `${opt.displayName} (${opt.nickname})` : opt.displayName;
+  }
+
+  const STATUS_DOT: Record<string, string> = {
+    connecting: 'bg-bark-400 animate-pulse',
+    connected: 'bg-moss-500',
+    error: 'bg-wilt-500',
+  };
+
+  const STATUS_LABEL: Record<string, string> = {
+    connecting: 'Connecting...',
+    connected: 'Connected',
+    error: 'Disconnected',
+  };
+
+  const STATUS_TEXT: Record<string, string> = {
+    connecting: 'text-shadow-700',
+    connected: 'text-moss-700',
+    error: 'text-wilt-600',
+  };
 </script>
 
-<div class="space-y-6">
-  <div>
-    <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Canopy</h1>
-    <p class="text-shadow-600 text-sm mt-1">Chat Interface</p>
+<div class="space-y-4">
+  <!-- Header -->
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Canopy</h1>
+      <p class="text-shadow-600 text-sm mt-1">Chat interface</p>
+    </div>
+    <!-- Connection Status -->
+    <div class="flex items-center gap-2">
+      <span class="inline-block w-2.5 h-2.5 rounded-full {STATUS_DOT[connectionStatus]}"></span>
+      <span class="text-sm font-medium {STATUS_TEXT[connectionStatus]}">{STATUS_LABEL[connectionStatus]}</span>
+      {#if statusDetail && connectionStatus !== 'connecting'}
+        <span class="text-sm text-shadow-600">-- {statusDetail}</span>
+      {/if}
+    </div>
   </div>
 
   {#if loading}
@@ -99,7 +159,7 @@
       <div class="h-4 bg-bark-200 rounded w-48 mb-4"></div>
       <div class="h-64 bg-bark-200 rounded"></div>
     </div>
-  {:else if error}
+  {:else if error && !bootstrap}
     <div class="card p-6 border-wilt-200">
       <p class="text-wilt-600 font-medium">Failed to load chat</p>
       <p class="text-shadow-600 text-sm mt-1">{error}</p>
@@ -108,88 +168,132 @@
       </p>
     </div>
   {:else if bootstrap}
-    <!-- Chat widget container -->
-    <div id="chat-container" class="h-[calc(100vh-14rem)] rounded-xl overflow-hidden border border-bark-300">
-      {#if !chatLoaded}
-        <!-- Fallback: link to existing chat page -->
-        <div class="flex flex-col items-center justify-center h-full bg-bark-50 p-8">
-          <p class="text-shadow-600 text-lg font-serif mb-4">Chat widget loading...</p>
-          <p class="text-shadow-700 text-sm mb-6 text-center max-w-md">
-            If the embedded chat does not load, you can open the standalone chat interface:
-          </p>
-          <a
-            href={bootstrap.api.chatCompletionsUrl?.replace('/v1/chat/completions', '/chat') ?? '/chat'}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="px-6 py-2.5 rounded-lg bg-gold-400 text-bark-50 font-medium
-                   hover:bg-gold-500 transition-colors inline-flex items-center gap-2"
+    <!-- Controls Bar -->
+    <div class="card-garden p-4">
+      <div class="flex flex-wrap items-end gap-4">
+        <!-- Contact Selector -->
+        <div class="flex flex-col gap-1">
+          <label for="chat-contact" class="text-sm font-semibold text-shadow-800">Contact</label>
+          <select
+            id="chat-contact"
+            bind:value={selectedContactId}
+            onchange={onContactChange}
+            disabled={saving}
+            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+                   focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
+                   disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Open Chat
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
-          </a>
+            {#each bootstrap.contactOptions as opt}
+              <option value={opt.canonicalContactId}>{contactLabel(opt)}</option>
+            {/each}
+          </select>
+        </div>
+
+        <!-- Privacy Level Selector -->
+        <div class="flex flex-col gap-1">
+          <label for="chat-privacy" class="text-sm font-semibold text-shadow-800">Privacy Level</label>
+          <select
+            id="chat-privacy"
+            bind:value={selectedPrivacyLevel}
+            onchange={onPrivacyChange}
+            disabled={saving}
+            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+                   focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
+                   disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {#each bootstrap.privacy.availableLevels as level}
+              <option value={level}>{level}</option>
+            {/each}
+          </select>
+        </div>
+
+        <!-- Identity Summary -->
+        <div class="flex-1 min-w-0">
+          <p class="text-sm text-shadow-800 truncate">
+            <span class="font-medium">{bootstrap.displayName}</span>
+            {#if bootstrap.nickname}
+              <span class="text-shadow-600">({bootstrap.nickname})</span>
+            {/if}
+            <span class="text-shadow-600 mx-1">|</span>
+            <span class="text-shadow-600 font-mono text-sm">{bootstrap.selectedIdentity.channel}:{bootstrap.selectedIdentity.userId}</span>
+          </p>
+          <p class="text-sm text-shadow-600 truncate">
+            Session: {bootstrap.defaultSessionId} | Model: {bootstrap.runtime.model.name}
+          </p>
+        </div>
+
+        <!-- Identity Details Toggle -->
+        <button
+          onclick={() => showIdentityDetails = !showIdentityDetails}
+          class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
+                 text-shadow-700 hover:bg-bark-100 transition-colors font-medium shrink-0"
+        >
+          {showIdentityDetails ? 'Hide Details' : 'Details'}
+        </button>
+      </div>
+
+      {#if saving}
+        <p class="text-sm text-gold-600 mt-2">Updating identity...</p>
+      {/if}
+      {#if error && bootstrap}
+        <p class="text-sm text-wilt-600 mt-2">{error}</p>
+      {/if}
+
+      <!-- Expanded Identity Details -->
+      {#if showIdentityDetails}
+        <div class="mt-4 pt-4 border-t border-bark-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+          <div>
+            <h3 class="text-sm text-shadow-800 font-semibold uppercase tracking-wide mb-1">Identity</h3>
+            <p class="text-shadow-800">Channel: <span class="font-mono">{bootstrap.selectedIdentity.channel}</span></p>
+            <p class="text-shadow-800">User ID: <span class="font-mono">{bootstrap.selectedIdentity.userId}</span></p>
+            <p class="text-shadow-800">Privacy: {bootstrap.selectedIdentity.privacyLevel}</p>
+          </div>
+          <div>
+            <h3 class="text-sm text-shadow-800 font-semibold uppercase tracking-wide mb-1">Session</h3>
+            <p class="text-shadow-800 font-mono break-all">{bootstrap.defaultSessionId}</p>
+            <p class="text-shadow-600 mt-1">Author: {bootstrap.defaultAuthorName} ({bootstrap.defaultAuthorId})</p>
+          </div>
+          <div>
+            <h3 class="text-sm text-shadow-800 font-semibold uppercase tracking-wide mb-1">API</h3>
+            <p class="text-shadow-800 font-mono text-sm break-all">{bootstrap.api.chatCompletionsUrl}</p>
+            {#if bootstrap.api.voiceWebSocketUrl}
+              <p class="text-shadow-800 font-mono text-sm break-all mt-1">{bootstrap.api.voiceWebSocketUrl}</p>
+            {/if}
+          </div>
+          <div>
+            <h3 class="text-sm text-shadow-800 font-semibold uppercase tracking-wide mb-1">Model</h3>
+            <p class="text-shadow-800">{bootstrap.runtime.model.name}</p>
+            <p class="text-shadow-600 mt-1">{bootstrap.runtime.model.provider} / {bootstrap.runtime.model.api}</p>
+          </div>
+          {#if bootstrap.contactOptions.length > 1}
+            <div>
+              <h3 class="text-sm text-shadow-800 font-semibold uppercase tracking-wide mb-1">Contacts</h3>
+              {#each bootstrap.contactOptions as opt}
+                <p class="text-shadow-800 text-sm">{contactLabel(opt)}</p>
+              {/each}
+            </div>
+          {/if}
+          {#if bootstrap.linkedChannels.length > 0}
+            <div>
+              <h3 class="text-sm text-shadow-800 font-semibold uppercase tracking-wide mb-1">Linked Channels</h3>
+              {#each bootstrap.linkedChannels as ch}
+                <p class="text-shadow-800 text-sm font-mono">{ch.channel}:{ch.userId} ({ch.privacyLevel})</p>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
 
-    <!-- Bootstrap configuration details -->
-    <details class="card p-4">
-      <summary class="text-sm font-medium text-shadow-600 cursor-pointer hover:text-gold-600">
-        Chat Configuration
-      </summary>
-      <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-        <div>
-          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Identity</h3>
-          <p class="text-shadow-700">{bootstrap.displayName}
-            {#if bootstrap.nickname}
-              <span class="text-shadow-600">({bootstrap.nickname})</span>
-            {/if}
-          </p>
-          <p class="text-sm text-shadow-600 mt-1">Contact: {bootstrap.canonicalContactId}</p>
-        </div>
-
-        <div>
-          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Session</h3>
-          <p class="text-shadow-700">{bootstrap.defaultSessionId}</p>
-          <p class="text-sm text-shadow-600 mt-1">
-            Author: {bootstrap.defaultAuthorName} ({bootstrap.defaultAuthorId})
-          </p>
-        </div>
-
-        <div>
-          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">API</h3>
-          <p class="text-shadow-800 text-sm font-mono break-all">{bootstrap.api.chatCompletionsUrl}</p>
-          {#if bootstrap.api.voiceWebSocketUrl}
-            <p class="text-shadow-800 text-sm font-mono break-all mt-1">{bootstrap.api.voiceWebSocketUrl}</p>
-          {/if}
-        </div>
-
-        <div>
-          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Model</h3>
-          <p class="text-shadow-700">{bootstrap.runtime.model.name}</p>
-          <p class="text-sm text-shadow-600 mt-1">
-            {bootstrap.runtime.model.provider} / {bootstrap.runtime.model.api}
-          </p>
-        </div>
-
-        <div>
-          <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Privacy</h3>
-          <p class="text-shadow-700">Level: {bootstrap.privacy.selectedLevel}</p>
-          <p class="text-sm text-shadow-600 mt-1">
-            Available: {bootstrap.privacy.availableLevels.join(', ')}
-          </p>
-        </div>
-
-        {#if bootstrap.contactOptions.length > 1}
-          <div>
-            <h3 class="text-sm text-shadow-700 font-semibold uppercase tracking-wide mb-1">Contact Options</h3>
-            {#each bootstrap.contactOptions as opt}
-              <p class="text-shadow-700 text-xs">{opt.displayName} ({opt.canonicalContactId})</p>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    </details>
+    <!-- Chat Iframe -->
+    <div class="rounded-xl overflow-hidden border border-bark-300 bg-white" style="height: calc(100vh - 16rem);">
+      <iframe
+        bind:this={iframeEl}
+        src="/chat"
+        title="Garden Chat"
+        class="w-full h-full border-0"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+      ></iframe>
+    </div>
   {/if}
 </div>

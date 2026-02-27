@@ -1,11 +1,23 @@
-import { initializeChatVoiceCockpit } from './chat-voice.js';
-
 const BOOTSTRAP_URL = '/api/chat/bootstrap';
 const DEFAULT_MODEL_ID = 'psfn-admin-chat';
 const DEFAULT_MODEL_NAME = 'PSFN Garden Chat';
 const DEFAULT_SYSTEM_PROMPT = 'You are PSFN speaking through the garden chat canopy.';
 const PROVIDER_KEY_PLACEHOLDER = 'admin-chat-local-key';
 const MAX_CONTEXT_MESSAGES = 40;
+
+const PI_WEB_UI_MODULE_CANDIDATES = [
+  'https://esm.sh/@mariozechner/pi-web-ui@0.52.12?target=es2022',
+  'https://cdn.jsdelivr.net/npm/@mariozechner/pi-web-ui@0.52.12/+esm',
+];
+
+const PI_WEB_UI_STYLESHEET_CANDIDATES = [
+  'https://esm.sh/@mariozechner/pi-web-ui@0.52.12/app.css',
+  'https://cdn.jsdelivr.net/npm/@mariozechner/pi-web-ui@0.52.12/dist/app.css',
+];
+
+const PLACEHOLDER_TOKENS = new Set([PROVIDER_KEY_PLACEHOLDER]);
+
+let piWebUiModulePromise = null;
 
 function requiredElement(root, selector) {
   const element = root.querySelector(selector);
@@ -20,11 +32,9 @@ function normalizeText(value) {
   return value.trim();
 }
 
-function formatClockTime(timestampMs) {
-  return new Date(timestampMs).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+function formatError(error) {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
 function setStatus(dom, message, isError = false) {
@@ -37,11 +47,6 @@ function setControlsDisabled(dom, disabled) {
   for (const field of fields) {
     field.disabled = disabled;
   }
-}
-
-function setComposerDisabled(dom, disabled) {
-  dom.input.disabled = disabled;
-  dom.sendButton.disabled = disabled;
 }
 
 async function readJsonBody(response) {
@@ -93,7 +98,9 @@ function buildTransportHeaders(bootstrap) {
 }
 
 function readBootstrapApiKey(bootstrap) {
-  return normalizeText(bootstrap?.api?.apiKey);
+  const key = normalizeText(bootstrap?.api?.apiKey);
+  if (!key || PLACEHOLDER_TOKENS.has(key)) return '';
+  return key;
 }
 
 function resolveClientApiKey(bootstrap) {
@@ -184,7 +191,27 @@ function replaceSelectOptions(select, options, selectedValue) {
   select.replaceChildren(...fragments);
 }
 
-function renderControls(dom, bootstrap) {
+function createDefaultModel() {
+  return {
+    id: DEFAULT_MODEL_ID,
+    name: DEFAULT_MODEL_NAME,
+    api: 'openai-completions',
+    provider: 'openai',
+    baseUrl: '',
+    reasoning: false,
+    input: ['text'],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 131072,
+    maxTokens: 4096,
+  };
+}
+
+function renderControls(dom, bootstrap, model = null) {
   const contactOptions = bootstrap.contactOptions.map(option => ({
     value: option.canonicalContactId,
     label: createContactLabel(option),
@@ -204,7 +231,9 @@ function renderControls(dom, bootstrap) {
 
   const nickname = normalizeText(bootstrap.nickname);
   const displayName = nickname ? `${bootstrap.displayName} (${nickname})` : bootstrap.displayName;
-  dom.contactMeta.textContent = `Mapped contact: ${displayName} | Session: ${bootstrap.defaultSessionId} | Model: ${DEFAULT_MODEL_NAME}`;
+  const modelName = normalizeText(model?.name) || DEFAULT_MODEL_NAME;
+  dom.contactMeta.textContent = `Mapped contact: ${displayName} | Session: ${bootstrap.defaultSessionId} | Model: ${modelName}`;
+  dom.agentContext.textContent = `Identity ${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId} | Privacy ${bootstrap.privacy.selectedLevel}`;
 }
 
 function createDomBindings(root) {
@@ -217,60 +246,10 @@ function createDomBindings(root) {
     authorName: requiredElement(root, '#chat-author-name'),
     authorId: requiredElement(root, '#chat-author-id'),
     contactMeta: requiredElement(root, '[data-chat-contact-meta]'),
+    agentContext: requiredElement(root, '[data-chat-agent-context]'),
     status: requiredElement(root, '[data-chat-status]'),
-    chatSurface: requiredElement(root, '#admin-chat-surface'),
-    thread: requiredElement(root, '[data-chat-thread]'),
-    composer: requiredElement(root, '[data-chat-composer]'),
-    input: requiredElement(root, '[data-chat-input]'),
-    sendButton: requiredElement(root, '[data-chat-send]'),
-    clearButton: requiredElement(root, '[data-chat-clear]'),
+    agentHost: requiredElement(root, '[data-chat-agent-host]'),
   };
-}
-
-function formatError(error) {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
-function createMessageNode(entry) {
-  const item = document.createElement('article');
-  item.className = `chat-message chat-message-${entry.role}`;
-
-  const meta = document.createElement('div');
-  meta.className = 'chat-message-meta';
-  meta.textContent = `${entry.label} • ${formatClockTime(entry.timestamp)}`;
-
-  const content = document.createElement('div');
-  content.className = 'chat-message-content';
-  content.textContent = entry.content;
-
-  item.append(meta, content);
-  return item;
-}
-
-function appendMessage(dom, role, content, timestamp = Date.now()) {
-  const roleLabel = role === 'user'
-    ? 'You'
-    : role === 'assistant'
-      ? 'PSFN'
-      : role === 'error'
-        ? 'Error'
-        : 'System';
-
-  const node = createMessageNode({
-    role,
-    content,
-    timestamp,
-    label: roleLabel,
-  });
-  dom.thread.append(node);
-  dom.thread.scrollTop = dom.thread.scrollHeight;
-}
-
-function clearConversation(context) {
-  context.messages = [];
-  context.dom.thread.replaceChildren();
-  appendMessage(context.dom, 'system', 'Garden bed cleared. Start a fresh turn.');
 }
 
 function parseMessageContentText(content) {
@@ -309,30 +288,83 @@ function parseCompletionText(payload) {
   return '';
 }
 
-function buildApiMessages(history) {
-  const recent = history.slice(-MAX_CONTEXT_MESSAGES);
+function buildApiMessages(history, systemPrompt) {
+  const recent = history
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .slice(-MAX_CONTEXT_MESSAGES);
+
   const messages = [{
     role: 'system',
-    content: DEFAULT_SYSTEM_PROMPT,
+    content: systemPrompt,
   }];
 
   for (const message of recent) {
+    const content = parseMessageContentText(message.content);
+    if (!content) continue;
     messages.push({
       role: message.role,
-      content: message.content,
+      content,
     });
   }
 
   return messages;
 }
 
-async function requestChatCompletion(context) {
-  const endpointUrl = new URL(context.bootstrap.api.chatCompletionsUrl, window.location.origin);
-  const apiKey = resolveClientApiKey(context.bootstrap);
+function normalizePromptInput(input) {
+  if (typeof input === 'string') return normalizeText(input);
+  if (!input || typeof input !== 'object') return '';
+  if ('content' in input) {
+    return normalizeText(parseMessageContentText(input.content));
+  }
+  return '';
+}
+
+function createUsageSummary(rawUsage) {
+  if (!rawUsage || typeof rawUsage !== 'object') return undefined;
+  const input = Number(rawUsage.prompt_tokens) || 0;
+  const output = Number(rawUsage.completion_tokens) || 0;
+  if (!input && !output) return undefined;
+
+  return {
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: input + output,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
+function createAssistantMessage(content, payload, model) {
+  return {
+    role: 'assistant',
+    content,
+    timestamp: Date.now(),
+    api: model?.api || 'openai-completions',
+    provider: model?.provider || 'openai',
+    model: model?.id || DEFAULT_MODEL_ID,
+    stopReason: 'stop',
+    usage: createUsageSummary(payload?.usage),
+  };
+}
+
+function isAbortError(error) {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+async function requestChatCompletion({ bootstrap, modelId, history, systemPrompt, signal }) {
+  const endpointUrl = new URL(bootstrap.api.chatCompletionsUrl, window.location.origin);
+  const apiKey = resolveClientApiKey(bootstrap);
   const headers = {
     Accept: 'application/json',
     'Content-Type': 'application/json',
-    ...buildTransportHeaders(context.bootstrap),
+    ...buildTransportHeaders(bootstrap),
   };
 
   if (apiKey) {
@@ -342,10 +374,11 @@ async function requestChatCompletion(context) {
   const response = await fetch(endpointUrl, {
     method: 'POST',
     headers,
+    signal,
     body: JSON.stringify({
-      model: DEFAULT_MODEL_ID,
+      model: modelId,
       stream: false,
-      messages: buildApiMessages(context.messages),
+      messages: buildApiMessages(history, systemPrompt),
     }),
   });
 
@@ -356,6 +389,263 @@ async function requestChatCompletion(context) {
   }
 
   return readJsonBody(response);
+}
+
+class AgentInterfaceSession {
+  constructor(options) {
+    this.options = options;
+    this.listeners = new Set();
+    this.abortController = null;
+    this.streamFn = null;
+    this.getApiKey = async (provider) => this.options.providerKeys.get(provider);
+    this.state = {
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+      model: createDefaultModel(),
+      thinkingLevel: 'off',
+      tools: [],
+      messages: [],
+      isStreaming: false,
+      streamMessage: null,
+      pendingToolCalls: new Set(),
+      error: undefined,
+    };
+  }
+
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  emit(event) {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error('[admin/chat/session-listener]', error);
+      }
+    }
+  }
+
+  emitViewRefresh() {
+    const lastMessage = this.state.messages[this.state.messages.length - 1]
+      || createAssistantMessage('', null, this.state.model);
+
+    this.emit({
+      type: 'turn_end',
+      message: lastMessage,
+      toolResults: [],
+    });
+  }
+
+  setModel(model) {
+    if (!model || typeof model !== 'object') return;
+    this.state.model = model;
+    void this.options.seedProviderKey(model.provider);
+    this.options.onModelChange(model);
+    this.emitViewRefresh();
+  }
+
+  setThinkingLevel(level) {
+    this.state.thinkingLevel = level;
+    this.emitViewRefresh();
+  }
+
+  abort() {
+    if (!this.abortController) return;
+    this.abortController.abort();
+  }
+
+  async prompt(input) {
+    const promptText = normalizePromptInput(input);
+    if (!promptText || this.state.isStreaming) return;
+
+    const userMessage = {
+      role: 'user',
+      content: promptText,
+      timestamp: Date.now(),
+    };
+
+    this.state.messages.push(userMessage);
+    this.state.error = undefined;
+    this.state.isStreaming = true;
+    this.options.onStatus('Waiting for PSFN...');
+
+    this.emit({ type: 'agent_start' });
+    this.emit({ type: 'turn_start' });
+    this.emit({ type: 'message_start', message: userMessage });
+    this.emit({ type: 'message_end', message: userMessage });
+
+    let assistantMessage = null;
+    this.abortController = new AbortController();
+
+    try {
+      const completion = await requestChatCompletion({
+        bootstrap: this.options.getBootstrap(),
+        modelId: this.state.model?.id || DEFAULT_MODEL_ID,
+        history: this.state.messages,
+        systemPrompt: this.state.systemPrompt,
+        signal: this.abortController.signal,
+      });
+
+      const assistantText = parseCompletionText(completion);
+      if (!assistantText) {
+        throw new Error('Completion payload did not include assistant text');
+      }
+
+      assistantMessage = createAssistantMessage(assistantText, completion, this.state.model);
+      this.state.messages.push(assistantMessage);
+      this.emit({ type: 'message_start', message: assistantMessage });
+      this.emit({ type: 'message_end', message: assistantMessage });
+      this.options.onStatus('Garden chat is ready.');
+    } catch (error) {
+      if (isAbortError(error)) {
+        this.options.onStatus('Request aborted.');
+      } else {
+        const message = formatError(error);
+        this.state.error = message;
+        assistantMessage = createAssistantMessage(`Error: ${message}`, null, this.state.model);
+        this.state.messages.push(assistantMessage);
+        this.emit({ type: 'message_start', message: assistantMessage });
+        this.emit({ type: 'message_end', message: assistantMessage });
+        this.options.onStatus(`Garden chat request failed: ${message}`, true);
+      }
+    } finally {
+      this.state.isStreaming = false;
+      this.abortController = null;
+
+      this.emit({
+        type: 'turn_end',
+        message: assistantMessage || createAssistantMessage('', null, this.state.model),
+        toolResults: [],
+      });
+      this.emit({ type: 'agent_end', messages: [...this.state.messages] });
+    }
+  }
+}
+
+function createMemoryStore(initialEntries = []) {
+  const map = new Map(initialEntries);
+  return {
+    async get(key) {
+      return map.get(key);
+    },
+    async set(key, value) {
+      map.set(key, value);
+    },
+    async delete(key) {
+      map.delete(key);
+    },
+    async keys() {
+      return Array.from(map.keys());
+    },
+    has(key) {
+      return map.has(key);
+    },
+  };
+}
+
+function createRuntimeStores(initialApiKey) {
+  const normalizedApiKey = normalizeText(initialApiKey);
+  const providerEntries = normalizedApiKey
+    ? [['openai', normalizedApiKey]]
+    : [['openai', PROVIDER_KEY_PLACEHOLDER]];
+
+  const providerKeys = createMemoryStore(providerEntries);
+  const settings = createMemoryStore([
+    ['proxy.enabled', false],
+    ['proxy.url', ''],
+  ]);
+
+  const customProviders = {
+    async getAll() {
+      return [];
+    },
+  };
+
+  const appStorage = {
+    settings,
+    providerKeys,
+    customProviders,
+    sessions: null,
+    backend: {
+      async getQuotaInfo() {
+        return null;
+      },
+      async requestPersistence() {
+        return false;
+      },
+    },
+  };
+
+  return {
+    appStorage,
+    providerKeys,
+  };
+}
+
+function loadStylesheet(href) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`link[data-chat-agent-style="${href}"]`);
+    if (existing) {
+      resolve();
+      return;
+    }
+
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    link.dataset.chatAgentStyle = href;
+    link.onload = () => resolve();
+    link.onerror = () => {
+      link.remove();
+      reject(new Error(`Failed loading stylesheet ${href}`));
+    };
+    document.head.append(link);
+  });
+}
+
+async function ensurePiWebUiStylesheets() {
+  let lastError = null;
+
+  for (const href of PI_WEB_UI_STYLESHEET_CANDIDATES) {
+    try {
+      await loadStylesheet(href);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`Unable to load pi-web-ui stylesheets: ${formatError(lastError)}`);
+}
+
+async function importPiWebUiModule() {
+  let lastError = null;
+
+  for (const url of PI_WEB_UI_MODULE_CANDIDATES) {
+    try {
+      return await import(url);
+    } catch (error) {
+      lastError = error;
+      console.warn('[admin/chat] failed module import', { url, error: formatError(error) });
+    }
+  }
+
+  throw new Error(`Unable to load pi-web-ui module: ${formatError(lastError)}`);
+}
+
+function loadPiWebUiModule() {
+  if (!piWebUiModulePromise) {
+    piWebUiModulePromise = importPiWebUiModule();
+  }
+  return piWebUiModulePromise;
+}
+
+function updateViewFromBootstrap(context) {
+  const model = context.session?.state?.model || null;
+  renderControls(context.dom, context.bootstrap, model);
 }
 
 function bindControlPersistence(context) {
@@ -386,7 +676,12 @@ async function persistControlChanges(context, changedField) {
     const payload = toBootstrapUpdatePayload(normalizedSelection);
     const refreshed = await postBootstrapState(payload);
     context.bootstrap = refreshed;
-    renderControls(context.dom, refreshed);
+    updateViewFromBootstrap(context);
+
+    if (context.seedProviderKey) {
+      await context.seedProviderKey(context.session?.state?.model?.provider || 'openai');
+    }
+
     setStatus(context.dom, 'Garden chat is ready.');
   } catch (error) {
     setStatus(context.dom, `Unable to update garden chat settings: ${formatError(error)}`, true);
@@ -401,52 +696,57 @@ async function persistControlChanges(context, changedField) {
   }
 }
 
-async function sendPrompt(context, promptText) {
-  if (context.isSending) return;
+async function mountAgentInterface(context) {
+  setStatus(context.dom, 'Loading AgentInterface runtime...');
 
-  context.isSending = true;
-  setComposerDisabled(context.dom, true);
+  const module = await loadPiWebUiModule();
+  await ensurePiWebUiStylesheets();
 
-  const sentAt = Date.now();
-  context.messages.push({ role: 'user', content: promptText });
-  appendMessage(context.dom, 'user', promptText, sentAt);
-  context.dom.input.value = '';
-  setStatus(context.dom, 'Waiting for PSFN...');
+  const stores = createRuntimeStores(resolveClientApiKey(context.bootstrap));
+  module.setAppStorage(stores.appStorage);
 
-  try {
-    const completion = await requestChatCompletion(context);
-    const assistantText = parseCompletionText(completion);
-    if (!assistantText) {
-      throw new Error('Completion payload did not include assistant text');
+  context.seedProviderKey = async (provider) => {
+    const normalizedProvider = normalizeText(provider) || 'openai';
+    const bootstrapKey = resolveClientApiKey(context.bootstrap);
+    if (!bootstrapKey) return;
+
+    const currentKey = normalizeText(await stores.providerKeys.get(normalizedProvider));
+    if (!currentKey || PLACEHOLDER_TOKENS.has(currentKey)) {
+      await stores.providerKeys.set(normalizedProvider, bootstrapKey);
     }
-    context.messages.push({ role: 'assistant', content: assistantText });
-    appendMessage(context.dom, 'assistant', assistantText);
-    setStatus(context.dom, 'Garden chat is ready.');
-  } catch (error) {
-    const message = formatError(error);
-    appendMessage(context.dom, 'error', message);
-    setStatus(context.dom, `Garden chat request failed: ${message}`, true);
-  } finally {
-    context.isSending = false;
-    setComposerDisabled(context.dom, false);
-    context.dom.input.focus();
-  }
-}
+  };
 
-function bindComposer(context) {
-  context.dom.composer.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const prompt = normalizeText(context.dom.input.value);
-    if (!prompt) {
-      context.dom.input.focus();
-      return;
-    }
-    void sendPrompt(context, prompt);
+  const session = new AgentInterfaceSession({
+    providerKeys: stores.providerKeys,
+    getBootstrap: () => context.bootstrap,
+    onStatus: (message, isError = false) => setStatus(context.dom, message, isError),
+    onModelChange: () => updateViewFromBootstrap(context),
+    seedProviderKey: context.seedProviderKey,
   });
+  context.session = session;
 
-  context.dom.clearButton.addEventListener('click', () => {
-    clearConversation(context);
-  });
+  await context.seedProviderKey(session.state.model.provider);
+  updateViewFromBootstrap(context);
+
+  const agentInterface = document.createElement('agent-interface');
+  agentInterface.enableAttachments = false;
+  agentInterface.enableModelSelector = true;
+  agentInterface.enableThinkingSelector = true;
+  agentInterface.showThemeToggle = false;
+  agentInterface.onApiKeyRequired = async (provider) => {
+    const existing = normalizeText(await stores.providerKeys.get(provider));
+    if (existing && !PLACEHOLDER_TOKENS.has(existing)) return true;
+
+    const entered = window.prompt(`Enter API key for ${provider}`);
+    const normalized = normalizeText(entered || '');
+    if (!normalized) return false;
+
+    await stores.providerKeys.set(provider, normalized);
+    return true;
+  };
+  agentInterface.session = session;
+
+  context.dom.agentHost.replaceChildren(agentInterface);
 }
 
 async function initializeGardenChat() {
@@ -462,26 +762,16 @@ async function initializeGardenChat() {
     const context = {
       bootstrap,
       dom,
-      messages: [],
+      session: null,
       isUpdating: false,
       pendingField: '',
-      isSending: false,
+      seedProviderKey: null,
     };
 
-    renderControls(dom, bootstrap);
+    updateViewFromBootstrap(context);
     bindControlPersistence(context);
-    bindComposer(context);
-    dom.input.focus();
+    await mountAgentInterface(context);
     setStatus(dom, 'Garden chat is ready.');
-
-    try {
-      initializeChatVoiceCockpit({
-        root,
-        getBootstrap: () => context.bootstrap,
-      });
-    } catch (voiceError) {
-      console.error('[admin/chat/voice]', voiceError);
-    }
   } catch (error) {
     setStatus(dom, `Failed to initialize garden chat: ${formatError(error)}`, true);
     console.error('[admin/chat]', error);

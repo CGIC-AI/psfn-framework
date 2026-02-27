@@ -894,6 +894,12 @@ td {
   color: var(--text-muted);
 }
 
+.chat-agent-context {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  font-family: 'Courier New', monospace;
+}
+
 .chat-status {
   padding: 0.45rem 0.6rem;
   border-radius: 6px;
@@ -923,6 +929,31 @@ td {
   background: #FCFBF8;
   display: flex;
   flex-direction: column;
+}
+
+.chat-agent-surface {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 243, 235, 0.88));
+}
+
+.chat-agent-host {
+  flex: 1;
+  min-height: 60vh;
+  overflow: hidden;
+}
+
+.chat-agent-host > agent-interface {
+  display: block;
+  height: 100%;
+  min-height: 60vh;
+}
+
+.chat-agent-loading {
+  height: 100%;
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
 
 .chat-thread {

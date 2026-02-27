@@ -3,16 +3,8 @@
   import {
     getSettings,
     updateSettings,
-    getModelsConfig,
-    saveModelsConfig,
-    getSkillsConfig,
-    saveSkillsConfig,
-    getSchedulerConfig,
-    saveSchedulerConfig,
-    getTrustPolicyConfig,
-    saveTrustPolicyConfig,
-    getCapabilitiesConfig,
-    saveCapabilitiesConfig,
+    getSubConfig,
+    saveSubConfig,
     listModels,
     refreshModels,
   } from '$lib/api/endpoints/settings';
@@ -138,6 +130,10 @@
     retryMaxAttempts = Number(config.retryMaxAttempts ?? 3);
   }
 
+  function tryPrettyPrint(raw: string): string {
+    try { return JSON.stringify(JSON.parse(raw), null, 2); } catch { return raw; }
+  }
+
   function flash(ok: boolean, msg: string) {
     saveOk = ok;
     saveMessage = msg;
@@ -199,15 +195,8 @@
     }
   }
 
-  function getRawSaveFn(key: string): (config: unknown) => Promise<void> {
-    switch (key) {
-      case 'models': return saveModelsConfig;
-      case 'skills': return saveSkillsConfig;
-      case 'scheduler': return saveSchedulerConfig;
-      case 'trust-policy': return saveTrustPolicyConfig;
-      case 'capabilities': return saveCapabilitiesConfig;
-      default: return async () => {};
-    }
+  function getRawSaveFn(key: string): (json: string) => Promise<string> {
+    return (json: string) => saveSubConfig(key, json);
   }
 
   // ── Actions ──
@@ -255,8 +244,10 @@
   async function saveRawConfig(key: string, label: string) {
     saving = true;
     try {
-      const parsed = JSON.parse(getRawJson(key));
-      await getRawSaveFn(key)(parsed);
+      // Validate JSON before sending
+      const json = getRawJson(key);
+      JSON.parse(json); // throws if invalid
+      await getRawSaveFn(key)(json);
       flashRaw(key, true, `${label} saved`);
     } catch (e) {
       flashRaw(key, false, e instanceof Error ? e.message : `Failed to save ${label}`);
@@ -268,7 +259,8 @@
   async function doRefreshModels() {
     refreshingModels = true;
     try {
-      discoveredModels = await refreshModels();
+      await refreshModels();
+      discoveredModels = await listModels();
       flash(true, `Discovered ${discoveredModels.length} models`);
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Model refresh failed');
@@ -290,17 +282,18 @@
       populateSimpleFields(data.config as Record<string, unknown>);
 
       const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([
-        getModelsConfig().catch(() => ({})),
-        getSkillsConfig().catch(() => ({})),
-        getSchedulerConfig().catch(() => ({})),
-        getTrustPolicyConfig().catch(() => ({})),
-        getCapabilitiesConfig().catch(() => ({})),
+        getSubConfig('models').catch(() => '{}'),
+        getSubConfig('skills').catch(() => '{}'),
+        getSubConfig('scheduler').catch(() => '{}'),
+        getSubConfig('trust-policy').catch(() => '{}'),
+        getSubConfig('capabilities').catch(() => '{}'),
       ]);
-      modelsJson = JSON.stringify(mConf, null, 2);
-      skillsJson = JSON.stringify(skConf, null, 2);
-      schedulerJson = JSON.stringify(schConf, null, 2);
-      trustPolicyJson = JSON.stringify(tpConf, null, 2);
-      capabilitiesJson = JSON.stringify(capConf, null, 2);
+      // getSubConfig returns raw JSON strings; pretty-print for editor
+      modelsJson = tryPrettyPrint(mConf);
+      skillsJson = tryPrettyPrint(skConf);
+      schedulerJson = tryPrettyPrint(schConf);
+      trustPolicyJson = tryPrettyPrint(tpConf);
+      capabilitiesJson = tryPrettyPrint(capConf);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load settings';
     } finally {

@@ -80,15 +80,28 @@ body {
 h1, h2, h3, h4 { font-family: var(--font-serif); }
 
 /* Card with subtle gold-tinted shadow */
-.card {
+.card,
+.card-garden {
   background: white;
   border: 1px solid var(--color-bark-300);
   border-radius: 0.75rem;
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
-.card:hover {
+.card:hover,
+.card-garden:hover {
   border-color: var(--color-gold-300);
   box-shadow: 0 2px 8px rgba(184,144,26,0.08);
+}
+
+/* Filigree divider */
+.divider-filigree {
+  border: 0;
+  border-top: 1px solid var(--color-bark-300);
+}
+
+/* Filigree border highlight */
+.filigree-border-strong {
+  border-color: var(--color-gold-400);
 }
 
 /* Gilded scrollbar */

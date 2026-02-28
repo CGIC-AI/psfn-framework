@@ -11,6 +11,9 @@ import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
 import type { CapabilityTierConfig } from '../../../config/capability-tier-config.js';
+import type { CapabilityToken } from '../../../capabilities/tokens.js';
+import { CAPABILITY_TOKENS } from '../../../capabilities/tokens.js';
+import { CAPABILITY_TIER_DEFAULTS } from '../../../capabilities/tiers.js';
 import type { EnvInfo } from '../types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
@@ -247,6 +250,61 @@ function renderCapabilityTierOptions(selected: CapabilityTier): string {
   return CAPABILITY_TIERS.map((tier) => (
     `<option value="${escapeHtml(tier)}"${tier === selected ? ' selected' : ''}>${escapeHtml(tier)}</option>`
   )).join('');
+}
+
+/** Human-readable labels for capability tokens */
+const CAPABILITY_TOKEN_LABELS: Readonly<Record<CapabilityToken, string>> = {
+  'identity.read': 'Identity Read',
+  'identity.write.runtime': 'Identity Write (Runtime)',
+  'identity.write.base': 'Identity Write (Base)',
+  'identity.write.operator': 'Identity Write (Operator)',
+  'memory.write': 'Memory Write',
+  'memory.delete': 'Memory Delete',
+  'external.discord': 'External: Discord',
+  'external.email': 'External: Email',
+  'external.web': 'External: Web',
+  'git.read': 'Git Read',
+  'git.write': 'Git Write',
+  'lifecycle.restart': 'Lifecycle: Restart',
+  'lifecycle.rebuild': 'Lifecycle: Rebuild',
+  'repl.execute': 'REPL Execute',
+  'shard.spawn': 'Shard Spawn',
+};
+
+function renderCustomTokenCheckboxes(
+  customTokens: readonly CapabilityToken[],
+  currentTier: CapabilityTier,
+): string {
+  const selectedSet = new Set(customTokens);
+  const isCustom = currentTier === 'custom';
+  const rows = CAPABILITY_TOKENS.map((token) => {
+    const checked = selectedSet.has(token) ? ' checked' : '';
+    const label = CAPABILITY_TOKEN_LABELS[token] ?? token;
+    // Show which preset tiers include this token
+    const includedIn: string[] = [];
+    for (const [tier, tokens] of Object.entries(CAPABILITY_TIER_DEFAULTS)) {
+      if ((tokens as readonly string[]).includes(token)) {
+        includedIn.push(tier);
+      }
+    }
+    const hint = includedIn.length > 0 ? ` (${includedIn.join(', ')})` : '';
+    return `
+      <label style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;cursor:pointer">
+        <input type="checkbox" name="customTokens" value="${escapeHtml(token)}"${checked}>
+        <code style="font-size:0.85rem">${escapeHtml(token)}</code>
+        <span style="color:var(--text-muted,#888);font-size:0.8rem">${escapeHtml(label)}${escapeHtml(hint)}</span>
+      </label>`;
+  }).join('');
+
+  return `
+    <div id="custom-tokens-editor" style="display:${isCustom ? 'block' : 'none'};margin-top:0.75rem">
+      <p class="note" style="margin:0 0 0.5rem 0;line-height:1.4">
+        Select which capability tokens to grant when using the custom tier.
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:0.25rem 1.5rem">
+        ${rows}
+      </div>
+    </div>`;
 }
 
 function renderImportRouteModeOptions(selected: ImportProcessingRouteMode): string {
@@ -671,11 +729,12 @@ export function settingsPage(
         <div class="form-row">
           <div class="form-group">
             <label>Active Tier</label>
-            <select name="capabilityTier">
+            <select name="capabilityTier" data-capability-tier-select>
               ${renderCapabilityTierOptions(configEditors.capabilities.tier)}
             </select>
           </div>
         </div>
+        ${renderCustomTokenCheckboxes(configEditors.capabilities.customTokens, configEditors.capabilities.tier)}
       </div>
 
       <div class="form-actions">
@@ -1204,6 +1263,15 @@ export function settingsPage(
             assignmentsBody.appendChild(fragment);
             bindPurposeRow(assignmentsBody.lastElementChild);
             refreshRoleSlotOptions();
+          });
+        }
+
+        // Capability tier: toggle custom tokens editor visibility
+        const tierSelect = form.querySelector('[data-capability-tier-select]');
+        const customTokensEditor = document.getElementById('custom-tokens-editor');
+        if (tierSelect && customTokensEditor) {
+          tierSelect.addEventListener('change', () => {
+            customTokensEditor.style.display = tierSelect.value === 'custom' ? 'block' : 'none';
           });
         }
 

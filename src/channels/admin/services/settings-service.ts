@@ -160,13 +160,15 @@ export class AdminSettingsDataService implements AdminSettingsService {
       const parsed = this.parseConfigJsonBody(body);
       saveCapabilityTierConfig(this.deps.config.dataDir, parsed);
       const runtimeCapabilities = loadCapabilityTierConfig(this.deps.config.dataDir);
-      const tier = runtimeCapabilities.defaultTier;
+      const tier = runtimeCapabilities.tier;
       if (!isCapabilityTier(tier)) {
         return {
           ok: false,
-          message: `defaultTier must be one of ${CAPABILITY_TIER_VALUES.join(', ')}`,
+          message: `tier must be one of ${CAPABILITY_TIER_VALUES.join(', ')}`,
         };
       }
+      this.deps.config.capabilityTier = tier;
+      this.deps.config.runtimeHooks?.refreshCapabilities?.();
       return { ok: true, message: 'capability-tier.json updated' };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };

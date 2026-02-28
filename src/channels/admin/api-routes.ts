@@ -10,14 +10,48 @@ import type {
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
-import type { ScheduledTask } from '../../scheduler/types.js';
+import type { ScheduledTask, TaskType } from '../../scheduler/types.js';
 import type { SkillSnapshot } from '../../skills/types.js';
 import type { ConfirmationQueueAdminApi } from './types.js';
 import type { ValuesJournalEntry } from '../../values/store.js';
+import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
+
+/** Wire-safe task shape (no handler function). */
+export interface AdminScheduledTaskView {
+  id: string;
+  name: string;
+  type: TaskType;
+  intervalMs: number;
+  runAt?: number;
+  state: string;
+}
 
 /** Minimal scheduler interface for JSON API routes. */
 export interface AdminSchedulerApi {
   listTasks(): ScheduledTask[];
+  /** Extended: full data with reflections. */
+  getFullData?(): {
+    tasks: AdminScheduledTaskView[];
+    reflections: ReflectionTemplate[];
+  };
+  /** Extended: update a scheduler task. */
+  updateTask?(id: string, updates: {
+    intervalMs?: number;
+    enabled?: boolean;
+    name?: string;
+  }): { ok: boolean; message: string };
+  /** Extended: create a new task. */
+  createTask?(input: {
+    id: string;
+    name: string;
+    type: TaskType;
+    intervalMs?: number;
+    runAt?: number;
+  }): { ok: boolean; message: string };
+  /** Extended: remove a task. */
+  removeTask?(id: string): { ok: boolean; message: string };
+  /** Extended: update a reflection template. */
+  updateReflection?(id: string, updates: Partial<ReflectionTemplate>): { ok: boolean; message: string };
 }
 
 /** Managed skill record shape returned by the store. */
@@ -37,6 +71,9 @@ export interface AdminSkillsApi {
   listManaged(): ManagedSkillRecord[];
   createSkill(input: { name: string; category: string; content: string; description?: string }): ManagedSkillRecord;
   updateSkill(input: { name: string; content: string; description?: string }): ManagedSkillRecord;
+  deleteSkill(name: string): void;
+  toggleSkill(name: string): boolean;
+  getDisabledSkills(): string[];
   invalidate(): void;
 }
 
@@ -477,18 +514,100 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/scheduler'),
       handle: (_req, res) => {
         if (!scheduler) {
-          sendJson(res, 200, { tasks: [] });
+          sendJson(res, 200, { tasks: [], reflections: [] });
           return;
         }
-        const tasks = scheduler.listTasks().map(task => ({
-          id: task.id,
-          name: task.name,
-          type: task.type,
-          intervalMs: task.intervalMs,
-          runAt: task.runAt,
-          state: task.state,
-        }));
-        sendJson(res, 200, { tasks });
+        if (scheduler.getFullData) {
+          sendJson(res, 200, scheduler.getFullData());
+        } else {
+          const tasks = scheduler.listTasks().map(task => ({
+            id: task.id,
+            name: task.name,
+            type: task.type,
+            intervalMs: task.intervalMs,
+            runAt: task.runAt,
+            state: task.state,
+          }));
+          sendJson(res, 200, { tasks, reflections: [] });
+        }
+      },
+    },
+    {
+      method: 'PATCH',
+      match: prefixedParamPath('/api/admin/scheduler/tasks/', 'taskId'),
+      handle: (req, res, { taskId }) => {
+        if (!scheduler?.updateTask) {
+          sendJson(res, 400, { ok: false, message: 'Scheduler mutation not available' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { ok: false, message: parsed.error });
+            return;
+          }
+          const updates = parsed.value as { intervalMs?: number; enabled?: boolean; name?: string };
+          const result = scheduler.updateTask!(taskId, updates);
+          sendJson(res, result.ok ? 200 : 400, result);
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/scheduler/tasks'),
+      handle: (req, res) => {
+        if (!scheduler?.createTask) {
+          sendJson(res, 400, { ok: false, message: 'Scheduler mutation not available' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { ok: false, message: parsed.error });
+            return;
+          }
+          const input = parsed.value as {
+            id: string;
+            name: string;
+            type: TaskType;
+            intervalMs?: number;
+            runAt?: number;
+          };
+          const result = scheduler.createTask!(input);
+          sendJson(res, result.ok ? 201 : 400, result);
+        });
+      },
+    },
+    {
+      method: 'DELETE',
+      match: prefixedParamPath('/api/admin/scheduler/tasks/', 'taskId'),
+      handle: (_req, res, { taskId }) => {
+        if (!scheduler?.removeTask) {
+          sendJson(res, 400, { ok: false, message: 'Scheduler mutation not available' });
+          return;
+        }
+        const result = scheduler.removeTask!(taskId);
+        sendJson(res, result.ok ? 200 : 400, result);
+      },
+    },
+    {
+      method: 'PATCH',
+      match: prefixedParamPath('/api/admin/scheduler/reflections/', 'reflectionId'),
+      handle: (req, res, { reflectionId }) => {
+        if (!scheduler?.updateReflection) {
+          sendJson(res, 400, { ok: false, message: 'Reflection mutation not available' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { ok: false, message: parsed.error });
+            return;
+          }
+          const updates = parsed.value as Partial<ReflectionTemplate>;
+          const result = scheduler.updateReflection!(reflectionId, updates);
+          sendJson(res, result.ok ? 200 : 400, result);
+        });
       },
     },
     // ── Skills ──
@@ -497,12 +616,13 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/skills'),
       handle: (_req, res) => {
         if (!skillsRuntime) {
-          sendJson(res, 200, { snapshot: null, managed: [] });
+          sendJson(res, 200, { snapshot: null, managed: [], disabledSkills: [] });
           return;
         }
         const snapshot = skillsRuntime.getSnapshot();
         const managed = skillsRuntime.listManaged();
-        sendJson(res, 200, { snapshot, managed });
+        const disabledSkills = skillsRuntime.getDisabledSkills();
+        sendJson(res, 200, { snapshot, managed, disabledSkills });
       },
     },
     {
@@ -553,6 +673,50 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { error: String(e instanceof Error ? e.message : e) });
           }
         });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/skills/toggle'),
+      handle: (req, res) => {
+        if (!skillsRuntime) {
+          sendJson(res, 400, { error: 'Skills runtime not available' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          try {
+            const { name } = parsed.value as { name: string };
+            if (!name?.trim()) {
+              sendJson(res, 400, { error: 'Skill name is required' });
+              return;
+            }
+            const nowEnabled = skillsRuntime!.toggleSkill(name);
+            sendJson(res, 200, { ok: true, name: name.trim(), enabled: nowEnabled });
+          } catch (e) {
+            sendJson(res, 400, { error: String(e instanceof Error ? e.message : e) });
+          }
+        });
+      },
+    },
+    {
+      method: 'DELETE',
+      match: prefixedParamPath('/api/admin/skills/', 'name'),
+      handle: (_req, res, { name }) => {
+        if (!skillsRuntime) {
+          sendJson(res, 400, { error: 'Skills runtime not available' });
+          return;
+        }
+        try {
+          skillsRuntime.deleteSkill(name);
+          sendJson(res, 200, { ok: true });
+        } catch (e) {
+          sendJson(res, 400, { error: String(e instanceof Error ? e.message : e) });
+        }
       },
     },
     // ── Confirmations ──

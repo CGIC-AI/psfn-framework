@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost, apiDelete } from '$lib/api/client';
+import { apiGet, apiPut, apiPatch, apiPost, apiDelete } from '$lib/api/client';
 import type { AdminContactListData, ContactUpdateResult, ChannelPrivacyLevel } from '$lib/types';
 
 export function listContacts(): Promise<AdminContactListData> {
@@ -19,9 +19,19 @@ export function updateContact(
   id: string,
   patch: ContactUpdatePayload
 ): Promise<ContactUpdateResult> {
-  return apiPatch<ContactUpdateResult>(
+  return apiPut<ContactUpdateResult>(
     `/api/admin/contacts/${encodeURIComponent(id)}`,
     patch
+  );
+}
+
+export function updateContactLegacyPatch(
+  id: string,
+  patch: ContactUpdatePayload
+): Promise<ContactUpdateResult> {
+  return apiPatch<ContactUpdateResult>(
+    `/api/admin/contacts/${encodeURIComponent(id)}`,
+    patch,
   );
 }
 

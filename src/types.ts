@@ -292,9 +292,14 @@ export interface SubstrateConfig {
   importProcessingLocalModel?: string;
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
+  webFetchAllowInternalNetwork?: boolean;
+  /** @deprecated Use webFetchAllowInternalNetwork + webFetchDomainAllowlist instead */
   webFetchLocalCrawlerEnabled?: boolean;
+  /** @deprecated Use webFetchAllowHttp instead */
   webFetchLocalCrawlerAllowHttp?: boolean;
+  /** @deprecated Use webFetchDomainAllowlist instead */
   webFetchLocalCrawlerHostAllowlist?: string[];
+  /** @deprecated Use webFetchDomainAllowlist instead */
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   wyomingShardRouting?: WyomingShardRoutingConfig;
@@ -389,6 +394,7 @@ export function loadConfig(): SubstrateConfig {
   const importProcessingLocalModel = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_MODEL);
   const webFetchAllowHttp = parseOptionalBooleanEnv(process.env.ALLOW_HTTP_FETCH) ?? false;
   const webFetchDomainAllowlist = parseStringListEnv(process.env.FETCH_DOMAIN_ALLOWLIST);
+  const webFetchAllowInternalNetwork = parseOptionalBooleanEnv(process.env.ALLOW_INTERNAL_NETWORK) ?? false;
   const webFetchLocalCrawlerEnabled = parseOptionalBooleanEnv(process.env.FETCH_LOCAL_CRAWLER_ENABLED) ?? false;
   const webFetchLocalCrawlerAllowHttp = parseOptionalBooleanEnv(process.env.FETCH_LOCAL_CRAWLER_ALLOW_HTTP) ?? false;
   const webFetchLocalCrawlerHostAllowlist = parseStringListEnv(process.env.FETCH_LOCAL_CRAWLER_HOST_ALLOWLIST);
@@ -514,6 +520,7 @@ export function loadConfig(): SubstrateConfig {
     ...(importProcessingLocalModel ? { importProcessingLocalModel } : {}),
     webFetchAllowHttp,
     ...(webFetchDomainAllowlist.length > 0 ? { webFetchDomainAllowlist } : {}),
+    webFetchAllowInternalNetwork,
     webFetchLocalCrawlerEnabled,
     webFetchLocalCrawlerAllowHttp,
     ...(webFetchLocalCrawlerHostAllowlist.length > 0 ? { webFetchLocalCrawlerHostAllowlist } : {}),

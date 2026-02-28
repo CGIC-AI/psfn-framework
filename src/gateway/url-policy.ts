@@ -19,6 +19,14 @@ const PRIVATE_RANGES = [
   /^fd/i,                            // unique local
 ];
 
+/** Always-blocked ranges even when allowInternalNetwork is true.
+ *  These are dangerous (cloud metadata, link-local, "this" network). */
+const ALWAYS_BLOCKED_RANGES = [
+  /^169\.254\./,                     // link-local / cloud metadata
+  /^0\./,                            // "this" network
+  /^fe80:/i,                         // IPv6 link-local
+];
+
 export function isPrivateIP(ip: string): boolean {
   // Handle IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:7f00:1)
   const mapped4 = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
@@ -28,11 +36,22 @@ export function isPrivateIP(ip: string): boolean {
   return PRIVATE_RANGES.some(r => r.test(ip));
 }
 
+/** Check if an IP is in an always-blocked range (cloud metadata, link-local).
+ *  These are blocked even when internal network access is allowed. */
+export function isAlwaysBlockedIP(ip: string): boolean {
+  const mapped4 = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped4) return isAlwaysBlockedIP(mapped4[1]);
+
+  return ALWAYS_BLOCKED_RANGES.some(r => r.test(ip));
+}
+
 export type UrlPolicyLane = 'default' | 'local_crawler';
 
 export interface UrlPolicyConfig {
   allowHttp?: boolean;           // default false (require HTTPS)
   domainAllowlist?: string[];    // if set, only these domains allowed
+  allowInternalNetwork?: boolean; // allow RFC1918/loopback access (still blocks cloud metadata)
+  /** @deprecated Use allowInternalNetwork + domainAllowlist instead */
   localCrawlerLane?: {
     enabled?: boolean;
     allowHttp?: boolean;
@@ -126,6 +145,16 @@ export function evaluateUrlPolicy(
   // Domain allowlist
   if (domainAllowlist.length > 0 && !matchesDomainAllowlist(hostname, domainAllowlist)) {
     return { allowed: false, reason: `Domain ${hostname} not in allowlist` };
+  }
+
+  // Internal network access mode: allow private IPs and localhost except always-blocked ranges
+  if (config.allowInternalNetwork === true) {
+    // Always block cloud metadata and link-local even in internal mode
+    if (isIP(hostname) && isAlwaysBlockedIP(hostname)) {
+      return { allowed: false, reason: `IP ${hostname} blocked (cloud metadata / link-local)` };
+    }
+    // Private IPs and localhost are allowed in internal mode
+    return { allowed: true };
   }
 
   // Check if hostname is a raw IP

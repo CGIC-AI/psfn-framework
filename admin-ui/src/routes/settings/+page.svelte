@@ -75,10 +75,8 @@
       importRouteMode, importStrictPolicy,
       importLocalEndpointUrl, importLocalModel,
       openRouterProviderOrder, webFetchAllowHttp,
-      webFetchDomainAllowlist, webFetchLocalCrawlerEnabled,
-      webFetchLocalCrawlerAllowHttp,
-      webFetchLocalCrawlerHostAllowlist,
-      webFetchLocalCrawlerDomainAllowlist, webFetchTlsCaCertPaths,
+      webFetchDomainAllowlist, webFetchAllowInternalNetwork,
+      webFetchTlsCaCertPaths,
       capabilityTier, catalogSlots, purposeMappings,
       // Memory & Extraction
       extractionInterval, compactionEmotionalSalienceThresholdPct,
@@ -143,10 +141,7 @@
   // ── Gateway web fetch ──
   let webFetchAllowHttp = $state(false);
   let webFetchDomainAllowlist = $state('');
-  let webFetchLocalCrawlerEnabled = $state(false);
-  let webFetchLocalCrawlerAllowHttp = $state(false);
-  let webFetchLocalCrawlerHostAllowlist = $state('');
-  let webFetchLocalCrawlerDomainAllowlist = $state('');
+  let webFetchAllowInternalNetwork = $state(false);
   let webFetchTlsCaCertPaths = $state('');
 
   // ── Voice / TTS ──
@@ -303,11 +298,14 @@
       id: 'fetch', title: 'Web Fetch Policy', icon: 'W',
       keys: [
         'webFetchAllowHttp', 'webFetchDomainAllowlist',
-        'webFetchLocalCrawlerEnabled', 'webFetchLocalCrawlerAllowHttp',
-        'webFetchLocalCrawlerHostAllowlist', 'webFetchLocalCrawlerDomainAllowlist',
-        'webFetchTlsCaCertPaths',
+        'webFetchAllowInternalNetwork', 'webFetchTlsCaCertPaths',
       ],
-      summary: () => webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only',
+      summary: () => {
+        const parts: string[] = [];
+        parts.push(webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only');
+        if (webFetchAllowInternalNetwork) parts.push('internal LAN');
+        return parts.join(', ');
+      },
     },
     {
       id: 'voice', title: 'Voice & Speech', icon: 'V',
@@ -443,10 +441,7 @@
     openRouterProviderOrder = Array.isArray(config.openRouterProviderOrder) ? config.openRouterProviderOrder.join(', ') : '';
     webFetchAllowHttp = Boolean(config.webFetchAllowHttp);
     webFetchDomainAllowlist = Array.isArray(config.webFetchDomainAllowlist) ? config.webFetchDomainAllowlist.join(', ') : '';
-    webFetchLocalCrawlerEnabled = Boolean(config.webFetchLocalCrawlerEnabled);
-    webFetchLocalCrawlerAllowHttp = Boolean(config.webFetchLocalCrawlerAllowHttp);
-    webFetchLocalCrawlerHostAllowlist = Array.isArray(config.webFetchLocalCrawlerHostAllowlist) ? config.webFetchLocalCrawlerHostAllowlist.join(', ') : '';
-    webFetchLocalCrawlerDomainAllowlist = Array.isArray(config.webFetchLocalCrawlerDomainAllowlist) ? config.webFetchLocalCrawlerDomainAllowlist.join(', ') : '';
+    webFetchAllowInternalNetwork = Boolean(config.webFetchAllowInternalNetwork);
     webFetchTlsCaCertPaths = Array.isArray(config.webFetchTlsCaCertPaths) ? config.webFetchTlsCaCertPaths.join(', ') : '';
     capabilityTier = String(config.capabilityTier ?? 'apprentice');
 
@@ -680,10 +675,7 @@
         openRouterProviderOrder: splitCsv(openRouterProviderOrder),
         webFetchAllowHttp,
         webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
-        webFetchLocalCrawlerEnabled,
-        webFetchLocalCrawlerAllowHttp,
-        webFetchLocalCrawlerHostAllowlist: splitCsv(webFetchLocalCrawlerHostAllowlist),
-        webFetchLocalCrawlerDomainAllowlist: splitCsv(webFetchLocalCrawlerDomainAllowlist),
+        webFetchAllowInternalNetwork,
         webFetchTlsCaCertPaths: splitCsv(webFetchTlsCaCertPaths),
         capabilityTier,
         // Memory & Extraction
@@ -1584,7 +1576,7 @@
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('fetch')}
-              <span class="text-sm text-shadow-500">{webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only'}{webFetchLocalCrawlerEnabled ? ', crawler on' : ''}</span>
+              <span class="text-sm text-shadow-500">{webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only'}{webFetchAllowInternalNetwork ? ', internal LAN' : ''}</span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('fetch') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
@@ -1593,37 +1585,22 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Allow HTTP Fetch</label>
+                <label class={LABEL_CLS}>Allow Internal Network Access</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={webFetchAllowInternalNetwork} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Allow fetching from RFC1918 / LAN hosts (cloud metadata still blocked)</span>
+                </label>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Allow Non-HTTPS</label>
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" bind:checked={webFetchAllowHttp} class={TOGGLE_CLS} />
-                  <span class="text-sm text-shadow-700">Allow non-HTTPS web fetch requests</span>
+                  <span class="text-sm text-shadow-700">Allow HTTP (non-encrypted) web fetch requests</span>
                 </label>
               </div>
               <div>
                 <label class={LABEL_CLS}>Domain Allowlist</label>
-                <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains" />
-              </div>
-              <div>
-                <label class={LABEL_CLS}>Local Crawler Enabled</label>
-                <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={webFetchLocalCrawlerEnabled} class={TOGGLE_CLS} />
-                  <span class="text-sm text-shadow-700">Enable local web crawler</span>
-                </label>
-              </div>
-              <div>
-                <label class={LABEL_CLS}>Local Crawler Allow HTTP</label>
-                <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={webFetchLocalCrawlerAllowHttp} class={TOGGLE_CLS} />
-                  <span class="text-sm text-shadow-700">Allow HTTP for local crawler</span>
-                </label>
-              </div>
-              <div>
-                <label class={LABEL_CLS}>Local Crawler Host Allowlist</label>
-                <input type="text" bind:value={webFetchLocalCrawlerHostAllowlist} class={INPUT_CLS} placeholder="comma-separated hosts" />
-              </div>
-              <div>
-                <label class={LABEL_CLS}>Local Crawler Domain Allowlist</label>
-                <input type="text" bind:value={webFetchLocalCrawlerDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains" />
+                <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains (e.g. local.operator.nyc, internal.corp)" />
               </div>
               <div>
                 <label class={LABEL_CLS}>TLS CA Cert Paths</label>

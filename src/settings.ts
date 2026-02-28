@@ -99,9 +99,14 @@ export interface EditableSettings {
   importProcessingLocalModel?: string;
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
+  webFetchAllowInternalNetwork?: boolean;
+  /** @deprecated Use webFetchAllowInternalNetwork + webFetchDomainAllowlist instead */
   webFetchLocalCrawlerEnabled?: boolean;
+  /** @deprecated Use webFetchAllowHttp instead */
   webFetchLocalCrawlerAllowHttp?: boolean;
+  /** @deprecated Use webFetchDomainAllowlist instead */
   webFetchLocalCrawlerHostAllowlist?: string[];
+  /** @deprecated Use webFetchDomainAllowlist instead */
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   capabilityTier?: CapabilityTier;
@@ -152,6 +157,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'importProcessingLocalModel',
   'webFetchAllowHttp',
   'webFetchDomainAllowlist',
+  'webFetchAllowInternalNetwork',
   'webFetchLocalCrawlerEnabled',
   'webFetchLocalCrawlerAllowHttp',
   'webFetchLocalCrawlerHostAllowlist',
@@ -551,6 +557,10 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.webFetchDomainAllowlist = toStringList(settings.webFetchDomainAllowlist) ?? [];
   }
 
+  if ('webFetchAllowInternalNetwork' in settings) {
+    normalized.webFetchAllowInternalNetwork = toBoolean(settings.webFetchAllowInternalNetwork) ?? false;
+  }
+
   if ('webFetchLocalCrawlerEnabled' in settings) {
     normalized.webFetchLocalCrawlerEnabled = toBoolean(settings.webFetchLocalCrawlerEnabled) ?? false;
   }
@@ -843,6 +853,9 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     importProcessingLocalModel: config.importProcessingLocalModel ?? null,
     webFetchAllowHttp: config.webFetchAllowHttp ?? false,
     webFetchDomainAllowlist: config.webFetchDomainAllowlist ?? [],
+    webFetchAllowInternalNetwork: config.webFetchAllowInternalNetwork
+      ?? config.webFetchLocalCrawlerEnabled
+      ?? false,
     webFetchLocalCrawlerEnabled: config.webFetchLocalCrawlerEnabled ?? false,
     webFetchLocalCrawlerAllowHttp: config.webFetchLocalCrawlerAllowHttp ?? false,
     webFetchLocalCrawlerHostAllowlist: config.webFetchLocalCrawlerHostAllowlist ?? [],
@@ -942,6 +955,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     config.webFetchDomainAllowlist = settings.webFetchDomainAllowlist && settings.webFetchDomainAllowlist.length > 0
       ? [...settings.webFetchDomainAllowlist]
       : undefined;
+  }
+  if ('webFetchAllowInternalNetwork' in settings) {
+    config.webFetchAllowInternalNetwork = settings.webFetchAllowInternalNetwork ?? false;
   }
   if ('webFetchLocalCrawlerEnabled' in settings) {
     config.webFetchLocalCrawlerEnabled = settings.webFetchLocalCrawlerEnabled ?? false;
@@ -1133,6 +1149,16 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const webFetchDomainAllowlistRaw = params.get('webFetchDomainAllowlist');
   if (webFetchDomainAllowlistRaw !== null) {
     settings.webFetchDomainAllowlist = parseCsvList(webFetchDomainAllowlistRaw);
+  }
+
+  const webFetchAllowInternalNetworkRaw = params.get('webFetchAllowInternalNetwork');
+  if (webFetchAllowInternalNetworkRaw !== null) {
+    const allow = toBoolean(webFetchAllowInternalNetworkRaw);
+    if (allow === undefined) {
+      errors.push('webFetchAllowInternalNetwork must be true or false');
+    } else {
+      settings.webFetchAllowInternalNetwork = allow;
+    }
   }
 
   const webFetchLocalCrawlerEnabledRaw = params.get('webFetchLocalCrawlerEnabled');

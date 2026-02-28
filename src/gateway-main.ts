@@ -227,6 +227,8 @@ async function main(): Promise<void> {
         ...(config.webFetchDomainAllowlist && config.webFetchDomainAllowlist.length > 0
           ? { domainAllowlist: config.webFetchDomainAllowlist }
           : {}),
+        allowInternalNetwork: config.webFetchAllowInternalNetwork === true,
+        // Deprecated: local crawler lane preserved for backward compat
         localCrawlerLane: {
           enabled: config.webFetchLocalCrawlerEnabled === true,
           allowHttp: config.webFetchLocalCrawlerAllowHttp === true,

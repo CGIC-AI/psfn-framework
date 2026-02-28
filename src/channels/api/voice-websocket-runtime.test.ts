@@ -50,7 +50,12 @@ function createStubTtsConnector(): StreamingTtsConnector {
   };
 }
 
-function createTestOptions(configOverrides: Partial<SubstrateConfig> = {}) {
+type RuntimeVoiceTestOverrides = Partial<SubstrateConfig> & {
+  sttProvider?: 'deepgram' | 'disabled';
+  ttsProvider?: SubstrateConfig['ttsProvider'] | 'disabled';
+};
+
+function createTestOptions(configOverrides: RuntimeVoiceTestOverrides = {}) {
   const config = {
     deepgramApiKey: 'deepgram-key',
     deepgramModel: 'nova-3',
@@ -86,6 +91,39 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     expect(runtime).toBeUndefined();
     expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
     expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
+  });
+
+  it('returns undefined when STT provider is explicitly disabled', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      sttProvider: 'disabled',
+    }));
+
+    expect(runtime).toBeUndefined();
+    expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
+    expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
+  });
+
+  it('returns undefined when TTS provider is explicitly disabled', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      ttsProvider: 'disabled',
+    }));
+
+    expect(runtime).toBeUndefined();
+    expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
+    expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
+  });
+
+  it('uses deepgram STT when provider is explicitly set to deepgram', () => {
+    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      sttProvider: 'deepgram',
+      ttsProvider: 'elevenlabs',
+    }));
+
+    expect(runtime).toBeDefined();
+    expect(createStreamingSttConnectorMock).toHaveBeenCalledWith('deepgram', {
+      apiKey: 'deepgram-key',
+      model: 'nova-3',
+    });
   });
 
   it('returns undefined for elevenlabs provider when ElevenLabs credentials are missing', () => {

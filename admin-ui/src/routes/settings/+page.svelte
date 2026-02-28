@@ -482,7 +482,7 @@
     echoTtsUrl = String(config.echoTtsUrl ?? '');
     echoTtsVoice = String(config.echoTtsVoice ?? '');
     echoTtsPreset = String(config.echoTtsPreset ?? '');
-    const rawStt = String(config.sttProvider ?? 'disabled');
+    const rawStt = String(config.sttProvider ?? (config.deepgramApiKey ? 'deepgram' : 'disabled'));
     sttProvider = rawStt === 'deepgram' ? 'deepgram' : 'disabled';
     deepgramModel = String(config.deepgramModel ?? 'nova-3');
 
@@ -1611,7 +1611,7 @@
         {/if}
       </div>
 
-      <!-- Voice & TTS (informational) -->
+      <!-- Voice & TTS -->
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('voice')}
@@ -1623,26 +1623,66 @@
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('voice')}
-              <span class="text-sm text-shadow-500">Requires server restart to change</span>
+              <span class="text-sm text-shadow-500">TTS: {ttsProvider}, STT: {sttProvider}</span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('voice') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
         </button>
         {#if openSections.has('voice')}
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
-            <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>TTS Provider</label>
+                <select bind:value={ttsProvider} class={INPUT_CLS}>
+                  <option value="disabled">disabled</option>
+                  <option value="elevenlabs">elevenlabs</option>
+                  <option value="echo">echo</option>
+                </select>
+                <p class="text-sm text-shadow-500 mt-1">Set to disabled to turn off voice synthesis connectors.</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>STT Provider</label>
+                <select bind:value={sttProvider} class={INPUT_CLS}>
+                  <option value="disabled">disabled</option>
+                  <option value="deepgram">deepgram</option>
+                </select>
+                <p class="text-sm text-shadow-500 mt-1">Set to disabled to turn off speech-to-text connectors.</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>ElevenLabs Voice ID</label>
+                <input type="text" bind:value={voiceId} class={INPUT_CLS} placeholder="rPQ6h200dfjiuYAy0JDA" />
+                <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted voice override.</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Deepgram Model</label>
+                <input type="text" bind:value={deepgramModel} class={INPUT_CLS} placeholder="nova-3" />
+                <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted model override.</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Echo TTS URL</label>
+                <input type="text" bind:value={echoTtsUrl} class={INPUT_CLS} placeholder="http://127.0.0.1:8001/v1/audio/speech" />
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Echo TTS Voice</label>
+                <input type="text" bind:value={echoTtsVoice} class={INPUT_CLS} placeholder="11labs-Allison" />
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Echo TTS Preset</label>
+                <input type="text" bind:value={echoTtsPreset} class={INPUT_CLS} placeholder="Independent-High-Speaker-CFG" />
+              </div>
+            </div>
+            <div class="mt-4 bg-bark-100 rounded-lg p-4 border border-bark-200">
               <p class="text-sm text-shadow-700">
-                Voice and TTS settings contain API keys and provider credentials that are configured at the server level.
-                These settings require a server restart to take effect.
+                Secrets and API credentials stay server-side in environment variables. Provider changes are applied at runtime wiring points and may require restart for active voice sessions.
               </p>
               <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div class="text-sm">
-                  <span class="font-medium text-shadow-800">ElevenLabs TTS:</span>
-                  <span class="text-shadow-600 ml-1 font-mono">TTS_PROVIDER, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID</span>
+                  <span class="font-medium text-shadow-800">ElevenLabs credentials:</span>
+                  <span class="text-shadow-600 ml-1 font-mono">ELEVENLABS_API_KEY</span>
                 </div>
                 <div class="text-sm">
-                  <span class="font-medium text-shadow-800">Echo TTS:</span>
-                  <span class="text-shadow-600 ml-1 font-mono">ECHO_TTS_URL, ECHO_TTS_VOICE, ECHO_TTS_PRESET</span>
+                  <span class="font-medium text-shadow-800">Deepgram credentials:</span>
+                  <span class="text-shadow-600 ml-1 font-mono">DEEPGRAM_API_KEY</span>
                 </div>
               </div>
             </div>

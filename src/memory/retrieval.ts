@@ -26,6 +26,22 @@ import { createComponentLogger } from '../logger.js';
 import type { ContactStore } from '../contacts/store.js';
 const log = createComponentLogger('Retrieval');
 
+/**
+ * Minimum number of memories guaranteed to surface even if privacy penalties
+ * zero their composite score. These are rescued by raw embedding similarity.
+ * Without this, memories that pass trust policy but have high privacy-risk
+ * penalties (confidential + private-source + sensitive tags) would silently
+ * disappear from context despite being allowed by the trust engine.
+ */
+const SCORE_GUARANTEE_MIN_K = 3;
+
+/**
+ * Floor multiplier for rescued memories. Their score becomes
+ * similarity * SCORE_GUARANTEE_FLOOR, which is intentionally low
+ * so naturally-scored memories always rank higher.
+ */
+const SCORE_GUARANTEE_FLOOR = 0.01;
+
 interface ScoredMemory {
   memory: PurrMemory & { similarity: number };
   baseScore: number;
@@ -71,12 +87,17 @@ interface RetrievalTelemetry {
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
   scoreRejectedCount?: number;
+  scoreGuaranteedCount?: number;
   visibilityScope: BroadcastVisibilityScope | 'non_broadcast';
   operatorApproval: boolean;
   provenanceRefs: string[];
   profileIncluded?: boolean;
   emotionalSnapshotIncluded?: boolean;
   emotionalContinuityCount?: number;
+  topSimilarity?: number;
+  bottomSimilarity?: number;
+  topScore?: number;
+  bottomScore?: number;
 }
 
 interface ProactiveWeightedMemory {
@@ -245,7 +266,8 @@ export class MemoryRetriever implements MemoryProvider {
 
     try {
       const embedding = await this.embeddingService.embed(contextText);
-      const candidateLimit = Math.max(20, limit * (budget.mode === 'hard_limit' ? 2 : 3));
+      // Oversample candidates: trust/score filtering can drop many, so fetch 4x budget
+      const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
 
       const memories = this.memoryStore.searchByEmbedding(
         embedding,
@@ -254,8 +276,19 @@ export class MemoryRetriever implements MemoryProvider {
       );
       telemetry.candidateCount = memories.length;
 
+      if (memories.length > 0) {
+        telemetry.topSimilarity = memories[0].similarity;
+        telemetry.bottomSimilarity = memories[memories.length - 1].similarity;
+      }
+
       if (memories.length === 0) {
         telemetry.reason = 'no_candidates';
+        log.info('Retrieval: no embedding candidates above threshold', {
+          channelId,
+          trustLevel: effectiveTrust,
+          threshold: this.retrievalThreshold,
+          queryLength: contextText.length,
+        });
         await this.emitRetrievalTelemetry(telemetry);
         return renderPromptBlock(profile, [], {
           emotionalSnapshot,
@@ -306,10 +339,13 @@ export class MemoryRetriever implements MemoryProvider {
       if (policyAllowed.length === 0) {
         telemetry.reason = 'trust_filtered';
         await this.emitRetrievalTelemetry(telemetry);
-        log.debug('Retrieval decision rationale', {
+        log.info('Retrieval: all candidates filtered by trust policy', {
+          channelId,
           trustLevel: effectiveTrust,
           channelVisibility,
-          ...diagnostics,
+          candidateCount: diagnostics.candidateCount,
+          rejectedBySensitivity: diagnostics.rejectedBySensitivity,
+          rejectedByPolicy: diagnostics.rejectedByPolicy,
         });
         return renderPromptBlock(profile, [], {
           emotionalSnapshot,
@@ -317,25 +353,59 @@ export class MemoryRetriever implements MemoryProvider {
         });
       }
 
-      const scored = policyAllowed
+      // Score all policy-allowed memories. Instead of filtering out score==0
+      // entirely, guarantee at least SCORE_GUARANTEE_MIN_K top-similarity
+      // memories surface even when privacy penalties zero their composite score.
+      // This prevents "water in the well, bucket has holes" retrieval gaps.
+      const allScored = policyAllowed
         .map(memory => ({ memory, ...computeRetrievalScore(memory, contextText) }))
-        .filter((candidate) => candidate.score > 0)
         .sort((a, b) => b.score - a.score);
-      diagnostics.rejectedByScore = policyAllowed.length - scored.length;
+
+      const positiveScored = allScored.filter(c => c.score > 0);
+      const zeroScored = allScored.filter(c => c.score <= 0);
+      diagnostics.rejectedByScore = zeroScored.length;
       telemetry.scoreRejectedCount = diagnostics.rejectedByScore;
+
+      // Guarantee: if we have policy-allowed memories with high similarity but
+      // zero composite score (privacy penalty zeroed them out), rescue the top
+      // SCORE_GUARANTEE_MIN_K by similarity so they still surface.
+      let scoreGuaranteedCount = 0;
+      if (positiveScored.length < SCORE_GUARANTEE_MIN_K && zeroScored.length > 0) {
+        const needed = SCORE_GUARANTEE_MIN_K - positiveScored.length;
+        const rescued = zeroScored
+          .sort((a, b) => b.memory.similarity - a.memory.similarity)
+          .slice(0, needed)
+          .map(item => ({
+            ...item,
+            // Assign a minimal positive score so they sort after naturally-scored
+            // memories but still appear in the output.
+            score: item.memory.similarity * SCORE_GUARANTEE_FLOOR,
+          }));
+        positiveScored.push(...rescued);
+        positiveScored.sort((a, b) => b.score - a.score);
+        scoreGuaranteedCount = rescued.length;
+      }
+      telemetry.scoreGuaranteedCount = scoreGuaranteedCount;
+
+      const scored = positiveScored;
 
       const ranked = budget.mode === 'hard_limit'
         ? scored.slice(0, limit)
         : scored;
       telemetry.rankedCount = ranked.length;
 
+      if (ranked.length > 0) {
+        telemetry.topScore = ranked[0].score;
+        telemetry.bottomScore = ranked[ranked.length - 1].score;
+      }
+
       if (ranked.length === 0) {
         telemetry.reason = 'score_filtered';
         await this.emitRetrievalTelemetry(telemetry);
-        log.debug('Retrieval decision rationale', {
+        log.info('Retrieval: all policy-allowed memories scored zero', {
+          channelId,
           trustLevel: effectiveTrust,
-          channelVisibility,
-          ...diagnostics,
+          policyAllowedCount: diagnostics.policyAllowedCount,
         });
         return renderPromptBlock(profile, [], {
           emotionalSnapshot,
@@ -357,6 +427,21 @@ export class MemoryRetriever implements MemoryProvider {
         privacyPenalty: Number(item.privacyPenalty.toFixed(4)),
         sensitivity: item.memory.sensitivity,
       }));
+
+      // INFO-level retrieval trace: operators can see the full pipeline funnel
+      // without needing debug logging enabled.
+      log.info('Retrieval trace', {
+        channelId,
+        trustLevel: effectiveTrust,
+        channelVisibility,
+        pipeline: `${diagnostics.candidateCount} candidates -> ${diagnostics.policyAllowedCount} policy-allowed -> ${scored.length} scored -> ${ranked.length} ranked -> ${selected.length} selected`,
+        rejectedBySensitivity: diagnostics.rejectedBySensitivity,
+        rejectedByPolicy: diagnostics.rejectedByPolicy,
+        rejectedByScore: diagnostics.rejectedByScore,
+        scoreGuaranteedCount,
+        budgetMode: budget.mode,
+        tokenBudget: budget.tokenBudget,
+      });
       log.debug('Retrieval decision rationale', {
         trustLevel: effectiveTrust,
         channelVisibility,
@@ -799,6 +884,12 @@ function selectWeightedMemory(weighted: ProactiveWeightedMemory[]): PurrMemory |
   }
   return weighted[weighted.length - 1]?.memory;
 }
+
+/** Exported for test access. */
+export const __retrieval_internals = {
+  SCORE_GUARANTEE_MIN_K,
+  SCORE_GUARANTEE_FLOOR,
+} as const;
 
 function renderProactiveRecall(memory: PurrMemory): string {
   const valenceSuffix =

@@ -449,7 +449,7 @@ export class LegacyAdminHandlers {
     });
   }
 
-  private appendAuditTimelineEntry(
+  appendAuditTimelineEntry(
     actionType: AdminAuditActionType,
     decision: AdminAuditDecision,
     narrative: string,
@@ -457,12 +457,13 @@ export class LegacyAdminHandlers {
     actor?: AdminAuditActor,
   ): void {
     const detailText = details.filter((value): value is string => Boolean(value && value.trim())).join(' • ');
+    const resolvedActor = actor ?? (actionType === 'identity_edit' ? 'operator' : undefined);
     this.auditTimeline.append({
       actionType,
       decision,
       narrative,
       details: detailText || undefined,
-      actor,
+      actor: resolvedActor,
     });
   }
 

@@ -293,6 +293,7 @@ describe('admin templates', () => {
           decision: 'allowed',
           narrative: 'Purrsephone edited runtime prompt layer.',
           details: 'layerId=runtime-main',
+          actor: 'operator',
         },
       ],
       filters: {
@@ -308,6 +309,7 @@ describe('admin templates', () => {
     expect(html).toContain('name="timeRange"');
     expect(html).toContain('Purrsephone edited runtime prompt layer');
     expect(html).toContain('data-action-type="identity_edit"');
+    expect(html).toContain('Actor: Operator');
   });
 
   it('renders values timeline entries with version metadata', () => {

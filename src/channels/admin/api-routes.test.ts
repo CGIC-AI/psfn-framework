@@ -485,6 +485,52 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('records operator-attributed audit entries for /api/admin/identity mutation routes and renders actor labels', async () => {
+    const fieldPatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({ field: 'name', value: 'ApiRouteAuditBot' }),
+      authHeaders,
+    );
+    expect(fieldPatchRes.status).toBe(200);
+
+    const rollbackRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/rollback',
+      JSON.stringify({ version: 1 }),
+      authHeaders,
+    );
+    expect(rollbackRes.status).toBe(200);
+
+    const importDeniedRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/import',
+      JSON.stringify({ path: join(tempDir, 'missing-audit-import-card.json') }),
+      authHeaders,
+    );
+    expect(importDeniedRes.status).toBe(400);
+
+    const uploadDeniedRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/upload',
+      JSON.stringify({ not: 'multipart' }),
+      authHeaders,
+    );
+    expect(uploadDeniedRes.status).toBeGreaterThanOrEqual(400);
+
+    const eventsRes = await request(port, 'GET', '/events?timeRange=all', undefined, authHeaders);
+    expect(eventsRes.status).toBe(200);
+    expect(eventsRes.body).toContain('Actor: Operator');
+    expect(eventsRes.body).toContain('/api/admin/identity/fields');
+    expect(eventsRes.body).toContain('/api/admin/identity/rollback');
+    expect(eventsRes.body).toContain('/api/admin/identity/import');
+    expect(eventsRes.body).toContain('/api/admin/identity/upload');
+  });
+
   it('streams telemetry over websocket and enforces websocket auth', async () => {
     const unauthorizedStatus = await openWebSocketExpectStatus(port, '/api/admin/events');
     expect(unauthorizedStatus).toBe(401);

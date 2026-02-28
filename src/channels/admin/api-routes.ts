@@ -207,6 +207,143 @@ export function buildAdminApiRoutes(options: {
         );
       },
     },
+    // ── Memory Linking ──
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/memory/link'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const id1 = typeof payload.id1 === 'string' ? payload.id1.trim() : '';
+          const id2 = typeof payload.id2 === 'string' ? payload.id2.trim() : '';
+          const linkType = typeof payload.linkType === 'string' ? payload.linkType.trim() : undefined;
+
+          if (!id1 || !id2) {
+            sendJson(res, 400, { error: 'Both id1 and id2 are required' });
+            return;
+          }
+
+          const result = memoryService.linkMemories(id1, id2, linkType);
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message ?? 'Failed to create link' });
+            return;
+          }
+          sendJson(res, 201, result);
+        });
+      },
+    },
+    {
+      method: 'DELETE',
+      match: exactPath('/api/admin/memory/link'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const id1 = typeof payload.id1 === 'string' ? payload.id1.trim() : '';
+          const id2 = typeof payload.id2 === 'string' ? payload.id2.trim() : '';
+
+          if (!id1 || !id2) {
+            sendJson(res, 400, { error: 'Both id1 and id2 are required' });
+            return;
+          }
+
+          const result = memoryService.unlinkMemories(id1, id2);
+          if (!result.ok) {
+            sendJson(res, 404, { error: result.message ?? 'Link not found' });
+            return;
+          }
+          sendJson(res, 200, { ok: true });
+        });
+      },
+    },
+    // ── Bulk Operations ──
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/memory/bulk-delete'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const ids = Array.isArray(payload.ids)
+            ? payload.ids.filter((v): v is string => typeof v === 'string')
+            : [];
+
+          if (!ids.length) {
+            sendJson(res, 400, { error: 'ids array is required and must not be empty' });
+            return;
+          }
+
+          const result = memoryService.bulkDelete(ids);
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message ?? 'Bulk delete failed' });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/memory/bulk-update'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const ids = Array.isArray(payload.ids)
+            ? payload.ids.filter((v): v is string => typeof v === 'string')
+            : [];
+          const fields = typeof payload.fields === 'object' && payload.fields !== null
+            ? payload.fields as Record<string, unknown>
+            : {};
+
+          if (!ids.length) {
+            sendJson(res, 400, { error: 'ids array is required and must not be empty' });
+            return;
+          }
+
+          const memoryType = typeof fields.memoryType === 'string' ? fields.memoryType : undefined;
+          const sensitivity = typeof fields.sensitivity === 'string' ? fields.sensitivity : undefined;
+
+          if (!memoryType && !sensitivity) {
+            sendJson(res, 400, { error: 'At least one field (memoryType, sensitivity) is required' });
+            return;
+          }
+
+          const result = memoryService.bulkUpdate(ids, { memoryType, sensitivity });
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message ?? 'Bulk update failed' });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    // Sub-path route MUST come before generic prefixed param route
+    {
+      method: 'GET',
+      match: paramWithSuffix('/api/admin/memory/', 'id', '/links'),
+      handle: (_req, res, { id }) => {
+        const links = memoryService.getMemoryLinks(id);
+        sendJson(res, 200, { links });
+      },
+    },
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/memory/', 'id'),

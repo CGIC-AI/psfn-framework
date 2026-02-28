@@ -102,6 +102,25 @@ export interface AdminMemorySearchResult {
   contactsById: Record<string, AdminMemoryContactSummary>;
 }
 
+export interface AdminMemoryLink {
+  id1: string;
+  id2: string;
+  linkType: string;
+  linkedAt: number;
+}
+
+export interface AdminMemoryLinkResult {
+  ok: boolean;
+  message?: string;
+  link?: AdminMemoryLink;
+}
+
+export interface AdminBulkMutationResult {
+  ok: boolean;
+  count: number;
+  message?: string;
+}
+
 // Sessions
 export interface ChannelInfo {
   channelId: string;

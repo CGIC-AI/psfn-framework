@@ -1,6 +1,7 @@
 const BOOTSTRAP_URL = '/api/chat/bootstrap';
 const DEFAULT_MODEL_ID = 'purrsephone-admin-chat';
 const DEFAULT_MODEL_NAME = 'PSFN Garden Chat';
+const DEFAULT_MODEL_PROVIDER = 'openai';
 const DEFAULT_SYSTEM_PROMPT = 'You are Purrsephone speaking through the garden chat canopy.';
 const PROVIDER_KEY_PLACEHOLDER = 'admin-chat-local-key';
 const MAX_CONTEXT_MESSAGES = 40;
@@ -238,6 +239,36 @@ function createDefaultModel() {
   };
 }
 
+function modelFromBootstrap(bootstrap) {
+  const runtimeModel = bootstrap?.runtime?.model;
+  if (!runtimeModel || typeof runtimeModel !== 'object') {
+    return createDefaultModel();
+  }
+
+  const id = normalizeText(runtimeModel.id) || DEFAULT_MODEL_ID;
+  const name = normalizeText(runtimeModel.name) || id || DEFAULT_MODEL_NAME;
+  const provider = normalizeText(runtimeModel.provider) || DEFAULT_MODEL_PROVIDER;
+  const api = normalizeText(runtimeModel.api) || 'openai-completions';
+  const baseUrl = normalizeText(runtimeModel.baseUrl);
+  const maxTokens = Number.isFinite(runtimeModel.maxTokens)
+    ? Number(runtimeModel.maxTokens)
+    : 4096;
+  const contextWindow = Number.isFinite(runtimeModel.contextWindow)
+    ? Number(runtimeModel.contextWindow)
+    : 131072;
+
+  return {
+    ...createDefaultModel(),
+    id,
+    name,
+    provider,
+    api,
+    baseUrl,
+    maxTokens,
+    contextWindow,
+  };
+}
+
 function renderControls(dom, bootstrap, model = null) {
   const contactOptions = bootstrap.contactOptions.map(option => ({
     value: option.canonicalContactId,
@@ -471,9 +502,10 @@ class AgentInterfaceSession {
     this.streamFn = null;
     this.debugEventSource = null;
     this.getApiKey = async (provider) => this.options.providerKeys.get(provider);
+    const bootstrapModel = modelFromBootstrap(this.options.getBootstrap());
     this.state = {
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
-      model: createDefaultModel(),
+      model: bootstrapModel,
       thinkingLevel: 'off',
       tools: [],
       messages: [],
@@ -970,6 +1002,9 @@ async function persistControlChanges(context, changedField) {
     const payload = toBootstrapUpdatePayload(normalizedSelection);
     const refreshed = await postBootstrapState(payload);
     context.bootstrap = refreshed;
+    if (context.session) {
+      context.session.setModel(modelFromBootstrap(refreshed));
+    }
     updateViewFromBootstrap(context);
 
     if (context.seedProviderKey) {

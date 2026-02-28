@@ -15,6 +15,7 @@ import type {
   AdminChatBootstrapUpdateInput,
   AdminChatContactOption,
   AdminChatLinkedChannelOption,
+  AdminChatRuntimeModelConfig,
   AdminModelRoomBootstrapResponse,
   AdminModelRoomParticipant,
 } from './types.js';
@@ -28,8 +29,9 @@ const VOICE_WEBSOCKET_PATH = '/v1/voice/ws';
 const OPENAI_API_BASE_PATH = '/v1';
 const PI_WEB_UI_MODULE_ROUTE = '/static/pi-web-ui/index.js';
 const PI_WEB_UI_STYLESHEET_ROUTE = '/static/pi-web-ui/app.css';
-const DEFAULT_RUNTIME_MODEL_ID = 'purrsephone-admin-chat';
-const DEFAULT_RUNTIME_MODEL_NAME = 'PSFN Garden Chat';
+const DEFAULT_RUNTIME_PROVIDER = 'openai';
+const DEFAULT_RUNTIME_MODEL_ID = 'openai/gpt-4.1-mini';
+const DEFAULT_RUNTIME_MODEL_NAME = 'Garden Chat';
 const SYNTHETIC_CONTACT_ID = 'admin.synthetic.default';
 const SYNTHETIC_DISPLAY_NAME = 'Primary Contact';
 const SYNTHETIC_CHANNEL = 'api';
@@ -56,6 +58,7 @@ interface AdminChatBootstrapServiceOptions {
   apiBaseUrl?: string;
   apiHost?: string;
   apiPort?: number;
+  config?: SubstrateConfig;
 }
 
 interface AdminChatBootstrapRuntimeOptions {
@@ -110,6 +113,7 @@ export class AdminChatBootstrapService {
   private readonly configuredApiBaseUrl?: string;
   private readonly configuredApiHost?: string;
   private readonly configuredApiPort?: number;
+  private readonly runtimeConfig?: SubstrateConfig;
   private selection: SelectionState = {};
 
   constructor(contactStore?: ContactStore | null, options: AdminChatBootstrapServiceOptions = {}) {
@@ -118,6 +122,7 @@ export class AdminChatBootstrapService {
     this.configuredApiBaseUrl = normalizeTrimmed(options.apiBaseUrl);
     this.configuredApiHost = normalizeTrimmed(options.apiHost);
     this.configuredApiPort = options.apiPort;
+    this.runtimeConfig = options.config;
   }
 
   buildBootstrap(options: AdminChatBootstrapRuntimeOptions = {}): AdminChatBootstrapResponse {
@@ -276,6 +281,7 @@ export class AdminChatBootstrapService {
     const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);
     const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, apiBaseUrl);
     const openAiBaseUrl = buildAbsoluteAdminChatApiUrl(OPENAI_API_BASE_PATH, apiBaseUrl);
+    const runtimeModel = this.resolveRuntimeModel(openAiBaseUrl, transportHeaders);
 
     return {
       contactOptions: contacts.map(contact => ({
@@ -311,14 +317,7 @@ export class AdminChatBootstrapService {
           stylesheetUrl: PI_WEB_UI_STYLESHEET_ROUTE,
         },
         transportHeaders,
-        model: {
-          id: DEFAULT_RUNTIME_MODEL_ID,
-          name: DEFAULT_RUNTIME_MODEL_NAME,
-          provider: 'openai',
-          api: 'openai-completions',
-          baseUrl: openAiBaseUrl,
-          headers: transportHeaders,
-        },
+        model: runtimeModel,
         apiKey,
       },
       defaultSessionId,
@@ -364,6 +363,37 @@ export class AdminChatBootstrapService {
 
   private resolveApiKey(): string | undefined {
     return this.configuredApiKey ?? normalizeTrimmed(process.env.API_KEY);
+  }
+
+  private resolveRuntimeModel(
+    openAiBaseUrl: string,
+    transportHeaders: Record<string, string>,
+  ): AdminChatRuntimeModelConfig {
+    const config = this.runtimeConfig;
+    const chatSlot = config?.modelRoster?.chat;
+    const slotKey = config?.modelRoleAssignments?.chat;
+    const catalogEntry = slotKey ? config?.modelCatalog?.[slotKey] : undefined;
+    const provider = normalizeTrimmed(catalogEntry?.provider)
+      ?? normalizeTrimmed(chatSlot?.provider)
+      ?? normalizeTrimmed(config?.primaryProvider)
+      ?? DEFAULT_RUNTIME_PROVIDER;
+    const modelId = normalizeTrimmed(catalogEntry?.model)
+      ?? normalizeTrimmed(chatSlot?.model)
+      ?? normalizeTrimmed(config?.primaryModel)
+      ?? DEFAULT_RUNTIME_MODEL_ID;
+    const modelName = normalizeTrimmed(catalogEntry?.defaults?.description)
+      ?? normalizeTrimmed(chatSlot?.model)
+      ?? normalizeTrimmed(config?.primaryModel)
+      ?? DEFAULT_RUNTIME_MODEL_NAME;
+
+    return {
+      id: modelId,
+      name: modelName,
+      provider: provider.toLowerCase(),
+      api: 'openai-completions',
+      baseUrl: openAiBaseUrl,
+      headers: transportHeaders,
+    };
   }
 
   private buildTransportHeaders(

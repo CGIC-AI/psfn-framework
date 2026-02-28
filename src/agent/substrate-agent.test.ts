@@ -122,6 +122,57 @@ function makeMockLLMProvider(): LLMProvider {
   };
 }
 
+interface ScriptedCompletionStep {
+  purpose: 'reasoning' | 'background';
+  content: string;
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+function makeScriptedMoaProvider(steps: ScriptedCompletionStep[]): {
+  provider: LLMProvider;
+  completeSpy: ReturnType<typeof vi.fn>;
+} {
+  let index = 0;
+  const completeSpy = vi.fn(async (
+    _context: LLMContext,
+    purpose: ScriptedCompletionStep['purpose'],
+    _options?: Record<string, unknown>,
+  ) => {
+    const step = steps[index++];
+    if (!step) {
+      throw new Error(`No scripted completion for purpose "${purpose}"`);
+    }
+    if (step.purpose !== purpose) {
+      throw new Error(`Expected purpose "${step.purpose}", received "${purpose}"`);
+    }
+    return {
+      content: step.content,
+      toolCalls: [],
+      model: step.model,
+      inputTokens: step.inputTokens ?? 12,
+      outputTokens: step.outputTokens ?? 24,
+      stopReason: 'stop',
+    } satisfies LLMResponse;
+  });
+
+  return {
+    provider: {
+      stream: vi.fn<any>().mockResolvedValue({
+        content: '',
+        toolCalls: [],
+        model: 'mock-stream',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      } satisfies LLMResponse),
+      complete: completeSpy as unknown as LLMProvider['complete'],
+    },
+    completeSpy,
+  };
+}
+
 // ── Tests ──
 
 describe('SubstrateAgent construction', () => {
@@ -642,6 +693,91 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(response.channelId).toBe('test-channel');
     expect(response.metadata.model).toBe('deepseek/deepseek-v3.2');
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('routes normal response turns through MoA deliberation when enabled', async () => {
+    const config = makeConfig({
+      moaEnabled: true,
+      moaReferenceModels: ['model-ref-a', 'model-ref-b'],
+      moaAggregatorModel: 'model-agg',
+      moaMaxRounds: 1,
+      moaMaxTokensPerRound: 120,
+      moaTimeoutMs: 30_000,
+    });
+    const sessionManager = makeMockSessionManager();
+    const { provider, completeSpy } = makeScriptedMoaProvider([
+      { purpose: 'reasoning', content: 'Reference voice A', model: 'model-ref-a', inputTokens: 10, outputTokens: 10 },
+      { purpose: 'background', content: 'Reference voice B', model: 'model-ref-b', inputTokens: 10, outputTokens: 10 },
+      { purpose: 'reasoning', content: 'Synthesized MoA reply', model: 'model-agg', inputTokens: 10, outputTokens: 10 },
+    ]);
+    const promptCallsBefore = promptSpy.mock.calls.length;
+
+    const agent = new SubstrateAgent(
+      new EventBus(), provider, sessionManager, 'test', config,
+    );
+
+    const response = await agent.handleMessage(makeMessage());
+
+    expect(promptSpy.mock.calls.length).toBe(promptCallsBefore);
+    expect(completeSpy).toHaveBeenCalledTimes(3);
+    expect(completeSpy.mock.calls[0][2]).toMatchObject({ modelHint: { model: 'model-ref-a', maxTokens: 120 } });
+    expect(completeSpy.mock.calls[1][2]).toMatchObject({ modelHint: { model: 'model-ref-b', maxTokens: 100 } });
+    expect(completeSpy.mock.calls[2][2]).toMatchObject({ modelHint: { model: 'model-agg', maxTokens: 80 } });
+    expect(response.content).toBe('Synthesized MoA reply');
+    expect(response.metadata.model).toBe('model-agg');
+    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
+      'test-channel',
+      'Synthesized MoA reply',
+      'user-1',
+      undefined,
+      undefined,
+      { trustLevel: 'regular' },
+    );
+  });
+
+  it('keeps tool-loop prompt behavior when MoA is disabled', async () => {
+    const config = makeConfig({
+      moaEnabled: false,
+      moaReferenceModels: ['model-ref-a', 'model-ref-b'],
+      moaAggregatorModel: 'model-agg',
+    });
+    const llmProvider = makeMockLLMProvider();
+    const promptCallsBefore = promptSpy.mock.calls.length;
+
+    const agent = new SubstrateAgent(
+      new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+    );
+
+    const response = await agent.handleMessage(makeMessage());
+
+    expect(promptSpy.mock.calls.length).toBe(promptCallsBefore + 1);
+    expect((llmProvider.complete as any).mock.calls.length).toBe(0);
+    expect(response.content).toBe('Mock response from Purrsephone');
+  });
+
+  it('honors moaMaxTokensPerRound by stopping a round when budget is exhausted', async () => {
+    const config = makeConfig({
+      moaEnabled: true,
+      moaReferenceModels: ['model-ref-a', 'model-ref-b'],
+      moaMaxRounds: 3,
+      moaMaxTokensPerRound: 40,
+      moaTimeoutMs: 30_000,
+    });
+    const { provider, completeSpy } = makeScriptedMoaProvider([
+      { purpose: 'reasoning', content: 'Voice one only', model: 'model-ref-a', inputTokens: 30, outputTokens: 20 },
+    ]);
+
+    const agent = new SubstrateAgent(
+      new EventBus(), provider, makeMockSessionManager(), 'test', config,
+    );
+
+    const response = await agent.handleMessage(makeMessage());
+
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    expect(completeSpy.mock.calls[0][2]).toMatchObject({ modelHint: { model: 'model-ref-a', maxTokens: 40 } });
+    expect(response.content).toBe('Voice one only');
+    expect(response.metadata.inputTokens).toBe(30);
+    expect(response.metadata.outputTokens).toBe(20);
   });
 
   it('passes taskKind to prompt composer for internal heartbeat turns', async () => {

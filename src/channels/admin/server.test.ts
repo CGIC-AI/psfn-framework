@@ -1620,6 +1620,15 @@ describe('AdminServer', () => {
       expect(testConfig.primaryMaxTokens).toBe(4096);
       expect(testConfig.sessionMessageLimit).toBe(50);
 
+      const timeline = await request(
+        port,
+        'GET',
+        '/events?actionType=settings_change&decision=all&timeRange=all',
+      );
+      expect(timeline.status).toBe(200);
+      expect(timeline.body).toContain('data-action-type="settings_change"');
+      expect(timeline.body).toContain('Operator updated runtime settings');
+
       // Reset for other tests
       testConfig.primaryMaxTokens = 16384;
       testConfig.sessionMessageLimit = 30;
@@ -2831,6 +2840,16 @@ describe('AdminServer with auth', () => {
     expect(res.status).toBe(200);
     const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
     expectApiPath(payload.api.chatCompletionsUrl, '/v1/chat/completions');
+  });
+
+  it('derives chat bootstrap runtime model from configured chat slot', async () => {
+    const res = await request(port, 'GET', '/api/chat/bootstrap', undefined, {
+      Authorization: 'Bearer test-admin-secret',
+    });
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+    expect(payload.runtime.model.id).toBe(testConfig.modelRoster.chat?.model);
+    expect(payload.runtime.model.provider).toBe(testConfig.modelRoster.chat?.provider);
   });
 
   it('accepts chat debug SSE with correct token', async () => {

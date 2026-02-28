@@ -1,9 +1,27 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listMemories, searchMemories, deleteMemory } from '$lib/api/endpoints/memory';
-  import type { AdminMemoryListData, AdminMemorySearchResult, PurrMemory, AdminMemoryContactSummary } from '$lib/types';
+  import {
+    bulkDeleteMemories,
+    bulkUpdateMemories,
+    deleteMemory,
+    getMemoryLinks,
+    linkMemories,
+    listMemories,
+    searchMemories,
+    unlinkMemories,
+  } from '$lib/api/endpoints/memory';
+  import type {
+    AdminBulkMutationResult,
+    AdminMemoryContactSummary,
+    AdminMemoryLink,
+    AdminMemoryListData,
+    AdminMemorySearchResult,
+    PurrMemory,
+  } from '$lib/types';
 
   const MEMORY_TYPES = ['', 'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational'];
+  const SENSITIVITY_LEVELS = ['', 'public', 'personal', 'intimate', 'confidential'];
+  const MEMORY_LINK_TYPES = ['related', 'supports', 'conflicts', 'sequence', 'causal'];
   const PAGE_SIZE = 20;
 
   let data = $state<AdminMemoryListData | null>(null);
@@ -19,6 +37,15 @@
   let offset = $state(0);
   let expandedId = $state<string | null>(null);
   let supersedeConfirmId = $state<string | null>(null);
+  let selectedIds = $state<string[]>([]);
+  let bulkMemoryType = $state('');
+  let bulkSensitivity = $state('');
+  let linksById = $state<Record<string, AdminMemoryLink[]>>({});
+  let linkTargetById = $state<Record<string, string>>({});
+  let linkTypeById = $state<Record<string, string>>({});
+  let loadingLinksFor = $state<string | null>(null);
+
+  let selectedCount = $derived(selectedIds.length);
 
   let contactsById = $derived<Record<string, AdminMemoryContactSummary>>(
     searchActive && searchResults ? searchResults.contactsById :
@@ -52,6 +79,37 @@
     actionOk = ok;
     actionMessage = msg;
     setTimeout(() => { actionMessage = ''; }, 4000);
+  }
+
+  function isSelected(id: string): boolean {
+    return selectedIds.includes(id);
+  }
+
+  function toggleSelected(id: string): void {
+    if (isSelected(id)) {
+      selectedIds = selectedIds.filter(existing => existing !== id);
+      return;
+    }
+    selectedIds = [...selectedIds, id];
+  }
+
+  function clearSelection(): void {
+    selectedIds = [];
+  }
+
+  function selectVisible(): void {
+    const visible = memories.map(memory => memory.id);
+    selectedIds = [...new Set([...selectedIds, ...visible])];
+  }
+
+  function toggleSelectVisible(): void {
+    const visible = memories.map(memory => memory.id);
+    const allVisibleSelected = visible.length > 0 && visible.every(id => selectedIds.includes(id));
+    if (allVisibleSelected) {
+      selectedIds = selectedIds.filter(id => !visible.includes(id));
+      return;
+    }
+    selectVisible();
   }
 
   async function loadMemories() {
@@ -101,10 +159,114 @@
     try {
       await deleteMemory(id);
       supersedeConfirmId = null;
+      selectedIds = selectedIds.filter(existing => existing !== id);
       flash(true, 'Memory superseded successfully');
       await loadMemories();
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Supersede failed');
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (selectedIds.length === 0) {
+      flash(false, 'Select at least one memory');
+      return;
+    }
+    if (!window.confirm(`Supersede ${selectedIds.length} selected memories?`)) return;
+    try {
+      const result: AdminBulkMutationResult = await bulkDeleteMemories(selectedIds);
+      flash(true, `Superseded ${result.count} memories`);
+      clearSelection();
+      await loadMemories();
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Bulk delete failed');
+    }
+  }
+
+  async function handleBulkUpdate() {
+    if (selectedIds.length === 0) {
+      flash(false, 'Select at least one memory');
+      return;
+    }
+    if (!bulkMemoryType && !bulkSensitivity) {
+      flash(false, 'Choose a memory type and/or sensitivity');
+      return;
+    }
+    try {
+      const result = await bulkUpdateMemories(selectedIds, {
+        ...(bulkMemoryType ? { memoryType: bulkMemoryType } : {}),
+        ...(bulkSensitivity ? { sensitivity: bulkSensitivity } : {}),
+      });
+      flash(true, `Updated ${result.count} memories`);
+      await loadMemories();
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Bulk update failed');
+    }
+  }
+
+  async function ensureLinksLoaded(id: string) {
+    if (linksById[id] !== undefined) return;
+    loadingLinksFor = id;
+    try {
+      const result = await getMemoryLinks(id);
+      linksById = {
+        ...linksById,
+        [id]: result.links ?? [],
+      };
+    } catch {
+      linksById = {
+        ...linksById,
+        [id]: [],
+      };
+    } finally {
+      if (loadingLinksFor === id) {
+        loadingLinksFor = null;
+      }
+    }
+  }
+
+  async function handleLinkMemory(id: string) {
+    const targetId = (linkTargetById[id] ?? '').trim();
+    const linkType = (linkTypeById[id] ?? 'related').trim() || 'related';
+    if (!targetId) {
+      flash(false, 'Target memory ID is required');
+      return;
+    }
+    if (targetId === id) {
+      flash(false, 'Cannot link a memory to itself');
+      return;
+    }
+
+    try {
+      const result = await linkMemories(id, targetId, linkType);
+      if (!result.ok) {
+        flash(false, result.message ?? 'Failed to create link');
+        return;
+      }
+      linkTargetById = { ...linkTargetById, [id]: '' };
+      await ensureLinksLoaded(id);
+      const refreshed = await getMemoryLinks(id);
+      linksById = {
+        ...linksById,
+        [id]: refreshed.links ?? [],
+      };
+      flash(true, 'Memory link created');
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to create link');
+    }
+  }
+
+  async function handleUnlinkMemory(memoryId: string, id1: string, id2: string) {
+    try {
+      await unlinkMemories(id1, id2);
+      const refreshed = await getMemoryLinks(memoryId);
+      linksById = {
+        ...linksById,
+        [memoryId]: refreshed.links ?? [],
+      };
+      flash(true, 'Memory link removed');
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to remove link');
     }
   }
 
@@ -248,6 +410,67 @@
     {/if}
   </div>
 
+  <!-- Bulk/link actions -->
+  <div class="card-garden p-4 space-y-3">
+    <div class="flex items-center justify-between gap-3">
+      <p class="text-shadow-700 text-sm">
+        Selected memories: <span class="font-medium text-shadow-900">{selectedCount}</span>
+      </p>
+      <div class="flex items-center gap-2">
+        <button
+          onclick={toggleSelectVisible}
+          class="px-3 py-1.5 rounded border border-bark-300 text-shadow-700 text-sm hover:bg-bark-200 transition-colors"
+        >
+          Toggle Visible
+        </button>
+        <button
+          onclick={clearSelection}
+          disabled={selectedCount === 0}
+          class="px-3 py-1.5 rounded border border-bark-300 text-shadow-700 text-sm hover:bg-bark-200
+                 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Clear
+        </button>
+      </div>
+    </div>
+    <div class="flex flex-col sm:flex-row gap-2 sm:items-center">
+      <select
+        bind:value={bulkMemoryType}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
+      >
+        <option value="">Set type (optional)</option>
+        {#each MEMORY_TYPES.filter(t => t) as t}
+          <option value={t}>{t}</option>
+        {/each}
+      </select>
+      <select
+        bind:value={bulkSensitivity}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
+      >
+        <option value="">Set sensitivity (optional)</option>
+        {#each SENSITIVITY_LEVELS.filter(t => t) as sensitivity}
+          <option value={sensitivity}>{sensitivity}</option>
+        {/each}
+      </select>
+      <button
+        onclick={handleBulkUpdate}
+        disabled={selectedCount === 0}
+        class="px-3 py-2 rounded-lg bg-moss-500 text-white text-sm font-medium hover:bg-moss-600
+               disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        Apply Bulk Update
+      </button>
+      <button
+        onclick={handleBulkDelete}
+        disabled={selectedCount === 0}
+        class="px-3 py-2 rounded-lg border border-wilt-200 text-wilt-600 text-sm font-medium hover:bg-wilt-50
+               disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        Bulk Supersede
+      </button>
+    </div>
+  </div>
+
   <!-- Error -->
   {#if error}
     <div class="card-garden p-4 border-wilt-200">
@@ -274,6 +497,13 @@
           <!-- Header -->
           <div class="flex items-start justify-between gap-3">
             <div class="flex items-center gap-2 flex-wrap">
+              <input
+                type="checkbox"
+                checked={isSelected(memory.id)}
+                onchange={() => toggleSelected(memory.id)}
+                class="h-4 w-4 rounded border-bark-300 accent-gold-600"
+                title="Select memory for bulk actions"
+              />
               <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={typeBadgeStyle(memory.type ?? 'unknown')}>
                 {memory.type ?? 'unknown'}
               </span>
@@ -294,7 +524,12 @@
               {/if}
             </div>
             <button
-              onclick={() => expandedId = expandedId === memory.id ? null : memory.id}
+              onclick={() => {
+                expandedId = expandedId === memory.id ? null : memory.id;
+                if (expandedId === memory.id) {
+                  void ensureLinksLoaded(memory.id);
+                }
+              }}
               class="text-sm text-gold-700 hover:text-gold-600 transition-colors shrink-0 font-medium"
             >
               {expandedId === memory.id ? 'Collapse' : 'Expand'}
@@ -376,6 +611,63 @@
                   >
                     Supersede
                   </button>
+                {/if}
+              </div>
+
+              <!-- Memory links -->
+              <div class="pt-2 border-t border-bark-200 space-y-2">
+                <p class="text-shadow-700 font-medium text-sm">Memory Links</p>
+                <div class="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    placeholder="Target memory ID"
+                    value={linkTargetById[memory.id] ?? ''}
+                    oninput={(event) => {
+                      const next = (event.currentTarget as HTMLInputElement).value;
+                      linkTargetById = { ...linkTargetById, [memory.id]: next };
+                    }}
+                    class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
+                  />
+                  <select
+                    value={linkTypeById[memory.id] ?? 'related'}
+                    onchange={(event) => {
+                      const next = (event.currentTarget as HTMLSelectElement).value;
+                      linkTypeById = { ...linkTypeById, [memory.id]: next };
+                    }}
+                    class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
+                  >
+                    {#each MEMORY_LINK_TYPES as linkType}
+                      <option value={linkType}>{linkType}</option>
+                    {/each}
+                  </select>
+                  <button
+                    onclick={() => handleLinkMemory(memory.id)}
+                    class="px-3 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 transition-colors"
+                  >
+                    Link
+                  </button>
+                </div>
+
+                {#if loadingLinksFor === memory.id}
+                  <p class="text-shadow-600 text-sm">Loading links...</p>
+                {:else if (linksById[memory.id] ?? []).length === 0}
+                  <p class="text-shadow-600 text-sm">No links for this memory.</p>
+                {:else}
+                  <div class="space-y-1">
+                    {#each linksById[memory.id] ?? [] as link}
+                      <div class="flex items-center justify-between rounded border border-bark-200 bg-bark-50 px-2 py-1 text-sm">
+                        <span class="text-shadow-800">
+                          <code>{link.id1}</code> ↔ <code>{link.id2}</code> ({link.linkType})
+                        </span>
+                        <button
+                          onclick={() => handleUnlinkMemory(memory.id, link.id1, link.id2)}
+                          class="text-wilt-600 hover:text-wilt-700 font-medium"
+                        >
+                          Unlink
+                        </button>
+                      </div>
+                    {/each}
+                  </div>
                 {/if}
               </div>
             </div>

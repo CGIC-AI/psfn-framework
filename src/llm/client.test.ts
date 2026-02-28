@@ -153,3 +153,80 @@ describe('LLMClient import-processing routing policy', () => {
     expect(requestOptions.provider).toEqual({ order: ['parasail', 'openai'] });
   });
 });
+
+describe('LLMClient completion model hints', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: `${provider}:${modelId}`,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('prioritizes explicit model hints for completion routing', async () => {
+    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'hinted response' }],
+      model: 'anthropic/claude-3.7-sonnet',
+      usage: { input: 18, output: 9 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'reasoning',
+      {
+        disableRetry: true,
+        modelHint: { model: 'anthropic/claude-3.7-sonnet' },
+      },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
+    expect(model.id).toBe('anthropic/claude-3.7-sonnet');
+  });
+
+  it('honors max-token model hints even without explicit model overrides', async () => {
+    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'token cap response' }],
+      model: 'z-ai/glm-5',
+      usage: { input: 10, output: 7 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'reasoning',
+      {
+        disableRetry: true,
+        modelHint: { maxTokens: 77 },
+      },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
+    expect(requestOptions.maxTokens).toBe(77);
+  });
+});

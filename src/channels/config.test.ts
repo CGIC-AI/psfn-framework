@@ -118,6 +118,57 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('applies telegram settings overrides ahead of channels.json values', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: false,
+          allowedUsers: ['from-file'],
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {}, {
+        telegram: {
+          enabled: true,
+          allowedUsers: ['111', ' 222 ', '', '111'],
+        },
+      });
+
+      expect(config.telegram.enabled).toBe(true);
+      expect(config.telegram.allowedUsers).toEqual(['111', '222', '111']);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('prioritizes explicit env telegram values over settings overrides', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: true,
+          allowedUsers: ['from-file'],
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        TELEGRAM_ENABLED: 'false',
+        TELEGRAM_ALLOWED_USERS: 'env-1, @env-two',
+      }, {
+        telegram: {
+          enabled: true,
+          allowedUsers: ['from-settings'],
+        },
+      });
+
+      expect(config.telegram.enabled).toBe(false);
+      expect(config.telegram.allowedUsers).toEqual(['env-1', '@env-two']);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('derives webhook path from webhook URL when explicit path is omitted', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {

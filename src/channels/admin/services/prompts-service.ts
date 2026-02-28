@@ -5,7 +5,11 @@ import {
   type LayerType,
   type PromptLayerRole,
 } from '../../../identity/prompt-types.js';
-import type { PromptLayerMetadataUpdate, PromptLayerStore } from '../../../identity/prompt-store.js';
+import type {
+  PromptLayerMetadataUpdate,
+  PromptLayerStore,
+  PromptLayerUpdatePatch,
+} from '../../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../../identity/prompt-registry.js';
 import {
   containsStructuredPromptSections,
@@ -61,11 +65,15 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
   }
 
-  private resolvePromptLayerContent(params: URLSearchParams): { content: string } | { error: string } {
+  private resolvePromptLayerContent(params: URLSearchParams): { content?: string } | { error: string } {
     if (containsStructuredPromptSections(params)) {
       const structured = parseStructuredPromptForm(params);
       if (!structured.ok) return { error: structured.error };
       return { content: structured.content };
+    }
+
+    if (!params.has('content')) {
+      return {};
     }
 
     const content = params.get('content') ?? '';
@@ -75,6 +83,22 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
 
     return { content };
+  }
+
+  private resolvePromptLayerPriority(
+    params: URLSearchParams,
+  ): { priority?: number } | { error: string } {
+    if (!params.has('priority')) {
+      return {};
+    }
+
+    const rawPriority = params.get('priority');
+    const value = rawPriority?.trim() ?? '';
+    if (!/^-?\d+$/.test(value)) {
+      return { error: 'priority must be an integer' };
+    }
+
+    return { priority: parseInt(value, 10) };
   }
 
   resolvePromptLayerMetadata(
@@ -227,12 +251,28 @@ export class AdminPromptsDataService implements AdminPromptsService {
       return { ok: false, message: resolvedMetadata.error };
     }
 
+    const resolvedPriority = this.resolvePromptLayerPriority(params);
+    if ('error' in resolvedPriority) {
+      return { ok: false, message: resolvedPriority.error };
+    }
+
+    const hasMetadata = Object.keys(resolvedMetadata.metadata).length > 0;
+    const hasContent = resolved.content !== undefined;
+    const hasPriority = resolvedPriority.priority !== undefined;
+    if (!hasContent && !hasMetadata && !hasPriority) {
+      return { ok: false, message: 'No prompt update fields provided' };
+    }
+
+    const patch: PromptLayerUpdatePatch = {};
+    if (hasContent) patch.content = resolved.content;
+    if (hasMetadata) patch.metadata = resolvedMetadata.metadata;
+    if (hasPriority) patch.priority = resolvedPriority.priority;
+
     try {
       const layer = promptStore.update(
         layerId,
-        resolved.content,
+        patch,
         'admin',
-        resolvedMetadata.metadata,
         'Admin prompt-layer edit via Garden API',
       );
       this.injectPromptEditSystemNote(
@@ -248,6 +288,63 @@ export class AdminPromptsDataService implements AdminPromptsService {
         ok: true,
         message: `Updated "${layer.name}" to v${layer.version}`,
         layer,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: String(error),
+      };
+    }
+  }
+
+  reorderPromptLayers(body: string): PromptUpdateResult {
+    const promptStore = this.deps.promptStore;
+    if (!promptStore) {
+      return { ok: false, message: 'Prompt store not configured' };
+    }
+
+    const params = this.parseBody(body);
+    const rawLayerIds = params.get('layerIds');
+    if (!rawLayerIds) {
+      return { ok: false, message: 'layerIds is required' };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawLayerIds);
+    } catch {
+      return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
+    }
+    if (!Array.isArray(parsed)) {
+      return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
+    }
+
+    const layerIds: string[] = [];
+    for (const entry of parsed) {
+      if (typeof entry !== 'string' || !entry.trim()) {
+        return { ok: false, message: 'layerIds entries must be non-empty strings' };
+      }
+      layerIds.push(entry.trim());
+    }
+
+    try {
+      const touched = promptStore.reorderByLayerIds(
+        layerIds,
+        'admin',
+        'Admin prompt-layer reorder via Garden API',
+      );
+
+      if (touched.length > 0) {
+        this.injectPromptEditSystemNote(
+          `Admin reordered ${touched.length} prompt layer${touched.length === 1 ? '' : 's'}.`,
+        );
+      }
+
+      return {
+        ok: true,
+        message: touched.length > 0
+          ? `Reordered ${touched.length} prompt layer${touched.length === 1 ? '' : 's'}`
+          : 'Prompt layers already in requested order',
       };
     } catch (error) {
       return {
@@ -363,14 +460,20 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
-    const resolved = this.resolvePromptLayerContent(params);
-    if ('error' in resolved) return null;
-
     const layer = promptStore.getById(layerId);
     if (!layer) return null;
+
+    const layerHistory = promptStore.getLayerHistory(layerId);
+    if (layerHistory.length === 0) return null;
+
+    const previousVersion = layer.version - 1;
+    const previousEntry = layerHistory.find(entry => entry.version === previousVersion)
+      ?? layerHistory[layerHistory.length - 1];
+    if (!previousEntry) return null;
+
     return {
-      oldContent: layer.content,
-      newContent: resolved.content,
+      oldContent: previousEntry.previousContent,
+      newContent: layer.content,
     };
   }
 }

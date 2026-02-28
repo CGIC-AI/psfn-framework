@@ -169,6 +169,32 @@ describe('PromptLayerStore', () => {
       expect(updated.promptOrder).toBeUndefined();
     });
 
+    it('preserves content for metadata-only patch updates', () => {
+      const layer = store.create({ type: 'runtime', name: 'Test', content: 'seed-content' });
+
+      const updated = store.update(layer.id, {
+        metadata: {
+          identifier: 'runtime.main',
+          role: 'assistant',
+          promptOrder: 3,
+        },
+      }, 'admin');
+
+      expect(updated.content).toBe('seed-content');
+      expect(updated.identifier).toBe('runtime.main');
+      expect(updated.role).toBe('assistant');
+      expect(updated.promptOrder).toBe(3);
+    });
+
+    it('preserves content for priority-only patch updates', () => {
+      const layer = store.create({ type: 'runtime', name: 'Test', content: 'seed-content', priority: 9 });
+
+      const updated = store.update(layer.id, { priority: 1 }, 'admin');
+
+      expect(updated.content).toBe('seed-content');
+      expect(updated.priority).toBe(1);
+    });
+
     it('writes history entry', () => {
       const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
       store.update(layer.id, 'v2', 'admin');
@@ -203,6 +229,34 @@ describe('PromptLayerStore', () => {
       const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
       expect(() => store.update(layer.id, 'v2', 'admin', { promptOrder: -1 })).toThrow('promptOrder must be an integer >= 0');
       expect(() => store.update(layer.id, 'v2', 'admin', { promptOrder: 1.5 })).toThrow('promptOrder must be an integer >= 0');
+    });
+  });
+
+  describe('reorderByLayerIds()', () => {
+    it('reorders priorities in one pass without mutating content', () => {
+      const a = store.create({ type: 'runtime', name: 'A', content: 'alpha', priority: 10 });
+      const b = store.create({ type: 'runtime', name: 'B', content: 'bravo', priority: 20 });
+      const c = store.create({ type: 'runtime', name: 'C', content: 'charlie', priority: 30 });
+
+      const touched = store.reorderByLayerIds([c.id, a.id, b.id], 'admin');
+
+      expect(touched).toHaveLength(3);
+      expect(store.getById(c.id)?.priority).toBe(0);
+      expect(store.getById(a.id)?.priority).toBe(1);
+      expect(store.getById(b.id)?.priority).toBe(2);
+      expect(store.getById(a.id)?.content).toBe('alpha');
+      expect(store.getById(b.id)?.content).toBe('bravo');
+      expect(store.getById(c.id)?.content).toBe('charlie');
+    });
+
+    it('requires the full layer-id set exactly once', () => {
+      const a = store.create({ type: 'runtime', name: 'A', content: 'alpha' });
+      const b = store.create({ type: 'runtime', name: 'B', content: 'bravo' });
+
+      expect(() => store.reorderByLayerIds([a.id], 'admin')).toThrow('layerIds must include every prompt layer exactly once');
+      expect(() => store.reorderByLayerIds([a.id, a.id], 'admin')).toThrow('Duplicate layer id');
+      expect(() => store.reorderByLayerIds([a.id, 'missing'], 'admin')).toThrow('Prompt layer not found');
+      expect(store.getById(b.id)?.content).toBe('bravo');
     });
   });
 

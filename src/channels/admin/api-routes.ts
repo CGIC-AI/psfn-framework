@@ -13,7 +13,12 @@ import type {
 } from './services/types.js';
 import type { ScheduledTask, TaskType } from '../../scheduler/types.js';
 import type { SkillSnapshot } from '../../skills/types.js';
-import type { ConfirmationQueueAdminApi } from './types.js';
+import type {
+  AdminAuditActionType,
+  AdminAuditActor,
+  AdminAuditDecision,
+  ConfirmationQueueAdminApi,
+} from './types.js';
 import type { ValuesJournalEntry } from '../../values/store.js';
 import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
 
@@ -143,6 +148,13 @@ export function buildAdminApiRoutes(options: {
   skillsRuntime?: AdminSkillsApi | null;
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
   valuesJournal?: AdminValuesJournalApi | null;
+  appendAuditTimelineEntry?: (
+    actionType: AdminAuditActionType,
+    decision: AdminAuditDecision,
+    narrative: string,
+    details?: Array<string | null | undefined>,
+    actor?: AdminAuditActor,
+  ) => void;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AdminApiRoute[] {
   const {
@@ -157,8 +169,17 @@ export function buildAdminApiRoutes(options: {
     skillsRuntime,
     confirmationQueueApi,
     valuesJournal,
+    appendAuditTimelineEntry,
     withBody,
   } = options;
+
+  const appendIdentityMutationAudit = (
+    decision: AdminAuditDecision,
+    narrative: string,
+    details: Array<string | null | undefined> = [],
+  ): void => {
+    appendAuditTimelineEntry?.('identity_edit', decision, narrative, details, 'operator');
+  };
 
   return [
     {
@@ -470,18 +491,44 @@ export function buildAdminApiRoutes(options: {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
+            appendIdentityMutationAudit(
+              'denied',
+              'Operator identity import via /api/admin/identity/import failed: invalid JSON payload.',
+            );
             sendJson(res, 400, { error: parsed.error });
             return;
           }
+          const payload = parsed.value as Record<string, unknown>;
+          const rawPath = typeof payload.path === 'string' ? payload.path.trim() : '';
           identityService.importIdentityCard(JSON.stringify(parsed.value)).then(
             result => {
               if (!result.ok) {
+                appendIdentityMutationAudit(
+                  'denied',
+                  `Operator identity import via /api/admin/identity/import failed: ${result.message}`,
+                  [rawPath ? `path=${rawPath}` : null],
+                );
                 sendJson(res, 400, { error: result.message });
                 return;
               }
+              appendIdentityMutationAudit(
+                'allowed',
+                'Operator imported identity card via /api/admin/identity/import.',
+                [
+                  rawPath ? `path=${rawPath}` : null,
+                  result.message || null,
+                ],
+              );
               sendJson(res, 201, result);
             },
-            error => sendJson(res, 500, { error: String(error) }),
+            error => {
+              appendIdentityMutationAudit(
+                'denied',
+                `Operator identity import via /api/admin/identity/import failed: ${String(error)}`,
+                [rawPath ? `path=${rawPath}` : null],
+              );
+              sendJson(res, 500, { error: String(error) });
+            },
           );
         });
       },
@@ -493,11 +540,20 @@ export function buildAdminApiRoutes(options: {
         handleMultipartUpload(req, res).then(
           (uploadResult) => {
             if (!uploadResult.ok) {
+              appendIdentityMutationAudit(
+                'denied',
+                `Operator identity upload via /api/admin/identity/upload failed: ${uploadResult.error}`,
+              );
               sendJson(res, uploadResult.status, { error: uploadResult.error });
               return;
             }
             const jsonResult = validateAndParseJsonFile(uploadResult.file);
             if (!jsonResult.ok) {
+              appendIdentityMutationAudit(
+                'denied',
+                `Operator identity upload via /api/admin/identity/upload failed: ${jsonResult.error}`,
+                [`filename=${uploadResult.file.filename}`],
+              );
               sendJson(res, 400, { error: jsonResult.error });
               return;
             }
@@ -505,15 +561,38 @@ export function buildAdminApiRoutes(options: {
             identityService.importIdentityCard(JSON.stringify({ cardData: jsonResult.data })).then(
               result => {
                 if (!result.ok) {
+                  appendIdentityMutationAudit(
+                    'denied',
+                    `Operator identity upload via /api/admin/identity/upload failed: ${result.message}`,
+                    [`filename=${jsonResult.filename}`],
+                  );
                   sendJson(res, 400, { error: result.message });
                   return;
                 }
+                appendIdentityMutationAudit(
+                  'allowed',
+                  'Operator imported identity card via /api/admin/identity/upload.',
+                  [`filename=${jsonResult.filename}`, result.message || null],
+                );
                 sendJson(res, 201, { ...result, filename: jsonResult.filename });
               },
-              error => sendJson(res, 500, { error: String(error) }),
+              error => {
+                appendIdentityMutationAudit(
+                  'denied',
+                  `Operator identity upload via /api/admin/identity/upload failed: ${String(error)}`,
+                  [`filename=${jsonResult.filename}`],
+                );
+                sendJson(res, 500, { error: String(error) });
+              },
             );
           },
-          (error) => sendJson(res, 500, { error: String(error) }),
+          (error) => {
+            appendIdentityMutationAudit(
+              'denied',
+              `Operator identity upload via /api/admin/identity/upload failed: ${String(error)}`,
+            );
+            sendJson(res, 500, { error: String(error) });
+          },
         );
       },
     },
@@ -524,14 +603,35 @@ export function buildAdminApiRoutes(options: {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
+            appendIdentityMutationAudit(
+              'denied',
+              'Operator identity rollback via /api/admin/identity/rollback failed: invalid JSON payload.',
+            );
             sendJson(res, 400, { error: parsed.error });
             return;
           }
+          const payload = parsed.value as Record<string, unknown>;
+          const rawVersion = typeof payload.version === 'number' || typeof payload.version === 'string'
+            ? String(payload.version)
+            : '';
           const result = identityService.rollbackIdentityCard(JSON.stringify(parsed.value));
           if (!result.ok) {
+            appendIdentityMutationAudit(
+              'denied',
+              `Operator identity rollback via /api/admin/identity/rollback failed: ${result.message}`,
+              [rawVersion ? `version=${rawVersion}` : null],
+            );
             sendJson(res, 400, { error: result.message });
             return;
           }
+          appendIdentityMutationAudit(
+            'allowed',
+            'Operator rolled identity card back via /api/admin/identity/rollback.',
+            [
+              rawVersion ? `targetVersion=${rawVersion}` : null,
+              result.snapshot ? `currentVersion=${result.snapshot.version}` : null,
+            ],
+          );
           sendJson(res, 200, result);
         });
       },
@@ -543,14 +643,33 @@ export function buildAdminApiRoutes(options: {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
+            appendIdentityMutationAudit(
+              'denied',
+              'Operator identity field update via /api/admin/identity/fields failed: invalid JSON payload.',
+            );
             sendJson(res, 400, { error: parsed.error });
             return;
           }
+          const payload = parsed.value as Record<string, unknown>;
+          const field = typeof payload.field === 'string' ? payload.field.trim() : '';
           const result = identityService.updateIdentityField(JSON.stringify(parsed.value));
           if (!result.ok) {
+            appendIdentityMutationAudit(
+              'denied',
+              `Operator identity field update via /api/admin/identity/fields failed: ${result.message}`,
+              [field ? `field=${field}` : null],
+            );
             sendJson(res, 400, { error: result.message });
             return;
           }
+          appendIdentityMutationAudit(
+            'allowed',
+            'Operator updated identity field via /api/admin/identity/fields.',
+            [
+              field ? `field=${field}` : null,
+              result.message || null,
+            ],
+          );
           sendJson(res, 200, result);
         });
       },

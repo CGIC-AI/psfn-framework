@@ -12,6 +12,11 @@ import { AdminConfirmationsHandlers } from './confirmations.js';
 import { AdminEventsHandlers } from './events.js';
 import type { AdminChatBootstrapResponse } from '../chat/index.js';
 import type { AdminModelRoomBootstrapResponse } from '../chat/index.js';
+import type {
+  AdminAuditActionType,
+  AdminAuditActor,
+  AdminAuditDecision,
+} from '../types.js';
 import type { AdminChatDebugStreamOptions } from '../types.js';
 
 export type AdminHandlersDeps = ConstructorParameters<typeof LegacyAdminHandlers>[0];
@@ -284,5 +289,15 @@ export class AdminHandlers {
 
   setupSSE(res: ServerResponse): () => void {
     return this.eventsHandlers.setupSSE(res);
+  }
+
+  appendAuditTimelineEntry(
+    actionType: AdminAuditActionType,
+    decision: AdminAuditDecision,
+    narrative: string,
+    details: Array<string | null | undefined> = [],
+    actor?: AdminAuditActor,
+  ): void {
+    this.legacy.appendAuditTimelineEntry(actionType, decision, narrative, details, actor);
   }
 }

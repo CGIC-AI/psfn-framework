@@ -99,6 +99,8 @@ import {
 import { resolveRuntimeSchedulerConfig } from '../../config/scheduler-runtime.js';
 import { setRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
 import { CAPABILITY_TIER_VALUES, isCapabilityTier } from '../../capabilities/tiers.js';
+import { isCapabilityToken } from '../../capabilities/tokens.js';
+import type { CapabilityToken } from '../../capabilities/tokens.js';
 import {
   AdminChatBootstrapService,
   type AdminChatBootstrapResponse,
@@ -2032,9 +2034,22 @@ export class LegacyAdminHandlers {
         const current = loadCapabilityTierConfig(this.config.dataDir, {
           seedDir: process.env.CONFIG_DIR,
         });
+
+        // Parse custom token grants from form checkboxes
+        const customTokens: CapabilityToken[] = [];
+        if (capabilityTierInput === 'custom') {
+          for (const rawToken of params.getAll('customTokens')) {
+            const token = rawToken.trim();
+            if (token && isCapabilityToken(token)) {
+              customTokens.push(token);
+            }
+          }
+        }
+
         const saved = saveCapabilityTierConfig(this.config.dataDir, {
           ...current,
           tier: capabilityTierInput,
+          customTokens: capabilityTierInput === 'custom' ? customTokens : current.customTokens,
         });
         this.config.capabilityTier = saved.tier;
         this.config.runtimeHooks?.refreshCapabilities?.();

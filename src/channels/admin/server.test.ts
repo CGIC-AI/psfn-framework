@@ -1642,6 +1642,59 @@ describe('AdminServer', () => {
       testConfig.capabilityTier = 'nursery';
     });
 
+    it('saves custom capability tokens when tier is custom via settings form POST', async () => {
+      const params = new URLSearchParams();
+      params.append('capabilityTier', 'custom');
+      params.append('customTokens', 'identity.read');
+      params.append('customTokens', 'git.read');
+      params.append('customTokens', 'memory.write');
+      const body = params.toString();
+      const res = await request(port, 'POST', '/api/settings', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Settings saved');
+      expect(testConfig.capabilityTier).toBe('custom');
+
+      const persisted = JSON.parse(
+        readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8'),
+      ) as { tier: string; customTokens: string[] };
+      expect(persisted.tier).toBe('custom');
+      expect(persisted.customTokens).toEqual(['identity.read', 'git.read', 'memory.write']);
+
+      testConfig.capabilityTier = 'nursery';
+    });
+
+    it('preserves existing custom tokens when switching to non-custom tier', async () => {
+      // First set custom tokens
+      const setCustom = new URLSearchParams();
+      setCustom.append('capabilityTier', 'custom');
+      setCustom.append('customTokens', 'git.write');
+      setCustom.append('customTokens', 'repl.execute');
+      await request(port, 'POST', '/api/settings', setCustom.toString(), {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      // Now switch to nursery - custom tokens should be preserved in config
+      const switchToNursery = new URLSearchParams();
+      switchToNursery.append('capabilityTier', 'nursery');
+      const res = await request(port, 'POST', '/api/settings', switchToNursery.toString(), {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Settings saved');
+      expect(testConfig.capabilityTier).toBe('nursery');
+
+      const persisted = JSON.parse(
+        readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8'),
+      ) as { tier: string; customTokens: string[] };
+      expect(persisted.tier).toBe('nursery');
+      // Custom tokens preserved for when user switches back
+      expect(persisted.customTokens).toEqual(['git.write', 'repl.execute']);
+
+      testConfig.capabilityTier = 'nursery';
+    });
+
     it('saves context budget percentages via POST', async () => {
       const body = 'sessionHistoryBudgetPct=9&memoryRetrievalBudgetPct=4';
       const res = await request(port, 'POST', '/api/settings', body, {

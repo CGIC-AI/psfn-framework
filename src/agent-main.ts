@@ -83,6 +83,7 @@ import {
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
+import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { toErrorMessage } from './utils/errors.js';
 
 const log = createComponentLogger('Agent');
@@ -438,10 +439,16 @@ async function main(): Promise<void> {
   log.info('Git self-modification tools enabled');
 
   // Validate tool wiring — catch misconfigured tools before they crash at invocation
-  agentLoop.validateToolWiring('gateway', gateway);
+  agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
   const moduleSummary = await moduleLoader.loadEnabledModules();
   log.info('Runtime modules initialized', moduleSummary);
+  log.info('Re-validating tool wiring after module load', {
+    mode: 'gateway',
+    loadedModules: moduleSummary.loaded,
+    failedModules: moduleSummary.failed,
+  });
+  agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
   // ── API server (optional) ──
 

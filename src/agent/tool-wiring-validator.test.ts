@@ -1,13 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import {
+  DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
   validateToolWiring,
   validateAndLogToolWiring,
   extractGatewayMethods,
   resolveClientMethod,
   type WirableTool,
-  type RuntimeMode,
-  type ValidateToolsOptions,
 } from './tool-wiring-validator.js';
 
 // ── Helpers ──
@@ -128,6 +127,43 @@ describe('validateToolWiring', () => {
     expect(report.invalidTools[0].missingGatewayMethods).toEqual(['git.commit (client: gitCommit)']);
   });
 
+  it('flags gateway-dependent tools with missing required metadata coverage', () => {
+    const tools = [
+      makeTool('repo_commit'),
+    ];
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools,
+      gatewayClientMethods: new Set(['gitCommit']),
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+    expect(report.totalTools).toBe(1);
+    expect(report.validTools).toBe(0);
+    expect(report.invalidTools).toHaveLength(1);
+    expect(report.invalidTools[0].toolName).toBe('repo_commit');
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('git.commit');
+  });
+
+  it('flags gateway-dependent tools with partial metadata coverage', () => {
+    const tools = [
+      makeTool('repo_commit', {
+        requiredGatewayMethods: ['git.status'],
+      }),
+    ];
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools,
+      gatewayClientMethods: new Set(['gitStatus', 'gitCommit']),
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+    expect(report.totalTools).toBe(1);
+    expect(report.validTools).toBe(0);
+    expect(report.invalidTools).toHaveLength(1);
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage).toEqual([
+      'requiredGatewayMethods missing "git.commit"',
+    ]);
+  });
+
   it('skips gateway method checks in single-process mode', () => {
     const tools = [
       makeTool('repo_status', {
@@ -237,6 +273,19 @@ describe('validateAndLogToolWiring', () => {
     });
     expect(disabled).toEqual(['bad_tool']);
   });
+
+  it('disables tools with missing gateway metadata coverage', () => {
+    const tools = [
+      makeTool('repo_status'),
+    ];
+    const disabled = validateAndLogToolWiring({
+      mode: 'gateway',
+      tools,
+      gatewayClientMethods: new Set(['gitStatus']),
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+    expect(disabled).toEqual(['repo_status']);
+  });
 });
 
 describe('production tools validation', () => {
@@ -293,6 +342,7 @@ describe('production tools validation', () => {
       mode: 'gateway',
       tools: gitTools,
       gatewayClientMethods: fullClientMethods,
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
     });
     expect(report.invalidTools).toHaveLength(0);
   });

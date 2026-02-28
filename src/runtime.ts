@@ -515,6 +515,12 @@ export class SubstrateRuntime implements Lifecycle {
 
     const moduleSummary = await this.moduleLoader.loadEnabledModules();
     log.info('Runtime modules initialized', moduleSummary);
+    log.info('Re-validating tool wiring after module load', {
+      mode: 'single',
+      loadedModules: moduleSummary.loaded,
+      failedModules: moduleSummary.failed,
+    });
+    this.agentLoop.validateToolWiring('single');
 
     const channelsConfig = loadRuntimeChannelsConfig(
       this.config.dataDir,

@@ -56,6 +56,7 @@ import { toErrorMessage } from '../utils/errors.js';
 import {
   validateAndLogToolWiring,
   extractGatewayMethods,
+  type GatewayToolMetadataCoverage,
   type RuntimeMode,
   type ValidateToolsOptions,
 } from './tool-wiring-validator.js';
@@ -373,12 +374,19 @@ export class SubstrateAgent {
    * @param mode - 'single' for single-process mode, 'gateway' for agent/gateway split
    * @param gatewayClient - The gateway client object (gateway mode only), used to
    *   extract available RPC methods via prototype inspection
+   * @param requiredGatewayMetadataCoverage - optional expected metadata coverage map
+   *   for known gateway-dependent tools
    */
-  validateToolWiring(mode: RuntimeMode, gatewayClient?: object): void {
+  validateToolWiring(
+    mode: RuntimeMode,
+    gatewayClient?: object,
+    requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage,
+  ): void {
     const allTools = [...this.coreTools, ...this.extendedTools];
     const options: ValidateToolsOptions = {
       mode,
       tools: allTools,
+      requiredGatewayMetadataCoverage,
     };
 
     if (mode === 'gateway' && gatewayClient) {
@@ -391,6 +399,9 @@ export class SubstrateAgent {
     const disabledSet = new Set(disabledNames);
     this.coreTools = this.coreTools.filter(t => !disabledSet.has(t.name));
     this.extendedTools = this.extendedTools.filter(t => !disabledSet.has(t.name));
+    for (const disabledName of disabledSet) {
+      this.loadedExtended.delete(disabledName);
+    }
   }
 
   setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {

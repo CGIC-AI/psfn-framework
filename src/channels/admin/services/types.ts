@@ -9,7 +9,7 @@ import type {
 } from '../../../identity/prompt-registry.js';
 import type { PromptHistoryEntry, PromptLayer } from '../../../identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
-import type { ContactProfileArtifact } from '../../../memory/store.js';
+import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
 import type { SessionEntry } from '../../../session/types.js';
 import type { SubstrateConfig } from '../../../types.js';
@@ -76,11 +76,28 @@ export interface MemoryMutationResult {
   message?: string;
 }
 
+export interface AdminMemoryLinkResult {
+  ok: boolean;
+  link?: MemoryLink;
+  message?: string;
+}
+
+export interface AdminBulkMutationResult {
+  ok: boolean;
+  count: number;
+  message?: string;
+}
+
 export interface AdminMemoryService {
   listMemories(params?: URLSearchParams): AdminMemoryListData;
   getMemoryDetail(id: string): AdminMemoryDetailData | null;
   searchMemories(query: string): Promise<AdminMemorySearchResult>;
   supersedeMemory(id: string): MemoryMutationResult;
+  linkMemories(id1: string, id2: string, linkType?: string): AdminMemoryLinkResult;
+  unlinkMemories(id1: string, id2: string): MemoryMutationResult;
+  getMemoryLinks(id: string): MemoryLink[];
+  bulkDelete(ids: string[]): AdminBulkMutationResult;
+  bulkUpdate(ids: string[], fields: { memoryType?: string; sensitivity?: string }): AdminBulkMutationResult;
 }
 
 export interface AdminSessionListData {

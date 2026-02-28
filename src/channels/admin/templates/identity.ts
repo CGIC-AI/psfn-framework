@@ -564,6 +564,63 @@ export function identityPage(card: CharacterCardV2, config: SubstrateConfig, opt
     </div>
 
     <div class="card">
+      <h3 style="margin-bottom:0.75rem">Upload Character Card</h3>
+      <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
+        Upload a character card JSON file directly from your browser. Max size: 2MB.
+      </p>
+      <form id="identity-upload-form" enctype="multipart/form-data" style="margin:0">
+        <div class="form-group">
+          <label for="identity-upload-file">Character Card File</label>
+          <input id="identity-upload-file" name="file" type="file" accept=".json" required>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn" id="identity-upload-btn">Upload &amp; Import</button>
+          <span id="identity-upload-result"></span>
+        </div>
+      </form>
+      <script>
+        (function() {
+          var form = document.getElementById('identity-upload-form');
+          var resultSpan = document.getElementById('identity-upload-result');
+          form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var fileInput = document.getElementById('identity-upload-file');
+            if (!fileInput.files || !fileInput.files.length) {
+              resultSpan.innerHTML = '<span class="form-error">Please select a file</span>';
+              return;
+            }
+            var formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            var btn = document.getElementById('identity-upload-btn');
+            btn.disabled = true;
+            btn.textContent = 'Uploading...';
+            resultSpan.innerHTML = '';
+            fetch('/api/admin/identity/upload', {
+              method: 'POST',
+              body: formData
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+              if (data.error) {
+                resultSpan.innerHTML = '<span class="form-error">' + data.error + '</span>';
+              } else {
+                resultSpan.innerHTML = '<span class="form-success">' + (data.message || 'Upload successful') + '</span>';
+                fileInput.value = '';
+              }
+            })
+            .catch(function(err) {
+              resultSpan.innerHTML = '<span class="form-error">Upload failed: ' + err.message + '</span>';
+            })
+            .finally(function() {
+              btn.disabled = false;
+              btn.textContent = 'Upload & Import';
+            });
+          });
+        })();
+      </script>
+    </div>
+
+    <div class="card">
       <h3 style="margin-bottom:0.75rem">Staged Intake (Card + L0 + L2)</h3>
       <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
         Stage card, chat, lorebook, and memory sources. Review proposed identity/L0/L2 writes before approval.

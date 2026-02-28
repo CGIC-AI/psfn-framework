@@ -14,6 +14,18 @@ interface MemoryListPaginationView {
   hasNext: boolean;
 }
 
+const MEMORY_TYPE_OPTIONS = [
+  'episodic',
+  'semantic',
+  'emotional',
+  'procedural',
+  'boundary',
+  'reflection',
+  'relational',
+] as const;
+
+const MEMORY_SENSITIVITY_OPTIONS = ['public', 'personal', 'intimate', 'confidential'] as const;
+
 function isRelationalMemory(m: PurrMemory): boolean {
   return m.type === 'relational' || m.type === 'emotional';
 }
@@ -88,6 +100,404 @@ function memoryProvenanceDetail(m: PurrMemory): string {
   return segments.map(segment => escapeHtml(segment)).join(' &rarr; ');
 }
 
+function renderOptionList(options: readonly string[]): string {
+  return options.map(option => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('');
+}
+
+function memoryActionScript(): string {
+  return `
+    <script>
+      (() => {
+        const root = document.getElementById('memory-admin-actions');
+        if (!root) return;
+
+        const feedbackEl = root.querySelector('[data-memory-feedback]');
+        const selectedCountEl = root.querySelector('[data-memory-selected-count]');
+        const bulkDeleteBtn = root.querySelector('[data-memory-bulk-delete]');
+        const bulkUpdateBtn = root.querySelector('[data-memory-bulk-update]');
+        const bulkTypeSelect = root.querySelector('[data-memory-bulk-type]');
+        const bulkSensitivitySelect = root.querySelector('[data-memory-bulk-sensitivity]');
+        const linkForm = root.querySelector('[data-memory-link-form]');
+        const linkId1Input = root.querySelector('[data-memory-link-id1]');
+        const linkId2Input = root.querySelector('[data-memory-link-id2]');
+        const linkTypeInput = root.querySelector('[data-memory-link-type]');
+        const useSelectedPairBtn = root.querySelector('[data-memory-use-selected-pair]');
+        const linksLoadForm = root.querySelector('[data-memory-links-load-form]');
+        const linksIdInput = root.querySelector('[data-memory-links-id]');
+        const linksResultsEl = root.querySelector('[data-memory-links-results]');
+        const selectAllCheckbox = document.querySelector('[data-memory-select-all]');
+        let activeLinksMemoryId = '';
+
+        const memoryCheckboxes = () => Array.from(document.querySelectorAll('[data-memory-select]'));
+        const selectedMemoryIds = () =>
+          Array.from(document.querySelectorAll('[data-memory-select]:checked'))
+            .map((checkbox) => checkbox.value.trim())
+            .filter(Boolean);
+
+        const setFeedback = (state, message) => {
+          if (!feedbackEl) return;
+          feedbackEl.textContent = message;
+          feedbackEl.classList.remove('form-success', 'form-error', 'crm-notes');
+          if (state === 'success') feedbackEl.classList.add('form-success');
+          else if (state === 'error') feedbackEl.classList.add('form-error');
+          else feedbackEl.classList.add('crm-notes');
+        };
+
+        const syncSelectionState = () => {
+          const selectedIds = selectedMemoryIds();
+          const selectedCount = selectedIds.length;
+
+          if (selectedCountEl) {
+            selectedCountEl.textContent = selectedCount + ' selected';
+          }
+          if (bulkDeleteBtn) {
+            bulkDeleteBtn.disabled = selectedCount === 0;
+          }
+          if (bulkUpdateBtn) {
+            bulkUpdateBtn.disabled = selectedCount === 0;
+          }
+          if (useSelectedPairBtn) {
+            useSelectedPairBtn.disabled = selectedCount !== 2;
+          }
+          if (selectAllCheckbox) {
+            const checkboxes = memoryCheckboxes();
+            selectAllCheckbox.checked = checkboxes.length > 0 && selectedCount === checkboxes.length;
+            selectAllCheckbox.indeterminate = selectedCount > 0 && selectedCount < checkboxes.length;
+          }
+        };
+
+        const requestJson = async (url, method, body) => {
+          const response = await fetch(url, {
+            method,
+            credentials: 'same-origin',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: body ? JSON.stringify(body) : undefined,
+          });
+
+          const raw = await response.text();
+          let payload = {};
+          if (raw) {
+            try {
+              payload = JSON.parse(raw);
+            } catch {
+              throw new Error('Received a non-JSON response from the admin API.');
+            }
+          }
+
+          if (!response.ok) {
+            const message = payload && typeof payload.error === 'string'
+              ? payload.error
+              : 'Request failed with status ' + response.status;
+            throw new Error(message);
+          }
+
+          return payload;
+        };
+
+        const escapeForHtml = (value) => String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+
+        const renderLinks = (memoryId, links) => {
+          if (!linksResultsEl) return;
+
+          if (!Array.isArray(links) || links.length === 0) {
+            linksResultsEl.innerHTML =
+              '<div class="crm-notes">No links found for <code>' + escapeForHtml(memoryId) + '</code>.</div>';
+            return;
+          }
+
+          const rows = links.map((entry) => {
+            const id1 = typeof entry.id1 === 'string' ? entry.id1 : '';
+            const id2 = typeof entry.id2 === 'string' ? entry.id2 : '';
+            const linkType = typeof entry.linkType === 'string' && entry.linkType.trim()
+              ? entry.linkType.trim()
+              : 'related';
+            const peerId = id1 === memoryId ? id2 : id1;
+            const createdAt = Number.isFinite(entry.createdAt)
+              ? new Date(Number(entry.createdAt)).toLocaleString()
+              : 'unknown';
+
+            return '<tr>'
+              + '<td><code>' + escapeForHtml(peerId || '(unknown)') + '</code></td>'
+              + '<td>' + escapeForHtml(linkType) + '</td>'
+              + '<td>' + escapeForHtml(createdAt) + '</td>'
+              + '<td><button type="button" class="btn btn-danger" data-memory-unlink data-id1="' + escapeForHtml(id1) + '" data-id2="' + escapeForHtml(id2) + '" style="font-size:0.75rem;padding:0.25rem 0.5rem">unlink</button></td>'
+              + '</tr>';
+          }).join('');
+
+          linksResultsEl.innerHTML =
+            '<table><thead><tr><th>Linked memory</th><th>Link type</th><th>Created</th><th></th></tr></thead><tbody>'
+            + rows
+            + '</tbody></table>';
+        };
+
+        const loadLinks = async (memoryId) => {
+          const normalizedId = (memoryId ?? '').trim();
+          if (!normalizedId) {
+            setFeedback('error', 'Enter a memory ID before loading links.');
+            return;
+          }
+          activeLinksMemoryId = normalizedId;
+          if (linksIdInput) linksIdInput.value = normalizedId;
+
+          setFeedback('info', 'Loading links for ' + normalizedId + '...');
+          const payload = await requestJson('/api/admin/memory/' + encodeURIComponent(normalizedId) + '/links', 'GET');
+          const links = Array.isArray(payload.links) ? payload.links : [];
+          renderLinks(normalizedId, links);
+          if (links.length > 0) {
+            setFeedback('success', 'Loaded ' + links.length + ' link(s) for ' + normalizedId + '.');
+          } else {
+            setFeedback('info', 'No links found for ' + normalizedId + '.');
+          }
+        };
+
+        if (selectAllCheckbox) {
+          selectAllCheckbox.addEventListener('change', () => {
+            const checked = Boolean(selectAllCheckbox.checked);
+            for (const checkbox of memoryCheckboxes()) {
+              checkbox.checked = checked;
+            }
+            syncSelectionState();
+          });
+        }
+
+        document.addEventListener('change', (event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          if (!target.matches('[data-memory-select]')) return;
+          syncSelectionState();
+        });
+
+        document.body.addEventListener('htmx:afterSwap', () => {
+          syncSelectionState();
+        });
+
+        if (bulkDeleteBtn instanceof HTMLButtonElement) {
+          bulkDeleteBtn.addEventListener('click', async () => {
+            const ids = selectedMemoryIds();
+            if (!ids.length) {
+              setFeedback('error', 'Select at least one memory before running bulk delete.');
+              return;
+            }
+            if (!window.confirm('Delete ' + ids.length + ' selected memory item(s)?')) return;
+
+            bulkDeleteBtn.disabled = true;
+            try {
+              const payload = await requestJson('/api/admin/memory/bulk-delete', 'POST', { ids });
+              const count = typeof payload.count === 'number' ? payload.count : 0;
+              setFeedback('success', 'Deleted ' + count + ' memory item(s). Refreshing list...');
+              window.setTimeout(() => window.location.reload(), 650);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              setFeedback('error', 'Bulk delete failed: ' + message);
+            } finally {
+              syncSelectionState();
+            }
+          });
+        }
+
+        if (bulkUpdateBtn instanceof HTMLButtonElement) {
+          bulkUpdateBtn.addEventListener('click', async () => {
+            const ids = selectedMemoryIds();
+            if (!ids.length) {
+              setFeedback('error', 'Select at least one memory before running bulk update.');
+              return;
+            }
+
+            const fields = {};
+            const memoryType = bulkTypeSelect instanceof HTMLSelectElement ? bulkTypeSelect.value.trim() : '';
+            const sensitivity = bulkSensitivitySelect instanceof HTMLSelectElement ? bulkSensitivitySelect.value.trim() : '';
+            if (memoryType) fields.memoryType = memoryType;
+            if (sensitivity) fields.sensitivity = sensitivity;
+
+            if (Object.keys(fields).length === 0) {
+              setFeedback('error', 'Choose a memory type and/or sensitivity value to apply.');
+              return;
+            }
+
+            bulkUpdateBtn.disabled = true;
+            try {
+              const payload = await requestJson('/api/admin/memory/bulk-update', 'POST', { ids, fields });
+              const count = typeof payload.count === 'number' ? payload.count : 0;
+              setFeedback('success', 'Updated ' + count + ' memory item(s). Refreshing list...');
+              window.setTimeout(() => window.location.reload(), 650);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              setFeedback('error', 'Bulk update failed: ' + message);
+            } finally {
+              syncSelectionState();
+            }
+          });
+        }
+
+        if (useSelectedPairBtn instanceof HTMLButtonElement) {
+          useSelectedPairBtn.addEventListener('click', () => {
+            const ids = selectedMemoryIds();
+            if (ids.length !== 2) {
+              setFeedback('error', 'Select exactly two memories to prefill the link form.');
+              return;
+            }
+            if (linkId1Input instanceof HTMLInputElement) linkId1Input.value = ids[0];
+            if (linkId2Input instanceof HTMLInputElement) linkId2Input.value = ids[1];
+            setFeedback('info', 'Prefilled link form from selected rows.');
+          });
+        }
+
+        if (linkForm instanceof HTMLFormElement) {
+          linkForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const id1 = linkId1Input instanceof HTMLInputElement ? linkId1Input.value.trim() : '';
+            const id2 = linkId2Input instanceof HTMLInputElement ? linkId2Input.value.trim() : '';
+            const linkType = linkTypeInput instanceof HTMLInputElement ? linkTypeInput.value.trim() : '';
+
+            if (!id1 || !id2) {
+              setFeedback('error', 'Both memory IDs are required to create a link.');
+              return;
+            }
+            if (id1 === id2) {
+              setFeedback('error', 'Linking requires two different memory IDs.');
+              return;
+            }
+
+            try {
+              const payload = {
+                id1,
+                id2,
+              };
+              if (linkType) payload.linkType = linkType;
+              const result = await requestJson('/api/admin/memory/link', 'POST', payload);
+              const createdLinkType = result && result.link && typeof result.link.linkType === 'string'
+                ? result.link.linkType
+                : (linkType || 'related');
+              setFeedback('success', 'Linked ' + id1 + ' and ' + id2 + ' (type: ' + createdLinkType + ').');
+              if (activeLinksMemoryId && (activeLinksMemoryId === id1 || activeLinksMemoryId === id2)) {
+                await loadLinks(activeLinksMemoryId);
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              setFeedback('error', 'Link creation failed: ' + message);
+            }
+          });
+        }
+
+        if (linksLoadForm instanceof HTMLFormElement) {
+          linksLoadForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const memoryId = linksIdInput instanceof HTMLInputElement ? linksIdInput.value : '';
+            loadLinks(memoryId).catch((error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              setFeedback('error', 'Unable to load links: ' + message);
+            });
+          });
+        }
+
+        if (linksResultsEl) {
+          linksResultsEl.addEventListener('click', (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+            const button = target.closest('[data-memory-unlink]');
+            if (!(button instanceof HTMLButtonElement)) return;
+
+            const id1 = button.getAttribute('data-id1') ?? '';
+            const id2 = button.getAttribute('data-id2') ?? '';
+            if (!id1 || !id2) {
+              setFeedback('error', 'Unlink failed: missing memory IDs in the selected link row.');
+              return;
+            }
+            if (!window.confirm('Unlink ' + id1 + ' and ' + id2 + '?')) return;
+
+            button.disabled = true;
+            requestJson('/api/admin/memory/link', 'DELETE', { id1, id2 }).then(
+              () => {
+                setFeedback('success', 'Unlinked ' + id1 + ' and ' + id2 + '.');
+                if (activeLinksMemoryId) {
+                  return loadLinks(activeLinksMemoryId);
+                }
+                return undefined;
+              },
+              (error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                setFeedback('error', 'Unlink failed: ' + message);
+              },
+            ).finally(() => {
+              button.disabled = false;
+            });
+          });
+        }
+
+        syncSelectionState();
+      })();
+    </script>
+  `;
+}
+
+function memoryActionPanel(): string {
+  return `
+    <div class="card" id="memory-admin-actions">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+        <strong>Memory Actions</strong>
+        <span class="crm-notes" data-memory-selected-count>0 selected</span>
+      </div>
+
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:0.9rem">
+        <button type="button" class="btn btn-danger" data-memory-bulk-delete disabled>Delete selected</button>
+        <label style="display:flex;flex-direction:column;gap:0.25rem;font-size:0.8rem;color:var(--text-muted)">
+          Set type
+          <select data-memory-bulk-type style="min-width:9rem;padding:0.45rem;border:1px solid var(--border);border-radius:6px;background:#fff">
+            <option value="">(no change)</option>
+            ${renderOptionList(MEMORY_TYPE_OPTIONS)}
+          </select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:0.25rem;font-size:0.8rem;color:var(--text-muted)">
+          Set sensitivity
+          <select data-memory-bulk-sensitivity style="min-width:9rem;padding:0.45rem;border:1px solid var(--border);border-radius:6px;background:#fff">
+            <option value="">(no change)</option>
+            ${renderOptionList(MEMORY_SENSITIVITY_OPTIONS)}
+          </select>
+        </label>
+        <button type="button" class="btn" data-memory-bulk-update disabled>Apply update</button>
+      </div>
+
+      <form data-memory-link-form style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:0.9rem">
+        <label style="display:flex;flex-direction:column;gap:0.25rem;font-size:0.8rem;color:var(--text-muted)">
+          Memory ID 1
+          <input data-memory-link-id1 type="text" placeholder="mem-1" style="min-width:13rem;padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:6px">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:0.25rem;font-size:0.8rem;color:var(--text-muted)">
+          Memory ID 2
+          <input data-memory-link-id2 type="text" placeholder="mem-2" style="min-width:13rem;padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:6px">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:0.25rem;font-size:0.8rem;color:var(--text-muted)">
+          Link type
+          <input data-memory-link-type type="text" placeholder="related" style="min-width:8rem;padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:6px">
+        </label>
+        <button type="button" class="btn" data-memory-use-selected-pair disabled>Use selected pair</button>
+        <button type="submit" class="btn">Create link</button>
+      </form>
+
+      <form data-memory-links-load-form style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:0.75rem">
+        <label style="display:flex;flex-direction:column;gap:0.25rem;font-size:0.8rem;color:var(--text-muted)">
+          Inspect links for memory
+          <input data-memory-links-id type="text" placeholder="memory-id" style="min-width:13rem;padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:6px">
+        </label>
+        <button type="submit" class="btn">Load links</button>
+      </form>
+
+      <div class="crm-notes" data-memory-feedback role="status" aria-live="polite">
+        Select memories to enable bulk actions, or enter IDs to manage links.
+      </div>
+      <div data-memory-links-results style="margin-top:0.6rem"></div>
+    </div>
+    ${memoryActionScript()}
+  `;
+}
+
 export function memoryListPage(
   memories: PurrMemory[],
   contactById: ReadonlyMap<string, MemoryContactView> = new Map(),
@@ -135,10 +545,17 @@ export function memoryListPage(
   return `
     ${searchForm}
     ${paginationControls}
+    ${memoryActionPanel()}
     <div class="card">
       <table>
         <thead><tr>
-          <th>Type</th><th>Text</th><th>Contact</th><th>Salience</th><th>Importance</th><th>Privacy</th><th>Extracted</th><th></th>
+          <th>
+            <label style="display:flex;gap:0.45rem;align-items:center">
+              <input type="checkbox" data-memory-select-all>
+              <span>Type</span>
+            </label>
+          </th>
+          <th>Text</th><th>Contact</th><th>Salience</th><th>Importance</th><th>Privacy</th><th>Extracted</th><th></th>
         </tr></thead>
         <tbody id="memory-results">${tableBody}</tbody>
       </table>
@@ -148,8 +565,13 @@ export function memoryListPage(
 export function memoryRow(m: PurrMemory, linkedContact?: MemoryContactView): string {
   const date = new Date(m.extractedAt).toLocaleDateString();
   const truncText = m.text.length > 120 ? escapeHtml(m.text.slice(0, 120)) + '...' : escapeHtml(m.text);
-  return `<tr data-memory-type="${m.type}">
-    <td><span class="badge badge-${m.type}">${m.type}</span></td>
+  return `<tr data-memory-type="${m.type}" data-memory-id="${escapeHtml(m.id)}">
+    <td>
+      <label style="display:flex;gap:0.45rem;align-items:center">
+        <input type="checkbox" data-memory-select value="${escapeHtml(m.id)}" aria-label="Select memory ${escapeHtml(m.id)}">
+        <span class="badge badge-${m.type}">${m.type}</span>
+      </label>
+    </td>
     <td><a href="/memory/${encodeURIComponent(m.id)}">${truncText}</a></td>
     <td>${memoryContactCell(m, linkedContact)}</td>
     <td>${m.salience.toFixed(2)}</td>

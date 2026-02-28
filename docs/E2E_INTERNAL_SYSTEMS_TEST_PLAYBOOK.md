@@ -42,6 +42,12 @@ Reason: `module_*`, `repo_*`, `crawler_fetch`, `web_research` in REPL require ga
 - Run the smoke harness once before manual Voice PE checks:
   - `npx tsx src/e2e-wyoming-roundtrip.ts`
 
+7. For Discord DM + voice deployments:
+- Run Discord readiness smoke in safe mode:
+  - `npm run smoke:discord:dm-voice -- --dry-run --strict`
+- If Discord credentials/channel IDs are available, run live read-only checks:
+  - `npm run smoke:discord:dm-voice -- --live --strict --dm-channel-id <id> --voice-channel-id <id>`
+
 ## Logging Requirements
 
 Capture all of the following:

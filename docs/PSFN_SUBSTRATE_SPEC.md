@@ -85,6 +85,18 @@ For API websocket voice runtime (`src/channels/api/voice-websocket-runtime.ts`),
 
 Discord voice runtime supports the same providers with connector fallback ordering, but requires explicit Echo URL/voice config to instantiate the Echo connector in that path.
 
+### Discord DM + Voice readiness contract
+
+- Runtime readiness is validated by `scripts/discord-dm-voice-smoke.mjs`.
+- Opus decoder strategy is explicit:
+  - Preferred backend: `@discordjs/opus` (native, lower CPU usage).
+  - Fallback backend: `opusscript` (portable JS fallback, higher CPU usage).
+  - Both are declared in `package.json` as optional dependencies so deployments can install whichever backend is feasible for the host environment.
+- Voice receive is guarded by runtime preflight in `src/channels/discord/voice.ts`:
+  - If Opus decoding is unavailable, Discord voice receive is disabled intentionally (DM/text routing remains available).
+  - Missing required voice env vars also disable voice receive rather than hard-crashing startup.
+- Full prerequisites, smoke usage, and troubleshooting are documented in `docs/DISCORD_DM_VOICE_READINESS.md`.
+
 ## Persistence Model
 
 - Sessions (`L0`): append-only JSONL per channel (`data/sessions/`)
@@ -136,6 +148,7 @@ Use these to validate current runtime health:
 npm test
 npm run lint
 npm run build
+npm run smoke:discord:dm-voice -- --dry-run --strict
 ```
 
 For deployed stacks, also validate API/admin reachability and any channel-specific smoke tests used by your environment.

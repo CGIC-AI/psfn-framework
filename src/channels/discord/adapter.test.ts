@@ -369,25 +369,126 @@ function makeInteractiveTextChannel() {
 function makeDiscordIncomingMessage(
   channelId: string,
   channel: any,
-  overrides?: { id?: string; content?: string },
+  overrides?: {
+    id?: string;
+    content?: string;
+    guildId?: string | null;
+    mentioned?: boolean;
+    authorId?: string;
+    authorDisplayName?: string;
+    bot?: boolean;
+  },
 ) {
+  const guildId = overrides?.guildId ?? null;
+  const mentioned = overrides?.mentioned ?? false;
+
   return {
     id: overrides?.id ?? 'msg-1',
     channelId,
     channel,
-    guild: null,
+    guild: guildId ? { id: guildId } : null,
     content: overrides?.content ?? 'hello',
     createdAt: new Date(),
     author: {
-      id: 'user-1',
-      bot: false,
+      id: overrides?.authorId ?? 'user-1',
+      bot: overrides?.bot ?? false,
       username: 'User',
-      displayName: 'User',
+      displayName: overrides?.authorDisplayName ?? 'User',
     },
-    mentions: { has: () => false },
+    mentions: { has: () => mentioned },
     reply: vi.fn(async () => {}),
   };
 }
+
+describe('DiscordAdapter DM routing', () => {
+  beforeEach(() => {
+    discordMock.channelsById.clear();
+    discordMock.createdClients.length = 0;
+    voiceMock.init.mockReset();
+    voiceMock.stop.mockReset();
+    voiceMock.stop.mockResolvedValue(undefined);
+  });
+
+  it('routes DMs without requiring a bot mention', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-channel';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'dm reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-1',
+        content: 'hello from dm',
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      channelId,
+      isDirectMessage: true,
+      content: 'hello from dm',
+    }));
+    expect(interactive.sent).toContain('dm reply');
+  });
+
+  it('requires mentions in guild channels and strips bot mention text', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'guild-channel';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'guild reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-1',
+        guildId: 'guild-1',
+        content: 'hello without mention',
+        mentioned: false,
+      }),
+    );
+    expect(handler).not.toHaveBeenCalled();
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-2',
+        guildId: 'guild-1',
+        content: '<@!bot-1> hello with mention',
+        mentioned: true,
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      channelId,
+      isDirectMessage: false,
+      content: 'hello with mention',
+    }));
+    expect(interactive.sent).toContain('guild reply');
+  });
+});
 
 describe('DiscordAdapter status visibility', () => {
   beforeEach(() => {

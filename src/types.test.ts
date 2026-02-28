@@ -73,6 +73,19 @@ describe('loadConfig voice DAVE options', () => {
     const disabled = loadConfig();
     expect(disabled.discordRespondAll).toBe(false);
   });
+
+  it('does not hardcode discord bot id when DISCORD_BOT_ID is unset', () => {
+    delete process.env.DISCORD_BOT_ID;
+    const config = loadConfig();
+    expect(config.discordBotId).toBe('');
+  });
+
+  it('accepts TELEGRAM_ALLOWED_USERS as alias for TELEGRAM_AUTHORIZED_USERS', () => {
+    delete process.env.TELEGRAM_AUTHORIZED_USERS;
+    process.env.TELEGRAM_ALLOWED_USERS = '5635268079,@vega';
+    const config = loadConfig();
+    expect(config.telegramAuthorizedUsers).toEqual(['5635268079', '@vega']);
+  });
 });
 
 describe('loadConfig gateway TLS options', () => {

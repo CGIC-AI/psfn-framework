@@ -298,6 +298,7 @@ export class DiscordVoiceRuntime {
   private decryptRecoveryAttempts: number[] = [];
   private decryptRecoveryInFlight = false;
   private opusAvailable = true;
+  private receiveEnabled = true;
 
   /** Per-user stream error counters for isolation and graceful teardown. */
   private streamErrorCounts = new Map<string, number>();
@@ -334,6 +335,7 @@ export class DiscordVoiceRuntime {
     // Run preflight to check Opus availability and config completeness
     const preflight = voicePreflight(config);
     this.opusAvailable = preflight.opusAvailable;
+    this.receiveEnabled = preflight.opusAvailable;
 
     if (!this.targetGuildId || !this.targetUserId || !deepgramApiKey) {
       this.enabled = false;
@@ -351,14 +353,11 @@ export class DiscordVoiceRuntime {
     }
 
     if (!preflight.opusAvailable) {
-      this.enabled = false;
-      this.ttsConnectors = [];
       log.error(
         'Voice enabled but no Opus decoder available. ' +
-        'Voice receive pipeline disabled to prevent crashes. ' +
+        'Voice receive pipeline disabled to prevent crashes; voice join/output remains enabled. ' +
         'Install one of: npm install @discordjs/opus (recommended), npm install opusscript (JS fallback)',
       );
-      return;
     }
 
     // Apply default ElevenLabs voice ID when none is explicitly configured
@@ -396,6 +395,7 @@ export class DiscordVoiceRuntime {
     log.info('Discord voice runtime enabled', {
       guildId: this.targetGuildId,
       userId: this.targetUserId,
+      receiveEnabled: this.receiveEnabled,
     });
 
     const isReady = typeof (this.client as { isReady?: () => boolean }).isReady === 'function'
@@ -536,21 +536,25 @@ export class DiscordVoiceRuntime {
     this.resetDecryptFailureTracking(generation);
     this.resetStreamErrorCounts();
 
-    this.speakingListener = (userId: string) => {
-      if (userId !== this.targetUserId || this.capturing || this.activeTurn) return;
-      this.handleUtterance().catch((error) => {
-        try {
-          this.emitVoiceError(error);
-        } catch (emitError) {
-          // Last-resort containment: never let errors escape to process level
-          log.error('Failed to emit voice error (double fault)', {
-            originalError: toErrorMessage(error),
-            emitError: toErrorMessage(emitError),
-          });
-        }
-      });
-    };
-    connection.receiver.speaking.on('start', this.speakingListener);
+    if (this.receiveEnabled) {
+      this.speakingListener = (userId: string) => {
+        if (userId !== this.targetUserId || this.capturing || this.activeTurn) return;
+        this.handleUtterance().catch((error) => {
+          try {
+            this.emitVoiceError(error);
+          } catch (emitError) {
+            // Last-resort containment: never let errors escape to process level
+            log.error('Failed to emit voice error (double fault)', {
+              originalError: toErrorMessage(error),
+              emitError: toErrorMessage(emitError),
+            });
+          }
+        });
+      };
+      connection.receiver.speaking.on('start', this.speakingListener);
+    } else {
+      this.speakingListener = null;
+    }
 
     await this.eventBus.emit('channel.voice.start', {
       guildId: channel.guild.id,

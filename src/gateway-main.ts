@@ -10,6 +10,11 @@ import { createComponentLogger } from './logger.js';
 import { LLMClient } from './llm/client.js';
 import { createEmbeddingProviderFromEnv } from './memory/embedding.js';
 import { DiscordAdapter } from './channels/discord/adapter.js';
+import { TelegramAdapter } from './channels/telegram/adapter.js';
+import {
+  loadRuntimeChannelsConfig,
+  type RuntimeChannelsConfigOverrides,
+} from './channels/config.js';
 import { EventBus } from './event-bus.js';
 import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
@@ -41,6 +46,8 @@ import { initDatabase } from './persistence/sqlite-utils.js';
 import { parsePositiveIntEnv } from './utils/env.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
+import type { SubstrateConfig } from './types.js';
+import type { EditableSettings } from './settings.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -136,6 +143,28 @@ function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
   return fallback;
 }
 
+function buildGatewayChannelsConfigOverrides(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): RuntimeChannelsConfigOverrides {
+  const telegramOverride: RuntimeChannelsConfigOverrides['telegram'] = {};
+
+  if (Object.hasOwn(settings, 'telegramEnabled')) {
+    telegramOverride.enabled = config.telegramEnabled ?? false;
+  }
+  if (Object.hasOwn(settings, 'telegramAuthorizedUsers')) {
+    telegramOverride.allowedUsers = config.telegramAuthorizedUsers
+      ? [...config.telegramAuthorizedUsers]
+      : [];
+  }
+
+  if (telegramOverride.enabled === undefined && telegramOverride.allowedUsers === undefined) {
+    return {};
+  }
+
+  return { telegram: telegramOverride };
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const savedSettings = loadSettings(config.dataDir);
@@ -144,6 +173,11 @@ async function main(): Promise<void> {
     defaultContextWindow: config.defaultContextWindow,
   });
   applySettings(config, modelsConfig);
+  const channelsConfig = loadRuntimeChannelsConfig(
+    config.dataDir,
+    process.env,
+    buildGatewayChannelsConfigOverrides(config, savedSettings),
+  );
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const workspacePath = process.env.WORKSPACE_PATH ?? './workspace';
   const ntfyBaseUrl = process.env.NTFY_BASE_URL?.trim() || undefined;
@@ -211,6 +245,9 @@ async function main(): Promise<void> {
   });
 
   const discord = new DiscordAdapter(config, eventBus);
+  const telegram = channelsConfig.telegram.enabled
+    ? new TelegramAdapter(channelsConfig.telegram, eventBus)
+    : null;
   const capabilityRuntime = new CapabilityRuntime({
     dataDir: config.dataDir,
     envTier: config.capabilityTier,
@@ -397,8 +434,27 @@ async function main(): Promise<void> {
     return { content: '', channelId: msg.channelId, metadata: { model: '', inputTokens: 0, outputTokens: 0, durationMs: 0 } };
   });
 
+  if (telegram) {
+    telegram.onMessage(async (msg) => {
+      const result = await gateway.requestAgentVoiceStream(msg);
+      return {
+        content: result.content,
+        channelId: result.channelId,
+        metadata: {
+          model: result.model,
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: result.durationMs,
+        },
+      };
+    });
+  }
+
   // ── Start everything ──
 
+  if (telegram) {
+    await telegram.init();
+  }
   await discord.init();
   gateway.start();
   await voiceModuleHost.startAll();
@@ -407,6 +463,13 @@ async function main(): Promise<void> {
     log.info(`Wyoming voice bridge listening on ${config.wyomingHost ?? '127.0.0.1'}:${config.wyomingPort ?? 10400}`);
   }
   await discord.start();
+  if (telegram) {
+    await telegram.start();
+    log.info('Telegram gateway bridge enabled', {
+      mode: channelsConfig.telegram.mode,
+      allowlistSize: channelsConfig.telegram.allowedUsers.length,
+    });
+  }
 
   log.info(`Ready — listening on ${socketPath}`);
   log.info(`Workspace: ${workspaceRoot}`);
@@ -420,6 +483,7 @@ async function main(): Promise<void> {
     if (wyomingTcpServer) await wyomingTcpServer.stop();
     await voiceModuleHost.stopAll();
     await gateway.stop();
+    if (telegram) await telegram.stop();
     await discord.stop();
     auditDb.close();
     process.exit(0);

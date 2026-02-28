@@ -189,7 +189,9 @@ export function loadRuntimeChannelsConfig(
     : DEFAULT_TELEGRAM_CHANNEL_CONFIG.token;
   const token = (env.TELEGRAM_BOT_TOKEN ?? tokenFromFile).trim();
 
-  const allowedUsers = parseAllowlistFromEnv(env.TELEGRAM_ALLOWED_USERS)
+  const allowedUsers = parseAllowlistFromEnv(
+    env.TELEGRAM_ALLOWED_USERS ?? env.TELEGRAM_AUTHORIZED_USERS,
+  )
     ?? allowedUsersOverride
     ?? parseStringArray(telegramConfig.allowedUsers);
 

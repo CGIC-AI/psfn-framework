@@ -2,6 +2,11 @@ import type { CharacterCardVersionStore } from '../../../identity/card-versionin
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { SubstrateConfig } from '../../../types.js';
 import { extractCardPatchFromRecord } from '../../../identity/card-versioning.js';
+import {
+  normalizeImportedCard,
+  writeNormalizedCharacterCard,
+} from '../../../identity/importer.js';
+import type { CCv3Data } from '@character-foundry/character-foundry/loader';
 import type {
   AdminIdentityData,
   AdminIdentityService,
@@ -69,13 +74,19 @@ export class AdminIdentityDataService implements AdminIdentityService {
   }
 
   async importIdentityCard(body: string): Promise<ImportResult> {
-    let payload: { path?: string };
+    let payload: { path?: string; cardData?: unknown };
     try {
-      payload = JSON.parse(body) as { path?: string };
+      payload = JSON.parse(body) as { path?: string; cardData?: unknown };
     } catch {
       return { ok: false, message: 'Request body must be valid JSON' };
     }
 
+    // Direct card data upload (from file upload endpoint)
+    if (payload.cardData !== undefined) {
+      return this.importCardFromData(payload.cardData);
+    }
+
+    // Path-based import (legacy)
     const importPath = payload.path?.trim();
     if (!importPath) {
       return { ok: false, message: 'path is required' };
@@ -88,6 +99,88 @@ export class AdminIdentityDataService implements AdminIdentityService {
     const formBody = new URLSearchParams({ path: importPath }).toString();
     const html = await this.deps.importIdentityCardHtml(formBody);
     return extractSettingsResultMessage(html);
+  }
+
+  private importCardFromData(cardData: unknown): ImportResult {
+    if (!cardData || typeof cardData !== 'object') {
+      return { ok: false, message: 'Uploaded card data must be a JSON object' };
+    }
+
+    const cardVersionStore = this.deps.cardVersionStore;
+    if (!cardVersionStore) {
+      return { ok: false, message: 'Card versioning store is not configured' };
+    }
+
+    try {
+      // The uploaded data might be a full CharacterCardV2 (with spec/data) or a CCv3Data-shaped object.
+      // Try to detect the shape and normalize accordingly.
+      const record = cardData as Record<string, unknown>;
+
+      let normalizedCard: CharacterCardV2;
+
+      if (record.data && typeof record.data === 'object') {
+        // Looks like a V2/V3 card with a data wrapper
+        const dataRecord = record.data as Record<string, unknown>;
+        normalizedCard = normalizeImportedCard({
+          data: {
+            name: typeof dataRecord.name === 'string' ? dataRecord.name : '',
+            description: typeof dataRecord.description === 'string' ? dataRecord.description : '',
+            personality: typeof dataRecord.personality === 'string' ? dataRecord.personality : '',
+            scenario: typeof dataRecord.scenario === 'string' ? dataRecord.scenario : '',
+            first_mes: typeof dataRecord.first_mes === 'string' ? dataRecord.first_mes : '',
+            mes_example: typeof dataRecord.mes_example === 'string' ? dataRecord.mes_example : '',
+            system_prompt: typeof dataRecord.system_prompt === 'string' ? dataRecord.system_prompt : '',
+            post_history_instructions: typeof dataRecord.post_history_instructions === 'string' ? dataRecord.post_history_instructions : '',
+            tags: Array.isArray(dataRecord.tags) ? dataRecord.tags : [],
+            creator: typeof dataRecord.creator === 'string' ? dataRecord.creator : '',
+            creator_notes: typeof dataRecord.creator_notes === 'string' ? dataRecord.creator_notes : '',
+            character_book: dataRecord.character_book as CCv3Data['data']['character_book'],
+          },
+        } as CCv3Data);
+      } else if (typeof record.name === 'string') {
+        // Flat card data (no data wrapper)
+        normalizedCard = normalizeImportedCard({
+          data: {
+            name: typeof record.name === 'string' ? record.name : '',
+            description: typeof record.description === 'string' ? record.description : '',
+            personality: typeof record.personality === 'string' ? record.personality : '',
+            scenario: typeof record.scenario === 'string' ? record.scenario : '',
+            first_mes: typeof record.first_mes === 'string' ? record.first_mes : '',
+            mes_example: typeof record.mes_example === 'string' ? record.mes_example : '',
+            system_prompt: typeof record.system_prompt === 'string' ? record.system_prompt : '',
+            post_history_instructions: typeof record.post_history_instructions === 'string' ? record.post_history_instructions : '',
+            tags: Array.isArray(record.tags) ? record.tags : [],
+            creator: typeof record.creator === 'string' ? record.creator : '',
+            creator_notes: typeof record.creator_notes === 'string' ? record.creator_notes : '',
+            character_book: record.character_book as CCv3Data['data']['character_book'],
+          },
+        } as CCv3Data);
+      } else {
+        return { ok: false, message: 'Uploaded card data must have a "data" object or a "name" field' };
+      }
+
+      // Apply to version store
+      const patch = extractCardPatchFromRecord(normalizedCard.data as unknown as Record<string, unknown>);
+      const snapshot = cardVersionStore.updateData(patch, 'admin:upload', 'File upload import');
+
+      // Also persist to disk if a card path is configured
+      if (this.deps.config.characterCardPath) {
+        writeNormalizedCharacterCard(this.deps.config.characterCardPath, snapshot.card);
+      }
+
+      // Update in-memory reference
+      Object.assign(this.deps.characterCard, snapshot.card);
+
+      return {
+        ok: true,
+        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}`,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Import failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   stageIdentityIntake(_body: string): IntakeStageResult {

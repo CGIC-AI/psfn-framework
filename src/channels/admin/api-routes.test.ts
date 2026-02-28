@@ -578,15 +578,25 @@ describe('AdminServer JSON API routes', () => {
     const detailPayload = JSON.parse(detailRes.body) as { contact: { id: string } };
     expect(detailPayload.contact.id).toBe(contact.id);
 
+    const putRes = await request(
+      port,
+      'PUT',
+      `/api/admin/contacts/${contact.id}`,
+      JSON.stringify({ trustLevel: 'trusted', notes: 'after put' }),
+      authHeaders,
+    );
+    expect(putRes.status).toBe(200);
+    expect(contactStore.getById(contact.id)?.trustLevel).toBe('trusted');
+    expect(contactStore.getById(contact.id)?.notes).toBe('after put');
+
     const patchRes = await request(
       port,
       'PATCH',
       `/api/admin/contacts/${contact.id}`,
-      JSON.stringify({ trustLevel: 'trusted', notes: 'after patch' }),
+      JSON.stringify({ notes: 'after patch' }),
       authHeaders,
     );
     expect(patchRes.status).toBe(200);
-    expect(contactStore.getById(contact.id)?.trustLevel).toBe('trusted');
     expect(contactStore.getById(contact.id)?.notes).toBe('after patch');
 
     const badPatch = await request(

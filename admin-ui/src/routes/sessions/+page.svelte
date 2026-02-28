@@ -12,7 +12,10 @@
   let loadingMessages = $state(false);
 
   let expandedToolCall = $state<number | null>(null);
-  let channelLastActivity = $state<Map<string, string>>(new Map());
+  let channelLastActivity = $state<Map<string, number>>(new Map());
+  let channelSearch = $state('');
+  let channelSort = $state<'recent' | 'messages_desc' | 'messages_asc' | 'name_asc' | 'name_desc'>('recent');
+  let messageSearch = $state('');
 
   // Channel type labels matching the htmx admin
   const CHANNEL_TYPE_LABELS: Record<string, string> = {
@@ -73,14 +76,16 @@
       messages = data.messages;
       compactionAudits = data.compactionAuditViews ?? [];
 
-      // Track last activity from the most recent message timestamp
+      // Track last activity from the most recent message timestamp.
       if (messages.length > 0) {
         const lastMsg = messages[messages.length - 1];
         if (lastMsg?.timestamp) {
-          const formatted = formatTimestamp(lastMsg.timestamp);
-          if (formatted) {
+          const ts = typeof lastMsg.timestamp === 'number'
+            ? lastMsg.timestamp
+            : Date.parse(lastMsg.timestamp);
+          if (Number.isFinite(ts)) {
             const next = new Map(channelLastActivity);
-            next.set(channelId, formatted);
+            next.set(channelId, ts);
             channelLastActivity = next;
           }
         }
@@ -147,6 +152,59 @@
     return null;
   }
 
+  function filterMessages(list: SessionEntry[], query: string): SessionEntry[] {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return list;
+    return list.filter((msg) => {
+      const content = (msg.content ?? '').toLowerCase();
+      const author = (msg.authorName ?? '').toLowerCase();
+      const role = (msg.role ?? '').toLowerCase();
+      const origin = (msg.originChannelId ?? '').toLowerCase();
+      return content.includes(needle)
+        || author.includes(needle)
+        || role.includes(needle)
+        || origin.includes(needle);
+    });
+  }
+
+  const filteredChannels = $derived.by(() => {
+    const needle = channelSearch.trim().toLowerCase();
+    const selectedId = selectedChannel;
+    const list = channels.filter((ch) => {
+      if (!needle) return true;
+      return channelLabel(ch).toLowerCase().includes(needle)
+        || ch.channelId.toLowerCase().includes(needle)
+        || (ch.linkedContactName ?? '').toLowerCase().includes(needle);
+    });
+
+    const sorted = [...list].sort((a, b) => {
+      if (selectedId && a.channelId === selectedId && b.channelId !== selectedId) return -1;
+      if (selectedId && b.channelId === selectedId && a.channelId !== selectedId) return 1;
+
+      if (channelSort === 'messages_desc') {
+        return b.messageCount - a.messageCount || channelLabel(a).localeCompare(channelLabel(b));
+      }
+      if (channelSort === 'messages_asc') {
+        return a.messageCount - b.messageCount || channelLabel(a).localeCompare(channelLabel(b));
+      }
+      if (channelSort === 'name_asc') {
+        return channelLabel(a).localeCompare(channelLabel(b));
+      }
+      if (channelSort === 'name_desc') {
+        return channelLabel(b).localeCompare(channelLabel(a));
+      }
+
+      const aTs = channelLastActivity.get(a.channelId) ?? 0;
+      const bTs = channelLastActivity.get(b.channelId) ?? 0;
+      if (bTs !== aTs) return bTs - aTs;
+      return b.messageCount - a.messageCount || channelLabel(a).localeCompare(channelLabel(b));
+    });
+
+    return sorted;
+  });
+
+  const filteredMessages = $derived.by(() => filterMessages(messages, messageSearch));
+
   onMount(() => {
     loadChannels();
   });
@@ -170,7 +228,27 @@
     <div class="w-72 shrink-0 card-garden overflow-hidden flex flex-col">
       <div class="p-3 border-b border-bark-300 bg-bark-100">
         <h2 class="text-sm font-medium text-shadow-800">Channels</h2>
-        <p class="text-sm text-shadow-600">{channels.length} sessions</p>
+        <p class="text-sm text-shadow-600">{filteredChannels.length} of {channels.length} sessions</p>
+        <div class="mt-2 space-y-2">
+          <input
+            type="search"
+            bind:value={channelSearch}
+            placeholder="Search channels..."
+            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-white text-sm text-shadow-800
+                   focus:outline-none focus:ring-2 focus:ring-gold-300"
+          />
+          <select
+            bind:value={channelSort}
+            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-white text-sm text-shadow-800
+                   focus:outline-none focus:ring-2 focus:ring-gold-300"
+          >
+            <option value="recent">Sort: Recent Activity</option>
+            <option value="messages_desc">Sort: Most Messages</option>
+            <option value="messages_asc">Sort: Fewest Messages</option>
+            <option value="name_asc">Sort: Name (A-Z)</option>
+            <option value="name_desc">Sort: Name (Z-A)</option>
+          </select>
+        </div>
       </div>
       <div class="flex-1 overflow-y-auto">
         {#if loadingChannels}
@@ -180,8 +258,8 @@
             {/each}
           </div>
         {:else}
-          {#each channels as ch (ch.channelId)}
-            {@const lastActivity = channelLastActivity.get(ch.channelId)}
+          {#each filteredChannels as ch (ch.channelId)}
+            {@const lastActivityTs = channelLastActivity.get(ch.channelId)}
             <button
               onclick={() => selectChannel(ch.channelId)}
               class="w-full text-left px-3 py-2.5 border-b border-bark-200 hover:bg-bark-100
@@ -207,14 +285,14 @@
                   <span class="text-sm text-moss-700">{ch.linkedContactName}</span>
                 {/if}
               </div>
-              {#if lastActivity}
+              {#if lastActivityTs}
                 <span class="text-sm text-shadow-600 block mt-0.5">
-                  Last: {lastActivity}
+                  Last: {formatTimestamp(lastActivityTs)}
                 </span>
               {/if}
             </button>
           {/each}
-          {#if channels.length === 0}
+          {#if filteredChannels.length === 0}
             <p class="p-4 text-shadow-600 text-sm text-center">No sessions found.</p>
           {/if}
         {/if}
@@ -237,7 +315,17 @@
               <p class="text-sm text-shadow-600 font-mono truncate">{selectedChannel}</p>
             {/if}
           </div>
-          <span class="text-sm text-shadow-600">{messages.length} messages</span>
+          <span class="text-sm text-shadow-600">{filteredMessages.length} of {messages.length} messages</span>
+        </div>
+
+        <div class="p-3 border-b border-bark-300 bg-bark-100">
+          <input
+            type="search"
+            bind:value={messageSearch}
+            placeholder="Filter messages (content, role, author)..."
+            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-white text-sm text-shadow-800
+                   focus:outline-none focus:ring-2 focus:ring-gold-300"
+          />
         </div>
 
         <!-- Compaction audits -->
@@ -267,7 +355,7 @@
               {/each}
             </div>
           {:else}
-            {#each messages as msg, i}
+            {#each filteredMessages as msg, i}
               <div class="rounded-lg border p-3 {roleColor(msg.role)}">
                 <div class="flex items-center justify-between mb-1">
                   <span class="text-sm font-semibold {roleLabelColor(msg.role)}">{displayName(msg)}</span>
@@ -301,7 +389,7 @@
               </div>
             {/each}
 
-            {#if messages.length === 0}
+            {#if filteredMessages.length === 0}
               <p class="text-shadow-600 text-sm text-center py-8">No messages in this session.</p>
             {/if}
           {/if}

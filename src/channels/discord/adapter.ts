@@ -4,7 +4,11 @@ import {
   GatewayIntentBits,
   Partials,
   type Message,
+  type MessageReaction,
+  type PartialMessageReaction,
   type TextChannel,
+  type User,
+  type PartialUser,
 } from 'discord.js';
 import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
 import type {
@@ -28,11 +32,15 @@ import { DiscordVoiceRuntime } from './voice.js';
 
 const log = createComponentLogger('Discord');
 
-const TYPING_INTERVAL_MS = 9_000;
+const TYPING_INTERVAL_MS = 5_000;
 const MAX_DISCORD_LENGTH = 2000;
 const STARTUP_BACKFILL_LIMIT = 100;
 const BACKFILL_DEDUP_WINDOW = 500;
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+const DEFAULT_TRIGGER_LISTEN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
+const LISTEN_WINDOW_LOG_INTERVAL_MS = 10_000;
+const IGNORE_PREFIX = '!i';
+const DELETE_EMOJI = '❌';
 type StatusKind = 'compaction' | 'retry';
 type QueueTelemetryPhase = 'acquired' | 'contended' | 'released';
 
@@ -70,13 +78,16 @@ export class DiscordAdapter implements ChannelAdapter {
   private handler: MessageHandler | null = null;
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
+  private botDisplayNames: string[] = [];
   private processing = new Set<string>();
-  private pendingByChannel = new Map<string, Message>();
   private lockStartedAt = new Map<string, number>();
   private lockContention = new Map<string, number>();
   private voice: DiscordVoiceRuntime;
   private statusMessages = new Map<string, Message>();
   private statusUnsubscribers: Array<() => void> = [];
+  /** Per-user listening windows: key = `channelId:userId`, value = expiry timestamp */
+  private listeningWindows = new Map<string, number>();
+  private listenWindowTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
@@ -96,7 +107,7 @@ export class DiscordAdapter implements ChannelAdapter {
     this.gateway = this;
     this.security = {
       supportsDirectMessages: true,
-      requiresMentionForChannelMessages: this.runtimeConfig.discordRespondAll !== true,
+      requiresMentionForChannelMessages: true,
     };
     this.streaming = {
       typingIntervalMs: TYPING_INTERVAL_MS,
@@ -125,8 +136,9 @@ export class DiscordAdapter implements ChannelAdapter {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessageReactions,
       ],
-      partials: [Partials.Channel],
+      partials: [Partials.Message, Partials.Reaction],
     });
 
     this.voice = new DiscordVoiceRuntime({
@@ -159,8 +171,24 @@ export class DiscordAdapter implements ChannelAdapter {
       });
     });
 
+    this.client.on(Events.MessageReactionAdd, (reaction, user) => {
+      this.onReactionAdd(reaction, user).catch(err => {
+        log.error('Reaction handling error', { error: String(err) });
+      });
+    });
+
     this.client.once(Events.ClientReady, (c) => {
       log.info(`Logged in as ${c.user.tag}`);
+      // Capture bot display names for trigger word matching
+      const names = new Set<string>();
+      if (c.user.username) names.add(c.user.username.toLowerCase());
+      if (c.user.displayName && c.user.displayName !== c.user.username) names.add(c.user.displayName.toLowerCase());
+      // Also grab the global name (the one users see)
+      if (c.user.globalName) names.add(c.user.globalName.toLowerCase());
+      this.botDisplayNames = [...names].filter(n => n.length > 1);
+      if (this.botDisplayNames.length > 0) {
+        log.info('Bot name triggers registered', { names: this.botDisplayNames });
+      }
     });
 
     this.voice.init();
@@ -180,6 +208,8 @@ export class DiscordAdapter implements ChannelAdapter {
   async stop(): Promise<void> {
     for (const unsub of this.statusUnsubscribers) unsub();
     this.statusUnsubscribers = [];
+    for (const key of this.listenWindowTimers.keys()) this.clearListenWindowTimer(key);
+    this.listeningWindows.clear();
     await this.clearAllStatusMessages();
     await this.voice.stop();
     this.client.destroy();
@@ -206,42 +236,131 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   private async onDiscordMessage(msg: Message): Promise<void> {
-    const liveBotId = this.client.user?.id;
-    const configuredBotId = this.runtimeConfig.discordBotId.trim();
-    const runtimeBotId = liveBotId ?? (configuredBotId.length > 0 ? configuredBotId : undefined);
-
     // Ignore self
-    if (liveBotId && msg.author.id === liveBotId) return;
+    if (msg.author.id === this.runtimeConfig.discordBotId) return;
     if (msg.author.bot) return;
     if (!this.handler) return;
 
-    // Respond to DMs always, guild messages only when mentioned
     const isDM = !msg.guild;
-    const isMentioned = runtimeBotId ? msg.mentions.has(runtimeBotId) : false;
-    const respondAllGuildMessages = this.runtimeConfig.discordRespondAll === true;
-    if (!isDM && !respondAllGuildMessages && !isMentioned) return;
-
     const channelId = msg.channelId;
+    const userId = msg.author.id;
+
+    // Check !i ignore prefix — skip even during active listening
+    if (!isDM && msg.content.trimStart().startsWith(IGNORE_PREFIX)) return;
+
+    // Determine why we should respond
+    const isMentioned = msg.mentions.has(this.runtimeConfig.discordBotId);
+    const isTriggered = !isDM && !isMentioned && this.matchesTriggerWord(msg.content);
+    const listenKey = `${channelId}:${userId}`;
+    const isListening = this.isInListeningWindow(listenKey);
+
+    if (!isDM && !isMentioned && !isTriggered && !isListening) return;
+
+    // Open or extend listening window for this user in this channel
+    if (!isDM && (isTriggered || isListening || isMentioned)) {
+      this.openListeningWindow(listenKey);
+    }
+
+    if (isTriggered) log.info('Trigger word matched', { channelId, messageId: msg.id });
+    if (isListening && !isTriggered && !isMentioned) log.debug('Active listening window', { channelId, userId });
 
     // Strip bot mention from content
-    let content = msg.content;
-    if (runtimeBotId) {
-      content = content.replace(new RegExp(`<@!?${runtimeBotId}>`, 'g'), '');
-    }
-    content = content.trim();
+    let content = msg.content
+      .replace(new RegExp(`<@!?${this.runtimeConfig.discordBotId}>`, 'g'), '')
+      .trim();
     if (!content) content = '(empty message)';
 
-    const substrateMsg: SubstrateMessage = {
+    // Only quote-reply on the initial trigger, not during listening window follow-ups
+    const shouldQuote = isTriggered;
+
+    await this.processMessage(msg, channelId, {
       id: msg.id,
       channelId,
       channelType: 'discord',
       isDirectMessage: isDM,
+      authorId: userId,
+      authorName: msg.author.displayName ?? msg.author.username,
+      content,
+      timestamp: msg.createdAt,
+    }, shouldQuote);
+  }
+
+  private async onReactionAdd(
+    reaction: MessageReaction | PartialMessageReaction,
+    user: User | PartialUser,
+  ): Promise<void> {
+    // Ignore reactions from self or bots
+    if (user.id === this.runtimeConfig.discordBotId) return;
+    if (user.bot) return;
+
+    const emojiName = reaction.emoji.name ?? '';
+
+    // ❌ on bot's own message → delete it
+    if (emojiName === DELETE_EMOJI) {
+      const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
+      const msg = fullReaction.message.partial ? await fullReaction.message.fetch() : fullReaction.message;
+      if (msg.author.id === this.runtimeConfig.discordBotId) {
+        log.info('Delete reaction on bot message', { messageId: msg.id, channelId: msg.channelId, requestedBy: user.id });
+        await msg.delete().catch(err => log.warn('Failed to delete bot message', { error: String(err) }));
+      }
+      return;
+    }
+
+    if (!this.handler) return;
+
+    // Check if this reaction is a configured trigger
+    const triggerReactions = this.runtimeConfig.discordTriggerReactions ?? [];
+    if (triggerReactions.length === 0) return;
+
+    const emojiId = reaction.emoji.id ? `<:${emojiName}:${reaction.emoji.id}>` : emojiName;
+    const isMatch = triggerReactions.some(trigger =>
+      trigger === emojiName || trigger === emojiId
+    );
+    if (!isMatch) return;
+
+    // Fetch partial reaction/message if needed
+    const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
+    const msg = fullReaction.message.partial ? await fullReaction.message.fetch() : fullReaction.message;
+
+    // Don't respond to bot's own messages
+    if (msg.author.id === this.runtimeConfig.discordBotId) return;
+    if (msg.author.bot) return;
+
+    const channelId = msg.channelId;
+    let content = msg.content?.trim() || '(empty message)';
+
+    log.info('Reaction trigger matched', { emoji: emojiName, channelId, messageId: msg.id, reactedBy: user.id });
+
+    // Open listening window for the message author (the person being pointed at)
+    this.openListeningWindow(`${channelId}:${msg.author.id}`);
+    // Also open for the reactor if different
+    if (user.id !== msg.author.id) {
+      this.openListeningWindow(`${channelId}:${user.id}`);
+    }
+
+    await this.processMessage(msg as Message, channelId, {
+      id: msg.id,
+      channelId,
+      channelType: 'discord',
+      isDirectMessage: false,
       authorId: msg.author.id,
       authorName: msg.author.displayName ?? msg.author.username,
       content,
       timestamp: msg.createdAt,
-    };
+    }, true, fullReaction);
+  }
 
+  /**
+   * Core message processing: lock channel, call handler, send response.
+   * When `replyToOriginal` is true, the bot replies (quotes) the triggering message.
+   */
+  private async processMessage(
+    msg: Message,
+    channelId: string,
+    substrateMsg: SubstrateMessage,
+    replyToOriginal: boolean,
+    triggerReaction?: MessageReaction | PartialMessageReaction,
+  ): Promise<void> {
     // If already processing this channel, steer (interrupt) instead of dropping
     if (this.processing.has(channelId)) {
       const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
@@ -254,11 +373,6 @@ export class DiscordAdapter implements ChannelAdapter {
       if (this.agent) {
         log.debug('Steering message into active stream', { channelId });
         this.agent.steer(substrateMsg);
-      } else {
-        // Gateway mode has no direct agent instance, so keep latest message queued
-        // instead of dropping it during lock contention.
-        this.pendingByChannel.set(channelId, msg);
-        log.debug('Queueing contended Discord message for deferred processing', { channelId });
       }
       return;
     }
@@ -277,13 +391,28 @@ export class DiscordAdapter implements ChannelAdapter {
     this.clearStatus(channelId, 'compaction').catch(() => undefined);
     this.clearStatus(channelId, 'retry').catch(() => undefined);
 
+    // Remove the trigger reaction so the user knows the bot acknowledged it
+    if (triggerReaction) {
+      triggerReaction.remove().catch(() => undefined);
+    }
+
     try {
       await this.eventBus.emit('message.received', { message: substrateMsg });
 
       const response = await this.handler(substrateMsg);
       const hasText = response.content.trim().length > 0;
       if (hasText) {
-        await this.outbound.sendText({ channelId }, response.content);
+        if (replyToOriginal) {
+          // Reply (quote) the original message for trigger-based responses
+          const chunks = splitMessage(response.content.trim());
+          // First chunk replies (quotes), rest are follow-ups in channel
+          await msg.reply(chunks[0]);
+          for (let i = 1; i < chunks.length; i++) {
+            await (msg.channel as TextChannel).send(chunks[i]);
+          }
+        } else {
+          await this.outbound.sendText({ channelId }, response.content);
+        }
         await this.eventBus.emit('message.sent', { response });
       } else {
         log.debug('Suppressing empty handler response for Discord channel', { channelId });
@@ -305,15 +434,64 @@ export class DiscordAdapter implements ChannelAdapter {
       this.lockStartedAt.delete(channelId);
       this.lockContention.delete(channelId);
       await this.clearStatus(channelId, 'compaction');
-      const pending = this.pendingByChannel.get(channelId);
-      if (pending) {
-        this.pendingByChannel.delete(channelId);
-        queueMicrotask(() => {
-          this.onDiscordMessage(pending).catch((error) => {
-            log.error('Deferred Discord message handling error', { channelId, error: String(error) });
-          });
-        });
+    }
+  }
+
+  private matchesTriggerWord(content: string): boolean {
+    const lowerContent = content.toLowerCase();
+    // Check configured trigger words
+    const triggerWords = this.runtimeConfig.discordTriggerWords;
+    if (triggerWords && triggerWords.some(word => lowerContent.includes(word.toLowerCase()))) {
+      return true;
+    }
+    // Check bot display names (username, globalName)
+    if (this.botDisplayNames.some(name => lowerContent.includes(name))) {
+      return true;
+    }
+    return false;
+  }
+
+  private isInListeningWindow(key: string): boolean {
+    const expiry = this.listeningWindows.get(key);
+    if (!expiry) return false;
+    if (Date.now() > expiry) {
+      this.listeningWindows.delete(key);
+      this.clearListenWindowTimer(key);
+      return false;
+    }
+    return true;
+  }
+
+  private get triggerListenWindowMs(): number {
+    return this.runtimeConfig.discordTriggerListenWindowMs ?? DEFAULT_TRIGGER_LISTEN_WINDOW_MS;
+  }
+
+  private openListeningWindow(key: string): void {
+    const windowMs = this.triggerListenWindowMs;
+    this.listeningWindows.set(key, Date.now() + windowMs);
+
+    // (Re)start the countdown logger
+    this.clearListenWindowTimer(key);
+    const timer = setInterval(() => {
+      const expiry = this.listeningWindows.get(key);
+      if (!expiry) { this.clearListenWindowTimer(key); return; }
+      const remainingMs = expiry - Date.now();
+      if (remainingMs <= 0) {
+        this.listeningWindows.delete(key);
+        this.clearListenWindowTimer(key);
+        log.info('Listening window expired', { key });
+        return;
       }
+      log.info('Listening window active', { key, remainingSeconds: Math.ceil(remainingMs / 1000) });
+    }, LISTEN_WINDOW_LOG_INTERVAL_MS);
+    this.listenWindowTimers.set(key, timer);
+  }
+
+  private clearListenWindowTimer(key: string): void {
+    const timer = this.listenWindowTimers.get(key);
+    if (timer) {
+      clearInterval(timer);
+      this.listenWindowTimers.delete(key);
     }
   }
 

@@ -265,7 +265,9 @@ export interface SubstrateConfig {
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
-  discordRespondAll?: boolean;
+  discordTriggerWords?: string[];
+  discordTriggerReactions?: string[];
+  discordTriggerListenWindowMs?: number;
   voiceTargetGuildId?: string;
   voiceTargetUserId?: string;
   voiceReadyCueText?: string;
@@ -458,9 +460,6 @@ export function loadConfig(): SubstrateConfig {
   const echoTtsVoice = parseOptionalStringEnv(process.env.ECHO_TTS_VOICE);
   const echoTtsPreset = parseOptionalStringEnv(process.env.ECHO_TTS_PRESET);
   const echoTtsModel = parseOptionalStringEnv(process.env.ECHO_TTS_MODEL);
-  const telegramAuthorizedUsers = parseStringListEnv(
-    process.env.TELEGRAM_ALLOWED_USERS ?? process.env.TELEGRAM_AUTHORIZED_USERS,
-  );
 
   return {
     primaryModel,
@@ -470,7 +469,7 @@ export function loadConfig(): SubstrateConfig {
     primaryMaxTokens,
     extractionMaxTokens,
     discordToken: process.env.DISCORD_TOKEN ?? '',
-    discordBotId: process.env.DISCORD_BOT_ID ?? '',
+    discordBotId: process.env.DISCORD_BOT_ID ?? '1050938702622375987',
     characterCardPath: process.env.CHARACTER_CARD_PATH ?? '/home/vega/.openclaw/agents/main/character.json',
     dataDir: process.env.DATA_DIR ?? './data',
     databasePath: process.env.DATABASE_PATH ?? './data/purrsephone.db',
@@ -518,7 +517,9 @@ export function loadConfig(): SubstrateConfig {
     },
     voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
     discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
-    discordRespondAll: parseOptionalBooleanEnv(process.env.DISCORD_RESPOND_ALL) ?? false,
+    discordTriggerWords: process.env.DISCORD_TRIGGER_WORDS ? parseStringListEnv(process.env.DISCORD_TRIGGER_WORDS) : undefined,
+    discordTriggerReactions: process.env.DISCORD_TRIGGER_REACTIONS ? parseStringListEnv(process.env.DISCORD_TRIGGER_REACTIONS) : ['👆'],
+    discordTriggerListenWindowMs: parseOptionalIntegerEnv(process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS, 10000),
     voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
     voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
@@ -556,8 +557,8 @@ export function loadConfig(): SubstrateConfig {
     wyomingHost,
     ...(wyomingPort !== undefined ? { wyomingPort } : {}),
     telegramEnabled: parseOptionalBooleanEnv(process.env.TELEGRAM_ENABLED) ?? false,
-    ...(telegramAuthorizedUsers.length > 0
-      ? { telegramAuthorizedUsers }
+    ...(parseStringListEnv(process.env.TELEGRAM_AUTHORIZED_USERS).length > 0
+      ? { telegramAuthorizedUsers: parseStringListEnv(process.env.TELEGRAM_AUTHORIZED_USERS) }
       : {}),
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),

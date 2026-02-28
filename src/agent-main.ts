@@ -434,8 +434,11 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createScratchpadWriteTool(memoryStore));
 
   // Git tools — self-modification via gateway-hosted git ops
-  registerGitTools(agentLoop, new GatewayGitOps(gateway));
+  registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });
   log.info('Git self-modification tools enabled');
+
+  // Validate tool wiring — catch misconfigured tools before they crash at invocation
+  agentLoop.validateToolWiring('gateway', gateway);
 
   const moduleSummary = await moduleLoader.loadEnabledModules();
   log.info('Runtime modules initialized', moduleSummary);

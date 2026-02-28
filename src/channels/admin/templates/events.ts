@@ -22,6 +22,7 @@ const ACTION_TYPE_LABELS: Record<AdminAuditActionType, string> = {
   identity_edit: 'Identity edit',
   external_action: 'External action',
   memory_mutation: 'Memory mutation',
+  settings_change: 'Settings change',
 };
 
 const DECISION_LABELS: Record<AdminAuditDecision, string> = {

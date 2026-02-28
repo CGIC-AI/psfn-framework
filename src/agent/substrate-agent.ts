@@ -53,6 +53,12 @@ import { tagToolWithReversibility } from '../capabilities/safeguards.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import {
+  validateAndLogToolWiring,
+  extractGatewayMethods,
+  type RuntimeMode,
+  type ValidateToolsOptions,
+} from './tool-wiring-validator.js';
+import {
   classifyBroadcastDraft,
   resolveBroadcastVisibilityScope,
 } from '../broadcast/safety.js';
@@ -347,6 +353,34 @@ export class SubstrateAgent {
       core: [...this.coreTools],
       extended: [...this.extendedTools],
     };
+  }
+
+  /**
+   * Validate that all registered tools have their runtime dependencies satisfied.
+   * Tools with missing dependencies are logged as warnings and removed from the
+   * tool registry so they cannot crash at invocation time.
+   *
+   * @param mode - 'single' for single-process mode, 'gateway' for agent/gateway split
+   * @param gatewayClient - The gateway client object (gateway mode only), used to
+   *   extract available RPC methods via prototype inspection
+   */
+  validateToolWiring(mode: RuntimeMode, gatewayClient?: object): void {
+    const allTools = [...this.coreTools, ...this.extendedTools];
+    const options: ValidateToolsOptions = {
+      mode,
+      tools: allTools,
+    };
+
+    if (mode === 'gateway' && gatewayClient) {
+      options.gatewayClientMethods = extractGatewayMethods(gatewayClient);
+    }
+
+    const disabledNames = validateAndLogToolWiring(options);
+    if (disabledNames.length === 0) return;
+
+    const disabledSet = new Set(disabledNames);
+    this.coreTools = this.coreTools.filter(t => !disabledSet.has(t.name));
+    this.extendedTools = this.extendedTools.filter(t => !disabledSet.has(t.name));
   }
 
   setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {

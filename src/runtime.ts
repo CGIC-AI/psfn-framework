@@ -472,6 +472,9 @@ export class SubstrateRuntime implements Lifecycle {
     });
     log.info('Git self-modification tools enabled');
 
+    // Validate tool wiring — catch misconfigured tools before they crash at invocation
+    this.agentLoop.validateToolWiring('single');
+
     const moduleSummary = await this.moduleLoader.loadEnabledModules();
     log.info('Runtime modules initialized', moduleSummary);
 

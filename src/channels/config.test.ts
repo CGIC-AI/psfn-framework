@@ -169,6 +169,26 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('accepts TELEGRAM_AUTHORIZED_USERS as allowlist env alias', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: true,
+          allowedUsers: ['from-file'],
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        TELEGRAM_AUTHORIZED_USERS: '5635268079,@operator',
+      });
+
+      expect(config.telegram.allowedUsers).toEqual(['5635268079', '@operator']);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('derives webhook path from webhook URL when explicit path is omitted', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {

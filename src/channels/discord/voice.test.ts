@@ -1370,7 +1370,7 @@ describe('DiscordVoiceRuntime', () => {
       expect(result.opusAvailable).toBe(true);
     });
 
-    it('disables voice runtime when opus decoder is unavailable', () => {
+    it('keeps voice runtime enabled but disables receive when opus decoder is unavailable', () => {
       // Temporarily make prism.opus.Decoder throw to simulate missing opus
       const originalDecoder = (prism as any).opus.Decoder;
       (prism as any).opus.Decoder = class ThrowingDecoder {
@@ -1387,8 +1387,36 @@ describe('DiscordVoiceRuntime', () => {
           getHandler: () => null,
         });
 
-        expect((runtime as any).enabled).toBe(false);
+        expect((runtime as any).enabled).toBe(true);
         expect((runtime as any).opusAvailable).toBe(false);
+        expect((runtime as any).receiveEnabled).toBe(false);
+      } finally {
+        (prism as any).opus.Decoder = originalDecoder;
+      }
+    });
+
+    it('still joins voice channel when opus decoder is unavailable', async () => {
+      const originalDecoder = (prism as any).opus.Decoder;
+      (prism as any).opus.Decoder = class ThrowingDecoder {
+        constructor() {
+          throw new Error('Could not find an Opus module');
+        }
+      };
+
+      try {
+        const connection = createMockVoiceConnection();
+        voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
+        const runtime = new DiscordVoiceRuntime({
+          client: { on: vi.fn(), off: vi.fn() } as any,
+          config: makeConfig(),
+          eventBus: new EventBus(),
+          getHandler: () => null,
+        });
+
+        await (runtime as any).joinChannel(makeVoiceChannel('channel-opusless'));
+
+        expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(1);
+        expect(connection.receiver.speaking.on).not.toHaveBeenCalled();
       } finally {
         (prism as any).opus.Decoder = originalDecoder;
       }

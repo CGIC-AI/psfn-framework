@@ -302,6 +302,10 @@ export interface SubstrateConfig {
   /** @deprecated Use webFetchDomainAllowlist instead */
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
+  /** Path to a CA certificate file (PEM) to trust for all outbound TLS connections (LLM, embeddings, etc.). Sets NODE_EXTRA_CA_CERTS at startup. */
+  gatewayTlsCaPath?: string;
+  /** When explicitly set to false, disables TLS certificate verification (NODE_TLS_REJECT_UNAUTHORIZED=0). DANGEROUS — dev only. */
+  gatewayTlsRejectUnauthorized?: boolean;
   wyomingShardRouting?: WyomingShardRoutingConfig;
   wyomingEnabled?: boolean;
   wyomingHost?: string;
@@ -408,6 +412,8 @@ export function loadConfig(): SubstrateConfig {
   const webFetchLocalCrawlerHostAllowlist = parseStringListEnv(process.env.FETCH_LOCAL_CRAWLER_HOST_ALLOWLIST);
   const webFetchLocalCrawlerDomainAllowlist = parseStringListEnv(process.env.FETCH_LOCAL_CRAWLER_DOMAIN_ALLOWLIST);
   const webFetchTlsCaCertPaths = parseStringListEnv(process.env.FETCH_TLS_CA_CERT_PATHS);
+  const gatewayTlsCaPath = parseOptionalStringEnv(process.env.GATEWAY_TLS_CA_PATH);
+  const gatewayTlsRejectUnauthorized = parseOptionalBooleanEnv(process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED);
   const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(process.env);
   const wyomingEnabled = parseOptionalBooleanEnv(process.env.WYOMING_ENABLED) ?? false;
   const wyomingHost = parseOptionalStringEnv(process.env.WYOMING_HOST) ?? '127.0.0.1';
@@ -534,6 +540,8 @@ export function loadConfig(): SubstrateConfig {
     ...(webFetchLocalCrawlerHostAllowlist.length > 0 ? { webFetchLocalCrawlerHostAllowlist } : {}),
     ...(webFetchLocalCrawlerDomainAllowlist.length > 0 ? { webFetchLocalCrawlerDomainAllowlist } : {}),
     ...(webFetchTlsCaCertPaths.length > 0 ? { webFetchTlsCaCertPaths } : {}),
+    ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),
+    ...(gatewayTlsRejectUnauthorized !== undefined ? { gatewayTlsRejectUnauthorized } : {}),
     wyomingShardRouting,
     wyomingEnabled,
     wyomingHost,

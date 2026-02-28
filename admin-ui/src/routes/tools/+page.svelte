@@ -43,23 +43,26 @@
 
   const CORE_TOOLS: ToolInfo[] = [
     { name: 'think',               description: 'RLM+REPL sandbox for multi-step reasoning with code execution',  category: 'core' },
-    { name: 'spawn_shard',         description: 'Launch ephemeral sub-agent for parallel work',                    category: 'core' },
     { name: 'memory_write',        description: 'Write a single memory directly to L2 store',                     category: 'memory' },
-    { name: 'memory_import_batch', description: 'Import multiple memories in a single batch',                     category: 'memory' },
-    { name: 'memory_redact',       description: 'Redact sensitive content from a memory',                         category: 'memory' },
-    { name: 'memory_delete',       description: 'Soft-delete a memory',                                           category: 'memory' },
-    { name: 'undo_memory_delete',  description: 'Restore a previously deleted memory',                            category: 'memory' },
-    { name: 'scratchpad_read',     description: 'Read from the agent scratchpad (ephemeral key-value)',            category: 'scratchpad' },
-    { name: 'scratchpad_write',    description: 'Write to the agent scratchpad (ephemeral key-value)',             category: 'scratchpad' },
     { name: 'contact_lookup',      description: 'Look up a contact by name or Discord ID',                        category: 'contact' },
     { name: 'contact_list',        description: 'List all known contacts with trust levels',                      category: 'contact' },
-    { name: 'self_restart',        description: 'Gracefully restart the agent process',                            category: 'lifecycle' },
-    { name: 'self_rebuild',        description: 'Trigger a rebuild and restart cycle',                             category: 'lifecycle' },
-    { name: 'notify_operator',     description: 'Send a notification to the operator via ntfy',                    category: 'lifecycle' },
     { name: 'load_tools',          description: 'Hot-swap active tool set to include extended tools',              category: 'core' },
   ];
 
   const EXTENDED_TOOLS: ToolInfo[] = [
+    // Shards & Lifecycle
+    { name: 'spawn_shard',            description: 'Launch ephemeral sub-agent for parallel work',           category: 'lifecycle' },
+    { name: 'self_restart',           description: 'Gracefully restart the agent process',                   category: 'lifecycle' },
+    { name: 'self_rebuild',           description: 'Trigger a rebuild and restart cycle',                    category: 'lifecycle' },
+    { name: 'notify_operator',        description: 'Send a notification to the operator via ntfy',           category: 'lifecycle' },
+    // Memory (extended)
+    { name: 'memory_import_batch',    description: 'Import multiple memories in a single batch',             category: 'memory' },
+    { name: 'memory_redact',          description: 'Redact sensitive content from a memory',                 category: 'memory' },
+    { name: 'memory_delete',          description: 'Soft-delete a memory',                                   category: 'memory' },
+    { name: 'undo_memory_delete',     description: 'Restore a previously deleted memory',                    category: 'memory' },
+    // Scratchpad
+    { name: 'scratchpad_read',        description: 'Read from the agent scratchpad (ephemeral key-value)',   category: 'scratchpad' },
+    { name: 'scratchpad_write',       description: 'Write to the agent scratchpad (ephemeral key-value)',    category: 'scratchpad' },
     // Git
     { name: 'repo_status',            description: 'Show working tree status of the substrate repo',        category: 'git' },
     { name: 'repo_diff',              description: 'Show file diffs in the working tree',                   category: 'git' },
@@ -97,6 +100,9 @@
   ];
 
   // ── Grouped extended tools ──
+  const lifecycleTools = EXTENDED_TOOLS.filter(t => t.category === 'lifecycle');
+  const memoryTools = EXTENDED_TOOLS.filter(t => t.category === 'memory');
+  const scratchpadTools = EXTENDED_TOOLS.filter(t => t.category === 'scratchpad');
   const gitTools = EXTENDED_TOOLS.filter(t => t.category === 'git');
   const promptTools = EXTENDED_TOOLS.filter(t => t.category === 'prompt');
   const identityTools = EXTENDED_TOOLS.filter(t => t.category === 'identity');
@@ -114,6 +120,9 @@
   }
 
   const EXTENDED_GROUPS: ExtendedGroup[] = [
+    { id: 'lifecycle', label: 'Lifecycle & Shards', dot: CATEGORY_DOT.lifecycle, tools: lifecycleTools },
+    { id: 'memory', label: 'Memory (Extended)', dot: CATEGORY_DOT.memory, tools: memoryTools },
+    { id: 'scratchpad', label: 'Scratchpad', dot: CATEGORY_DOT.scratchpad, tools: scratchpadTools },
     { id: 'git', label: 'Git Self-Modification', dot: CATEGORY_DOT.git, tools: gitTools },
     { id: 'prompt', label: 'Prompt Stack', dot: CATEGORY_DOT.prompt, tools: promptTools },
     { id: 'identity', label: 'Identity', dot: CATEGORY_DOT.identity, tools: identityTools },

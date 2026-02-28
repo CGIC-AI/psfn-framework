@@ -137,6 +137,10 @@
 
   // Edit panel
 
+  function contactChannelKey(ch: { channel: string; userId: string }): string {
+    return `${ch.channel}:${ch.userId}`;
+  }
+
   function startEdit(contact: Contact) {
     editingContactId = contact.id;
     editDisplayName = contact.displayName;
@@ -148,11 +152,18 @@
     newChannelName = '';
     newChannelUserId = '';
     newChannelPrivacy = 'private';
-    // Initialize channel privacy edits from current values
+    // Initialize channel privacy edits from contact.channels
     channelPrivacyEdits = {};
-    const channels = getChannels(contact.id);
-    for (const ch of channels) {
-      channelPrivacyEdits[channelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
+    if (contact.channels) {
+      for (const ch of contact.channels) {
+        channelPrivacyEdits[contactChannelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
+      }
+    } else {
+      // Fallback to relatedChannelMap
+      const channels = getChannels(contact.id);
+      for (const ch of channels) {
+        channelPrivacyEdits[channelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
+      }
     }
   }
 
@@ -184,14 +195,24 @@
         patch.notes = editNotes;
       }
 
-      // Collect channel privacy changes
-      const channels = getChannels(contactId);
+      // Collect channel privacy changes from contact.channels or relatedChannelMap
       const privacyChanges: Array<{ channel: string; userId: string; privacyLevel: ChannelPrivacyLevel }> = [];
-      for (const ch of channels) {
-        const key = channelKey(ch);
-        const newPrivacy = channelPrivacyEdits[key];
-        if (newPrivacy && newPrivacy !== ch.privacyLevel) {
-          privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
+      if (contact.channels && contact.channels.length > 0) {
+        for (const ch of contact.channels) {
+          const key = contactChannelKey(ch);
+          const newPrivacy = channelPrivacyEdits[key];
+          if (newPrivacy && newPrivacy !== ch.privacyLevel) {
+            privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
+          }
+        }
+      } else {
+        const channels = getChannels(contactId);
+        for (const ch of channels) {
+          const key = channelKey(ch);
+          const newPrivacy = channelPrivacyEdits[key];
+          if (newPrivacy && newPrivacy !== ch.privacyLevel) {
+            privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
+          }
         }
       }
       if (privacyChanges.length > 0) {
@@ -498,24 +519,83 @@
             {/if}
           </div>
 
-          <!-- Channel Links with Privacy Badges -->
-          {#if channels.length > 0}
-            <div class="border-t border-bark-200 pt-2">
-              <p class="text-sm font-medium text-shadow-700 mb-1.5 uppercase tracking-wider">Channel Links</p>
+          <!-- Channel Identity Links -->
+          <div class="border-t border-bark-200 pt-2">
+            <p class="text-sm font-medium text-shadow-700 mb-1.5 uppercase tracking-wider">Channel Identities</p>
+            {#if contact.channels && contact.channels.length > 0}
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-bark-300">
+                      <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">Channel</th>
+                      <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">User ID</th>
+                      <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">Privacy</th>
+                      <th class="text-left py-1.5 text-shadow-700 font-medium text-sm">Seen</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each contact.channels as ch}
+                      {@const pb = privacyBadge(ch.privacyLevel)}
+                      <tr class="border-b border-bark-100">
+                        <td class="py-1.5 pr-2 text-shadow-800 font-medium">{ch.channel}</td>
+                        <td class="py-1.5 pr-2 font-mono text-shadow-800 text-sm break-all">{ch.userId}</td>
+                        <td class="py-1.5 pr-2">
+                          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
+                            style="{pb.bg}; {pb.text}">
+                            {pb.label}
+                          </span>
+                        </td>
+                        <td class="py-1.5 text-shadow-600 text-sm">
+                          {#if ch.firstSeen || ch.lastSeen}
+                            {#if ch.firstSeen}
+                              <span title="First seen">{formatDate(ch.firstSeen)}</span>
+                            {/if}
+                            {#if ch.firstSeen && ch.lastSeen}
+                              <span class="text-shadow-400 mx-0.5">-</span>
+                            {/if}
+                            {#if ch.lastSeen}
+                              <span title="Last seen">{formatDate(ch.lastSeen)}</span>
+                            {/if}
+                          {:else}
+                            <span class="text-shadow-400 italic">-</span>
+                          {/if}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {:else if contact.channelIdentities && contact.channelIdentities.length > 0}
+              <!-- Fallback: show channelIdentities without privacy/dates -->
               <div class="space-y-1">
-                {#each channels as ch}
-                  {@const pb = privacyBadge(ch.privacyLevel)}
+                {#each contact.channelIdentities as ci}
                   <div class="flex items-center gap-2">
-                    <span class="font-mono text-sm text-shadow-800">{ch.channel}:{ch.userId}</span>
-                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
-                      style="{pb.bg}; {pb.text}">
-                      {pb.label}
-                    </span>
+                    <span class="text-sm text-shadow-800 font-medium">{ci.channel}</span>
+                    <span class="font-mono text-sm text-shadow-700 break-all">{ci.userId}</span>
                   </div>
                 {/each}
               </div>
-            </div>
-          {/if}
+            {:else if channels.length > 0}
+              <!-- Fallback: show related conversation channels -->
+              <div class="space-y-1">
+                {#each channels as ch}
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm text-shadow-800 font-medium">{ch.channel}</span>
+                    <span class="font-mono text-sm text-shadow-700 break-all">{ch.userId}</span>
+                    {#if ch.privacyLevel}
+                      {@const pb = privacyBadge(ch.privacyLevel)}
+                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
+                        style="{pb.bg}; {pb.text}">
+                        {pb.label}
+                      </span>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="text-sm text-shadow-500 italic">No channel identities linked</p>
+            {/if}
+          </div>
 
           <!-- Profile + Memory count -->
           {#if profile}
@@ -631,7 +711,30 @@
               </div>
 
               <!-- Channel Privacy Editing -->
-              {#if channels.length > 0}
+              {#if contact.channels && contact.channels.length > 0}
+                <div>
+                  <p class="text-sm font-medium text-shadow-800 mb-2">Channel Privacy Levels</p>
+                  <div class="space-y-2">
+                    {#each contact.channels as ch}
+                      {@const key = contactChannelKey(ch)}
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.userId}</span>
+                        <select
+                          value={channelPrivacyEdits[key] ?? ch.privacyLevel}
+                          onchange={(e) => {
+                            channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
+                          }}
+                          class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-white text-shadow-800
+                                 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
+                          {#each CHANNEL_PRIVACY_LEVELS as pl}
+                            <option value={pl}>{pl.replace('_', ' ')}</option>
+                          {/each}
+                        </select>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {:else if channels.length > 0}
                 <div>
                   <p class="text-sm font-medium text-shadow-800 mb-2">Channel Privacy Levels</p>
                   <div class="space-y-2">

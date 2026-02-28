@@ -20,9 +20,24 @@ export interface AdminSchedulerApi {
   listTasks(): ScheduledTask[];
 }
 
+/** Managed skill record shape returned by the store. */
+export interface ManagedSkillRecord {
+  name: string;
+  description: string;
+  category: string;
+  version: number;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Minimal skills runtime interface for JSON API routes. */
 export interface AdminSkillsApi {
   getSnapshot(): SkillSnapshot;
+  listManaged(): ManagedSkillRecord[];
+  createSkill(input: { name: string; category: string; content: string; description?: string }): ManagedSkillRecord;
+  updateSkill(input: { name: string; content: string; description?: string }): ManagedSkillRecord;
+  invalidate(): void;
 }
 
 /** Minimal values journal interface for JSON API routes. */
@@ -482,11 +497,62 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/skills'),
       handle: (_req, res) => {
         if (!skillsRuntime) {
-          sendJson(res, 200, { snapshot: null });
+          sendJson(res, 200, { snapshot: null, managed: [] });
           return;
         }
         const snapshot = skillsRuntime.getSnapshot();
-        sendJson(res, 200, { snapshot });
+        const managed = skillsRuntime.listManaged();
+        sendJson(res, 200, { snapshot, managed });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/skills'),
+      handle: (req, res) => {
+        if (!skillsRuntime) {
+          sendJson(res, 400, { error: 'Skills runtime not available' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          try {
+            const input = parsed.value as { name: string; category: string; content: string; description?: string };
+            const result = skillsRuntime!.createSkill(input);
+            skillsRuntime!.invalidate();
+            sendJson(res, 201, { ok: true, skill: result });
+          } catch (e) {
+            sendJson(res, 400, { error: String(e instanceof Error ? e.message : e) });
+          }
+        });
+      },
+    },
+    {
+      method: 'PATCH',
+      match: exactPath('/api/admin/skills'),
+      handle: (req, res) => {
+        if (!skillsRuntime) {
+          sendJson(res, 400, { error: 'Skills runtime not available' });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          try {
+            const input = parsed.value as { name: string; content: string; description?: string };
+            const result = skillsRuntime!.updateSkill(input);
+            skillsRuntime!.invalidate();
+            sendJson(res, 200, { ok: true, skill: result });
+          } catch (e) {
+            sendJson(res, 400, { error: String(e instanceof Error ? e.message : e) });
+          }
+        });
       },
     },
     // ── Confirmations ──

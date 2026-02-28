@@ -143,14 +143,19 @@
   const PLACEHOLDER_VALUES = ['sytem prompt', 'system prompt', 'post history', 'post_history_instructions'];
 
   function isPlaceholder(value: string | undefined): boolean {
-    if (!value || !value.trim()) return true;
+    if (!value || !value.trim()) return false;
     return PLACEHOLDER_VALUES.some(p => value.trim().toLowerCase() === p);
+  }
+
+  function displayValue(value: string | undefined): string {
+    if (!value || !value.trim() || isPlaceholder(value)) return '';
+    return value;
   }
 
   // Inline edit helpers
   function startFieldEdit(field: string, value: string) {
     editingField = field;
-    editFieldValue = value;
+    editFieldValue = isPlaceholder(value) ? '' : (value ?? '');
   }
 
   function cancelFieldEdit() {
@@ -181,8 +186,36 @@
     }
   }
 
+  // Alternate greetings editing
+  let editingGreetingIndex = $state<number | null>(null);
+  let editGreetingValue = $state('');
+  let savingGreeting = $state(false);
+
+  function startGreetingEdit(index: number, value: string) {
+    editingGreetingIndex = index;
+    editGreetingValue = value;
+  }
+
+  function cancelGreetingEdit() {
+    editingGreetingIndex = null;
+    editGreetingValue = '';
+  }
+
+  // Appearance (extensions.visual_description) editing
+  let editingAppearance = $state(false);
+  let editAppearanceValue = $state('');
+  let savingAppearance = $state(false);
+
   let card = $derived(data?.card ?? null);
   let cardData = $derived(card?.data ?? null);
+  let appearanceValue = $derived(
+    cardData?.extensions?.visual_description
+      ? String(cardData.extensions.visual_description)
+      : ''
+  );
+  let alternateGreetings = $derived(
+    (cardData?.alternate_greetings as string[] | undefined) ?? []
+  );
 
   // Character card fields config
   interface CardFieldConfig {
@@ -433,75 +466,114 @@
           {/if}
         </div>
 
+        <!-- Appearance (extensions.visual_description) -->
+        <div class="card-garden p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Appearance</h3>
+            <span class="text-sm text-shadow-500 italic mr-2">extensions.visual_description (read-only)</span>
+          </div>
+          {#if appearanceValue}
+            <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">{appearanceValue}</div>
+          {:else}
+            <p class="text-sm text-shadow-500 italic">No visual description set in extensions</p>
+          {/if}
+        </div>
+
         <!-- Card fields -- each is click-to-edit -->
         {#each CARD_FIELDS as field}
-          {@const value = cardData[field.key] as string | undefined}
-          {#if !isPlaceholder(value)}
-            <div class="card-garden p-5">
-              <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">{field.label}</h3>
-                {#if editingField === field.key}
-                  <div class="flex gap-1.5">
-                    <button onclick={saveFieldEdit}
-                      disabled={savingField}
-                      class="px-2.5 py-1 text-sm font-medium rounded bg-gold-600 text-white hover:bg-gold-700 disabled:opacity-50 transition-colors">
-                      {savingField ? 'Saving...' : 'Save'}
-                    </button>
-                    <button onclick={cancelFieldEdit}
-                      disabled={savingField}
-                      class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 disabled:opacity-50 transition-colors border border-bark-300">
-                      Cancel
-                    </button>
-                  </div>
-                {:else}
-                  <button onclick={() => startFieldEdit(field.key, value ?? '')}
-                    class="text-sm text-gold-700 hover:text-gold-600 transition-colors font-medium">
-                    Edit
-                  </button>
-                {/if}
-              </div>
-
+          {@const rawValue = cardData[field.key] as string | undefined}
+          {@const value = displayValue(rawValue)}
+          <div class="card-garden p-5">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">{field.label}</h3>
               {#if editingField === field.key}
-                <textarea
-                  bind:value={editFieldValue}
-                  rows={field.rows}
-                  class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
-                         {field.mono ? 'font-mono' : ''}
-                         focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
-                ></textarea>
-              {:else if field.mono}
-                <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap leading-relaxed bg-bark-100 p-3 rounded-lg max-h-64 overflow-y-auto">{value ?? ''}</pre>
+                <div class="flex gap-1.5">
+                  <button onclick={saveFieldEdit}
+                    disabled={savingField}
+                    class="px-2.5 py-1 text-sm font-medium rounded bg-gold-600 text-white hover:bg-gold-700 disabled:opacity-50 transition-colors">
+                    {savingField ? 'Saving...' : 'Save'}
+                  </button>
+                  <button onclick={cancelFieldEdit}
+                    disabled={savingField}
+                    class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 disabled:opacity-50 transition-colors border border-bark-300">
+                    Cancel
+                  </button>
+                </div>
               {:else}
-                <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">{value ?? ''}</div>
+                <button onclick={() => startFieldEdit(field.key, rawValue ?? '')}
+                  class="text-sm text-gold-700 hover:text-gold-600 transition-colors font-medium">
+                  Edit
+                </button>
+              {/if}
+            </div>
+
+            {#if editingField === field.key}
+              <textarea
+                bind:value={editFieldValue}
+                rows={field.rows}
+                class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
+                       {field.mono ? 'font-mono' : ''}
+                       focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+              ></textarea>
+            {:else if value}
+              {#if field.mono}
+                <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap leading-relaxed bg-bark-100 p-3 rounded-lg max-h-64 overflow-y-auto">{value}</pre>
+              {:else}
+                <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">{value}</div>
+              {/if}
+            {:else}
+              <p class="text-sm text-shadow-500 italic">Not set -- click Edit to add content</p>
+            {/if}
+          </div>
+        {/each}
+
+        <!-- Alternate Greetings -->
+        <div class="card-garden overflow-hidden">
+          <button
+            class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
+            onclick={() => showAlternateGreetings = !showAlternateGreetings}
+          >
+            <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">
+              Alternate Greetings
+              <span class="text-shadow-500 font-normal normal-case ml-1">({alternateGreetings.length})</span>
+            </h3>
+            <svg class="w-4 h-4 text-shadow-600 transition-transform {showAlternateGreetings ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {#if showAlternateGreetings}
+            <div class="border-t border-bark-300 p-5 space-y-3">
+              {#if alternateGreetings.length > 0}
+                {#each alternateGreetings as greeting, i}
+                  <div>
+                    <div class="flex items-center justify-between mb-1">
+                      <p class="text-sm font-medium text-shadow-700">Greeting {i + 1}</p>
+                    </div>
+                    {#if editingGreetingIndex === i}
+                      <textarea
+                        bind:value={editGreetingValue}
+                        rows={4}
+                        class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
+                               focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                      ></textarea>
+                      <div class="flex gap-1.5 mt-2">
+                        <button onclick={cancelGreetingEdit}
+                          disabled={savingGreeting}
+                          class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 transition-colors border border-bark-300">
+                          Cancel
+                        </button>
+                      </div>
+                    {:else}
+                      <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed bg-bark-100 p-3 rounded-lg">{greeting}</div>
+                    {/if}
+                  </div>
+                {/each}
+              {:else}
+                <p class="text-sm text-shadow-500 italic">No alternate greetings defined</p>
               {/if}
             </div>
           {/if}
-        {/each}
-
-        <!-- Alternate Greetings (collapsible) -->
-        {#if cardData.alternate_greetings && (cardData.alternate_greetings as string[]).length > 0}
-          <div class="card-garden overflow-hidden">
-            <button
-              class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
-              onclick={() => showAlternateGreetings = !showAlternateGreetings}
-            >
-              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Alternate Greetings</h3>
-              <svg class="w-4 h-4 text-shadow-600 transition-transform {showAlternateGreetings ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {#if showAlternateGreetings}
-              <div class="border-t border-bark-300 p-5 space-y-3">
-                {#each cardData.alternate_greetings as greeting, i}
-                  <div>
-                    <p class="text-sm font-medium text-shadow-700 mb-1">Greeting {i + 1}</p>
-                    <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed bg-bark-100 p-3 rounded-lg">{greeting}</div>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
+        </div>
 
         <!-- Extensions (collapsible) -->
         {#if cardData.extensions && Object.keys(cardData.extensions).length > 0}

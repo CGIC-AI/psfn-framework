@@ -567,20 +567,20 @@
 
     <!-- Terminal-style event stream -->
     <div
-      class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-shadow-800"
-      style="background-color: var(--color-shadow-900); min-height: 400px;"
+      class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-shadow-800 bg-shadow-900"
+      style="min-height: 400px;"
       bind:this={scrollContainer}
       onscroll={handleScroll}
     >
       {#if filteredEvents.length === 0}
         <div class="p-12 text-center">
-          <p class="text-sm italic font-sans" style="color: var(--color-bark-400);">
+          <p class="text-sm italic font-sans text-bark-400">
             No sap flows yet -- events will appear as the substrate runs
           </p>
           {#if !isConnected()}
             <button
               onclick={handleConnect}
-              class="mt-3 text-sm font-sans font-medium" style="color: var(--color-gold-400);"
+              class="mt-3 text-sm font-sans font-medium text-gold-400 hover:text-gold-300"
             >
               Connect to start
             </button>
@@ -597,22 +597,21 @@
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expandedIdx = expandedIdx === i ? null : i; } }}
             >
               <!-- Timestamp -->
-              <span class="shrink-0 w-28" style="color: var(--color-bark-500);">
+              <span class="shrink-0 w-28 text-bark-500">
                 {formatTime(event.timestamp)}
               </span>
               <!-- Event type (gold) -->
-              <span class="shrink-0 w-56 font-medium truncate" style="color: var(--color-gold-400);">
+              <span class="shrink-0 w-56 font-medium truncate text-gold-400">
                 {event.type}
               </span>
               <!-- Key-value data -->
-              <span class="flex-1 truncate" style="color: var(--color-bark-300);">
+              <span class="flex-1 truncate text-bark-300">
                 {formatEventKv(event.data)}
               </span>
             </div>
             {#if expandedIdx === i}
               <pre
-                class="mx-2 mb-1 p-3 rounded text-sm font-mono overflow-x-auto max-h-64 overflow-y-auto"
-                style="background-color: var(--color-shadow-950); color: var(--color-bark-300);"
+                class="mx-2 mb-1 p-3 rounded text-sm font-mono overflow-x-auto max-h-64 overflow-y-auto bg-shadow-950 text-bark-300"
               >{formatJson(event.data)}</pre>
             {/if}
           {/each}

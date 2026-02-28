@@ -130,6 +130,14 @@ export interface EditableSettings {
   discordHeartbeatChannel?: string;
   telegramEnabled?: boolean;
   telegramAuthorizedUsers?: string;
+
+  // MoA (Mixture of Agents) configuration
+  moaEnabled?: boolean;
+  moaReferenceModels?: string[];
+  moaAggregatorModel?: string;
+  moaMaxRounds?: number;
+  moaMaxTokensPerRound?: number;
+  moaTimeoutMs?: number;
 }
 
 export const RUNTIME_SETTINGS_KEYS = [
@@ -182,6 +190,13 @@ export const RUNTIME_SETTINGS_KEYS = [
   'discordHeartbeatChannel',
   'telegramEnabled',
   'telegramAuthorizedUsers',
+  // MoA (Mixture of Agents)
+  'moaEnabled',
+  'moaReferenceModels',
+  'moaAggregatorModel',
+  'moaMaxRounds',
+  'moaMaxTokensPerRound',
+  'moaTimeoutMs',
 ] as const;
 
 export type RuntimeSettingKey = typeof RUNTIME_SETTINGS_KEYS[number];
@@ -641,6 +656,18 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.telegramAuthorizedUsers = trimmed || undefined;
   }
 
+  // MoA (Mixture of Agents)
+  if ('moaEnabled' in settings) {
+    normalized.moaEnabled = toBoolean(settings.moaEnabled) ?? false;
+  }
+  if ('moaReferenceModels' in settings) {
+    normalized.moaReferenceModels = toStringList(settings.moaReferenceModels) ?? [];
+  }
+  if ('moaAggregatorModel' in settings) {
+    const trimmed = typeof settings.moaAggregatorModel === 'string' ? settings.moaAggregatorModel.trim() : '';
+    normalized.moaAggregatorModel = trimmed || undefined;
+  }
+
   return normalized;
 }
 
@@ -880,6 +907,13 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     discordHeartbeatChannel: null,
     telegramEnabled: false,
     telegramAuthorizedUsers: null,
+    // MoA (Mixture of Agents)
+    moaEnabled: config.moaEnabled ?? false,
+    moaReferenceModels: config.moaReferenceModels ?? [],
+    moaAggregatorModel: config.moaAggregatorModel ?? null,
+    moaMaxRounds: config.moaMaxRounds ?? null,
+    moaMaxTokensPerRound: config.moaMaxTokensPerRound ?? null,
+    moaTimeoutMs: config.moaTimeoutMs ?? null,
   };
 }
 
@@ -1022,6 +1056,23 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     if (trimmed) config.deepgramModel = trimmed;
   }
 
+  // MoA (Mixture of Agents)
+  if ('moaEnabled' in settings) {
+    config.moaEnabled = settings.moaEnabled ?? false;
+  }
+  if ('moaReferenceModels' in settings) {
+    config.moaReferenceModels = settings.moaReferenceModels && settings.moaReferenceModels.length > 0
+      ? [...settings.moaReferenceModels]
+      : undefined;
+  }
+  if ('moaAggregatorModel' in settings) {
+    const trimmed = settings.moaAggregatorModel?.trim() ?? '';
+    config.moaAggregatorModel = trimmed || undefined;
+  }
+  if (settings.moaMaxRounds !== undefined) config.moaMaxRounds = settings.moaMaxRounds;
+  if (settings.moaMaxTokensPerRound !== undefined) config.moaMaxTokensPerRound = settings.moaMaxTokensPerRound;
+  if (settings.moaTimeoutMs !== undefined) config.moaTimeoutMs = settings.moaTimeoutMs;
+
   const shouldSyncModels = hasModelSettings(settings)
     || config.modelCatalog !== undefined
     || config.modelRoleAssignments !== undefined;
@@ -1069,6 +1120,9 @@ export const SETTINGS_VALIDATION = {
   thinkMaxSubQueries: { min: 1, max: 100 },
   retryMaxAttempts: { min: 0, max: 10 },
   retryBaseDelayMs: { min: 500, max: 30000 },
+  moaMaxRounds: { min: 1, max: 10 },
+  moaMaxTokensPerRound: { min: 256, max: 1_000_000 },
+  moaTimeoutMs: { min: 5000, max: 600_000 },
 } as const;
 
 /** Validate and parse form data into EditableSettings. Returns [settings, errors]. */
@@ -1286,6 +1340,27 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const telegramAuthorizedUsersRaw = params.get('telegramAuthorizedUsers');
   if (telegramAuthorizedUsersRaw !== null) {
     settings.telegramAuthorizedUsers = telegramAuthorizedUsersRaw.trim();
+  }
+
+  // MoA (Mixture of Agents)
+  const moaEnabledRaw = params.get('moaEnabled');
+  if (moaEnabledRaw !== null) {
+    const enabled = toBoolean(moaEnabledRaw);
+    if (enabled === undefined) {
+      errors.push('moaEnabled must be true or false');
+    } else {
+      settings.moaEnabled = enabled;
+    }
+  }
+
+  const moaReferenceModelsRaw = params.get('moaReferenceModels');
+  if (moaReferenceModelsRaw !== null) {
+    settings.moaReferenceModels = parseCsvList(moaReferenceModelsRaw);
+  }
+
+  const moaAggregatorModelRaw = params.get('moaAggregatorModel');
+  if (moaAggregatorModelRaw !== null) {
+    settings.moaAggregatorModel = moaAggregatorModelRaw.trim();
   }
 
   // Numeric fields

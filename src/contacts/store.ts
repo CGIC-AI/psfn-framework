@@ -31,8 +31,10 @@ import {
 } from './store/identity-utils.js';
 import { mergeContacts as mergeContactsOperation } from './store/merge-operations.js';
 import {
+  deleteContact as deleteContactOperation,
   recordContactChannelActivity,
   setContactTrustLevel,
+  unlinkChannelIdentity as unlinkChannelIdentityOperation,
   updateContactChannelPrivacy,
   updateContactEmotionalBaseline,
   updateContactIdentityProfile,
@@ -297,5 +299,21 @@ export class ContactStore {
 
   getCanonicalContactKey(channel: ContactChannel, channelUserId: string): string | undefined {
     return getCanonicalContactKey(this.db, channel, channelUserId);
+  }
+
+  deleteContact(id: string): boolean {
+    const contact = this.getById(id);
+    if (!contact) return false;
+    if (contact.trustLevel === 'primary') {
+      log.warn('Attempted to delete primary user contact', { id });
+      return false;
+    }
+    return deleteContactOperation(this.db, id);
+  }
+
+  unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string): boolean {
+    const contact = this.getById(contactId);
+    if (!contact) return false;
+    return unlinkChannelIdentityOperation(this.db, contactId, channel, channelUserId);
   }
 }

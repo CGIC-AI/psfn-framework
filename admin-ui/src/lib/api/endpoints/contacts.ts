@@ -1,4 +1,4 @@
-import { apiGet, apiPatch } from '$lib/api/client';
+import { apiGet, apiPatch, apiPost, apiDelete } from '$lib/api/client';
 import type { AdminContactListData, ContactUpdateResult, ChannelPrivacyLevel } from '$lib/types';
 
 export function listContacts(): Promise<AdminContactListData> {
@@ -22,5 +22,38 @@ export function updateContact(
   return apiPatch<ContactUpdateResult>(
     `/api/admin/contacts/${encodeURIComponent(id)}`,
     patch
+  );
+}
+
+export interface ContactCreatePayload {
+  displayName: string;
+  trustLevel?: string;
+  relationshipType?: string;
+  notes?: string;
+}
+
+export function createContact(payload: ContactCreatePayload): Promise<ContactUpdateResult> {
+  return apiPost<ContactUpdateResult>('/api/admin/contacts', payload);
+}
+
+export function deleteContact(id: string): Promise<ContactUpdateResult> {
+  return apiDelete<ContactUpdateResult>(`/api/admin/contacts/${encodeURIComponent(id)}`);
+}
+
+export function mergeContacts(targetId: string, sourceId: string): Promise<ContactUpdateResult> {
+  return apiPost<ContactUpdateResult>(
+    `/api/admin/contacts/${encodeURIComponent(targetId)}/merge`,
+    { sourceId },
+  );
+}
+
+export function unlinkChannelIdentity(
+  contactId: string,
+  channel: string,
+  userId: string,
+): Promise<ContactUpdateResult> {
+  return apiPost<ContactUpdateResult>(
+    `/api/admin/contacts/${encodeURIComponent(contactId)}/unlink`,
+    { channel, userId },
   );
 }

@@ -177,6 +177,168 @@ export class AdminContactsDataService implements AdminContactsService {
     return updated.id === contact.id;
   }
 
+  createContact(body: string): ContactUpdateResult {
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) {
+      return { ok: false, message: 'Contact store not available' };
+    }
+
+    let payload: { displayName?: string; trustLevel?: TrustLevel; relationshipType?: RelationshipType; notes?: string };
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return { ok: false, message: 'Request body must be valid JSON' };
+    }
+
+    const displayName = payload.displayName?.trim();
+    if (!displayName) {
+      return { ok: false, message: 'displayName is required' };
+    }
+
+    if (payload.trustLevel !== undefined) {
+      if (!TRUST_LEVELS.includes(payload.trustLevel)) {
+        return { ok: false, message: `Invalid trust level: ${payload.trustLevel}` };
+      }
+      if (payload.trustLevel === 'primary') {
+        return { ok: false, message: 'Cannot create a contact with primary trust level' };
+      }
+    }
+
+    if (payload.relationshipType !== undefined && !VALID_RELATIONSHIP_TYPES.includes(payload.relationshipType)) {
+      return { ok: false, message: `Invalid relationship type: ${payload.relationshipType}` };
+    }
+
+    const contact = contactStore.upsert({
+      displayName,
+      trustLevel: payload.trustLevel ?? 'regular',
+      relationshipType: payload.relationshipType ?? 'acquaintance',
+      notes: payload.notes,
+    });
+
+    return {
+      ok: true,
+      message: 'Contact created',
+      contact,
+      relatedChannels: [],
+    };
+  }
+
+  deleteContact(contactId: string): ContactUpdateResult {
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) {
+      return { ok: false, message: 'Contact store not available' };
+    }
+
+    const contact = contactStore.getById(contactId);
+    if (!contact) {
+      return { ok: false, message: 'Contact not found' };
+    }
+
+    if (contact.trustLevel === 'primary') {
+      return { ok: false, message: 'Cannot delete the primary contact' };
+    }
+
+    if (!contactStore.deleteContact(contactId)) {
+      return { ok: false, message: 'Failed to delete contact' };
+    }
+
+    return { ok: true, message: 'Contact deleted' };
+  }
+
+  mergeContacts(targetId: string, body: string): ContactUpdateResult {
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) {
+      return { ok: false, message: 'Contact store not available' };
+    }
+
+    let payload: { sourceId?: string };
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return { ok: false, message: 'Request body must be valid JSON' };
+    }
+
+    const sourceId = payload.sourceId?.trim();
+    if (!sourceId) {
+      return { ok: false, message: 'sourceId is required' };
+    }
+
+    if (sourceId === targetId) {
+      return { ok: false, message: 'Cannot merge a contact with itself' };
+    }
+
+    const target = contactStore.getById(targetId);
+    if (!target) {
+      return { ok: false, message: 'Target contact not found' };
+    }
+
+    const source = contactStore.getById(sourceId);
+    if (!source) {
+      return { ok: false, message: 'Source contact not found' };
+    }
+
+    if (!contactStore.mergeContacts(sourceId, targetId)) {
+      return { ok: false, message: 'Merge failed' };
+    }
+
+    const merged = contactStore.getById(targetId);
+    if (!merged) {
+      return { ok: false, message: 'Merge succeeded but target not found after merge' };
+    }
+
+    return {
+      ok: true,
+      message: 'Contacts merged',
+      contact: merged,
+      relatedChannels: buildRelatedConversationChannelMap({
+        contacts: [merged],
+        sessionStore: this.deps.sessionStore,
+      }).get(merged.id) ?? [],
+    };
+  }
+
+  unlinkChannelIdentity(contactId: string, body: string): ContactUpdateResult {
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) {
+      return { ok: false, message: 'Contact store not available' };
+    }
+
+    let payload: { channel?: string; userId?: string };
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return { ok: false, message: 'Request body must be valid JSON' };
+    }
+
+    const channel = payload.channel?.trim();
+    const userId = payload.userId?.trim();
+    if (!channel || !userId) {
+      return { ok: false, message: 'channel and userId are required' };
+    }
+
+    const contact = contactStore.getById(contactId);
+    if (!contact) {
+      return { ok: false, message: 'Contact not found' };
+    }
+
+    if (!contactStore.unlinkChannelIdentity(contactId, channel, userId)) {
+      return { ok: false, message: 'Channel identity not found or already unlinked' };
+    }
+
+    const updated = contactStore.getById(contactId);
+    return {
+      ok: true,
+      message: 'Channel identity unlinked',
+      contact: updated,
+      relatedChannels: updated
+        ? buildRelatedConversationChannelMap({
+          contacts: [updated],
+          sessionStore: this.deps.sessionStore,
+        }).get(updated.id) ?? []
+        : [],
+    };
+  }
+
   updateContact(contactId: string, body: string): ContactUpdateResult {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {

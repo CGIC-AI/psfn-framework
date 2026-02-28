@@ -22,6 +22,7 @@ import type {
   ThinkTraceView,
   ConfirmationQueueAdminApi,
   AdminAuditActionType,
+  AdminAuditActor,
   AdminAuditDecision,
   AdminChatDebugCategory,
   AdminChatDebugEventPayload,
@@ -439,8 +440,8 @@ export class LegacyAdminHandlers {
     registerAuditTimelineSources({
       eventBus: this.eventBus,
       activeToolInvocations: this.activeToolInvocations,
-      appendAuditTimelineEntry: (actionType, decision, narrative, details = []) => {
-        this.appendAuditTimelineEntry(actionType, decision, narrative, details);
+      appendAuditTimelineEntry: (actionType, decision, narrative, details = [], actor) => {
+        this.appendAuditTimelineEntry(actionType, decision, narrative, details, actor);
       },
     });
   }
@@ -450,6 +451,7 @@ export class LegacyAdminHandlers {
     decision: AdminAuditDecision,
     narrative: string,
     details: Array<string | null | undefined> = [],
+    actor?: AdminAuditActor,
   ): void {
     const detailText = details.filter((value): value is string => Boolean(value && value.trim())).join(' • ');
     this.auditTimeline.append({
@@ -457,6 +459,7 @@ export class LegacyAdminHandlers {
       decision,
       narrative,
       details: detailText || undefined,
+      actor,
     });
   }
 
@@ -2283,11 +2286,13 @@ export class LegacyAdminHandlers {
   }
 
   chatBootstrap(requestOrigin?: string): AdminChatBootstrapResponse {
-    return this.chatBootstrapService.buildBootstrap({ requestOrigin });
+    const settingsApiBaseUrl = this.resolveChatApiBaseUrlFromSettings();
+    return this.chatBootstrapService.buildBootstrap({ requestOrigin, settingsApiBaseUrl });
   }
 
   chatModelRoomBootstrap(requestOrigin?: string): AdminModelRoomBootstrapResponse {
-    return this.chatBootstrapService.buildModelRoomBootstrap(this.config, { requestOrigin });
+    const settingsApiBaseUrl = this.resolveChatApiBaseUrlFromSettings();
+    return this.chatBootstrapService.buildModelRoomBootstrap(this.config, { requestOrigin, settingsApiBaseUrl });
   }
 
   private async renderConfirmationQueueFragment(
@@ -2328,7 +2333,20 @@ export class LegacyAdminHandlers {
     requestOrigin?: string,
   ): AdminChatBootstrapResponse {
     const update = this.parseChatBootstrapUpdate(body, contentTypeHeader);
-    return this.chatBootstrapService.updateSelection(update, { requestOrigin });
+    const settingsApiBaseUrl = this.resolveChatApiBaseUrlFromSettings();
+    return this.chatBootstrapService.updateSelection(update, { requestOrigin, settingsApiBaseUrl });
+  }
+
+  private resolveChatApiBaseUrlFromSettings(): string | undefined {
+    try {
+      const settings = loadSettings(this.config.dataDir);
+      const raw = settings.chatApiBaseUrl;
+      if (typeof raw !== 'string') return undefined;
+      const trimmed = raw.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private parseChatBootstrapUpdate(

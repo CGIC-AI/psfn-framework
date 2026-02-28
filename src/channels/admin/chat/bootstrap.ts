@@ -60,6 +60,9 @@ interface AdminChatBootstrapServiceOptions {
 
 interface AdminChatBootstrapRuntimeOptions {
   requestOrigin?: string;
+  /** Per-call override for the API base URL, e.g. from editable settings.
+   *  Takes priority over the constructor-level `apiBaseUrl` option. */
+  settingsApiBaseUrl?: string;
 }
 
 function normalizeTrimmed(value: string | undefined): string | undefined {
@@ -135,7 +138,7 @@ export class AdminChatBootstrapService {
     options: AdminChatBootstrapRuntimeOptions = {},
   ): AdminModelRoomBootstrapResponse {
     const apiBaseUrl = resolveAdminChatApiBaseUrl({
-      explicitApiBaseUrl: this.configuredApiBaseUrl,
+      explicitApiBaseUrl: options.settingsApiBaseUrl ?? this.configuredApiBaseUrl,
       apiHost: this.configuredApiHost,
       apiPort: this.configuredApiPort,
       browserOrigin: options.requestOrigin,
@@ -249,7 +252,7 @@ export class AdminChatBootstrapService {
       this.selection.userId,
     );
     const apiBaseUrl = resolveAdminChatApiBaseUrl({
-      explicitApiBaseUrl: this.configuredApiBaseUrl,
+      explicitApiBaseUrl: options.settingsApiBaseUrl ?? this.configuredApiBaseUrl,
       apiHost: this.configuredApiHost,
       apiPort: this.configuredApiPort,
       browserOrigin: options.requestOrigin,

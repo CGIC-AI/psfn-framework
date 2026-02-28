@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAbsoluteAdminChatApiUrl,
   resolveAdminChatApiBaseUrl,
+  RELATIVE_BASE_URL,
 } from './api-base-url.js';
 
 describe('resolveAdminChatApiBaseUrl', () => {
@@ -15,8 +16,13 @@ describe('resolveAdminChatApiBaseUrl', () => {
     expect(value).toBe('https://api.example.com/v1/');
   });
 
-  it('defaults to localhost API host when no options are provided', () => {
+  it('returns relative base URL when no port is provided', () => {
     const value = resolveAdminChatApiBaseUrl();
+    expect(value).toBe(RELATIVE_BASE_URL);
+  });
+
+  it('uses default localhost with explicit port', () => {
+    const value = resolveAdminChatApiBaseUrl({ apiPort: 3000 });
     expect(value).toBe('http://127.0.0.1:3000');
   });
 
@@ -64,5 +70,10 @@ describe('buildAbsoluteAdminChatApiUrl', () => {
   it('builds absolute endpoint URLs from base URL', () => {
     const value = buildAbsoluteAdminChatApiUrl('/v1/chat/completions', 'http://127.0.0.1:3000');
     expect(value).toBe('http://127.0.0.1:3000/v1/chat/completions');
+  });
+
+  it('returns relative path when base URL is RELATIVE_BASE_URL', () => {
+    const value = buildAbsoluteAdminChatApiUrl('/v1/chat/completions', RELATIVE_BASE_URL);
+    expect(value).toBe('/v1/chat/completions');
   });
 });

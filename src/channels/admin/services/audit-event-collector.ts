@@ -1,6 +1,7 @@
 import type { EventBus } from '../../../event-bus.js';
 import type {
   AdminAuditActionType,
+  AdminAuditActor,
   AdminAuditDecision,
 } from '../types.js';
 
@@ -22,6 +23,7 @@ export interface AuditTimelineAppender {
     decision: AdminAuditDecision,
     narrative: string,
     details?: Array<string | null | undefined>,
+    actor?: AdminAuditActor,
   ): void;
 }
 
@@ -66,6 +68,7 @@ export function registerAuditTimelineSources(options: {
         shardId ? `shard=${shardId}` : null,
         durationMs !== null ? `durationMs=${durationMs}` : null,
       ],
+      'companion',
     );
 
     if (AGENT_IDENTITY_EDIT_TOOLS.has(toolLabel)) {
@@ -80,6 +83,7 @@ export function registerAuditTimelineSources(options: {
           shardId ? `shard=${shardId}` : null,
           durationMs !== null ? `durationMs=${durationMs}` : null,
         ],
+        'companion',
       );
     }
   });
@@ -102,6 +106,7 @@ export function registerAuditTimelineSources(options: {
         `deduplicated=${deduplicatedCount}`,
         `superseded=${supersededCount}`,
       ],
+      'companion',
     );
   });
 
@@ -114,6 +119,7 @@ export function registerAuditTimelineSources(options: {
         `model=${response.metadata.model}`,
         `durationMs=${response.metadata.durationMs}`,
       ],
+      'companion',
     );
   });
 
@@ -127,6 +133,7 @@ export function registerAuditTimelineSources(options: {
         `signals=${event.signals.join(',') || 'none'}`,
         `draftLength=${event.draftLength}`,
       ],
+      'companion',
     );
   });
 
@@ -142,6 +149,7 @@ export function registerAuditTimelineSources(options: {
         `contextMessages=${event.contextMessageCount}`,
         `memoryContextChars=${event.memoryContextChars}`,
       ],
+      'companion',
     );
   });
 
@@ -155,6 +163,7 @@ export function registerAuditTimelineSources(options: {
         event.scope ? `scope=${event.scope}` : null,
         `eventId=${event.id}`,
       ],
+      'companion',
     );
   });
 
@@ -167,6 +176,7 @@ export function registerAuditTimelineSources(options: {
         `activeSessions=${event.activeSessions}`,
         `maxSessions=${event.maxSessions}`,
       ],
+      'companion',
     );
   });
 
@@ -185,6 +195,7 @@ export function registerAuditTimelineSources(options: {
         `durationMs=${event.durationMs}`,
         `activeSessions=${event.activeSessions}`,
       ],
+      'companion',
     );
   });
 
@@ -201,6 +212,7 @@ export function registerAuditTimelineSources(options: {
         event.observed !== undefined ? `observed=${event.observed}` : null,
         `action=${event.action}`,
       ],
+      'companion',
     );
   });
 }

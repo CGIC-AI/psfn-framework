@@ -110,6 +110,11 @@ export interface EditableSettings {
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   capabilityTier?: CapabilityTier;
+  /** Override the base URL used by Garden Chat to reach the OpenAI-compatible API.
+   *  When set, this takes priority over the `API_BASE_URL` env var and the
+   *  auto-resolved URL derived from `API_HOST`/`API_PORT`. Useful when the
+   *  API server is behind a reverse proxy or on a non-standard URL. */
+  chatApiBaseUrl?: string;
 
   // Voice / TTS (non-secret config only — API keys stay in .env)
   ttsProvider?: 'elevenlabs' | 'echo' | 'disabled';

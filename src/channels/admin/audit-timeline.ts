@@ -13,6 +13,7 @@ export const ADMIN_AUDIT_ACTION_TYPES: AdminAuditActionType[] = [
   'identity_edit',
   'external_action',
   'memory_mutation',
+  'settings_change',
 ];
 
 export const ADMIN_AUDIT_DECISIONS: AdminAuditDecision[] = [
@@ -61,6 +62,7 @@ export class AdminAuditTimelineStore {
       decision: entry.decision,
       narrative: entry.narrative,
       details: entry.details?.trim() || undefined,
+      actor: entry.actor,
     };
     this.entries.unshift(normalized);
     if (this.entries.length > MAX_AUDIT_TIMELINE_ENTRIES) {

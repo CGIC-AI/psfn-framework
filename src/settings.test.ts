@@ -626,6 +626,33 @@ describe('settings', () => {
       const [, errors] = parseSettingsForm(params);
       expect(errors.length).toBe(1);
     });
+
+    it('parses capabilityTier field', () => {
+      const params = new URLSearchParams({
+        capabilityTier: 'custom',
+      });
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.capabilityTier).toBe('custom');
+    });
+
+    it('rejects invalid capabilityTier value', () => {
+      const params = new URLSearchParams({
+        capabilityTier: 'invalid_tier',
+      });
+      const [, errors] = parseSettingsForm(params);
+      expect(errors.length).toBe(1);
+      expect(errors[0]).toContain('capabilityTier');
+    });
+
+    it('accepts all valid capabilityTier values', () => {
+      for (const tier of ['nursery', 'apprentice', 'autonomous', 'custom']) {
+        const params = new URLSearchParams({ capabilityTier: tier });
+        const [settings, errors] = parseSettingsForm(params);
+        expect(errors).toEqual([]);
+        expect(settings.capabilityTier).toBe(tier);
+      }
+    });
   });
 
   describe('runtime settings snapshot', () => {
@@ -816,6 +843,31 @@ describe('settings', () => {
       expect(config.moaMaxRounds).toBe(2);
       expect(config.moaMaxTokensPerRound).toBe(4096);
       expect(config.moaTimeoutMs).toBe(30000);
+    });
+
+    it('round-trip save -> load -> apply preserves capabilityTier', () => {
+      saveSettings(tempDir, {
+        capabilityTier: 'autonomous',
+      });
+
+      const loaded = loadSettings(tempDir);
+      const config = makeConfig();
+      applySettings(config, loaded);
+
+      expect(config.capabilityTier).toBe('autonomous');
+    });
+
+    it('round-trip save -> load -> apply handles custom capabilityTier', () => {
+      saveSettings(tempDir, {
+        capabilityTier: 'custom',
+      });
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.capabilityTier).toBe('custom');
+
+      const config = makeConfig();
+      applySettings(config, loaded);
+      expect(config.capabilityTier).toBe('custom');
     });
   });
 });

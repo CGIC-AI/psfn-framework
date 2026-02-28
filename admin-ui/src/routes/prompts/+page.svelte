@@ -9,12 +9,14 @@
     rollbackPrompt,
     getPromptDiff,
   } from '$lib/api/endpoints/prompts';
+  import { apiPost } from '$lib/api/client';
   import type {
     PromptLayer,
     PromptRegistryEntry,
     AdminPromptDetailData,
     PromptHistoryEntry,
     PromptDiffResult,
+    PromptUpdateResult,
   } from '$lib/types';
 
   // ── Structured prompt constants ──
@@ -437,6 +439,22 @@
     }
   }
 
+  function buildReorderedLayerIds(sourceIdx: number, targetIdx: number): string[] | null {
+    if (sourceIdx === targetIdx) return null;
+    if (sourceIdx < 0 || sourceIdx >= sortedLayers.length) return null;
+    if (targetIdx < 0 || targetIdx >= sortedLayers.length) return null;
+
+    const nextOrder = sortedLayers.map(layer => layer.id);
+    const [movedLayerId] = nextOrder.splice(sourceIdx, 1);
+    if (!movedLayerId) return null;
+    nextOrder.splice(targetIdx, 0, movedLayerId);
+    return nextOrder;
+  }
+
+  async function reorderLayers(layerIds: string[]) {
+    await apiPost<PromptUpdateResult>('/api/admin/prompts/reorder', { layerIds });
+  }
+
   // ── Drag-and-drop reorder ──
   function onDragStart(e: DragEvent, idx: number) {
     dragSourceIdx = idx;
@@ -466,23 +484,15 @@
       return;
     }
 
-    const sourceLayer = sortedLayers[dragSourceIdx];
-    const targetLayer = sortedLayers[targetIdx];
-    if (!sourceLayer || !targetLayer) {
+    const nextOrder = buildReorderedLayerIds(dragSourceIdx, targetIdx);
+    if (!nextOrder) {
       dragSourceIdx = null;
       return;
     }
-
-    // Swap priorities
-    const srcPriority = sourceLayer.priority;
-    const tgtPriority = targetLayer.priority;
     dragSourceIdx = null;
 
     try {
-      await Promise.all([
-        updatePrompt(sourceLayer.id, { priority: tgtPriority }),
-        updatePrompt(targetLayer.id, { priority: srcPriority }),
-      ]);
+      await reorderLayers(nextOrder);
       await refreshList();
       showToast('Reordered');
     } catch (e2) {
@@ -502,14 +512,10 @@
     if (idx < 0) return;
     const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
     if (swapIdx < 0 || swapIdx >= sortedLayers.length) return;
-    const current = sortedLayers[idx];
-    const target = sortedLayers[swapIdx];
-    if (!current || !target) return;
+    const nextOrder = buildReorderedLayerIds(idx, swapIdx);
+    if (!nextOrder) return;
     try {
-      await Promise.all([
-        updatePrompt(current.id, { priority: target.priority }),
-        updatePrompt(target.id, { priority: current.priority }),
-      ]);
+      await reorderLayers(nextOrder);
       await refreshList();
     } catch (e2) {
       error = e2 instanceof Error ? e2.message : 'Failed to reorder';

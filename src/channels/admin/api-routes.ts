@@ -715,6 +715,34 @@ export function buildAdminApiRoutes(options: {
         });
       },
     },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/prompts/reorder'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+
+          const reorderablePromptsService = promptsService as AdminPromptsService & {
+            reorderPromptLayers?: (payload: string) => { ok: boolean; message: string };
+          };
+          if (typeof reorderablePromptsService.reorderPromptLayers !== 'function') {
+            sendJson(res, 400, { error: 'Prompt reorder not available' });
+            return;
+          }
+
+          const result = reorderablePromptsService.reorderPromptLayers(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
     // Sub-path routes MUST be before generic prefixed param routes
     {
       method: 'POST',

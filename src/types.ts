@@ -306,6 +306,14 @@ export interface SubstrateConfig {
   wyomingEnabled?: boolean;
   wyomingHost?: string;
   wyomingPort?: number;
+
+  // ── MoA (Mixture of Agents) ──
+  moaEnabled?: boolean;
+  moaReferenceModels?: string[];
+  moaAggregatorModel?: string;
+  moaMaxRounds?: number;
+  moaMaxTokensPerRound?: number;
+  moaTimeoutMs?: number;
 }
 
 export function loadConfig(): SubstrateConfig {

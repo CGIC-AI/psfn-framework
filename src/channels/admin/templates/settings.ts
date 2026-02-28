@@ -624,6 +624,46 @@ export function settingsPage(
       </div>
 
       <div class="card">
+        <h3 style="margin-bottom:0.75rem">Mixture of Agents (MoA)</h3>
+        <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
+          When enabled, queries are sent to multiple reference models in parallel, then an aggregator model synthesizes their outputs into a final response.
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Enabled</label>
+            <select name="moaEnabled">
+              <option value="false"${config.moaEnabled ? '' : ' selected'}>Disabled</option>
+              <option value="true"${config.moaEnabled ? ' selected' : ''}>Enabled</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Aggregator Model</label>
+            <input type="text" name="moaAggregatorModel" value="${escapeHtml(config.moaAggregatorModel ?? '')}" placeholder="e.g. openai/gpt-4.1" list="settings-model-list">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:2">
+            <label>Reference Models (comma-separated model IDs)</label>
+            <input type="text" name="moaReferenceModels" value="${escapeHtml((config.moaReferenceModels ?? []).join(', '))}" placeholder="e.g. openai/gpt-4.1, z-ai/glm-5, deepseek/deepseek-v3.2">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Max Rounds (1-10)</label>
+            <input type="number" name="moaMaxRounds" value="${toTextNumber(config.moaMaxRounds)}" min="1" max="10" placeholder="1">
+          </div>
+          <div class="form-group">
+            <label>Max Tokens Per Round (256-1,000,000)</label>
+            <input type="number" name="moaMaxTokensPerRound" value="${toTextNumber(config.moaMaxTokensPerRound)}" min="256" max="1000000" placeholder="4096">
+          </div>
+          <div class="form-group">
+            <label>Timeout Per Round (ms, 5000-600,000)</label>
+            <input type="number" name="moaTimeoutMs" value="${toTextNumber(config.moaTimeoutMs)}" min="5000" max="600000" placeholder="30000">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h3 style="margin-bottom:0.75rem">Capability Tier</h3>
         <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
           Controls which capability tokens are granted at runtime. Save Settings applies tier changes immediately.

@@ -58,10 +58,23 @@ function validatePromptOrder(promptOrder: unknown): number | undefined {
   return promptOrder;
 }
 
+function validatePriority(priority: unknown): number {
+  if (typeof priority !== 'number' || !Number.isInteger(priority)) {
+    throw new Error('priority must be an integer');
+  }
+  return priority;
+}
+
 export interface PromptLayerMetadataUpdate {
   identifier?: string;
   role?: PromptLayerRole;
   promptOrder?: number;
+}
+
+export interface PromptLayerUpdatePatch {
+  content?: string;
+  priority?: number;
+  metadata?: PromptLayerMetadataUpdate;
 }
 
 export class PromptLayerStore {
@@ -227,11 +240,58 @@ export class PromptLayerStore {
     id: string,
     content: string,
     updatedBy: string,
-    metadata: PromptLayerMetadataUpdate = {},
+    metadata?: PromptLayerMetadataUpdate,
     reason?: string,
+  ): PromptLayer;
+  update(
+    id: string,
+    patch: PromptLayerUpdatePatch,
+    updatedBy: string,
+    reason?: string,
+  ): PromptLayer;
+  update(
+    id: string,
+    contentOrPatch: string | PromptLayerUpdatePatch,
+    updatedBy: string,
+    metadataOrReason: PromptLayerMetadataUpdate | string = {},
+    reasonArg?: string,
   ): PromptLayer {
     const layer = this.layers.find(l => l.id === id);
     if (!layer) throw new Error(`Prompt layer not found: ${id}`);
+
+    let nextContent = layer.content;
+    let hasContent = false;
+    let hasPriority = false;
+    let nextPriority = layer.priority;
+    let metadata: PromptLayerMetadataUpdate = {};
+    let reason: string | undefined = reasonArg;
+
+    if (typeof contentOrPatch === 'string') {
+      nextContent = contentOrPatch;
+      hasContent = true;
+      if (typeof metadataOrReason === 'string') {
+        reason = metadataOrReason;
+      } else {
+        metadata = metadataOrReason;
+      }
+    } else {
+      const patch = contentOrPatch;
+      if (Object.prototype.hasOwnProperty.call(patch, 'content')) {
+        if (typeof patch.content !== 'string') {
+          throw new Error('content must be a string');
+        }
+        nextContent = patch.content;
+        hasContent = true;
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'priority')) {
+        nextPriority = validatePriority(patch.priority);
+        hasPriority = true;
+      }
+      metadata = patch.metadata ?? {};
+      if (typeof metadataOrReason === 'string') {
+        reason = metadataOrReason;
+      }
+    }
 
     const hasIdentifier = Object.prototype.hasOwnProperty.call(metadata, 'identifier');
     const hasRole = Object.prototype.hasOwnProperty.call(metadata, 'role');
@@ -241,6 +301,11 @@ export class PromptLayerStore {
     const role = hasRole ? validatePromptRole(metadata.role) : undefined;
     const promptOrder = hasPromptOrder ? validatePromptOrder(metadata.promptOrder) : undefined;
     const normalizedReason = normalizeReason(reason);
+    const hasAnyUpdate = hasContent || hasPriority || hasIdentifier || hasRole || hasPromptOrder;
+    if (!hasAnyUpdate) {
+      throw new Error('No prompt update fields provided');
+    }
+    const nextChecksum = contentChecksum(nextContent);
 
     // Record history before modifying
     this.appendHistory({
@@ -248,25 +313,103 @@ export class PromptLayerStore {
       layerName: layer.name,
       previousContent: layer.content,
       previousChecksum: layer.checksum,
-      newContent: content,
-      newChecksum: contentChecksum(content),
+      newContent: nextContent,
+      newChecksum: nextChecksum,
       updatedBy,
       ...(normalizedReason ? { reason: normalizedReason } : {}),
       timestamp: new Date().toISOString(),
       version: layer.version,
     });
 
-    layer.content = content;
+    if (hasContent) layer.content = nextContent;
+    if (hasPriority) layer.priority = nextPriority;
     if (hasIdentifier) layer.identifier = identifier;
     if (hasRole) layer.role = role;
     if (hasPromptOrder) layer.promptOrder = promptOrder;
-    layer.checksum = contentChecksum(content);
+    layer.checksum = nextChecksum;
     layer.version += 1;
     layer.updatedAt = new Date().toISOString();
     layer.updatedBy = updatedBy;
     this.save();
     log.info(`Updated prompt layer: ${layer.name} v${layer.version}`);
     return layer;
+  }
+
+  reorderByLayerIds(
+    layerIds: string[],
+    updatedBy: string,
+    reason?: string,
+  ): PromptLayer[] {
+    if (!Array.isArray(layerIds) || layerIds.length === 0) {
+      throw new Error('layerIds must be a non-empty array');
+    }
+    if (layerIds.length !== this.layers.length) {
+      throw new Error('layerIds must include every prompt layer exactly once');
+    }
+
+    const seen = new Set<string>();
+    for (const rawId of layerIds) {
+      if (typeof rawId !== 'string') {
+        throw new Error('layerIds entries must be strings');
+      }
+      const layerId = rawId.trim();
+      if (!layerId) {
+        throw new Error('layerIds entries must be non-empty');
+      }
+      if (seen.has(layerId)) {
+        throw new Error(`Duplicate layer id in reorder payload: ${layerId}`);
+      }
+      seen.add(layerId);
+    }
+
+    const layerById = new Map(this.layers.map(layer => [layer.id, layer]));
+    const targetOrder: PromptLayer[] = [];
+    for (const layerId of layerIds) {
+      const layer = layerById.get(layerId);
+      if (!layer) {
+        throw new Error(`Prompt layer not found: ${layerId}`);
+      }
+      targetOrder.push(layer);
+    }
+
+    if (targetOrder.length !== this.layers.length) {
+      throw new Error('layerIds must include every prompt layer exactly once');
+    }
+
+    const normalizedReason = normalizeReason(reason);
+    const timestamp = new Date().toISOString();
+    const touched: PromptLayer[] = [];
+
+    for (let nextPriority = 0; nextPriority < targetOrder.length; nextPriority++) {
+      const layer = targetOrder[nextPriority];
+      if (layer.priority === nextPriority) continue;
+
+      this.appendHistory({
+        layerId: layer.id,
+        layerName: layer.name,
+        previousContent: layer.content,
+        previousChecksum: layer.checksum,
+        newContent: layer.content,
+        newChecksum: layer.checksum,
+        updatedBy,
+        ...(normalizedReason ? { reason: normalizedReason } : {}),
+        timestamp,
+        version: layer.version,
+      });
+
+      layer.priority = nextPriority;
+      layer.version += 1;
+      layer.updatedAt = timestamp;
+      layer.updatedBy = updatedBy;
+      touched.push(layer);
+    }
+
+    if (touched.length > 0) {
+      this.save();
+      log.info(`Reordered prompt layers (${touched.length} touched)`);
+    }
+
+    return touched;
   }
 
   toggle(id: string): PromptLayer {

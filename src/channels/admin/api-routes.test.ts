@@ -650,6 +650,80 @@ describe('AdminServer JSON API routes', () => {
     expect(promptPatchRes.status).toBe(200);
     expect(promptStore.getById(layerId)?.content).toContain('Updated API prompt content');
 
+    const promptDiffRes = await request(
+      port,
+      'GET',
+      `/api/admin/prompts/${layerId}/diff`,
+      undefined,
+      authHeaders,
+    );
+    expect(promptDiffRes.status).toBe(200);
+    const promptDiffPayload = JSON.parse(promptDiffRes.body) as { oldContent: string; newContent: string };
+    expect(promptDiffPayload.oldContent).toContain('Base prompt');
+    expect(promptDiffPayload.newContent).toContain('Updated API prompt content');
+
+    const priorityOnlyPatchRes = await request(
+      port,
+      'PATCH',
+      `/api/admin/prompts/${layerId}`,
+      JSON.stringify({ priority: 7 }),
+      authHeaders,
+    );
+    expect(priorityOnlyPatchRes.status).toBe(200);
+    expect(promptStore.getById(layerId)?.priority).toBe(7);
+    expect(promptStore.getById(layerId)?.content).toContain('Updated API prompt content');
+
+    const postPriorityDiffRes = await request(
+      port,
+      'GET',
+      `/api/admin/prompts/${layerId}/diff`,
+      undefined,
+      authHeaders,
+    );
+    expect(postPriorityDiffRes.status).toBe(200);
+    const postPriorityDiffPayload = JSON.parse(postPriorityDiffRes.body) as { oldContent: string; newContent: string };
+    expect(postPriorityDiffPayload.oldContent).toContain('Updated API prompt content');
+    expect(postPriorityDiffPayload.newContent).toContain('Updated API prompt content');
+
+    const createPromptA = await request(
+      port,
+      'POST',
+      '/api/admin/prompts',
+      JSON.stringify({ name: 'Runtime Layer A', type: 'runtime', content: 'runtime-a', priority: 25 }),
+      authHeaders,
+    );
+    expect(createPromptA.status).toBe(201);
+
+    const createPromptB = await request(
+      port,
+      'POST',
+      '/api/admin/prompts',
+      JSON.stringify({ name: 'Runtime Layer B', type: 'runtime', content: 'runtime-b', priority: 26 }),
+      authHeaders,
+    );
+    expect(createPromptB.status).toBe(201);
+
+    const promptsBeforeReorderRes = await request(port, 'GET', '/api/admin/prompts', undefined, authHeaders);
+    expect(promptsBeforeReorderRes.status).toBe(200);
+    const promptsBeforeReorderPayload = JSON.parse(promptsBeforeReorderRes.body) as { layers: Array<{ id: string }> };
+    const reorderedLayerIds = promptsBeforeReorderPayload.layers.map(layer => layer.id);
+    const [movedLayerId] = reorderedLayerIds.splice(reorderedLayerIds.length - 1, 1);
+    if (movedLayerId) reorderedLayerIds.unshift(movedLayerId);
+
+    const reorderRes = await request(
+      port,
+      'POST',
+      '/api/admin/prompts/reorder',
+      JSON.stringify({ layerIds: reorderedLayerIds }),
+      authHeaders,
+    );
+    expect(reorderRes.status).toBe(200);
+
+    for (const [index, reorderedLayerId] of reorderedLayerIds.entries()) {
+      expect(promptStore.getById(reorderedLayerId)?.priority).toBe(index);
+    }
+    expect(promptStore.getById(layerId)?.content).toContain('Updated API prompt content');
+
     const missingPrompt = await request(port, 'GET', '/api/admin/prompts/missing-layer', undefined, authHeaders);
     expect(missingPrompt.status).toBe(404);
   });

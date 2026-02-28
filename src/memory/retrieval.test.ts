@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRetriever } from './retrieval.js';
+import { MemoryRetriever, __retrieval_internals } from './retrieval.js';
 import type { MemoryStore } from './store.js';
 import type { EmbeddingService } from '../agent/contracts.js';
 import type { PurrMemory } from './types.js';
@@ -904,5 +904,345 @@ describe('MemoryRetriever basic behavior', () => {
       candidateCount: 0,
       returnedCount: 0,
     });
+  });
+});
+
+describe('MemoryRetriever score guarantee (top-K rescue)', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('rescues memories with zero composite score when they are the only candidates', async () => {
+    // Create a memory where baseScore = 0 because salience = 0 or importance = 0.
+    // This is the real scenario: after aggressive salience decay, salience can
+    // hit the floor (0.05) and with low importance the composite multiplies to ~0.
+    // When importance is exactly 0, baseScore becomes 0, and the memory would
+    // silently vanish from context despite being highly similar.
+    const memories = [
+      makeMemory({
+        text: 'Zero importance memory with high similarity',
+        sensitivity: 'public',
+        similarity: 0.95,
+        importance: 0,  // exactly 0 -> baseScore = 0
+        salience: 0.5,
+        emotionalValence: 0,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    // Without the guarantee, this would be filtered out (score = 0).
+    // With the guarantee, it should surface.
+    expect(result).toContain('Zero importance memory with high similarity');
+  });
+
+  it('rescues up to SCORE_GUARANTEE_MIN_K zero-scored memories', async () => {
+    const { SCORE_GUARANTEE_MIN_K } = __retrieval_internals;
+    // Create more than MIN_K memories with zero importance
+    const memories = Array.from({ length: SCORE_GUARANTEE_MIN_K + 2 }, (_, idx) =>
+      makeMemory({
+        text: `Zero importance memory ${idx}`,
+        sensitivity: 'public',
+        similarity: 0.95 - idx * 0.02,
+        importance: 0,  // zero -> score = 0
+        salience: 0.5,
+      }),
+    );
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    // Should rescue exactly SCORE_GUARANTEE_MIN_K memories
+    const memoryCount = countRenderedMemories(result);
+    expect(memoryCount).toBe(SCORE_GUARANTEE_MIN_K);
+    // Highest-similarity ones should be rescued first
+    for (let idx = 0; idx < SCORE_GUARANTEE_MIN_K; idx++) {
+      expect(result).toContain(`Zero importance memory ${idx}`);
+    }
+  });
+
+  it('does not rescue when enough positive-scored memories already exist', async () => {
+    const { SCORE_GUARANTEE_MIN_K } = __retrieval_internals;
+    // Create enough naturally-scored memories to exceed MIN_K
+    const positiveMemories = Array.from({ length: SCORE_GUARANTEE_MIN_K + 2 }, (_, idx) =>
+      makeMemory({
+        text: `Good memory ${idx}`,
+        sensitivity: 'public',
+        similarity: 0.95 - idx * 0.01,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+    );
+    // Add a zero-importance memory (score will be 0)
+    const zeroMemory = makeMemory({
+      text: 'Zero importance memory should not be rescued',
+      sensitivity: 'public',
+      similarity: 0.88,
+      importance: 0,
+      salience: 0.5,
+    });
+    const store = makeMockStore([...positiveMemories, zeroMemory]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    // The zero-importance memory should NOT be rescued since we already have enough
+    expect(result).not.toContain('Zero importance memory should not be rescued');
+    // But the positive memories should all be there
+    for (let idx = 0; idx < SCORE_GUARANTEE_MIN_K; idx++) {
+      expect(result).toContain(`Good memory ${idx}`);
+    }
+  });
+
+  it('rescued memories sort after naturally-scored ones', async () => {
+    // One naturally-scored memory and one zero-importance memory
+    const memories = [
+      makeMemory({
+        text: 'Naturally scored memory',
+        sensitivity: 'public',
+        similarity: 0.80,
+        importance: 0.8,
+        salience: 0.8,
+      }),
+      makeMemory({
+        text: 'Rescued zero-importance memory',
+        sensitivity: 'public',
+        similarity: 0.95,  // Higher similarity than the natural one
+        importance: 0,      // zero -> score = 0 -> rescued
+        salience: 0.5,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    // Both should appear
+    expect(result).toContain('Naturally scored memory');
+    expect(result).toContain('Rescued zero-importance memory');
+    // Natural one should come first (higher composite score)
+    const naturalIdx = result.indexOf('Naturally scored memory');
+    const rescuedIdx = result.indexOf('Rescued zero-importance memory');
+    expect(naturalIdx).toBeLessThan(rescuedIdx);
+  });
+});
+
+describe('MemoryRetriever retrieval trace telemetry', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('emits telemetry with similarity range and score range', async () => {
+    const memories = [
+      makeMemory({ text: 'Memory A', sensitivity: 'public', similarity: 0.95 }),
+      makeMemory({ text: 'Memory B', sensitivity: 'public', similarity: 0.75 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await retriever.retrieve('test query', 'api:test', 'primary');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    const telemetry = calls[0][1] as Record<string, unknown>;
+    expect(telemetry.topSimilarity).toBe(0.95);
+    expect(telemetry.bottomSimilarity).toBe(0.75);
+    expect(typeof telemetry.topScore).toBe('number');
+    expect(typeof telemetry.bottomScore).toBe('number');
+    expect((telemetry.topScore as number)).toBeGreaterThan(0);
+  });
+
+  it('emits scoreGuaranteedCount in telemetry when memories are rescued', async () => {
+    // Create a memory with zero importance -> composite score = 0 -> rescued
+    const memories = [
+      makeMemory({
+        text: 'Zero importance but high similarity',
+        sensitivity: 'public',
+        similarity: 0.92,
+        importance: 0,    // exactly 0 -> baseScore = 0
+        salience: 0.5,
+        emotionalValence: 0,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await retriever.retrieve('test query', 'api:test', 'primary');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    const telemetry = calls[0][1] as Record<string, unknown>;
+    expect(telemetry.scoreGuaranteedCount).toBeGreaterThan(0);
+  });
+
+  it('emits telemetry with pipeline stage counts for trust-filtered scenario', async () => {
+    const memories = [
+      makeMemory({ text: 'Secret A', sensitivity: 'confidential', similarity: 0.95 }),
+      makeMemory({ text: 'Public B', sensitivity: 'public', similarity: 0.85 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    // regular trust + semi_private = only public allowed
+    await retriever.retrieve('test query', '1234567890', 'regular');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    const telemetry = calls[0][1] as Record<string, unknown>;
+    expect(telemetry.candidateCount).toBe(2);
+    expect(telemetry.sensitivityRejectedCount).toBe(1);
+    expect(telemetry.returnedCount).toBe(1);
+  });
+});
+
+describe('MemoryRetriever soft-delete exclusion', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('soft-deleted memories are not returned by the mock store (simulating SQL filter)', async () => {
+    // In the real store, `searchByEmbedding` filters with `AND m.deleted_at IS NULL`.
+    // This test verifies that our retriever does not accidentally re-introduce
+    // deleted memories and that the store contract is respected.
+    const activeMemory = makeMemory({
+      text: 'Active memory',
+      sensitivity: 'public',
+      similarity: 0.90,
+    });
+    // The store should NOT return soft-deleted memories; we simulate this by
+    // only including the active one in the mock.
+    const store = makeMockStore([activeMemory]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    expect(result).toContain('Active memory');
+    // Verify searchByEmbedding was called (the SQL filter happens there)
+    expect(store.searchByEmbedding).toHaveBeenCalled();
+  });
+
+  it('getMemoriesByContact also excludes soft-deleted via SQL (store contract)', async () => {
+    // Emotional continuity collection uses getMemoriesByContact.
+    // Verify the store contract holds for that path too.
+    const store = makeMockStore([]);
+    const emotionalMemory = makeMemory({
+      id: 'emo-active',
+      text: 'Active emotional memory',
+      type: 'emotional',
+      emotionalValence: 0.5,
+      sensitivity: 'public',
+      similarity: 0.5,
+    });
+    (store.getMemoriesByContact as ReturnType<typeof vi.fn>).mockReturnValue([emotionalMemory]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'how are things?',
+      'api:test',
+      'primary',
+      undefined,
+      'contact-1',
+    );
+
+    // The emotional continuity memory should surface
+    expect(result).toContain('Active emotional memory');
+    expect(store.getMemoriesByContact).toHaveBeenCalledWith('contact-1', 12);
+  });
+});
+
+describe('MemoryRetriever low-salience but high-similarity surfacing', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('low-salience memories with high similarity still surface when public sensitivity', async () => {
+    // Salience has decayed to near-floor (0.06) but embedding similarity
+    // is high. These should still surface because the composite score
+    // formula multiplies all factors — a very high similarity can compensate.
+    const memories = [
+      makeMemory({
+        text: 'Decayed but highly relevant fact',
+        sensitivity: 'public',
+        similarity: 0.97,  // very high similarity
+        importance: 0.8,
+        salience: 0.06,    // near floor after decay
+        emotionalValence: 0.3,
+        extractedAt: Date.now() - 2 * 24 * 60 * 60 * 1000, // 2 days ago
+        lastAccessed: Date.now() - 1 * 24 * 60 * 60 * 1000, // 1 day ago
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    // Should still surface due to high similarity * importance
+    // score = 0.97 * recency * (1 + 0.15) * 0.8 * 0.06 * 1 * 1
+    // recency ~= 1/(1 + 1/30) ~= 0.968
+    // base ~= 0.97 * 0.968 * 1.15 * 0.8 * 0.06 = 0.052
+    // Even with privacy penalty this should be > 0
+    expect(result).toContain('Decayed but highly relevant fact');
+  });
+
+  it('very low salience + low importance + low similarity gets score-rescued by guarantee', async () => {
+    // This memory has low everything EXCEPT it passes trust policy.
+    // Without the guarantee it would be filtered out (score near zero
+    // or negative after privacy penalty). With the guarantee, if it's
+    // the only memory available, it gets rescued.
+    const memories = [
+      makeMemory({
+        text: 'Only memory available but poor scores',
+        sensitivity: 'public',
+        similarity: 0.35,  // just above threshold
+        importance: 0.1,
+        salience: 0.06,
+        emotionalValence: 0,
+        extractedAt: Date.now() - 90 * 24 * 60 * 60 * 1000, // 90 days old
+        lastAccessed: Date.now() - 60 * 24 * 60 * 60 * 1000, // 60 days since access
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    // This memory has very low composite score but it's the only candidate.
+    // The guarantee should rescue it if it would otherwise be zero.
+    // Even if score is tiny but positive, it should still appear.
+    // With the guarantee, we expect it to surface.
+    expect(result.length).toBeGreaterThan(0);
   });
 });

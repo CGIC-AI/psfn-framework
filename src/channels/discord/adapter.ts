@@ -2,6 +2,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  Partials,
   type Message,
   type TextChannel,
 } from 'discord.js';
@@ -70,6 +71,7 @@ export class DiscordAdapter implements ChannelAdapter {
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
+  private pendingByChannel = new Map<string, Message>();
   private lockStartedAt = new Map<string, number>();
   private lockContention = new Map<string, number>();
   private voice: DiscordVoiceRuntime;
@@ -124,6 +126,7 @@ export class DiscordAdapter implements ChannelAdapter {
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.GuildVoiceStates,
       ],
+      partials: [Partials.Channel],
     });
 
     this.voice = new DiscordVoiceRuntime({
@@ -203,10 +206,12 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   private async onDiscordMessage(msg: Message): Promise<void> {
-    const runtimeBotId = this.client.user?.id ?? this.runtimeConfig.discordBotId;
+    const liveBotId = this.client.user?.id;
+    const configuredBotId = this.runtimeConfig.discordBotId.trim();
+    const runtimeBotId = liveBotId ?? (configuredBotId.length > 0 ? configuredBotId : undefined);
 
     // Ignore self
-    if (runtimeBotId && msg.author.id === runtimeBotId) return;
+    if (liveBotId && msg.author.id === liveBotId) return;
     if (msg.author.bot) return;
     if (!this.handler) return;
 
@@ -249,6 +254,11 @@ export class DiscordAdapter implements ChannelAdapter {
       if (this.agent) {
         log.debug('Steering message into active stream', { channelId });
         this.agent.steer(substrateMsg);
+      } else {
+        // Gateway mode has no direct agent instance, so keep latest message queued
+        // instead of dropping it during lock contention.
+        this.pendingByChannel.set(channelId, msg);
+        log.debug('Queueing contended Discord message for deferred processing', { channelId });
       }
       return;
     }
@@ -295,6 +305,15 @@ export class DiscordAdapter implements ChannelAdapter {
       this.lockStartedAt.delete(channelId);
       this.lockContention.delete(channelId);
       await this.clearStatus(channelId, 'compaction');
+      const pending = this.pendingByChannel.get(channelId);
+      if (pending) {
+        this.pendingByChannel.delete(channelId);
+        queueMicrotask(() => {
+          this.onDiscordMessage(pending).catch((error) => {
+            log.error('Deferred Discord message handling error', { channelId, error: String(error) });
+          });
+        });
+      }
     }
   }
 

@@ -40,22 +40,25 @@ vi.mock('discord.js', () => {
     }
   }
 
-  return {
-    Client: MockClient,
-    Events: {
-      MessageCreate: 'messageCreate',
-      ClientReady: 'ready',
-      VoiceStateUpdate: 'voiceStateUpdate',
-    },
-    GatewayIntentBits: {
-      Guilds: 1,
-      GuildMessages: 2,
-      MessageContent: 4,
-      DirectMessages: 8,
-      GuildVoiceStates: 16,
-    },
-  };
-});
+    return {
+      Client: MockClient,
+      Events: {
+        MessageCreate: 'messageCreate',
+        ClientReady: 'ready',
+        VoiceStateUpdate: 'voiceStateUpdate',
+      },
+      GatewayIntentBits: {
+        Guilds: 1,
+        GuildMessages: 2,
+        MessageContent: 4,
+        DirectMessages: 8,
+        GuildVoiceStates: 16,
+      },
+      Partials: {
+        Channel: 'channel',
+      },
+    };
+  });
 
 vi.mock('./voice.js', () => {
   return {
@@ -554,6 +557,57 @@ describe('DiscordAdapter DM routing', () => {
     expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
       content: 'hello',
     }));
+  });
+
+  it('queues contended messages in gateway mode when no direct agent is attached', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-queue-channel';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    let releaseFirst: (() => void) | null = null;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const handler = vi.fn(async (message: SubstrateMessage) => {
+      if (message.id === 'dm-1') {
+        await firstTurn;
+      }
+      return {
+        content: `reply-${message.id}`,
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    const firstDispatch = (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-1',
+        content: 'first',
+      }),
+    );
+
+    await Promise.resolve();
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-2',
+        content: 'second',
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    releaseFirst?.();
+    await firstDispatch;
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+    expect(handler.mock.calls.map((call) => call[0].id)).toEqual(['dm-1', 'dm-2']);
   });
 });
 

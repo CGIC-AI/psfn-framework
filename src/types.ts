@@ -458,6 +458,9 @@ export function loadConfig(): SubstrateConfig {
   const echoTtsVoice = parseOptionalStringEnv(process.env.ECHO_TTS_VOICE);
   const echoTtsPreset = parseOptionalStringEnv(process.env.ECHO_TTS_PRESET);
   const echoTtsModel = parseOptionalStringEnv(process.env.ECHO_TTS_MODEL);
+  const telegramAuthorizedUsers = parseStringListEnv(
+    process.env.TELEGRAM_ALLOWED_USERS ?? process.env.TELEGRAM_AUTHORIZED_USERS,
+  );
 
   return {
     primaryModel,
@@ -467,7 +470,7 @@ export function loadConfig(): SubstrateConfig {
     primaryMaxTokens,
     extractionMaxTokens,
     discordToken: process.env.DISCORD_TOKEN ?? '',
-    discordBotId: process.env.DISCORD_BOT_ID ?? '1050938702622375987',
+    discordBotId: process.env.DISCORD_BOT_ID ?? '',
     characterCardPath: process.env.CHARACTER_CARD_PATH ?? '/home/vega/.openclaw/agents/main/character.json',
     dataDir: process.env.DATA_DIR ?? './data',
     databasePath: process.env.DATABASE_PATH ?? './data/purrsephone.db',
@@ -553,8 +556,8 @@ export function loadConfig(): SubstrateConfig {
     wyomingHost,
     ...(wyomingPort !== undefined ? { wyomingPort } : {}),
     telegramEnabled: parseOptionalBooleanEnv(process.env.TELEGRAM_ENABLED) ?? false,
-    ...(parseStringListEnv(process.env.TELEGRAM_AUTHORIZED_USERS).length > 0
-      ? { telegramAuthorizedUsers: parseStringListEnv(process.env.TELEGRAM_AUTHORIZED_USERS) }
+    ...(telegramAuthorizedUsers.length > 0
+      ? { telegramAuthorizedUsers }
       : {}),
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),

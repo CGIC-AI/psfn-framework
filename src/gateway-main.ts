@@ -3,8 +3,8 @@
 // Run: npm run gateway
 
 import 'dotenv/config';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { LLMClient } from './llm/client.js';
@@ -17,6 +17,8 @@ import {
   resolveAllowedReadPathsFromEnv,
   resolveTrustedModuleRegistryPathFromEnv,
 } from './gateway/policy-config.js';
+import { MODULE_REGISTRY_PATH } from './security/policy-constants.js';
+import { ensureRegistryFile } from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
@@ -183,11 +185,14 @@ async function main(): Promise<void> {
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
   mkdirSync(workspaceRoot, { recursive: true });
 
+  // Ensure the module registry file exists regardless of policy — prevents
+  // ENOENT when the REPL sandbox or ModuleLoader reads it for the first time.
+  const moduleRegistryAbsolute = resolve(
+    workspaceRoot,
+    process.env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH,
+  );
+  ensureRegistryFile(moduleRegistryAbsolute);
   const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(process.env, workspaceRoot);
-  if (trustedModuleRegistryPath && !existsSync(trustedModuleRegistryPath)) {
-    mkdirSync(dirname(trustedModuleRegistryPath), { recursive: true });
-    writeFileSync(trustedModuleRegistryPath, '[]\n', 'utf-8');
-  }
 
   // ── Create providers (these hold secrets / have network access) ──
 

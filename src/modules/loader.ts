@@ -3,6 +3,7 @@ import { createComponentLogger } from '../logger.js';
 import { toErrorMessage } from '../utils/errors.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import {
+  ensureRegistryFile,
   readModuleRegistry,
   resolveModuleRegistryPath,
   writeModuleRegistry,
@@ -73,6 +74,7 @@ export class ModuleLoader {
   }
 
   async loadEnabledModules(): Promise<ModuleLoadSummary> {
+    ensureRegistryFile(this.registryPath);
     const records = await readModuleRegistry(this.registryPath);
     let mutated = false;
     let attempted = 0;

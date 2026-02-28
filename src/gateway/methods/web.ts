@@ -243,7 +243,7 @@ async function fetchWithPolicyChecks(
 
   const parsed = new URL(url);
   const dnsCheck = await checkResolvedIP(parsed.hostname, undefined, {
-    allowPrivateResolvedIp: lane === 'local_crawler',
+    allowPrivateResolvedIp: lane === 'local_crawler' || urlPolicyConfig.allowInternalNetwork === true,
   });
   if (!dnsCheck.allowed) {
     log.warn(`DNS resolution blocked fetch: ${dnsCheck.reason} (${url})`);

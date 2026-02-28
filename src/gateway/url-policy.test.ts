@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateUrlPolicy, isPrivateIP, checkResolvedIP, type DnsResolver } from './url-policy.js';
+import { evaluateUrlPolicy, isPrivateIP, isAlwaysBlockedIP, checkResolvedIP, type DnsResolver } from './url-policy.js';
 
 describe('isPrivateIP', () => {
   it('detects IPv4 loopback', () => {
@@ -69,6 +69,37 @@ describe('isPrivateIP', () => {
     expect(isPrivateIP('8.8.8.8')).toBe(false);
     expect(isPrivateIP('93.184.216.34')).toBe(false);
     expect(isPrivateIP('2606:4700::1')).toBe(false);
+  });
+});
+
+describe('isAlwaysBlockedIP', () => {
+  it('blocks cloud metadata IP (169.254.x)', () => {
+    expect(isAlwaysBlockedIP('169.254.169.254')).toBe(true);
+    expect(isAlwaysBlockedIP('169.254.0.1')).toBe(true);
+  });
+
+  it('blocks "this" network (0.x)', () => {
+    expect(isAlwaysBlockedIP('0.0.0.0')).toBe(true);
+  });
+
+  it('blocks IPv6 link-local', () => {
+    expect(isAlwaysBlockedIP('fe80::1')).toBe(true);
+  });
+
+  it('blocks IPv4-mapped cloud metadata', () => {
+    expect(isAlwaysBlockedIP('::ffff:169.254.169.254')).toBe(true);
+  });
+
+  it('allows RFC1918 ranges (these are permitted for internal network)', () => {
+    expect(isAlwaysBlockedIP('10.0.0.1')).toBe(false);
+    expect(isAlwaysBlockedIP('172.16.0.1')).toBe(false);
+    expect(isAlwaysBlockedIP('192.168.1.1')).toBe(false);
+    expect(isAlwaysBlockedIP('127.0.0.1')).toBe(false);
+  });
+
+  it('allows public IPs', () => {
+    expect(isAlwaysBlockedIP('8.8.8.8')).toBe(false);
+    expect(isAlwaysBlockedIP('93.184.216.34')).toBe(false);
   });
 });
 
@@ -216,6 +247,93 @@ describe('evaluateUrlPolicy', () => {
   it('allowlist is case-insensitive', () => {
     const config = { domainAllowlist: ['Example.COM'] };
     expect(evaluateUrlPolicy('https://example.com/', config).allowed).toBe(true);
+  });
+
+  // ── allowInternalNetwork ──
+
+  describe('allowInternalNetwork', () => {
+    const internalConfig = { allowInternalNetwork: true, allowHttp: true };
+
+    it('allows RFC1918 Class A (10.x) when internal network enabled', () => {
+      const result = evaluateUrlPolicy('https://10.0.0.1/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+
+    it('allows RFC1918 Class B (172.16.x) when internal network enabled', () => {
+      const result = evaluateUrlPolicy('https://172.16.0.1/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+
+    it('allows RFC1918 Class C (192.168.x) when internal network enabled', () => {
+      const result = evaluateUrlPolicy('https://192.168.1.1/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+
+    it('allows loopback (127.0.0.1) when internal network enabled', () => {
+      const result = evaluateUrlPolicy('https://127.0.0.1/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+
+    it('allows localhost by name when internal network enabled', () => {
+      const result = evaluateUrlPolicy('https://localhost:8443/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+
+    it('allows localhost.localdomain when internal network enabled', () => {
+      const result = evaluateUrlPolicy('https://localhost.localdomain/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+
+    it('allows internal domain names when internal network enabled', () => {
+      const result = evaluateUrlPolicy('https://your-ollama-host:11434/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+
+    it('allows HTTP to internal hosts when both flags set', () => {
+      const result = evaluateUrlPolicy('http://192.168.1.100:8080/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+
+    it('still blocks HTTP when allowHttp is false', () => {
+      const result = evaluateUrlPolicy('http://192.168.1.1/', { allowInternalNetwork: true });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('HTTP not allowed');
+    });
+
+    it('still blocks cloud metadata IP (169.254.x) even with internal network', () => {
+      const result = evaluateUrlPolicy('https://169.254.169.254/latest/meta-data/', internalConfig);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('cloud metadata');
+    });
+
+    it('still blocks 0.0.0.0 even with internal network', () => {
+      const result = evaluateUrlPolicy('https://0.0.0.0/', internalConfig);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('cloud metadata');
+    });
+
+    it('still blocks link-local IPv6 (fe80::) even with internal network', () => {
+      const result = evaluateUrlPolicy('https://[fe80::1]/', internalConfig);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('cloud metadata');
+    });
+
+    it('respects domain allowlist when internal network enabled', () => {
+      const config = {
+        allowInternalNetwork: true,
+        allowHttp: true,
+        domainAllowlist: ['local.vega.nyc'],
+      };
+      // Allowlisted domain on internal network should work
+      expect(evaluateUrlPolicy('http://your-ollama-host:11434/', config).allowed).toBe(true);
+      // Non-allowlisted domain should be blocked
+      expect(evaluateUrlPolicy('http://evil.com/', config).allowed).toBe(false);
+    });
+
+    it('allows public IPs alongside internal when enabled', () => {
+      const result = evaluateUrlPolicy('https://8.8.8.8/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
   });
 
   describe('local crawler lane', () => {

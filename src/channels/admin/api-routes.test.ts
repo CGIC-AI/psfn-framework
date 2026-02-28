@@ -30,13 +30,23 @@ function request(
   headers?: Record<string, string>,
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
+    const requestHeaders: Record<string, string> = {
+      ...(headers ?? {}),
+    };
+    if (typeof body === 'string' && body.length > 0) {
+      const hasContentLength = Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'content-length');
+      if (!hasContentLength) {
+        requestHeaders['Content-Length'] = String(Buffer.byteLength(body));
+      }
+    }
+
     const req = http.request(
       {
         hostname: '127.0.0.1',
         port,
         method,
         path,
-        headers: headers ?? {},
+        headers: requestHeaders,
       },
       (res) => {
         let data = '';
@@ -357,6 +367,165 @@ describe('AdminServer JSON API routes', () => {
 
     const badType = await request(port, 'GET', '/api/admin/memory?type=not-a-type', undefined, authHeaders);
     expect(badType.status).toBe(400);
+  });
+
+  it('supports memory bulk update/delete and link/unlink endpoints', async () => {
+    const now = Date.now();
+    memoryStore.insertMemory({
+      id: 'bulk-mem-1',
+      text: 'Bulk memory one',
+      type: 'semantic',
+      importance: 0.6,
+      confidence: 0.8,
+      emotionalValence: 0.1,
+      salience: 0.6,
+      sourceRef: 'api:bulk:1',
+      extractedAt: now,
+      lastAccessed: now,
+      accessCount: 0,
+      tags: ['bulk'],
+      sensitivity: 'personal',
+    }, new Float32Array([0.2, 0.1, 0.3]));
+    memoryStore.insertMemory({
+      id: 'bulk-mem-2',
+      text: 'Bulk memory two',
+      type: 'episodic',
+      importance: 0.7,
+      confidence: 0.75,
+      emotionalValence: 0.2,
+      salience: 0.65,
+      sourceRef: 'api:bulk:2',
+      extractedAt: now + 1,
+      lastAccessed: now + 1,
+      accessCount: 0,
+      tags: ['bulk'],
+      sensitivity: 'personal',
+    }, new Float32Array([0.25, 0.15, 0.35]));
+    memoryStore.insertMemory({
+      id: 'bulk-mem-3',
+      text: 'Bulk memory three',
+      type: 'procedural',
+      importance: 0.55,
+      confidence: 0.72,
+      emotionalValence: 0.05,
+      salience: 0.52,
+      sourceRef: 'api:bulk:3',
+      extractedAt: now + 2,
+      lastAccessed: now + 2,
+      accessCount: 0,
+      tags: ['bulk'],
+      sensitivity: 'personal',
+    }, new Float32Array([0.3, 0.2, 0.4]));
+
+    const linkRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/link',
+      JSON.stringify({ id1: 'bulk-mem-2', id2: 'bulk-mem-1', linkType: 'supports' }),
+      authHeaders,
+    );
+    expect(linkRes.status).toBe(201);
+    const linkPayload = JSON.parse(linkRes.body) as {
+      ok: boolean;
+      link: { id1: string; id2: string; linkType: string };
+    };
+    expect(linkPayload.ok).toBe(true);
+    expect([linkPayload.link.id1, linkPayload.link.id2].sort()).toEqual(['bulk-mem-1', 'bulk-mem-2']);
+    expect(linkPayload.link.linkType).toBe('supports');
+
+    const linksRes = await request(port, 'GET', '/api/admin/memory/bulk-mem-1/links', undefined, authHeaders);
+    expect(linksRes.status).toBe(200);
+    const linksPayload = JSON.parse(linksRes.body) as { links: Array<{ id1: string; id2: string; linkType: string }> };
+    expect(linksPayload.links).toHaveLength(1);
+    expect(linksPayload.links[0]?.linkType).toBe('supports');
+
+    const bulkUpdateRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/bulk-update',
+      JSON.stringify({
+        ids: ['bulk-mem-1', 'bulk-mem-2'],
+        fields: { memoryType: 'emotional', sensitivity: 'confidential' },
+      }),
+      authHeaders,
+    );
+    expect(bulkUpdateRes.status).toBe(200);
+    const bulkUpdatePayload = JSON.parse(bulkUpdateRes.body) as { ok: boolean; count: number };
+    expect(bulkUpdatePayload.ok).toBe(true);
+    expect(bulkUpdatePayload.count).toBe(2);
+    expect(memoryStore.getById('bulk-mem-1')?.type).toBe('emotional');
+    expect(memoryStore.getById('bulk-mem-1')?.sensitivity).toBe('confidential');
+    expect(memoryStore.getById('bulk-mem-2')?.type).toBe('emotional');
+    expect(memoryStore.getById('bulk-mem-2')?.sensitivity).toBe('confidential');
+
+    const unlinkRes = await request(
+      port,
+      'DELETE',
+      '/api/admin/memory/link',
+      JSON.stringify({ id1: 'bulk-mem-1', id2: 'bulk-mem-2' }),
+      authHeaders,
+    );
+    expect(unlinkRes.status).toBe(200);
+
+    const linksAfterUnlinkRes = await request(port, 'GET', '/api/admin/memory/bulk-mem-1/links', undefined, authHeaders);
+    expect(linksAfterUnlinkRes.status).toBe(200);
+    const linksAfterUnlinkPayload = JSON.parse(linksAfterUnlinkRes.body) as { links: Array<{ id1: string; id2: string }> };
+    expect(linksAfterUnlinkPayload.links).toHaveLength(0);
+
+    const bulkDeleteRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/bulk-delete',
+      JSON.stringify({ ids: ['bulk-mem-2', 'bulk-mem-3'] }),
+      authHeaders,
+    );
+    expect(bulkDeleteRes.status).toBe(200);
+    const bulkDeletePayload = JSON.parse(bulkDeleteRes.body) as { ok: boolean; count: number };
+    expect(bulkDeletePayload.ok).toBe(true);
+    expect(bulkDeletePayload.count).toBe(2);
+    expect(memoryStore.getById('bulk-mem-2')?.deletedAt).toBeDefined();
+    expect(memoryStore.getById('bulk-mem-3')?.deletedAt).toBeDefined();
+    expect(memoryStore.listActiveMemories({ limit: 10, offset: 0 }).map(memory => memory.id)).not.toContain('bulk-mem-2');
+    expect(memoryStore.listActiveMemories({ limit: 10, offset: 0 }).map(memory => memory.id)).not.toContain('bulk-mem-3');
+  });
+
+  it('renders memory page with bulk and link UI wiring', async () => {
+    memoryStore.insertMemory({
+      id: 'ui-memory-1',
+      text: 'UI memory one',
+      type: 'semantic',
+      importance: 0.55,
+      confidence: 0.8,
+      emotionalValence: 0.12,
+      salience: 0.62,
+      sourceRef: 'api:ui:1',
+      extractedAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 0,
+      tags: ['ui'],
+      sensitivity: 'personal',
+    }, new Float32Array([0.3, 0.1, 0.2]));
+
+    const pageRes = await request(
+      port,
+      'GET',
+      '/memory',
+      undefined,
+      { Authorization: `Bearer ${token}` },
+    );
+
+    expect(pageRes.status).toBe(200);
+    expect(pageRes.body).toContain('id="memory-admin-actions"');
+    expect(pageRes.body).toContain('data-memory-select-all');
+    expect(pageRes.body).toContain('data-memory-select value="ui-memory-1"');
+    expect(pageRes.body).toContain('data-memory-bulk-delete');
+    expect(pageRes.body).toContain('data-memory-bulk-update');
+    expect(pageRes.body).toContain('data-memory-link-form');
+    expect(pageRes.body).toContain('data-memory-links-load-form');
+    expect(pageRes.body).toContain('/api/admin/memory/bulk-delete');
+    expect(pageRes.body).toContain('/api/admin/memory/bulk-update');
+    expect(pageRes.body).toContain('/api/admin/memory/link');
+    expect(pageRes.body).toContain('/api/admin/memory/');
   });
 
   it('supports session list and messages endpoints', async () => {

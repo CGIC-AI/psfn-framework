@@ -177,6 +177,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'webFetchLocalCrawlerDomainAllowlist',
   'webFetchTlsCaCertPaths',
   'capabilityTier',
+  'chatApiBaseUrl',
   // Voice / TTS
   'ttsProvider',
   'voiceId',
@@ -626,6 +627,12 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     }
   }
 
+  if ('chatApiBaseUrl' in settings) {
+    normalized.chatApiBaseUrl = typeof settings.chatApiBaseUrl === 'string'
+      ? settings.chatApiBaseUrl.trim()
+      : '';
+  }
+
   // Voice / TTS
   if ('ttsProvider' in settings) {
     normalized.ttsProvider = toTtsProvider(settings.ttsProvider) ?? 'disabled';
@@ -903,6 +910,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     webFetchLocalCrawlerDomainAllowlist: config.webFetchLocalCrawlerDomainAllowlist ?? [],
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
     capabilityTier: config.capabilityTier ?? 'nursery',
+    chatApiBaseUrl: (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl ?? null,
     // Voice / TTS
     ttsProvider: resolveRuntimeTtsProvider(config),
     voiceId: config.elevenLabsVoiceId ?? '',
@@ -1033,6 +1041,10 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
 
   if (settings.capabilityTier !== undefined && isCapabilityTier(settings.capabilityTier)) {
     config.capabilityTier = settings.capabilityTier;
+  }
+  if ('chatApiBaseUrl' in settings) {
+    const trimmed = settings.chatApiBaseUrl?.trim() ?? '';
+    (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl = trimmed || undefined;
   }
 
   // Voice / TTS
@@ -1283,6 +1295,22 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const webFetchTlsCaCertPathsRaw = params.get('webFetchTlsCaCertPaths');
   if (webFetchTlsCaCertPathsRaw !== null) {
     settings.webFetchTlsCaCertPaths = parseCsvList(webFetchTlsCaCertPathsRaw);
+  }
+
+  const chatApiBaseUrlRaw = params.get('chatApiBaseUrl');
+  if (chatApiBaseUrlRaw !== null) {
+    const endpointUrl = chatApiBaseUrlRaw.trim();
+    settings.chatApiBaseUrl = endpointUrl;
+    if (endpointUrl) {
+      try {
+        const parsed = new URL(endpointUrl);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          errors.push('chatApiBaseUrl must use http or https');
+        }
+      } catch {
+        errors.push('chatApiBaseUrl must be a valid URL');
+      }
+    }
   }
 
   const capabilityTierRaw = params.get('capabilityTier');

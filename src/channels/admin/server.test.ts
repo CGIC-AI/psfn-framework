@@ -949,6 +949,34 @@ describe('AdminServer', () => {
       expect(Array.isArray(payload.participants)).toBe(true);
     });
 
+    it('uses persisted chatApiBaseUrl override in bootstrap endpoints', async () => {
+      const chatApiBaseUrl = 'https://chat-proxy.example:7443';
+      const saveRes = await request(
+        port,
+        'POST',
+        '/api/settings',
+        `chatApiBaseUrl=${encodeURIComponent(chatApiBaseUrl)}`,
+        { 'Content-Type': 'application/x-www-form-urlencoded' },
+      );
+      expect(saveRes.status).toBe(200);
+      expect(saveRes.body).toContain('Settings saved');
+
+      const persisted = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf-8')) as { chatApiBaseUrl?: string };
+      expect(persisted.chatApiBaseUrl).toBe(chatApiBaseUrl);
+
+      const bootstrapRes = await request(port, 'GET', '/api/chat/bootstrap');
+      expect(bootstrapRes.status).toBe(200);
+      const bootstrapPayload = JSON.parse(bootstrapRes.body) as AdminChatBootstrapResponse;
+      expect(bootstrapPayload.api.chatCompletionsUrl).toBe('https://chat-proxy.example:7443/v1/chat/completions');
+      expect(bootstrapPayload.api.voiceWebSocketUrl).toBe('https://chat-proxy.example:7443/v1/voice/ws');
+      expect(bootstrapPayload.runtime.model.baseUrl).toBe('https://chat-proxy.example:7443/v1');
+
+      const modelRoomRes = await request(port, 'GET', '/api/chat/model-room/bootstrap');
+      expect(modelRoomRes.status).toBe(200);
+      const modelRoomPayload = JSON.parse(modelRoomRes.body) as AdminModelRoomBootstrapResponse;
+      expect(modelRoomPayload.api.chatCompletionsUrl).toBe('https://chat-proxy.example:7443/v1/chat/completions');
+    });
+
     it('exposes only direct-provider model-catalog entries in model-room bootstrap', async () => {
       await server.stop();
       const roomConfig: SubstrateConfig = {
@@ -1475,6 +1503,21 @@ describe('AdminServer', () => {
       expect(res.body).toContain('name="primaryModel"');
       expect(res.body).toContain('name="modelCatalogJson"');
       expect(res.body).toContain('name="modelRoleAssignmentsJson"');
+      expect(res.body).toContain('name="chatApiBaseUrl"');
+    });
+
+    it('shows configured chat API base URL override in settings form', async () => {
+      const runtimeConfig = testConfig as SubstrateConfig & { chatApiBaseUrl?: string };
+      runtimeConfig.chatApiBaseUrl = 'https://chat-proxy.example:7443';
+
+      try {
+        const res = await request(port, 'GET', '/settings');
+        expect(res.status).toBe(200);
+        expect(res.body).toContain('name="chatApiBaseUrl"');
+        expect(res.body).toContain('value="https://chat-proxy.example:7443"');
+      } finally {
+        runtimeConfig.chatApiBaseUrl = undefined;
+      }
     });
 
     it('shows memory settings', async () => {

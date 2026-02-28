@@ -401,6 +401,7 @@ export function settingsPage(
     ['LITELLM_API_KEY', envInfo.litellmApiKey],
     ['OLLAMA_URL', envInfo.ollamaUrl],
     ['IMPORT_PROCESSING_LOCAL_API_KEY', envInfo.importProcessingLocalApiKey],
+    ['TELEGRAM_BOT_TOKEN', envInfo.telegramBotToken],
   ];
 
   const secretsRowsHtml = secretKeys
@@ -717,6 +718,26 @@ export function settingsPage(
           <div class="form-group">
             <label>Timeout Per Round (ms, 5000-600,000)</label>
             <input type="number" name="moaTimeoutMs" value="${toTextNumber(config.moaTimeoutMs)}" min="5000" max="600000" placeholder="30000">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">Telegram</h3>
+        <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
+          Telegram bot channel. The bot token is configured via <code>TELEGRAM_BOT_TOKEN</code> in <code>.env</code> (not editable here for security).
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Enabled</label>
+            <select name="telegramEnabled">
+              <option value="false"${config.telegramEnabled ? '' : ' selected'}>Disabled</option>
+              <option value="true"${config.telegramEnabled ? ' selected' : ''}>Enabled</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:2">
+            <label>Authorized Users (comma-separated Telegram user IDs)</label>
+            <input type="text" name="telegramAuthorizedUsers" value="${escapeHtml((config.telegramAuthorizedUsers ?? []).join(', '))}" placeholder="e.g. 123456789, 987654321">
           </div>
         </div>
       </div>

@@ -311,6 +311,10 @@ export interface SubstrateConfig {
   wyomingHost?: string;
   wyomingPort?: number;
 
+  // ── Telegram ──
+  telegramEnabled?: boolean;
+  telegramAuthorizedUsers?: string[];
+
   // ── MoA (Mixture of Agents) ──
   moaEnabled?: boolean;
   moaReferenceModels?: string[];
@@ -546,6 +550,10 @@ export function loadConfig(): SubstrateConfig {
     wyomingEnabled,
     wyomingHost,
     ...(wyomingPort !== undefined ? { wyomingPort } : {}),
+    telegramEnabled: parseOptionalBooleanEnv(process.env.TELEGRAM_ENABLED) ?? false,
+    ...(parseStringListEnv(process.env.TELEGRAM_AUTHORIZED_USERS).length > 0
+      ? { telegramAuthorizedUsers: parseStringListEnv(process.env.TELEGRAM_AUTHORIZED_USERS) }
+      : {}),
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
   };

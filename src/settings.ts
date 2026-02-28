@@ -905,8 +905,8 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     // Channels
     discordEnabled: Boolean(config.discordToken),
     discordHeartbeatChannel: null,
-    telegramEnabled: false,
-    telegramAuthorizedUsers: null,
+    telegramEnabled: config.telegramEnabled ?? false,
+    telegramAuthorizedUsers: config.telegramAuthorizedUsers?.join(', ') ?? null,
     // MoA (Mixture of Agents)
     moaEnabled: config.moaEnabled ?? false,
     moaReferenceModels: config.moaReferenceModels ?? [],
@@ -1054,6 +1054,17 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if ('deepgramModel' in settings) {
     const trimmed = settings.deepgramModel?.trim() ?? '';
     if (trimmed) config.deepgramModel = trimmed;
+  }
+
+  // Channels
+  if ('telegramEnabled' in settings) {
+    config.telegramEnabled = settings.telegramEnabled ?? false;
+  }
+  if ('telegramAuthorizedUsers' in settings) {
+    const csv = settings.telegramAuthorizedUsers?.trim() ?? '';
+    config.telegramAuthorizedUsers = csv
+      ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
+      : undefined;
   }
 
   // MoA (Mixture of Agents)

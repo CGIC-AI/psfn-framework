@@ -5,6 +5,11 @@
 #
 # The proxy listens on localhost:4000 and routes LLM requests
 # to upstream providers using real API keys held in .env.
+#
+# TLS (optional):
+#   To enable HTTPS, generate certificates with scripts/cert-setup.sh,
+#   then uncomment the TLS volume mounts and SSL env vars below.
+#   See docs/TLS_SETUP.md for the full setup guide.
 
 services:
   litellm:
@@ -15,13 +20,25 @@ services:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./litellm_config.yaml:/app/config.yaml:ro
+      # ── TLS certificate mounts (uncomment to enable HTTPS) ──
+      # - ../certs/<domain>/fullchain.pem:/certs/cert.pem:ro
+      # - ../certs/<domain>/key.pem:/certs/key.pem:ro
     env_file:
       - .env
+    # environment:
+      # ── TLS environment (uncomment to enable HTTPS) ──
+      # SSL_CERTIFICATE: /certs/cert.pem
+      # SSL_KEYFILE: /certs/key.pem
     command:
       - "--config"
       - "/app/config.yaml"
       - "--port"
       - "4000"
+      # ── TLS flags (uncomment to enable HTTPS) ──
+      # - "--ssl_certfile"
+      # - "/certs/cert.pem"
+      # - "--ssl_keyfile"
+      # - "/certs/key.pem"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 30s

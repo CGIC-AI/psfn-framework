@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -242,6 +243,28 @@ export class SkillStore {
     });
 
     return this.readSkillRecord(existing.absolutePath);
+  }
+
+  delete(name: string): void {
+    const normalizedName = normalizeSkillName(name);
+    const existing = this.getByName(normalizedName);
+    if (!existing) {
+      throw new Error(`Skill "${normalizedName}" does not exist`);
+    }
+
+    // Remove the skill directory (category/name/) containing the SKILL.md file
+    const skillDir = dirname(existing.absolutePath);
+    ensurePathWithinRoot(this.managedRootDir, skillDir);
+    rmSync(skillDir, { recursive: true, force: true });
+
+    // Try to remove the category directory if it's now empty
+    const categoryDir = dirname(skillDir);
+    if (existsSync(categoryDir) && lstatSync(categoryDir).isDirectory()) {
+      const remaining = readdirSync(categoryDir);
+      if (remaining.length === 0) {
+        rmSync(categoryDir, { recursive: true, force: true });
+      }
+    }
   }
 
   private listManagedSkillFiles(): string[] {

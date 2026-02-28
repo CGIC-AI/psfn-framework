@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { relative, resolve, sep } from 'node:path';
 import {
   loadSkillsConfig,
+  saveSkillsConfig,
   type SkillsRuntimeConfig,
 } from '../config/skills-config.js';
 import { filterEligibleSkills } from './filter.js';
@@ -104,6 +105,36 @@ export class SkillsRuntime {
     const record = this.store.update(input);
     this.invalidate();
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
+  }
+
+  /** Delete a managed skill by name. */
+  deleteSkill(name: string): void {
+    this.store.delete(name);
+    this.invalidate();
+  }
+
+  /** Toggle a skill's enabled/disabled state via disabledSkills config. Returns new enabled state. */
+  toggleSkill(name: string): boolean {
+    const config = this.loadRuntimeConfig();
+    const normalizedName = name.trim();
+    if (!normalizedName) throw new Error('Skill name must be non-empty');
+
+    const isDisabled = config.disabledSkills.includes(normalizedName);
+    const nextDisabled = isDisabled
+      ? config.disabledSkills.filter(s => s !== normalizedName)
+      : [...config.disabledSkills, normalizedName];
+
+    saveSkillsConfig(this.options.dataDir, {
+      ...config,
+      disabledSkills: nextDisabled,
+    });
+    this.invalidate();
+    return isDisabled; // was disabled, now enabled → returns true
+  }
+
+  /** Get the current disabled skills list from config. */
+  getDisabledSkills(): string[] {
+    return this.loadRuntimeConfig().disabledSkills;
   }
 
   private getOrCreateCache(): SkillSnapshotCache {

@@ -40,6 +40,7 @@ import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parsePositiveIntEnv } from './utils/env.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
+import { applyGatewayTlsConfig } from './gateway/tls.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -175,6 +176,12 @@ async function main(): Promise<void> {
     process.env.SHELL_EXEC_MAX_OUTPUT_CHARS,
     DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
   );
+  // ── Apply TLS config early, before any HTTPS connections ──
+  applyGatewayTlsConfig({
+    caPath: config.gatewayTlsCaPath,
+    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
+  });
+
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 

@@ -65,6 +65,42 @@ describe('loadConfig voice DAVE options', () => {
   });
 });
 
+describe('loadConfig gateway TLS options', () => {
+  it('omits gateway TLS fields when env vars are unset', () => {
+    delete process.env.GATEWAY_TLS_CA_PATH;
+    delete process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED;
+
+    const config = loadConfig();
+
+    expect(config.gatewayTlsCaPath).toBeUndefined();
+    expect(config.gatewayTlsRejectUnauthorized).toBeUndefined();
+  });
+
+  it('parses GATEWAY_TLS_CA_PATH', () => {
+    process.env.GATEWAY_TLS_CA_PATH = '/etc/ssl/custom-ca.pem';
+
+    const config = loadConfig();
+
+    expect(config.gatewayTlsCaPath).toBe('/etc/ssl/custom-ca.pem');
+  });
+
+  it('parses GATEWAY_TLS_REJECT_UNAUTHORIZED=false', () => {
+    process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED = 'false';
+
+    const config = loadConfig();
+
+    expect(config.gatewayTlsRejectUnauthorized).toBe(false);
+  });
+
+  it('parses GATEWAY_TLS_REJECT_UNAUTHORIZED=true', () => {
+    process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED = 'true';
+
+    const config = loadConfig();
+
+    expect(config.gatewayTlsRejectUnauthorized).toBe(true);
+  });
+});
+
 describe('loadConfig TTS provider options', () => {
   it('defaults to elevenlabs when provider env vars are unset', () => {
     delete process.env.TTS_PROVIDER;

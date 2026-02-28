@@ -934,6 +934,95 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).not.toContain('{{user}}');
   });
 
+  it('prefers contact nickname for {{user}} across mapped channel identities', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const sharedContact = {
+      id: 'contact-primary',
+      displayName: 'Operator',
+      nickname: 'V',
+      trustLevel: 'primary',
+      channelIdentities: [
+        { channel: 'discord', userId: 'discord-operator' },
+        { channel: 'telegram', userId: '5635268079' },
+      ],
+    };
+    const mockContactStore = {
+      resolveChannelIdentity: vi.fn().mockImplementation((_channel: string, _userId: string) => sharedContact),
+    } as unknown as ContactStore;
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Address {{user}} by name.',
+      config,
+      { characterName: 'PSFN' },
+    );
+    agent.contactStore = mockContactStore;
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-nick-discord',
+      channelId: 'discord-chan',
+      channelType: 'discord',
+      authorId: 'discord-operator',
+      authorName: 'discord-operator',
+    }));
+    await agent.handleMessage(makeMessage({
+      id: 'msg-nick-telegram',
+      channelId: 'telegram:5635268079',
+      channelType: 'telegram',
+      authorId: '5635268079',
+      authorName: '5635268079',
+    }));
+
+    const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    expect(firstPrompt).toContain('Address V by name.');
+    expect(secondPrompt).toContain('Address V by name.');
+    expect(firstPrompt).toContain('Speaking with: V');
+    expect(secondPrompt).toContain('Speaking with: V');
+    expect(firstPrompt).not.toContain('Address discord-operator by name.');
+    expect(secondPrompt).not.toContain('Address 5635268079 by name.');
+  });
+
+  it('keeps explicitly loaded extended tools active across turns', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    const extendedProbeTool = {
+      name: 'extended_probe_tool',
+      label: 'extended_probe_tool',
+      description: 'test-only probe tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({
+        role: 'tool',
+        content: [{ type: 'text', text: 'ok' }],
+      })),
+    } as any;
+    agent.registerTool(extendedProbeTool, 'extended');
+
+    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
+    expect(loadTools).toBeDefined();
+    await (loadTools as any).execute('load-1', { tools: ['extended_probe_tool'] });
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    await agent.handleMessage(makeMessage({ id: 'msg-load-persist-1' }));
+    await agent.handleMessage(makeMessage({ id: 'msg-load-persist-2' }));
+
+    const setToolNamesByCall = setToolsSpy.mock.calls.map(
+      (call) => (call[0] as Array<{ name: string }>).map((tool) => tool.name),
+    );
+    expect(setToolNamesByCall.length).toBeGreaterThanOrEqual(2);
+    expect(setToolNamesByCall[0]).toContain('extended_probe_tool');
+    expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
+  });
+
   it('freezes static prompt prefix per session while dynamic suffix updates each turn', async () => {
     vi.useFakeTimers();
     try {

@@ -78,6 +78,7 @@ export type {
 
 interface ResolvedAuthorContext {
   trustLevel: TrustLevel;
+  resolvedUserName: string;
   canonicalContactKey?: string;
   continuityFallbackKeys: string[];
 }
@@ -580,6 +581,7 @@ export class SubstrateAgent {
       const promptOverride = this.normalizeTurnPromptOverride(message);
       const templateVariables = this.buildPromptTemplateVariables(
         message,
+        authorContext.resolvedUserName,
         trustLevel,
         channelType,
         authorContext.canonicalContactKey,
@@ -587,6 +589,7 @@ export class SubstrateAgent {
       );
       const runtimeContext = this.buildRuntimeContext(
         message,
+        authorContext.resolvedUserName,
         trustLevel,
         channelType,
         authorContext.canonicalContactKey,
@@ -680,8 +683,11 @@ export class SubstrateAgent {
         // Configure pi-agent-core Agent for this turn
         this.ensureModel(message);
         this.agent.setSystemPrompt(context.systemPrompt);
-        this.loadedExtended.clear();
-        this.agent.setTools(this.withCapabilityGates(this.coreTools));
+        const activeTools = [
+          ...this.coreTools,
+          ...this.extendedTools.filter((tool) => this.loadedExtended.has(tool.name)),
+        ];
+        this.agent.setTools(this.withCapabilityGates(activeTools));
 
         // Convert ContextMessage[] to AgentMessage[] for the Agent.
         // Exclude the last message (the user message we just recorded) —
@@ -1318,6 +1324,7 @@ export class SubstrateAgent {
 
   private buildPromptTemplateVariables(
     message: SubstrateMessage,
+    resolvedUserName: string,
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
@@ -1327,8 +1334,8 @@ export class SubstrateAgent {
     const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
 
     return {
-      user: message.authorName,
-      user_name: message.authorName,
+      user: resolvedUserName,
+      user_name: resolvedUserName,
       user_id: message.authorId,
       char: this.characterName,
       char_name: this.characterName,
@@ -1349,6 +1356,7 @@ export class SubstrateAgent {
   /** Build a runtime context block with current time, channel, user, model info */
   private buildRuntimeContext(
     message: SubstrateMessage,
+    resolvedUserName: string,
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey?: string,
@@ -1367,7 +1375,7 @@ export class SubstrateAgent {
       '[Runtime Context]',
       `Current time: ${now.toISOString()}`,
       `Channel: ${message.channelId} (type: ${channelType ?? 'unknown'}, visibility: ${visibility})`,
-      `Speaking with: ${message.authorName} (userId: ${message.authorId}, canonicalId: ${canonicalContactKey ?? message.authorId}, trust: ${trustLevel})`,
+      `Speaking with: ${resolvedUserName} (userId: ${message.authorId}, canonicalId: ${canonicalContactKey ?? message.authorId}, trust: ${trustLevel})`,
       `Model: ${modelId}`,
       `Capability tier: ${capabilityTier}`,
       `Context window: ${contextWindow} tokens`,
@@ -1538,12 +1546,26 @@ export class SubstrateAgent {
     return [...keys].sort((a, b) => a.localeCompare(b));
   }
 
+  private resolvePromptUserName(message: SubstrateMessage, contact?: Contact): string {
+    const nickname = contact?.nickname?.trim();
+    if (nickname) return nickname;
+
+    const displayName = contact?.displayName?.trim();
+    if (displayName) return displayName;
+
+    const authorName = message.authorName?.trim();
+    if (authorName) return authorName;
+
+    return 'User';
+  }
+
   private resolveAuthorContext(message: SubstrateMessage): ResolvedAuthorContext {
     // Internal system channels are self-context (heartbeat/reflection/planning).
     // They should use full private trust for memory access.
     if (message.channelId.startsWith('internal:')) {
       return {
         trustLevel: 'primary',
+        resolvedUserName: this.resolvePromptUserName(message),
         canonicalContactKey: message.authorId,
         continuityFallbackKeys: [],
       };
@@ -1552,6 +1574,7 @@ export class SubstrateAgent {
     if (!message.authorId || !this.contactStore) {
       return {
         trustLevel: 'regular',
+        resolvedUserName: this.resolvePromptUserName(message),
         continuityFallbackKeys: [],
       };
     }
@@ -1578,6 +1601,7 @@ export class SubstrateAgent {
 
       return {
         trustLevel: contact?.trustLevel ?? 'regular',
+        resolvedUserName: this.resolvePromptUserName(message, contact),
         canonicalContactKey,
         continuityFallbackKeys: canonicalContactKey
           ? this.collectContinuityFallbackKeys(message.authorId, canonicalContactKey, contact)
@@ -1591,6 +1615,7 @@ export class SubstrateAgent {
       });
       return {
         trustLevel: 'regular',
+        resolvedUserName: this.resolvePromptUserName(message),
         continuityFallbackKeys: [],
       };
     }

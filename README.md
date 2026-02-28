@@ -40,7 +40,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
 - **WebSocket voice runtime** — transport primitives for browser/app clients using `voice-wire-v1` session frames
 - **OpenAI-Compatible API** — `/v1/chat/completions` with SSE streaming for WebUI integration
-- **Admin GUI (Purrsephone's Garden)** — htmx-powered management panel with JSON API: memory browser, session viewer, contacts, scheduler, settings, prompt editor, model discovery. Chat page powered by [pi-web-ui](https://github.com/nickvdyck/pi-web-ui) AgentInterface. WebSocket telemetry endpoint for programmatic consumers
+- **Admin GUI (Purrsephone's Garden)** — Svelte 5 SPA at `/garden` with 17+ pages: memory browser, session viewer, contacts (CRUD, merge, unlink), scheduler, settings, prompt editor, model discovery, chat cockpit. WebSocket telemetry endpoint. *Legacy htmx admin server at `/` is deprecated and will be removed next release.*
 
 ### Infrastructure
 - **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
@@ -133,15 +133,15 @@ npm run agent:docker    # --network=none Docker container
 
 ### Optional Services
 
-**Admin GUI + JSON API:**
+**Admin GUI (Purrsephone's Garden) + JSON API:**
 ```bash
-ADMIN_PORT=3001        # Activates Purrsephone's Garden + JSON API
+ADMIN_PORT=3001        # Activates Garden Svelte SPA + JSON API
 ADMIN_TOKEN=your-token # Secures the panel and API
 ADMIN_HOST=127.0.0.1
 ADMIN_ALLOW_INSECURE=false # Set true only for local dev without token
 ```
 
-JSON API available at `/api/admin/*` (dashboard, memory, sessions, contacts, settings, identity, prompts). WebSocket telemetry at `WS /api/admin/events`. Same auth as the htmx panel.
+Svelte 5 SPA served at `/garden` (build with `npm run garden:build` or dev with `npm run garden:dev`). JSON API at `/api/admin/*` (dashboard, memory, sessions, contacts, settings, identity, prompts). WebSocket telemetry at `WS /api/admin/events`. Legacy htmx panel at `/` is deprecated.
 
 **OpenAI-compatible API:**
 ```bash
@@ -257,7 +257,7 @@ Gateway (host)                    Agent (container, --network=none)
 | **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
 | **Git Self-Modification** | GitOps service, 6 tools (status, diff, patch, commit, branch, PR), path allowlist, audit log |
 | **Module System** | Hot-loadable TypeScript modules (planned) |
-| **Channel Layer** | Discord (text + voice), OpenAI API, admin GUI (Purrsephone's Garden) |
+| **Channel Layer** | Discord (text + voice), OpenAI API, admin GUI (Svelte SPA at `/garden`), Wyoming protocol |
 | **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers |
 
 Heartbeat/reflection runtime wiring uses `wireHeartbeatRuntime` in `src/bootstrap/parity.ts`.
@@ -271,7 +271,7 @@ Heartbeat/reflection runtime wiring uses `wireHeartbeatRuntime` in `src/bootstra
 - **Settings**: JSON — live-mutable, atomic writes
 - **Audit log**: JSONL — every git operation logged
 
-### Agent Tools (34)
+### Agent Tools (38)
 
 Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`.
 
@@ -285,6 +285,7 @@ Your companion has access to these tools during conversation. Core tools are alw
 | **Shards** | `spawn_shard` (parallel sub-agents) |
 | **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `schedule_task` |
 | **Lifecycle** | `self_restart`, `self_rebuild`, `notify_operator` |
+| **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
 | **Meta** | `load_tools` (hot-swap core/extended tool sets) |
 
 ## Project Structure
@@ -309,13 +310,20 @@ src/
   shards/                   # Self-spawning parallel sub-agents
   repl/                     # RLM+REPL sandbox (think tool)
   scheduler/                # Cron, heartbeat, one-shot, maintenance
+  voice/                    # Voice pipeline (STT, TTS connectors, WebSocket transport)
+  skills/                   # Self-authored skill store (CRUD, execution)
+  capabilities/             # Runtime capability declarations
+  values/                   # Values journal (agent-authored principles)
+  bootstrap/                # Composition root (parity wiring, feature flags)
   channels/
-    admin/                  # Purrsephone's Garden (htmx web GUI + JSON API)
+    admin/                  # Legacy htmx admin server + JSON API (deprecated)
       handlers/             # Domain handler modules (11 modules)
       services/             # Data service layer (8 services + types)
     api/                    # OpenAI-compatible REST API
     discord/                # Discord.js adapter (text + voice)
+    wyoming/                # Wyoming protocol adapter
 
+admin-ui/                   # Svelte 5 SPA — Purrsephone's Garden at /garden
 docker/                     # Agent container configuration
 proxy/                      # LiteLLM proxy configuration
 data/                       # Runtime data (gitignored)
@@ -329,6 +337,10 @@ npm test             # Run tests
 npm run test:watch   # Watch mode
 npm run lint         # ESLint
 npm run build        # Compile with tsup
+npm run garden:dev   # Svelte admin UI dev server (vite)
+npm run garden:build # Build admin UI for production
+npm run smoke:chat   # Chat cockpit smoke test
+npm run e2e          # End-to-end integration tests
 ```
 
 ## Tech Stack

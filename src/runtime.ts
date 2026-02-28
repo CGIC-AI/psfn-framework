@@ -100,6 +100,20 @@ import { ModuleLoader } from './modules/loader.js';
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
+type RuntimeVoiceSttProvider = 'deepgram' | 'disabled';
+type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
+
+function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
+  const configured = (config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider }).sttProvider;
+  if (configured === 'deepgram' || configured === 'disabled') return configured;
+  return config.deepgramApiKey ? 'deepgram' : 'disabled';
+}
+
+function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
+  const configured = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
+  if (configured === 'elevenlabs' || configured === 'echo' || configured === 'disabled') return configured;
+  return 'elevenlabs';
+}
 
 export function buildRuntimeChannelsConfigOverrides(
   config: SubstrateConfig,
@@ -805,9 +819,10 @@ export class SubstrateRuntime implements Lifecycle {
 
       const wyomingAdapters = [handleAdapter];
 
-      // ASR adapter — wired to Deepgram STT when API key is available
+      // ASR adapter — wired to Deepgram STT when selected and API key is available
+      const wyomingSttProvider = resolveRuntimeVoiceSttProvider(this.config);
       const wyomingDeepgramKey = this.config.deepgramApiKey;
-      if (wyomingDeepgramKey) {
+      if (wyomingSttProvider === 'deepgram' && wyomingDeepgramKey) {
         const sttConnector = createStreamingSttConnector('deepgram', {
           apiKey: wyomingDeepgramKey,
           model: this.config.deepgramModel,
@@ -817,7 +832,7 @@ export class SubstrateRuntime implements Lifecycle {
       }
 
       // TTS adapter — wired to the configured TTS provider (elevenlabs or echo)
-      const wyomingTtsProvider: StreamingTtsProvider = this.config.ttsProvider ?? 'elevenlabs';
+      const wyomingTtsProvider = resolveRuntimeVoiceTtsProvider(this.config);
       try {
         let ttsConnector;
         if (wyomingTtsProvider === 'echo' && this.config.echoTtsUrl && this.config.echoTtsVoice) {
@@ -827,7 +842,7 @@ export class SubstrateRuntime implements Lifecycle {
             preset: this.config.echoTtsPreset ?? 'normal',
             ...(this.config.echoTtsModel ? { model: this.config.echoTtsModel } : {}),
           });
-        } else if (this.config.elevenLabsApiKey) {
+        } else if (wyomingTtsProvider === 'elevenlabs' && this.config.elevenLabsApiKey) {
           ttsConnector = createStreamingTtsConnector('elevenlabs', {
             apiKey: this.config.elevenLabsApiKey,
             voiceId: this.config.elevenLabsVoiceId ?? 'YOUR_VOICE_ID',

@@ -395,6 +395,7 @@ export class LegacyAdminHandlers {
       apiBaseUrl: deps.apiBaseUrl,
       apiHost: deps.apiHost,
       apiPort: deps.apiPort,
+      config: this.config,
     });
     this.valuesJournal = new ValuesJournalStore(join(this.config.dataDir, 'values.jsonl'));
 
@@ -2059,6 +2060,20 @@ export class LegacyAdminHandlers {
         return tpl.settingsFormResult(false, `Settings saved but capability tier update failed: ${message}`);
       }
     }
+
+    const changedFields = Object.keys(settings).sort();
+    if (capabilityTierInput) {
+      changedFields.push('capabilityTier');
+    }
+    this.appendAuditTimelineEntry(
+      'settings_change',
+      'allowed',
+      'Operator updated runtime settings.',
+      [
+        changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null,
+      ],
+      'operator',
+    );
 
     return tpl.settingsFormResult(true, 'Settings saved');
   }

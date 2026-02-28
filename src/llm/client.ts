@@ -34,6 +34,18 @@ interface LLMRequestOptions extends SimpleStreamOptions {
   provider?: { order: string[] };
 }
 
+export interface LLMCompletionModelHint {
+  model?: string;
+  provider?: string;
+  maxTokens?: number;
+}
+
+export interface LLMCompletionOptions {
+  signal?: AbortSignal;
+  disableRetry?: boolean;
+  modelHint?: LLMCompletionModelHint;
+}
+
 export class SensitiveImportRoutePolicyError extends Error {
   readonly code = 'sensitive_import_route_rejected';
   readonly audit: ImportPolicyAuditRecord;
@@ -121,6 +133,141 @@ export class LLMClient {
     });
 
     throw new SensitiveImportRoutePolicyError(evaluation.audit, reason);
+  }
+
+  private normalizeModelHint(modelHint: LLMCompletionModelHint | undefined): LLMCompletionModelHint | null {
+    if (!modelHint) return null;
+    const rawModel = modelHint.model?.trim();
+    const provider = modelHint.provider?.trim().toLowerCase();
+    const maxTokens = modelHint.maxTokens;
+    if (!rawModel && (!Number.isFinite(maxTokens) || maxTokens === undefined || maxTokens <= 0)) {
+      return null;
+    }
+    return {
+      ...(rawModel ? { model: rawModel } : {}),
+      ...(provider ? { provider } : {}),
+      ...(Number.isFinite(maxTokens) && maxTokens !== undefined && maxTokens > 0
+        ? { maxTokens: Math.floor(maxTokens) }
+        : {}),
+    };
+  }
+
+  private parseProviderQualifiedHint(value: string): { provider: string; model: string } | null {
+    const separatorIndex = value.indexOf(':');
+    if (separatorIndex <= 0) return null;
+    const provider = value.slice(0, separatorIndex).trim().toLowerCase();
+    const model = value.slice(separatorIndex + 1).trim();
+    if (!provider || !model || provider.includes('/')) return null;
+    return { provider, model };
+  }
+
+  private withOpenRouterPreferences(candidate: RoutingCandidate): RoutingCandidate {
+    if (candidate.provider !== 'openrouter') return candidate;
+    const providerOrder = this.config.openRouterProviderOrder?.filter(Boolean) ?? [];
+    if (providerOrder.length === 0) return candidate;
+    return {
+      ...candidate,
+      openRouterProviderOrder: [...providerOrder],
+    };
+  }
+
+  private candidateKey(candidate: RoutingCandidate): string {
+    return [
+      candidate.provider,
+      candidate.model,
+      String(candidate.maxTokens),
+      String(candidate.contextWindow ?? ''),
+      candidate.requestBaseUrl ?? '',
+      candidate.requestApiKeyEnv ?? '',
+      candidate.openRouterZdrOnly ? 'zdr' : '',
+      candidate.openRouterProviderOrder?.join(',') ?? '',
+      candidate.importRouteMode ?? '',
+    ].join('::');
+  }
+
+  private dedupeCandidates(candidates: RoutingCandidate[]): RoutingCandidate[] {
+    const deduped: RoutingCandidate[] = [];
+    const seen = new Set<string>();
+    for (const candidate of candidates) {
+      const key = this.candidateKey(candidate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(candidate);
+    }
+    return deduped;
+  }
+
+  private resolveModelHintCandidate(
+    modelHint: LLMCompletionModelHint,
+    fallbackCandidates: RoutingCandidate[],
+  ): RoutingCandidate | null {
+    const baseCandidate = fallbackCandidates[0];
+    const hintedModel = modelHint.model?.trim();
+    const qualified = hintedModel ? this.parseProviderQualifiedHint(hintedModel) : null;
+    const catalog = this.config.modelCatalog ?? {};
+    const fromSlot = hintedModel ? catalog[hintedModel] : undefined;
+    const fromModelId = hintedModel
+      ? Object.values(catalog).find(entry => entry.model === hintedModel)
+      : undefined;
+    const catalogMatch = fromSlot ?? fromModelId;
+
+    let provider = modelHint.provider ?? qualified?.provider ?? catalogMatch?.provider ?? baseCandidate?.provider;
+    let model = qualified?.model ?? (catalogMatch?.model ?? hintedModel ?? baseCandidate?.model);
+    let maxTokens = modelHint.maxTokens
+      ?? catalogMatch?.overrides?.maxTokens
+      ?? catalogMatch?.defaults?.maxTokens
+      ?? baseCandidate?.maxTokens;
+    const contextWindow = catalogMatch?.overrides?.contextWindow
+      ?? catalogMatch?.defaults?.contextWindow
+      ?? baseCandidate?.contextWindow;
+
+    if (!provider || !model) return null;
+    provider = provider.trim().toLowerCase();
+    model = model.trim();
+    if (!provider || !model) return null;
+
+    if (!Number.isFinite(maxTokens) || maxTokens === undefined || maxTokens <= 0) {
+      maxTokens = this.config.primaryMaxTokens;
+    }
+    if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
+
+    const hinted: RoutingCandidate = {
+      provider,
+      model,
+      maxTokens: Math.floor(maxTokens),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+    };
+
+    if (baseCandidate && baseCandidate.provider === provider) {
+      if (baseCandidate.requestBaseUrl) hinted.requestBaseUrl = baseCandidate.requestBaseUrl;
+      if (baseCandidate.requestApiKeyEnv) hinted.requestApiKeyEnv = baseCandidate.requestApiKeyEnv;
+      if (baseCandidate.openRouterZdrOnly) hinted.openRouterZdrOnly = true;
+      if (baseCandidate.importRouteMode) hinted.importRouteMode = baseCandidate.importRouteMode;
+    }
+
+    return this.withOpenRouterPreferences(hinted);
+  }
+
+  private resolveCandidates(
+    purpose: RoutingPurpose,
+    modelHint: LLMCompletionModelHint | undefined,
+  ): RoutingCandidate[] {
+    const candidates = resolveRoutingCandidates(this.config, purpose);
+    const normalizedHint = this.normalizeModelHint(modelHint);
+    if (!normalizedHint) return candidates;
+
+    const hintedCandidate = this.resolveModelHintCandidate(normalizedHint, candidates);
+    if (!hintedCandidate) return candidates;
+
+    log.debug('Applying completion model hint', {
+      purpose,
+      requestedModel: normalizedHint.model ?? null,
+      requestedProvider: normalizedHint.provider ?? null,
+      routedModel: hintedCandidate.model,
+      routedProvider: hintedCandidate.provider,
+    });
+
+    return this.dedupeCandidates([hintedCandidate, ...candidates]);
   }
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
@@ -259,7 +406,7 @@ export class LLMClient {
   async complete(
     context: LLMContext,
     purpose: CompletionPurpose,
-    options: { signal?: AbortSignal; disableRetry?: boolean } = {},
+    options: LLMCompletionOptions = {},
   ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
     const piContext = toPiContext(context);
@@ -307,6 +454,7 @@ export class LLMClient {
           },
         });
       },
+      { modelHint: options.modelHint },
     );
 
     log.info('LLM complete finished', {
@@ -315,6 +463,7 @@ export class LLMClient {
       model: candidate.model,
       provider: candidate.provider,
       attempts,
+      requestedModelHint: options.modelHint?.model,
     });
 
     const content = extractTextContent(response.content as unknown[]);
@@ -347,8 +496,9 @@ export class LLMClient {
   private async runWithFallback<T>(
     purpose: RoutingPurpose,
     execute: (candidate: RoutingCandidate, attempt: number) => Promise<T>,
+    options: { modelHint?: LLMCompletionModelHint } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
-    const candidates = resolveRoutingCandidates(this.config, purpose);
+    const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
       this.enforceImportRoutingPolicy(purpose, candidate);
       return execute(candidate, attempt);

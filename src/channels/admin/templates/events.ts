@@ -6,6 +6,7 @@ import {
 } from '../audit-timeline.js';
 import type {
   AdminAuditActionType,
+  AdminAuditActor,
   AdminAuditDecision,
   AdminAuditTimeRange,
   AdminAuditTimelineEntry,
@@ -28,6 +29,11 @@ const ACTION_TYPE_LABELS: Record<AdminAuditActionType, string> = {
 const DECISION_LABELS: Record<AdminAuditDecision, string> = {
   allowed: 'Allowed',
   denied: 'Denied',
+};
+
+const ACTOR_LABELS: Record<AdminAuditActor, string> = {
+  operator: 'Operator',
+  companion: 'Purrsephone',
 };
 
 const TIME_RANGE_LABELS: Record<AdminAuditTimeRange, string> = {
@@ -177,8 +183,12 @@ export function auditTimelineItem(entry: AdminAuditTimelineEntry): string {
   const timeLabel = timestamp.toLocaleTimeString();
   const actionTypeLabel = ACTION_TYPE_LABELS[entry.actionType];
   const decisionLabel = DECISION_LABELS[entry.decision];
+  const actorLabel = entry.actor ? ACTOR_LABELS[entry.actor] : null;
   const detailsHtml = entry.details
     ? `<div class="audit-item-details">${escapeHtml(entry.details)}</div>`
+    : '';
+  const actorHtml = actorLabel
+    ? `<span class="audit-badge audit-badge-actor">Actor: ${escapeHtml(actorLabel)}</span>`
     : '';
 
   return `<article class="audit-item" data-action-type="${escapeHtml(entry.actionType)}" data-decision="${escapeHtml(entry.decision)}">
@@ -186,6 +196,7 @@ export function auditTimelineItem(entry: AdminAuditTimelineEntry): string {
       <span class="audit-item-time">${escapeHtml(`${dateLabel} ${timeLabel}`)}</span>
       <span class="audit-badge">${escapeHtml(actionTypeLabel)}</span>
       <span class="audit-badge audit-badge-${escapeHtml(entry.decision)}">${escapeHtml(decisionLabel)}</span>
+      ${actorHtml}
     </div>
     <div class="audit-item-narrative">${escapeHtml(entry.narrative)}</div>
     ${detailsHtml}

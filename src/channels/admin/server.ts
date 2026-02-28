@@ -1196,6 +1196,9 @@ export class AdminServer implements Lifecycle {
         skillsRuntime: this.skillsRuntimeRef,
         confirmationQueueApi: this.confirmationQueueApiRef,
         valuesJournal: this.valuesJournal,
+        appendAuditTimelineEntry: (actionType, decision, narrative, details = [], actor) => {
+          this.handlers.appendAuditTimelineEntry(actionType, decision, narrative, details, actor);
+        },
         withBody: (req, res, cb) => this.withBody(req, res, cb),
       }),
     ];

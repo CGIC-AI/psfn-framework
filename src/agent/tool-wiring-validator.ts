@@ -35,6 +35,22 @@ export type WirableTool = AgentTool<any> & {
   wiringMeta?: ToolWiringMeta;
 };
 
+/**
+ * Expected requiredGatewayMethods coverage for known gateway-dependent tools.
+ * If a tool appears in this map in gateway mode, it must declare matching
+ * requiredGatewayMethods metadata or it is disabled.
+ */
+export type GatewayToolMetadataCoverage = Readonly<Record<string, readonly string[]>>;
+
+export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage = Object.freeze({
+  repo_status: Object.freeze(['git.status']),
+  repo_diff: Object.freeze(['git.diff']),
+  repo_apply_patch: Object.freeze(['git.apply_patch']),
+  repo_commit: Object.freeze(['git.commit']),
+  repo_create_branch: Object.freeze(['git.create_branch']),
+  repo_open_pr: Object.freeze(['git.open_pr']),
+});
+
 // ── Validation Types ──
 
 export type RuntimeMode = 'single' | 'gateway';
@@ -44,6 +60,7 @@ export interface ToolValidationResult {
   valid: boolean;
   missingGatewayMethods: string[];
   missingServices: string[];
+  missingGatewayMetadataCoverage: string[];
 }
 
 export interface ValidationReport {
@@ -118,6 +135,8 @@ export interface ValidateToolsOptions {
   tools: readonly AgentTool<any>[];
   /** Available gateway client methods (gateway mode only) */
   gatewayClientMethods?: Set<string>;
+  /** Expected metadata coverage for known gateway-dependent tools */
+  requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage;
   /** Available service names */
   availableServices?: Set<string>;
 }
@@ -127,19 +146,24 @@ export interface ValidateToolsOptions {
  * Returns a report describing which tools are valid and which have missing deps.
  */
 export function validateToolWiring(options: ValidateToolsOptions): ValidationReport {
-  const { mode, tools, gatewayClientMethods, availableServices } = options;
+  const {
+    mode,
+    tools,
+    gatewayClientMethods,
+    requiredGatewayMetadataCoverage,
+    availableServices,
+  } = options;
   const results: ToolValidationResult[] = [];
 
   for (const tool of tools) {
     const wirable = tool as WirableTool;
     const meta = wirable.wiringMeta;
-    if (!meta) continue;
-
     const missingGatewayMethods: string[] = [];
     const missingServices: string[] = [];
+    const missingGatewayMetadataCoverage: string[] = [];
 
     // Check gateway method dependencies
-    if (mode === 'gateway' && meta.requiredGatewayMethods && gatewayClientMethods) {
+    if (mode === 'gateway' && meta?.requiredGatewayMethods && gatewayClientMethods) {
       for (const rpcMethod of meta.requiredGatewayMethods) {
         const clientMethod = resolveClientMethod(rpcMethod);
         if (!gatewayClientMethods.has(clientMethod)) {
@@ -148,8 +172,29 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
       }
     }
 
+    // Enforce metadata coverage for known gateway-dependent tools.
+    if (mode === 'gateway') {
+      const expectedCoverage = requiredGatewayMetadataCoverage?.[tool.name];
+      if (expectedCoverage && expectedCoverage.length > 0) {
+        if (!meta?.requiredGatewayMethods || meta.requiredGatewayMethods.length === 0) {
+          missingGatewayMetadataCoverage.push(
+            `requiredGatewayMethods metadata missing (expected: ${expectedCoverage.join(', ')})`,
+          );
+        } else {
+          const declared = new Set(meta.requiredGatewayMethods);
+          for (const expectedRpcMethod of expectedCoverage) {
+            if (!declared.has(expectedRpcMethod)) {
+              missingGatewayMetadataCoverage.push(
+                `requiredGatewayMethods missing "${expectedRpcMethod}"`,
+              );
+            }
+          }
+        }
+      }
+    }
+
     // Check service dependencies
-    if (meta.requiredServices && availableServices) {
+    if (meta?.requiredServices && availableServices) {
       for (const service of meta.requiredServices) {
         if (!availableServices.has(service)) {
           missingServices.push(service);
@@ -157,12 +202,17 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
       }
     }
 
-    if (missingGatewayMethods.length > 0 || missingServices.length > 0) {
+    if (
+      missingGatewayMethods.length > 0
+      || missingServices.length > 0
+      || missingGatewayMetadataCoverage.length > 0
+    ) {
       results.push({
         toolName: tool.name,
         valid: false,
         missingGatewayMethods,
         missingServices,
+        missingGatewayMetadataCoverage,
       });
     }
   }
@@ -199,10 +249,16 @@ export function validateAndLogToolWiring(options: ValidateToolsOptions): string[
     if (invalid.missingServices.length > 0) {
       reasons.push(`missing services: ${invalid.missingServices.join(', ')}`);
     }
+    if (invalid.missingGatewayMetadataCoverage.length > 0) {
+      reasons.push(
+        `missing gateway metadata coverage: ${invalid.missingGatewayMetadataCoverage.join(', ')}`,
+      );
+    }
     log.warn(`Tool "${invalid.toolName}" disabled — ${reasons.join('; ')}`, {
       tool: invalid.toolName,
       missingGatewayMethods: invalid.missingGatewayMethods,
       missingServices: invalid.missingServices,
+      missingGatewayMetadataCoverage: invalid.missingGatewayMetadataCoverage,
     });
     disabledNames.push(invalid.toolName);
   }

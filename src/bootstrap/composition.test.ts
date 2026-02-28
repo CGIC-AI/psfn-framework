@@ -7,6 +7,13 @@ import { EventBus } from '../event-bus.js';
 import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import { ModuleLoader } from '../modules/loader.js';
 import { DEFAULT_REPL_CONFIG } from '../repl/types.js';
+import {
+  DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+  extractGatewayMethods,
+  validateAndLogToolWiring,
+  type GatewayToolMetadataCoverage,
+  type RuntimeMode,
+} from '../agent/tool-wiring-validator.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type { LLMResponse } from '../types.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
@@ -79,6 +86,25 @@ class FakeSubstrateAgent {
       extended: [],
     };
   }
+
+  validateToolWiring(
+    mode: RuntimeMode,
+    gatewayClient?: object,
+    requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage,
+  ): void {
+    const disabled = validateAndLogToolWiring({
+      mode,
+      tools: this.tools,
+      ...(mode === 'gateway' && gatewayClient
+        ? { gatewayClientMethods: extractGatewayMethods(gatewayClient) }
+        : {}),
+      requiredGatewayMetadataCoverage,
+    });
+    if (disabled.length === 0) return;
+
+    const disabledSet = new Set(disabled);
+    this.tools = this.tools.filter((tool) => !disabledSet.has(tool.name));
+  }
 }
 
 function findThinkTool(target: FakeSubstrateAgent): AgentTool<any> {
@@ -108,6 +134,25 @@ function moduleWithActivation(toolName: string): string {
     '      parameters: { type: "object", properties: {}, additionalProperties: false },',
     '      execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),',
     '    });',
+    '  },',
+    '};',
+  ].join('\n');
+}
+
+function moduleWithMismatchedGatewayMetadata(toolName: string): string {
+  return [
+    'export default {',
+    '  name: "planner",',
+    '  activate(ctx) {',
+    '    const tool = {',
+    `      name: "${toolName}",`,
+    '      label: "planner_probe_gateway",',
+    '      description: "module probe with wrong gateway metadata",',
+    '      parameters: { type: "object", properties: {}, additionalProperties: false },',
+    '      execute: async () => ({ content: [{ type: "text", text: "should-not-run" }], details: {} }),',
+    '      wiringMeta: { requiredGatewayMethods: ["git.status"] },',
+    '    };',
+    '    ctx.registerTool(tool);',
     '  },',
     '};',
   ].join('\n');
@@ -274,6 +319,53 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
   });
 });
 
+describe('module loader + tool wiring revalidation', () => {
+  it('disables dynamically loaded invalid gateway-dependent tools before use', async () => {
+    class FakeGatewayClient {
+      gitStatus(): void { /* noop */ }
+      gitCommit(): void { /* noop */ }
+    }
+
+    const root = mkdtempSync(join(tmpdir(), 'psfn-module-post-validate-'));
+    const registryPath = join(root, 'registry.json');
+    writeFileSync(registryPath, JSON.stringify([
+      {
+        id: 'mod-1',
+        name: 'planner',
+        source: moduleWithMismatchedGatewayMetadata('repo_commit'),
+        enabled: true,
+        installedAt: 100,
+        updatedAt: 100,
+        version: 1,
+      },
+    ], null, 2), 'utf-8');
+
+    const eventBus = new EventBus();
+    const target = new FakeSubstrateAgent();
+    const moduleLoader = new ModuleLoader({
+      eventBus,
+      registerTool: (tool, category) => target.registerTool(tool, category),
+      registryPath,
+    });
+
+    try {
+      const gateway = new FakeGatewayClient();
+
+      // Mirrors startup flow: pre-load validation, module activation, post-load validation.
+      target.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
+      const summary = await moduleLoader.loadEnabledModules();
+      expect(summary).toEqual({ attempted: 1, loaded: 1, failed: 0 });
+      expect(target.tools.map((tool) => tool.name)).toContain('repo_commit');
+
+      target.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
+      expect(target.tools.map((tool) => tool.name)).not.toContain('repo_commit');
+    } finally {
+      await moduleLoader.shutdown();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('agent-main split wiring', () => {
   it('wires module lifecycle + tier-gated think deps in split mode', () => {
     const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
@@ -281,6 +373,17 @@ describe('agent-main split wiring', () => {
     expect(source).toContain('moduleLoader.loadEnabledModules()');
     expect(source).toContain('moduleInstallConfirmationQueue: cardProposalQueue');
     expect(source).toContain('onModuleRegistryMutation: async (mutation) =>');
+  });
+
+  it('re-validates tool wiring after module load in split mode', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const preIndex = source.indexOf("agentLoop.validateToolWiring('gateway'");
+    const moduleLoadIndex = source.indexOf('moduleLoader.loadEnabledModules()');
+    const postIndex = source.indexOf("agentLoop.validateToolWiring('gateway'", preIndex + 1);
+
+    expect(preIndex).toBeGreaterThanOrEqual(0);
+    expect(moduleLoadIndex).toBeGreaterThan(preIndex);
+    expect(postIndex).toBeGreaterThan(moduleLoadIndex);
   });
 });
 
@@ -311,5 +414,16 @@ describe('runtime composition wiring', () => {
     expect(source).not.toContain('new ShardManager(');
     expect(source).not.toContain('createSpawnShardTool(');
     expect(source).not.toContain('createThinkTool(');
+  });
+
+  it('re-validates tool wiring after module load in single-process mode', () => {
+    const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+    const preIndex = source.indexOf("this.agentLoop.validateToolWiring('single')");
+    const moduleLoadIndex = source.indexOf('this.moduleLoader.loadEnabledModules()');
+    const postIndex = source.indexOf("this.agentLoop.validateToolWiring('single')", preIndex + 1);
+
+    expect(preIndex).toBeGreaterThanOrEqual(0);
+    expect(moduleLoadIndex).toBeGreaterThan(preIndex);
+    expect(postIndex).toBeGreaterThan(moduleLoadIndex);
   });
 });

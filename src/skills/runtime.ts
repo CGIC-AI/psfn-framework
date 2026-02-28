@@ -87,6 +87,25 @@ export class SkillsRuntime {
     return this.store;
   }
 
+  /** List managed (user-created) skills. */
+  listManaged(): Array<{ name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string }> {
+    return this.store.list().map(({ absolutePath: _, relativePath: __, ...rest }) => rest);
+  }
+
+  /** Create a new managed skill. */
+  createSkill(input: { name: string; category: string; content: string; description?: string }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
+    const record = this.store.create(input);
+    this.invalidate();
+    return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
+  }
+
+  /** Update an existing managed skill. */
+  updateSkill(input: { name: string; content: string; description?: string }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
+    const record = this.store.update(input);
+    this.invalidate();
+    return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
+  }
+
   private getOrCreateCache(): SkillSnapshotCache {
     const runtimeConfig = this.loadRuntimeConfig();
     const repoRoot = this.options.repoRoot ?? process.cwd();

@@ -537,8 +537,19 @@ export interface SkillSnapshot {
   skipped: SkillSkipRecord[];
 }
 
+export interface ManagedSkill {
+  name: string;
+  description: string;
+  category: string;
+  version: number;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AdminSkillsData {
   snapshot: SkillSnapshot;
+  managed: ManagedSkill[];
 }
 
 // Confirmations

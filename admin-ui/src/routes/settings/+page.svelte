@@ -95,6 +95,12 @@
       profileSynthesisMinSourceMemories,
       // Think Tool
       thinkMaxTokens, thinkMaxWallTimeMs, thinkMaxSubQueries,
+      // Voice / TTS
+      ttsProvider, voiceId, echoTtsUrl, echoTtsVoice, echoTtsPreset,
+      sttProvider, deepgramModel,
+      // Channels
+      discordEnabled, discordHeartbeatChannel,
+      telegramEnabled, telegramAuthorizedUsers,
     });
   }
 
@@ -142,6 +148,21 @@
   let webFetchLocalCrawlerHostAllowlist = $state('');
   let webFetchLocalCrawlerDomainAllowlist = $state('');
   let webFetchTlsCaCertPaths = $state('');
+
+  // ── Voice / TTS ──
+  let ttsProvider = $state<'elevenlabs' | 'echo' | 'disabled'>('disabled');
+  let voiceId = $state('');
+  let echoTtsUrl = $state('');
+  let echoTtsVoice = $state('');
+  let echoTtsPreset = $state('');
+  let sttProvider = $state<'deepgram' | 'disabled'>('disabled');
+  let deepgramModel = $state('nova-3');
+
+  // ── Channels ──
+  let discordEnabled = $state(false);
+  let discordHeartbeatChannel = $state('');
+  let telegramEnabled = $state(false);
+  let telegramAuthorizedUsers = $state('');
 
   // ── Capability tier ──
   let capabilityTier = $state('apprentice');
@@ -287,6 +308,25 @@
         'webFetchTlsCaCertPaths',
       ],
       summary: () => webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only',
+    },
+    {
+      id: 'voice', title: 'Voice & Speech', icon: 'V',
+      keys: [
+        'ttsProvider', 'voiceId', 'echoTtsUrl', 'echoTtsVoice', 'echoTtsPreset',
+        'sttProvider', 'deepgramModel',
+      ],
+      summary: () => `TTS: ${ttsProvider}, STT: ${sttProvider}`,
+    },
+    {
+      id: 'channels', title: 'Channels', icon: 'C',
+      keys: [
+        'discordEnabled', 'discordHeartbeatChannel',
+        'telegramEnabled', 'telegramAuthorizedUsers',
+      ],
+      summary: () => [
+        discordEnabled ? 'Discord on' : 'Discord off',
+        telegramEnabled ? 'Telegram on' : 'Telegram off',
+      ].join(', '),
     },
   ];
 
@@ -439,6 +479,23 @@
     thinkMaxTokens = Number(config.thinkMaxTokens ?? 50000);
     thinkMaxWallTimeMs = Number(config.thinkMaxWallTimeMs ?? 120000);
     thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 10);
+
+    // Voice / TTS
+    const rawTts = String(config.ttsProvider ?? 'disabled');
+    ttsProvider = (rawTts === 'elevenlabs' || rawTts === 'echo') ? rawTts : 'disabled';
+    voiceId = String(config.voiceId ?? config.elevenLabsVoiceId ?? '');
+    echoTtsUrl = String(config.echoTtsUrl ?? '');
+    echoTtsVoice = String(config.echoTtsVoice ?? '');
+    echoTtsPreset = String(config.echoTtsPreset ?? '');
+    const rawStt = String(config.sttProvider ?? 'disabled');
+    sttProvider = rawStt === 'deepgram' ? 'deepgram' : 'disabled';
+    deepgramModel = String(config.deepgramModel ?? 'nova-3');
+
+    // Channels
+    discordEnabled = Boolean(config.discordEnabled);
+    discordHeartbeatChannel = String(config.discordHeartbeatChannel ?? '');
+    telegramEnabled = Boolean(config.telegramEnabled);
+    telegramAuthorizedUsers = String(config.telegramAuthorizedUsers ?? '');
 
     // Populate catalog slots
     const catalog = config.modelCatalog as Record<string, Record<string, unknown>> | undefined;
@@ -655,6 +712,19 @@
         thinkMaxTokens,
         thinkMaxWallTimeMs,
         thinkMaxSubQueries,
+        // Voice / TTS
+        ttsProvider,
+        voiceId,
+        echoTtsUrl,
+        echoTtsVoice,
+        echoTtsPreset,
+        sttProvider,
+        deepgramModel,
+        // Channels
+        discordEnabled,
+        discordHeartbeatChannel,
+        telegramEnabled,
+        telegramAuthorizedUsers,
         ...catalogPayload,
       });
       flash(result.ok, result.message || 'Settings saved');

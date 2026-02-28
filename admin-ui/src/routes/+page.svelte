@@ -70,17 +70,17 @@
     {@const stats = data.stats}
     <!-- Stat cards -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <div class="card-garden p-5">
+      <a href="/memory" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Memories</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.memoryTotal.toLocaleString()}</p>
         <p class="text-sm text-shadow-600 mt-1">Avg salience: {(stats.avgSalience * 100).toFixed(0)}%</p>
-      </div>
+      </a>
 
-      <div class="card-garden p-5">
+      <a href="/sessions" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Sessions</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.sessionCount}</p>
         <p class="text-sm text-shadow-600 mt-1">{stats.sessionUsage.turns} turns total</p>
-      </div>
+      </a>
 
       <div class="card-garden p-5">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Total Tokens <span class="text-shadow-600 normal-case font-normal">(current session)</span></p>
@@ -110,7 +110,8 @@
         <h2 class="font-serif text-lg text-shadow-900 mb-3">Memory Breakdown</h2>
         <div class="space-y-2">
           {#each Object.entries(stats.memoryByType) as [type, count]}
-            <div class="flex items-center gap-3">
+            <a href="/memory?type={encodeURIComponent(type)}"
+              class="flex items-center gap-3 hover:bg-bark-50 rounded-lg px-1 py-0.5 -mx-1 transition-colors cursor-pointer">
               <span class="px-2 py-0.5 text-sm rounded border {memoryTypeColor(type)} min-w-24 text-center">
                 {type}
               </span>
@@ -121,7 +122,7 @@
                 ></div>
               </div>
               <span class="text-sm text-shadow-800 tabular-nums w-12 text-right font-medium">{count}</span>
-            </div>
+            </a>
           {/each}
         </div>
       </div>
@@ -199,10 +200,10 @@
 
     <!-- Additional stats -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div class="card-garden p-5">
+      <a href="/scheduler" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Scheduler Tasks</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.schedulerTasks}</p>
-      </div>
+      </a>
       <div class="card-garden p-5">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Active Shards</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.activeShards}</p>

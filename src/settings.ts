@@ -105,6 +105,21 @@ export interface EditableSettings {
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   capabilityTier?: CapabilityTier;
+
+  // Voice / TTS (non-secret config only — API keys stay in .env)
+  ttsProvider?: 'elevenlabs' | 'echo' | 'disabled';
+  voiceId?: string;
+  echoTtsUrl?: string;
+  echoTtsVoice?: string;
+  echoTtsPreset?: string;
+  sttProvider?: 'deepgram' | 'disabled';
+  deepgramModel?: string;
+
+  // Channel configuration (non-secret — bot tokens stay in .env)
+  discordEnabled?: boolean;
+  discordHeartbeatChannel?: string;
+  telegramEnabled?: boolean;
+  telegramAuthorizedUsers?: string;
 }
 
 export const RUNTIME_SETTINGS_KEYS = [
@@ -143,6 +158,19 @@ export const RUNTIME_SETTINGS_KEYS = [
   'webFetchLocalCrawlerDomainAllowlist',
   'webFetchTlsCaCertPaths',
   'capabilityTier',
+  // Voice / TTS
+  'ttsProvider',
+  'voiceId',
+  'echoTtsUrl',
+  'echoTtsVoice',
+  'echoTtsPreset',
+  'sttProvider',
+  'deepgramModel',
+  // Channels
+  'discordEnabled',
+  'discordHeartbeatChannel',
+  'telegramEnabled',
+  'telegramAuthorizedUsers',
 ] as const;
 
 export type RuntimeSettingKey = typeof RUNTIME_SETTINGS_KEYS[number];
@@ -198,6 +226,23 @@ function toBoolean(value: unknown): boolean | undefined {
   if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
   if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
   return undefined;
+}
+
+const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
+const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
+
+function toTtsProvider(value: unknown): 'elevenlabs' | 'echo' | 'disabled' | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!TTS_PROVIDER_VALUES.has(trimmed)) return undefined;
+  return trimmed as 'elevenlabs' | 'echo' | 'disabled';
+}
+
+function toSttProvider(value: unknown): 'deepgram' | 'disabled' | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!STT_PROVIDER_VALUES.has(trimmed)) return undefined;
+  return trimmed as 'deepgram' | 'disabled';
 }
 
 function toImportProcessingRouteMode(value: unknown): ImportProcessingRouteMode | undefined {
@@ -537,6 +582,50 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     }
   }
 
+  // Voice / TTS
+  if ('ttsProvider' in settings) {
+    normalized.ttsProvider = toTtsProvider(settings.ttsProvider) ?? 'disabled';
+  }
+  if ('voiceId' in settings) {
+    const trimmed = typeof settings.voiceId === 'string' ? settings.voiceId.trim() : '';
+    normalized.voiceId = trimmed || undefined;
+  }
+  if ('echoTtsUrl' in settings) {
+    const trimmed = typeof settings.echoTtsUrl === 'string' ? settings.echoTtsUrl.trim() : '';
+    normalized.echoTtsUrl = trimmed || undefined;
+  }
+  if ('echoTtsVoice' in settings) {
+    const trimmed = typeof settings.echoTtsVoice === 'string' ? settings.echoTtsVoice.trim() : '';
+    normalized.echoTtsVoice = trimmed || undefined;
+  }
+  if ('echoTtsPreset' in settings) {
+    const trimmed = typeof settings.echoTtsPreset === 'string' ? settings.echoTtsPreset.trim() : '';
+    normalized.echoTtsPreset = trimmed || undefined;
+  }
+  if ('sttProvider' in settings) {
+    normalized.sttProvider = toSttProvider(settings.sttProvider) ?? 'disabled';
+  }
+  if ('deepgramModel' in settings) {
+    const trimmed = typeof settings.deepgramModel === 'string' ? settings.deepgramModel.trim() : '';
+    normalized.deepgramModel = trimmed || undefined;
+  }
+
+  // Channels
+  if ('discordEnabled' in settings) {
+    normalized.discordEnabled = toBoolean(settings.discordEnabled) ?? false;
+  }
+  if ('discordHeartbeatChannel' in settings) {
+    const trimmed = typeof settings.discordHeartbeatChannel === 'string' ? settings.discordHeartbeatChannel.trim() : '';
+    normalized.discordHeartbeatChannel = trimmed || undefined;
+  }
+  if ('telegramEnabled' in settings) {
+    normalized.telegramEnabled = toBoolean(settings.telegramEnabled) ?? false;
+  }
+  if ('telegramAuthorizedUsers' in settings) {
+    const trimmed = typeof settings.telegramAuthorizedUsers === 'string' ? settings.telegramAuthorizedUsers.trim() : '';
+    normalized.telegramAuthorizedUsers = trimmed || undefined;
+  }
+
   return normalized;
 }
 
@@ -760,6 +849,19 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     webFetchLocalCrawlerDomainAllowlist: config.webFetchLocalCrawlerDomainAllowlist ?? [],
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
     capabilityTier: config.capabilityTier ?? 'nursery',
+    // Voice / TTS
+    ttsProvider: config.ttsProvider ?? 'disabled',
+    voiceId: config.elevenLabsVoiceId ?? '',
+    echoTtsUrl: config.echoTtsUrl ?? '',
+    echoTtsVoice: config.echoTtsVoice ?? '',
+    echoTtsPreset: config.echoTtsPreset ?? '',
+    sttProvider: config.deepgramApiKey ? 'deepgram' : 'disabled',
+    deepgramModel: config.deepgramModel ?? 'nova-3',
+    // Channels
+    discordEnabled: Boolean(config.discordToken),
+    discordHeartbeatChannel: null,
+    telegramEnabled: false,
+    telegramAuthorizedUsers: null,
   };
 }
 
@@ -867,6 +969,36 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
 
   if (settings.capabilityTier !== undefined && isCapabilityTier(settings.capabilityTier)) {
     config.capabilityTier = settings.capabilityTier;
+  }
+
+  // Voice / TTS
+  if ('ttsProvider' in settings) {
+    const provider = settings.ttsProvider;
+    if (provider === 'elevenlabs' || provider === 'echo') {
+      config.ttsProvider = provider;
+    } else {
+      config.ttsProvider = undefined;
+    }
+  }
+  if ('voiceId' in settings) {
+    const trimmed = settings.voiceId?.trim() ?? '';
+    if (trimmed) config.elevenLabsVoiceId = trimmed;
+  }
+  if ('echoTtsUrl' in settings) {
+    const trimmed = settings.echoTtsUrl?.trim() ?? '';
+    if (trimmed) config.echoTtsUrl = trimmed;
+  }
+  if ('echoTtsVoice' in settings) {
+    const trimmed = settings.echoTtsVoice?.trim() ?? '';
+    if (trimmed) config.echoTtsVoice = trimmed;
+  }
+  if ('echoTtsPreset' in settings) {
+    const trimmed = settings.echoTtsPreset?.trim() ?? '';
+    if (trimmed) config.echoTtsPreset = trimmed;
+  }
+  if ('deepgramModel' in settings) {
+    const trimmed = settings.deepgramModel?.trim() ?? '';
+    if (trimmed) config.deepgramModel = trimmed;
   }
 
   const shouldSyncModels = hasModelSettings(settings)
@@ -1046,6 +1178,83 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     } else {
       settings.capabilityTier = tier;
     }
+  }
+
+  // Voice / TTS
+  const ttsProviderRaw = params.get('ttsProvider');
+  if (ttsProviderRaw !== null) {
+    const provider = toTtsProvider(ttsProviderRaw);
+    if (!provider) {
+      errors.push('ttsProvider must be one of: elevenlabs, echo, disabled');
+    } else {
+      settings.ttsProvider = provider;
+    }
+  }
+
+  const voiceIdRaw = params.get('voiceId');
+  if (voiceIdRaw !== null) {
+    settings.voiceId = voiceIdRaw.trim();
+  }
+
+  const echoTtsUrlRaw = params.get('echoTtsUrl');
+  if (echoTtsUrlRaw !== null) {
+    settings.echoTtsUrl = echoTtsUrlRaw.trim();
+  }
+
+  const echoTtsVoiceRaw = params.get('echoTtsVoice');
+  if (echoTtsVoiceRaw !== null) {
+    settings.echoTtsVoice = echoTtsVoiceRaw.trim();
+  }
+
+  const echoTtsPresetRaw = params.get('echoTtsPreset');
+  if (echoTtsPresetRaw !== null) {
+    settings.echoTtsPreset = echoTtsPresetRaw.trim();
+  }
+
+  const sttProviderRaw = params.get('sttProvider');
+  if (sttProviderRaw !== null) {
+    const provider = toSttProvider(sttProviderRaw);
+    if (!provider) {
+      errors.push('sttProvider must be one of: deepgram, disabled');
+    } else {
+      settings.sttProvider = provider;
+    }
+  }
+
+  const deepgramModelRaw = params.get('deepgramModel');
+  if (deepgramModelRaw !== null) {
+    settings.deepgramModel = deepgramModelRaw.trim();
+  }
+
+  // Channels
+  const discordEnabledRaw = params.get('discordEnabled');
+  if (discordEnabledRaw !== null) {
+    const enabled = toBoolean(discordEnabledRaw);
+    if (enabled === undefined) {
+      errors.push('discordEnabled must be true or false');
+    } else {
+      settings.discordEnabled = enabled;
+    }
+  }
+
+  const discordHeartbeatChannelRaw = params.get('discordHeartbeatChannel');
+  if (discordHeartbeatChannelRaw !== null) {
+    settings.discordHeartbeatChannel = discordHeartbeatChannelRaw.trim();
+  }
+
+  const telegramEnabledRaw = params.get('telegramEnabled');
+  if (telegramEnabledRaw !== null) {
+    const enabled = toBoolean(telegramEnabledRaw);
+    if (enabled === undefined) {
+      errors.push('telegramEnabled must be true or false');
+    } else {
+      settings.telegramEnabled = enabled;
+    }
+  }
+
+  const telegramAuthorizedUsersRaw = params.get('telegramAuthorizedUsers');
+  if (telegramAuthorizedUsersRaw !== null) {
+    settings.telegramAuthorizedUsers = telegramAuthorizedUsersRaw.trim();
   }
 
   // Numeric fields

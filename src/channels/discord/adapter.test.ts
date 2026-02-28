@@ -488,6 +488,73 @@ describe('DiscordAdapter DM routing', () => {
     }));
     expect(interactive.sent).toContain('guild reply');
   });
+
+  it('responds to guild messages without mention when discordRespondAll is enabled', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig({ discordRespondAll: true }), eventBus);
+    await adapter.init();
+
+    const channelId = 'guild-channel-open';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'open reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-open-1',
+        guildId: 'guild-1',
+        content: 'hello without mention',
+        mentioned: false,
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(interactive.sent).toContain('open reply');
+  });
+
+  it('falls back to live client user id for mention stripping when config bot id is missing', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig({ discordBotId: '' }), eventBus);
+    await adapter.init();
+
+    const client = discordMock.createdClients[0];
+    client.user = { id: 'bot-runtime' };
+
+    const channelId = 'guild-channel-runtime-bot';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'runtime id reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-runtime-1',
+        guildId: 'guild-1',
+        content: '<@!bot-runtime> hello',
+        mentioned: true,
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      content: 'hello',
+    }));
+  });
 });
 
 describe('DiscordAdapter status visibility', () => {

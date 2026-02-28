@@ -201,10 +201,86 @@
     editGreetingValue = '';
   }
 
+  async function saveGreetingEdit() {
+    if (editingGreetingIndex === null) return;
+    savingGreeting = true;
+    error = '';
+    try {
+      const nextGreetings = [...alternateGreetings];
+      nextGreetings[editingGreetingIndex] = editGreetingValue.trim();
+      const cleaned = nextGreetings.filter((entry) => entry.length > 0);
+      const result = await updateIdentityField('alternate_greetings', JSON.stringify(cleaned));
+      if (result.ok) {
+        data = await getIdentity();
+        cancelGreetingEdit();
+      } else {
+        error = result.message || 'Failed to save greeting';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to save greeting';
+    } finally {
+      savingGreeting = false;
+    }
+  }
+
+  function addGreeting() {
+    editingGreetingIndex = alternateGreetings.length;
+    editGreetingValue = '';
+  }
+
+  async function removeGreeting(index: number) {
+    savingGreeting = true;
+    error = '';
+    try {
+      const nextGreetings = alternateGreetings.filter((_entry, i) => i !== index);
+      const result = await updateIdentityField('alternate_greetings', JSON.stringify(nextGreetings));
+      if (result.ok) {
+        data = await getIdentity();
+        if (editingGreetingIndex === index) {
+          cancelGreetingEdit();
+        }
+      } else {
+        error = result.message || 'Failed to remove greeting';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to remove greeting';
+    } finally {
+      savingGreeting = false;
+    }
+  }
+
   // Appearance (extensions.visual_description) editing
   let editingAppearance = $state(false);
   let editAppearanceValue = $state('');
   let savingAppearance = $state(false);
+
+  function startAppearanceEdit() {
+    editingAppearance = true;
+    editAppearanceValue = appearanceValue;
+  }
+
+  function cancelAppearanceEdit() {
+    editingAppearance = false;
+    editAppearanceValue = '';
+  }
+
+  async function saveAppearanceEdit() {
+    savingAppearance = true;
+    error = '';
+    try {
+      const result = await updateIdentityField('extensions.visual_description', editAppearanceValue);
+      if (result.ok) {
+        data = await getIdentity();
+        cancelAppearanceEdit();
+      } else {
+        error = result.message || 'Failed to save appearance';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to save appearance';
+    } finally {
+      savingAppearance = false;
+    }
+  }
 
   let card = $derived(data?.card ?? null);
   let cardData = $derived(card?.data ?? null);
@@ -470,9 +546,38 @@
         <div class="card-garden p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Appearance</h3>
-            <span class="text-sm text-shadow-500 italic mr-2">extensions.visual_description (read-only)</span>
+            {#if editingAppearance}
+              <div class="flex gap-1.5">
+                <button
+                  onclick={saveAppearanceEdit}
+                  disabled={savingAppearance}
+                  class="px-2.5 py-1 text-sm font-medium rounded bg-gold-600 text-white hover:bg-gold-700 disabled:opacity-50 transition-colors"
+                >
+                  {savingAppearance ? 'Saving...' : 'Save'}
+                </button>
+                <button
+                  onclick={cancelAppearanceEdit}
+                  disabled={savingAppearance}
+                  class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 disabled:opacity-50 transition-colors border border-bark-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            {:else}
+              <button onclick={startAppearanceEdit}
+                class="text-sm text-gold-700 hover:text-gold-600 transition-colors font-medium">
+                Edit
+              </button>
+            {/if}
           </div>
-          {#if appearanceValue}
+          {#if editingAppearance}
+            <textarea
+              bind:value={editAppearanceValue}
+              rows={4}
+              class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
+                     focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+            ></textarea>
+          {:else if appearanceValue}
             <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">{appearanceValue}</div>
           {:else}
             <p class="text-sm text-shadow-500 italic">No visual description set in extensions</p>
@@ -529,25 +634,52 @@
 
         <!-- Alternate Greetings -->
         <div class="card-garden overflow-hidden">
-          <button
-            class="w-full flex items-center justify-between p-5 text-left hover:bg-bark-50 transition-colors"
-            onclick={() => showAlternateGreetings = !showAlternateGreetings}
-          >
-            <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">
-              Alternate Greetings
-              <span class="text-shadow-500 font-normal normal-case ml-1">({alternateGreetings.length})</span>
-            </h3>
-            <svg class="w-4 h-4 text-shadow-600 transition-transform {showAlternateGreetings ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
+          <div class="w-full flex items-center justify-between p-5 hover:bg-bark-50 transition-colors">
+            <button
+              class="flex-1 flex items-center justify-between text-left"
+              onclick={() => showAlternateGreetings = !showAlternateGreetings}
+            >
+              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">
+                Alternate Greetings
+                <span class="text-shadow-500 font-normal normal-case ml-1">({alternateGreetings.length})</span>
+              </h3>
+              <svg class="w-4 h-4 text-shadow-600 transition-transform {showAlternateGreetings ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {#if showAlternateGreetings}
+              <button
+                onclick={addGreeting}
+                class="ml-3 text-sm text-gold-700 hover:text-gold-600 transition-colors font-medium"
+              >
+                Add
+              </button>
+            {/if}
+          </div>
           {#if showAlternateGreetings}
             <div class="border-t border-bark-300 p-5 space-y-3">
-              {#if alternateGreetings.length > 0}
+              {#if alternateGreetings.length > 0 || editingGreetingIndex === alternateGreetings.length}
                 {#each alternateGreetings as greeting, i}
                   <div>
                     <div class="flex items-center justify-between mb-1">
                       <p class="text-sm font-medium text-shadow-700">Greeting {i + 1}</p>
+                      {#if editingGreetingIndex !== i}
+                        <div class="flex gap-2">
+                          <button
+                            onclick={() => startGreetingEdit(i, greeting)}
+                            class="text-sm text-gold-700 hover:text-gold-600 transition-colors font-medium"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onclick={() => removeGreeting(i)}
+                            disabled={savingGreeting}
+                            class="text-sm text-wilt-600 hover:text-wilt-700 transition-colors font-medium disabled:opacity-50"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      {/if}
                     </div>
                     {#if editingGreetingIndex === i}
                       <textarea
@@ -557,6 +689,11 @@
                                focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                       ></textarea>
                       <div class="flex gap-1.5 mt-2">
+                        <button onclick={saveGreetingEdit}
+                          disabled={savingGreeting}
+                          class="px-2.5 py-1 text-sm font-medium rounded bg-gold-600 text-white hover:bg-gold-700 disabled:opacity-50 transition-colors">
+                          {savingGreeting ? 'Saving...' : 'Save'}
+                        </button>
                         <button onclick={cancelGreetingEdit}
                           disabled={savingGreeting}
                           class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 transition-colors border border-bark-300">
@@ -568,6 +705,31 @@
                     {/if}
                   </div>
                 {/each}
+                {#if editingGreetingIndex === alternateGreetings.length}
+                  <div>
+                    <div class="flex items-center justify-between mb-1">
+                      <p class="text-sm font-medium text-shadow-700">Greeting {alternateGreetings.length + 1}</p>
+                    </div>
+                    <textarea
+                      bind:value={editGreetingValue}
+                      rows={4}
+                      class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
+                             focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                    ></textarea>
+                    <div class="flex gap-1.5 mt-2">
+                      <button onclick={saveGreetingEdit}
+                        disabled={savingGreeting}
+                        class="px-2.5 py-1 text-sm font-medium rounded bg-gold-600 text-white hover:bg-gold-700 disabled:opacity-50 transition-colors">
+                        {savingGreeting ? 'Saving...' : 'Save'}
+                      </button>
+                      <button onclick={cancelGreetingEdit}
+                        disabled={savingGreeting}
+                        class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 transition-colors border border-bark-300">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                {/if}
               {:else}
                 <p class="text-sm text-shadow-500 italic">No alternate greetings defined</p>
               {/if}

@@ -63,6 +63,16 @@ describe('loadConfig voice DAVE options', () => {
     expect(config.webFetchLocalCrawlerDomainAllowlist).toEqual(['crawler.local']);
     expect(config.webFetchTlsCaCertPaths).toEqual(['/etc/ssl/root.pem', '/etc/ssl/intermediate.pem']);
   });
+
+  it('parses DISCORD_RESPOND_ALL toggle', () => {
+    process.env.DISCORD_RESPOND_ALL = 'true';
+    const enabled = loadConfig();
+    expect(enabled.discordRespondAll).toBe(true);
+
+    process.env.DISCORD_RESPOND_ALL = 'false';
+    const disabled = loadConfig();
+    expect(disabled.discordRespondAll).toBe(false);
+  });
 });
 
 describe('loadConfig gateway TLS options', () => {

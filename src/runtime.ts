@@ -412,10 +412,25 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     // Contact store + tools — trust-gated privacy system
+    const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
+    const primaryTelegramUserId = (
+      process.env.PRIMARY_TELEGRAM_USER_ID
+      ?? process.env.TELEGRAM_PRIMARY_USER_ID
+      ?? ''
+    ).trim();
     const contactStore = wireContactRuntime(
       this.agentLoop,
       this.db,
-      process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID,
+      primaryUserId,
+      primaryTelegramUserId
+        ? {
+          bootstrapPrimaryIdentityLinks: [{
+            channel: 'telegram',
+            userId: primaryTelegramUserId,
+            privacyLevel: 'private',
+          }],
+        }
+        : {},
     );
 
     this.memoryExtractor = wireMemoryRuntime({

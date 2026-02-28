@@ -265,6 +265,7 @@ export interface SubstrateConfig {
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
+  discordRespondAll?: boolean;
   voiceTargetGuildId?: string;
   voiceTargetUserId?: string;
   voiceReadyCueText?: string;
@@ -514,6 +515,7 @@ export function loadConfig(): SubstrateConfig {
     },
     voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
     discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
+    discordRespondAll: parseOptionalBooleanEnv(process.env.DISCORD_RESPOND_ALL) ?? false,
     voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
     voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',

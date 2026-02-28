@@ -346,10 +346,25 @@ async function main(): Promise<void> {
   wireSettingsRuntime(agentLoop, config);
 
   // Contact store + tools — trust-gated privacy system
+  const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
+  const primaryTelegramUserId = (
+    process.env.PRIMARY_TELEGRAM_USER_ID
+    ?? process.env.TELEGRAM_PRIMARY_USER_ID
+    ?? ''
+  ).trim();
   const contactStore = wireContactRuntime(
     agentLoop,
     db,
-    process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID,
+    primaryUserId,
+    primaryTelegramUserId
+      ? {
+        bootstrapPrimaryIdentityLinks: [{
+          channel: 'telegram',
+          userId: primaryTelegramUserId,
+          privacyLevel: 'private',
+        }],
+      }
+      : {},
   );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)

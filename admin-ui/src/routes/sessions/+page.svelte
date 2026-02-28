@@ -52,12 +52,26 @@
     return `${typeLabel} . ${channelName}`;
   }
 
+  function toTimestampMs(value: string | number | undefined): number | null {
+    if (value === undefined) return null;
+    const timestamp = typeof value === 'number' ? value : Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+
   async function loadChannels() {
     loadingChannels = true;
     error = '';
     try {
       const data = await listSessions();
       channels = data.channels;
+      const seeded = new Map<string, number>();
+      for (const channel of data.channels) {
+        const ts = toTimestampMs(channel.lastActivityAt);
+        if (ts !== null) {
+          seeded.set(channel.channelId, ts);
+        }
+      }
+      channelLastActivity = seeded;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load sessions';
     } finally {
@@ -169,7 +183,6 @@
 
   const filteredChannels = $derived.by(() => {
     const needle = channelSearch.trim().toLowerCase();
-    const selectedId = selectedChannel;
     const list = channels.filter((ch) => {
       if (!needle) return true;
       return channelLabel(ch).toLowerCase().includes(needle)
@@ -178,9 +191,6 @@
     });
 
     const sorted = [...list].sort((a, b) => {
-      if (selectedId && a.channelId === selectedId && b.channelId !== selectedId) return -1;
-      if (selectedId && b.channelId === selectedId && a.channelId !== selectedId) return 1;
-
       if (channelSort === 'messages_desc') {
         return b.messageCount - a.messageCount || channelLabel(a).localeCompare(channelLabel(b));
       }

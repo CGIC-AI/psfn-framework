@@ -103,6 +103,7 @@ describe('admin templates', () => {
         litellmApiKey: '[set]',
         ollamaUrl: '[set]',
         importProcessingLocalApiKey: '[not set]',
+        telegramBotToken: '[not set]',
       },
       {
         models: { modelCatalog: {}, modelRoleAssignments: {}, modelRoster: {} },

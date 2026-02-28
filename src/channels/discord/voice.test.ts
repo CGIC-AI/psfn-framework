@@ -1406,29 +1406,101 @@ describe('DiscordVoiceRuntime', () => {
       expect(turnErrors.length).toBeGreaterThan(0);
     });
 
-    it('tracks per-user stream errors and emits degraded event after threshold', async () => {
-      const eventBus = new EventBus();
-      const handler = vi.fn();
-      const { runtime } = makeRuntimeHarness(eventBus, handler);
+    it('executes degraded-threshold recovery with distinct detection vs execution telemetry', async () => {
+      vi.useFakeTimers();
+      try {
+        const eventBus = new EventBus();
+        const degradedEvents: Array<{
+          phase: string;
+          userId: string;
+          errorCount: number;
+          recoveryAttempt?: number;
+        }> = [];
+        const recoveryAttempts: number[] = [];
+        eventBus.on('voice.stream.degraded', (event: any) => {
+          degradedEvents.push({
+            phase: event.phase,
+            userId: event.userId,
+            errorCount: event.errorCount,
+            recoveryAttempt: event.recoveryAttempt,
+          });
+        });
+        eventBus.on('voice.connection.recovery', (event) => {
+          recoveryAttempts.push(event.attempt);
+        });
 
-      const degradedEvents: Array<{ userId: string; errorCount: number }> = [];
-      eventBus.on('voice.stream.degraded', (event) => {
-        degradedEvents.push({ userId: event.userId, errorCount: event.errorCount });
-      });
+        const runtime = new DiscordVoiceRuntime({
+          client: {
+            on: vi.fn(),
+            off: vi.fn(),
+          } as any,
+          config: makeConfig(),
+          eventBus,
+          getHandler: () => null,
+        });
 
-      // Record errors up to threshold (10)
-      for (let i = 0; i < 9; i++) {
-        (runtime as any).recordStreamError('user-1');
+        const initialConnection = createMockVoiceConnection();
+        const recoveredConnectionA = createMockVoiceConnection();
+        const recoveredConnectionB = createMockVoiceConnection();
+        voiceSdkMocks.joinVoiceChannel
+          .mockReturnValueOnce(initialConnection)
+          .mockReturnValueOnce(recoveredConnectionA)
+          .mockReturnValueOnce(recoveredConnectionB);
+
+        await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+
+        // Threshold breach 1 -> should detect degradation + execute recovery.
+        for (let i = 0; i < 10; i++) {
+          (runtime as any).recordStreamError('user-1');
+        }
+        await flushMicrotasks();
+
+        // Threshold breach 2 during in-flight recovery -> detect only, no overlapping recovery.
+        for (let i = 0; i < 10; i++) {
+          (runtime as any).recordStreamError('user-1');
+        }
+        await flushMicrotasks();
+
+        const detectedBeforeRejoin = degradedEvents.filter((event) => event.phase === 'degraded-detected');
+        const executedBeforeRejoin = degradedEvents.filter((event) => event.phase === 'recovery-executed');
+        expect(detectedBeforeRejoin).toHaveLength(2);
+        expect(executedBeforeRejoin).toEqual([
+          expect.objectContaining({
+            userId: 'user-1',
+            errorCount: 10,
+            recoveryAttempt: 1,
+          }),
+        ]);
+        expect(recoveryAttempts).toEqual([1]);
+        expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(DECRYPT_RECOVERY_COOLDOWN_MS);
+        await flushMicrotasks();
+
+        expect(initialConnection.destroy).toHaveBeenCalledTimes(1);
+        expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(2);
+
+        // Threshold breach 3 after first recovery completes -> recovery should run again.
+        for (let i = 0; i < 10; i++) {
+          (runtime as any).recordStreamError('user-1');
+        }
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        const executedAfterSecondStart = degradedEvents.filter((event) => event.phase === 'recovery-executed');
+        expect(executedAfterSecondStart).toEqual([
+          expect.objectContaining({ recoveryAttempt: 1 }),
+          expect.objectContaining({ recoveryAttempt: 2 }),
+        ]);
+        expect(recoveryAttempts).toEqual([1, 2]);
+
+        await vi.advanceTimersByTimeAsync(DECRYPT_RECOVERY_COOLDOWN_MS);
+        await flushMicrotasks();
+
+        expect(voiceSdkMocks.joinVoiceChannel).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
       }
-      expect(degradedEvents).toHaveLength(0);
-
-      // This should trigger the degraded event
-      (runtime as any).recordStreamError('user-1');
-      await flushMicrotasks();
-
-      expect(degradedEvents).toHaveLength(1);
-      expect(degradedEvents[0].userId).toBe('user-1');
-      expect(degradedEvents[0].errorCount).toBe(10);
     });
 
     it('isolates per-user stream error counts', () => {

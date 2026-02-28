@@ -165,6 +165,8 @@ export const DISCORD_VOICE_DEFAULT_VOICE_ID = 'YOUR_VOICE_ID';
 
 type VoiceTurnErrorStage = 'ingest' | 'stt' | 'llm' | 'tts' | 'unknown';
 type VoiceTurnObservationKind = 'silence' | 'empty-transcript' | 'empty-response' | 'playback-error';
+type VoiceConnectionRecoveryTrigger = 'decrypt-failures' | 'stream-degraded';
+type VoiceStreamDegradedPhase = 'degraded-detected' | 'recovery-executed';
 
 interface StructuredVoiceError extends Error {
   voiceStage?: VoiceTurnErrorStage;
@@ -1231,24 +1233,77 @@ export class DiscordVoiceRuntime {
     const count = (this.streamErrorCounts.get(userId) ?? 0) + 1;
     this.streamErrorCounts.set(userId, count);
 
-    if (count >= STREAM_ERROR_MAX_FAILURES) {
-      log.error('Stream error threshold exceeded for user; tearing down receive stream', {
+    if (count < STREAM_ERROR_MAX_FAILURES) {
+      return;
+    }
+
+    log.error('Stream error threshold exceeded for user; tearing down receive stream', {
+      userId,
+      errorCount: count,
+      threshold: STREAM_ERROR_MAX_FAILURES,
+    });
+    this.streamErrorCounts.delete(userId);
+
+    const recoveryChannel = this.activeChannel;
+    const recoveryGeneration = this.connectionGeneration;
+    this.emitStreamDegradedTelemetry({
+      phase: 'degraded-detected',
+      userId,
+      errorCount: count,
+      threshold: STREAM_ERROR_MAX_FAILURES,
+      channel: recoveryChannel,
+      generation: recoveryGeneration,
+    });
+
+    if (!recoveryChannel || !this.connection) {
+      log.warn('Stream degradation threshold exceeded without active connection; skipping recovery', {
         userId,
         errorCount: count,
         threshold: STREAM_ERROR_MAX_FAILURES,
       });
-      this.streamErrorCounts.delete(userId);
-
-      // Emit event so external listeners can react
-      this.eventBus.emit('voice.stream.degraded', {
-        userId,
-        channelId: this.activeChannel?.id,
-        guildId: this.activeChannel?.guild.id,
-        errorCount: count,
-        threshold: STREAM_ERROR_MAX_FAILURES,
-        timestampMs: Date.now(),
-      }).catch(() => undefined);
+      return;
     }
+
+    void this.startDecryptRecovery({
+      channel: recoveryChannel,
+      generation: recoveryGeneration,
+      failureCount: count,
+      tolerance: STREAM_ERROR_MAX_FAILURES,
+      trigger: 'stream-degraded',
+      degradedUserId: userId,
+      degradedErrorCount: count,
+    });
+  }
+
+  private emitStreamDegradedTelemetry(params: {
+    phase: VoiceStreamDegradedPhase;
+    userId: string;
+    errorCount: number;
+    threshold: number;
+    channel?: VoiceBasedChannel | null;
+    generation?: number;
+    recoveryAttempt?: number;
+  }): void {
+    const { phase, userId, errorCount, threshold, generation, recoveryAttempt } = params;
+    const channel = params.channel ?? this.activeChannel;
+    const payload: Record<string, unknown> = {
+      phase,
+      userId,
+      channelId: channel?.id,
+      guildId: channel?.guild.id,
+      generation,
+      errorCount,
+      threshold,
+      recoveryAttempt,
+      timestampMs: Date.now(),
+    };
+
+    // voice.stream.degraded is a telemetry-only channel event not part of EventMap.
+    const emitUntyped = this.eventBus.emit.bind(this.eventBus) as unknown as (
+      event: string,
+      data: Record<string, unknown>,
+    ) => Promise<void>;
+    emitUntyped('voice.stream.degraded', payload).catch(() => undefined);
   }
 
   /**
@@ -1426,8 +1481,20 @@ export class DiscordVoiceRuntime {
     channel: VoiceBasedChannel;
     generation: number;
     failureCount: number;
+    tolerance?: number;
+    trigger?: VoiceConnectionRecoveryTrigger;
+    degradedUserId?: string;
+    degradedErrorCount?: number;
   }): Promise<void> {
-    const { channel, generation, failureCount } = params;
+    const {
+      channel,
+      generation,
+      failureCount,
+      tolerance = this.decryptionFailureTolerance,
+      trigger = 'decrypt-failures',
+      degradedUserId = this.targetUserId,
+      degradedErrorCount = failureCount,
+    } = params;
     if (this.decryptRecoveryInFlight) {
       return;
     }
@@ -1445,13 +1512,16 @@ export class DiscordVoiceRuntime {
           userId: this.targetUserId,
           generation,
           failureCount,
-          tolerance: this.decryptionFailureTolerance,
+          tolerance,
           maxAttempts: DECRYPT_RECOVERY_MAX_REJOINS,
           windowMs: DECRYPT_RECOVERY_WINDOW_MS,
           timestampMs: nowMs,
         };
+        const exhaustedPrefix = trigger === 'stream-degraded'
+          ? 'Voice stream recovery exhausted'
+          : 'Voice decrypt recovery exhausted';
         const errorText = (
-          `Voice decrypt recovery exhausted after ${DECRYPT_RECOVERY_MAX_REJOINS} rejoins ` +
+          `${exhaustedPrefix} after ${DECRYPT_RECOVERY_MAX_REJOINS} rejoins ` +
           `in ${Math.floor(DECRYPT_RECOVERY_WINDOW_MS / 1_000)} seconds`
         );
 
@@ -1463,11 +1533,12 @@ export class DiscordVoiceRuntime {
           error: errorText,
         });
 
-        log.error('Voice decrypt recovery exhausted; operator intervention required', {
+        log.error('Voice connection recovery exhausted; operator intervention required', {
           ...exhaustedPayload,
+          trigger,
           error: errorText,
         });
-        await this.leaveChannel('decrypt-recovery-exhausted');
+        await this.leaveChannel(trigger === 'stream-degraded' ? 'stream-recovery-exhausted' : 'decrypt-recovery-exhausted');
         return;
       }
 
@@ -1480,7 +1551,7 @@ export class DiscordVoiceRuntime {
         userId: this.targetUserId,
         generation,
         failureCount,
-        tolerance: this.decryptionFailureTolerance,
+        tolerance,
         attempt,
         maxAttempts: DECRYPT_RECOVERY_MAX_REJOINS,
         windowMs: DECRYPT_RECOVERY_WINDOW_MS,
@@ -1489,35 +1560,56 @@ export class DiscordVoiceRuntime {
       };
 
       await this.eventBus.emit('voice.connection.recovery', recoveryPayload);
-      log.warn('Recovering voice connection after repeated decrypt failures', recoveryPayload);
+      if (trigger === 'stream-degraded') {
+        this.emitStreamDegradedTelemetry({
+          phase: 'recovery-executed',
+          userId: degradedUserId,
+          errorCount: degradedErrorCount,
+          threshold: STREAM_ERROR_MAX_FAILURES,
+          channel,
+          generation,
+          recoveryAttempt: attempt,
+        });
+      }
 
-      await this.leaveChannel('decrypt-recovery');
+      log.warn('Recovering voice connection after repeated failures', {
+        ...recoveryPayload,
+        trigger,
+      });
+
+      await this.leaveChannel(trigger === 'stream-degraded' ? 'stream-recovery' : 'decrypt-recovery');
       await this.wait(DECRYPT_RECOVERY_COOLDOWN_MS);
 
       if (this.activeChannel) {
-        log.info('Skipping decrypt recovery rejoin because another channel is already active', {
+        log.info('Skipping recovery rejoin because another channel is already active', {
           ...recoveryPayload,
+          trigger,
           activeChannelId: this.activeChannel.id,
         });
         return;
       }
 
       await this.joinChannel(channel);
-      log.info('Voice connection recovered after decrypt failures', recoveryPayload);
+      log.info('Voice connection recovered after repeated failures', {
+        ...recoveryPayload,
+        trigger,
+      });
     } catch (error) {
       const errorText = toErrorMessage(error);
-      log.error('Voice decrypt recovery failed', {
+      log.error('Voice connection recovery failed', {
         guildId: channel.guild.id,
         channelId: channel.id,
         userId: this.targetUserId,
         generation,
+        trigger,
         error: errorText,
       });
+      const recoveryLabel = trigger === 'stream-degraded' ? 'stream' : 'decrypt';
       await this.eventBus.emit('channel.voice.error', {
         guildId: channel.guild.id,
         channelId: channel.id,
         userId: this.targetUserId,
-        error: `Voice decrypt recovery failed: ${errorText}`,
+        error: `Voice ${recoveryLabel} recovery failed: ${errorText}`,
       });
     } finally {
       this.decryptRecoveryInFlight = false;

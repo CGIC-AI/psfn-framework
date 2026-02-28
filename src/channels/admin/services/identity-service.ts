@@ -281,7 +281,27 @@ export class AdminIdentityDataService implements AdminIdentityService {
       return { ok: false, message: 'field is required' };
     }
 
-    const patch = extractCardPatchFromRecord({ [field]: value });
+    const patchRecord: Record<string, unknown> = {};
+    if (field === 'alternate_greetings') {
+      if (value.trim().length === 0) {
+        patchRecord[field] = [];
+      } else {
+        try {
+          const parsed = JSON.parse(value) as unknown;
+          if (Array.isArray(parsed)) {
+            patchRecord[field] = parsed;
+          } else {
+            patchRecord[field] = value;
+          }
+        } catch {
+          patchRecord[field] = value;
+        }
+      }
+    } else {
+      patchRecord[field] = value;
+    }
+
+    const patch = extractCardPatchFromRecord(patchRecord);
     try {
       const snapshot = cardVersionStore.updateData(patch, 'admin:api', `Admin edited field: ${field}`);
       // Also update the in-memory character card reference

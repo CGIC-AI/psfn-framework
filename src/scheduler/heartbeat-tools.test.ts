@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { HeartbeatPolicyStore } from './heartbeat-policy.js';
 import {
   createHeartbeatGetPolicyTool,
+  createHeartbeatRunTemplateTool,
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from './heartbeat-tools.js';
@@ -278,6 +279,66 @@ describe('heartbeat_update_policy', () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     await tool.execute('call-12', { templateId: 'whisper', enabled: true }, new AbortController().signal);
     expect(syncFn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('heartbeat_run_template', () => {
+  let tmpDir: string;
+  let store: HeartbeatPolicyStore;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `hbt-run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    mkdirSync(tmpDir, { recursive: true });
+    store = new HeartbeatPolicyStore(join(tmpDir, 'policy.json'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('runs a known template and returns output', async () => {
+    const runTemplate = vi.fn(async () => ({
+      templateId: 'whisper',
+      templateName: 'Whisper',
+      reflection: 'A quiet reflection',
+    }));
+
+    const tool = createHeartbeatRunTemplateTool(store, runTemplate);
+    const result = await tool.execute('call-run-1', { templateId: 'whisper' }, new AbortController().signal);
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(runTemplate).toHaveBeenCalledWith('whisper', {});
+    expect(text).toContain('Triggered reflection template');
+    expect(text).toContain('A quiet reflection');
+    expect(result.details.isError).toBeFalsy();
+  });
+
+  it('returns error for unknown template id', async () => {
+    const runTemplate = vi.fn();
+    const tool = createHeartbeatRunTemplateTool(store, runTemplate);
+    const result = await tool.execute('call-run-2', { templateId: 'missing-template' }, new AbortController().signal);
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(text).toContain('not found');
+    expect(result.details.isError).toBe(true);
+    expect(runTemplate).not.toHaveBeenCalled();
+  });
+
+  it('passes sendToDiscord override and surfaces callback errors', async () => {
+    const runTemplate = vi.fn(async () => {
+      throw new Error('manual run failed');
+    });
+    const tool = createHeartbeatRunTemplateTool(store, runTemplate);
+    const result = await tool.execute(
+      'call-run-3',
+      { templateId: 'whisper', sendToDiscord: true },
+      new AbortController().signal,
+    );
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(runTemplate).toHaveBeenCalledWith('whisper', { sendToDiscordOverride: true });
+    expect(text).toContain('heartbeat_run_template failed');
+    expect(result.details.isError).toBe(true);
   });
 });
 

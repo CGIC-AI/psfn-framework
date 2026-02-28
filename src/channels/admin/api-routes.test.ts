@@ -550,8 +550,12 @@ describe('AdminServer JSON API routes', () => {
 
     const sessionsRes = await request(port, 'GET', '/api/admin/sessions', undefined, authHeaders);
     expect(sessionsRes.status).toBe(200);
-    const sessionsPayload = JSON.parse(sessionsRes.body) as { channels: Array<{ channelId: string }> };
-    expect(sessionsPayload.channels.some(channel => channel.channelId === 'api-session')).toBe(true);
+    const sessionsPayload = JSON.parse(sessionsRes.body) as {
+      channels: Array<{ channelId: string; lastActivityAt?: number }>;
+    };
+    const listed = sessionsPayload.channels.find(channel => channel.channelId === 'api-session');
+    expect(listed).toBeDefined();
+    expect(typeof listed?.lastActivityAt).toBe('number');
 
     const messagesRes = await request(port, 'GET', '/api/admin/sessions/api-session', undefined, authHeaders);
     expect(messagesRes.status).toBe(200);
@@ -631,6 +635,40 @@ describe('AdminServer JSON API routes', () => {
     expect(identityRes.status).toBe(200);
     const identityPayload = JSON.parse(identityRes.body) as { card: { data: { name: string } } };
     expect(identityPayload.card.data.name).toBe('ApiTestBot');
+
+    const appearancePatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({ field: 'extensions.visual_description', value: 'golden eyes and ivy hair' }),
+      authHeaders,
+    );
+    expect(appearancePatchRes.status).toBe(200);
+
+    const greetingsPatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({
+        field: 'alternate_greetings',
+        value: JSON.stringify(['hello v', 'hi in moonlight']),
+      }),
+      authHeaders,
+    );
+    expect(greetingsPatchRes.status).toBe(200);
+
+    const identityAfterPatchRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
+    expect(identityAfterPatchRes.status).toBe(200);
+    const identityAfterPatch = JSON.parse(identityAfterPatchRes.body) as {
+      card: {
+        data: {
+          extensions?: Record<string, unknown>;
+          alternate_greetings?: string[];
+        };
+      };
+    };
+    expect(identityAfterPatch.card.data.extensions?.visual_description).toBe('golden eyes and ivy hair');
+    expect(identityAfterPatch.card.data.alternate_greetings).toEqual(['hello v', 'hi in moonlight']);
 
     const identityImportRes = await request(
       port,

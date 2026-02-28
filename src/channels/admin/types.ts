@@ -140,6 +140,7 @@ export interface AdminChatDebugStreamOptions {
 export interface ChannelInfo {
   channelId: string;
   messageCount: number;
+  lastActivityAt?: number;
   displayLabel?: string;
   linkedContactId?: string;
   linkedContactName?: string;

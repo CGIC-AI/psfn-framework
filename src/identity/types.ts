@@ -16,4 +16,7 @@ export interface CharacterData {
   tags: string[];
   creator: string;
   creator_notes?: string;
+  alternate_greetings?: string[];
+  extensions?: Record<string, unknown>;
+  character_version?: string;
 }

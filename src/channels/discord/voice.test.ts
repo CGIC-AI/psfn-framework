@@ -471,6 +471,39 @@ describe('DiscordVoiceRuntime', () => {
     }));
   });
 
+  it('reconciles target voice state on init when client is already ready', async () => {
+    const readyVoiceChannel = makeVoiceChannel('channel-ready');
+    const client = {
+      on: vi.fn(),
+      off: vi.fn(),
+      isReady: vi.fn(() => true),
+      guilds: {
+        fetch: vi.fn(async () => ({
+          members: {
+            fetch: vi.fn(async () => ({
+              voice: {
+                channel: readyVoiceChannel,
+              },
+            })),
+          },
+        })),
+      },
+    } as any;
+
+    const runtime = new DiscordVoiceRuntime({
+      client,
+      config: makeConfig(),
+      eventBus: new EventBus(),
+      getHandler: () => null,
+    });
+
+    const joinSpy = vi.spyOn(runtime as any, 'joinChannel').mockResolvedValue(undefined);
+    runtime.init();
+    await flushAsyncWork();
+
+    expect(joinSpy).toHaveBeenCalledWith(readyVoiceChannel);
+  });
+
   it('uses default DAVE join options when config values are not set', async () => {
     const connection = createMockVoiceConnection();
     voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);

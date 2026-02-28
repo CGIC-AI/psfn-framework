@@ -392,16 +392,25 @@ export class DiscordVoiceRuntime {
     if (!this.enabled) return;
 
     this.client.on(Events.VoiceStateUpdate, this.onVoiceStateUpdate);
+    this.client.on(Events.ClientReady, this.onClientReady);
     log.info('Discord voice runtime enabled', {
       guildId: this.targetGuildId,
       userId: this.targetUserId,
     });
+
+    const isReady = typeof (this.client as { isReady?: () => boolean }).isReady === 'function'
+      ? (this.client as { isReady: () => boolean }).isReady()
+      : false;
+    if (isReady) {
+      void this.reconcileTargetVoiceChannel('init');
+    }
   }
 
   async stop(): Promise<void> {
     if (!this.enabled) return;
 
     this.client.off(Events.VoiceStateUpdate, this.onVoiceStateUpdate);
+    this.client.off(Events.ClientReady, this.onClientReady);
     await this.leaveChannel('shutdown');
   }
 
@@ -442,6 +451,51 @@ export class DiscordVoiceRuntime {
       this.handlingState = false;
     }
   };
+
+  private onClientReady = (): void => {
+    void this.reconcileTargetVoiceChannel('client-ready');
+  };
+
+  private async reconcileTargetVoiceChannel(trigger: 'init' | 'client-ready'): Promise<void> {
+    const guildFetcher = (this.client as unknown as {
+      guilds?: {
+        fetch?: (guildId: string) => Promise<{
+          members?: {
+            fetch?: (userId: string) => Promise<{ voice?: { channel?: VoiceBasedChannel | null } }>;
+          };
+        }>;
+      };
+    }).guilds?.fetch;
+    if (!guildFetcher) return;
+
+    try {
+      const guild = await guildFetcher(this.targetGuildId);
+      const member = await guild.members?.fetch?.(this.targetUserId);
+      const targetChannel = member?.voice?.channel ?? null;
+
+      if (!targetChannel) {
+        log.debug('Discord voice target user is not in a voice channel during reconciliation', {
+          trigger,
+          guildId: this.targetGuildId,
+          userId: this.targetUserId,
+        });
+        return;
+      }
+
+      if (this.activeChannel?.id === targetChannel.id) {
+        return;
+      }
+
+      await this.joinChannel(targetChannel);
+    } catch (error) {
+      log.warn('Discord voice startup reconciliation failed', {
+        trigger,
+        guildId: this.targetGuildId,
+        userId: this.targetUserId,
+        error: toErrorMessage(error),
+      });
+    }
+  }
 
   private async joinChannel(channel: VoiceBasedChannel): Promise<void> {
     await this.leaveChannel('switch-channel');

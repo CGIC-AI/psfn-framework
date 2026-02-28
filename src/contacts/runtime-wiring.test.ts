@@ -40,6 +40,23 @@ describe('wireContactRuntime', () => {
     const contact = target.contactStore!.resolveUserId('primary-user-123');
     expect(contact.trustLevel).toBe('primary');
   });
+
+  it('links bootstrap identities onto the primary contact', () => {
+    const db = new Database(':memory:');
+    const target = new FakeTarget();
+
+    wireContactRuntime(target, db, 'primary-user-123', {
+      bootstrapPrimaryIdentityLinks: [{
+        channel: 'telegram',
+        userId: '5635268079',
+        privacyLevel: 'private',
+      }],
+    });
+
+    const primary = target.contactStore!.resolveUserId('primary-user-123');
+    const linked = target.contactStore!.getByChannelIdentity('telegram', '5635268079');
+    expect(linked?.id).toBe(primary.id);
+  });
 });
 
 describe('entrypoint composition', () => {

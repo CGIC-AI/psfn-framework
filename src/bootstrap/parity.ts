@@ -32,6 +32,7 @@ import {
 import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import {
   createHeartbeatGetPolicyTool,
+  createHeartbeatRunTemplateTool,
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from '../scheduler/heartbeat-tools.js';
@@ -267,6 +268,83 @@ export function wireHeartbeatRuntime(
     };
   };
 
+  const executeTemplate = async (
+    template: ReflectionTemplate,
+    options: { sendToDiscordOverride?: boolean } = {},
+  ): Promise<{ templateId: string; templateName: string; reflection: string }> => {
+    const reflectionChannelId = `internal:reflection:${template.id}`;
+    let reflectionText = '';
+    let deliberationMetadata: ValuesDeliberationMetadata | undefined;
+
+    if (shouldUseDeliberation(template)) {
+      const deliberationResult = await runTemplateDeliberation(template);
+      reflectionText = deliberationResult.reflection;
+      deliberationMetadata = deliberationResult.metadata;
+      try {
+        persistDeliberationJournalEntry(
+          reflectionChannelId,
+          reflectionText,
+          deliberationMetadata,
+        );
+      } catch (error) {
+        log.warn(`Reflection "${template.id}" journal persistence skipped`, {
+          error: String(error),
+        });
+      }
+      try {
+        await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
+      } catch (error) {
+        log.warn(`Reflection "${template.id}" memory persistence skipped`, {
+          error: String(error),
+        });
+      }
+    } else {
+      const response = await agentLoop.handleMessage({
+        id: `reflection-${template.id}-${Date.now()}`,
+        channelId: reflectionChannelId,
+        channelType: 'terminal',
+        authorId: 'scheduler',
+        authorName: template.name,
+        content: template.prompt,
+        timestamp: new Date(),
+      });
+      reflectionText = response.content;
+    }
+
+    if (template.id === 'values-reflection') {
+      valuesJournal.append({
+        templateId: template.id,
+        templateName: template.name,
+        prompt: template.prompt,
+        reflection: reflectionText,
+        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+      });
+    }
+
+    const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
+    if (shouldSendToDiscord && heartbeatChannelId) {
+      await sender.send(heartbeatChannelId, reflectionText);
+    }
+
+    return {
+      templateId: template.id,
+      templateName: template.name,
+      reflection: reflectionText,
+    };
+  };
+
+  const runTemplateNow = async (
+    templateId: string,
+    options: { sendToDiscordOverride?: boolean } = {},
+  ): Promise<{ templateId: string; templateName: string; reflection: string }> => {
+    const current = store.load();
+    const template = current.templates.find(candidate => candidate.id === templateId);
+    if (!template) {
+      throw new Error(`Template "${templateId}" not found`);
+    }
+    return executeTemplate(template, options);
+  };
+
   // Create sync function that re-registers all reflection tasks
   const syncReflectionTasks = (): void => {
     // Unregister all existing reflection:* tasks
@@ -288,57 +366,7 @@ export function wireHeartbeatRuntime(
           intervalMs: template.intervalMs,
           handler: async () => {
             try {
-              const reflectionChannelId = `internal:reflection:${template.id}`;
-              let reflectionText = '';
-              let deliberationMetadata: ValuesDeliberationMetadata | undefined;
-
-              if (shouldUseDeliberation(template)) {
-                const deliberationResult = await runTemplateDeliberation(template);
-                reflectionText = deliberationResult.reflection;
-                deliberationMetadata = deliberationResult.metadata;
-                try {
-                  persistDeliberationJournalEntry(
-                    reflectionChannelId,
-                    reflectionText,
-                    deliberationMetadata,
-                  );
-                } catch (error) {
-                  log.warn(`Reflection "${template.id}" journal persistence skipped`, {
-                    error: String(error),
-                  });
-                }
-                try {
-                  await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
-                } catch (error) {
-                  log.warn(`Reflection "${template.id}" memory persistence skipped`, {
-                    error: String(error),
-                  });
-                }
-              } else {
-                const response = await agentLoop.handleMessage({
-                  id: `reflection-${template.id}-${Date.now()}`,
-                  channelId: reflectionChannelId,
-                  channelType: 'terminal',
-                  authorId: 'scheduler',
-                  authorName: template.name,
-                  content: template.prompt,
-                  timestamp: new Date(),
-                });
-                reflectionText = response.content;
-              }
-
-              if (template.id === 'values-reflection') {
-                valuesJournal.append({
-                  templateId: template.id,
-                  templateName: template.name,
-                  prompt: template.prompt,
-                  reflection: reflectionText,
-                  ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-                });
-              }
-              if (template.sendToDiscord && heartbeatChannelId) {
-                await sender.send(heartbeatChannelId, reflectionText);
-              }
+              await executeTemplate(template);
             } catch (err) {
               log.error(`Reflection "${template.id}" error`, { error: String(err) });
             }
@@ -359,6 +387,7 @@ export function wireHeartbeatRuntime(
   // Register tools
   target.registerTool(createHeartbeatGetPolicyTool(store), 'extended');
   target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
+  target.registerTool(createHeartbeatRunTemplateTool(store, runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
 
   const activeCount = policy.templates.filter(t => t.enabled).length;

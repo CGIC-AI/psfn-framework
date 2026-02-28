@@ -1,7 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listContacts, updateContact } from '$lib/api/endpoints/contacts';
-  import type { ContactUpdatePayload } from '$lib/api/endpoints/contacts';
+  import {
+    listContacts,
+    updateContact,
+    createContact,
+    deleteContact,
+    mergeContacts,
+    unlinkChannelIdentity,
+  } from '$lib/api/endpoints/contacts';
+  import type { ContactUpdatePayload, ContactCreatePayload } from '$lib/api/endpoints/contacts';
   import type {
     Contact,
     AdminContactListData,
@@ -42,6 +49,16 @@
   // Collapsible panels
   let showVerifications = $state(false);
   let showAuditTrail = $state(false);
+
+  // Create contact form
+  let showCreateForm = $state(false);
+  let createDisplayName = $state('');
+  let createTrustLevel = $state<TrustLevel>('regular');
+  let createRelationshipType = $state<RelationshipType>('acquaintance');
+  let createNotes = $state('');
+
+  // Merge contact
+  let mergeSourceId = $state('');
 
   const TRUST_LEVELS: TrustLevel[] = ['primary', 'trusted', 'regular', 'public'];
 
@@ -283,6 +300,101 @@
     }
   }
 
+  // CRUD handlers
+
+  async function handleCreate() {
+    if (!createDisplayName.trim()) return;
+    saving = true;
+    try {
+      const payload: ContactCreatePayload = {
+        displayName: createDisplayName.trim(),
+        trustLevel: createTrustLevel,
+        relationshipType: createRelationshipType,
+      };
+      if (createNotes.trim()) payload.notes = createNotes.trim();
+      const result = await createContact(payload);
+      if (result.ok) {
+        data = await listContacts();
+        showCreateForm = false;
+        createDisplayName = '';
+        createTrustLevel = 'regular';
+        createRelationshipType = 'acquaintance';
+        createNotes = '';
+        flash(true, result.message || 'Contact created');
+      } else {
+        flash(false, result.message || 'Create failed');
+      }
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to create contact');
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function handleDelete(contactId: string) {
+    if (!confirm('Delete this contact? L2 memories will be orphaned (kept but unlinked). This cannot be undone.')) return;
+    saving = true;
+    try {
+      const result = await deleteContact(contactId);
+      if (result.ok) {
+        data = await listContacts();
+        editingContactId = null;
+        flash(true, result.message || 'Contact deleted');
+      } else {
+        flash(false, result.message || 'Delete failed');
+      }
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to delete contact');
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function handleMerge(targetId: string) {
+    const sourceId = mergeSourceId.trim();
+    if (!sourceId) {
+      flash(false, 'Enter a source contact ID to merge');
+      return;
+    }
+    if (!confirm(`Merge source ${sourceId} into this contact? The source contact will be deleted and all its data transferred here.`)) return;
+    saving = true;
+    try {
+      const result = await mergeContacts(targetId, sourceId);
+      if (result.ok) {
+        data = await listContacts();
+        mergeSourceId = '';
+        flash(true, result.message || 'Contacts merged');
+      } else {
+        flash(false, result.message || 'Merge failed');
+      }
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to merge contacts');
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function handleUnlink(contactId: string, channel: string, userId: string) {
+    if (!confirm(`Unlink ${channel}:${userId} from this contact?`)) return;
+    saving = true;
+    try {
+      const result = await unlinkChannelIdentity(contactId, channel, userId);
+      if (result.ok) {
+        data = await listContacts();
+        // Re-open edit with refreshed data
+        const refreshed = data?.contacts.find(c => c.id === contactId);
+        if (refreshed && editingContactId === contactId) startEdit(refreshed);
+        flash(true, result.message || 'Channel identity unlinked');
+      } else {
+        flash(false, result.message || 'Unlink failed');
+      }
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to unlink channel identity');
+    } finally {
+      saving = false;
+    }
+  }
+
   // Init
   onMount(async () => {
     try {
@@ -447,6 +559,69 @@
       </div>
     {/if}
 
+    <!-- Create Contact -->
+    <div>
+      <button onclick={() => showCreateForm = !showCreateForm}
+        class="px-4 py-2 text-sm font-medium rounded-lg bg-gold-600 text-white
+               hover:bg-gold-700 transition-colors">
+        {showCreateForm ? 'Hide Create Form' : '+ New Contact'}
+      </button>
+      {#if showCreateForm}
+        <div class="card-garden p-5 mt-3 space-y-3">
+          <h4 class="text-sm font-serif font-semibold text-shadow-800">Create Contact</h4>
+          <div>
+            <label for="create-name" class="block text-sm font-medium text-shadow-800 mb-1">Display Name</label>
+            <input id="create-name" type="text" bind:value={createDisplayName}
+              class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                     focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+              placeholder="Required" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="create-trust" class="block text-sm font-medium text-shadow-800 mb-1">Trust Level</label>
+              <select id="create-trust" bind:value={createTrustLevel}
+                class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
+                {#each TRUST_LEVELS.filter(l => l !== 'primary') as level}
+                  <option value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>
+                {/each}
+              </select>
+            </div>
+            <div>
+              <label for="create-rel" class="block text-sm font-medium text-shadow-800 mb-1">Relationship</label>
+              <select id="create-rel" bind:value={createRelationshipType}
+                class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
+                {#each RELATIONSHIP_TYPES as rt}
+                  <option value={rt}>{formatRelType(rt)}</option>
+                {/each}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label for="create-notes" class="block text-sm font-medium text-shadow-800 mb-1">Notes</label>
+            <textarea id="create-notes" bind:value={createNotes} rows={2}
+              class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm resize-y
+                     focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+              placeholder="Optional notes..."
+            ></textarea>
+          </div>
+          <div class="flex gap-2">
+            <button onclick={handleCreate} disabled={saving || !createDisplayName.trim()}
+              class="px-4 py-2 text-sm font-medium rounded-lg bg-gold-600 text-white
+                     hover:bg-gold-700 disabled:opacity-50 transition-colors">
+              {saving ? 'Creating...' : 'Create'}
+            </button>
+            <button onclick={() => showCreateForm = false}
+              class="px-4 py-2 text-sm font-medium rounded-lg text-shadow-700
+                     hover:bg-bark-200 transition-colors border border-bark-300">
+              Cancel
+            </button>
+          </div>
+        </div>
+      {/if}
+    </div>
+
     <!-- Contact Cards Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {#each data.contacts as contact (contact.id)}
@@ -464,6 +639,7 @@
               {#if contact.nickname && contact.nickname.toLowerCase() !== contact.displayName.toLowerCase()}
                 <p class="text-sm text-shadow-600 truncate">aka {contact.nickname}</p>
               {/if}
+              <code class="font-mono text-xs text-shadow-500 select-all">{contact.id}</code>
             </div>
 
             <!-- Trust badge (clickable to quick-edit) -->
@@ -730,6 +906,13 @@
                             <option value={pl}>{pl.replace('_', ' ')}</option>
                           {/each}
                         </select>
+                        <button onclick={() => handleUnlink(contact.id, ch.channel, ch.userId)}
+                          disabled={saving}
+                          class="text-xs px-2 py-0.5 rounded border border-wilt-300 text-wilt-600
+                                 hover:bg-wilt-50 disabled:opacity-50 transition-colors"
+                          title="Unlink this channel identity">
+                          Unlink
+                        </button>
                       </div>
                     {/each}
                   </div>
@@ -753,6 +936,13 @@
                             <option value={pl}>{pl.replace('_', ' ')}</option>
                           {/each}
                         </select>
+                        <button onclick={() => handleUnlink(contact.id, ch.channel, ch.userId)}
+                          disabled={saving}
+                          class="text-xs px-2 py-0.5 rounded border border-wilt-300 text-wilt-600
+                                 hover:bg-wilt-50 disabled:opacity-50 transition-colors"
+                          title="Unlink this channel identity">
+                          Unlink
+                        </button>
                       </div>
                     {/each}
                   </div>
@@ -812,8 +1002,50 @@
                 {/if}
               </div>
 
-              <!-- Save / Cancel buttons -->
-              <div class="flex gap-2 pt-2">
+              <!-- Merge Contacts -->
+              <div>
+                <details class="group">
+                  <summary class="text-sm font-medium text-gold-700 hover:text-gold-600 transition-colors cursor-pointer">
+                    Merge Another Contact Into This One
+                  </summary>
+                  <div class="mt-2 p-3 border border-bark-300 rounded-lg bg-bark-50 space-y-2">
+                    <p class="text-sm text-shadow-600">
+                      The source contact will be deleted. All its channel links, memories, and activity will transfer here.
+                    </p>
+                    <div>
+                      <label for="merge-source-{contact.id}" class="text-sm text-shadow-700">Source Contact ID</label>
+                      <input id="merge-source-{contact.id}" type="text" bind:value={mergeSourceId}
+                        class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                               focus:outline-none focus:ring-1 focus:ring-gold-300 font-mono"
+                        placeholder="UUID of contact to absorb" />
+                    </div>
+                    {#if data?.contacts}
+                      <div>
+                        <label for="merge-source-select-{contact.id}" class="text-sm text-shadow-700">Or pick from list</label>
+                        <select id="merge-source-select-{contact.id}"
+                          value={mergeSourceId}
+                          onchange={(e) => mergeSourceId = (e.target as HTMLSelectElement).value}
+                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                                 focus:outline-none focus:ring-1 focus:ring-gold-300">
+                          <option value="">Select...</option>
+                          {#each data.contacts.filter(c => c.id !== contact.id) as other}
+                            <option value={other.id}>{contactDisplayName(other)} ({other.id.slice(0, 8)}...)</option>
+                          {/each}
+                        </select>
+                      </div>
+                    {/if}
+                    <button onclick={() => handleMerge(contact.id)}
+                      disabled={saving || !mergeSourceId.trim()}
+                      class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gold-600 text-white
+                             hover:bg-gold-700 disabled:opacity-50 transition-colors">
+                      {saving ? 'Merging...' : 'Merge'}
+                    </button>
+                  </div>
+                </details>
+              </div>
+
+              <!-- Save / Cancel / Delete buttons -->
+              <div class="flex items-center gap-2 pt-2">
                 <button onclick={() => saveEdit(contact.id)} disabled={saving || !editDisplayName.trim()}
                   class="px-4 py-2 text-sm font-medium rounded-lg bg-gold-600 text-white
                          hover:bg-gold-700 disabled:opacity-50 transition-colors">
@@ -824,6 +1056,13 @@
                          hover:bg-bark-200 transition-colors border border-bark-300">
                   Cancel
                 </button>
+                {#if contact.trustLevel !== 'primary'}
+                  <button onclick={() => handleDelete(contact.id)} disabled={saving}
+                    class="ml-auto px-4 py-2 text-sm font-medium rounded-lg border border-wilt-300 text-wilt-600
+                           hover:bg-wilt-50 disabled:opacity-50 transition-colors">
+                    Delete Contact
+                  </button>
+                {/if}
               </div>
             </div>
           {/if}

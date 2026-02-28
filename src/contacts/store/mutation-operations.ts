@@ -9,6 +9,7 @@ import {
   normalizeIdentity,
   normalizeNicknameValue,
 } from './identity-utils.js';
+import { maybeHasContactLinkedTable } from './schema.js';
 
 export function setContactTrustLevel(
   db: Database.Database,
@@ -119,5 +120,38 @@ export function updateContactChannelPrivacy(
     identity.channel,
     identity.userId,
   );
+  return result.changes > 0;
+}
+
+export function deleteContact(db: Database.Database, id: string): boolean {
+  const deleteTx = db.transaction((contactId: string): boolean => {
+    // Orphan L2 memories (keep facts, unlink contact)
+    if (maybeHasContactLinkedTable(db, 'l2_memories', 'contact_id')) {
+      db.prepare('UPDATE l2_memories SET contact_id = NULL WHERE contact_id = ?').run(contactId);
+    }
+    // Remove contact profiles
+    if (maybeHasContactLinkedTable(db, 'contact_profiles', 'contact_id')) {
+      db.prepare('DELETE FROM contact_profiles WHERE contact_id = ?').run(contactId);
+    }
+    // Remove channel identities and activity (child tables)
+    db.prepare('DELETE FROM contact_channel_ids WHERE contact_id = ?').run(contactId);
+    db.prepare('DELETE FROM contact_channel_activity WHERE contact_id = ?').run(contactId);
+    // Remove the contact itself
+    const result = db.prepare('DELETE FROM contacts WHERE id = ?').run(contactId);
+    return result.changes > 0;
+  });
+  return deleteTx(id);
+}
+
+export function unlinkChannelIdentity(
+  db: Database.Database,
+  contactId: string,
+  channel: string,
+  channelUserId: string,
+): boolean {
+  const identity = normalizeIdentity(channel, channelUserId);
+  const result = db.prepare(
+    'DELETE FROM contact_channel_ids WHERE contact_id = ? AND channel = ? AND channel_user_id = ?',
+  ).run(contactId, identity.channel, identity.userId);
   return result.changes > 0;
 }

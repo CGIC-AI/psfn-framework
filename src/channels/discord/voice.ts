@@ -52,6 +52,114 @@ const DECRYPT_RECOVERY_WINDOW_MS = 5 * 60_000;
 const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
 const DEFAULT_ECHO_TTS_PRESET = 'normal';
 
+/**
+ * Maximum number of consecutive stream errors per user before tearing down
+ * that user's receive stream.
+ */
+const STREAM_ERROR_MAX_FAILURES = 10;
+
+/** Result of checking Opus decoder availability. */
+export interface OpusAvailabilityResult {
+  available: boolean;
+  backend: string | null;
+  error: string | null;
+}
+
+/**
+ * Checks whether an Opus decoder backend is available.
+ * Tries prism-media's built-in Opus decoder instantiation.
+ * Returns which backend is available (or none with guidance).
+ */
+export function checkOpusAvailability(): OpusAvailabilityResult {
+  try {
+    // prism-media tries @discordjs/opus, then node-opus, then opusscript
+    const decoder = new prism.opus.Decoder({
+      rate: 48_000,
+      channels: 2,
+      frameSize: 960,
+    });
+    // Clean up the test decoder
+    decoder.destroy?.();
+
+    // Determine which backend prism-media resolved to
+    let backend: string = 'unknown';
+    try {
+      // prism-media exposes the resolved package name
+      if ('module' in prism.opus && typeof (prism.opus as Record<string, unknown>).module === 'string') {
+        backend = (prism.opus as Record<string, unknown>).module as string;
+      }
+    } catch {
+      // Ignore introspection failures
+    }
+
+    return { available: true, backend, error: null };
+  } catch (error) {
+    const message = toErrorMessage(error);
+    return {
+      available: false,
+      backend: null,
+      error: message,
+    };
+  }
+}
+
+/**
+ * Result of the voice preflight check.
+ */
+export interface VoicePreflightResult {
+  opusAvailable: boolean;
+  opusBackend: string | null;
+  configComplete: boolean;
+  missingConfig: string[];
+  canReceive: boolean;
+}
+
+/**
+ * Runs a preflight check for the voice receive pipeline.
+ * Validates Opus decoder availability and configuration completeness.
+ * Should be called before enabling voice receive.
+ */
+export function voicePreflight(config: SubstrateConfig): VoicePreflightResult {
+  const opus = checkOpusAvailability();
+  const missingConfig: string[] = [];
+
+  if (!config.voiceTargetGuildId) missingConfig.push('VOICE_TARGET_GUILD_ID');
+  if (!config.voiceTargetUserId) missingConfig.push('VOICE_TARGET_USER_ID');
+  if (!config.deepgramApiKey) missingConfig.push('DEEPGRAM_API_KEY');
+
+  const configComplete = missingConfig.length === 0;
+  const canReceive = opus.available && configComplete;
+
+  if (!opus.available) {
+    log.error(
+      'No Opus decoder found. Voice receive pipeline will be disabled. ' +
+      'Install one of: npm install @discordjs/opus (recommended, native), ' +
+      'npm install opusscript (JS fallback, slower). ' +
+      `Error: ${opus.error}`,
+    );
+  }
+
+  if (missingConfig.length > 0) {
+    log.warn('Voice config incomplete, missing env vars', {
+      missing: missingConfig,
+    });
+  }
+
+  if (canReceive) {
+    log.info('Voice preflight passed', {
+      opusBackend: opus.backend,
+    });
+  }
+
+  return {
+    opusAvailable: opus.available,
+    opusBackend: opus.backend,
+    configComplete,
+    missingConfig,
+    canReceive,
+  };
+}
+
 /** Default ElevenLabs voice ID used when no explicit voice ID is configured. */
 export const DISCORD_VOICE_DEFAULT_VOICE_ID = 'YOUR_VOICE_ID';
 
@@ -187,6 +295,10 @@ export class DiscordVoiceRuntime {
   private decryptFailureCount = 0;
   private decryptRecoveryAttempts: number[] = [];
   private decryptRecoveryInFlight = false;
+  private opusAvailable = true;
+
+  /** Per-user stream error counters for isolation and graceful teardown. */
+  private streamErrorCounts = new Map<string, number>();
 
   constructor({ client, config, eventBus, getHandler }: DiscordVoiceRuntimeConfig) {
     this.client = client;
@@ -217,6 +329,10 @@ export class DiscordVoiceRuntime {
       return;
     }
 
+    // Run preflight to check Opus availability and config completeness
+    const preflight = voicePreflight(config);
+    this.opusAvailable = preflight.opusAvailable;
+
     if (!this.targetGuildId || !this.targetUserId || !deepgramApiKey) {
       this.enabled = false;
       this.ttsConnectors = [];
@@ -229,6 +345,17 @@ export class DiscordVoiceRuntime {
         hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', config),
         hasEchoConfig: hasTtsProviderConfig('echo', config),
       });
+      return;
+    }
+
+    if (!preflight.opusAvailable) {
+      this.enabled = false;
+      this.ttsConnectors = [];
+      log.error(
+        'Voice enabled but no Opus decoder available. ' +
+        'Voice receive pipeline disabled to prevent crashes. ' +
+        'Install one of: npm install @discordjs/opus (recommended), npm install opusscript (JS fallback)',
+      );
       return;
     }
 
@@ -301,7 +428,14 @@ export class DiscordVoiceRuntime {
 
       await this.joinChannel(nextChannel);
     } catch (error) {
-      this.emitVoiceError(error);
+      try {
+        this.emitVoiceError(error);
+      } catch (emitError) {
+        log.error('Failed to emit voice state error (double fault)', {
+          originalError: toErrorMessage(error),
+          emitError: toErrorMessage(emitError),
+        });
+      }
     } finally {
       this.handlingState = false;
     }
@@ -344,10 +478,21 @@ export class DiscordVoiceRuntime {
     this.player = player;
     this.activeChannel = channel;
     this.resetDecryptFailureTracking(generation);
+    this.resetStreamErrorCounts();
 
     this.speakingListener = (userId: string) => {
       if (userId !== this.targetUserId || this.capturing || this.activeTurn) return;
-      this.handleUtterance().catch((error) => this.emitVoiceError(error));
+      this.handleUtterance().catch((error) => {
+        try {
+          this.emitVoiceError(error);
+        } catch (emitError) {
+          // Last-resort containment: never let errors escape to process level
+          log.error('Failed to emit voice error (double fault)', {
+            originalError: toErrorMessage(error),
+            emitError: toErrorMessage(emitError),
+          });
+        }
+      });
     };
     connection.receiver.speaking.on('start', this.speakingListener);
 
@@ -397,6 +542,7 @@ export class DiscordVoiceRuntime {
     this.capturing = false;
     this.decryptFailureGeneration = 0;
     this.decryptFailureCount = 0;
+    this.resetStreamErrorCounts();
 
     if (prevChannel) {
       await this.eventBus.emit('channel.voice.end', {
@@ -416,7 +562,16 @@ export class DiscordVoiceRuntime {
         generation,
         previousStatus: oldState.status,
         status: newState.status,
-      }).catch((error) => this.emitVoiceError(error));
+      }).catch((error) => {
+        try {
+          this.emitVoiceError(error);
+        } catch (emitError) {
+          log.error('Failed to emit connection state error (double fault)', {
+            originalError: toErrorMessage(error),
+            emitError: toErrorMessage(emitError),
+          });
+        }
+      });
     };
 
     this.connectionStateListener = stateListener;
@@ -518,12 +673,33 @@ export class DiscordVoiceRuntime {
         timestampMs,
       });
 
-      const opusStream = turn.connection.receiver.subscribe(this.targetUserId, {
-        end: {
-          behavior: EndBehaviorType.AfterSilence,
-          duration: CAPTURE_SILENCE_MS,
-        },
-      });
+      let opusStream: NodeJS.ReadableStream;
+      try {
+        opusStream = turn.connection.receiver.subscribe(this.targetUserId, {
+          end: {
+            behavior: EndBehaviorType.AfterSilence,
+            duration: CAPTURE_SILENCE_MS,
+          },
+        });
+      } catch (subscribeError) {
+        throw this.createVoiceError({
+          error: subscribeError,
+          stage: 'ingest',
+          code: 'VOICE_SUBSCRIBE_FAILED',
+        });
+      }
+
+      // Attach a safety error listener immediately to prevent unhandled 'error' event crashes.
+      // The actual error handling is in decodeOpusToPcm; this just prevents Node.js from
+      // throwing if an error fires before the pipe is set up.
+      const safetyErrorHandler = (err: Error): void => {
+        log.warn('AudioReceiveStream error caught by safety listener', {
+          error: toErrorMessage(err),
+          userId: this.targetUserId,
+        });
+        this.recordStreamError(this.targetUserId);
+      };
+      opusStream.on('error', safetyErrorHandler);
 
       const pcm = await runWithVoiceStageBudget({
         stage: 'ingest',
@@ -946,11 +1122,27 @@ export class DiscordVoiceRuntime {
 
   private async decodeOpusToPcm(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-      const decoder = new prism.opus.Decoder({
-        rate: 48_000,
-        channels: 2,
-        frameSize: 960,
-      });
+      let decoder: InstanceType<typeof prism.opus.Decoder>;
+
+      try {
+        decoder = new prism.opus.Decoder({
+          rate: 48_000,
+          channels: 2,
+          frameSize: 960,
+        });
+      } catch (error) {
+        const msg = toErrorMessage(error);
+        log.error('Failed to create Opus decoder. Install @discordjs/opus or opusscript.', {
+          error: msg,
+        });
+        reject(this.createVoiceError({
+          error: new Error(`Opus decoder unavailable: ${msg}`),
+          stage: 'ingest',
+          code: 'VOICE_OPUS_UNAVAILABLE',
+        }));
+        return;
+      }
+
       const chunks: Buffer[] = [];
       let total = 0;
       let settled = false;
@@ -977,10 +1169,26 @@ export class DiscordVoiceRuntime {
         succeed();
       };
       const onDecoderError = (error: Error): void => {
-        fail(error);
+        log.warn('Opus decoder error (contained)', {
+          error: toErrorMessage(error),
+        });
+        fail(this.createVoiceError({
+          error,
+          stage: 'ingest',
+          code: 'VOICE_OPUS_DECODE_FAILED',
+        }));
       };
       const onOpusError = (error: Error): void => {
-        fail(error);
+        log.warn('AudioReceiveStream error (contained)', {
+          error: toErrorMessage(error),
+        });
+        // Track per-user failures
+        this.recordStreamError(this.targetUserId);
+        fail(this.createVoiceError({
+          error,
+          stage: 'ingest',
+          code: 'VOICE_RECEIVE_STREAM_ERROR',
+        }));
       };
       const onAbort = (): void => {
         fail(new Error('Voice capture aborted'));
@@ -992,6 +1200,12 @@ export class DiscordVoiceRuntime {
         decoder.off('error', onDecoderError);
         opusStream.off('error', onOpusError);
         signal?.removeEventListener('abort', onAbort);
+        // Ensure decoder is properly destroyed
+        try {
+          decoder.destroy?.();
+        } catch {
+          // Ignore cleanup errors
+        }
       };
 
       if (signal?.aborted) {
@@ -1007,6 +1221,41 @@ export class DiscordVoiceRuntime {
 
       opusStream.pipe(decoder);
     });
+  }
+
+  /**
+   * Record a stream error for a given user. If the error count exceeds the
+   * threshold, the stream is considered degraded and a warning is emitted.
+   */
+  private recordStreamError(userId: string): void {
+    const count = (this.streamErrorCounts.get(userId) ?? 0) + 1;
+    this.streamErrorCounts.set(userId, count);
+
+    if (count >= STREAM_ERROR_MAX_FAILURES) {
+      log.error('Stream error threshold exceeded for user; tearing down receive stream', {
+        userId,
+        errorCount: count,
+        threshold: STREAM_ERROR_MAX_FAILURES,
+      });
+      this.streamErrorCounts.delete(userId);
+
+      // Emit event so external listeners can react
+      this.eventBus.emit('voice.stream.degraded', {
+        userId,
+        channelId: this.activeChannel?.id,
+        guildId: this.activeChannel?.guild.id,
+        errorCount: count,
+        threshold: STREAM_ERROR_MAX_FAILURES,
+        timestampMs: Date.now(),
+      }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Reset stream error tracking, typically called when joining a new channel.
+   */
+  private resetStreamErrorCounts(): void {
+    this.streamErrorCounts.clear();
   }
 
   private nonBotMemberCount(channel: VoiceBasedChannel): number {

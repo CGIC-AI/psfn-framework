@@ -121,6 +121,8 @@ vi.mock('prism-media', () => {
         Decoder: class MockDecoder {
           on(): void {}
           once(): void {}
+          off(): void {}
+          destroy(): void {}
         },
       },
     },
@@ -158,9 +160,12 @@ vi.mock('../../voice/policy/security.js', () => {
   };
 });
 
+import prism from 'prism-media';
 import {
   DiscordVoiceRuntime,
   DISCORD_VOICE_DEFAULT_VOICE_ID,
+  checkOpusAvailability,
+  voicePreflight,
 } from './voice.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
@@ -1297,6 +1302,213 @@ describe('DiscordVoiceRuntime', () => {
       const providers = calls.map((call) => call[0]);
       expect(providers).toContain('echo');
       expect(providers).toContain('elevenlabs');
+    });
+  });
+
+  describe('Opus preflight', () => {
+    it('checkOpusAvailability returns available when prism-media Decoder can be created', () => {
+      // prism-media is mocked in this test suite, so Decoder creation should succeed
+      const result = checkOpusAvailability();
+      expect(result.available).toBe(true);
+      expect(result.error).toBeNull();
+    });
+
+    it('voicePreflight reports missing config vars', () => {
+      const result = voicePreflight(makeConfig({
+        voiceTargetGuildId: '',
+        voiceTargetUserId: '',
+        deepgramApiKey: '',
+      }));
+      expect(result.configComplete).toBe(false);
+      expect(result.missingConfig).toContain('VOICE_TARGET_GUILD_ID');
+      expect(result.missingConfig).toContain('VOICE_TARGET_USER_ID');
+      expect(result.missingConfig).toContain('DEEPGRAM_API_KEY');
+    });
+
+    it('voicePreflight reports config complete when all required vars are set', () => {
+      const result = voicePreflight(makeConfig());
+      expect(result.configComplete).toBe(true);
+      expect(result.missingConfig).toEqual([]);
+    });
+
+    it('voicePreflight canReceive is true when opus available and config complete', () => {
+      const result = voicePreflight(makeConfig());
+      expect(result.canReceive).toBe(true);
+      expect(result.opusAvailable).toBe(true);
+    });
+
+    it('disables voice runtime when opus decoder is unavailable', () => {
+      // Temporarily make prism.opus.Decoder throw to simulate missing opus
+      const originalDecoder = (prism as any).opus.Decoder;
+      (prism as any).opus.Decoder = class ThrowingDecoder {
+        constructor() {
+          throw new Error('Could not find an Opus module');
+        }
+      };
+
+      try {
+        const runtime = new DiscordVoiceRuntime({
+          client: { on: vi.fn(), off: vi.fn() } as any,
+          config: makeConfig(),
+          eventBus: new EventBus(),
+          getHandler: () => null,
+        });
+
+        expect((runtime as any).enabled).toBe(false);
+        expect((runtime as any).opusAvailable).toBe(false);
+      } finally {
+        (prism as any).opus.Decoder = originalDecoder;
+      }
+    });
+
+    it('checkOpusAvailability returns unavailable when decoder throws', () => {
+      const originalDecoder = (prism as any).opus.Decoder;
+      (prism as any).opus.Decoder = class ThrowingDecoder {
+        constructor() {
+          throw new Error('Could not find an Opus module');
+        }
+      };
+
+      try {
+        const result = checkOpusAvailability();
+        expect(result.available).toBe(false);
+        expect(result.error).toContain('Could not find an Opus module');
+        expect(result.backend).toBeNull();
+      } finally {
+        (prism as any).opus.Decoder = originalDecoder;
+      }
+    });
+  });
+
+  describe('Stream error hardening', () => {
+    it('contains opus stream errors without crashing', async () => {
+      const eventBus = new EventBus();
+      const handler = vi.fn(async () => ({
+        content: 'response',
+        channelId: 'discord-voice:guild-1',
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 0 },
+      }));
+      const { runtime } = makeRuntimeHarness(eventBus, handler);
+
+      // Simulate decodeOpusToPcm that throws a stream error
+      (runtime as any).decodeOpusToPcm = vi.fn(async () => {
+        const err = new Error('DecryptionFailed(UnencryptedWhenPassthroughDisabled)');
+        throw err;
+      });
+
+      // Should not throw an unhandled error -- handleUtterance wraps errors in voice.turn.error
+      const turnErrors: Array<{ stage: string; code: string }> = [];
+      eventBus.on('voice.turn.error', (event) => {
+        turnErrors.push({ stage: event.stage, code: event.code });
+      });
+
+      await expect((runtime as any).handleUtterance()).rejects.toThrow();
+      expect(turnErrors.length).toBeGreaterThan(0);
+    });
+
+    it('tracks per-user stream errors and emits degraded event after threshold', async () => {
+      const eventBus = new EventBus();
+      const handler = vi.fn();
+      const { runtime } = makeRuntimeHarness(eventBus, handler);
+
+      const degradedEvents: Array<{ userId: string; errorCount: number }> = [];
+      eventBus.on('voice.stream.degraded', (event) => {
+        degradedEvents.push({ userId: event.userId, errorCount: event.errorCount });
+      });
+
+      // Record errors up to threshold (10)
+      for (let i = 0; i < 9; i++) {
+        (runtime as any).recordStreamError('user-1');
+      }
+      expect(degradedEvents).toHaveLength(0);
+
+      // This should trigger the degraded event
+      (runtime as any).recordStreamError('user-1');
+      await flushMicrotasks();
+
+      expect(degradedEvents).toHaveLength(1);
+      expect(degradedEvents[0].userId).toBe('user-1');
+      expect(degradedEvents[0].errorCount).toBe(10);
+    });
+
+    it('isolates per-user stream error counts', () => {
+      const eventBus = new EventBus();
+      const handler = vi.fn();
+      const { runtime } = makeRuntimeHarness(eventBus, handler);
+
+      // Record errors for different users
+      for (let i = 0; i < 5; i++) {
+        (runtime as any).recordStreamError('user-a');
+      }
+      for (let i = 0; i < 3; i++) {
+        (runtime as any).recordStreamError('user-b');
+      }
+
+      expect((runtime as any).streamErrorCounts.get('user-a')).toBe(5);
+      expect((runtime as any).streamErrorCounts.get('user-b')).toBe(3);
+    });
+
+    it('resets stream error counts when joining a new channel', async () => {
+      const eventBus = new EventBus();
+      const handler = vi.fn();
+      const { runtime } = makeRuntimeHarness(eventBus, handler);
+
+      (runtime as any).recordStreamError('user-1');
+      (runtime as any).recordStreamError('user-1');
+      expect((runtime as any).streamErrorCounts.size).toBe(1);
+
+      // leaveChannel should reset stream error counts
+      await (runtime as any).leaveChannel('test-reset');
+      expect((runtime as any).streamErrorCounts.size).toBe(0);
+    });
+
+    it('handles decoder creation failure gracefully in decodeOpusToPcm', async () => {
+      const eventBus = new EventBus();
+      const handler = vi.fn();
+      const { runtime } = makeRuntimeHarness(eventBus, handler);
+
+      // Temporarily make Decoder throw
+      const originalDecoder = (prism as any).opus.Decoder;
+      (prism as any).opus.Decoder = class ThrowingDecoder {
+        constructor() {
+          throw new Error('Could not find an Opus module');
+        }
+      };
+
+      try {
+        const fakeStream = new PassThrough();
+        await expect(
+          (runtime as any).decodeOpusToPcm(fakeStream),
+        ).rejects.toThrow('Opus decoder unavailable');
+      } finally {
+        (prism as any).opus.Decoder = originalDecoder;
+      }
+    });
+
+    it('double-fault containment prevents process crash when emitVoiceError throws', () => {
+      const eventBus = new EventBus();
+      const runtime = new DiscordVoiceRuntime({
+        client: { on: vi.fn(), off: vi.fn() } as any,
+        config: makeConfig(),
+        eventBus,
+        getHandler: () => null,
+      });
+
+      // Make emitVoiceError's internal eventBus.emit throw
+      const origEmit = eventBus.emit.bind(eventBus);
+      let emitCallCount = 0;
+      vi.spyOn(eventBus, 'emit').mockImplementation(async (...args) => {
+        emitCallCount++;
+        if (emitCallCount <= 2) {
+          throw new Error('EventBus emit failure');
+        }
+        return origEmit(...(args as [string, unknown]));
+      });
+
+      // This should NOT throw -- double fault should be caught
+      expect(() => {
+        (runtime as any).emitVoiceError(new Error('test error'));
+      }).not.toThrow();
     });
   });
 });

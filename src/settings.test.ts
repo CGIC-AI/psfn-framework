@@ -869,5 +869,77 @@ describe('settings', () => {
       applySettings(config, loaded);
       expect(config.capabilityTier).toBe('custom');
     });
+
+    it('parseSettingsForm parses telegram form fields', () => {
+      const params = new URLSearchParams({
+        telegramEnabled: 'true',
+        telegramAuthorizedUsers: '123456789, 987654321',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.telegramEnabled).toBe(true);
+      expect(settings.telegramAuthorizedUsers).toBe('123456789, 987654321');
+    });
+
+    it('parseSettingsForm rejects invalid telegramEnabled value', () => {
+      const params = new URLSearchParams({
+        telegramEnabled: 'maybe',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+      expect(errors).toContain('telegramEnabled must be true or false');
+    });
+
+    it('round-trip save -> load -> apply preserves telegram settings', () => {
+      saveSettings(tempDir, {
+        telegramEnabled: true,
+        telegramAuthorizedUsers: '123456789, 987654321',
+      });
+
+      const loaded = loadSettings(tempDir);
+      const config = makeConfig();
+      applySettings(config, loaded);
+
+      expect(config.telegramEnabled).toBe(true);
+      expect(config.telegramAuthorizedUsers).toEqual(['123456789', '987654321']);
+    });
+
+    it('applySettings deduplicates telegram authorized users', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        telegramAuthorizedUsers: '111, 222, 111, 333, 222',
+      });
+
+      expect(config.telegramAuthorizedUsers).toEqual(['111', '222', '333']);
+    });
+
+    it('applySettings clears telegram authorized users when empty', () => {
+      const config = makeConfig();
+      config.telegramAuthorizedUsers = ['111'];
+      applySettings(config, {
+        telegramAuthorizedUsers: '',
+      });
+
+      expect(config.telegramAuthorizedUsers).toBeUndefined();
+    });
+
+    it('normalizeEditableSettings trims telegram authorized users', () => {
+      const result = normalizeEditableSettings({
+        telegramAuthorizedUsers: '  123 ,  456  ',
+      });
+
+      expect(result.telegramAuthorizedUsers).toBe('123 ,  456');
+    });
+
+    it('getRuntimeSettingsSnapshot reads telegram config', () => {
+      const config = makeConfig();
+      config.telegramEnabled = true;
+      config.telegramAuthorizedUsers = ['111', '222'];
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.telegramEnabled).toBe(true);
+      expect(snapshot.telegramAuthorizedUsers).toBe('111, 222');
+    });
   });
 });

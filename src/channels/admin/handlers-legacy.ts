@@ -1925,6 +1925,7 @@ export class LegacyAdminHandlers {
       litellmApiKey: process.env.LITELLM_API_KEY ? 'configured' : 'not set',
       ollamaUrl: process.env.OLLAMA_URL ? 'configured' : 'not set',
       importProcessingLocalApiKey: process.env.IMPORT_PROCESSING_LOCAL_API_KEY ? 'configured' : 'not set',
+      telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'not set',
     };
   }
 

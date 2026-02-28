@@ -171,4 +171,5 @@ export interface EnvInfo {
   litellmApiKey: string;
   ollamaUrl: string;
   importProcessingLocalApiKey: string;
+  telegramBotToken: string;
 }

@@ -21,7 +21,7 @@ Nine layers:
 5. **Identity & Prompts** — Character card loader, layered prompt stack (base→operator→runtime→channel→task), versioned layers with JSONL history, context-aware composition, admin UI "Prompt Soil" page, agent tools for self-editing
 6. **Git Self-Modification** — `GitOps` service (status, diff, branch, patch, commit, PR), 6 agent tools with path allowlist + protected branch blocking + audit logging
 7. **Module System** — hot-loadable TypeScript modules, self-installable via REPL (not yet built)
-8. **Channel Layer** — Discord adapter (voice reverse RPC for gateway split), OpenAI-compatible API, admin GUI (Purrsephone's Garden: editable settings, model discovery, garden primer, memory type filters, session dates, full identity view, contacts/trust management, prompt soil)
+8. **Channel Layer** — Discord adapter (voice reverse RPC for gateway split), OpenAI-compatible API, admin GUI (Purrsephone's Garden — Svelte 5 SPA at `/garden`; legacy htmx server deprecated, next release removes it)
 9. **Scheduler** — cron, heartbeat, one-shot, `updateTask`, configurable maintenance interval
 
 ### Key Design Principle: RLM+REPL
@@ -55,6 +55,10 @@ npm run lint             # ESLint
 npm run gateway          # Start gateway (host-side, holds secrets)
 npm run agent            # Start agent (connects to gateway)
 npm run agent:docker     # Start agent in --network=none container
+npm run garden:dev       # Svelte admin UI dev server (vite)
+npm run garden:build     # Build admin UI for production
+npm run smoke:chat       # Chat cockpit smoke test
+npm run e2e              # End-to-end integration tests
 ```
 
 ## Configuration Source Of Truth
@@ -124,11 +128,14 @@ src/
   shards/                # Self-spawning assistant shards (parallel sub-agents)
   session/               # JSONL tree sessions, auto-compaction, per-channel isolation, user continuity
   scheduler/             # Cron, heartbeat, one-shot tasks, maintenance workers
+  voice/                 # Voice pipeline (STT, TTS connectors, WebSocket transport)
   channels/
-    admin/               # Web management GUI (htmx, garden theme)
+    admin/               # Legacy htmx admin server (deprecated — use /garden)
     api/                 # OpenAI-compatible REST API
-    discord/             # Discord.js adapter
+    discord/             # Discord.js adapter (text + voice)
+    wyoming/             # Wyoming protocol adapter
 
+admin-ui/                # Svelte 5 SPA — Purrsephone's Garden at /garden
 docker/                  # Container configuration
   Dockerfile.agent       # Agent container (node:22-slim, non-root)
   docker-compose.yml     # --network=none agent with volume mounts
@@ -214,14 +221,16 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 
 ## Current State
 
-- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **provider-pluggable streaming TTS (elevenlabs + echo)**, **git self-modification tools**, **layered prompt stack**, **heartbeat reflections**, **RLM evidence tracking**, **reasoning support (thinkingFormat)**, **runtime context injection**, **lazy tool loading**
+- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **provider-pluggable streaming TTS (elevenlabs + echo)**, **git self-modification tools**, **layered prompt stack**, **heartbeat reflections**, **RLM evidence tracking**, **reasoning support (thinkingFormat)**, **runtime context injection**, **lazy tool loading**, **contacts CRUD/merge/unlink (admin API + UI)**, **Svelte 5 admin SPA (Purrsephone's Garden at /garden)**, **pluggable embedding providers (ollama/transformers/api)**, **voice pipeline (Deepgram STT + streaming TTS)**, **Wyoming protocol adapter**, **capabilities system**, **skills system**, **values journal**, **bootstrap composition**
+- **Admin UI migration**: Svelte 5 SPA at `admin-ui/` serves at `/garden`. Legacy htmx admin (`src/channels/admin/`) is deprecated and will be removed next release.
 - **Verification cadence**: use `npm test`, `npm run build`, and `npm run e2e` for current status instead of relying on static counts in docs.
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. Auto-compaction in `SessionManager.buildContext()` when context exceeds `compactionThresholdPct`. No SQLite for conversations.
-- **Deps**: `@mariozechner/pi-ai`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `dotenv`, `uuid`, `json-rpc-2.0`
+- **Deps**: `@mariozechner/pi-ai`, `@mariozechner/pi-agent-core`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `@discordjs/voice`, `json-rpc-2.0`, `winston`, `js-tiktoken`, `ws`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5 — reasoning models supported via `thinkingFormat` compat)
 - **Embeddings**: Local Ollama at your-ollama-host:11434 (snowflake-arctic-embed2, 1024d)
 - **Purrsephone still runs on OpenClaw/BotMaker** at `/mnt/samesung/ai/botmaker` until substrate is live-tested
-- **Not yet built**: module system, capability tokens
+- **Admin UI (Svelte SPA)**: `admin-ui/` — SvelteKit 5, `npm run garden:dev` for dev, `npm run garden:build` for prod. Serves at `/garden` on admin port. API client at `admin-ui/src/lib/api/`.
+- **Not yet built**: module system (hot-load), capability tokens
 
 ## Guidelines
 

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -28,6 +28,37 @@ function baseRecord(overrides: Partial<ModuleRecord> = {}): ModuleRecord {
 }
 
 describe('ModuleLoader', () => {
+  it('creates registry file on loadEnabledModules if missing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-module-loader-enoent-'));
+    const registryPath = join(root, 'nested', 'modules', 'registry.json');
+
+    const registerTool = vi.fn();
+    const eventBus = new EventBus();
+    const loader = new ModuleLoader({
+      eventBus,
+      registerTool,
+      registryPath,
+    });
+
+    try {
+      expect(existsSync(registryPath)).toBe(false);
+      const summary = await loader.loadEnabledModules();
+      expect(existsSync(registryPath)).toBe(true);
+      expect(summary).toEqual({
+        attempted: 0,
+        loaded: 0,
+        failed: 0,
+      });
+
+      // Verify the created file is valid JSON
+      const content = readFileSync(registryPath, 'utf-8');
+      expect(JSON.parse(content)).toEqual([]);
+    } finally {
+      await loader.shutdown();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('loads enabled modules through validate -> load -> activate lifecycle', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-module-loader-'));
     const registryPath = join(root, 'registry.json');

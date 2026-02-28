@@ -486,8 +486,34 @@ export interface ScheduledTask {
   state: TaskState;
 }
 
+export interface ReflectionDeliberationConfig {
+  maxRounds?: number;
+  maxTotalTokens?: number;
+  maxWallTimeMs?: number;
+  voices?: Array<'background' | 'reasoning'>;
+  inputUsdPerMillionTokens?: number;
+  outputUsdPerMillionTokens?: number;
+}
+
+export interface ReflectionTemplate {
+  id: string;
+  name: string;
+  prompt: string;
+  intervalMs: number;
+  enabled: boolean;
+  sendToDiscord: boolean;
+  mode?: 'standard' | 'deliberation';
+  deliberation?: ReflectionDeliberationConfig;
+}
+
 export interface AdminSchedulerData {
   tasks: ScheduledTask[];
+  reflections: ReflectionTemplate[];
+}
+
+export interface SchedulerMutationResult {
+  ok: boolean;
+  message: string;
 }
 
 // Skills
@@ -550,6 +576,7 @@ export interface ManagedSkill {
 export interface AdminSkillsData {
   snapshot: SkillSnapshot;
   managed: ManagedSkill[];
+  disabledSkills: string[];
 }
 
 // Confirmations

@@ -676,5 +676,146 @@ describe('settings', () => {
       expect(isRuntimeSettingKey('thinkMaxSubQueries')).toBe(true);
       expect(isRuntimeSettingKey('discordToken')).toBe(false);
     });
+
+    it('includes MoA settings in snapshot with defaults', () => {
+      const config = makeConfig();
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.moaEnabled).toBe(false);
+      expect(snapshot.moaReferenceModels).toEqual([]);
+      expect(snapshot.moaAggregatorModel).toBeNull();
+      expect(snapshot.moaMaxRounds).toBeNull();
+      expect(snapshot.moaMaxTokensPerRound).toBeNull();
+      expect(snapshot.moaTimeoutMs).toBeNull();
+    });
+
+    it('reflects configured MoA values in snapshot', () => {
+      const config = makeConfig();
+      config.moaEnabled = true;
+      config.moaReferenceModels = ['openai/gpt-4.1', 'z-ai/glm-5'];
+      config.moaAggregatorModel = 'openai/gpt-4.1';
+      config.moaMaxRounds = 2;
+      config.moaMaxTokensPerRound = 8192;
+      config.moaTimeoutMs = 60000;
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.moaEnabled).toBe(true);
+      expect(snapshot.moaReferenceModels).toEqual(['openai/gpt-4.1', 'z-ai/glm-5']);
+      expect(snapshot.moaAggregatorModel).toBe('openai/gpt-4.1');
+      expect(snapshot.moaMaxRounds).toBe(2);
+      expect(snapshot.moaMaxTokensPerRound).toBe(8192);
+      expect(snapshot.moaTimeoutMs).toBe(60000);
+    });
+
+    it('MoA setting keys are valid runtime setting keys', () => {
+      expect(isRuntimeSettingKey('moaEnabled')).toBe(true);
+      expect(isRuntimeSettingKey('moaReferenceModels')).toBe(true);
+      expect(isRuntimeSettingKey('moaAggregatorModel')).toBe(true);
+      expect(isRuntimeSettingKey('moaMaxRounds')).toBe(true);
+      expect(isRuntimeSettingKey('moaMaxTokensPerRound')).toBe(true);
+      expect(isRuntimeSettingKey('moaTimeoutMs')).toBe(true);
+    });
+  });
+
+  describe('MoA settings', () => {
+    it('applySettings applies MoA configuration to config', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        moaEnabled: true,
+        moaReferenceModels: ['openai/gpt-4.1', 'z-ai/glm-5', 'deepseek/deepseek-v3.2'],
+        moaAggregatorModel: 'openai/gpt-4.1',
+        moaMaxRounds: 3,
+        moaMaxTokensPerRound: 4096,
+        moaTimeoutMs: 45000,
+      });
+
+      expect(config.moaEnabled).toBe(true);
+      expect(config.moaReferenceModels).toEqual(['openai/gpt-4.1', 'z-ai/glm-5', 'deepseek/deepseek-v3.2']);
+      expect(config.moaAggregatorModel).toBe('openai/gpt-4.1');
+      expect(config.moaMaxRounds).toBe(3);
+      expect(config.moaMaxTokensPerRound).toBe(4096);
+      expect(config.moaTimeoutMs).toBe(45000);
+    });
+
+    it('applySettings does not modify MoA config when settings are empty', () => {
+      const config = makeConfig();
+      config.moaEnabled = true;
+      config.moaReferenceModels = ['z-ai/glm-5'];
+      config.moaAggregatorModel = 'z-ai/glm-5';
+      applySettings(config, {});
+      expect(config.moaEnabled).toBe(true);
+      expect(config.moaReferenceModels).toEqual(['z-ai/glm-5']);
+      expect(config.moaAggregatorModel).toBe('z-ai/glm-5');
+    });
+
+    it('applySettings clears moaReferenceModels when empty array is provided', () => {
+      const config = makeConfig();
+      config.moaReferenceModels = ['z-ai/glm-5'];
+      applySettings(config, { moaReferenceModels: [] });
+      expect(config.moaReferenceModels).toBeUndefined();
+    });
+
+    it('parseSettingsForm parses MoA form fields', () => {
+      const params = new URLSearchParams({
+        moaEnabled: 'true',
+        moaReferenceModels: 'openai/gpt-4.1, z-ai/glm-5, openai/gpt-4.1',
+        moaAggregatorModel: 'openai/gpt-4.1',
+        moaMaxRounds: '2',
+        moaMaxTokensPerRound: '8192',
+        moaTimeoutMs: '30000',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.moaEnabled).toBe(true);
+      expect(settings.moaReferenceModels).toEqual(['openai/gpt-4.1', 'z-ai/glm-5']);
+      expect(settings.moaAggregatorModel).toBe('openai/gpt-4.1');
+      expect(settings.moaMaxRounds).toBe(2);
+      expect(settings.moaMaxTokensPerRound).toBe(8192);
+      expect(settings.moaTimeoutMs).toBe(30000);
+    });
+
+    it('parseSettingsForm rejects out-of-range MoA numeric values', () => {
+      const params = new URLSearchParams({
+        moaMaxRounds: '0',
+        moaMaxTokensPerRound: '100',
+        moaTimeoutMs: '1000',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+      expect(errors.length).toBe(3);
+      expect(errors.some(err => err.includes('moaMaxRounds'))).toBe(true);
+      expect(errors.some(err => err.includes('moaMaxTokensPerRound'))).toBe(true);
+      expect(errors.some(err => err.includes('moaTimeoutMs'))).toBe(true);
+    });
+
+    it('parseSettingsForm rejects invalid moaEnabled value', () => {
+      const params = new URLSearchParams({
+        moaEnabled: 'maybe',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+      expect(errors).toContain('moaEnabled must be true or false');
+    });
+
+    it('round-trip save → load → apply preserves MoA settings', () => {
+      saveSettings(tempDir, {
+        moaEnabled: true,
+        moaReferenceModels: ['openai/gpt-4.1', 'z-ai/glm-5'],
+        moaAggregatorModel: 'openai/gpt-4.1',
+        moaMaxRounds: 2,
+        moaMaxTokensPerRound: 4096,
+        moaTimeoutMs: 30000,
+      });
+
+      const loaded = loadSettings(tempDir);
+      const config = makeConfig();
+      applySettings(config, loaded);
+
+      expect(config.moaEnabled).toBe(true);
+      expect(config.moaReferenceModels).toEqual(['openai/gpt-4.1', 'z-ai/glm-5']);
+      expect(config.moaAggregatorModel).toBe('openai/gpt-4.1');
+      expect(config.moaMaxRounds).toBe(2);
+      expect(config.moaMaxTokensPerRound).toBe(4096);
+      expect(config.moaTimeoutMs).toBe(30000);
+    });
   });
 });

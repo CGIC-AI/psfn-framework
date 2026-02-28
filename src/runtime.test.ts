@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SubstrateRuntime } from './runtime.js';
+import { SubstrateRuntime, buildRuntimeChannelsConfigOverrides } from './runtime.js';
 import { buildSessionHmacKeyring } from './session/journal-utils.js';
 import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { composeSessionRuntime } from './bootstrap/composition.js';
@@ -45,6 +45,57 @@ function makeMinimalConfig(overrides?: Record<string, unknown>) {
     ...overrides,
   } as any;
 }
+
+describe('buildRuntimeChannelsConfigOverrides', () => {
+  it('returns empty overrides when telegram settings keys are not present', () => {
+    const overrides = buildRuntimeChannelsConfigOverrides(
+      makeMinimalConfig({
+        telegramEnabled: true,
+        telegramAuthorizedUsers: ['111'],
+      }),
+      {},
+    );
+
+    expect(overrides).toEqual({});
+  });
+
+  it('maps telegram settings-backed config values into channel overrides', () => {
+    const overrides = buildRuntimeChannelsConfigOverrides(
+      makeMinimalConfig({
+        telegramEnabled: true,
+        telegramAuthorizedUsers: ['111', '222'],
+      }),
+      {
+        telegramEnabled: false,
+        telegramAuthorizedUsers: 'ignored-here',
+      },
+    );
+
+    expect(overrides).toEqual({
+      telegram: {
+        enabled: true,
+        allowedUsers: ['111', '222'],
+      },
+    });
+  });
+
+  it('passes an empty allowlist override when telegramAuthorizedUsers was explicitly set empty', () => {
+    const overrides = buildRuntimeChannelsConfigOverrides(
+      makeMinimalConfig({
+        telegramAuthorizedUsers: undefined,
+      }),
+      {
+        telegramAuthorizedUsers: undefined,
+      },
+    );
+
+    expect(overrides).toEqual({
+      telegram: {
+        allowedUsers: [],
+      },
+    });
+  });
+});
 
 describe('SubstrateRuntime crash recovery wiring', () => {
   const originalExtractionDrainTimeoutMs = process.env.EXTRACTION_DRAIN_TIMEOUT_MS;

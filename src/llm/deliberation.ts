@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { LLMProvider } from '../agent/contracts.js';
 import type { CompletionPurpose, ContextMessage } from '../types.js';
+import type { LLMCompletionOptions } from './client.js';
 
 type DeliberationPurpose = Extract<CompletionPurpose, 'background' | 'reasoning'>;
 
@@ -35,6 +36,7 @@ export interface DeliberationCaps {
   maxRounds: number;
   maxTotalTokens: number;
   maxWallTimeMs: number;
+  maxTokensPerRound?: number;
 }
 
 export interface DeliberationFatigueConfig {
@@ -51,6 +53,7 @@ export interface DeliberationCostConfig {
 
 export interface DeliberationVoiceTurn {
   purpose: DeliberationPurpose;
+  requestedModel?: string;
   content: string;
   model: string;
   inputTokens: number;
@@ -61,6 +64,8 @@ export interface DeliberationRound {
   index: number;
   voices: DeliberationVoiceTurn[];
   synthesis: string;
+  aggregatorModel?: string;
+  requestedAggregatorModel?: string;
   novelty: number;
   fatigue: number;
   continueProbability: number;
@@ -88,6 +93,8 @@ export interface DeliberationResult {
 export interface DeliberationOptions {
   sessionId?: string;
   voices?: DeliberationPurpose[];
+  referenceModels?: string[];
+  aggregatorModel?: string;
   aggregatorPurpose?: DeliberationPurpose;
   caps?: Partial<DeliberationCaps>;
   fatigue?: Partial<DeliberationFatigueConfig>;
@@ -95,9 +102,15 @@ export interface DeliberationOptions {
   now?: () => number;
 }
 
+interface DeliberationVoiceConfig {
+  purpose: DeliberationPurpose;
+  requestedModel?: string;
+}
+
 interface ResolvedDeliberationConfig {
   sessionId: string;
-  voices: DeliberationPurpose[];
+  voices: DeliberationVoiceConfig[];
+  aggregatorModel?: string;
   aggregatorPurpose: DeliberationPurpose;
   caps: DeliberationCaps;
   fatigue: DeliberationFatigueConfig;
@@ -121,6 +134,32 @@ function normalizePurposes(values: DeliberationPurpose[] | undefined): Deliberat
     if (!deduped.includes(purpose)) deduped.push(purpose);
   }
   return deduped.length > 0 ? deduped : [...DEFAULT_VOICES];
+}
+
+function normalizeModelHints(values: string[] | undefined): string[] {
+  if (!Array.isArray(values) || values.length === 0) return [];
+  const hints: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed || hints.includes(trimmed)) continue;
+    hints.push(trimmed);
+  }
+  return hints;
+}
+
+function resolveVoiceConfigs(
+  purposes: DeliberationPurpose[],
+  referenceModels: string[],
+): DeliberationVoiceConfig[] {
+  if (referenceModels.length === 0) {
+    return purposes.map(purpose => ({ purpose }));
+  }
+
+  return referenceModels.map((requestedModel, index) => ({
+    purpose: purposes[index % purposes.length],
+    requestedModel,
+  }));
 }
 
 function tokenizeForNovelty(text: string): Set<string> {
@@ -166,10 +205,16 @@ function estimateCostUsd(
 }
 
 function resolveDeliberationConfig(options: DeliberationOptions = {}): ResolvedDeliberationConfig {
+  const voices = normalizePurposes(options.voices);
+  const referenceModels = normalizeModelHints(options.referenceModels);
+  const aggregatorModel = options.aggregatorModel?.trim() || undefined;
   const caps: DeliberationCaps = {
     maxRounds: Math.max(1, Math.floor(options.caps?.maxRounds ?? DEFAULT_CAPS.maxRounds)),
     maxTotalTokens: Math.max(256, Math.floor(options.caps?.maxTotalTokens ?? DEFAULT_CAPS.maxTotalTokens)),
     maxWallTimeMs: Math.max(250, Math.floor(options.caps?.maxWallTimeMs ?? DEFAULT_CAPS.maxWallTimeMs)),
+    ...(options.caps?.maxTokensPerRound !== undefined
+      ? { maxTokensPerRound: Math.max(1, Math.floor(options.caps.maxTokensPerRound)) }
+      : {}),
   };
 
   const fatigue: DeliberationFatigueConfig = {
@@ -194,7 +239,8 @@ function resolveDeliberationConfig(options: DeliberationOptions = {}): ResolvedD
 
   return {
     sessionId: options.sessionId ?? randomUUID(),
-    voices: normalizePurposes(options.voices),
+    voices: resolveVoiceConfigs(voices, referenceModels),
+    ...(aggregatorModel ? { aggregatorModel } : {}),
     aggregatorPurpose: options.aggregatorPurpose === 'background'
       ? 'background'
       : DEFAULT_AGGREGATOR_PURPOSE,
@@ -266,6 +312,47 @@ function buildAggregatorMessages(
   return [{ role: 'user', content }];
 }
 
+interface DeliberationCompletionProvider extends LLMProvider {
+  complete(
+    context: { systemPrompt: string; messages: ContextMessage[] },
+    purpose: CompletionPurpose,
+    options?: LLMCompletionOptions,
+  ): Promise<{
+    content: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+  }>;
+}
+
+async function completeForDeliberation(
+  llmProvider: LLMProvider,
+  context: { systemPrompt: string; messages: ContextMessage[] },
+  purpose: CompletionPurpose,
+  options?: LLMCompletionOptions,
+): Promise<{
+  content: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+}> {
+  const completionProvider = llmProvider as DeliberationCompletionProvider;
+  return completionProvider.complete(context, purpose, options);
+}
+
+function buildCompletionOptions(
+  requestedModel: string | undefined,
+  maxTokens: number | undefined,
+): LLMCompletionOptions | undefined {
+  if (!requestedModel && maxTokens === undefined) return undefined;
+  return {
+    modelHint: {
+      ...(requestedModel ? { model: requestedModel } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+    },
+  };
+}
+
 export async function runDeliberation(
   llmProvider: LLMProvider,
   prompt: string,
@@ -297,22 +384,38 @@ export async function runDeliberation(
 
     const roundStartedAt = config.now();
     const voices: DeliberationVoiceTurn[] = [];
+    let roundInputTokens = 0;
+    let roundOutputTokens = 0;
+    let aggregatorModel: string | undefined;
 
-    for (const purpose of config.voices) {
-      const response = await llmProvider.complete(
+    for (const voice of config.voices) {
+      const roundRemainingTokens = config.caps.maxTokensPerRound !== undefined
+        ? Math.max(1, config.caps.maxTokensPerRound - (roundInputTokens + roundOutputTokens))
+        : undefined;
+      if (config.caps.maxTokensPerRound !== undefined && roundRemainingTokens <= 0) {
+        stopReason = 'token_cap';
+        break;
+      }
+
+      const response = await completeForDeliberation(
+        llmProvider,
         {
-          systemPrompt: buildVoiceSystemPrompt(purpose),
+          systemPrompt: buildVoiceSystemPrompt(voice.purpose),
           messages: buildVoiceMessages(prompt, previousSynthesis, roundIndex),
         },
-        purpose,
+        voice.purpose,
+        buildCompletionOptions(voice.requestedModel, roundRemainingTokens),
       );
 
       totalInputTokens += response.inputTokens;
       totalOutputTokens += response.outputTokens;
       estimatedCostUsd += estimateCostUsd(config.cost, response.inputTokens, response.outputTokens);
+      roundInputTokens += response.inputTokens;
+      roundOutputTokens += response.outputTokens;
 
       voices.push({
-        purpose,
+        purpose: voice.purpose,
+        ...(voice.requestedModel ? { requestedModel: voice.requestedModel } : {}),
         content: response.content.trim(),
         model: response.model,
         inputTokens: response.inputTokens,
@@ -327,6 +430,13 @@ export async function runDeliberation(
         stopReason = 'token_cap';
         break;
       }
+      if (
+        config.caps.maxTokensPerRound !== undefined
+        && roundInputTokens + roundOutputTokens >= config.caps.maxTokensPerRound
+      ) {
+        stopReason = 'token_cap';
+        break;
+      }
     }
 
     if (voices.length === 0) {
@@ -335,33 +445,46 @@ export async function runDeliberation(
     }
 
     let synthesis = voices[voices.length - 1].content;
-    let roundInputTokens = voices.reduce((sum, voice) => sum + voice.inputTokens, 0);
-    let roundOutputTokens = voices.reduce((sum, voice) => sum + voice.outputTokens, 0);
 
     if (!stopReason) {
-      const synthesisResponse = await llmProvider.complete(
-        {
-          systemPrompt:
-            'You are an inner synthesis layer. Merge multiple perspectives into a single reflection that preserves nuance and avoids repetition.',
-          messages: buildAggregatorMessages(prompt, voices, previousSynthesis),
-        },
-        config.aggregatorPurpose,
-      );
-      synthesis = synthesisResponse.content.trim();
-      totalInputTokens += synthesisResponse.inputTokens;
-      totalOutputTokens += synthesisResponse.outputTokens;
-      estimatedCostUsd += estimateCostUsd(
-        config.cost,
-        synthesisResponse.inputTokens,
-        synthesisResponse.outputTokens,
-      );
-      roundInputTokens += synthesisResponse.inputTokens;
-      roundOutputTokens += synthesisResponse.outputTokens;
-
-      if (config.now() - startedAt >= config.caps.maxWallTimeMs) {
-        stopReason = 'time_cap';
-      } else if (totalInputTokens + totalOutputTokens >= config.caps.maxTotalTokens) {
+      const roundRemainingTokens = config.caps.maxTokensPerRound !== undefined
+        ? Math.max(1, config.caps.maxTokensPerRound - (roundInputTokens + roundOutputTokens))
+        : undefined;
+      if (config.caps.maxTokensPerRound !== undefined && roundRemainingTokens <= 0) {
         stopReason = 'token_cap';
+      } else {
+        const synthesisResponse = await completeForDeliberation(
+          llmProvider,
+          {
+            systemPrompt:
+              'You are an inner synthesis layer. Merge multiple perspectives into a single reflection that preserves nuance and avoids repetition.',
+            messages: buildAggregatorMessages(prompt, voices, previousSynthesis),
+          },
+          config.aggregatorPurpose,
+          buildCompletionOptions(config.aggregatorModel, roundRemainingTokens),
+        );
+        synthesis = synthesisResponse.content.trim();
+        aggregatorModel = synthesisResponse.model;
+        totalInputTokens += synthesisResponse.inputTokens;
+        totalOutputTokens += synthesisResponse.outputTokens;
+        estimatedCostUsd += estimateCostUsd(
+          config.cost,
+          synthesisResponse.inputTokens,
+          synthesisResponse.outputTokens,
+        );
+        roundInputTokens += synthesisResponse.inputTokens;
+        roundOutputTokens += synthesisResponse.outputTokens;
+
+        if (config.now() - startedAt >= config.caps.maxWallTimeMs) {
+          stopReason = 'time_cap';
+        } else if (totalInputTokens + totalOutputTokens >= config.caps.maxTotalTokens) {
+          stopReason = 'token_cap';
+        } else if (
+          config.caps.maxTokensPerRound !== undefined
+          && roundInputTokens + roundOutputTokens >= config.caps.maxTokensPerRound
+        ) {
+          stopReason = 'token_cap';
+        }
       }
     }
 
@@ -378,6 +501,8 @@ export async function runDeliberation(
       index: roundIndex,
       voices,
       synthesis,
+      ...(aggregatorModel ? { aggregatorModel } : {}),
+      ...(config.aggregatorModel ? { requestedAggregatorModel: config.aggregatorModel } : {}),
       novelty,
       fatigue,
       continueProbability,
@@ -409,7 +534,7 @@ export async function runDeliberation(
     output,
     stopReason,
     rounds,
-    voices: config.voices,
+    voices: config.voices.map(voice => voice.purpose),
     caps: config.caps,
     totalInputTokens,
     totalOutputTokens,

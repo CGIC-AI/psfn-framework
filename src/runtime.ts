@@ -27,7 +27,7 @@ import type { ChannelAdapter } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, applySettings } from './settings.js';
+import { loadSettings, applySettings, type EditableSettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
@@ -75,7 +75,7 @@ import {
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
 import { attachVoiceObservers } from './voice/observers/index.js';
-import { loadRuntimeChannelsConfig } from './channels/config.js';
+import { loadRuntimeChannelsConfig, type RuntimeChannelsConfigOverrides } from './channels/config.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
 import { createWyomingServiceRegistry } from './channels/wyoming/services/index.js';
@@ -100,6 +100,30 @@ import { ModuleLoader } from './modules/loader.js';
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
+
+export function buildRuntimeChannelsConfigOverrides(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): RuntimeChannelsConfigOverrides {
+  const telegramOverride: RuntimeChannelsConfigOverrides['telegram'] = {};
+
+  if (Object.hasOwn(settings, 'telegramEnabled')) {
+    telegramOverride.enabled = config.telegramEnabled ?? false;
+  }
+  if (Object.hasOwn(settings, 'telegramAuthorizedUsers')) {
+    telegramOverride.allowedUsers = config.telegramAuthorizedUsers
+      ? [...config.telegramAuthorizedUsers]
+      : [];
+  }
+
+  if (telegramOverride.enabled === undefined && telegramOverride.allowedUsers === undefined) {
+    return {};
+  }
+
+  return {
+    telegram: telegramOverride,
+  };
+}
 
 export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;
@@ -478,7 +502,11 @@ export class SubstrateRuntime implements Lifecycle {
     const moduleSummary = await this.moduleLoader.loadEnabledModules();
     log.info('Runtime modules initialized', moduleSummary);
 
-    const channelsConfig = loadRuntimeChannelsConfig(this.config.dataDir);
+    const channelsConfig = loadRuntimeChannelsConfig(
+      this.config.dataDir,
+      process.env,
+      buildRuntimeChannelsConfigOverrides(this.config, savedSettings),
+    );
 
     // Discord adapter — setAgent enables steering (mid-stream message injection)
     this.discord = new DiscordAdapter(this.config, this.eventBus, {

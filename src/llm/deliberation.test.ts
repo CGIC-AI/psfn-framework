@@ -6,6 +6,7 @@ import { runDeliberation } from './deliberation.js';
 interface ScriptedStep {
   purpose: CompletionPurpose;
   content: string;
+  model?: string;
   inputTokens?: number;
   outputTokens?: number;
   delayMs?: number;
@@ -15,7 +16,7 @@ function mockResponse(step: ScriptedStep): LLMResponse {
   return {
     content: step.content,
     toolCalls: [],
-    model: `mock-${step.purpose}`,
+    model: step.model ?? `mock-${step.purpose}`,
     inputTokens: step.inputTokens ?? 12,
     outputTokens: step.outputTokens ?? 24,
     stopReason: 'stop',
@@ -25,8 +26,10 @@ function mockResponse(step: ScriptedStep): LLMResponse {
 function scriptedProvider(steps: ScriptedStep[]): {
   provider: LLMProvider;
   calls: CompletionPurpose[];
+  options: Array<Record<string, unknown> | undefined>;
 } {
   const calls: CompletionPurpose[] = [];
+  const options: Array<Record<string, unknown> | undefined> = [];
   let index = 0;
 
   const provider: LLMProvider = {
@@ -38,8 +41,13 @@ function scriptedProvider(steps: ScriptedStep[]): {
       outputTokens: 0,
       stopReason: 'stop',
     })),
-    complete: vi.fn(async (_context: LLMContext, purpose: CompletionPurpose) => {
+    complete: vi.fn(async (
+      _context: LLMContext,
+      purpose: CompletionPurpose,
+      requestOptions?: Record<string, unknown>,
+    ) => {
       calls.push(purpose);
+      options.push(requestOptions);
       const step = steps[index++];
       if (!step) {
         throw new Error(`No scripted response available for purpose ${purpose}`);
@@ -54,7 +62,7 @@ function scriptedProvider(steps: ScriptedStep[]): {
     }),
   };
 
-  return { provider, calls };
+  return { provider, calls, options };
 }
 
 describe('runDeliberation', () => {
@@ -124,5 +132,40 @@ describe('runDeliberation', () => {
 
     expect(result.stopReason).toBe('max_rounds');
     expect(result.rounds).toHaveLength(2);
+  });
+
+  it('propagates model hints for reference voices and aggregator', async () => {
+    const { provider, options } = scriptedProvider([
+      { purpose: 'reasoning', content: 'Voice one', model: 'model-a', inputTokens: 10, outputTokens: 10 },
+      { purpose: 'background', content: 'Voice two', model: 'model-b', inputTokens: 10, outputTokens: 10 },
+      { purpose: 'reasoning', content: 'Synthesis output', model: 'model-agg', inputTokens: 10, outputTokens: 10 },
+    ]);
+
+    const result = await runDeliberation(provider, 'Hint routing', {
+      referenceModels: ['model-a', 'model-b'],
+      aggregatorModel: 'model-agg',
+      caps: { maxRounds: 1, maxTotalTokens: 10_000, maxWallTimeMs: 20_000, maxTokensPerRound: 120 },
+    });
+
+    expect(result.rounds).toHaveLength(1);
+    expect(result.rounds[0].aggregatorModel).toBe('model-agg');
+    expect(options[0]).toMatchObject({ modelHint: { model: 'model-a', maxTokens: 120 } });
+    expect(options[1]).toMatchObject({ modelHint: { model: 'model-b', maxTokens: 100 } });
+    expect(options[2]).toMatchObject({ modelHint: { model: 'model-agg', maxTokens: 80 } });
+  });
+
+  it('stops when maxTokensPerRound is exhausted mid-round', async () => {
+    const { provider, calls } = scriptedProvider([
+      { purpose: 'reasoning', content: 'Voice one only', inputTokens: 30, outputTokens: 20 },
+    ]);
+
+    const result = await runDeliberation(provider, 'Per-round token cap', {
+      caps: { maxRounds: 5, maxTotalTokens: 10_000, maxWallTimeMs: 20_000, maxTokensPerRound: 40 },
+    });
+
+    expect(result.stopReason).toBe('token_cap');
+    expect(result.rounds).toHaveLength(1);
+    expect(result.rounds[0].voices).toHaveLength(1);
+    expect(calls).toEqual(['reasoning']);
   });
 });

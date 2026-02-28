@@ -36,6 +36,13 @@ export interface RuntimeChannelsConfig {
   telegram: TelegramChannelConfig;
 }
 
+export interface RuntimeChannelsConfigOverrides {
+  telegram?: {
+    enabled?: boolean;
+    allowedUsers?: string[];
+  };
+}
+
 const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
   enabled: false,
   token: '',
@@ -155,6 +162,7 @@ function loadRawChannelsConfig(dataDir: string): Record<string, unknown> {
 export function loadRuntimeChannelsConfig(
   dataDir: string,
   env: NodeJS.ProcessEnv = process.env,
+  overrides: RuntimeChannelsConfigOverrides = {},
 ): RuntimeChannelsConfig {
   const rawConfig = loadRawChannelsConfig(dataDir);
   const interpolated = interpolateEnvTokens(rawConfig, env);
@@ -163,8 +171,16 @@ export function loadRuntimeChannelsConfig(
   const telegramConfig = isRecord(scopedRoot.telegram)
     ? scopedRoot.telegram
     : {};
+  const telegramOverride = overrides.telegram ?? {};
+  const enabledOverride = typeof telegramOverride.enabled === 'boolean'
+    ? telegramOverride.enabled
+    : undefined;
+  const allowedUsersOverride = Array.isArray(telegramOverride.allowedUsers)
+    ? parseStringArray(telegramOverride.allowedUsers)
+    : undefined;
 
   const enabled = parseBoolean(env.TELEGRAM_ENABLED)
+    ?? enabledOverride
     ?? parseBoolean(telegramConfig.enabled)
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.enabled;
 
@@ -174,6 +190,7 @@ export function loadRuntimeChannelsConfig(
   const token = (env.TELEGRAM_BOT_TOKEN ?? tokenFromFile).trim();
 
   const allowedUsers = parseAllowlistFromEnv(env.TELEGRAM_ALLOWED_USERS)
+    ?? allowedUsersOverride
     ?? parseStringArray(telegramConfig.allowedUsers);
 
   const mode = parseTelegramMode(env.TELEGRAM_MODE)

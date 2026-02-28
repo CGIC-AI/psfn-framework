@@ -19,6 +19,7 @@ import type {
   AgentResponse,
   CapabilityTier,
   ContextMessage,
+  LLMContext,
   MessageModelOverride,
   MessagePromptOverride,
   SubstrateConfig,
@@ -62,6 +63,7 @@ import {
   classifyBroadcastDraft,
   resolveBroadcastVisibilityScope,
 } from '../broadcast/safety.js';
+import { runDeliberation } from '../llm/deliberation.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -98,6 +100,14 @@ interface FrozenPromptPrefix {
   renderedPrefix: string;
   staticHash: string;
   settingsHash: string;
+}
+
+interface ResolvedMoaSettings {
+  maxRounds: number;
+  maxTokensPerRound?: number;
+  timeoutMs: number;
+  referenceModels: string[];
+  aggregatorModel?: string;
 }
 
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
@@ -630,64 +640,92 @@ export class SubstrateAgent {
         promptMode: promptOverride.mode,
       });
 
-      // Configure pi-agent-core Agent for this turn
-      this.ensureModel(message);
-      this.agent.setSystemPrompt(context.systemPrompt);
-      this.loadedExtended.clear();
-      this.agent.setTools(this.withCapabilityGates(this.coreTools));
-
-      // Convert ContextMessage[] to AgentMessage[] for the Agent.
-      // Exclude the last message (the user message we just recorded) —
-      // agent.prompt() will re-add it, avoiding duplication.
-      const agentMessages = this.contextToAgentMessages(context.messages);
-      const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
-      this.agent.replaceMessages(historyMessages);
-      const turnStartMessageIndex = this.agent.state.messages.length;
-
       const promptStageStart = Date.now();
-      let firstTokenAt: number | null = null;
-      const streamTelemetryBus = this.eventBus as unknown as {
-        on: (event: string, handler: (data: { channelId: string; text: string }) => void) => () => void;
-      };
-      const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
-        if (channelId !== message.channelId || firstTokenAt != null) return;
-        firstTokenAt = Date.now();
-        this.emitTurnStage(message, startTime, 'first-token', {
-          ttftMs: firstTokenAt - startTime,
-          source: 'stream',
-        });
-      });
+      let firstTokenAt: number;
+      let turnMessages: AgentMessage[] = [];
+      let turnUsage: TurnUsage;
+      let responseModel: string;
+      let responseText: string;
 
-      // Activate event bridge for this channel (streams deltas + tool events to EventBus)
-      this.bridge.setChannel(message.channelId);
-      try {
-        // Run the agent — pi-agent-core handles tool loop internally
-        await this.agent.prompt({
-          role: 'user',
-          content: message.content,
-          timestamp: Date.now(),
-        } satisfies UserMessage);
-      } finally {
-        unsubscribeFirstToken();
-        this.bridge.clearChannel();
-      }
-      if (firstTokenAt == null) {
+      const moaSettings = this.resolveMoaSettings();
+      if (moaSettings) {
+        const moaResult = await this.runMoaTurn(context, message, moaSettings);
         firstTokenAt = Date.now();
         this.emitTurnStage(message, startTime, 'first-token', {
           ttftMs: firstTokenAt - startTime,
           source: 'fallback',
         });
+        this.emitTurnStage(message, startTime, 'prompt', {
+          durationMs: Date.now() - promptStageStart,
+          ttftMs: firstTokenAt - startTime,
+          mode: 'moa',
+          rounds: moaResult.rounds,
+          stopReason: moaResult.stopReason,
+        });
+        turnUsage = moaResult.turnUsage;
+        responseModel = moaResult.model;
+        responseText = moaResult.output;
+      } else {
+        // Configure pi-agent-core Agent for this turn
+        this.ensureModel(message);
+        this.agent.setSystemPrompt(context.systemPrompt);
+        this.loadedExtended.clear();
+        this.agent.setTools(this.withCapabilityGates(this.coreTools));
+
+        // Convert ContextMessage[] to AgentMessage[] for the Agent.
+        // Exclude the last message (the user message we just recorded) —
+        // agent.prompt() will re-add it, avoiding duplication.
+        const agentMessages = this.contextToAgentMessages(context.messages);
+        const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
+        this.agent.replaceMessages(historyMessages);
+        const turnStartMessageIndex = this.agent.state.messages.length;
+
+        let streamFirstTokenAt: number | null = null;
+        const streamTelemetryBus = this.eventBus as unknown as {
+          on: (event: string, handler: (data: { channelId: string; text: string }) => void) => () => void;
+        };
+        const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
+          if (channelId !== message.channelId || streamFirstTokenAt != null) return;
+          streamFirstTokenAt = Date.now();
+          this.emitTurnStage(message, startTime, 'first-token', {
+            ttftMs: streamFirstTokenAt - startTime,
+            source: 'stream',
+          });
+        });
+
+        // Activate event bridge for this channel (streams deltas + tool events to EventBus)
+        this.bridge.setChannel(message.channelId);
+        try {
+          // Run the agent — pi-agent-core handles tool loop internally
+          await this.agent.prompt({
+            role: 'user',
+            content: message.content,
+            timestamp: Date.now(),
+          } satisfies UserMessage);
+        } finally {
+          unsubscribeFirstToken();
+          this.bridge.clearChannel();
+        }
+        if (streamFirstTokenAt == null) {
+          streamFirstTokenAt = Date.now();
+          this.emitTurnStage(message, startTime, 'first-token', {
+            ttftMs: streamFirstTokenAt - startTime,
+            source: 'fallback',
+          });
+        }
+        this.emitTurnStage(message, startTime, 'prompt', {
+          durationMs: Date.now() - promptStageStart,
+          ttftMs: streamFirstTokenAt - startTime,
+        });
+
+        turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
+        turnUsage = this.accumulateTurnUsage(turnMessages);
+        responseModel = this.agent.state.model?.id ?? 'unknown';
+        firstTokenAt = streamFirstTokenAt;
+
+        // Extract response from agent state (last assistant message)
+        responseText = this.extractResponseText();
       }
-      this.emitTurnStage(message, startTime, 'prompt', {
-        durationMs: Date.now() - promptStageStart,
-        ttftMs: firstTokenAt - startTime,
-      });
-
-      const turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
-      const turnUsage = this.accumulateTurnUsage(turnMessages);
-
-      // Extract response from agent state (last assistant message)
-      const responseText = this.extractResponseText();
       let safeResponseText = responseText;
       let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
 
@@ -765,7 +803,7 @@ export class SubstrateAgent {
         content: safeResponseText,
         channelId: message.channelId,
         metadata: {
-          model: this.agent.state.model?.id ?? 'unknown',
+          model: responseModel,
           inputTokens: turnUsage.inputTokens,
           outputTokens: turnUsage.outputTokens,
           durationMs: Date.now() - startTime,
@@ -801,6 +839,153 @@ export class SubstrateAgent {
   }
 
   // ── Private helpers ──
+
+  private resolveMoaSettings(): ResolvedMoaSettings | null {
+    if (this.config.moaEnabled !== true) return null;
+
+    const maxRoundsRaw = this.config.moaMaxRounds ?? 4;
+    const timeoutMsRaw = this.config.moaTimeoutMs ?? 45_000;
+    const maxTokensPerRoundRaw = this.config.moaMaxTokensPerRound;
+
+    if (!Number.isFinite(maxRoundsRaw) || maxRoundsRaw <= 0) {
+      log.warn('MoA disabled for turn due invalid max rounds', {
+        moaMaxRounds: this.config.moaMaxRounds,
+      });
+      return null;
+    }
+    if (!Number.isFinite(timeoutMsRaw) || timeoutMsRaw <= 0) {
+      log.warn('MoA disabled for turn due invalid timeout', {
+        moaTimeoutMs: this.config.moaTimeoutMs,
+      });
+      return null;
+    }
+    if (
+      maxTokensPerRoundRaw !== undefined
+      && (!Number.isFinite(maxTokensPerRoundRaw) || maxTokensPerRoundRaw <= 0)
+    ) {
+      log.warn('MoA disabled for turn due invalid token cap', {
+        moaMaxTokensPerRound: this.config.moaMaxTokensPerRound,
+      });
+      return null;
+    }
+
+    const referenceModels: string[] = [];
+    for (const value of this.config.moaReferenceModels ?? []) {
+      const trimmed = value.trim();
+      if (!trimmed || referenceModels.includes(trimmed)) continue;
+      referenceModels.push(trimmed);
+    }
+    const aggregatorModel = this.config.moaAggregatorModel?.trim() || undefined;
+
+    return {
+      maxRounds: Math.max(1, Math.floor(maxRoundsRaw)),
+      timeoutMs: Math.max(250, Math.floor(timeoutMsRaw)),
+      ...(maxTokensPerRoundRaw !== undefined
+        ? { maxTokensPerRound: Math.max(1, Math.floor(maxTokensPerRoundRaw)) }
+        : {}),
+      referenceModels,
+      ...(aggregatorModel ? { aggregatorModel } : {}),
+    };
+  }
+
+  private buildMoaPrompt(context: LLMContext): string {
+    const transcript = context.messages
+      .map(message => `${message.role === 'assistant' ? 'Assistant' : 'User'}:\n${message.content}`)
+      .join('\n\n');
+    return [
+      'Produce the best final assistant reply for the latest user turn.',
+      `System instructions:\n${context.systemPrompt}`,
+      transcript.length > 0 ? `Conversation transcript:\n${transcript}` : '',
+      'Return only the assistant response text to send back.',
+    ]
+      .map(section => section.trim())
+      .filter(section => section.length > 0)
+      .join('\n\n');
+  }
+
+  private async runMoaTurn(
+    context: LLMContext,
+    message: SubstrateMessage,
+    settings: ResolvedMoaSettings,
+  ): Promise<{
+    output: string;
+    model: string;
+    turnUsage: TurnUsage;
+    rounds: number;
+    stopReason: string;
+  }> {
+    const caps = {
+      maxRounds: settings.maxRounds,
+      maxWallTimeMs: settings.timeoutMs,
+      ...(settings.maxTokensPerRound !== undefined
+        ? {
+          maxTokensPerRound: settings.maxTokensPerRound,
+          maxTotalTokens: settings.maxTokensPerRound * settings.maxRounds,
+        }
+        : {}),
+    };
+    const deliberation = await runDeliberation(
+      this.llmClient,
+      this.buildMoaPrompt(context),
+      {
+        ...(settings.referenceModels.length > 0 ? { referenceModels: settings.referenceModels } : {}),
+        ...(settings.aggregatorModel ? { aggregatorModel: settings.aggregatorModel } : {}),
+        caps,
+      },
+    );
+
+    const llmCalls = deliberation.rounds.reduce(
+      (sum, round) => sum + round.voices.length + (round.aggregatorModel ? 1 : 0),
+      0,
+    );
+    const peakInputTokens = deliberation.rounds.reduce(
+      (max, round) => Math.max(max, round.inputTokens),
+      0,
+    );
+    const contextWindow = this.resolveContextWindow();
+    const contextUtilization = contextWindow > 0
+      ? Math.min(100, (peakInputTokens / contextWindow) * 100)
+      : 0;
+    const lastRound = deliberation.rounds[deliberation.rounds.length - 1];
+    const model = lastRound?.aggregatorModel
+      ?? lastRound?.voices[lastRound.voices.length - 1]?.model
+      ?? this.config.modelRoster.chat?.model
+      ?? this.config.primaryModel;
+
+    const turnUsage: TurnUsage = {
+      inputTokens: deliberation.totalInputTokens,
+      outputTokens: deliberation.totalOutputTokens,
+      cacheReadTokens: 0,
+      llmCalls,
+      toolCalls: 0,
+      contextUtilization,
+      ...(deliberation.estimatedCostUsd > 0 ? { estimatedCostUsd: deliberation.estimatedCostUsd } : {}),
+    };
+
+    this.emitTelemetry('agent.moa.turn', {
+      turnId: message.id,
+      channelId: message.channelId,
+      rounds: deliberation.rounds.length,
+      stopReason: deliberation.stopReason,
+      llmCalls,
+      referenceModels: settings.referenceModels,
+      aggregatorModel: settings.aggregatorModel ?? null,
+      model,
+      totalInputTokens: deliberation.totalInputTokens,
+      totalOutputTokens: deliberation.totalOutputTokens,
+      maxRounds: settings.maxRounds,
+      maxTokensPerRound: settings.maxTokensPerRound ?? null,
+      timeoutMs: settings.timeoutMs,
+    });
+
+    return {
+      output: deliberation.output,
+      model,
+      turnUsage,
+      rounds: deliberation.rounds.length,
+      stopReason: deliberation.stopReason,
+    };
+  }
 
   private emitTurnStage(
     message: SubstrateMessage,

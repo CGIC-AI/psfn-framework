@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, dirname, resolve } from 'node:path';
 import { MODULE_REGISTRY_PATH } from '../security/policy-constants.js';
@@ -38,6 +39,19 @@ export function parseModuleRegistry(raw: string): ModuleRecord[] {
     return [];
   }
   return parsed.filter((entry): entry is ModuleRecord => isModuleRecord(entry));
+}
+
+/**
+ * Ensure the registry file exists on disk. Creates parent directories and
+ * seeds an empty JSON array if the file is missing. This is safe to call
+ * repeatedly — it is a no-op when the file already exists.
+ */
+export function ensureRegistryFile(registryPath: string): void {
+  if (existsSync(registryPath)) {
+    return;
+  }
+  mkdirSync(dirname(registryPath), { recursive: true });
+  writeFileSync(registryPath, '[]\n', 'utf-8');
 }
 
 export async function readModuleRegistry(registryPath: string): Promise<ModuleRecord[]> {

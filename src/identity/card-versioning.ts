@@ -30,6 +30,8 @@ const MUTABLE_CARD_FIELDS = [
   'tags',
   'creator',
   'creator_notes',
+  'alternate_greetings',
+  'extensions_visual_description',
 ] as const;
 
 type MutableCardField = (typeof MUTABLE_CARD_FIELDS)[number];
@@ -46,6 +48,8 @@ export interface CharacterCardPatch {
   tags?: string[];
   creator?: string;
   creator_notes?: string;
+  alternate_greetings?: string[];
+  extensions_visual_description?: string;
 }
 
 export interface CharacterCardHistoryEntry {
@@ -103,6 +107,21 @@ function sanitizeTagsPatchValue(value: unknown): string[] | undefined {
   return value.filter((entry): entry is string => typeof entry === 'string');
 }
 
+function sanitizeAlternateGreetingsPatchValue(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+  if (typeof value !== 'string') return undefined;
+  const parsed = value
+    .split('\n')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return parsed;
+}
+
 export function extractCardPatchFromRecord(record: Record<string, unknown>): CharacterCardPatch {
   const patch: CharacterCardPatch = {};
 
@@ -116,9 +135,22 @@ export function extractCardPatchFromRecord(record: Record<string, unknown>): Cha
       continue;
     }
 
+    if (field === 'alternate_greetings') {
+      const greetings = sanitizeAlternateGreetingsPatchValue(value);
+      if (greetings !== undefined) patch.alternate_greetings = greetings;
+      continue;
+    }
+
     const text = sanitizeStringPatchValue(value);
     if (text !== undefined) {
       (patch as Record<MutableCardField, unknown>)[field] = text;
+    }
+  }
+
+  if (record['extensions.visual_description'] !== undefined) {
+    const value = sanitizeStringPatchValue(record['extensions.visual_description']);
+    if (value !== undefined) {
+      patch.extensions_visual_description = value;
     }
   }
 
@@ -219,6 +251,21 @@ export class CharacterCardVersionStore {
       ...(patch.tags !== undefined ? { tags: [...patch.tags] } : {}),
       ...(patch.creator !== undefined ? { creator: patch.creator } : {}),
       ...(patch.creator_notes !== undefined ? { creator_notes: patch.creator_notes } : {}),
+      ...(patch.alternate_greetings !== undefined
+        ? { alternate_greetings: [...patch.alternate_greetings] }
+        : {}),
+      ...(patch.extensions_visual_description !== undefined
+        ? {
+          extensions: {
+            ...(
+              typeof currentData.extensions === 'object' && currentData.extensions !== null
+                ? currentData.extensions
+                : {}
+            ),
+            visual_description: patch.extensions_visual_description,
+          },
+        }
+        : {}),
     };
 
     const nextCard: CharacterCardV2 = {

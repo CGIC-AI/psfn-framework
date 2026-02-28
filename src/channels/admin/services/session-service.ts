@@ -99,15 +99,27 @@ export class AdminSessionDataService implements AdminSessionService {
     const contacts = this.deps.contactStore?.listAll() ?? [];
     return {
       channels: channels.map(channel => {
+        const lastEntry = this.deps.sessionStore.getLastEntry(channel.channelId);
+        const lastActivityAt = lastEntry
+          ? (typeof lastEntry.timestamp === 'number'
+            ? lastEntry.timestamp
+            : Date.parse(String(lastEntry.timestamp)))
+          : undefined;
+        const channelWithActivity = (
+          typeof lastActivityAt === 'number' && Number.isFinite(lastActivityAt)
+        )
+          ? { ...channel, lastActivityAt }
+          : channel;
+
         const linkedContact = getLinkedContactForSession({
           channelId: channel.channelId,
           contacts,
           sessionStore: this.deps.sessionStore,
           contactStore: this.deps.contactStore,
         });
-        if (!linkedContact) return channel;
+        if (!linkedContact) return channelWithActivity;
         return {
-          ...channel,
+          ...channelWithActivity,
           linkedContactId: linkedContact.id,
           linkedContactName: linkedContact.displayName,
         };

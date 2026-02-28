@@ -94,7 +94,7 @@ export class DiscordAdapter implements ChannelAdapter {
     this.gateway = this;
     this.security = {
       supportsDirectMessages: true,
-      requiresMentionForChannelMessages: true,
+      requiresMentionForChannelMessages: this.runtimeConfig.discordRespondAll !== true,
     };
     this.streaming = {
       typingIntervalMs: TYPING_INTERVAL_MS,
@@ -203,22 +203,27 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   private async onDiscordMessage(msg: Message): Promise<void> {
+    const runtimeBotId = this.client.user?.id ?? this.runtimeConfig.discordBotId;
+
     // Ignore self
-    if (msg.author.id === this.runtimeConfig.discordBotId) return;
+    if (runtimeBotId && msg.author.id === runtimeBotId) return;
     if (msg.author.bot) return;
     if (!this.handler) return;
 
     // Respond to DMs always, guild messages only when mentioned
     const isDM = !msg.guild;
-    const isMentioned = msg.mentions.has(this.runtimeConfig.discordBotId);
-    if (!isDM && !isMentioned) return;
+    const isMentioned = runtimeBotId ? msg.mentions.has(runtimeBotId) : false;
+    const respondAllGuildMessages = this.runtimeConfig.discordRespondAll === true;
+    if (!isDM && !respondAllGuildMessages && !isMentioned) return;
 
     const channelId = msg.channelId;
 
     // Strip bot mention from content
-    let content = msg.content
-      .replace(new RegExp(`<@!?${this.runtimeConfig.discordBotId}>`, 'g'), '')
-      .trim();
+    let content = msg.content;
+    if (runtimeBotId) {
+      content = content.replace(new RegExp(`<@!?${runtimeBotId}>`, 'g'), '');
+    }
+    content = content.trim();
     if (!content) content = '(empty message)';
 
     const substrateMsg: SubstrateMessage = {

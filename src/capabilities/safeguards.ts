@@ -24,6 +24,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   prompt_layer_toggle: 'irreversible',
   settings_get: 'reversible',
   heartbeat_get_policy: 'reversible',
+  heartbeat_run_template: 'irreversible',
   heartbeat_update_policy: 'irreversible',
   schedule_task: 'irreversible',
   contact_list: 'reversible',

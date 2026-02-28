@@ -20,6 +20,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   contact_set_channel_privacy: 'identity.write.runtime',
   contact_set_trust: 'identity.write.runtime',
   heartbeat_get_policy: 'identity.read',
+  heartbeat_run_template: 'identity.write.runtime',
   heartbeat_update_policy: 'identity.write.runtime',
   identity_changelog: 'identity.read',
   identity_diff: 'identity.read',

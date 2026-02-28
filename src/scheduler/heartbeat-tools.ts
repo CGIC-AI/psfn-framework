@@ -59,6 +59,12 @@ function cloneDeliberation(config: ReflectionDeliberationConfig | undefined): Re
   };
 }
 
+interface HeartbeatRunTemplateResult {
+  templateId: string;
+  templateName: string;
+  reflection: string;
+}
+
 // ── Tool 1: heartbeat_get_policy ──
 
 export function createHeartbeatGetPolicyTool(
@@ -271,7 +277,60 @@ export function createHeartbeatUpdatePolicyTool(
   };
 }
 
-// ── Tool 3: schedule_task ──
+// ── Tool 3: heartbeat_run_template ──
+
+export function createHeartbeatRunTemplateTool(
+  store: HeartbeatPolicyStore,
+  runTemplate: (
+    templateId: string,
+    options?: { sendToDiscordOverride?: boolean },
+  ) => Promise<HeartbeatRunTemplateResult>,
+): AgentTool<any> {
+  return {
+    name: 'heartbeat_run_template',
+    label: 'heartbeat_run_template',
+    description:
+      'Manually trigger any reflection template by template id and return the reflection output now. ' +
+      'Useful when you want a specific reflection run on demand.',
+    parameters: Type.Object({
+      templateId: Type.String({ description: 'Reflection template id to run immediately' }),
+      sendToDiscord: Type.Optional(
+        Type.Boolean({ description: 'Override whether this manual run should be sent to Discord' }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: { templateId: string; sendToDiscord?: boolean },
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const templateId = params.templateId.trim();
+      if (!templateId) {
+        return textResultWithError('templateId is required', true);
+      }
+
+      try {
+        const policy = store.load();
+        if (!policy.templates.some(template => template.id === templateId)) {
+          return textResultWithError(`Template "${templateId}" not found`, true);
+        }
+
+        const result = await runTemplate(templateId, {
+          ...(params.sendToDiscord !== undefined
+            ? { sendToDiscordOverride: params.sendToDiscord }
+            : {}),
+        });
+        const reflection = result.reflection.trim();
+        return textResult(
+          `Triggered reflection template "${result.templateName}" (${result.templateId}).\n\n`
+          + (reflection || '[empty reflection output]'),
+        );
+      } catch (error) {
+        return textResultWithError(`heartbeat_run_template failed: ${errorMessage(error)}`, true);
+      }
+    },
+  };
+}
+
+// ── Tool 4: schedule_task ──
 
 export function createScheduleTaskTool(
   scheduler: Scheduler,

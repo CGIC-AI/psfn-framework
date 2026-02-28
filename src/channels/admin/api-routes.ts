@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseJsonBody, sendJson } from '../http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
+import { handleMultipartUpload, validateAndParseJsonFile } from './multipart.js';
 import type {
   AdminContactsService,
   AdminDashboardService,
@@ -483,6 +484,37 @@ export function buildAdminApiRoutes(options: {
             error => sendJson(res, 500, { error: String(error) }),
           );
         });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/identity/upload'),
+      handle: (req, res) => {
+        handleMultipartUpload(req, res).then(
+          (uploadResult) => {
+            if (!uploadResult.ok) {
+              sendJson(res, uploadResult.status, { error: uploadResult.error });
+              return;
+            }
+            const jsonResult = validateAndParseJsonFile(uploadResult.file);
+            if (!jsonResult.ok) {
+              sendJson(res, 400, { error: jsonResult.error });
+              return;
+            }
+            // Pass the parsed card data as a JSON string to the import service
+            identityService.importIdentityCard(JSON.stringify({ cardData: jsonResult.data })).then(
+              result => {
+                if (!result.ok) {
+                  sendJson(res, 400, { error: result.message });
+                  return;
+                }
+                sendJson(res, 201, { ...result, filename: jsonResult.filename });
+              },
+              error => sendJson(res, 500, { error: String(error) }),
+            );
+          },
+          (error) => sendJson(res, 500, { error: String(error) }),
+        );
       },
     },
     {

@@ -73,10 +73,10 @@
   ];
 
   const TRUST_BADGE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-    primary:  { bg: 'background-color: #e8b931', text: 'color: #3a2e0a', label: 'Primary' },
-    trusted:  { bg: 'background-color: #4caf50', text: 'color: white', label: 'Trusted' },
-    regular:  { bg: 'background-color: #2196f3', text: 'color: white', label: 'Regular' },
-    public:   { bg: 'background-color: #9e9e9e', text: 'color: white', label: 'Public' },
+    primary:  { bg: 'background-color: #e8b931', text: 'color: #3a2e0a', label: '👑 Primary' },
+    trusted:  { bg: 'background-color: #c0c0c0', text: 'color: #2b2b2b', label: '🗝 Trusted' },
+    regular:  { bg: 'background-color: #4caf50', text: 'color: white', label: '🍃 Regular' },
+    public:   { bg: 'background-color: #9e9e9e', text: 'color: white', label: '🪨 Public' },
   };
 
   const PRIVACY_BADGE_STYLES: Record<string, { bg: string; text: string; label: string }> = {

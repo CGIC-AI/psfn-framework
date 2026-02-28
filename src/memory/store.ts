@@ -597,7 +597,7 @@ export class MemoryStore {
       SELECT *
       FROM l2_memories
       WHERE superseded_by IS NULL AND deleted_at IS NULL
-      ORDER BY extracted_at DESC
+      ORDER BY extracted_at DESC, id DESC
       LIMIT ?
       OFFSET ?
     `).all(limit, offset) as MemoryRow[];

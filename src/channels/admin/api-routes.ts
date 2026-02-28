@@ -92,7 +92,7 @@ type RouteParams = Record<string, string>;
 type RouteMatcher = (path: string) => RouteParams | null;
 
 export interface AdminApiRoute {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
   handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
 }
@@ -179,6 +179,22 @@ export function buildAdminApiRoutes(options: {
     details: Array<string | null | undefined> = [],
   ): void => {
     appendAuditTimelineEntry?.('identity_edit', decision, narrative, details, 'operator');
+  };
+
+  const handleContactUpdate = (req: IncomingMessage, res: ServerResponse, id: string): void => {
+    withBody(req, res, (body) => {
+      const parsed = parseAdminJsonBody(body);
+      if (!parsed.ok) {
+        sendJson(res, 400, { error: parsed.error });
+        return;
+      }
+      const result = contactsService.updateContact(id, JSON.stringify(parsed.value));
+      if (!result.ok) {
+        sendJson(res, result.message === 'Contact not found' ? 404 : 400, { error: result.message });
+        return;
+      }
+      sendJson(res, 200, result);
+    });
   };
 
   return [
@@ -500,22 +516,17 @@ export function buildAdminApiRoutes(options: {
       },
     },
     {
+      method: 'PUT',
+      match: prefixedParamPath('/api/admin/contacts/', 'id'),
+      handle: (req, res, { id }) => {
+        handleContactUpdate(req, res, id);
+      },
+    },
+    {
       method: 'PATCH',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (req, res, { id }) => {
-        withBody(req, res, (body) => {
-          const parsed = parseAdminJsonBody(body);
-          if (!parsed.ok) {
-            sendJson(res, 400, { error: parsed.error });
-            return;
-          }
-          const result = contactsService.updateContact(id, JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, result.message === 'Contact not found' ? 404 : 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 200, result);
-        });
+        handleContactUpdate(req, res, id);
       },
     },
     {

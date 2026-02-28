@@ -206,4 +206,46 @@ describe('SalienceDecay', () => {
 
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MEMORY_CONFIG.maintenanceIntervalMs);
   });
+
+  it('processes salience decay across multiple pages of active memories', () => {
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+
+    for (let i = 0; i < 5; i += 1) {
+      store.insertMemory(makeMemory({
+        id: `batch-${i}`,
+        type: 'episodic',
+        salience: 1.0,
+        lastAccessed: oneWeekAgo,
+      }), makeEmbedding());
+    }
+
+    pagedDecay.run();
+
+    const updated = store.getAllActiveMemories(100);
+    expect(updated).toHaveLength(5);
+    for (const memory of updated) {
+      expect(memory.salience).toBeCloseTo(0.5, 1);
+    }
+  });
+
+  it('uses paginated reads while decaying active memories', () => {
+    const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 5; i += 1) {
+      store.insertMemory(makeMemory({
+        id: `offset-${i}`,
+        type: 'episodic',
+        salience: 1.0,
+        lastAccessed: oneWeekAgo,
+      }), makeEmbedding());
+    }
+
+    const listSpy = vi.spyOn(store, 'listActiveMemories');
+    pagedDecay.run();
+
+    expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 0 });
+    expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 2 });
+    expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 4 });
+  });
 });

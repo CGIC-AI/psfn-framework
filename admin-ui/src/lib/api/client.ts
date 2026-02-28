@@ -62,6 +62,21 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(API_BASE + path, {
+    method: 'PUT',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    window.location.href = '/garden/login';
+    throw new ApiError(401, 'Unauthorized');
+  }
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  return res.json();
+}
+
 export async function apiDelete<T>(path: string): Promise<T> {
   const res = await fetch(API_BASE + path, {
     method: 'DELETE',

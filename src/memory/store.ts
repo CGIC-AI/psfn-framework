@@ -59,6 +59,13 @@ interface MemoryAbstractionLinkRow {
   reason: string | null;
 }
 
+interface MemoryLinkRow {
+  id1: string;
+  id2: string;
+  link_type: string;
+  created_at: number;
+}
+
 interface ContactProfileRow {
   contact_id: string;
   summary_text: string;
@@ -93,6 +100,13 @@ export interface MemoryDeleteVersion {
   deleteReason?: string;
   restoredAt?: number;
   restoredBy?: string;
+}
+
+export interface MemoryLink {
+  id1: string;
+  id2: string;
+  linkType: string;
+  createdAt: number;
 }
 
 export interface MemoryAbstractionLink {
@@ -148,6 +162,15 @@ function mapMemoryDeleteVersionRow(row: MemoryDeleteVersionRow): MemoryDeleteVer
     deleteReason: row.delete_reason ?? undefined,
     restoredAt: row.restored_at ?? undefined,
     restoredBy: row.restored_by ?? undefined,
+  };
+}
+
+function mapMemoryLinkRow(row: MemoryLinkRow): MemoryLink {
+  return {
+    id1: row.id1,
+    id2: row.id2,
+    linkType: row.link_type,
+    createdAt: row.created_at,
   };
 }
 
@@ -295,6 +318,16 @@ export class MemoryStore {
       CREATE INDEX IF NOT EXISTS idx_l2_abstraction_source ON l2_memory_abstraction_links(source_memory_id);
       CREATE INDEX IF NOT EXISTS idx_l2_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id);
 
+      CREATE TABLE IF NOT EXISTS memory_links (
+        id1 TEXT NOT NULL,
+        id2 TEXT NOT NULL,
+        link_type TEXT NOT NULL DEFAULT 'related',
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (id1, id2)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_links_id1 ON memory_links(id1);
+      CREATE INDEX IF NOT EXISTS idx_memory_links_id2 ON memory_links(id2);
+
       CREATE VIRTUAL TABLE IF NOT EXISTS l2_memory_embeddings USING vec0(
         memory_id TEXT PRIMARY KEY,
         embedding float[${this.embeddingDims}]
@@ -385,6 +418,19 @@ export class MemoryStore {
       );
     `);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_scratchpad_updated_at ON scratchpad_entries(updated_at DESC, created_at DESC)`);
+
+    // Create memory_links table for linking related memories
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_links (
+        id1 TEXT NOT NULL,
+        id2 TEXT NOT NULL,
+        link_type TEXT NOT NULL DEFAULT 'related',
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (id1, id2)
+      );
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_links_id1 ON memory_links(id1)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_links_id2 ON memory_links(id2)`);
   }
 
   // ── L2 Memories ──
@@ -814,6 +860,150 @@ export class MemoryStore {
     `);
     const rows = stmt.all(contactId, limit) as MemoryRow[];
     return rows.map(mapMemoryRow);
+  }
+
+  // ── Memory Links ──
+
+  linkMemories(id1: string, id2: string, linkType: string = 'related'): MemoryLink | null {
+    const normalizedId1 = id1.trim();
+    const normalizedId2 = id2.trim();
+    const normalizedType = linkType.trim() || 'related';
+    if (!normalizedId1 || !normalizedId2) return null;
+    if (normalizedId1 === normalizedId2) return null;
+
+    // Canonical ordering: alphabetically smaller id first
+    const [first, second] = normalizedId1 < normalizedId2
+      ? [normalizedId1, normalizedId2]
+      : [normalizedId2, normalizedId1];
+
+    const now = Date.now();
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO memory_links (id1, id2, link_type, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(first, second, normalizedType, now);
+
+    if (result.changes === 0) return null;
+    return { id1: first, id2: second, linkType: normalizedType, createdAt: now };
+  }
+
+  unlinkMemories(id1: string, id2: string): boolean {
+    const normalizedId1 = id1.trim();
+    const normalizedId2 = id2.trim();
+    if (!normalizedId1 || !normalizedId2) return false;
+
+    // Try both orderings in case caller doesn't know canonical order
+    const [first, second] = normalizedId1 < normalizedId2
+      ? [normalizedId1, normalizedId2]
+      : [normalizedId2, normalizedId1];
+
+    const result = this.db.prepare(`
+      DELETE FROM memory_links WHERE id1 = ? AND id2 = ?
+    `).run(first, second);
+    return result.changes > 0;
+  }
+
+  getLinkedMemories(id: string): MemoryLink[] {
+    const normalizedId = id.trim();
+    if (!normalizedId) return [];
+
+    const rows = this.db.prepare(`
+      SELECT id1, id2, link_type, created_at
+      FROM memory_links
+      WHERE id1 = ? OR id2 = ?
+      ORDER BY created_at DESC
+    `).all(normalizedId, normalizedId) as MemoryLinkRow[];
+
+    return rows.map(mapMemoryLinkRow);
+  }
+
+  // ── Bulk Operations ──
+
+  bulkDelete(ids: string[]): number {
+    if (!ids.length) return 0;
+    const now = Date.now();
+    const deletedBy = 'admin:bulk';
+
+    const selectStmt = this.db.prepare(`
+      SELECT * FROM l2_memories
+      WHERE id = ? AND deleted_at IS NULL
+      LIMIT 1
+    `);
+    const insertVersion = this.db.prepare(`
+      INSERT INTO l2_memory_delete_versions (
+        delete_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const updateStmt = this.db.prepare(`
+      UPDATE l2_memories
+      SET deleted_at = ?, deleted_by = ?, delete_reason = ?
+      WHERE id = ? AND deleted_at IS NULL
+    `);
+
+    let count = 0;
+    const transaction = this.db.transaction(() => {
+      for (const id of ids) {
+        const normalizedId = id.trim();
+        if (!normalizedId) continue;
+
+        const row = selectStmt.get(normalizedId) as MemoryRow | undefined;
+        if (!row) continue;
+
+        const snapshot = mapMemoryRow(row);
+        const deleteId = randomUUID();
+        insertVersion.run(
+          deleteId,
+          normalizedId,
+          JSON.stringify(snapshot),
+          now,
+          deletedBy,
+          'bulk delete',
+        );
+        const result = updateStmt.run(now, deletedBy, 'bulk delete', normalizedId);
+        if (result.changes > 0) count++;
+      }
+    });
+
+    transaction();
+    return count;
+  }
+
+  bulkUpdate(
+    ids: string[],
+    fields: Partial<Pick<PurrMemory, 'type' | 'sensitivity'>>,
+  ): number {
+    if (!ids.length) return 0;
+
+    const setClauses: string[] = [];
+    const setValues: unknown[] = [];
+
+    if (fields.type !== undefined) {
+      setClauses.push('type = ?');
+      setValues.push(fields.type);
+    }
+    if (fields.sensitivity !== undefined) {
+      setClauses.push('sensitivity = ?');
+      setValues.push(fields.sensitivity);
+    }
+
+    if (setClauses.length === 0) return 0;
+
+    const stmt = this.db.prepare(
+      `UPDATE l2_memories SET ${setClauses.join(', ')} WHERE id = ? AND deleted_at IS NULL`,
+    );
+
+    let count = 0;
+    const transaction = this.db.transaction(() => {
+      for (const id of ids) {
+        const normalizedId = id.trim();
+        if (!normalizedId) continue;
+        const result = stmt.run(...setValues, normalizedId);
+        if (result.changes > 0) count++;
+      }
+    });
+
+    transaction();
+    return count;
   }
 
   upsertContactProfile(profile: ContactProfileArtifact): void {

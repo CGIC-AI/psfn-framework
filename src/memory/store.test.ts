@@ -471,4 +471,196 @@ describe('MemoryStore', () => {
       legacyDb.close();
     });
   });
+
+  describe('Memory Links', () => {
+    it('links two memories and retrieves the link', () => {
+      store.insertMemory(makeMemory('m1', 'Fact A'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'Fact B'), makeEmbedding(2));
+
+      const link = store.linkMemories('m1', 'm2', 'related');
+      expect(link).toBeDefined();
+      expect(link!.linkType).toBe('related');
+
+      const links = store.getLinkedMemories('m1');
+      expect(links).toHaveLength(1);
+      expect(links[0].linkType).toBe('related');
+
+      // Should also be found from the other side
+      const links2 = store.getLinkedMemories('m2');
+      expect(links2).toHaveLength(1);
+    });
+
+    it('uses canonical ordering (smaller id first)', () => {
+      store.insertMemory(makeMemory('aaa', 'Fact A'), makeEmbedding(1));
+      store.insertMemory(makeMemory('zzz', 'Fact Z'), makeEmbedding(2));
+
+      const link = store.linkMemories('zzz', 'aaa');
+      expect(link).toBeDefined();
+      expect(link!.id1).toBe('aaa');
+      expect(link!.id2).toBe('zzz');
+    });
+
+    it('returns null for duplicate links', () => {
+      store.insertMemory(makeMemory('m1', 'A'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B'), makeEmbedding(2));
+
+      const first = store.linkMemories('m1', 'm2');
+      expect(first).toBeDefined();
+
+      const duplicate = store.linkMemories('m1', 'm2');
+      expect(duplicate).toBeNull();
+    });
+
+    it('returns null when linking a memory to itself', () => {
+      store.insertMemory(makeMemory('m1', 'Fact'), makeEmbedding(1));
+      const link = store.linkMemories('m1', 'm1');
+      expect(link).toBeNull();
+    });
+
+    it('returns null for empty ids', () => {
+      expect(store.linkMemories('', 'm2')).toBeNull();
+      expect(store.linkMemories('m1', '')).toBeNull();
+    });
+
+    it('unlinks memories', () => {
+      store.insertMemory(makeMemory('m1', 'A'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B'), makeEmbedding(2));
+
+      store.linkMemories('m1', 'm2');
+      expect(store.getLinkedMemories('m1')).toHaveLength(1);
+
+      const removed = store.unlinkMemories('m1', 'm2');
+      expect(removed).toBe(true);
+      expect(store.getLinkedMemories('m1')).toHaveLength(0);
+    });
+
+    it('unlink returns false for non-existent link', () => {
+      expect(store.unlinkMemories('m1', 'm2')).toBe(false);
+    });
+
+    it('unlink works regardless of id order', () => {
+      store.insertMemory(makeMemory('m1', 'A'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B'), makeEmbedding(2));
+
+      store.linkMemories('m1', 'm2');
+      // Unlink with reversed order
+      const removed = store.unlinkMemories('m2', 'm1');
+      expect(removed).toBe(true);
+    });
+
+    it('returns empty array for memory with no links', () => {
+      store.insertMemory(makeMemory('m1', 'Alone'), makeEmbedding(1));
+      expect(store.getLinkedMemories('m1')).toHaveLength(0);
+    });
+
+    it('defaults link type to related', () => {
+      store.insertMemory(makeMemory('m1', 'A'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B'), makeEmbedding(2));
+
+      const link = store.linkMemories('m1', 'm2');
+      expect(link!.linkType).toBe('related');
+    });
+
+    it('supports custom link types', () => {
+      store.insertMemory(makeMemory('m1', 'A'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B'), makeEmbedding(2));
+
+      const link = store.linkMemories('m1', 'm2', 'supersedes');
+      expect(link!.linkType).toBe('supersedes');
+    });
+  });
+
+  describe('Bulk Operations', () => {
+    it('bulkDelete soft-deletes multiple memories with snapshots', () => {
+      store.insertMemory(makeMemory('m1', 'First'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'Second'), makeEmbedding(2));
+      store.insertMemory(makeMemory('m3', 'Third'), makeEmbedding(3));
+
+      const count = store.bulkDelete(['m1', 'm3']);
+      expect(count).toBe(2);
+
+      const active = store.getAllActiveMemories();
+      expect(active).toHaveLength(1);
+      expect(active[0].id).toBe('m2');
+
+      // Verify m1 has a delete version (snapshot preserved)
+      const m1 = store.getById('m1');
+      expect(m1?.deletedAt).toBeDefined();
+      expect(m1?.deletedBy).toBe('admin:bulk');
+    });
+
+    it('bulkDelete returns 0 for empty array', () => {
+      expect(store.bulkDelete([])).toBe(0);
+    });
+
+    it('bulkDelete skips already-deleted memories', () => {
+      store.insertMemory(makeMemory('m1', 'First'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'Second'), makeEmbedding(2));
+
+      store.softDeleteMemory('m1', { deletedBy: 'test' });
+
+      const count = store.bulkDelete(['m1', 'm2']);
+      expect(count).toBe(1);
+    });
+
+    it('bulkDelete skips non-existent ids without error', () => {
+      store.insertMemory(makeMemory('m1', 'First'), makeEmbedding(1));
+      const count = store.bulkDelete(['m1', 'nonexistent']);
+      expect(count).toBe(1);
+    });
+
+    it('bulkUpdate changes type for multiple memories', () => {
+      store.insertMemory(makeMemory('m1', 'A', { type: 'semantic' }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B', { type: 'semantic' }), makeEmbedding(2));
+      store.insertMemory(makeMemory('m3', 'C', { type: 'emotional' }), makeEmbedding(3));
+
+      const count = store.bulkUpdate(['m1', 'm2'], { type: 'episodic' });
+      expect(count).toBe(2);
+
+      expect(store.getById('m1')?.type).toBe('episodic');
+      expect(store.getById('m2')?.type).toBe('episodic');
+      expect(store.getById('m3')?.type).toBe('emotional'); // untouched
+    });
+
+    it('bulkUpdate changes sensitivity for multiple memories', () => {
+      store.insertMemory(makeMemory('m1', 'A', { sensitivity: 'personal' }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B', { sensitivity: 'personal' }), makeEmbedding(2));
+
+      const count = store.bulkUpdate(['m1', 'm2'], { sensitivity: 'confidential' });
+      expect(count).toBe(2);
+
+      expect(store.getById('m1')?.sensitivity).toBe('confidential');
+      expect(store.getById('m2')?.sensitivity).toBe('confidential');
+    });
+
+    it('bulkUpdate returns 0 for empty ids', () => {
+      expect(store.bulkUpdate([], { type: 'semantic' })).toBe(0);
+    });
+
+    it('bulkUpdate returns 0 for empty fields', () => {
+      store.insertMemory(makeMemory('m1', 'A'), makeEmbedding(1));
+      expect(store.bulkUpdate(['m1'], {})).toBe(0);
+    });
+
+    it('bulkUpdate skips soft-deleted memories', () => {
+      store.insertMemory(makeMemory('m1', 'A'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B'), makeEmbedding(2));
+
+      store.softDeleteMemory('m1', { deletedBy: 'test' });
+
+      const count = store.bulkUpdate(['m1', 'm2'], { type: 'episodic' });
+      expect(count).toBe(1);
+    });
+
+    it('bulkUpdate can update both type and sensitivity at once', () => {
+      store.insertMemory(makeMemory('m1', 'A', { type: 'semantic', sensitivity: 'personal' }), makeEmbedding(1));
+
+      const count = store.bulkUpdate(['m1'], { type: 'relational', sensitivity: 'intimate' });
+      expect(count).toBe(1);
+
+      const mem = store.getById('m1');
+      expect(mem?.type).toBe('relational');
+      expect(mem?.sensitivity).toBe('intimate');
+    });
+  });
 });

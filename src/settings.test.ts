@@ -66,6 +66,15 @@ function makeConfig(): SubstrateConfig {
     },
     retryMaxAttempts: 3,
     retryBaseDelayMs: 2000,
+    ttsProvider: 'elevenlabs',
+    deepgramApiKey: 'deepgram-key',
+    deepgramModel: 'nova-3',
+    elevenLabsApiKey: 'elevenlabs-key',
+    elevenLabsVoiceId: 'voice-id',
+    elevenLabsModelId: 'eleven_turbo_v2_5',
+    echoTtsUrl: 'http://127.0.0.1:8001/v1/audio/speech',
+    echoTtsVoice: 'echo-default',
+    echoTtsPreset: 'normal',
   };
 }
 
@@ -432,6 +441,34 @@ describe('settings', () => {
         memoryRetrievalMinTokens: 800,
       });
     });
+
+    it('applies explicit voice provider settings including disabled providers', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        ttsProvider: 'disabled',
+        sttProvider: 'disabled',
+      });
+
+      expect((config as SubstrateConfig & { ttsProvider?: string }).ttsProvider).toBe('disabled');
+      expect((config as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('disabled');
+    });
+
+    it('clears voice override fields when empty strings are provided', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        voiceId: '',
+        echoTtsUrl: '',
+        echoTtsVoice: '',
+        echoTtsPreset: '',
+        deepgramModel: '',
+      });
+
+      expect(config.elevenLabsVoiceId).toBeUndefined();
+      expect(config.echoTtsUrl).toBeUndefined();
+      expect(config.echoTtsVoice).toBeUndefined();
+      expect(config.echoTtsPreset).toBeUndefined();
+      expect(config.deepgramModel).toBeUndefined();
+    });
   });
 
   describe('round-trip', () => {
@@ -465,6 +502,55 @@ describe('settings', () => {
       expect(config.primaryMaxTokens).toBe(5000);
       expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
       expect(config.extractionMaxTokens).toBe(1200);
+    });
+
+    it('save → load → apply preserves explicitly cleared voice fields', () => {
+      saveSettings(tempDir, {
+        ttsProvider: 'disabled',
+        sttProvider: 'disabled',
+        voiceId: '',
+        echoTtsUrl: '',
+        echoTtsVoice: '',
+        echoTtsPreset: '',
+        deepgramModel: '',
+      });
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.ttsProvider).toBe('disabled');
+      expect(loaded.sttProvider).toBe('disabled');
+      expect(loaded.voiceId).toBe('');
+      expect(loaded.echoTtsUrl).toBe('');
+      expect(loaded.echoTtsVoice).toBe('');
+      expect(loaded.echoTtsPreset).toBe('');
+      expect(loaded.deepgramModel).toBe('');
+
+      const config = makeConfig();
+      applySettings(config, loaded);
+      expect((config as SubstrateConfig & { ttsProvider?: string }).ttsProvider).toBe('disabled');
+      expect((config as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('disabled');
+      expect(config.elevenLabsVoiceId).toBeUndefined();
+      expect(config.echoTtsUrl).toBeUndefined();
+      expect(config.echoTtsVoice).toBeUndefined();
+      expect(config.echoTtsPreset).toBeUndefined();
+      expect(config.deepgramModel).toBeUndefined();
+    });
+  });
+
+  describe('voice settings normalization', () => {
+    it('preserves empty voice strings as explicit clear values', () => {
+      const normalized = normalizeEditableSettings({
+        voiceId: ' ',
+        echoTtsUrl: ' ',
+        echoTtsVoice: ' ',
+        echoTtsPreset: ' ',
+        deepgramModel: ' ',
+      });
+
+      expect(normalized.voiceId).toBe('');
+      expect(normalized.echoTtsUrl).toBe('');
+      expect(normalized.echoTtsVoice).toBe('');
+      expect(normalized.echoTtsPreset).toBe('');
+      expect(normalized.deepgramModel).toBe('');
     });
   });
 
@@ -702,6 +788,22 @@ describe('settings', () => {
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('thinkMaxSubQueries')).toBe(true);
       expect(isRuntimeSettingKey('discordToken')).toBe(false);
+    });
+
+    it('honors explicit sttProvider override before api-key fallback in snapshot', () => {
+      const config = makeConfig();
+      const runtimeConfig = config as SubstrateConfig & { sttProvider?: 'deepgram' | 'disabled' };
+
+      runtimeConfig.sttProvider = 'disabled';
+      expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('disabled');
+
+      runtimeConfig.sttProvider = 'deepgram';
+      expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('deepgram');
+
+      runtimeConfig.sttProvider = undefined;
+      expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('deepgram');
+      config.deepgramApiKey = '';
+      expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('disabled');
     });
 
     it('includes MoA settings in snapshot with defaults', () => {

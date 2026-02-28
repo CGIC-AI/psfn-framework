@@ -256,6 +256,8 @@ function toBoolean(value: unknown): boolean | undefined {
 
 const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
 const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
+type RuntimeVoiceTtsProvider = 'elevenlabs' | 'echo' | 'disabled';
+type RuntimeVoiceSttProvider = 'deepgram' | 'disabled';
 
 function toTtsProvider(value: unknown): 'elevenlabs' | 'echo' | 'disabled' | undefined {
   if (typeof value !== 'string') return undefined;
@@ -269,6 +271,18 @@ function toSttProvider(value: unknown): 'deepgram' | 'disabled' | undefined {
   const trimmed = value.trim().toLowerCase();
   if (!STT_PROVIDER_VALUES.has(trimmed)) return undefined;
   return trimmed as 'deepgram' | 'disabled';
+}
+
+function resolveRuntimeTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
+  const provider = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
+  if (provider === 'elevenlabs' || provider === 'echo' || provider === 'disabled') return provider;
+  return 'disabled';
+}
+
+function resolveRuntimeSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
+  const configured = (config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider }).sttProvider;
+  if (configured === 'deepgram' || configured === 'disabled') return configured;
+  return config.deepgramApiKey ? 'deepgram' : 'disabled';
 }
 
 function toImportProcessingRouteMode(value: unknown): ImportProcessingRouteMode | undefined {
@@ -617,27 +631,22 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.ttsProvider = toTtsProvider(settings.ttsProvider) ?? 'disabled';
   }
   if ('voiceId' in settings) {
-    const trimmed = typeof settings.voiceId === 'string' ? settings.voiceId.trim() : '';
-    normalized.voiceId = trimmed || undefined;
+    normalized.voiceId = typeof settings.voiceId === 'string' ? settings.voiceId.trim() : '';
   }
   if ('echoTtsUrl' in settings) {
-    const trimmed = typeof settings.echoTtsUrl === 'string' ? settings.echoTtsUrl.trim() : '';
-    normalized.echoTtsUrl = trimmed || undefined;
+    normalized.echoTtsUrl = typeof settings.echoTtsUrl === 'string' ? settings.echoTtsUrl.trim() : '';
   }
   if ('echoTtsVoice' in settings) {
-    const trimmed = typeof settings.echoTtsVoice === 'string' ? settings.echoTtsVoice.trim() : '';
-    normalized.echoTtsVoice = trimmed || undefined;
+    normalized.echoTtsVoice = typeof settings.echoTtsVoice === 'string' ? settings.echoTtsVoice.trim() : '';
   }
   if ('echoTtsPreset' in settings) {
-    const trimmed = typeof settings.echoTtsPreset === 'string' ? settings.echoTtsPreset.trim() : '';
-    normalized.echoTtsPreset = trimmed || undefined;
+    normalized.echoTtsPreset = typeof settings.echoTtsPreset === 'string' ? settings.echoTtsPreset.trim() : '';
   }
   if ('sttProvider' in settings) {
     normalized.sttProvider = toSttProvider(settings.sttProvider) ?? 'disabled';
   }
   if ('deepgramModel' in settings) {
-    const trimmed = typeof settings.deepgramModel === 'string' ? settings.deepgramModel.trim() : '';
-    normalized.deepgramModel = trimmed || undefined;
+    normalized.deepgramModel = typeof settings.deepgramModel === 'string' ? settings.deepgramModel.trim() : '';
   }
 
   // Channels
@@ -895,12 +904,12 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
     capabilityTier: config.capabilityTier ?? 'nursery',
     // Voice / TTS
-    ttsProvider: config.ttsProvider ?? 'disabled',
+    ttsProvider: resolveRuntimeTtsProvider(config),
     voiceId: config.elevenLabsVoiceId ?? '',
     echoTtsUrl: config.echoTtsUrl ?? '',
     echoTtsVoice: config.echoTtsVoice ?? '',
     echoTtsPreset: config.echoTtsPreset ?? '',
-    sttProvider: config.deepgramApiKey ? 'deepgram' : 'disabled',
+    sttProvider: resolveRuntimeSttProvider(config),
     deepgramModel: config.deepgramModel ?? 'nova-3',
     // Channels
     discordEnabled: Boolean(config.discordToken),
@@ -1029,31 +1038,41 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   // Voice / TTS
   if ('ttsProvider' in settings) {
     const provider = settings.ttsProvider;
-    if (provider === 'elevenlabs' || provider === 'echo') {
-      config.ttsProvider = provider;
+    const voiceConfig = config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider };
+    if (provider === 'elevenlabs' || provider === 'echo' || provider === 'disabled') {
+      voiceConfig.ttsProvider = provider;
     } else {
-      config.ttsProvider = undefined;
+      voiceConfig.ttsProvider = undefined;
     }
   }
   if ('voiceId' in settings) {
     const trimmed = settings.voiceId?.trim() ?? '';
-    if (trimmed) config.elevenLabsVoiceId = trimmed;
+    config.elevenLabsVoiceId = trimmed || undefined;
   }
   if ('echoTtsUrl' in settings) {
     const trimmed = settings.echoTtsUrl?.trim() ?? '';
-    if (trimmed) config.echoTtsUrl = trimmed;
+    config.echoTtsUrl = trimmed || undefined;
   }
   if ('echoTtsVoice' in settings) {
     const trimmed = settings.echoTtsVoice?.trim() ?? '';
-    if (trimmed) config.echoTtsVoice = trimmed;
+    config.echoTtsVoice = trimmed || undefined;
   }
   if ('echoTtsPreset' in settings) {
     const trimmed = settings.echoTtsPreset?.trim() ?? '';
-    if (trimmed) config.echoTtsPreset = trimmed;
+    config.echoTtsPreset = trimmed || undefined;
+  }
+  if ('sttProvider' in settings) {
+    const provider = settings.sttProvider;
+    const voiceConfig = config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider };
+    if (provider === 'deepgram' || provider === 'disabled') {
+      voiceConfig.sttProvider = provider;
+    } else {
+      voiceConfig.sttProvider = undefined;
+    }
   }
   if ('deepgramModel' in settings) {
     const trimmed = settings.deepgramModel?.trim() ?? '';
-    if (trimmed) config.deepgramModel = trimmed;
+    config.deepgramModel = trimmed || undefined;
   }
 
   // Channels

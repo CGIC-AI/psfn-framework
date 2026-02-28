@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/
+psfn/
 .env
 proxy/.env
 *.db
@@ -13,8 +14,7 @@ certs/
 .bv/
 
 # Internal planning/audit artifacts (non-product docs)
-PSFN_*_22626.md
-ADMIN_UX_MIGRATION_RECC.md
+working_docs/
 history/
 
 # Beads transient lock/socket files (keep .beads/issues.jsonl tracked)

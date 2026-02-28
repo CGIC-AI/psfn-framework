@@ -418,6 +418,64 @@ export function buildAdminApiRoutes(options: {
       },
     },
     {
+      method: 'POST',
+      match: exactPath('/api/admin/contacts'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = contactsService.createContact(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 201, result);
+        });
+      },
+    },
+    // Sub-path routes MUST come before generic prefixed param route for contacts
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/contacts/', 'id', '/merge'),
+      handle: (req, res, { id }) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = contactsService.mergeContacts(id, JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/contacts/', 'id', '/unlink'),
+      handle: (req, res, { id }) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
       method: 'GET',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }) => {
@@ -427,6 +485,18 @@ export function buildAdminApiRoutes(options: {
           return;
         }
         sendJson(res, 200, detail);
+      },
+    },
+    {
+      method: 'DELETE',
+      match: prefixedParamPath('/api/admin/contacts/', 'id'),
+      handle: (_req, res, { id }) => {
+        const result = contactsService.deleteContact(id);
+        if (!result.ok) {
+          sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+          return;
+        }
+        sendJson(res, 200, result);
       },
     },
     {

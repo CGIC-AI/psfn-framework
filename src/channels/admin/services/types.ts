@@ -223,6 +223,10 @@ export interface AdminContactsService {
   listContacts(params?: URLSearchParams): AdminContactListData;
   getContactDetail(contactId: string): AdminContactDetailData | null;
   updateContact(contactId: string, body: string): ContactUpdateResult;
+  createContact(body: string): ContactUpdateResult;
+  deleteContact(contactId: string): ContactUpdateResult;
+  mergeContacts(targetId: string, body: string): ContactUpdateResult;
+  unlinkChannelIdentity(contactId: string, body: string): ContactUpdateResult;
 }
 
 export interface AdminPromptListData {

@@ -749,4 +749,60 @@ describe('ContactStore', () => {
       expect(contact.trustLevel).toBe('regular');
     });
   });
+
+  describe('deleteContact', () => {
+    it('deletes a regular contact and its channel links', () => {
+      const contact = store.upsert({ displayName: 'Deleteable' });
+      store.linkChannelIdentity(contact.id, 'discord', '999');
+      expect(store.getById(contact.id)).toBeDefined();
+
+      const result = store.deleteContact(contact.id);
+      expect(result).toBe(true);
+      expect(store.getById(contact.id)).toBeUndefined();
+
+      // Channel identity should also be gone
+      expect(store.getByChannelIdentity('discord', '999')).toBeUndefined();
+    });
+
+    it('refuses to delete the primary contact', () => {
+      const primary = store.upsert({
+        displayName: 'Primary',
+        discordUserId: PRIMARY_USER_ID,
+      });
+      expect(primary.trustLevel).toBe('primary');
+
+      const result = store.deleteContact(primary.id);
+      expect(result).toBe(false);
+      expect(store.getById(primary.id)).toBeDefined();
+    });
+
+    it('returns false for non-existent contact', () => {
+      expect(store.deleteContact('no-such-id')).toBe(false);
+    });
+  });
+
+  describe('unlinkChannelIdentity', () => {
+    it('removes a specific channel identity link', () => {
+      const contact = store.upsert({ displayName: 'Multi' });
+      store.linkChannelIdentity(contact.id, 'api', '111');
+      store.linkChannelIdentity(contact.id, 'telegram', '222');
+
+      const result = store.unlinkChannelIdentity(contact.id, 'api', '111');
+      expect(result).toBe(true);
+
+      // API link gone
+      expect(store.getByChannelIdentity('api', '111')).toBeUndefined();
+      // Telegram link still present
+      expect(store.getByChannelIdentity('telegram', '222')).toBeDefined();
+    });
+
+    it('returns false for non-existent contact', () => {
+      expect(store.unlinkChannelIdentity('no-such-id', 'discord', '111')).toBe(false);
+    });
+
+    it('returns false when channel identity does not exist on contact', () => {
+      const contact = store.upsert({ displayName: 'Solo' });
+      expect(store.unlinkChannelIdentity(contact.id, 'discord', 'nope')).toBe(false);
+    });
+  });
 });

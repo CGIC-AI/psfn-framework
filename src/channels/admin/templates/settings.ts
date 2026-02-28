@@ -387,6 +387,7 @@ export function settingsPage(
   const openRouterProviderOrderText = (config.openRouterProviderOrder ?? []).join(', ');
   const importLocalEndpointUrl = config.importProcessingLocalEndpointUrl ?? '';
   const importLocalModel = config.importProcessingLocalModel ?? '';
+  const chatApiBaseUrl = (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl ?? '';
   const webFetchDomainAllowlistText = (config.webFetchDomainAllowlist ?? []).join(', ');
   const webFetchLocalCrawlerHostAllowlistText = (config.webFetchLocalCrawlerHostAllowlist ?? []).join(', ');
   const webFetchLocalCrawlerDomainAllowlistText = (config.webFetchLocalCrawlerDomainAllowlist ?? []).join(', ');
@@ -575,6 +576,17 @@ export function settingsPage(
               <option value="false"${!importStrictPolicyEnabled ? ' selected' : ''}>Disabled</option>
               <option value="true"${importStrictPolicyEnabled ? ' selected' : ''}>Enabled (ZDR required)</option>
             </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Garden Chat API Base URL Override (optional)</label>
+            <input
+              type="text"
+              name="chatApiBaseUrl"
+              value="${escapeHtml(chatApiBaseUrl)}"
+              placeholder="https://api.example.com"
+            >
           </div>
         </div>
         <div class="form-row">

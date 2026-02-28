@@ -28,6 +28,7 @@
     "e2e": "tsx src/e2e-test.ts",
     "e2e:voice": "tsx src/e2e-voice-roundtrip.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
+    "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
     "walkthrough": "tsx src/e2e-walkthrough.ts",
     "lint": "eslint \"src/**/*.ts\"",
     "garden:dev": "cd admin-ui && npm run dev",
@@ -52,6 +53,10 @@
     "uuid": "^11.0.0",
     "winston": "^3.19.0",
     "ws": "^8.19.0"
+  },
+  "optionalDependencies": {
+    "@discordjs/opus": "^0.10.0",
+    "opusscript": "^0.0.8"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",

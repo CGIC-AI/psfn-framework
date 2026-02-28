@@ -39,6 +39,7 @@ import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
+import { AdminSchedulerService } from './services/scheduler-service.js';
 import { ValuesJournalStore } from '../../values/store.js';
 
 const log = createComponentLogger('AdminServer');
@@ -138,6 +139,7 @@ export class AdminServer implements Lifecycle {
   private identityService: AdminIdentityDataService;
   private promptsService: AdminPromptsDataService;
   private valuesJournal!: ValuesJournalStore;
+  private schedulerService!: AdminSchedulerService;
   private scheduler!: import('../../scheduler/scheduler.js').Scheduler;
   private skillsRuntimeRef!: import('../../skills/runtime.js').SkillsRuntime | null;
   private confirmationQueueApiRef!: import('./types.js').ConfirmationQueueAdminApi | null;
@@ -222,6 +224,7 @@ export class AdminServer implements Lifecycle {
     });
     this.valuesJournal = new ValuesJournalStore(join(config.config.dataDir, 'values.jsonl'));
     this.scheduler = config.scheduler;
+    this.schedulerService = new AdminSchedulerService(config.scheduler, config.config.dataDir);
     this.skillsRuntimeRef = config.skillsRuntime ?? null;
     this.confirmationQueueApiRef = config.confirmationQueueApi ?? null;
     this.routes = this.buildRoutes();
@@ -1189,7 +1192,7 @@ export class AdminServer implements Lifecycle {
         settingsService: this.settingsService,
         identityService: this.identityService,
         promptsService: this.promptsService,
-        scheduler: this.scheduler,
+        scheduler: this.schedulerService,
         skillsRuntime: this.skillsRuntimeRef,
         confirmationQueueApi: this.confirmationQueueApiRef,
         valuesJournal: this.valuesJournal,

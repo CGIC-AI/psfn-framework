@@ -57,6 +57,7 @@ import {
   writeLastActiveSession,
 } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
+import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
@@ -73,6 +74,7 @@ import {
   wireCharacterCardRuntime,
   wireStaticPromptRegistry,
   wireSettingsRuntime,
+  wireSessionToolsRuntime,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
@@ -375,6 +377,7 @@ async function main(): Promise<void> {
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config);
+  wireSessionToolsRuntime(agentLoop, sessionManager, config.dataDir);
 
   // Contact store + tools — trust-gated privacy system
   const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
@@ -807,9 +810,10 @@ async function main(): Promise<void> {
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
 
   gateway.onHandleMessage(async (message: SubstrateMessage) => {
+    const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
     writeLastActiveSession(config.dataDir, {
-      sessionId: message.channelId,
-      channelType: message.channelType,
+      sessionId,
+      channelType: inferSessionChannelType(sessionId) ?? message.channelType,
       timestamp: message.timestamp instanceof Date
         ? message.timestamp.getTime()
         : Date.now(),
@@ -899,9 +903,10 @@ async function main(): Promise<void> {
     }
 
     // Track last-active channel for lifecycle notifications
+    const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
     writeLastActiveSession(config.dataDir, {
-      sessionId: message.channelId,
-      channelType: message.channelType,
+      sessionId,
+      channelType: inferSessionChannelType(sessionId) ?? message.channelType,
       timestamp: message.timestamp instanceof Date
         ? message.timestamp.getTime()
         : Date.now(),

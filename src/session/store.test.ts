@@ -421,6 +421,40 @@ describe('SessionStore', () => {
     });
   });
 
+  it('lists sessions by recent activity with metadata', () => {
+    store.append({
+      channelId: 'api:b-session',
+      role: 'assistant',
+      content: 'Second session latest',
+      timestamp: 2_000,
+    });
+    store.append({
+      channelId: 'api:a-session',
+      role: 'user',
+      content: 'First session latest',
+      authorName: 'Alice',
+      timestamp: 2_000,
+    });
+    store.append({
+      channelId: 'api:c-session',
+      role: 'assistant',
+      content: 'Older session',
+      timestamp: 1_000,
+    });
+
+    const sessions = store.listSessionsByRecentActivity(10);
+    expect(sessions.map(session => session.sessionId)).toEqual([
+      'api:a-session',
+      'api:b-session',
+      'api:c-session',
+    ]);
+    expect(sessions[0].messageCount).toBe(1);
+    expect(sessions[0].lastActivityAt).toBe(2_000);
+    expect(sessions[0].lastRole).toBe('user');
+    expect(sessions[0].lastAuthorName).toBe('Alice');
+    expect(sessions[0].lastMessagePreview).toBe('First session latest');
+  });
+
   it('returns null for latest session when no messages exist', () => {
     expect(store.getLatestSessionByTimestamp()).toBeNull();
   });

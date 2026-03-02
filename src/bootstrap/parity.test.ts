@@ -6,7 +6,28 @@ import { EventBus } from '../event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import { wireHeartbeatRuntime } from './parity.js';
+import { wireHeartbeatRuntime, wireSessionToolsRuntime } from './parity.js';
+
+describe('wireSessionToolsRuntime', () => {
+  it('registers session tools as extended tools', () => {
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const sessionManager = {
+      listRecentSessions: vi.fn(() => []),
+      getSessionActivity: vi.fn(() => null),
+      setActiveContextSession: vi.fn(),
+      getActiveContextSession: vi.fn(() => null),
+    } as any;
+
+    wireSessionToolsRuntime(target, sessionManager, '/tmp/test-data');
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    expect(calls).toHaveLength(2);
+    expect(calls.map(([tool]) => tool.name).sort()).toEqual(['session_list', 'session_resume']);
+    expect(calls.every(([, category]) => category === 'extended')).toBe(true);
+  });
+});
 
 describe('wireHeartbeatRuntime', () => {
   let tempDir: string;

@@ -32,6 +32,29 @@ export interface EventMap {
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage };
   'agent.stream.delta': { channelId: string; text: string };
   'agent.stream.thinking': { channelId: string; text: string };
+  'agent.toolcall.start': {
+    channelId: string;
+    contentIndex: number;
+    toolCallId?: string;
+    toolName?: string;
+    shardId?: string;
+  };
+  'agent.toolcall.delta': {
+    channelId: string;
+    contentIndex: number;
+    delta: string;
+    toolCallId?: string;
+    toolName?: string;
+    shardId?: string;
+  };
+  'agent.toolcall.end': {
+    channelId: string;
+    contentIndex: number;
+    toolCallId: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    shardId?: string;
+  };
   'agent.tool.start': { channelId: string; toolCallId: string; toolName: string; shardId?: string };
   'agent.tool.end': { channelId: string; toolCallId: string; toolName: string; isError: boolean; shardId?: string };
   'agent.compaction.start': {

@@ -237,6 +237,7 @@ export interface RuntimeConfigHooks {
   refreshModels?: () => void;
   refreshCapabilities?: () => void;
   invalidatePromptPrefixCache?: () => void;
+  persistPromotedExtendedTools?: (toolNames: readonly string[]) => void;
 }
 
 // ── Configuration ──
@@ -244,6 +245,7 @@ export interface RuntimeConfigHooks {
 export type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous' | 'custom';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
+export const PROMOTED_EXTENDED_TOOL_SLOTS_MAX = 4;
 
 export interface WyomingShardRoutingConfig {
   enabled: boolean;
@@ -299,6 +301,7 @@ export interface SubstrateConfig {
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
   runtimeHooks?: RuntimeConfigHooks;
+  promotedExtendedTools?: string[];
   capabilityTier?: CapabilityTier;
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;

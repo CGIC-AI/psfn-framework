@@ -27,7 +27,7 @@ import type { ChannelAdapter } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, applySettings, type EditableSettings } from './settings.js';
+import { loadSettings, saveSettings, applySettings, type EditableSettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
@@ -81,6 +81,7 @@ import {
   wirePromptRuntime,
   wireCharacterCardRuntime,
   wireStaticPromptRegistry,
+  wireSettingsRuntime,
   wireSessionToolsRuntime,
   buildReplConfig,
   wireHeartbeatRuntime,
@@ -163,6 +164,20 @@ export function createEmbeddingDimensionMismatchFatalMessage(
   const mismatchWarning = createEmbeddingDimensionMismatchWarning(result);
   if (!mismatchWarning) return null;
   return `${mismatchWarning.message}: configured=${mismatchWarning.configuredDims}, stored=${mismatchWarning.storedDims}. ${mismatchWarning.recommendation}`;
+}
+
+function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
+  const existingHooks = config.runtimeHooks ?? {};
+  config.runtimeHooks = {
+    ...existingHooks,
+    persistPromotedExtendedTools: (toolNames) => {
+      const current = loadSettings(config.dataDir);
+      saveSettings(config.dataDir, {
+        ...current,
+        promotedExtendedTools: [...toolNames],
+      });
+    },
+  };
 }
 
 export class SubstrateRuntime implements Lifecycle {
@@ -315,6 +330,7 @@ export class SubstrateRuntime implements Lifecycle {
     // Load persisted settings and apply over env defaults
     const savedSettings = loadSettings(this.config.dataDir);
     applySettings(this.config, savedSettings);
+    installPromotedToolsPersistenceHook(this.config);
     const modelsConfig = loadModelsConfig(this.config.dataDir, {
       defaultContextWindow: this.config.defaultContextWindow,
     });
@@ -477,6 +493,7 @@ export class SubstrateRuntime implements Lifecycle {
       getCapabilityTier: () => this.capabilityRuntime.getTier(),
       confirmationQueue: cardProposalQueue,
     });
+    wireSettingsRuntime(this.agentLoop, this.config);
     wireSessionToolsRuntime(this.agentLoop, this.sessionManager, this.config.dataDir);
 
     // Contact store + tools — trust-gated privacy system

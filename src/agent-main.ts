@@ -25,7 +25,7 @@ import {
 } from './channels/api/active-health-probe.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, applySettings } from './settings.js';
+import { loadSettings, saveSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
@@ -119,6 +119,20 @@ interface WyomingDelegationDecision {
 
 function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
+}
+
+function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
+  const existingHooks = config.runtimeHooks ?? {};
+  config.runtimeHooks = {
+    ...existingHooks,
+    persistPromotedExtendedTools: (toolNames) => {
+      const current = loadSettings(config.dataDir);
+      saveSettings(config.dataDir, {
+        ...current,
+        promotedExtendedTools: [...toolNames],
+      });
+    },
+  };
 }
 
 function resolveWyomingRoutingMetadata(message: SubstrateMessage): WyomingRoutingMetadata | undefined {
@@ -217,6 +231,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const savedSettings = loadSettings(config.dataDir);
   applySettings(config, savedSettings);
+  installPromotedToolsPersistenceHook(config);
   const modelsConfig = loadModelsConfig(config.dataDir, {
     defaultContextWindow: config.defaultContextWindow,
   });

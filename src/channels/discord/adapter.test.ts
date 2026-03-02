@@ -92,6 +92,15 @@ interface MockDiscordMessage {
   };
 }
 
+interface MockDiscordAttachment {
+  id: string;
+  name?: string;
+  url: string;
+  proxyURL?: string;
+  contentType?: string;
+  size?: number;
+}
+
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
     primaryModel: 'test',
@@ -388,10 +397,14 @@ function makeDiscordIncomingMessage(
     authorId?: string;
     authorDisplayName?: string;
     bot?: boolean;
+    attachments?: MockDiscordAttachment[];
   },
 ) {
   const guildId = overrides?.guildId ?? null;
   const mentioned = overrides?.mentioned ?? false;
+  const attachments = new Map(
+    (overrides?.attachments ?? []).map((attachment) => [attachment.id, attachment]),
+  );
 
   return {
     id: overrides?.id ?? 'msg-1',
@@ -407,6 +420,7 @@ function makeDiscordIncomingMessage(
       displayName: overrides?.authorDisplayName ?? 'User',
     },
     mentions: { has: () => mentioned },
+    attachments,
     reply: vi.fn(async () => {}),
   };
 }
@@ -487,6 +501,60 @@ describe('DiscordAdapter DM routing', () => {
       content: 'hello from dm',
     }));
     expect(interactive.sent).toContain('dm reply');
+  });
+
+  it('extracts image attachments into substrate messages', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-channel-attachments';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'image received',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-image-1',
+        content: 'check this image',
+        attachments: [
+          {
+            id: 'att-image-1',
+            name: 'cat.png',
+            url: 'https://cdn.discordapp.com/attachments/a/b/cat.png',
+            contentType: 'image/png',
+            size: 64_000,
+          },
+          {
+            id: 'att-doc-1',
+            name: 'notes.txt',
+            url: 'https://cdn.discordapp.com/attachments/a/b/notes.txt',
+            contentType: 'text/plain',
+            size: 1_024,
+          },
+        ],
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      channelId,
+      attachments: [
+        {
+          url: 'https://cdn.discordapp.com/attachments/a/b/cat.png',
+          contentType: 'image/png',
+          name: 'cat.png',
+        },
+      ],
+    }));
   });
 
   it('requires mentions in guild channels and strips bot mention text', async () => {

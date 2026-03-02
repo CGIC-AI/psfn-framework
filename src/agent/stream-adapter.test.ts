@@ -75,6 +75,18 @@ describe('resolveModel', () => {
     expect(model.id).toBe('deepseek/deepseek-v3.2');
   });
 
+  it('resolves vision model from roster', () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const model = resolveModel(config, 'vision');
+    expect(model.id).toBe('vision-model');
+  });
+
   it('falls back to chat model for unconfigured purposes', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({ modelRoster: {
@@ -90,6 +102,15 @@ describe('resolveModel', () => {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
     } });
     const model = resolveModel(config, 'background');
+    expect(model.id).toBe('z-ai/glm-5');
+  });
+
+  it('falls back to chat model when vision purpose is unconfigured', () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({ modelRoster: {
+      chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+    } });
+    const model = resolveModel(config, 'vision');
     expect(model.id).toBe('z-ai/glm-5');
   });
 

@@ -150,6 +150,30 @@ describe('embedding providers', () => {
     );
   });
 
+  it('copies transformer tensor rows so returned vectors are detached from backing buffer', async () => {
+    process.env.EMBEDDING_PROVIDER = 'transformers';
+    process.env.TRANSFORMERS_MODEL = 'Xenova/all-MiniLM-L6-v2';
+    process.env.TRANSFORMERS_EMBEDDING_DIMS = '2';
+
+    const tensorData = new Float32Array([0.5, 0.6, 0.7, 0.8]);
+    mockExtractor.mockResolvedValue({
+      data: tensorData,
+      dims: [2, 2],
+    });
+    mockPipeline.mockResolvedValue(mockExtractor);
+
+    const provider = createEmbeddingProviderFromEnv();
+    const vectors = await provider.embedBatch(['alpha', 'beta']);
+
+    tensorData[0] = 9.9;
+    tensorData[2] = 8.8;
+
+    expect(vectors[0]).toEqual(new Float32Array([0.5, 0.6]));
+    expect(vectors[1]).toEqual(new Float32Array([0.7, 0.8]));
+    expect(vectors[0].buffer).not.toBe(tensorData.buffer);
+    expect(vectors[1].buffer).not.toBe(tensorData.buffer);
+  });
+
   it('lazily initializes the pipeline on first embed call', async () => {
     const tensorData = new Float32Array([1, 2, 3]);
     mockExtractor.mockResolvedValue({

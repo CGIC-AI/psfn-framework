@@ -52,6 +52,10 @@ const LEXICAL_STOPWORDS = new Set([
 ]);
 const log = createComponentLogger('MemoryStore');
 
+function embeddingToBuffer(embedding: Float32Array): Buffer {
+  return Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+}
+
 interface MemoryRow {
   id: string;
   text: string;
@@ -598,7 +602,7 @@ export class MemoryStore {
         memory.deletedBy ?? null,
         memory.deleteReason ?? null,
       );
-      insertVec.run(memory.id, Buffer.from(embedding.buffer));
+      insertVec.run(memory.id, embeddingToBuffer(embedding));
     });
 
     transaction();
@@ -626,7 +630,7 @@ export class MemoryStore {
       ORDER BY v.distance ASC
     `);
 
-    const rows = stmt.all(Buffer.from(embedding.buffer), limit * 2) as Array<MemoryRow & {
+    const rows = stmt.all(embeddingToBuffer(embedding), limit * 2) as Array<MemoryRow & {
       distance: number;
     }>;
 

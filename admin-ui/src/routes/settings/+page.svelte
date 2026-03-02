@@ -103,6 +103,8 @@
       sttProvider, deepgramModel,
       // Channels
       discordEnabled, discordHeartbeatChannel,
+      discordTriggerWords, discordTriggerReactions,
+      discordTriggerListenWindowSeconds,
       telegramEnabled, telegramAuthorizedUsers,
     });
   }
@@ -162,6 +164,9 @@
   // ── Channels ──
   let discordEnabled = $state(false);
   let discordHeartbeatChannel = $state('');
+  let discordTriggerWords = $state('');
+  let discordTriggerReactions = $state('👆');
+  let discordTriggerListenWindowSeconds = $state(120);
   let telegramEnabled = $state(false);
   let telegramAuthorizedUsers = $state('');
 
@@ -329,12 +334,22 @@
       id: 'channels', title: 'Channels', icon: 'C',
       keys: [
         'discordEnabled', 'discordHeartbeatChannel',
+        'discordTriggerWords', 'discordTriggerReactions',
+        'discordTriggerListenWindowMs',
         'telegramEnabled', 'telegramAuthorizedUsers',
       ],
-      summary: () => [
-        discordEnabled ? 'Discord on' : 'Discord off',
-        telegramEnabled ? 'Telegram on' : 'Telegram off',
-      ].join(', '),
+      summary: () => {
+        const wordsCount = splitCsv(discordTriggerWords).length;
+        const reactionsCount = splitCsv(discordTriggerReactions).length;
+        const windowSeconds = normalizeDiscordListenWindowSeconds(discordTriggerListenWindowSeconds);
+        return [
+          discordEnabled ? 'Discord on' : 'Discord off',
+          telegramEnabled ? 'Telegram on' : 'Telegram off',
+          `${wordsCount} word trigger${wordsCount === 1 ? '' : 's'}`,
+          `${reactionsCount} reaction trigger${reactionsCount === 1 ? '' : 's'}`,
+          `${windowSeconds}s listen window`,
+        ].join(', ');
+      },
     },
   ];
 
@@ -500,6 +515,11 @@
     // Channels
     discordEnabled = Boolean(config.discordEnabled);
     discordHeartbeatChannel = String(config.discordHeartbeatChannel ?? '');
+    discordTriggerWords = String(config.discordTriggerWords ?? '');
+    discordTriggerReactions = String(config.discordTriggerReactions ?? '👆');
+    discordTriggerListenWindowSeconds = normalizeDiscordListenWindowSeconds(
+      Number(config.discordTriggerListenWindowMs ?? 120000) / 1000,
+    );
     telegramEnabled = Boolean(config.telegramEnabled);
     telegramAuthorizedUsers = String(config.telegramAuthorizedUsers ?? '');
 
@@ -662,75 +682,91 @@
     return str.split(',').map(s => s.trim()).filter(Boolean);
   }
 
+  function normalizeDiscordListenWindowSeconds(value: number): number {
+    if (!Number.isFinite(value)) return 120;
+    return clamp(Math.round(value), 10, 600);
+  }
+
+  function collectSimplePayload(catalogPayload: Record<string, unknown>): Record<string, unknown> {
+    const discordTriggerListenWindowMs = normalizeDiscordListenWindowSeconds(
+      discordTriggerListenWindowSeconds,
+    ) * 1000;
+
+    return {
+      primaryModel,
+      extractionModel,
+      memoryBudgetPct,
+      ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
+      ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
+      sessionRestartBehavior,
+      sessionHistoryBudgetPct,
+      memoryRetrievalBudgetPct,
+      extractionThresholdPct,
+      compactionThresholdPct,
+      primaryMaxTokens: maxResponseTokens,
+      retryMaxAttempts,
+      retryBaseDelayMs,
+      importProcessingRouteMode: importRouteMode,
+      importProcessingStrictPolicy: importStrictPolicy,
+      importProcessingLocalEndpointUrl: importLocalEndpointUrl,
+      importProcessingLocalModel: importLocalModel,
+      openRouterProviderOrder: splitCsv(openRouterProviderOrder),
+      webFetchAllowHttp,
+      webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
+      webFetchAllowInternalNetwork,
+      webFetchTlsCaCertPaths: splitCsv(webFetchTlsCaCertPaths),
+      capabilityTier,
+      // Memory & Extraction
+      extractionInterval,
+      compactionEmotionalSalienceThresholdPct,
+      defaultContextWindow,
+      maintenanceIntervalMs,
+      // Memory Extraction Tuning
+      memoryExtractionMinImportance,
+      memoryExtractionMinConfidence,
+      memoryExtractionMinNovelty,
+      memoryExtractionMaxWrites,
+      memoryExtractionTelemetryEnabled,
+      memoryRetrievalTelemetryEnabled,
+      // Profile Synthesis
+      profileSynthesisEnabled,
+      profileSynthesisRefreshIntervalMs,
+      profileSynthesisCooldownMs,
+      profileSynthesisMinWrites,
+      profileSynthesisMinImportance,
+      profileSynthesisMinConfidence,
+      profileSynthesisMinNovelty,
+      profileSynthesisSourceMemoryLimit,
+      profileSynthesisMinSourceMemories,
+      // Think Tool
+      thinkMaxTokens,
+      thinkMaxWallTimeMs,
+      thinkMaxSubQueries,
+      // Voice / TTS
+      ttsProvider,
+      voiceId,
+      echoTtsUrl,
+      echoTtsVoice,
+      echoTtsPreset,
+      sttProvider,
+      deepgramModel,
+      // Channels
+      discordEnabled,
+      discordHeartbeatChannel,
+      discordTriggerWords,
+      discordTriggerReactions,
+      discordTriggerListenWindowMs,
+      telegramEnabled,
+      telegramAuthorizedUsers,
+      ...catalogPayload,
+    };
+  }
+
   async function saveSimple() {
     saving = true;
     try {
       const catalogPayload = buildCatalogPayload();
-      const result = await updateSettings({
-        primaryModel,
-        extractionModel,
-        memoryBudgetPct,
-        ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
-        ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
-        sessionRestartBehavior,
-        sessionHistoryBudgetPct,
-        memoryRetrievalBudgetPct,
-        extractionThresholdPct,
-        compactionThresholdPct,
-        primaryMaxTokens: maxResponseTokens,
-        retryMaxAttempts,
-        retryBaseDelayMs,
-        importProcessingRouteMode: importRouteMode,
-        importProcessingStrictPolicy: importStrictPolicy,
-        importProcessingLocalEndpointUrl: importLocalEndpointUrl,
-        importProcessingLocalModel: importLocalModel,
-        openRouterProviderOrder: splitCsv(openRouterProviderOrder),
-        webFetchAllowHttp,
-        webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
-        webFetchAllowInternalNetwork,
-        webFetchTlsCaCertPaths: splitCsv(webFetchTlsCaCertPaths),
-        capabilityTier,
-        // Memory & Extraction
-        extractionInterval,
-        compactionEmotionalSalienceThresholdPct,
-        defaultContextWindow,
-        maintenanceIntervalMs,
-        // Memory Extraction Tuning
-        memoryExtractionMinImportance,
-        memoryExtractionMinConfidence,
-        memoryExtractionMinNovelty,
-        memoryExtractionMaxWrites,
-        memoryExtractionTelemetryEnabled,
-        memoryRetrievalTelemetryEnabled,
-        // Profile Synthesis
-        profileSynthesisEnabled,
-        profileSynthesisRefreshIntervalMs,
-        profileSynthesisCooldownMs,
-        profileSynthesisMinWrites,
-        profileSynthesisMinImportance,
-        profileSynthesisMinConfidence,
-        profileSynthesisMinNovelty,
-        profileSynthesisSourceMemoryLimit,
-        profileSynthesisMinSourceMemories,
-        // Think Tool
-        thinkMaxTokens,
-        thinkMaxWallTimeMs,
-        thinkMaxSubQueries,
-        // Voice / TTS
-        ttsProvider,
-        voiceId,
-        echoTtsUrl,
-        echoTtsVoice,
-        echoTtsPreset,
-        sttProvider,
-        deepgramModel,
-        // Channels
-        discordEnabled,
-        discordHeartbeatChannel,
-        telegramEnabled,
-        telegramAuthorizedUsers,
-        ...catalogPayload,
-      });
+      const result = await updateSettings(collectSimplePayload(catalogPayload));
       flash(result.ok, result.message || 'Settings saved');
       if (result.ok) {
         data = await getSettings();
@@ -1711,7 +1747,7 @@
         {/if}
       </div>
 
-      <!-- Channels (informational) -->
+      <!-- Channels -->
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('channels')}
@@ -1723,22 +1759,84 @@
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('channels')}
-              <span class="text-sm text-shadow-500">Requires server restart to change</span>
+              <span class="text-sm text-shadow-500">
+                {discordEnabled ? 'Discord on' : 'Discord off'}, {discordTriggerListenWindowSeconds}s listen window
+              </span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('channels') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
         </button>
         {#if openSections.has('channels')}
-          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4 space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Discord Enabled</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={discordEnabled} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Enable Discord channel bridge</span>
+                </label>
+                <p class="text-sm text-shadow-500 mt-1">Requires a valid <span class="font-mono">DISCORD_TOKEN</span> at runtime.</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Discord Heartbeat Channel</label>
+                <input type="text" bind:value={discordHeartbeatChannel} class={INPUT_CLS} placeholder="channel-id" />
+                <p class="text-sm text-shadow-500 mt-1">Optional channel ID used for heartbeat/status pings.</p>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Discord Trigger Words</label>
+                <input type="text" bind:value={discordTriggerWords} class={INPUT_CLS} placeholder="pixie, hey psfn" />
+                <p class="text-sm text-shadow-500 mt-1">
+                  Comma-separated words or phrases that trigger replies in guild channels.
+                </p>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Discord Trigger Reactions</label>
+                <input type="text" bind:value={discordTriggerReactions} class={INPUT_CLS} placeholder="👆, 🔥, 👀" />
+                <p class="text-sm text-shadow-500 mt-1">
+                  Comma-separated emoji reactions that open a Discord follow-up window.
+                </p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Discord Listen Window (seconds)</label>
+                <input
+                  type="number"
+                  min="10"
+                  max="600"
+                  step="1"
+                  value={discordTriggerListenWindowSeconds}
+                  onchange={(e) => {
+                    discordTriggerListenWindowSeconds = normalizeDiscordListenWindowSeconds(
+                      Number((e.target as HTMLInputElement).value),
+                    );
+                  }}
+                  class={INPUT_CLS}
+                />
+                <p class="text-sm text-shadow-500 mt-1">
+                  After a trigger, accept follow-up Discord messages for this long (10-600s). Saved as milliseconds.
+                </p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Telegram Enabled</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={telegramEnabled} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Enable Telegram channel bridge</span>
+                </label>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Telegram Authorized Users</label>
+                <input type="text" bind:value={telegramAuthorizedUsers} class={INPUT_CLS} placeholder="12345678, 87654321" />
+                <p class="text-sm text-shadow-500 mt-1">Comma-separated Telegram user IDs allowed to interact.</p>
+              </div>
+            </div>
             <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
               <p class="text-sm text-shadow-700">
                 Channel bindings (ports, tokens, host addresses) are security-sensitive settings configured at the server level.
-                These settings are set at startup and require a server restart to change.
+                Trigger behavior is saved here, while host/token bindings are set at startup and may require restart to change.
               </p>
               <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div class="text-sm">
                   <span class="font-medium text-shadow-800">Discord:</span>
-                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_HEARTBEAT_CHANNEL</span>
+                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_HEARTBEAT_CHANNEL, DISCORD_TRIGGER_* (optional)</span>
                 </div>
                 <div class="text-sm">
                   <span class="font-medium text-shadow-800">OpenAI API:</span>

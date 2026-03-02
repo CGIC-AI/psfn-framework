@@ -94,6 +94,7 @@ import type {
   AdaptiveToolSnapshotTelemetry,
   AdaptiveToolSnapshotTool,
 } from './adaptive-tools-telemetry.js';
+import { contextMessagesToPiMessages } from '../llm/message-conversion.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -1582,7 +1583,7 @@ export class SubstrateAgent {
         // Convert ContextMessage[] to AgentMessage[] for the Agent.
         // Exclude the last message (the user message we just recorded) —
         // agent.prompt() will re-add it, avoiding duplication.
-        const agentMessages = this.contextToAgentMessages(context.messages);
+        const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
         const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
         this.agent.replaceMessages(historyMessages);
         const turnStartMessageIndex = this.agent.state.messages.length;
@@ -2181,35 +2182,6 @@ export class SubstrateAgent {
       undefined,
       { trustLevel },
     );
-  }
-
-  /** Convert ContextMessage[] (from buildContext) to AgentMessage[] for pi-agent-core */
-  private contextToAgentMessages(messages: ContextMessage[]): AgentMessage[] {
-    return messages.map(m => {
-      if (m.role === 'user') {
-        return {
-          role: 'user',
-          content: m.content,
-          timestamp: Date.now(),
-        } satisfies UserMessage;
-      }
-      // assistant — pi-ai expects content as ContentPart[]
-      return {
-        role: 'assistant',
-        content: [{ type: 'text', text: m.content }],
-        api: '',
-        provider: '',
-        model: '',
-        usage: {
-          input: 0, output: 0,
-          cacheRead: 0, cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: 'stop',
-        timestamp: Date.now(),
-      } satisfies AssistantMessage;
-    });
   }
 
   /** Aggregate usage stats for a single turn across all tool loop iterations. */

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { createSettingsGetTool } from './settings-tools.js';
+import {
+  createPromotedToolsAddTool,
+  createPromotedToolsListTool,
+  createPromotedToolsRemoveTool,
+  createPromotedToolsSwapTool,
+  createSettingsGetTool,
+} from './settings-tools.js';
 import type { SubstrateConfig } from './types.js';
 
 function makeConfig(): SubstrateConfig {
@@ -88,5 +94,103 @@ describe('createSettingsGetTool', () => {
 
     expect(readText(result)).toContain('Unknown setting key');
     expect(result.details.isError).toBe(true);
+  });
+});
+
+describe('promoted tools settings helpers', () => {
+  it('returns promoted tool list payload', async () => {
+    const listTool = createPromotedToolsListTool({
+      getPromotedExtendedToolsLimit: () => 4,
+      getPromotedExtendedTools: () => ['repo_status', 'session_list'],
+      addPromotedExtendedTool: () => {
+        throw new Error('not used');
+      },
+      removePromotedExtendedTool: () => {
+        throw new Error('not used');
+      },
+      swapPromotedExtendedTools: () => {
+        throw new Error('not used');
+      },
+    });
+
+    const result = await listTool.execute('call-list', {});
+    const payload = JSON.parse(readText(result));
+    expect(payload.action).toBe('list');
+    expect(payload.maxSlots).toBe(4);
+    expect(payload.promotedTools).toEqual(['repo_status', 'session_list']);
+  });
+
+  it('marks promoted add errors in tool response details', async () => {
+    const addTool = createPromotedToolsAddTool({
+      getPromotedExtendedToolsLimit: () => 4,
+      getPromotedExtendedTools: () => ['repo_status'],
+      addPromotedExtendedTool: () => ({
+        ok: false,
+        changed: false,
+        promotedTools: ['repo_status'],
+        message: 'denied',
+        errorCode: 'capability_denied',
+        requiredTokens: ['git.write'],
+        missingTokens: ['git.write'],
+      }),
+      removePromotedExtendedTool: () => {
+        throw new Error('not used');
+      },
+      swapPromotedExtendedTools: () => {
+        throw new Error('not used');
+      },
+    });
+
+    const result = await addTool.execute('call-add', { tool: 'repo_commit' });
+    const payload = JSON.parse(readText(result));
+    expect(payload.action).toBe('add');
+    expect(payload.ok).toBe(false);
+    expect(payload.errorCode).toBe('capability_denied');
+    expect(result.details.isError).toBe(true);
+  });
+
+  it('routes remove and swap requests to manager', async () => {
+    const removed: string[] = [];
+    const swapped: Array<[number, number]> = [];
+    const manager = {
+      getPromotedExtendedToolsLimit: () => 4,
+      getPromotedExtendedTools: () => ['repo_status', 'session_list'],
+      addPromotedExtendedTool: () => ({
+        ok: true,
+        changed: true,
+        promotedTools: ['repo_status'],
+        message: 'added',
+      }),
+      removePromotedExtendedTool: (toolName: string) => {
+        removed.push(toolName);
+        return {
+          ok: true,
+          changed: true,
+          promotedTools: ['session_list'],
+          message: 'removed',
+        };
+      },
+      swapPromotedExtendedTools: (fromSlot: number, toSlot: number) => {
+        swapped.push([fromSlot, toSlot]);
+        return {
+          ok: true,
+          changed: true,
+          promotedTools: ['session_list', 'repo_status'],
+          message: 'swapped',
+        };
+      },
+    };
+
+    const removeTool = createPromotedToolsRemoveTool(manager);
+    const removeResult = await removeTool.execute('call-remove', { tool: 'repo_status' });
+    const removePayload = JSON.parse(readText(removeResult));
+    expect(removePayload.action).toBe('remove');
+    expect(removed).toEqual(['repo_status']);
+
+    const swapTool = createPromotedToolsSwapTool(manager);
+    const swapResult = await swapTool.execute('call-swap', { fromSlot: 1, toSlot: 2 });
+    const swapPayload = JSON.parse(readText(swapResult));
+    expect(swapPayload.action).toBe('swap');
+    expect(swapped).toEqual([[1, 2]]);
   });
 });

@@ -2,6 +2,7 @@ import {
   streamSimple,
   completeSimple,
   getEnvApiKey,
+  type Context as PiContext,
   type Model,
   type SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
@@ -20,8 +21,9 @@ import { llmRetryConfig } from './retry-config.js';
 import {
   extractReasoningContent,
   extractTextContent,
-  toPiContext,
+  toPiTools,
 } from './conversion.js';
+import { contextMessagesToPiMessages } from './message-conversion.js';
 import { createComponentLogger } from '../logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
@@ -277,8 +279,16 @@ export class LLMClient {
     return this.dedupeCandidates([hintedCandidate, ...candidates]);
   }
 
+  private buildPiContext(context: LLMContext): PiContext {
+    return {
+      systemPrompt: context.systemPrompt,
+      messages: contextMessagesToPiMessages(context.messages),
+      ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
+    };
+  }
+
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
-    const piContext = toPiContext(context);
+    const piContext = this.buildPiContext(context);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
 
     try {
@@ -420,7 +430,7 @@ export class LLMClient {
     options: LLMCompletionOptions = {},
   ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
-    const piContext = toPiContext(context);
+    const piContext = this.buildPiContext(context);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
 
     const { result: response, candidate, attempts } = await this.runWithFallback(

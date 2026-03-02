@@ -1,13 +1,12 @@
 import type {
   Message,
-  UserMessage,
-  AssistantMessage,
   Tool as PiTool,
   Context as PiContext,
   TextContent as TextBlock,
   ThinkingContent as ThinkingBlock,
 } from '@mariozechner/pi-ai';
 import type { ContextMessage, LLMContext, ToolSchema } from '../types.js';
+import { contextMessagesToPiMessages } from './message-conversion.js';
 
 interface GenericBlock {
   type?: unknown;
@@ -53,33 +52,7 @@ export function toPiTools(tools: ToolSchema[]): PiTool[] {
 
 export function toPiMessages(messages: ContextMessage[]): Message[] {
   const now = Date.now();
-  return messages.map((message): Message => {
-    if (message.role === 'user') {
-      return {
-        role: 'user',
-        content: message.content,
-        timestamp: now,
-      } satisfies UserMessage;
-    }
-
-    return {
-      role: 'assistant',
-      content: [{ type: 'text', text: message.content }],
-      api: '',
-      provider: '',
-      model: '',
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'stop',
-      timestamp: now,
-    } satisfies AssistantMessage;
-  });
+  return contextMessagesToPiMessages(messages, () => now);
 }
 
 export function toPiContext(context: LLMContext): PiContext {

@@ -2,7 +2,13 @@
 // Common primitives used by both single-process runtime and gateway agent mode.
 
 import { join } from 'node:path';
-import type { PostTurnActionCandidate, SubstrateConfig } from '../types.js';
+import type {
+  ObservabilityCallType,
+  PostTurnActionCandidate,
+  SubstrateConfig,
+  SubstrateMessage,
+} from '../types.js';
+import type { EventBus } from '../event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
 import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
@@ -10,7 +16,10 @@ import {
   createDefaultExtendedToolAutoloadPolicy,
   type ExtendedToolAutoloadPolicy,
 } from '../agent/extended-tool-autoload-policy.js';
-import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
+import type {
+  ExtendedToolActivationResult,
+  PostTurnActionInferer,
+} from '../agent/substrate-agent.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
@@ -62,26 +71,30 @@ import {
 import { ReflectionJournalStore } from '../notes/reflection-journal.js';
 import type { PostTurnActionRuntime } from './post-turn-actions.js';
 import { isBusyTurnError } from '../lifecycle/turn-contention.js';
+import {
+  buildDeferredToolHandoffCandidate,
+  buildDeferredToolHandoffMessage,
+  DEFERRED_TOOL_HANDOFF_ACTION_KIND,
+  normalizeDeferredToolHandoffIntent,
+  normalizeDeferredToolHandoffPayload,
+  type DeferredToolHandoffIntent,
+  type DeferredToolHandoffPayload,
+} from '../agent/deferred-tool-handoff.js';
 
 const log = createComponentLogger('SharedWiring');
 const HEARTBEAT_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
+const LOAD_TOOLS_TOOL_NAME = 'load_tools';
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
 interface HeartbeatAgent {
-  handleMessage(message: {
-    id: string;
-    channelId: string;
-    channelType: 'terminal';
-    authorId: string;
-    authorName: string;
-    content: string;
-    timestamp: Date;
-  }): Promise<{ content: string }>;
+  handleMessage(message: SubstrateMessage): Promise<{ content: string }>;
+  activateExtendedTools?(toolNames: readonly string[]): ExtendedToolActivationResult;
   waitForIdle?(): Promise<void>;
   registerPostTurnActionInferer?(inferer: PostTurnActionInferer): () => void;
 }
 
 interface HeartbeatRuntimeOptions {
+  eventBus?: EventBus;
   llmProvider?: LLMProvider;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   postTurnActions?: PostTurnActionRuntime;
@@ -178,6 +191,59 @@ function isHeartbeatRunTemplateToolResult(message: unknown): boolean {
     candidate.role === 'toolResult'
     && candidate.toolName === HEARTBEAT_RUN_TEMPLATE_TOOL_NAME
   );
+}
+
+function isLoadToolsToolResult(message: unknown): boolean {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    return false;
+  }
+
+  const candidate = message as Record<string, unknown>;
+  return (
+    candidate.role === 'toolResult'
+    && candidate.toolName === LOAD_TOOLS_TOOL_NAME
+  );
+}
+
+function extractDeferredToolHandoffIntent(message: unknown): DeferredToolHandoffIntent | null {
+  const stack: unknown[] = [message];
+  const seen = new Set<unknown>();
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== 'object') continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+
+    if (Array.isArray(current)) {
+      for (const entry of current) {
+        if (entry && typeof entry === 'object') {
+          stack.push(entry);
+        }
+      }
+      continue;
+    }
+
+    const record = current as Record<string, unknown>;
+    const deferredToolHandoff = normalizeDeferredToolHandoffIntent(record.deferredToolHandoff);
+    if (deferredToolHandoff) {
+      return deferredToolHandoff;
+    }
+
+    for (const value of Object.values(record)) {
+      if (value && typeof value === 'object') {
+        stack.push(value);
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolvePostTurnCallType(message: SubstrateMessage): ObservabilityCallType {
+  if (message.channelId.startsWith('internal:')) {
+    return 'scheduled';
+  }
+  return 'chat';
 }
 
 export interface PromptRuntimeTarget extends ToolRegistrarTarget {
@@ -323,6 +389,36 @@ export function wireHeartbeatRuntime(
   const policy = store.load();
   const pendingDeferredTemplates = new Set<string>();
   const lastScheduledRunAt = new Map<string, number>();
+  const deferredToolHandoffPayloads = new Map<string, DeferredToolHandoffPayload>();
+  const deferredToolHandoffExecutionState = new Map<string, { activated: boolean; executed: boolean }>();
+  const telemetryEventBus = runtimeOptions.eventBus;
+
+  const emitDeferredToolHandoffTelemetry = (
+    payload: {
+      actionId: string;
+      dedupeKey: string;
+      channelId: string;
+      sourceMessageId: string;
+      toolNames: string[];
+      intendedAction: string;
+      phase: 'queued' | 'activated' | 'executed' | 'failed';
+      attempt?: number;
+      maxAttempts?: number;
+      error?: string;
+    },
+  ): void => {
+    if (!telemetryEventBus) return;
+    telemetryEventBus.emit('agent.tool_handoff.telemetry', {
+      ...payload,
+      timestamp: Date.now(),
+    }).catch((error) => {
+      log.warn('Deferred tool-handoff telemetry emit failed', {
+        actionId: payload.actionId,
+        phase: payload.phase,
+        error: String(error),
+      });
+    });
+  };
 
   const toDeliberationMetadata = (
     result: DeliberationResult,
@@ -627,6 +723,110 @@ export function wireHeartbeatRuntime(
   };
 
   if (runtimeOptions.postTurnActions) {
+    telemetryEventBus?.on('agent.post_turn.action.telemetry', (telemetry) => {
+      if (telemetry.actionKind !== DEFERRED_TOOL_HANDOFF_ACTION_KIND) {
+        return;
+      }
+
+      const payload = deferredToolHandoffPayloads.get(telemetry.dedupeKey);
+      if (!payload) {
+        return;
+      }
+
+      if (telemetry.phase === 'queued') {
+        emitDeferredToolHandoffTelemetry({
+          actionId: telemetry.actionId,
+          dedupeKey: telemetry.dedupeKey,
+          channelId: telemetry.channelId,
+          sourceMessageId: telemetry.sourceMessageId,
+          toolNames: payload.toolNames,
+          intendedAction: payload.intendedAction,
+          phase: 'queued',
+          attempt: telemetry.attempt,
+          maxAttempts: telemetry.maxAttempts,
+        });
+      } else if (telemetry.phase === 'failed') {
+        emitDeferredToolHandoffTelemetry({
+          actionId: telemetry.actionId,
+          dedupeKey: telemetry.dedupeKey,
+          channelId: telemetry.channelId,
+          sourceMessageId: telemetry.sourceMessageId,
+          toolNames: payload.toolNames,
+          intendedAction: payload.intendedAction,
+          phase: 'failed',
+          attempt: telemetry.attempt,
+          maxAttempts: telemetry.maxAttempts,
+          ...(telemetry.error ? { error: telemetry.error } : {}),
+        });
+        deferredToolHandoffExecutionState.delete(telemetry.dedupeKey);
+        deferredToolHandoffPayloads.delete(telemetry.dedupeKey);
+      } else if (telemetry.phase === 'succeeded') {
+        deferredToolHandoffExecutionState.delete(telemetry.dedupeKey);
+        deferredToolHandoffPayloads.delete(telemetry.dedupeKey);
+      }
+    });
+
+    runtimeOptions.postTurnActions.registerHandler(
+      DEFERRED_TOOL_HANDOFF_ACTION_KIND,
+      async (action) => {
+        const payload = normalizeDeferredToolHandoffPayload(action.payload);
+        if (!payload) {
+          throw new Error(`Deferred tool handoff action "${action.id}" is missing required payload fields`);
+        }
+        deferredToolHandoffPayloads.set(action.dedupeKey, payload);
+
+        const executionState = deferredToolHandoffExecutionState.get(action.dedupeKey) ?? {
+          activated: false,
+          executed: false,
+        };
+
+        if (!executionState.activated) {
+          const activation = agentLoop.activateExtendedTools?.(payload.toolNames);
+          if (!activation) {
+            throw new Error('Agent loop does not support deferred tool activation');
+          }
+          if (activation.activatedTools.length === 0) {
+            throw new Error(
+              `Deferred tool handoff action "${action.id}" could not activate tools: ${payload.toolNames.join(', ')}`,
+            );
+          }
+          executionState.activated = true;
+          emitDeferredToolHandoffTelemetry({
+            actionId: action.id,
+            dedupeKey: action.dedupeKey,
+            channelId: action.channelId,
+            sourceMessageId: action.sourceMessageId,
+            toolNames: payload.toolNames,
+            intendedAction: payload.intendedAction,
+            phase: 'activated',
+          });
+          deferredToolHandoffExecutionState.set(action.dedupeKey, executionState);
+        }
+
+        if (executionState.executed) {
+          return;
+        }
+
+        const response = await agentLoop.handleMessage(buildDeferredToolHandoffMessage(action.id, payload));
+        const responseText = response.content.trim();
+        if (responseText && !payload.turn.channelId.startsWith('internal:')) {
+          await sender.send(payload.turn.channelId, responseText);
+        }
+
+        executionState.executed = true;
+        deferredToolHandoffExecutionState.set(action.dedupeKey, executionState);
+        emitDeferredToolHandoffTelemetry({
+          actionId: action.id,
+          dedupeKey: action.dedupeKey,
+          channelId: action.channelId,
+          sourceMessageId: action.sourceMessageId,
+          toolNames: payload.toolNames,
+          intendedAction: payload.intendedAction,
+          phase: 'executed',
+        });
+      },
+    );
+
     runtimeOptions.postTurnActions.registerHandler(
       DEFERRED_HEARTBEAT_ACTION_KIND,
       async (action) => {
@@ -650,17 +850,36 @@ export function wireHeartbeatRuntime(
     );
 
     if (agentLoop.registerPostTurnActionInferer) {
-      const inferDeferredHeartbeatActions: PostTurnActionInferer = ({ turnMessages }) => {
+      const inferDeferredPostTurnActions: PostTurnActionInferer = ({ message, turnMessages }) => {
+        const callType = resolvePostTurnCallType(message);
         const inferred: PostTurnActionCandidate[] = [];
         for (const turnMessage of turnMessages) {
-          if (!isHeartbeatRunTemplateToolResult(turnMessage)) continue;
-          const candidate = extractDeferredActionCandidate(turnMessage);
-          if (!candidate || candidate.kind !== DEFERRED_HEARTBEAT_ACTION_KIND) continue;
+          if (isHeartbeatRunTemplateToolResult(turnMessage)) {
+            const candidate = extractDeferredActionCandidate(turnMessage);
+            if (candidate && candidate.kind === DEFERRED_HEARTBEAT_ACTION_KIND) {
+              inferred.push(candidate);
+            }
+            continue;
+          }
+
+          if (!isLoadToolsToolResult(turnMessage)) continue;
+          const deferredToolHandoff = extractDeferredToolHandoffIntent(turnMessage);
+          if (!deferredToolHandoff) continue;
+          const candidate = buildDeferredToolHandoffCandidate(
+            deferredToolHandoff,
+            message,
+            callType,
+          );
+          const normalizedPayload = normalizeDeferredToolHandoffPayload(candidate.payload);
+          if (!normalizedPayload) continue;
+          if (candidate.dedupeKey) {
+            deferredToolHandoffPayloads.set(candidate.dedupeKey, normalizedPayload);
+          }
           inferred.push(candidate);
         }
         return inferred;
       };
-      agentLoop.registerPostTurnActionInferer(inferDeferredHeartbeatActions);
+      agentLoop.registerPostTurnActionInferer(inferDeferredPostTurnActions);
     } else {
       log.warn('Post-turn action runtime enabled but inferer registration is unavailable');
     }

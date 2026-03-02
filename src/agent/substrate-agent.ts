@@ -61,7 +61,7 @@ import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { tagToolWithReversibility } from '../capabilities/safeguards.js';
-import { textResult, textResultWithError } from '../tools/results.js';
+import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import {
   validateAndLogToolWiring,
@@ -75,6 +75,11 @@ import {
   resolveBroadcastVisibilityScope,
 } from '../broadcast/safety.js';
 import { runDeliberation } from '../llm/deliberation.js';
+import {
+  normalizeDeferredToolHandoffIntent,
+  normalizeToolNameList,
+  type DeferredToolHandoffIntent,
+} from './deferred-tool-handoff.js';
 import {
   createDefaultExtendedToolAutoloadPolicy,
   type ExtendedToolAutoloadPolicy,
@@ -135,6 +140,12 @@ interface PostTurnInferenceContext {
 export type PostTurnActionInferer = (
   context: PostTurnInferenceContext,
 ) => PostTurnActionCandidate[] | Promise<PostTurnActionCandidate[]>;
+
+export interface ExtendedToolActivationResult {
+  requestedTools: string[];
+  activatedTools: string[];
+  missingTools: string[];
+}
 
 export type PromotedToolMutationErrorCode =
   | 'invalid_name'
@@ -704,6 +715,32 @@ export class SubstrateAgent {
     };
   }
 
+  activateExtendedTools(toolNames: readonly string[]): ExtendedToolActivationResult {
+    const requestedTools = normalizeToolNameList(toolNames);
+    const byName = new Set(this.extendedTools.map(tool => tool.name));
+    const activatedTools: string[] = [];
+    const missingTools: string[] = [];
+
+    for (const name of requestedTools) {
+      if (!byName.has(name)) {
+        missingTools.push(name);
+        continue;
+      }
+      this.loadedExtended.add(name);
+      activatedTools.push(name);
+    }
+
+    if (activatedTools.length > 0) {
+      this.applyActiveToolsToAgent();
+    }
+
+    return {
+      requestedTools,
+      activatedTools,
+      missingTools,
+    };
+  }
+
   /**
    * Validate that all registered tools have their runtime dependencies satisfied.
    * Tools with missing dependencies are logged as warnings and removed from the
@@ -770,24 +807,64 @@ export class SubstrateAgent {
       description: 'Load extended tool schemas by name. Call with tool names from the tool directory in your runtime context.',
       parameters: Type.Object({
         tools: Type.Array(Type.String(), { description: 'Names of extended tools to load' }),
+        intendedAction: Type.Optional(
+          Type.String({
+            description:
+              'Optional follow-up action to execute after this reply when tools were discovered late.',
+          }),
+        ),
+        deferUntilTurnBoundary: Type.Optional(
+          Type.Boolean({
+            description:
+              'Set true when this tool load was discovered late and the intended action should continue post-reply.',
+          }),
+        ),
+        maxRetries: Type.Optional(
+          Type.Number({
+            description: 'Optional retry cap for deferred continuation (default: 2, max: 4).',
+            minimum: 0,
+            maximum: 4,
+          }),
+        ),
       }),
       execute: async (
         _toolCallId: string,
-        params: { tools: string[] },
-      ): Promise<AgentToolResult<any>> => {
-        const catalog = new Map(self.extendedTools.map(tool => [tool.name, tool]));
-        const matched: AgentTool<any>[] = [];
-        const seen = new Set<string>();
-        for (const name of params.tools) {
-          if (seen.has(name)) continue;
-          seen.add(name);
-          const tool = catalog.get(name);
-          if (tool) matched.push(tool);
-        }
-        for (const t of matched) self.loadedExtended.add(t.name);
-        self.applyActiveToolsToAgent();
-        if (matched.length) {
-          return textResult(`Loaded ${matched.length} tools: ${matched.map(t => t.name).join(', ')}`);
+        params: {
+          tools: string[];
+          intendedAction?: string;
+          deferUntilTurnBoundary?: boolean;
+          maxRetries?: number;
+        },
+      ): Promise<AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }>> => {
+        const activation = self.activateExtendedTools(params.tools);
+        if (activation.activatedTools.length > 0) {
+          const details: { deferredToolHandoff?: DeferredToolHandoffIntent } = {};
+          const contentLines = [
+            `Loaded ${activation.activatedTools.length} tools: ${activation.activatedTools.join(', ')}`,
+          ];
+
+          if (activation.missingTools.length > 0) {
+            contentLines.push(`Missing tools: ${activation.missingTools.join(', ')}`);
+          }
+
+          const deferredToolHandoff = params.deferUntilTurnBoundary
+            ? normalizeDeferredToolHandoffIntent({
+              toolNames: activation.activatedTools,
+              intendedAction: params.intendedAction,
+              maxRetries: params.maxRetries,
+            })
+            : null;
+          if (deferredToolHandoff) {
+            details.deferredToolHandoff = deferredToolHandoff;
+            contentLines.push('Queued deferred continuation intent for post-turn execution.');
+          } else if (params.deferUntilTurnBoundary) {
+            contentLines.push('Deferred continuation skipped: provide a non-empty intendedAction.');
+          }
+
+          return {
+            content: [{ type: 'text', text: contentLines.join('\n') }],
+            details,
+          };
         }
         return textResultWithError(
           `No matching tools found. Available: ${self.extendedTools.map(t => t.name).join(', ')}`,

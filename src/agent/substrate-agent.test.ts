@@ -1162,6 +1162,51 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
   });
 
+  it('captures deferred tool-handoff intent details from load_tools', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    const extendedProbeTool = {
+      name: 'extended_probe_tool',
+      label: 'extended_probe_tool',
+      description: 'test-only probe tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({
+        role: 'tool',
+        content: [{ type: 'text', text: 'ok' }],
+      })),
+    } as any;
+    agent.registerTool(extendedProbeTool, 'extended');
+
+    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
+    expect(loadTools).toBeDefined();
+
+    const result = await (loadTools as any).execute('load-intent-1', {
+      tools: ['extended_probe_tool'],
+      intendedAction: 'Use extended_probe_tool to gather diagnostics for this request.',
+      deferUntilTurnBoundary: true,
+      maxRetries: 1,
+    });
+    const details = result.details as {
+      deferredToolHandoff?: {
+        toolNames: string[];
+        intendedAction: string;
+        maxRetries?: number;
+      };
+    };
+    expect(details.deferredToolHandoff).toEqual({
+      toolNames: ['extended_probe_tool'],
+      intendedAction: 'Use extended_probe_tool to gather diagnostics for this request.',
+      maxRetries: 1,
+    });
+  });
+
   it('activates promoted extended tools each turn without load_tools calls', async () => {
     const config = makeConfig({
       promotedExtendedTools: ['extended_probe_tool'],

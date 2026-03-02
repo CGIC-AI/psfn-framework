@@ -353,6 +353,7 @@ export class SubstrateRuntime implements Lifecycle {
       join(this.config.dataDir, 'character-card-history.jsonl'),
     );
     log.info(`Loaded character: ${card.data.name}`);
+    this.config.characterName = card.data.name;
     const promptRegistry = wireStaticPromptRegistry(this.config.dataDir);
     const cardProposalQueue = new ConfirmationQueue();
 

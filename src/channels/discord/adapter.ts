@@ -4,7 +4,11 @@ import {
   GatewayIntentBits,
   Partials,
   type Message,
+  type MessageReaction,
+  type PartialMessageReaction,
+  type PartialUser,
   type TextChannel,
+  type User,
 } from 'discord.js';
 import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
 import type {
@@ -39,10 +43,21 @@ const MAX_DISCORD_LENGTH = 2000;
 const STARTUP_BACKFILL_LIMIT = 100;
 const BACKFILL_DEDUP_WINDOW = 500;
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+const DISCORD_TRIGGER_REACTION_DEFAULT = '👆';
+const DISCORD_LISTEN_WINDOW_DEFAULT_MS = 120_000;
+const DISCORD_LISTEN_WINDOW_MIN_MS = 10_000;
+const DISCORD_LISTEN_WINDOW_MAX_MS = 600_000;
+const DISCORD_TRIGGER_OPT_OUT_PREFIX = '!i';
 type StatusKind = 'compaction' | 'retry';
 
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
+}
+
+interface PendingDiscordTurn {
+  msg: Message;
+  substrateMsg: SubstrateMessage;
+  replyToOriginal: boolean;
 }
 
 export class DiscordAdapter implements ChannelAdapter {
@@ -76,10 +91,11 @@ export class DiscordAdapter implements ChannelAdapter {
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
-  private pendingByChannel = new DeferredLatestByChannel<Message>();
+  private pendingByChannel = new DeferredLatestByChannel<PendingDiscordTurn>();
   private lockStartedAt = new Map<string, number>();
   private lockContention = new Map<string, number>();
   private lockPolicy = new Map<string, TurnContentionPolicy>();
+  private listeningWindows = new Map<string, number>();
   private voice: DiscordVoiceRuntime;
   private statusMessages = new Map<string, Message>();
   private statusUnsubscribers: Array<() => void> = [];
@@ -102,7 +118,7 @@ export class DiscordAdapter implements ChannelAdapter {
     this.gateway = this;
     this.security = {
       supportsDirectMessages: true,
-      requiresMentionForChannelMessages: this.runtimeConfig.discordRespondAll !== true,
+      requiresMentionForChannelMessages: true,
     };
     this.streaming = {
       typingIntervalMs: TYPING_INTERVAL_MS,
@@ -131,8 +147,9 @@ export class DiscordAdapter implements ChannelAdapter {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessageReactions,
       ],
-      partials: [Partials.Channel],
+      partials: [Partials.Channel, Partials.Message, Partials.Reaction],
     });
 
     this.voice = new DiscordVoiceRuntime({
@@ -164,6 +181,11 @@ export class DiscordAdapter implements ChannelAdapter {
         log.error('Message handling error', { error: String(err) });
       });
     });
+    this.client.on(Events.MessageReactionAdd, (reaction, user) => {
+      this.onReactionAdd(reaction, user).catch(err => {
+        log.error('Reaction handling error', { error: String(err) });
+      });
+    });
 
     this.client.once(Events.ClientReady, (c) => {
       log.info(`Logged in as ${c.user.tag}`);
@@ -187,6 +209,7 @@ export class DiscordAdapter implements ChannelAdapter {
     for (const unsub of this.statusUnsubscribers) unsub();
     this.statusUnsubscribers = [];
     await this.clearAllStatusMessages();
+    this.listeningWindows.clear();
     await this.voice.stop();
     this.client.destroy();
   }
@@ -212,43 +235,121 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   private async onDiscordMessage(msg: Message): Promise<void> {
-    const liveBotId = this.client.user?.id;
-    const configuredBotId = this.runtimeConfig.discordBotId.trim();
-    const runtimeBotId = liveBotId ?? (configuredBotId.length > 0 ? configuredBotId : undefined);
+    const runtimeBotId = this.resolveRuntimeBotId();
 
-    // Ignore self
-    if (liveBotId && msg.author.id === liveBotId) return;
+    // Ignore self + bots
+    if (runtimeBotId && msg.author.id === runtimeBotId) return;
     if (msg.author.bot) return;
     if (!this.handler) return;
 
-    // Respond to DMs always, guild messages only when mentioned
+    // Respond to DMs always, guild messages by mention/trigger/listening window.
     const isDM = !msg.guild;
-    const isMentioned = runtimeBotId ? msg.mentions.has(runtimeBotId) : false;
-    const respondAllGuildMessages = this.runtimeConfig.discordRespondAll === true;
-    if (!isDM && !respondAllGuildMessages && !isMentioned) return;
-
     const channelId = msg.channelId;
+    if (!isDM) {
+      if (msg.content.trimStart().startsWith(DISCORD_TRIGGER_OPT_OUT_PREFIX)) return;
 
-    // Strip bot mention from content
-    let content = msg.content;
-    if (runtimeBotId) {
-      content = content.replace(new RegExp(`<@!?${runtimeBotId}>`, 'g'), '');
+      const isMentioned = runtimeBotId ? msg.mentions.has(runtimeBotId) : false;
+      const isTriggered = this.matchesTriggerWord(msg.content);
+      const listenKey = this.listeningWindowKey(channelId, msg.author.id);
+      const isListening = this.isInListeningWindow(listenKey);
+
+      if (!isMentioned && !isTriggered && !isListening) return;
+
+      this.openListeningWindow(listenKey);
+
+      if (isTriggered && !isMentioned) {
+        log.debug('Discord trigger word matched', { channelId, authorId: msg.author.id });
+      } else if (isListening && !isMentioned) {
+        log.debug('Discord listening window accepted follow-up', { channelId, authorId: msg.author.id });
+      }
     }
-    content = content.trim();
-    if (!content) content = '(empty message)';
 
-    const substrateMsg: SubstrateMessage = {
-      id: msg.id,
+    const substrateMsg = this.buildSubstrateMessage(msg, isDM, runtimeBotId);
+    await this.processMessage({
+      msg,
+      substrateMsg,
+      replyToOriginal: false,
+    });
+  }
+
+  private async onReactionAdd(
+    reaction: MessageReaction | PartialMessageReaction,
+    user: User | PartialUser,
+  ): Promise<void> {
+    const runtimeBotId = this.resolveRuntimeBotId();
+    if (runtimeBotId && user.id === runtimeBotId) return;
+    if (user.bot) return;
+
+    const emojiName = reaction.emoji.name ?? '';
+    const isDeleteReaction = emojiName === '❌';
+
+    if (!isDeleteReaction) {
+      if (!this.handler) return;
+      if (!this.matchesTriggerReaction(emojiName, reaction.emoji.id)) return;
+    }
+
+    const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
+    const targetMessage = fullReaction.message.partial
+      ? await fullReaction.message.fetch()
+      : fullReaction.message;
+
+    if (isDeleteReaction) {
+      if (runtimeBotId && targetMessage.author.id === runtimeBotId) {
+        log.info('Discord delete reaction received for bot message', {
+          messageId: targetMessage.id,
+          channelId: targetMessage.channelId,
+          reactorId: user.id,
+        });
+        await targetMessage.delete().catch((error) => {
+          log.warn('Failed to delete Discord bot message from reaction', {
+            messageId: targetMessage.id,
+            channelId: targetMessage.channelId,
+            error: String(error),
+          });
+        });
+      }
+      return;
+    }
+
+    if (targetMessage.author.bot) return;
+    if (runtimeBotId && targetMessage.author.id === runtimeBotId) return;
+
+    const channelId = targetMessage.channelId;
+    log.debug('Discord reaction trigger matched', {
       channelId,
-      channelType: 'discord',
-      isDirectMessage: isDM,
-      authorId: msg.author.id,
-      authorName: msg.author.displayName ?? msg.author.username,
-      content,
-      timestamp: msg.createdAt,
-    };
+      messageId: targetMessage.id,
+      emoji: emojiName,
+      reactorId: user.id,
+    });
 
-    // If already processing this channel, steer (interrupt) instead of dropping
+    const authorListenKey = this.listeningWindowKey(channelId, targetMessage.author.id);
+    this.openListeningWindow(authorListenKey);
+    const reactorListenKey = this.listeningWindowKey(channelId, user.id);
+    if (reactorListenKey !== authorListenKey) {
+      this.openListeningWindow(reactorListenKey);
+    }
+
+    fullReaction.remove().catch(() => undefined);
+
+    const substrateMsg = this.buildSubstrateMessage(
+      targetMessage as Message,
+      !targetMessage.guild,
+      runtimeBotId,
+    );
+    await this.processMessage({
+      msg: targetMessage as Message,
+      substrateMsg,
+      replyToOriginal: true,
+    });
+  }
+
+  private async processMessage(turn: PendingDiscordTurn): Promise<void> {
+    const { msg, substrateMsg, replyToOriginal } = turn;
+    const channelId = substrateMsg.channelId;
+
+    if (!this.handler) return;
+
+    // If already processing this channel, steer (interrupt) instead of dropping.
     if (this.processing.has(channelId)) {
       const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
       const queueDepth = (this.lockContention.get(channelId) ?? 0) + 1;
@@ -265,7 +366,7 @@ export class DiscordAdapter implements ChannelAdapter {
       } else {
         // Gateway mode has no direct agent instance, so keep latest message queued
         // instead of dropping it during lock contention.
-        const deferred = this.pendingByChannel.set(channelId, msg);
+        const deferred = this.pendingByChannel.set(channelId, turn);
         this.emitQueueTelemetry(channelId, 'contended', 'defer-latest', {
           queueDepth: deferred.queueDepth,
           waitMs,
@@ -296,9 +397,14 @@ export class DiscordAdapter implements ChannelAdapter {
       await this.eventBus.emit('message.received', { message: substrateMsg });
 
       const response = await this.handler(substrateMsg);
-      const hasText = response.content.trim().length > 0;
+      const trimmedResponse = response.content.trim();
+      const hasText = trimmedResponse.length > 0;
       if (hasText) {
-        await this.outbound.sendText({ channelId }, response.content);
+        if (replyToOriginal) {
+          await this.sendReply(msg, trimmedResponse);
+        } else {
+          await this.outbound.sendText({ channelId }, response.content);
+        }
         await this.eventBus.emit('message.sent', { response });
       } else {
         log.debug('Suppressing empty handler response for Discord channel', { channelId });
@@ -308,7 +414,9 @@ export class DiscordAdapter implements ChannelAdapter {
       log.error('Error processing message', { error: String(error) });
       try {
         await msg.reply('Something went wrong. Please try again.');
-      } catch { /* ignore reply errors */ }
+      } catch {
+        // Ignore reply errors.
+      }
     } finally {
       clearInterval(typingInterval);
       this.processing.delete(channelId);
@@ -325,12 +433,132 @@ export class DiscordAdapter implements ChannelAdapter {
       const pending = this.pendingByChannel.take(channelId);
       if (pending) {
         queueMicrotask(() => {
-          this.onDiscordMessage(pending).catch((error) => {
+          this.processMessage(pending).catch((error) => {
             log.error('Deferred Discord message handling error', { channelId, error: String(error) });
           });
         });
       }
     }
+  }
+
+  private buildSubstrateMessage(
+    msg: Message,
+    isDirectMessage: boolean,
+    runtimeBotId?: string,
+  ): SubstrateMessage {
+    return {
+      id: msg.id,
+      channelId: msg.channelId,
+      channelType: 'discord',
+      isDirectMessage,
+      authorId: msg.author.id,
+      authorName: msg.author.displayName ?? msg.author.username,
+      content: this.sanitizeMessageContent(msg.content, runtimeBotId),
+      timestamp: msg.createdAt,
+    };
+  }
+
+  private sanitizeMessageContent(content: string, runtimeBotId?: string): string {
+    let normalized = content;
+    if (runtimeBotId) {
+      normalized = normalized.replace(new RegExp(`<@!?${runtimeBotId}>`, 'g'), '');
+    }
+    normalized = normalized.trim();
+    return normalized.length > 0 ? normalized : '(empty message)';
+  }
+
+  private async sendReply(msg: Message, content: string): Promise<void> {
+    const chunks = splitMessage(content);
+    if (chunks.length === 0) return;
+
+    await msg.reply(chunks[0]);
+    for (let i = 1; i < chunks.length; i++) {
+      await (msg.channel as TextChannel).send(chunks[i]);
+    }
+  }
+
+  private resolveRuntimeBotId(): string | undefined {
+    const liveBotId = this.client.user?.id;
+    if (liveBotId) return liveBotId;
+    const configuredBotId = this.runtimeConfig.discordBotId.trim();
+    return configuredBotId.length > 0 ? configuredBotId : undefined;
+  }
+
+  private listeningWindowKey(channelId: string, userId: string): string {
+    return `${channelId}:${userId}`;
+  }
+
+  private isInListeningWindow(key: string): boolean {
+    const expiry = this.listeningWindows.get(key);
+    if (expiry === undefined) return false;
+    if (Date.now() > expiry) {
+      this.listeningWindows.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  private openListeningWindow(key: string): void {
+    const windowMs = this.resolveListeningWindowMs();
+    this.listeningWindows.set(key, Date.now() + windowMs);
+    log.debug('Discord listening window opened/extended', { key, windowMs });
+  }
+
+  private resolveListeningWindowMs(): number {
+    const configured = this.runtimeConfig.discordTriggerListenWindowMs;
+    if (typeof configured !== 'number' || Number.isNaN(configured)) {
+      return DISCORD_LISTEN_WINDOW_DEFAULT_MS;
+    }
+    return Math.min(
+      DISCORD_LISTEN_WINDOW_MAX_MS,
+      Math.max(DISCORD_LISTEN_WINDOW_MIN_MS, Math.floor(configured)),
+    );
+  }
+
+  private matchesTriggerWord(content: string): boolean {
+    const lower = content.toLowerCase();
+    if (!lower) return false;
+
+    const characterName = this.runtimeConfig.characterName?.trim();
+    if (characterName && lower.includes(characterName.toLowerCase())) {
+      return true;
+    }
+
+    const configuredWords = this.runtimeConfig.discordTriggerWords ?? [];
+    for (const configured of configuredWords) {
+      const candidate = configured.trim().toLowerCase();
+      if (candidate && lower.includes(candidate)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private matchesTriggerReaction(emojiName: string, emojiId: string | null): boolean {
+    const normalizedEmoji = emojiName.trim();
+    if (!normalizedEmoji) return false;
+
+    const candidates = new Set<string>([normalizedEmoji]);
+    if (emojiId) {
+      candidates.add(`<:${normalizedEmoji}:${emojiId}>`);
+      candidates.add(`<a:${normalizedEmoji}:${emojiId}>`);
+    }
+
+    for (const reaction of this.getTriggerReactions()) {
+      if (candidates.has(reaction)) return true;
+    }
+    return false;
+  }
+
+  private getTriggerReactions(): string[] {
+    const configured = (this.runtimeConfig.discordTriggerReactions ?? [])
+      .map((reaction) => reaction.trim())
+      .filter((reaction) => reaction.length > 0);
+
+    return configured.length > 0
+      ? configured
+      : [DISCORD_TRIGGER_REACTION_DEFAULT];
   }
 
   private startTyping(msg: Message): ReturnType<typeof setInterval> {

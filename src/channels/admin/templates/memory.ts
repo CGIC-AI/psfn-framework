@@ -44,7 +44,7 @@ function sensitivityBadge(level: string): string {
 
 function formatContactLink(contactId: string, label: string): string {
   const fragment = encodeURIComponent(`contact-row-${contactId}`);
-  const viewHref = `/contacts#${fragment}`;
+  const viewHref = `/legacy/contacts#${fragment}`;
   const editHref = `/api/contacts/${encodeURIComponent(contactId)}/edit`;
   return `<div><a href="${viewHref}">${escapeHtml(label)}</a></div>
     <div class="crm-notes"><a href="${viewHref}">view</a> · <a href="${editHref}">edit</a></div>`;
@@ -520,7 +520,7 @@ export function memoryListPage(
   const nextOffset = pagination.offset + pagination.limit;
   const paginationControls = `
     <div class="search-form" style="margin-top:0.75rem;align-items:center;gap:0.75rem;flex-wrap:wrap">
-      <form method="get" action="/memory" style="display:flex;gap:0.5rem;align-items:center">
+      <form method="get" action="/legacy/memory" style="display:flex;gap:0.5rem;align-items:center">
         <label for="memory-limit">Limit</label>
         <input id="memory-limit" type="number" name="limit" min="1" max="200" value="${pagination.limit}" style="max-width:6rem">
         <input type="hidden" name="offset" value="0">
@@ -529,10 +529,10 @@ export function memoryListPage(
       <div class="crm-notes">Showing ${start}-${end} of ${pagination.total}</div>
       <div style="display:flex;gap:0.5rem">
         ${pagination.hasPrevious
-    ? `<a class="btn" href="/memory?limit=${pagination.limit}&offset=${previousOffset}">&larr; Newer</a>`
+    ? `<a class="btn" href="/legacy/memory?limit=${pagination.limit}&offset=${previousOffset}">&larr; Newer</a>`
     : '<span class="btn" style="pointer-events:none;opacity:0.5">&larr; Newer</span>'}
         ${pagination.hasNext
-    ? `<a class="btn" href="/memory?limit=${pagination.limit}&offset=${nextOffset}">Older &rarr;</a>`
+    ? `<a class="btn" href="/legacy/memory?limit=${pagination.limit}&offset=${nextOffset}">Older &rarr;</a>`
     : '<span class="btn" style="pointer-events:none;opacity:0.5">Older &rarr;</span>'}
       </div>
     </div>
@@ -572,7 +572,7 @@ export function memoryRow(m: PurrMemory, linkedContact?: MemoryContactView): str
         <span class="badge badge-${m.type}">${m.type}</span>
       </label>
     </td>
-    <td><a href="/memory/${encodeURIComponent(m.id)}">${truncText}</a></td>
+    <td><a href="/legacy/memory/${encodeURIComponent(m.id)}">${truncText}</a></td>
     <td>${memoryContactCell(m, linkedContact)}</td>
     <td>${m.salience.toFixed(2)}</td>
     <td>${m.importance.toFixed(2)}</td>
@@ -607,5 +607,5 @@ export function memoryDetailPage(m: PurrMemory, linkedContact?: MemoryContactVie
         ${m.supersededBy ? `<tr><td>Superseded By</td><td>${escapeHtml(m.supersededBy)}</td></tr>` : ''}
       </table>
     </div>
-    <a href="/memory">&larr; Back to Memory Blossoms</a>`;
+    <a href="/legacy/memory">&larr; Back to Memory Blossoms</a>`;
 }

@@ -159,7 +159,7 @@ export function auditTimelinePage(model: AuditTimelinePageModel): string {
     <p class="audit-intro">
       Unified timeline for tool invocations, identity edits, external actions, and memory mutations.
     </p>
-    <form class="audit-filter-form" method="GET" action="/events">
+    <form class="audit-filter-form" method="GET" action="/legacy/events">
       <label>
         Action type
         <select name="actionType">${actionTypeOptions}</select>

@@ -273,7 +273,7 @@ export class AdminServer implements Lifecycle {
       characterCard: config.characterCard,
       config: config.config,
       cardVersionStore: config.cardVersionStore,
-      importIdentityCardHtml: (body) => this.handlers.importIdentityCard(body),
+      importIdentityCardHtml: (body) => this.handlers.domains.identity.importIdentityCard(body),
     });
     this.promptsService = new AdminPromptsDataService({
       promptStore: config.promptStore,
@@ -812,20 +812,20 @@ export class AdminServer implements Lifecycle {
           });
         },
       },
-      { method: 'GET', match: exactPath('/'), handle: (_req, res) => this.sendHtml(res, this.handlers.dashboard()) },
+      { method: 'GET', match: exactPath('/'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.dashboard.dashboard()) },
       {
         method: 'GET',
         match: exactPath('/memory'),
         handle: (req, res) => {
           const url = new URL(req.url ?? '/memory', `http://${req.headers.host ?? 'localhost'}`);
-          this.sendHtml(res, this.handlers.memoryList(url.searchParams));
+          this.sendHtml(res, this.handlers.domains.memory.memoryList(url.searchParams));
         },
       },
       {
         method: 'GET',
         match: prefixedParamPath('/memory/', 'id', { exclude: (path) => path.startsWith('/memory/search') }),
         handle: (_req, res, { id }) => {
-          const html = this.handlers.memoryDetail(id);
+          const html = this.handlers.domains.memory.memoryDetail(id);
           if (!html) {
             this.send404(res, `/memory/${encodeURIComponent(id)}`);
             return;
@@ -833,33 +833,33 @@ export class AdminServer implements Lifecycle {
           this.sendHtml(res, html);
         },
       },
-      { method: 'GET', match: exactPath('/sessions'), handle: (_req, res) => this.sendHtml(res, this.handlers.sessionList()) },
+      { method: 'GET', match: exactPath('/sessions'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.sessions.sessionList()) },
       {
         method: 'GET',
         match: prefixedParamPath('/sessions/', 'channelId', { exclude: (path) => path.includes('/api/') }),
-        handle: (_req, res, { channelId }) => this.sendHtml(res, this.handlers.sessionMessages(channelId)),
+        handle: (_req, res, { channelId }) => this.sendHtml(res, this.handlers.domains.sessions.sessionMessages(channelId)),
       },
       { method: 'GET', match: exactPath('/scheduler'), handle: (_req, res) => this.sendHtml(res, this.handlers.schedulerPage()) },
       { method: 'GET', match: exactPath('/shards'), handle: (_req, res) => this.sendHtml(res, this.handlers.shardsPage()) },
-      { method: 'GET', match: exactPath('/contacts'), handle: (_req, res) => this.sendHtml(res, this.handlers.contactsPage()) },
-      { method: 'GET', match: exactPath('/chat'), handle: (_req, res) => this.sendHtml(res, this.handlers.chatPage()) },
+      { method: 'GET', match: exactPath('/contacts'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.contacts.contactsPage()) },
+      { method: 'GET', match: exactPath('/chat'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.chat.chatPage()) },
       {
         method: 'GET',
         match: exactPath('/confirmations'),
         handle: (_req, res) => {
-          this.handlers.confirmationsPage().then(
+          this.handlers.domains.confirmations.confirmationsPage().then(
             (html) => this.sendHtml(res, html),
             (err) => this.send500('Confirmations page error', err, res),
           );
         },
       },
-      { method: 'GET', match: exactPath('/identity'), handle: (_req, res) => this.sendHtml(res, this.handlers.identityPage()) },
+      { method: 'GET', match: exactPath('/identity'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.identity.identityPage()) },
       {
         method: 'POST',
         match: exactPath('/api/identity/import'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.handlers.importIdentityCard(body).then(
+            this.handlers.domains.identity.importIdentityCard(body).then(
               (html) => this.sendFragment(res, html),
               (err) => this.send500('Identity import error', err, res),
             );
@@ -871,7 +871,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/identity/intake/stage'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.stageIdentityIntake(body));
+            this.sendFragment(res, this.handlers.domains.identity.stageIdentityIntake(body));
           });
         },
       },
@@ -880,7 +880,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/identity/intake/commit'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.handlers.commitIdentityIntake(body).then(
+            this.handlers.domains.identity.commitIdentityIntake(body).then(
               (html) => this.sendFragment(res, html),
               (err) => this.send500('Identity intake commit error', err, res),
             );
@@ -892,7 +892,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/identity/card/rollback'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.rollbackIdentityCard(body));
+            this.sendFragment(res, this.handlers.domains.identity.rollbackIdentityCard(body));
           });
         },
       },
@@ -901,7 +901,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/identity/card/diff'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.previewIdentityCardDiff(body));
+            this.sendFragment(res, this.handlers.domains.identity.previewIdentityCardDiff(body));
           });
         },
       },
@@ -909,29 +909,29 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/settings'),
         handle: (_req, res) => {
-          this.handlers.settingsPage().then(
+          this.handlers.domains.settings.settingsPage().then(
             (html) => this.sendHtml(res, html),
             (err) => this.send500('Settings page error', err, res),
           );
         },
       },
-      { method: 'GET', match: exactPath('/skills'), handle: (_req, res) => this.sendHtml(res, this.handlers.skillsPage()) },
+      { method: 'GET', match: exactPath('/skills'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.settings.skillsPage()) },
       {
         method: 'GET',
         match: exactPath('/events'),
         handle: (req, res) => {
           const url = new URL(req.url ?? '/events', `http://${req.headers.host ?? 'localhost'}`);
-          this.sendHtml(res, this.handlers.eventsPageHtml(url.searchParams));
+          this.sendHtml(res, this.handlers.domains.events.eventsPageHtml(url.searchParams));
         },
       },
-      { method: 'GET', match: exactPath('/values'), handle: (_req, res) => this.sendHtml(res, this.handlers.valuesTimelinePageHtml()) },
+      { method: 'GET', match: exactPath('/values'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.events.valuesTimelinePageHtml()) },
       { method: 'GET', match: exactPath('/primer'), handle: (_req, res) => this.sendHtml(res, this.handlers.primerPage()) },
       {
         method: 'GET',
         match: exactPath('/api/memory/list'),
         handle: (req, res) => {
           const url = new URL(req.url ?? '/api/memory/list', `http://${req.headers.host ?? 'localhost'}`);
-          this.sendFragment(res, this.handlers.memoryListFragment(url.searchParams));
+          this.sendFragment(res, this.handlers.domains.memory.memoryListFragment(url.searchParams));
         },
       },
       {
@@ -941,7 +941,7 @@ export class AdminServer implements Lifecycle {
           this.withBody(req, res, (body) => {
             const params = new URLSearchParams(body);
             const query = params.get('query') ?? '';
-            this.handlers.memorySearch(query).then(
+            this.handlers.domains.memory.memorySearch(query).then(
               (html) => this.sendFragment(res, html),
               (err) => {
                 log.error('Memory search error', { error: String(err) });
@@ -954,12 +954,12 @@ export class AdminServer implements Lifecycle {
       {
         method: 'POST',
         match: wrappedParamPath('/api/memory/', '/supersede', 'id'),
-        handle: (_req, res, { id }) => this.sendFragment(res, this.handlers.memorySupersede(id)),
+        handle: (_req, res, { id }) => this.sendFragment(res, this.handlers.domains.memory.memorySupersede(id)),
       },
       {
         method: 'GET',
         match: wrappedParamPath('/api/sessions/', '/messages', 'channelId'),
-        handle: (_req, res, { channelId }) => this.sendFragment(res, this.handlers.sessionMessagesFragment(channelId)),
+        handle: (_req, res, { channelId }) => this.sendFragment(res, this.handlers.domains.sessions.sessionMessagesFragment(channelId)),
       },
       {
         method: 'GET',
@@ -967,7 +967,7 @@ export class AdminServer implements Lifecycle {
         handle: (req, res) => sendJson(
           res,
           200,
-          this.handlers.chatBootstrap(this.resolveRequestOrigin(req)),
+          this.handlers.domains.chat.chatBootstrap(this.resolveRequestOrigin(req)),
         ),
       },
       {
@@ -976,7 +976,7 @@ export class AdminServer implements Lifecycle {
         handle: (req, res) => sendJson(
           res,
           200,
-          this.handlers.chatModelRoomBootstrap(this.resolveRequestOrigin(req)),
+          this.handlers.domains.chat.chatModelRoomBootstrap(this.resolveRequestOrigin(req)),
         ),
       },
       {
@@ -985,7 +985,7 @@ export class AdminServer implements Lifecycle {
         handle: (req, res) => {
           const url = new URL(req.url ?? '/api/chat/events/stream', `http://${req.headers.host ?? 'localhost'}`);
           const channelId = url.searchParams.get('channelId') ?? undefined;
-          const cleanup = this.handlers.setupChatDebugSSE(res, { channelId });
+          const cleanup = this.handlers.domains.chat.setupChatDebugSSE(res, { channelId });
           req.on('close', cleanup);
         },
       },
@@ -995,7 +995,7 @@ export class AdminServer implements Lifecycle {
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
             try {
-              const payload = this.handlers.updateChatBootstrap(
+              const payload = this.handlers.domains.chat.updateChatBootstrap(
                 body,
                 req.headers['content-type'],
                 this.resolveRequestOrigin(req),
@@ -1013,7 +1013,7 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/api/confirmations/list'),
         handle: (_req, res) => {
-          this.handlers.confirmationsListFragment().then(
+          this.handlers.domains.confirmations.confirmationsListFragment().then(
             (html) => this.sendFragment(res, html),
             (err) => this.send500('Confirmation queue list error', err, res),
           );
@@ -1024,7 +1024,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/confirmations/resolve'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.handlers.resolveConfirmation(body).then(
+            this.handlers.domains.confirmations.resolveConfirmation(body).then(
               (html) => this.sendFragment(res, html),
               (err) => this.send500('Confirmation queue resolve error', err, res),
             );
@@ -1034,27 +1034,27 @@ export class AdminServer implements Lifecycle {
       {
         method: 'GET',
         match: exactPath('/api/contacts/list'),
-        handle: (_req, res) => this.sendFragment(res, this.handlers.contactsListFragment()),
+        handle: (_req, res) => this.sendFragment(res, this.handlers.domains.contacts.contactsListFragment()),
       },
       {
         method: 'GET',
         match: exactPath('/api/contacts/mutations'),
         handle: (req, res) => {
           const url = new URL(req.url ?? '/api/contacts/mutations', `http://${req.headers.host ?? 'localhost'}`);
-          this.sendFragment(res, this.handlers.contactMutationAuditFragment(url.searchParams));
+          this.sendFragment(res, this.handlers.domains.contacts.contactMutationAuditFragment(url.searchParams));
         },
       },
       {
         method: 'GET',
         match: wrappedParamPath('/api/contacts/', '/edit', 'contactId'),
-        handle: (_req, res, { contactId }) => this.sendFragment(res, this.handlers.contactEditFormFragment(contactId)),
+        handle: (_req, res, { contactId }) => this.sendFragment(res, this.handlers.domains.contacts.contactEditFormFragment(contactId)),
       },
       {
         method: 'POST',
         match: prefixedParamPath('/api/contacts/', 'contactId', { exclude: (path) => path.endsWith('/edit') }),
         handle: (req, res, { contactId }) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.handleContactUpdate(contactId, body));
+            this.sendFragment(res, this.handlers.domains.contacts.handleContactUpdate(contactId, body));
           });
         },
       },
@@ -1063,14 +1063,14 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/settings'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.updateSettings(body));
+            this.sendFragment(res, this.handlers.domains.settings.updateSettings(body));
           });
         },
       },
       {
         method: 'GET',
         match: exactPath('/api/settings/models'),
-        handle: (_req, res) => sendText(res, 200, this.handlers.modelsConfigJson(), {
+        handle: (_req, res) => sendText(res, 200, this.handlers.domains.settings.modelsConfigJson(), {
           'Content-Type': 'application/json',
         }),
       },
@@ -1079,14 +1079,14 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/settings/models'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.updateModelsConfig(body));
+            this.sendFragment(res, this.handlers.domains.settings.updateModelsConfig(body));
           });
         },
       },
       {
         method: 'GET',
         match: exactPath('/api/settings/skills'),
-        handle: (_req, res) => sendText(res, 200, this.handlers.skillsConfigJson(), {
+        handle: (_req, res) => sendText(res, 200, this.handlers.domains.settings.skillsConfigJson(), {
           'Content-Type': 'application/json',
         }),
       },
@@ -1095,14 +1095,14 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/settings/skills'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.updateSkillsConfig(body));
+            this.sendFragment(res, this.handlers.domains.settings.updateSkillsConfig(body));
           });
         },
       },
       {
         method: 'GET',
         match: exactPath('/api/settings/scheduler'),
-        handle: (_req, res) => sendText(res, 200, this.handlers.schedulerConfigJson(), {
+        handle: (_req, res) => sendText(res, 200, this.handlers.domains.settings.schedulerConfigJson(), {
           'Content-Type': 'application/json',
         }),
       },
@@ -1111,14 +1111,14 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/settings/scheduler'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.updateSchedulerConfig(body));
+            this.sendFragment(res, this.handlers.domains.settings.updateSchedulerConfig(body));
           });
         },
       },
       {
         method: 'GET',
         match: exactPath('/api/settings/trust-policy'),
-        handle: (_req, res) => sendText(res, 200, this.handlers.trustPolicyConfigJson(), {
+        handle: (_req, res) => sendText(res, 200, this.handlers.domains.settings.trustPolicyConfigJson(), {
           'Content-Type': 'application/json',
         }),
       },
@@ -1127,14 +1127,14 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/settings/trust-policy'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.updateTrustPolicyConfig(body));
+            this.sendFragment(res, this.handlers.domains.settings.updateTrustPolicyConfig(body));
           });
         },
       },
       {
         method: 'GET',
         match: exactPath('/api/settings/capabilities'),
-        handle: (_req, res) => sendText(res, 200, this.handlers.capabilitiesConfigJson(), {
+        handle: (_req, res) => sendText(res, 200, this.handlers.domains.settings.capabilitiesConfigJson(), {
           'Content-Type': 'application/json',
         }),
       },
@@ -1143,7 +1143,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/settings/capabilities'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.updateCapabilitiesConfig(body));
+            this.sendFragment(res, this.handlers.domains.settings.updateCapabilitiesConfig(body));
           });
         },
       },
@@ -1151,7 +1151,7 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/api/models'),
         handle: (_req, res) => {
-          this.handlers.modelListJson().then(
+          this.handlers.domains.settings.modelListJson().then(
             (json) => sendText(res, 200, json, { 'Content-Type': 'application/json' }),
             (err) => {
               log.error('Model list error', { error: String(err) });
@@ -1164,7 +1164,7 @@ export class AdminServer implements Lifecycle {
         method: 'POST',
         match: exactPath('/api/models/refresh'),
         handle: (_req, res) => {
-          this.handlers.refreshModels().then(
+          this.handlers.domains.settings.refreshModels().then(
             (json) => sendText(res, 200, json, { 'Content-Type': 'application/json' }),
             (err) => {
               log.error('Model refresh error', { error: String(err) });
@@ -1197,12 +1197,12 @@ export class AdminServer implements Lifecycle {
           });
         },
       },
-      { method: 'GET', match: exactPath('/prompts'), handle: (_req, res) => this.sendHtml(res, this.handlers.promptsPage()) },
+      { method: 'GET', match: exactPath('/prompts'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.prompts.promptsPage()) },
       {
         method: 'GET',
         match: prefixedParamPath('/prompts/static/', 'key'),
         handle: (_req, res, { key }) => {
-          const html = this.handlers.promptRegistryDetail(key);
+          const html = this.handlers.domains.prompts.promptRegistryDetail(key);
           if (!html) {
             this.send404(res, `/prompts/static/${encodeURIComponent(key)}`);
             return;
@@ -1214,7 +1214,7 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: prefixedParamPath('/prompts/', 'layerId', { exclude: (path) => path.includes('/api/') }),
         handle: (_req, res, { layerId }) => {
-          const html = this.handlers.promptDetail(layerId);
+          const html = this.handlers.domains.prompts.promptDetail(layerId);
           if (!html) {
             this.send404(res, `/prompts/${encodeURIComponent(layerId)}`);
             return;
@@ -1227,7 +1227,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/prompts/update'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.updatePromptLayer(body));
+            this.sendFragment(res, this.handlers.domains.prompts.updatePromptLayer(body));
           });
         },
       },
@@ -1236,7 +1236,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/prompts/static/update'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.updatePromptRegistry(body));
+            this.sendFragment(res, this.handlers.domains.prompts.updatePromptRegistry(body));
           });
         },
       },
@@ -1245,7 +1245,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/prompts/toggle'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.togglePromptLayer(body));
+            this.sendFragment(res, this.handlers.domains.prompts.togglePromptLayer(body));
           });
         },
       },
@@ -1254,7 +1254,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/prompts/rollback'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.rollbackPromptLayer(body));
+            this.sendFragment(res, this.handlers.domains.prompts.rollbackPromptLayer(body));
           });
         },
       },
@@ -1263,7 +1263,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/prompts/static/rollback'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.rollbackPromptRegistry(body));
+            this.sendFragment(res, this.handlers.domains.prompts.rollbackPromptRegistry(body));
           });
         },
       },
@@ -1272,7 +1272,7 @@ export class AdminServer implements Lifecycle {
         match: exactPath('/api/prompts/diff'),
         handle: (req, res) => {
           this.withBody(req, res, (body) => {
-            this.sendFragment(res, this.handlers.previewPromptLayerDiff(body));
+            this.sendFragment(res, this.handlers.domains.prompts.previewPromptLayerDiff(body));
           });
         },
       },
@@ -1285,7 +1285,7 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/events/stream'),
         handle: (req, res) => {
-          const cleanup = this.handlers.setupSSE(res);
+          const cleanup = this.handlers.domains.events.setupSSE(res);
           req.on('close', cleanup);
         },
       },

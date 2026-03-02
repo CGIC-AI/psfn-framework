@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     bulkDeleteMemories,
     bulkUpdateMemories,
@@ -39,6 +39,8 @@
   let endDateFilter = $state('');
   let searchQuery = $state('');
   let searchActive = $state(false);
+  let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+  let searchRequestId = 0;
   let offset = $state(0);
 
   let detailModalId = $state<string | null>(null);
@@ -146,6 +148,11 @@
   }
 
   async function loadMemories() {
+    searchRequestId += 1;
+    if (searchDebounce) {
+      clearTimeout(searchDebounce);
+      searchDebounce = null;
+    }
     loading = true;
     error = '';
     searchActive = false;
@@ -174,19 +181,29 @@
   }
 
   async function handleSearch() {
-    if (!searchQuery.trim()) {
+    if (searchDebounce) {
+      clearTimeout(searchDebounce);
+      searchDebounce = null;
+    }
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery) {
       searchActive = false;
       searchResults = null;
       return;
     }
+    const requestId = ++searchRequestId;
     loading = true;
     error = '';
     try {
-      searchResults = await searchMemories(searchQuery.trim());
+      const nextResults = await searchMemories(trimmedQuery);
+      if (requestId !== searchRequestId) return;
+      searchResults = nextResults;
       searchActive = true;
     } catch (e) {
+      if (requestId !== searchRequestId) return;
       error = e instanceof Error ? e.message : 'Search failed';
     } finally {
+      if (requestId !== searchRequestId) return;
       loading = false;
     }
   }
@@ -214,6 +231,34 @@
     } finally {
       detailModalLoading = false;
     }
+  }
+
+  function queueSearch() {
+    if (searchDebounce) {
+      clearTimeout(searchDebounce);
+      searchDebounce = null;
+    }
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      if (searchActive || searchResults) {
+        searchActive = false;
+        searchResults = null;
+        void loadMemories();
+      }
+      return;
+    }
+    if (trimmed.length < 2) {
+      if (searchActive || searchResults) {
+        searchActive = false;
+        searchResults = null;
+        void loadMemories();
+      }
+      return;
+    }
+    searchDebounce = setTimeout(() => {
+      searchDebounce = null;
+      void handleSearch();
+    }, 320);
   }
 
   async function handleSupersede(id: string) {
@@ -411,6 +456,13 @@
   onMount(() => {
     loadMemories();
   });
+
+  onDestroy(() => {
+    searchRequestId += 1;
+    if (searchDebounce) {
+      clearTimeout(searchDebounce);
+    }
+  });
 </script>
 
 <div class="space-y-6">
@@ -491,9 +543,11 @@
 
     <div class="flex flex-col sm:flex-row gap-2">
       <input
+        data-search-shortcut
         type="text"
         bind:value={searchQuery}
         placeholder="Search memories..."
+        oninput={queueSearch}
         onkeydown={(e) => { if (e.key === 'Enter') handleSearch(); }}
         class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
                placeholder:text-shadow-400 focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
@@ -508,6 +562,7 @@
       {#if searchActive}
         <button
           onclick={() => { searchQuery = ''; searchActive = false; searchResults = null; loadMemories(); }}
+          data-esc-close
           class="px-3 py-2 rounded-lg border border-bark-300 text-shadow-700 text-sm
                  hover:bg-bark-200 transition-colors"
         >

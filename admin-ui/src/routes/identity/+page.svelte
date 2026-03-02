@@ -11,7 +11,8 @@
     requestIdentityImportConfirmation,
     requestIdentityRollbackConfirmation,
   } from '$lib/components/identity-confirmation-flow';
-  import type { AdminIdentityData, CharacterCardV2 } from '$lib/types';
+  import type { AdminIdentityData, CharacterCardV2, CharacterCardHistoryEntry } from '$lib/types';
+  import { pushToast } from '$lib/stores/toast.svelte';
 
   let data = $state<AdminIdentityData | null>(null);
   let loading = $state(true);
@@ -82,11 +83,13 @@
       const result = await importIdentity({ path });
       importMessage = result.message || 'Import successful';
       importSuccess = result.ok !== false;
+      pushToast(importMessage, importSuccess ? 'success' : 'error');
       data = await getIdentity();
       importPath = '';
     } catch (e) {
       importMessage = e instanceof Error ? e.message : 'Import failed';
       importSuccess = false;
+      pushToast(importMessage, 'error');
     } finally {
       importing = false;
     }
@@ -98,9 +101,11 @@
     try {
       const result = await rollbackIdentity({ version });
       rollbackMessage = result.message || 'Rollback successful';
+      pushToast(rollbackMessage, 'success');
       data = await getIdentity();
     } catch (e) {
       rollbackMessage = e instanceof Error ? e.message : 'Rollback failed';
+      pushToast(rollbackMessage, 'error');
     } finally {
       rollingBack = null;
     }
@@ -215,11 +220,14 @@
         data = await getIdentity();
         editingField = null;
         editFieldValue = '';
+        pushToast('Field saved', 'success');
       } else {
         error = result.message || 'Failed to save field';
+        pushToast(error, 'error');
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to save field';
+      pushToast(error, 'error');
     } finally {
       savingField = false;
     }
@@ -252,11 +260,14 @@
       if (result.ok) {
         data = await getIdentity();
         cancelGreetingEdit();
+        pushToast('Greeting updated', 'success');
       } else {
         error = result.message || 'Failed to save greeting';
+        pushToast(error, 'error');
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to save greeting';
+      pushToast(error, 'error');
     } finally {
       savingGreeting = false;
     }
@@ -278,11 +289,14 @@
         if (editingGreetingIndex === index) {
           cancelGreetingEdit();
         }
+        pushToast('Greeting removed', 'success');
       } else {
         error = result.message || 'Failed to remove greeting';
+        pushToast(error, 'error');
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to remove greeting';
+      pushToast(error, 'error');
     } finally {
       savingGreeting = false;
     }
@@ -311,11 +325,14 @@
       if (result.ok) {
         data = await getIdentity();
         cancelAppearanceEdit();
+        pushToast('Appearance saved', 'success');
       } else {
         error = result.message || 'Failed to save appearance';
+        pushToast(error, 'error');
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to save appearance';
+      pushToast(error, 'error');
     } finally {
       savingAppearance = false;
     }
@@ -596,6 +613,7 @@
                 </button>
                 <button
                   onclick={cancelAppearanceEdit}
+                  data-esc-close
                   disabled={savingAppearance}
                   class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 disabled:opacity-50 transition-colors border border-bark-300"
                 >
@@ -638,6 +656,7 @@
                     {savingField ? 'Saving...' : 'Save'}
                   </button>
                   <button onclick={cancelFieldEdit}
+                    data-esc-close
                     disabled={savingField}
                     class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 disabled:opacity-50 transition-colors border border-bark-300">
                     Cancel
@@ -734,6 +753,7 @@
                           {savingGreeting ? 'Saving...' : 'Save'}
                         </button>
                         <button onclick={cancelGreetingEdit}
+                          data-esc-close
                           disabled={savingGreeting}
                           class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 transition-colors border border-bark-300">
                           Cancel
@@ -762,6 +782,7 @@
                         {savingGreeting ? 'Saving...' : 'Save'}
                       </button>
                       <button onclick={cancelGreetingEdit}
+                        data-esc-close
                         disabled={savingGreeting}
                         class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 transition-colors border border-bark-300">
                         Cancel

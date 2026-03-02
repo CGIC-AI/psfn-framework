@@ -46,6 +46,23 @@ export interface MessagePromptOverride {
   systemPrompt?: string;
 }
 
+export type ObservabilityCallType =
+  | 'chat'
+  | 'tool'
+  | 'memory'
+  | 'summary'
+  | 'background'
+  | 'scheduled';
+
+export interface CorrelationMetadata {
+  turnId?: string;
+  requestId?: string;
+  channelId?: string;
+  callType: ObservabilityCallType;
+  toolName?: string;
+  purpose: string;
+}
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'unknown';
   wyoming?: WyomingRoutingMetadata;
@@ -146,6 +163,7 @@ export interface LLMContext {
   systemPrompt: string;
   messages: ContextMessage[];
   tools?: ToolSchema[];
+  correlation?: CorrelationMetadata;
 }
 
 export interface StreamCallbacks {

@@ -147,6 +147,12 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
         {
           systemPrompt: runtimeCompactionPrompt,
           messages: [{ role: 'user', content: compactText }],
+          correlation: {
+            requestId: `compaction:${params.channelId}:${Date.now()}`,
+            channelId: params.channelId,
+            callType: 'summary',
+            purpose: 'session.compaction.summary',
+          },
         },
         'background',
       ),

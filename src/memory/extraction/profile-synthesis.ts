@@ -153,6 +153,12 @@ export async function refreshContactProfile(
     {
       systemPrompt: prompt,
       messages: [{ role: 'user', content: 'Synthesize the stable contact profile now.' }],
+      correlation: {
+        requestId: `profile-synthesis:${options.canonicalContactId}:${now}`,
+        channelId: options.channelId,
+        callType: 'memory',
+        purpose: 'memory.profile_synthesis',
+      },
     },
     'background',
   );

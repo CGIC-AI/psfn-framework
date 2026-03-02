@@ -28,6 +28,12 @@ export function createLLMCapabilities(options: CreateLLMCapabilitiesOptions): LL
       {
         systemPrompt: 'You are a helpful assistant. Answer concisely.',
         messages: [{ role: 'user', content: prompt }],
+        correlation: {
+          requestId: `repl-llm-query-${Date.now()}-${attempt ?? 1}`,
+          callType: 'tool',
+          toolName: 'llm_query',
+          purpose: attempt ? 'repl.llm_query.retry' : 'repl.llm_query',
+        },
       },
       'reasoning',
     );

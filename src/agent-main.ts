@@ -830,6 +830,7 @@ async function main(): Promise<void> {
     config.dataDir,
     heartbeatChannelId,
     {
+      eventBus,
       llmProvider: gateway,
       memoryWriter,
       postTurnActions,

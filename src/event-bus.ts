@@ -56,6 +56,19 @@ export interface EventMap {
     delayMs?: number;
     error?: string;
   };
+  'agent.tool_handoff.telemetry': {
+    actionId: string;
+    dedupeKey: string;
+    channelId: string;
+    sourceMessageId: string;
+    toolNames: string[];
+    intendedAction: string;
+    phase: 'queued' | 'activated' | 'executed' | 'failed';
+    attempt?: number;
+    maxAttempts?: number;
+    timestamp: number;
+    error?: string;
+  };
   'agent.turn.stage': {
     turnId: string;
     channelId: string;

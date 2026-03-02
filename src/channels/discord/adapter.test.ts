@@ -44,6 +44,7 @@ vi.mock('discord.js', () => {
       Client: MockClient,
       Events: {
         MessageCreate: 'messageCreate',
+        MessageReactionAdd: 'messageReactionAdd',
         ClientReady: 'ready',
         VoiceStateUpdate: 'voiceStateUpdate',
       },
@@ -53,9 +54,12 @@ vi.mock('discord.js', () => {
         MessageContent: 4,
         DirectMessages: 8,
         GuildVoiceStates: 16,
+        GuildMessageReactions: 32,
       },
       Partials: {
         Channel: 'channel',
+        Message: 'message',
+        Reaction: 'reaction',
       },
     };
   });
@@ -113,6 +117,10 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
       chat: { model: 'test', provider: 'test', maxTokens: 1024, contextWindow: 128_000 },
     },
     discordBackfillOnStartup: true,
+    discordTriggerWords: [],
+    discordTriggerReactions: ['👆'],
+    discordTriggerListenWindowMs: 120_000,
+    characterName: '',
     ...overrides,
   };
 }
@@ -403,6 +411,41 @@ function makeDiscordIncomingMessage(
   };
 }
 
+function makeReactionTargetMessage(
+  channelId: string,
+  channel: any,
+  overrides?: {
+    id?: string;
+    content?: string;
+    guildId?: string | null;
+    authorId?: string;
+    authorDisplayName?: string;
+    bot?: boolean;
+  },
+) {
+  return {
+    ...makeDiscordIncomingMessage(channelId, channel, {
+      ...overrides,
+      mentioned: false,
+    }),
+    partial: false,
+    delete: vi.fn(async () => {}),
+  };
+}
+
+function makeReactionPayload(targetMessage: any, options?: { emojiName?: string; emojiId?: string | null }) {
+  return {
+    emoji: {
+      name: options?.emojiName ?? '👆',
+      id: options?.emojiId ?? null,
+    },
+    partial: false,
+    message: targetMessage,
+    fetch: vi.fn(async () => null),
+    remove: vi.fn(async () => {}),
+  };
+}
+
 describe('DiscordAdapter DM routing', () => {
   beforeEach(() => {
     discordMock.channelsById.clear();
@@ -492,18 +535,18 @@ describe('DiscordAdapter DM routing', () => {
     expect(interactive.sent).toContain('guild reply');
   });
 
-  it('responds to guild messages without mention when discordRespondAll is enabled', async () => {
+  it('responds to guild messages without mention when character name trigger matches', async () => {
     const eventBus = new EventBus();
-    const adapter = new DiscordAdapter(makeConfig({ discordRespondAll: true }), eventBus);
+    const adapter = new DiscordAdapter(makeConfig({ characterName: 'PSFN' }), eventBus);
     await adapter.init();
 
-    const channelId = 'guild-channel-open';
+    const channelId = 'guild-channel-trigger-char';
     const interactive = makeInteractiveTextChannel();
     discordMock.channelsById.set(channelId, interactive.channel);
 
     const handler = vi.fn(async () => {
       return {
-        content: 'open reply',
+        content: 'triggered reply',
         channelId,
         metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
       };
@@ -512,15 +555,48 @@ describe('DiscordAdapter DM routing', () => {
 
     await (adapter as any).onDiscordMessage(
       makeDiscordIncomingMessage(channelId, interactive.channel, {
-        id: 'guild-open-1',
+        id: 'guild-trigger-1',
         guildId: 'guild-1',
-        content: 'hello without mention',
+        content: 'hey psfn, are you there?',
         mentioned: false,
       }),
     );
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(interactive.sent).toContain('open reply');
+    expect(interactive.sent).toContain('triggered reply');
+  });
+
+  it('responds to guild messages when configured trigger words match case-insensitively', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig({
+      discordTriggerWords: ['pixie', 'wake up'],
+    }), eventBus);
+    await adapter.init();
+
+    const channelId = 'guild-channel-trigger-word';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'keyword reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-trigger-word-1',
+        guildId: 'guild-1',
+        content: 'WAKE UP please',
+        mentioned: false,
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(interactive.sent).toContain('keyword reply');
   });
 
   it('falls back to live client user id for mention stripping when config bot id is missing', async () => {
@@ -557,6 +633,255 @@ describe('DiscordAdapter DM routing', () => {
     expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
       content: 'hello',
     }));
+  });
+
+  it('extends listening windows after trigger and honors !i opt-out', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const eventBus = new EventBus();
+      const adapter = new DiscordAdapter(makeConfig({
+        discordTriggerWords: ['summon'],
+        discordTriggerListenWindowMs: 10_000,
+      }), eventBus);
+      await adapter.init();
+
+      const channelId = 'guild-channel-listening';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      const handler = vi.fn(async (message: SubstrateMessage) => {
+        return {
+          content: `reply-${message.id}`,
+          channelId,
+          metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      });
+      adapter.onMessage(handler);
+
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'guild-listen-1',
+          guildId: 'guild-1',
+          authorId: 'user-listen',
+          content: 'please summon her',
+          mentioned: false,
+        }),
+      );
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'guild-listen-2',
+          guildId: 'guild-1',
+          authorId: 'user-listen',
+          content: 'follow-up without keywords',
+          mentioned: false,
+        }),
+      );
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'guild-listen-3',
+          guildId: 'guild-1',
+          authorId: 'user-listen',
+          content: '!i skip this one',
+          mentioned: false,
+        }),
+      );
+
+      vi.advanceTimersByTime(10_001);
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'guild-listen-4',
+          guildId: 'guild-1',
+          authorId: 'user-listen',
+          content: 'window should be expired now',
+          mentioned: false,
+        }),
+      );
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler.mock.calls.map((call) => call[0].id)).toEqual(['guild-listen-1', 'guild-listen-2']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('invokes bot on target message when default 👆 reaction trigger is used', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'guild-channel-reaction';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'reaction reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    const targetMessage = makeReactionTargetMessage(channelId, interactive.channel, {
+      id: 'reaction-target-1',
+      guildId: 'guild-1',
+      authorId: 'user-target',
+      content: 'react to this message',
+    });
+    const reaction = makeReactionPayload(targetMessage, { emojiName: '👆' });
+
+    await (adapter as any).onReactionAdd(reaction, {
+      id: 'reactor-1',
+      bot: false,
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      id: 'reaction-target-1',
+      content: 'react to this message',
+    }));
+    expect(targetMessage.reply).toHaveBeenCalledWith('reaction reply');
+    expect(reaction.remove).toHaveBeenCalledTimes(1);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'reaction-followup-1',
+        guildId: 'guild-1',
+        authorId: 'reactor-1',
+        content: 'follow-up after reaction trigger',
+        mentioned: false,
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('deletes bot-authored message when ❌ reaction is added', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'should not run',
+        channelId: 'guild-channel-delete',
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    const channelId = 'guild-channel-delete';
+    const interactive = makeInteractiveTextChannel();
+    const targetMessage = makeReactionTargetMessage(channelId, interactive.channel, {
+      id: 'reaction-delete-target',
+      guildId: 'guild-1',
+      authorId: 'bot-1',
+      bot: true,
+      content: 'bot message',
+    });
+    const reaction = makeReactionPayload(targetMessage, { emojiName: '❌' });
+
+    await (adapter as any).onReactionAdd(reaction, {
+      id: 'reactor-2',
+      bot: false,
+    });
+
+    expect(targetMessage.delete).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('uses live config updates for trigger words, reaction triggers, and listening window duration', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-02T00:00:00.000Z'));
+      const eventBus = new EventBus();
+      const config = makeConfig({
+        discordTriggerWords: ['alpha'],
+        discordTriggerReactions: ['👆'],
+        discordTriggerListenWindowMs: 120_000,
+      });
+      const adapter = new DiscordAdapter(config, eventBus);
+      await adapter.init();
+
+      const channelId = 'guild-channel-live-config';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      const handler = vi.fn(async (message: SubstrateMessage) => {
+        return {
+          content: `live-${message.id}`,
+          channelId,
+          metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      });
+      adapter.onMessage(handler);
+
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'live-word-1',
+          guildId: 'guild-1',
+          authorId: 'user-live-1',
+          content: 'beta ping',
+          mentioned: false,
+        }),
+      );
+      expect(handler).not.toHaveBeenCalled();
+
+      config.discordTriggerWords = ['beta'];
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'live-word-2',
+          guildId: 'guild-1',
+          authorId: 'user-live-1',
+          content: 'beta ping',
+          mentioned: false,
+        }),
+      );
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      config.discordTriggerListenWindowMs = 10_000;
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'live-window-1',
+          guildId: 'guild-1',
+          authorId: 'user-live-2',
+          content: 'beta opens window',
+          mentioned: false,
+        }),
+      );
+      expect(handler).toHaveBeenCalledTimes(2);
+
+      vi.advanceTimersByTime(10_001);
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'live-window-2',
+          guildId: 'guild-1',
+          authorId: 'user-live-2',
+          content: 'no trigger after expiry',
+          mentioned: false,
+        }),
+      );
+      expect(handler).toHaveBeenCalledTimes(2);
+
+      config.discordTriggerReactions = ['🔥'];
+      const targetMessage = makeReactionTargetMessage(channelId, interactive.channel, {
+        id: 'live-reaction-target',
+        guildId: 'guild-1',
+        authorId: 'user-live-3',
+        content: 'reaction target',
+      });
+      const oldReaction = makeReactionPayload(targetMessage, { emojiName: '👆' });
+      await (adapter as any).onReactionAdd(oldReaction, { id: 'reactor-live', bot: false });
+      expect(handler).toHaveBeenCalledTimes(2);
+
+      const newReaction = makeReactionPayload(targetMessage, { emojiName: '🔥' });
+      await (adapter as any).onReactionAdd(newReaction, { id: 'reactor-live', bot: false });
+      expect(handler).toHaveBeenCalledTimes(3);
+      expect(targetMessage.reply).toHaveBeenCalledWith('live-live-reaction-target');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('queues contended messages in gateway mode when no direct agent is attached', async () => {

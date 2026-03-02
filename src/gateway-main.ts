@@ -271,6 +271,10 @@ async function main(): Promise<void> {
   const llmClient = new LLMClient(config);
 
   const embeddingProvider = createEmbeddingProviderFromEnv(process.env);
+  log.info('Embedding provider initialized', {
+    provider: embeddingProvider.kind,
+    dims: embeddingProvider.dims,
+  });
   const gitOps = new GitOps({
     repoRoot: workspaceRoot,
   });

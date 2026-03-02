@@ -369,8 +369,12 @@ export class SubstrateRuntime implements Lifecycle {
     this.crashRecoveryQueue = this.sessionStore.getCrashRecoveryExtractionCandidates();
     this.restoreLatestSessionMetadata();
 
-    // Embedding provider (Ollama local)
+    // Embedding provider (selected by EMBEDDING_PROVIDER)
     const embeddingProvider = createEmbeddingProviderFromEnv();
+    log.info('Embedding provider initialized', {
+      provider: embeddingProvider.kind,
+      dims: embeddingProvider.dims,
+    });
 
     this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims);
     const embeddingDimensionCheck = validateEmbeddingDimensions(

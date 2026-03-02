@@ -7,6 +7,7 @@
 
 import 'dotenv/config';
 import { initDatabase } from './persistence/sqlite-utils.js';
+import * as sqliteVec from 'sqlite-vec';
 import { createEmbeddingProviderFromEnv } from './memory/embedding.js';
 import { migrateMemoryEmbeddings } from './memory/migration.js';
 import type { ReembedMigrationProgress } from './memory/migration.js';
@@ -87,12 +88,13 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
   const db = initDatabase(config.databasePath);
+  sqliteVec.load(db);
 
   try {
     console.log(`Database: ${config.databasePath}`);
 
     const embeddingProvider = createEmbeddingProviderFromEnv();
-    console.log(`Embedding provider: dims=${embeddingProvider.dims}`);
+    console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
     console.log('');
 
     const result = await migrateMemoryEmbeddings(db, embeddingProvider, {

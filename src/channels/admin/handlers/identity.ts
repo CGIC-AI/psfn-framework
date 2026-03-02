@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { MemoryStore } from '../../../memory/store.js';
 import { MemoryWriter, type MemoryWriteOptions } from '../../../memory/writer.js';
@@ -16,13 +15,6 @@ import {
   type CharacterMemorySeed,
 } from '../../../identity/importer.js';
 import type { RelationshipType } from '../../../contacts/types.js';
-import {
-  estimateImportedMemoryCriticality,
-  inferImportedMemoryType,
-  initializeImportedMemorySalience,
-  type MemoryType,
-  type SensitivityLevel,
-} from '../../../memory/types.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -41,24 +33,25 @@ import * as tpl from '../templates.js';
 import { toErrorMessage } from '../../../utils/errors.js';
 import {
   buildMemoryDedupKey,
-  clampUnit,
-  estimateTokens,
-  inferRelationshipTypeHint,
   normalizeCardFieldValue,
   normalizeProvenanceRefs,
-  normalizeSensitivity,
-  normalizeSessionRole,
   parsePositiveInteger,
-  parseProvenanceRefs,
-  parseTimestamp,
   shouldPromoteRelationship,
-  toNonEmptyString,
-  toNumber,
-  toRecord,
-  toStringArray,
   truncateDebugText,
   uniqueLowercase,
 } from '../utils.js';
+import {
+  chunkChatMessages,
+  DEFAULT_CHAT_CHUNK_TARGET_TOKENS,
+  MAX_CHAT_CHUNK_TARGET_TOKENS,
+  MIN_CHAT_CHUNK_TARGET_TOKENS,
+  parseChatMessagesFromPayload,
+  parseJsonFileFromPath,
+  parseLorebookItemsFromPayload,
+  parseMemoryItemsFromPayload,
+  type ParsedRawMemoryItem,
+  type StagedIntakeChatMessage,
+} from './identity/intake-parsing.js';
 
 export interface AdminIdentityHandlersDeps {
   memoryStore: MemoryStore;
@@ -76,10 +69,6 @@ export interface AdminIdentityHandlersDeps {
     actor?: AdminAuditActor,
   ) => void;
 }
-
-const DEFAULT_CHAT_CHUNK_TARGET_TOKENS = 50_000;
-const MIN_CHAT_CHUNK_TARGET_TOKENS = 1_000;
-const MAX_CHAT_CHUNK_TARGET_TOKENS = 200_000;
 
 const INTAKE_CARD_DIFF_FIELDS: Array<{ key: keyof CharacterCardV2['data']; label: string }> = [
   { key: 'name', label: 'Name' },
@@ -114,14 +103,6 @@ interface StagedIntakeCardMutation {
   importedCard: CharacterCardV2;
 }
 
-interface StagedIntakeChatMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp: number;
-  authorId?: string;
-  authorName?: string;
-}
-
 interface StagedIntakeChatMutation {
   channelId: string;
   chunkTargetTokens: number;
@@ -147,21 +128,6 @@ interface StagedIdentityIntake {
 interface IntakeFlash {
   kind: IdentityIntakeFlash['kind'];
   message: string;
-}
-
-interface ParsedRawMemoryItem {
-  text: string;
-  type: MemoryType;
-  importance: number;
-  salience: number;
-  criticality: number;
-  tags: string[];
-  provenanceRefs: string[];
-  sensitivity: SensitivityLevel;
-  contactId?: string;
-  extractedAt?: number;
-  lastAccessed?: number;
-  relationshipTypeHint?: RelationshipType;
 }
 
 export class AdminIdentityHandlers {
@@ -275,8 +241,8 @@ export class AdminIdentityHandlers {
       }
 
       if (chatPath) {
-        const payload = this.parseJsonFileFromPath(chatPath, 'Chat');
-        const messages = this.parseChatMessagesFromPayload(payload);
+        const payload = parseJsonFileFromPath(chatPath, 'Chat');
+        const messages = parseChatMessagesFromPayload(payload);
         if (messages.length === 0) {
           throw new Error(`Chat source "${chatPath}" produced no valid messages`);
         }
@@ -287,7 +253,7 @@ export class AdminIdentityHandlers {
           MIN_CHAT_CHUNK_TARGET_TOKENS,
           MAX_CHAT_CHUNK_TARGET_TOKENS,
         );
-        const chunks = this.chunkChatMessages(messages, chunkTargetTokens);
+        const chunks = chunkChatMessages(messages, chunkTargetTokens);
         stage.chatMutation = {
           channelId,
           chunkTargetTokens,
@@ -303,8 +269,8 @@ export class AdminIdentityHandlers {
       }
 
       if (lorebookPath) {
-        const payload = this.parseJsonFileFromPath(lorebookPath, 'Lorebook');
-        const lorebookItems = this.parseLorebookItemsFromPayload(payload, lorebookPath);
+        const payload = parseJsonFileFromPath(lorebookPath, 'Lorebook');
+        const lorebookItems = parseLorebookItemsFromPayload(payload, lorebookPath);
         if (lorebookItems.length === 0) {
           throw new Error(`Lorebook source "${lorebookPath}" produced no valid entries`);
         }
@@ -317,8 +283,8 @@ export class AdminIdentityHandlers {
       }
 
       if (memoryPath) {
-        const payload = this.parseJsonFileFromPath(memoryPath, 'Memory');
-        const memoryItems = this.parseMemoryItemsFromPayload(payload, memoryPath);
+        const payload = parseJsonFileFromPath(memoryPath, 'Memory');
+        const memoryItems = parseMemoryItemsFromPayload(payload, memoryPath);
         if (memoryItems.length === 0) {
           throw new Error(`Memory source "${memoryPath}" produced no valid entries`);
         }
@@ -880,320 +846,6 @@ export class AdminIdentityHandlers {
 
   private renderIdentityIntakeReview(flash?: IntakeFlash): string {
     return tpl.identityIntakeReviewFragment(this.buildIdentityIntakeReviewState(), flash);
-  }
-
-  private parseJsonFileFromPath(rawPath: string, label: string): unknown {
-    const path = rawPath.trim();
-    if (!path) {
-      throw new Error(`${label} path is required`);
-    }
-    let raw: string;
-    try {
-      raw = readFileSync(path, 'utf-8');
-    } catch (error) {
-      const message = toErrorMessage(error);
-      throw new Error(`Unable to read ${label} file "${path}": ${message}`);
-    }
-
-    try {
-      return JSON.parse(raw);
-    } catch (error) {
-      const message = toErrorMessage(error);
-      throw new Error(`${label} file "${path}" is not valid JSON: ${message}`);
-    }
-  }
-
-  private parseChatMessagesFromPayload(payload: unknown): StagedIntakeChatMessage[] {
-    let rows: unknown[] = [];
-    if (Array.isArray(payload)) {
-      rows = payload;
-    } else {
-      const record = toRecord(payload);
-      if (record) {
-        const candidates = record.messages ?? record.chat ?? record.turns ?? record.entries;
-        if (Array.isArray(candidates)) rows = candidates;
-      }
-    }
-
-    const now = Date.now();
-    const messages: StagedIntakeChatMessage[] = [];
-    for (let index = 0; index < rows.length; index++) {
-      const row = rows[index];
-      if (typeof row === 'string') {
-        const content = row.trim();
-        if (!content) continue;
-        messages.push({
-          role: 'user',
-          content,
-          timestamp: now + index,
-        });
-        continue;
-      }
-
-      const entry = toRecord(row);
-      if (!entry) continue;
-      const content = toNonEmptyString(entry.content)
-        ?? toNonEmptyString(entry.text)
-        ?? toNonEmptyString(entry.message)
-        ?? toNonEmptyString(entry.body);
-      if (!content) continue;
-
-      messages.push({
-        role: normalizeSessionRole(entry.role ?? entry.speaker ?? entry.authorRole ?? entry.type),
-        content,
-        timestamp: parseTimestamp(
-          entry.timestamp ?? entry.createdAt ?? entry.created_at ?? entry.date,
-          now + index,
-        ),
-        authorId: toNonEmptyString(entry.authorId) ?? toNonEmptyString(entry.userId) ?? undefined,
-        authorName: toNonEmptyString(entry.authorName)
-          ?? toNonEmptyString(entry.author)
-          ?? toNonEmptyString(entry.name)
-          ?? undefined,
-      });
-    }
-
-    return messages;
-  }
-
-  private chunkChatMessages(
-    messages: readonly StagedIntakeChatMessage[],
-    chunkTargetTokens: number,
-  ): IdentityIntakeChatChunk[] {
-    if (messages.length === 0) return [];
-    const chunks: IdentityIntakeChatChunk[] = [];
-    let chunkStart = 0;
-    let chunkTokenCount = 0;
-    let chunkIndex = 1;
-
-    const pushChunk = (endExclusive: number, tokenCount: number): void => {
-      if (endExclusive <= chunkStart) return;
-      const messageCount = endExclusive - chunkStart;
-      chunks.push({
-        id: `chat-chunk-${chunkIndex}`,
-        index: chunkIndex,
-        startMessage: chunkStart + 1,
-        endMessage: endExclusive,
-        messageCount,
-        estimatedTokens: tokenCount,
-        status: 'pending',
-      });
-      chunkIndex += 1;
-      chunkStart = endExclusive;
-      chunkTokenCount = 0;
-    };
-
-    for (let idx = 0; idx < messages.length; idx++) {
-      const messageTokens = estimateTokens(messages[idx].content);
-      if (chunkTokenCount > 0 && chunkTokenCount + messageTokens > chunkTargetTokens) {
-        pushChunk(idx, chunkTokenCount);
-      }
-      chunkTokenCount += messageTokens;
-    }
-
-    pushChunk(messages.length, chunkTokenCount);
-    return chunks;
-  }
-
-  private parseMemoryItemsFromPayload(payload: unknown, sourcePath?: string): ParsedRawMemoryItem[] {
-    let rows: unknown[] = [];
-    if (Array.isArray(payload)) {
-      rows = payload;
-    } else {
-      const record = toRecord(payload);
-      if (record) {
-        const candidates = record.memories ?? record.memory ?? record.items ?? record.entries;
-        if (Array.isArray(candidates)) rows = candidates;
-      }
-    }
-
-    const items: ParsedRawMemoryItem[] = [];
-    for (const row of rows) {
-      const entry = toRecord(row);
-      if (!entry) continue;
-      const text = toNonEmptyString(entry.text)
-        ?? toNonEmptyString(entry.content)
-        ?? toNonEmptyString(entry.memory)
-        ?? toNonEmptyString(entry.summary);
-      if (!text) continue;
-
-      const tags = uniqueLowercase(
-        toStringArray(entry.tags)
-          .concat(toStringArray(entry.keywords))
-          .concat(toStringArray(entry.labels)),
-      );
-      const type = inferImportedMemoryType({
-        text,
-        explicitType: entry.type ?? entry.memoryType,
-        tags,
-      });
-      const importance = clampUnit(
-        toNumber(entry.importance)
-          ?? toNumber(entry.priority)
-          ?? toNumber(entry.weight)
-          ?? 0.5,
-      );
-      const now = Date.now();
-      const extractedAt = parseTimestamp(
-        entry.extractedAt
-          ?? entry.extracted_at
-          ?? entry.createdAt
-          ?? entry.created_at
-          ?? entry.timestamp
-          ?? entry.date,
-        now,
-      );
-      const lastAccessed = parseTimestamp(
-        entry.lastAccessed
-          ?? entry.last_accessed
-          ?? entry.updatedAt
-          ?? entry.updated_at
-          ?? entry.last_seen
-          ?? extractedAt,
-        extractedAt,
-      );
-      const salience = initializeImportedMemorySalience({
-        importance,
-        salience: toNumber(entry.salience) ?? undefined,
-        type,
-        tags,
-        text,
-        extractedAt,
-        lastAccessed,
-      });
-      const criticality = estimateImportedMemoryCriticality({
-        type,
-        importance,
-        tags,
-        text,
-      });
-      const fallbackRef = sourcePath
-        ? `legacy:${sourcePath}#memory-${items.length + 1}`
-        : `legacy:memory#${items.length + 1}`;
-      const provenanceRefs = parseProvenanceRefs(entry, fallbackRef);
-      const relationshipTypeHint = inferRelationshipTypeHint({
-        explicitValue: entry.relationshipType ?? entry.relationship_type,
-        text,
-        tags,
-        type,
-      });
-
-      items.push({
-        text,
-        type,
-        importance,
-        salience,
-        criticality,
-        tags,
-        provenanceRefs,
-        sensitivity: normalizeSensitivity(entry.sensitivity),
-        contactId: toNonEmptyString(entry.contactId) ?? toNonEmptyString(entry.contact_id) ?? undefined,
-        extractedAt,
-        lastAccessed,
-        relationshipTypeHint,
-      });
-    }
-    return items;
-  }
-
-  private parseLorebookItemsFromPayload(payload: unknown, sourcePath?: string): ParsedRawMemoryItem[] {
-    let rows: unknown[] = [];
-    if (Array.isArray(payload)) {
-      rows = payload;
-    } else {
-      const root = toRecord(payload);
-      if (root) {
-        const topLevel = root.entries ?? root.items ?? root.lorebook;
-        if (Array.isArray(topLevel)) rows = topLevel;
-        if (rows.length === 0) {
-          const cardData = toRecord(root.data);
-          const characterBook = toRecord(cardData?.character_book ?? root.character_book);
-          if (characterBook && Array.isArray(characterBook.entries)) {
-            rows = characterBook.entries;
-          }
-        }
-      }
-    }
-
-    const items: ParsedRawMemoryItem[] = [];
-    for (const row of rows) {
-      const entry = toRecord(row);
-      if (!entry) continue;
-      const text = toNonEmptyString(entry.content)
-        ?? toNonEmptyString(entry.text)
-        ?? toNonEmptyString(entry.description)
-        ?? toNonEmptyString(entry.comment);
-      if (!text) continue;
-
-      const keywords = toStringArray(entry.keys)
-        .concat(toStringArray(entry.keywords))
-        .concat(toStringArray(entry.trigger_words))
-        .slice(0, 6);
-      const tags = uniqueLowercase(['lorebook', ...keywords]);
-      const type = inferImportedMemoryType({
-        text,
-        explicitType: entry.type ?? 'semantic',
-        tags,
-      });
-      const importance = clampUnit(
-        toNumber(entry.importance)
-          ?? toNumber(entry.priority)
-          ?? toNumber(entry.weight)
-          ?? 0.55,
-      );
-      const now = Date.now();
-      const extractedAt = parseTimestamp(
-        entry.updatedAt
-          ?? entry.updated_at
-          ?? entry.createdAt
-          ?? entry.created_at
-          ?? entry.timestamp,
-        now,
-      );
-      const lastAccessed = extractedAt;
-      const salience = initializeImportedMemorySalience({
-        importance,
-        salience: toNumber(entry.salience) ?? undefined,
-        type,
-        tags,
-        text,
-        extractedAt,
-        lastAccessed,
-      });
-      const criticality = estimateImportedMemoryCriticality({
-        type,
-        importance,
-        tags,
-        text,
-      });
-      const fallbackRef = sourcePath
-        ? `legacy:${sourcePath}#lorebook-${items.length + 1}`
-        : `legacy:lorebook#${items.length + 1}`;
-      const provenanceRefs = parseProvenanceRefs(entry, fallbackRef);
-      const relationshipTypeHint = inferRelationshipTypeHint({
-        explicitValue: entry.relationshipType ?? entry.relationship_type,
-        text,
-        tags,
-        type,
-      });
-
-      items.push({
-        text,
-        type,
-        importance,
-        salience,
-        criticality,
-        tags,
-        provenanceRefs,
-        sensitivity: normalizeSensitivity(entry.sensitivity),
-        contactId: toNonEmptyString(entry.contactId) ?? toNonEmptyString(entry.contact_id) ?? undefined,
-        extractedAt,
-        lastAccessed,
-        relationshipTypeHint,
-      });
-    }
-
-    return items;
   }
 
   private stageMemoryMutations(

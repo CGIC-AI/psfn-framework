@@ -11,6 +11,7 @@ import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { createSettingsGetTool } from '../settings-tools.js';
+import type { SessionManager } from '../session/manager.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -47,6 +48,7 @@ import {
   resolveValuesJournalPath,
 } from '../persistence/layout.js';
 import { ReflectionJournalStore } from '../notes/reflection-journal.js';
+import { createSessionListTool, createSessionResumeTool } from '../tools/session.js';
 import type { PostTurnActionRuntime } from './post-turn-actions.js';
 import { isBusyTurnError } from '../lifecycle/turn-contention.js';
 
@@ -236,6 +238,15 @@ export function wireSettingsRuntime(
   config: SubstrateConfig,
 ): void {
   target.registerTool(createSettingsGetTool(config), 'extended');
+}
+
+export function wireSessionToolsRuntime(
+  target: ToolRegistrarTarget,
+  sessionManager: SessionManager,
+  dataDir: string,
+): void {
+  target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'extended');
+  target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
 }
 
 /**

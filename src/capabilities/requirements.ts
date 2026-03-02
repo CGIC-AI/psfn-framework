@@ -43,6 +43,8 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   repo_open_pr: 'git.write',
   repo_status: 'git.read',
   schedule_task: 'identity.write.runtime',
+  session_list: 'identity.read',
+  session_resume: 'identity.write.runtime',
   self_rebuild: 'lifecycle.rebuild',
   self_restart: 'lifecycle.restart',
   settings_get: 'identity.read',

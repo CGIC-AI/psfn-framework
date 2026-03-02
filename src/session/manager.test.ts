@@ -102,6 +102,19 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Memory block');
   });
 
+  it('does not persist internal reflection channels to session journals', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const reflectionChannel = 'internal:reflection:whisper';
+
+    mgr.recordUserMessage(reflectionChannel, 'Reflect on today', 'scheduler', 'Scheduler');
+    mgr.recordAssistantMessage(reflectionChannel, 'Reflection output');
+    mgr.appendSystemNote(reflectionChannel, 'Deliberation metadata');
+
+    expect(store.count(reflectionChannel)).toBe(0);
+    expect(store.listChannels().some(channel => channel.channelId === reflectionChannel)).toBe(false);
+  });
+
   it('loads verified session history without unverified tags', async () => {
     const config = makeConfig();
     const keyring = {

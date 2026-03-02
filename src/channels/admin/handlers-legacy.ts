@@ -119,6 +119,10 @@ import {
 import { AdminAuditTimelineStore } from './audit-timeline.js';
 import { ValuesJournalStore } from '../../values/store.js';
 import {
+  resolveLegacyValuesJournalPath,
+  resolveValuesJournalPath,
+} from '../../persistence/layout.js';
+import {
   buildCompactionSourceBlock,
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
@@ -399,7 +403,9 @@ export class LegacyAdminHandlers {
       config: this.config,
       resolveGlobalDefaultSessionId: () => this.resolveGlobalDefaultSessionId(),
     });
-    this.valuesJournal = new ValuesJournalStore(join(this.config.dataDir, 'values.jsonl'));
+    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(this.config.dataDir), {
+      legacyFilePaths: [resolveLegacyValuesJournalPath(this.config.dataDir)],
+    });
 
     this.eventBus.on('agent.turn.usage', ({ usage }) => {
       this.usageTotals.turns += 1;

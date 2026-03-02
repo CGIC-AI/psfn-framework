@@ -6,7 +6,6 @@
 // - src/agent-main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
 // Keep core construction through these helpers so behavior stays aligned across both entrypoints.
 
-import { join } from 'node:path';
 import type { SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
 import { SessionStore, type SessionIntegrityProvider } from '../session/store.js';
@@ -34,6 +33,12 @@ import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import type { ShardAuditTrail } from '../shards/manager.js';
 import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
+import {
+  ensurePersistenceLayout,
+  migrateLegacyPersistenceLayout,
+  resolveContinuityDir,
+  resolveSessionsDir,
+} from '../persistence/layout.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -51,7 +56,10 @@ export interface SessionCompositionOptions {
 }
 
 export function composeSessionRuntime(options: SessionCompositionOptions): SessionComposition {
-  const sessionsDir = options.sessionsDir ?? join(options.config.dataDir, 'sessions');
+  ensurePersistenceLayout(options.config.dataDir);
+  migrateLegacyPersistenceLayout(options.config.dataDir);
+
+  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(options.config.dataDir);
   const sessionStore = new SessionStore(sessionsDir, {
     integrityProvider: options.sessionIntegrityProvider ?? null,
   });
@@ -64,7 +72,7 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
 
   let continuityStore: UserContinuityStore | null = null;
   if (options.enableContinuity) {
-    continuityStore = new UserContinuityStore(sessionsDir);
+    continuityStore = new UserContinuityStore(resolveContinuityDir(options.config.dataDir));
     sessionManager.continuityStore = continuityStore;
   }
 

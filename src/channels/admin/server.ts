@@ -41,6 +41,10 @@ import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
 import { ValuesJournalStore } from '../../values/store.js';
+import {
+  resolveLegacyValuesJournalPath,
+  resolveValuesJournalPath,
+} from '../../persistence/layout.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -222,7 +226,9 @@ export class AdminServer implements Lifecycle {
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
     });
-    this.valuesJournal = new ValuesJournalStore(join(config.config.dataDir, 'values.jsonl'));
+    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(config.config.dataDir), {
+      legacyFilePaths: [resolveLegacyValuesJournalPath(config.config.dataDir)],
+    });
     this.scheduler = config.scheduler;
     this.schedulerService = new AdminSchedulerService(config.scheduler, config.config.dataDir);
     this.skillsRuntimeRef = config.skillsRuntime ?? null;

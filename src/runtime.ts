@@ -101,6 +101,12 @@ import {
 } from './capabilities/safeguards.js';
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { ModuleLoader } from './modules/loader.js';
+import {
+  resolveContactsDir,
+  resolveNotesDir,
+  resolveScratchpadMirrorPath,
+  resolveSessionsDir,
+} from './persistence/layout.js';
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -334,7 +340,7 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Initialize core components
     this.llmClient = new LLMClient(this.config);
-    const sessionsDir = join(this.config.dataDir, 'sessions');
+    const sessionsDir = resolveSessionsDir(this.config.dataDir);
     const sessionHmacKeyring = buildSessionHmacKeyring({
       serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
       singleKey: process.env.GATEWAY_SESSION_HMAC_KEY,
@@ -376,7 +382,11 @@ export class SubstrateRuntime implements Lifecycle {
       dims: embeddingProvider.dims,
     });
 
-    this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims);
+    const notesDir = resolveNotesDir(this.config.dataDir);
+    this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims, {
+      notesDir,
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(this.config.dataDir),
+    });
     const embeddingDimensionCheck = validateEmbeddingDimensions(
       this.db,
       embeddingProvider.dims,
@@ -446,15 +456,18 @@ export class SubstrateRuntime implements Lifecycle {
       this.agentLoop,
       this.db,
       primaryUserId,
-      primaryTelegramUserId
-        ? {
-          bootstrapPrimaryIdentityLinks: [{
-            channel: 'telegram',
-            userId: primaryTelegramUserId,
-            privacyLevel: 'private',
-          }],
-        }
-        : {},
+      {
+        exportDir: resolveContactsDir(this.config.dataDir),
+        ...(primaryTelegramUserId
+          ? {
+            bootstrapPrimaryIdentityLinks: [{
+              channel: 'telegram',
+              userId: primaryTelegramUserId,
+              privacyLevel: 'private',
+            }],
+          }
+          : {}),
+      },
     );
 
     this.memoryExtractor = wireMemoryRuntime({
@@ -647,7 +660,6 @@ export class SubstrateRuntime implements Lifecycle {
       heartbeatChannelId,
       {
         llmProvider: this.llmClient,
-        sessionManager: this.sessionManager,
         memoryWriter,
       },
     );

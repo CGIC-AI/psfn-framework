@@ -89,6 +89,12 @@ import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { toErrorMessage } from './utils/errors.js';
+import {
+  resolveContactsDir,
+  resolveNotesDir,
+  resolveScratchpadMirrorPath,
+  resolveSessionsDir,
+} from './persistence/layout.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -284,7 +290,7 @@ async function main(): Promise<void> {
 
   // ── Initialize local components ──
 
-  const sessionsDir = join(config.dataDir, 'sessions');
+  const sessionsDir = resolveSessionsDir(config.dataDir);
   const sessionComposition = composeSessionRuntime({
     config,
     eventBus,
@@ -308,7 +314,10 @@ async function main(): Promise<void> {
     });
   }
 
-  const memoryStore = new MemoryStore(db, gateway.dims);
+  const memoryStore = new MemoryStore(db, gateway.dims, {
+    notesDir: resolveNotesDir(config.dataDir),
+    scratchpadMirrorPath: resolveScratchpadMirrorPath(config.dataDir),
+  });
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
   const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
     embeddingDimensionCheck,
@@ -372,15 +381,18 @@ async function main(): Promise<void> {
     agentLoop,
     db,
     primaryUserId,
-    primaryTelegramUserId
-      ? {
-        bootstrapPrimaryIdentityLinks: [{
-          channel: 'telegram',
-          userId: primaryTelegramUserId,
-          privacyLevel: 'private',
-        }],
-      }
-      : {},
+    {
+      exportDir: resolveContactsDir(config.dataDir),
+      ...(primaryTelegramUserId
+        ? {
+          bootstrapPrimaryIdentityLinks: [{
+            channel: 'telegram',
+            userId: primaryTelegramUserId,
+            privacyLevel: 'private',
+          }],
+        }
+        : {}),
+    },
   );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
@@ -775,7 +787,6 @@ async function main(): Promise<void> {
     heartbeatChannelId,
     {
       llmProvider: gateway,
-      sessionManager,
       memoryWriter,
     },
   );

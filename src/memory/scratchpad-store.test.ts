@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as sqliteVec from 'sqlite-vec';
@@ -80,6 +80,34 @@ describe('MemoryStore scratchpad persistence', () => {
     expect(listed[0].content).toBe('persist this note');
 
     secondDb.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('mirrors scratchpad notes to data/notes when configured', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-scratchpad-mirror-'));
+    const dbPath = join(tempDir, 'scratchpad.db');
+    const notesDir = join(tempDir, 'notes');
+
+    const mirrorDb = new Database(dbPath);
+    sqliteVec.load(mirrorDb);
+    const mirrorStore = new MemoryStore(mirrorDb, 1024, { notesDir });
+
+    mirrorStore.addScratchpadEntry('Mirror note one', { id: 'sp-1', now: 1_700_000_000_000 });
+    mirrorStore.addScratchpadEntry('Mirror note two', { id: 'sp-2', now: 1_700_000_000_001 });
+    mirrorStore.removeScratchpadEntry('sp-1');
+
+    const mirror = JSON.parse(readFileSync(join(notesDir, 'scratchpad.json'), 'utf-8')) as {
+      count: number;
+      entries: Array<{ id: string; content: string }>;
+    };
+    expect(mirror.count).toBe(1);
+    expect(mirror.entries).toHaveLength(1);
+    expect(mirror.entries[0]).toMatchObject({
+      id: 'sp-2',
+      content: 'Mirror note two',
+    });
+
+    mirrorDb.close();
     rmSync(tempDir, { recursive: true, force: true });
   });
 });

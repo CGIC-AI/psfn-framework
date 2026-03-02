@@ -564,6 +564,17 @@ export class SubstrateRuntime implements Lifecycle {
     });
     log.info('Git self-modification tools enabled');
 
+    // Vault tools — Obsidian note read/write (conditional on vault name)
+    if (this.config.obsidianVaultName) {
+      const { wireVaultRuntime } = await import('./vault/runtime-wiring.js');
+      wireVaultRuntime(this.agentLoop, {
+        vaultName: this.config.obsidianVaultName,
+        cliPath: this.config.obsidianCliPath,
+        timeoutMs: this.config.obsidianTimeoutMs,
+      });
+      log.info('Obsidian vault tools enabled', { vault: this.config.obsidianVaultName });
+    }
+
     // Validate tool wiring — catch misconfigured tools before they crash at invocation
     this.agentLoop.validateToolWiring('single');
 
@@ -651,6 +662,20 @@ export class SubstrateRuntime implements Lifecycle {
       },
     ));
 
+    // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
+    let vaultAutoPublisher: import('./vault/auto-publish.js').VaultAutoPublisher | undefined;
+    if (this.config.obsidianAutoPublish && this.config.obsidianVaultName) {
+      const { VaultOps } = await import('./vault/ops.js');
+      const { VaultAutoPublisher } = await import('./vault/auto-publish.js');
+      const vaultOps = new VaultOps({
+        vaultName: this.config.obsidianVaultName,
+        cliPath: this.config.obsidianCliPath,
+        timeoutMs: this.config.obsidianTimeoutMs,
+      });
+      vaultAutoPublisher = new VaultAutoPublisher(vaultOps);
+      log.info('Vault auto-publish enabled for reflections');
+    }
+
     // Heartbeat reflections — policy-driven multi-template reflection system
     wireHeartbeatRuntime(
       this.agentLoop,
@@ -664,6 +689,7 @@ export class SubstrateRuntime implements Lifecycle {
         llmProvider: this.llmClient,
         memoryWriter,
         postTurnActions,
+        ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
       },
     );
 

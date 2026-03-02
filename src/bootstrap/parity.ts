@@ -102,6 +102,13 @@ interface HeartbeatRuntimeOptions {
   llmProvider?: LLMProvider;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   postTurnActions?: PostTurnActionRuntime;
+  vaultAutoPublisher?: { publishReflection(input: {
+    templateId: string;
+    templateName: string;
+    reflection: string;
+    mode: 'agent' | 'deliberation';
+    createdAt: Date;
+  }): Promise<void> };
 }
 
 function hasPromotedToolsManager(
@@ -598,6 +605,21 @@ export function wireHeartbeatRuntime(
       log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
         error: String(error),
       });
+    }
+
+    // Auto-publish to Obsidian vault
+    if (runtimeOptions.vaultAutoPublisher) {
+      try {
+        await runtimeOptions.vaultAutoPublisher.publishReflection({
+          templateId: template.id,
+          templateName: template.name,
+          reflection: reflectionText,
+          mode: reflectionMode,
+          createdAt: new Date(),
+        });
+      } catch (error) {
+        log.warn(`Reflection "${template.id}" vault publish skipped`, { error: String(error) });
+      }
     }
 
     const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;

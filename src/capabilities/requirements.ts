@@ -55,6 +55,10 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   settings_get: 'identity.read',
   spawn_shard: 'shard.spawn',
   think: 'repl.execute',
+  vault_write: 'identity.write.runtime',
+  vault_read: 'identity.read',
+  vault_search: 'identity.read',
+  vault_daily: 'identity.write.runtime',
 };
 
 function toRecord(value: unknown): Record<string, unknown> {

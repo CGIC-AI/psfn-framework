@@ -457,6 +457,19 @@ async function main(): Promise<void> {
   registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });
   log.info('Git self-modification tools enabled');
 
+  // Vault tools — Obsidian note read/write via gateway shell.exec
+  if (config.obsidianVaultName) {
+    const { GatewayVaultOps } = await import('./vault/gateway-ops.js');
+    const { registerVaultTools } = await import('./vault/runtime-wiring.js');
+    const vaultOps = new GatewayVaultOps(gateway, {
+      vaultName: config.obsidianVaultName,
+      cliPath: config.obsidianCliPath,
+      timeoutMs: config.obsidianTimeoutMs,
+    });
+    registerVaultTools(agentLoop, vaultOps, { gatewayMode: true });
+    log.info('Obsidian vault tools enabled', { vault: config.obsidianVaultName });
+  }
+
   // Validate tool wiring — catch misconfigured tools before they crash at invocation
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
@@ -756,6 +769,20 @@ async function main(): Promise<void> {
     },
   ));
 
+  // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
+  let vaultAutoPublisher: import('./vault/auto-publish.js').VaultAutoPublisher | undefined;
+  if (config.obsidianAutoPublish && config.obsidianVaultName) {
+    const { GatewayVaultOps } = await import('./vault/gateway-ops.js');
+    const { VaultAutoPublisher } = await import('./vault/auto-publish.js');
+    const vaultOps = new GatewayVaultOps(gateway, {
+      vaultName: config.obsidianVaultName,
+      cliPath: config.obsidianCliPath,
+      timeoutMs: config.obsidianTimeoutMs,
+    });
+    vaultAutoPublisher = new VaultAutoPublisher(vaultOps);
+    log.info('Vault auto-publish enabled for reflections');
+  }
+
   // Heartbeat reflections — policy-driven multi-template reflection system
   wireHeartbeatRuntime(
     agentLoop,
@@ -769,6 +796,7 @@ async function main(): Promise<void> {
       llmProvider: gateway,
       memoryWriter,
       postTurnActions,
+      ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
     },
   );
 

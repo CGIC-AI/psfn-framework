@@ -142,6 +142,12 @@ export interface EditableSettings {
   telegramEnabled?: boolean;
   telegramAuthorizedUsers?: string;
 
+  // Obsidian vault
+  obsidianVaultName?: string;
+  obsidianCliPath?: string;
+  obsidianAutoPublish?: boolean;
+  obsidianTimeoutMs?: number;
+
   // MoA (Mixture of Agents) configuration
   moaEnabled?: boolean;
   moaReferenceModels?: string[];
@@ -207,6 +213,11 @@ export const RUNTIME_SETTINGS_KEYS = [
   'discordTriggerListenWindowMs',
   'telegramEnabled',
   'telegramAuthorizedUsers',
+  // Obsidian vault
+  'obsidianVaultName',
+  'obsidianCliPath',
+  'obsidianAutoPublish',
+  'obsidianTimeoutMs',
   // MoA (Mixture of Agents)
   'moaEnabled',
   'moaReferenceModels',
@@ -727,6 +738,20 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.telegramAuthorizedUsers = trimmed || undefined;
   }
 
+  // Obsidian vault
+  if ('obsidianVaultName' in settings) {
+    normalized.obsidianVaultName = toNonEmptyString(settings.obsidianVaultName);
+  }
+  if ('obsidianCliPath' in settings) {
+    normalized.obsidianCliPath = toNonEmptyString(settings.obsidianCliPath) ?? 'obsidian';
+  }
+  if ('obsidianAutoPublish' in settings) {
+    normalized.obsidianAutoPublish = toBoolean(settings.obsidianAutoPublish) ?? false;
+  }
+  if ('obsidianTimeoutMs' in settings) {
+    normalized.obsidianTimeoutMs = toIntegerInRange(settings.obsidianTimeoutMs, 1000, 30000);
+  }
+
   // MoA (Mixture of Agents)
   if ('moaEnabled' in settings) {
     normalized.moaEnabled = toBoolean(settings.moaEnabled) ?? false;
@@ -984,6 +1009,11 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     discordTriggerListenWindowMs: config.discordTriggerListenWindowMs ?? 120_000,
     telegramEnabled: config.telegramEnabled ?? false,
     telegramAuthorizedUsers: config.telegramAuthorizedUsers?.join(', ') ?? null,
+    // Obsidian vault
+    obsidianVaultName: config.obsidianVaultName ?? null,
+    obsidianCliPath: config.obsidianCliPath ?? 'obsidian',
+    obsidianAutoPublish: config.obsidianAutoPublish ?? false,
+    obsidianTimeoutMs: config.obsidianTimeoutMs ?? 10000,
     // MoA (Mixture of Agents)
     moaEnabled: config.moaEnabled ?? false,
     moaReferenceModels: config.moaReferenceModels ?? [],
@@ -1181,6 +1211,20 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
       : undefined;
   }
 
+  // Obsidian vault
+  if ('obsidianVaultName' in settings) {
+    config.obsidianVaultName = settings.obsidianVaultName?.trim() || undefined;
+  }
+  if ('obsidianCliPath' in settings) {
+    config.obsidianCliPath = settings.obsidianCliPath?.trim() || undefined;
+  }
+  if ('obsidianAutoPublish' in settings) {
+    config.obsidianAutoPublish = settings.obsidianAutoPublish ?? false;
+  }
+  if ('obsidianTimeoutMs' in settings) {
+    config.obsidianTimeoutMs = settings.obsidianTimeoutMs;
+  }
+
   // MoA (Mixture of Agents)
   if ('moaEnabled' in settings) {
     config.moaEnabled = settings.moaEnabled ?? false;
@@ -1246,6 +1290,7 @@ export const SETTINGS_VALIDATION = {
   retryMaxAttempts: { min: 0, max: 10 },
   retryBaseDelayMs: { min: 500, max: 30000 },
   discordTriggerListenWindowMs: { min: 10_000, max: 600_000 },
+  obsidianTimeoutMs: { min: 1000, max: 30000 },
   moaMaxRounds: { min: 1, max: 10 },
   moaMaxTokensPerRound: { min: 256, max: 1_000_000 },
   moaTimeoutMs: { min: 5000, max: 600_000 },
@@ -1509,6 +1554,29 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   if (telegramAuthorizedUsersRaw !== null) {
     settings.telegramAuthorizedUsers = telegramAuthorizedUsersRaw.trim();
   }
+
+  // Obsidian vault
+  const obsidianVaultNameRaw = params.get('obsidianVaultName');
+  if (obsidianVaultNameRaw !== null) {
+    settings.obsidianVaultName = obsidianVaultNameRaw.trim() || undefined;
+  }
+
+  const obsidianCliPathRaw = params.get('obsidianCliPath');
+  if (obsidianCliPathRaw !== null) {
+    settings.obsidianCliPath = obsidianCliPathRaw.trim() || 'obsidian';
+  }
+
+  const obsidianAutoPublishRaw = params.get('obsidianAutoPublish');
+  if (obsidianAutoPublishRaw !== null) {
+    const enabled = toBoolean(obsidianAutoPublishRaw);
+    if (enabled === undefined) {
+      errors.push('obsidianAutoPublish must be true or false');
+    } else {
+      settings.obsidianAutoPublish = enabled;
+    }
+  }
+
+  // obsidianTimeoutMs is handled by SETTINGS_VALIDATION numeric loop
 
   // MoA (Mixture of Agents)
   const moaEnabledRaw = params.get('moaEnabled');

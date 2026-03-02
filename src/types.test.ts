@@ -64,14 +64,25 @@ describe('loadConfig voice DAVE options', () => {
     expect(config.webFetchTlsCaCertPaths).toEqual(['/etc/ssl/root.pem', '/etc/ssl/intermediate.pem']);
   });
 
-  it('parses DISCORD_RESPOND_ALL toggle', () => {
-    process.env.DISCORD_RESPOND_ALL = 'true';
-    const enabled = loadConfig();
-    expect(enabled.discordRespondAll).toBe(true);
+  it('parses discord trigger env values and defaults', () => {
+    delete process.env.DISCORD_TRIGGER_WORDS;
+    delete process.env.DISCORD_TRIGGER_REACTIONS;
+    delete process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS;
 
-    process.env.DISCORD_RESPOND_ALL = 'false';
-    const disabled = loadConfig();
-    expect(disabled.discordRespondAll).toBe(false);
+    const defaults = loadConfig();
+    expect(defaults.discordTriggerWords).toEqual([]);
+    expect(defaults.discordTriggerReactions).toEqual(['👆']);
+    expect(defaults.discordTriggerListenWindowMs).toBe(120000);
+    expect(defaults.characterName).toBe('');
+
+    process.env.DISCORD_TRIGGER_WORDS = 'pixie, hey psfn';
+    process.env.DISCORD_TRIGGER_REACTIONS = '🔥, 👀';
+    process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS = '45000';
+
+    const configured = loadConfig();
+    expect(configured.discordTriggerWords).toEqual(['pixie', 'hey psfn']);
+    expect(configured.discordTriggerReactions).toEqual(['🔥', '👀']);
+    expect(configured.discordTriggerListenWindowMs).toBe(45000);
   });
 
   it('does not hardcode discord bot id when DISCORD_BOT_ID is unset', () => {

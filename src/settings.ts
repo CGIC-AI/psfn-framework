@@ -134,6 +134,9 @@ export interface EditableSettings {
   // Channel configuration (non-secret — bot tokens stay in .env)
   discordEnabled?: boolean;
   discordHeartbeatChannel?: string;
+  discordTriggerWords?: string;
+  discordTriggerReactions?: string;
+  discordTriggerListenWindowMs?: number;
   telegramEnabled?: boolean;
   telegramAuthorizedUsers?: string;
 
@@ -196,6 +199,9 @@ export const RUNTIME_SETTINGS_KEYS = [
   // Channels
   'discordEnabled',
   'discordHeartbeatChannel',
+  'discordTriggerWords',
+  'discordTriggerReactions',
+  'discordTriggerListenWindowMs',
   'telegramEnabled',
   'telegramAuthorizedUsers',
   // MoA (Mixture of Agents)
@@ -687,6 +693,21 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     const trimmed = typeof settings.discordHeartbeatChannel === 'string' ? settings.discordHeartbeatChannel.trim() : '';
     normalized.discordHeartbeatChannel = trimmed || undefined;
   }
+  if ('discordTriggerWords' in settings) {
+    const trimmed = typeof settings.discordTriggerWords === 'string' ? settings.discordTriggerWords.trim() : '';
+    normalized.discordTriggerWords = trimmed || undefined;
+  }
+  if ('discordTriggerReactions' in settings) {
+    const trimmed = typeof settings.discordTriggerReactions === 'string' ? settings.discordTriggerReactions.trim() : '';
+    normalized.discordTriggerReactions = trimmed || undefined;
+  }
+  if ('discordTriggerListenWindowMs' in settings) {
+    normalized.discordTriggerListenWindowMs = toIntegerInRange(
+      settings.discordTriggerListenWindowMs,
+      10_000,
+      600_000,
+    );
+  }
   if ('telegramEnabled' in settings) {
     normalized.telegramEnabled = toBoolean(settings.telegramEnabled) ?? false;
   }
@@ -946,6 +967,9 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     // Channels
     discordEnabled: Boolean(config.discordToken),
     discordHeartbeatChannel: null,
+    discordTriggerWords: config.discordTriggerWords?.join(', ') ?? null,
+    discordTriggerReactions: config.discordTriggerReactions?.join(', ') ?? '👆',
+    discordTriggerListenWindowMs: config.discordTriggerListenWindowMs ?? 120_000,
     telegramEnabled: config.telegramEnabled ?? false,
     telegramAuthorizedUsers: config.telegramAuthorizedUsers?.join(', ') ?? null,
     // MoA (Mixture of Agents)
@@ -1116,6 +1140,22 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
 
   // Channels
+  if ('discordTriggerWords' in settings) {
+    const csv = settings.discordTriggerWords?.trim() ?? '';
+    config.discordTriggerWords = csv
+      ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
+      : [];
+  }
+  if ('discordTriggerReactions' in settings) {
+    const csv = settings.discordTriggerReactions?.trim() ?? '';
+    const reactions = csv
+      ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
+      : [];
+    config.discordTriggerReactions = reactions.length > 0 ? reactions : ['👆'];
+  }
+  if ('discordTriggerListenWindowMs' in settings) {
+    config.discordTriggerListenWindowMs = settings.discordTriggerListenWindowMs ?? 120_000;
+  }
   if ('telegramEnabled' in settings) {
     config.telegramEnabled = settings.telegramEnabled ?? false;
   }
@@ -1190,6 +1230,7 @@ export const SETTINGS_VALIDATION = {
   thinkMaxSubQueries: { min: 1, max: 100 },
   retryMaxAttempts: { min: 0, max: 10 },
   retryBaseDelayMs: { min: 500, max: 30000 },
+  discordTriggerListenWindowMs: { min: 10_000, max: 600_000 },
   moaMaxRounds: { min: 1, max: 10 },
   moaMaxTokensPerRound: { min: 256, max: 1_000_000 },
   moaTimeoutMs: { min: 5000, max: 600_000 },
@@ -1421,6 +1462,16 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const discordHeartbeatChannelRaw = params.get('discordHeartbeatChannel');
   if (discordHeartbeatChannelRaw !== null) {
     settings.discordHeartbeatChannel = discordHeartbeatChannelRaw.trim();
+  }
+
+  const discordTriggerWordsRaw = params.get('discordTriggerWords');
+  if (discordTriggerWordsRaw !== null) {
+    settings.discordTriggerWords = discordTriggerWordsRaw.trim();
+  }
+
+  const discordTriggerReactionsRaw = params.get('discordTriggerReactions');
+  if (discordTriggerReactionsRaw !== null) {
+    settings.discordTriggerReactions = discordTriggerReactionsRaw.trim();
   }
 
   const telegramEnabledRaw = params.get('telegramEnabled');

@@ -288,6 +288,7 @@ async function main(): Promise<void> {
     idFactory: () => `card-${randomUUID()}`,
   });
   log.info(`Loaded character: ${card.data.name}`);
+  config.characterName = card.data.name;
   const promptRegistry = wireStaticPromptRegistry(config.dataDir);
 
   // ── Initialize local components ──

@@ -1060,5 +1060,63 @@ describe('settings', () => {
       expect(snapshot.telegramEnabled).toBe(true);
       expect(snapshot.telegramAuthorizedUsers).toBe('111, 222');
     });
+
+    it('parseSettingsForm parses discord trigger form fields', () => {
+      const params = new URLSearchParams({
+        discordTriggerWords: 'pixie, hey psfn',
+        discordTriggerReactions: '👆, 🔥',
+        discordTriggerListenWindowMs: '45000',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.discordTriggerWords).toBe('pixie, hey psfn');
+      expect(settings.discordTriggerReactions).toBe('👆, 🔥');
+      expect(settings.discordTriggerListenWindowMs).toBe(45000);
+    });
+
+    it('parseSettingsForm validates discordTriggerListenWindowMs range', () => {
+      const params = new URLSearchParams({
+        discordTriggerListenWindowMs: '9999',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+      expect(errors.some(err => err.includes('discordTriggerListenWindowMs'))).toBe(true);
+    });
+
+    it('applySettings updates discord trigger config and keeps default reaction when cleared', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        discordTriggerWords: 'pixie, hey psfn',
+        discordTriggerReactions: '🔥, 👀',
+        discordTriggerListenWindowMs: 45000,
+      });
+
+      expect(config.discordTriggerWords).toEqual(['pixie', 'hey psfn']);
+      expect(config.discordTriggerReactions).toEqual(['🔥', '👀']);
+      expect(config.discordTriggerListenWindowMs).toBe(45000);
+
+      applySettings(config, { discordTriggerReactions: '' });
+      expect(config.discordTriggerReactions).toEqual(['👆']);
+    });
+
+    it('getRuntimeSettingsSnapshot reflects discord trigger config values', () => {
+      const config = makeConfig();
+      config.discordTriggerWords = ['pixie', 'hey psfn'];
+      config.discordTriggerReactions = ['🔥', '👀'];
+      config.discordTriggerListenWindowMs = 45000;
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.discordTriggerWords).toBe('pixie, hey psfn');
+      expect(snapshot.discordTriggerReactions).toBe('🔥, 👀');
+      expect(snapshot.discordTriggerListenWindowMs).toBe(45000);
+    });
+
+    it('getRuntimeSettingsSnapshot uses discord trigger defaults when unset', () => {
+      const snapshot = getRuntimeSettingsSnapshot(makeConfig());
+      expect(snapshot.discordTriggerWords).toBeNull();
+      expect(snapshot.discordTriggerReactions).toBe('👆');
+      expect(snapshot.discordTriggerListenWindowMs).toBe(120000);
+    });
   });
 });

@@ -4,6 +4,7 @@
 
 import type {
   CompletionPurpose,
+  LLMRequestMetadata,
   LLMContext,
   LLMResponse,
   StreamCallbacks,
@@ -15,6 +16,8 @@ export interface LLMProvider {
   stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
   complete(context: LLMContext, purpose: CompletionPurpose): Promise<LLMResponse>;
 }
+
+export type { LLMRequestMetadata };
 
 export interface EmbeddingService {
   embed(text: string): Promise<Float32Array>;

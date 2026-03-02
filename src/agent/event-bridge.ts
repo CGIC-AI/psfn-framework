@@ -14,7 +14,10 @@ export interface EventBridge {
   /** Set the active channel before calling agent.prompt() */
   setChannel(
     channelId: string,
-    correlation?: Partial<Pick<CorrelationMetadata, 'turnId' | 'requestId' | 'callType' | 'purpose'>>,
+    correlation?: Partial<Pick<
+      CorrelationMetadata,
+      'turnId' | 'requestId' | 'callType' | 'purpose' | 'originType' | 'originStage'
+    >>,
   ): void;
   /** Clear the active channel after prompt completes */
   clearChannel(): void;
@@ -43,6 +46,8 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
     requestId?: string;
     callType?: ObservabilityCallType;
     purpose?: string;
+    originType?: ObservabilityCallType;
+    originStage?: string;
   } | null = null;
 
   const unsub = agent.subscribe((event: AgentEvent) => {
@@ -53,6 +58,8 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
       requestId,
       callType,
       purpose,
+      originType,
+      originStage,
     } = currentContext;
     const shardId = resolveShardId(channelId);
     const withCorrelation = (
@@ -65,6 +72,8 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
       callType: type === 'chat' ? (callType ?? 'chat') : 'tool',
       toolName: toolName ?? undefined,
       purpose: purpose ?? eventPurpose,
+      originType: type === 'chat' ? (originType ?? callType ?? 'chat') : 'tool',
+      originStage: originStage ?? purpose ?? eventPurpose,
     });
 
     switch (event.type) {
@@ -141,7 +150,10 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
   return {
     setChannel(
       channelId: string,
-      correlation?: Partial<Pick<CorrelationMetadata, 'turnId' | 'requestId' | 'callType' | 'purpose'>>,
+      correlation?: Partial<Pick<
+        CorrelationMetadata,
+        'turnId' | 'requestId' | 'callType' | 'purpose' | 'originType' | 'originStage'
+      >>,
     ) {
       currentContext = {
         channelId,
@@ -149,6 +161,8 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
         ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
         ...(correlation?.callType ? { callType: correlation.callType } : {}),
         ...(correlation?.purpose ? { purpose: correlation.purpose } : {}),
+        ...(correlation?.originType ? { originType: correlation.originType } : {}),
+        ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
       };
     },
     clearChannel() { currentContext = null; },

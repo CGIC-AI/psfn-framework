@@ -284,6 +284,9 @@ describe('LLMClient correlation metadata', () => {
           requestId: 'req-1',
           channelId: 'internal:heartbeat',
           callType: 'scheduled',
+          originType: 'scheduled',
+          originStage: 'health.check',
+          toolCallId: 'tool-call-1',
           purpose: 'health.check',
         },
       },
@@ -297,6 +300,9 @@ describe('LLMClient correlation metadata', () => {
       requestId: 'req-1',
       channelId: 'internal:heartbeat',
       callType: 'scheduled',
+      originType: 'scheduled',
+      originStage: 'health.check',
+      toolCallId: 'tool-call-1',
       purpose: 'health.check',
     });
 

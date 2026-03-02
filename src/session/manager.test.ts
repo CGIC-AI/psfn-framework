@@ -573,8 +573,16 @@ describe('SessionManager', () => {
     });
     mgr.setPreCompactionExtractionHandler(preCompactionFlush as any);
 
-    const complete = vi.fn<LLMProvider['complete']>().mockImplementation(async (_context, purpose) => {
+    const complete = vi.fn<LLMProvider['complete']>().mockImplementation(async (context, purpose) => {
       expect(purpose).toBe('background');
+      expect(context.correlation).toMatchObject({
+        requestId: expect.stringContaining('compaction:'),
+        channelId: 'ch1',
+        callType: 'summary',
+        purpose: 'session.compaction.summary',
+        originType: 'summary',
+        originStage: 'session.compaction.summary',
+      });
       callOrder.push('summary');
       return {
         content: 'Summary of old messages.',

@@ -54,12 +54,18 @@ export type ObservabilityCallType =
   | 'background'
   | 'scheduled';
 
-export interface CorrelationMetadata {
+export interface LLMRequestMetadata {
   turnId?: string;
   requestId?: string;
   channelId?: string;
-  callType: ObservabilityCallType;
   toolName?: string;
+  toolCallId?: string;
+  originType?: ObservabilityCallType;
+  originStage?: string;
+}
+
+export interface CorrelationMetadata extends LLMRequestMetadata {
+  callType: ObservabilityCallType;
   purpose: string;
 }
 

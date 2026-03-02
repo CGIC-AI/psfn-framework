@@ -768,15 +768,22 @@ export class AdminServer implements Lifecycle {
       ?? readString(nestedExternalEvent?.channelId);
     const callType = normalizeCallType(readString(payload.callType))
       ?? inferTelemetryCallType(eventName);
+    const originType = normalizeCallType(readString(payload.originType))
+      ?? callType;
     const toolName = readString(payload.toolName);
+    const toolCallId = readString(payload.toolCallId);
     const purpose = readString(payload.purpose) ?? eventName;
+    const originStage = readString(payload.originStage) ?? purpose;
 
     return {
       ...(turnId ? { turnId } : {}),
       ...(requestId ? { requestId } : {}),
       ...(channelId ? { channelId } : {}),
       ...(callType ? { callType } : {}),
+      ...(originType ? { originType } : {}),
+      ...(originStage ? { originStage } : {}),
       ...(toolName ? { toolName } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
       ...(purpose ? { purpose } : {}),
     };
   }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   extractReasoningContent,
   extractTextContent,
@@ -55,5 +55,20 @@ describe('llm conversion helpers', () => {
     expect((messages[1] as any).content[0].text).toBe('second');
     expect(tools[0].name).toBe('x');
     expect((tools[0] as any).parameters).toEqual({ type: 'object' });
+  });
+
+  it('toPiMessages keeps a fixed timestamp across converted messages', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(4242);
+
+    const messages = toPiMessages([
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'second' },
+    ]);
+
+    expect((messages[0] as any).timestamp).toBe(4242);
+    expect((messages[1] as any).timestamp).toBe(4242);
+    expect(nowSpy).toHaveBeenCalledTimes(1);
+
+    nowSpy.mockRestore();
   });
 });

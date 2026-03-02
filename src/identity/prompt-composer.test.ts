@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from './prompt-store.js';
@@ -7,15 +7,18 @@ import { PromptComposer } from './prompt-composer.js';
 
 describe('PromptComposer', () => {
   let tmpDir: string;
+  let layersPath: string;
+  let historyPath: string;
+  let lastKnownGoodPath: string;
   let store: PromptLayerStore;
   let composer: PromptComposer;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'psfn-composer-'));
-    store = new PromptLayerStore(
-      join(tmpDir, 'layers.json'),
-      join(tmpDir, 'history.jsonl'),
-    );
+    layersPath = join(tmpDir, 'layers.json');
+    historyPath = join(tmpDir, 'history.jsonl');
+    lastKnownGoodPath = join(tmpDir, 'last-known-good.json');
+    store = new PromptLayerStore(layersPath, historyPath);
     composer = new PromptComposer(store);
   });
 
@@ -267,6 +270,49 @@ describe('PromptComposer', () => {
       expect(result.text).toBe('');
       expect(result.layerCount).toBe(0);
       expect(result.layerIds).toEqual([]);
+    });
+
+    it('persists lastKnownGood to disk and round-trips on restart', () => {
+      store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
+      const warm = composer.compose({ channelType: 'discord_text' });
+      expect(warm.text).toBe('DISCORD');
+
+      expect(existsSync(lastKnownGoodPath)).toBe(true);
+      const persistedRaw = readFileSync(lastKnownGoodPath, 'utf-8');
+      const persisted = JSON.parse(persistedRaw) as {
+        version?: number;
+        savedAt?: string;
+        compose?: { text?: string };
+      };
+      expect(persisted.version).toBe(1);
+      expect(typeof persisted.savedAt).toBe('string');
+      expect(persisted.compose.text).toBe('DISCORD');
+      expect(
+        readdirSync(tmpDir).filter(name => name.startsWith('last-known-good.json.') && name.endsWith('.tmp')),
+      ).toEqual([]);
+
+      writeFileSync(layersPath, '[]', 'utf-8');
+      const restartedStore = new PromptLayerStore(layersPath, historyPath);
+      const restartedComposer = new PromptComposer(restartedStore);
+      const cold = restartedComposer.compose({ channelType: 'api' });
+
+      expect(cold.text).toBe('DISCORD');
+      expect(cold.hash).toBe(warm.hash);
+    });
+
+    it('uses persisted lastKnownGood on cold start when prompt layers are broken', () => {
+      store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
+      composer.compose({ channelType: 'discord_text' });
+      expect(existsSync(lastKnownGoodPath)).toBe(true);
+
+      writeFileSync(layersPath, '{broken-json', 'utf-8');
+      const restartedStore = new PromptLayerStore(layersPath, historyPath);
+      const restartedComposer = new PromptComposer(restartedStore);
+      const fallback = restartedComposer.compose({ channelType: 'api' });
+
+      expect(fallback.text).toBe('DISCORD');
+      expect(fallback.layerCount).toBe(1);
+      expect(fallback.layerIds).toHaveLength(1);
     });
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from './prompt-store.js';
@@ -395,6 +395,29 @@ describe('PromptLayerStore', () => {
   describe('getHistory() / getLayerHistory()', () => {
     it('returns empty when no history', () => {
       expect(store.getHistory()).toEqual([]);
+    });
+
+    it('recovers valid history lines when JSONL contains corrupt entries', () => {
+      const layer = store.create({ type: 'runtime', name: 'A', content: 'a1' });
+      store.update(layer.id, 'a2', 'admin');
+      store.update(layer.id, 'a3', 'admin');
+
+      const historyLines = readFileSync(historyPath, 'utf-8').trimEnd().split('\n');
+      expect(historyLines).toHaveLength(2);
+
+      writeFileSync(
+        historyPath,
+        `${historyLines[0]}\n{"layerId":"bad-schema"}\n{not-json\n${historyLines[1]}\n`,
+        'utf-8',
+      );
+
+      const recovered = store.getLayerHistory(layer.id);
+      expect(recovered).toHaveLength(2);
+      expect(recovered[0].newContent).toBe('a2');
+      expect(recovered[1].newContent).toBe('a3');
+
+      const rolledBack = store.rollback(layer.id, 1);
+      expect(rolledBack.content).toBe('a1');
     });
 
     it('filters history by layer id', () => {

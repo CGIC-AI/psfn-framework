@@ -285,7 +285,10 @@ export interface SubstrateConfig {
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
-  discordRespondAll?: boolean;
+  discordTriggerWords?: string[];
+  discordTriggerReactions?: string[];
+  discordTriggerListenWindowMs?: number;
+  characterName?: string;
   voiceTargetGuildId?: string;
   voiceTargetUserId?: string;
   voiceReadyCueText?: string;
@@ -543,7 +546,18 @@ export function loadConfig(): SubstrateConfig {
     },
     voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
     discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
-    discordRespondAll: parseOptionalBooleanEnv(process.env.DISCORD_RESPOND_ALL) ?? false,
+    discordTriggerWords: parseStringListEnv(process.env.DISCORD_TRIGGER_WORDS),
+    discordTriggerReactions: (() => {
+      const configured = parseStringListEnv(process.env.DISCORD_TRIGGER_REACTIONS);
+      return configured.length > 0 ? configured : ['👆'];
+    })(),
+    discordTriggerListenWindowMs: parseBoundedIntegerEnv(
+      process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS,
+      120_000,
+      10_000,
+      600_000,
+    ),
+    characterName: '',
     voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
     voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',

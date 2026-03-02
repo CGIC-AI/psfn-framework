@@ -74,6 +74,7 @@ import {
   wireStaticPromptRegistry,
   wireSettingsRuntime,
   buildReplConfig,
+  wireSessionRuntime,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
@@ -375,6 +376,10 @@ async function main(): Promise<void> {
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config);
+  wireSessionRuntime(agentLoop, {
+    dataDir: config.dataDir,
+    sessionManager,
+  });
 
   // Contact store + tools — trust-gated privacy system
   const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;

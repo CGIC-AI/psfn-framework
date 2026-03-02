@@ -75,6 +75,7 @@ import {
   wireCharacterCardRuntime,
   wireStaticPromptRegistry,
   buildReplConfig,
+  wireSessionRuntime,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
@@ -450,6 +451,10 @@ export class SubstrateRuntime implements Lifecycle {
     wireCharacterCardRuntime(this.agentLoop, cardVersionStore, {
       getCapabilityTier: () => this.capabilityRuntime.getTier(),
       confirmationQueue: cardProposalQueue,
+    });
+    wireSessionRuntime(this.agentLoop, {
+      dataDir: this.config.dataDir,
+      sessionManager: this.sessionManager,
     });
 
     // Contact store + tools — trust-gated privacy system

@@ -27,7 +27,7 @@ import type { ChannelAdapter } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, saveSettings, applySettings, type EditableSettings } from './settings.js';
+import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
@@ -35,10 +35,8 @@ import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
 import { registerScheduledBackupTask } from './backup/service.js';
 import {
-  createEmbeddingDimensionMismatchWarning,
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
-  type EmbeddingDimensionValidationResult,
 } from './backup/startup-checks.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parseOptionalPositiveIntEnv } from './utils/env.js';
@@ -88,7 +86,7 @@ import {
 } from './bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { attachVoiceObservers } from './voice/observers/index.js';
-import { loadRuntimeChannelsConfig, type RuntimeChannelsConfigOverrides } from './channels/config.js';
+import { loadRuntimeChannelsConfig } from './channels/config.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
 import { createWyomingServiceRegistry } from './channels/wyoming/services/index.js';
@@ -96,10 +94,7 @@ import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/h
 import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
 import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
-import {
-  createStreamingTtsConnector,
-  type StreamingTtsProvider,
-} from './voice/connectors/tts/index.js';
+import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
@@ -116,69 +111,20 @@ import {
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
+import {
+  buildRuntimeChannelsConfigOverrides,
+  createEmbeddingDimensionMismatchFatalMessage,
+  installPromotedToolsPersistenceHook,
+  resolveRuntimeVoiceSttProvider,
+  resolveRuntimeVoiceTtsProvider,
+} from './runtime/bootstrap-helpers.js';
+export {
+  buildRuntimeChannelsConfigOverrides,
+  createEmbeddingDimensionMismatchFatalMessage,
+};
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
-type RuntimeVoiceSttProvider = 'deepgram' | 'disabled';
-type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
-
-function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
-  const configured = (config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider }).sttProvider;
-  if (configured === 'deepgram' || configured === 'disabled') return configured;
-  return config.deepgramApiKey ? 'deepgram' : 'disabled';
-}
-
-function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
-  const configured = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
-  if (configured === 'elevenlabs' || configured === 'echo' || configured === 'disabled') return configured;
-  return 'elevenlabs';
-}
-
-export function buildRuntimeChannelsConfigOverrides(
-  config: SubstrateConfig,
-  settings: EditableSettings,
-): RuntimeChannelsConfigOverrides {
-  const telegramOverride: RuntimeChannelsConfigOverrides['telegram'] = {};
-
-  if (Object.hasOwn(settings, 'telegramEnabled')) {
-    telegramOverride.enabled = config.telegramEnabled ?? false;
-  }
-  if (Object.hasOwn(settings, 'telegramAuthorizedUsers')) {
-    telegramOverride.allowedUsers = config.telegramAuthorizedUsers
-      ? [...config.telegramAuthorizedUsers]
-      : [];
-  }
-
-  if (telegramOverride.enabled === undefined && telegramOverride.allowedUsers === undefined) {
-    return {};
-  }
-
-  return {
-    telegram: telegramOverride,
-  };
-}
-
-export function createEmbeddingDimensionMismatchFatalMessage(
-  result: EmbeddingDimensionValidationResult,
-): string | null {
-  const mismatchWarning = createEmbeddingDimensionMismatchWarning(result);
-  if (!mismatchWarning) return null;
-  return `${mismatchWarning.message}: configured=${mismatchWarning.configuredDims}, stored=${mismatchWarning.storedDims}. ${mismatchWarning.recommendation}`;
-}
-
-function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
-  const existingHooks = config.runtimeHooks ?? {};
-  config.runtimeHooks = {
-    ...existingHooks,
-    persistPromotedExtendedTools: (toolNames) => {
-      const current = loadSettings(config.dataDir);
-      saveSettings(config.dataDir, {
-        ...current,
-        promotedExtendedTools: [...toolNames],
-      });
-    },
-  };
-}
 
 export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;

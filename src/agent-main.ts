@@ -8,7 +8,6 @@ import { loadConfig } from './types.js';
 import type {
   SubstrateConfig,
   SubstrateMessage,
-  WyomingRoutingMetadata,
 } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
@@ -96,6 +95,7 @@ import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { toErrorMessage } from './utils/errors.js';
+import { evaluateWyomingDelegation } from './agent-main/wyoming-routing.js';
 import {
   resolveContactsDir,
   resolveNotesDir,
@@ -109,13 +109,6 @@ const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
-
-interface WyomingDelegationDecision {
-  isWyoming: boolean;
-  delegate: boolean;
-  reason: string;
-  routing?: WyomingRoutingMetadata;
-}
 
 function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
@@ -132,65 +125,6 @@ function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
         promotedExtendedTools: [...toolNames],
       });
     },
-  };
-}
-
-function resolveWyomingRoutingMetadata(message: SubstrateMessage): WyomingRoutingMetadata | undefined {
-  const routing = message.routing?.wyoming;
-  if (routing) {
-    return routing;
-  }
-  if (message.channelType !== 'api' || !message.channelId.startsWith('api:wyoming:')) {
-    return undefined;
-  }
-
-  const parts = message.channelId.split(':');
-  if (parts.length < 4) {
-    return undefined;
-  }
-
-  return {
-    siteId: parts[2],
-    satelliteId: parts.slice(3).join(':'),
-  };
-}
-
-function evaluateWyomingDelegation(
-  message: SubstrateMessage,
-  config: SubstrateConfig,
-): WyomingDelegationDecision {
-  const routing = resolveWyomingRoutingMetadata(message);
-  if (!routing) {
-    return {
-      isWyoming: false,
-      delegate: false,
-      reason: 'not_wyoming',
-    };
-  }
-
-  if (!config.wyomingShardRouting?.enabled) {
-    return {
-      isWyoming: true,
-      delegate: false,
-      reason: 'agent_policy_disabled',
-      routing,
-    };
-  }
-
-  if (routing.shardDelegation?.eligible !== true) {
-    return {
-      isWyoming: true,
-      delegate: false,
-      reason: routing.shardDelegation?.reason ?? 'gateway_policy_denied',
-      routing,
-    };
-  }
-
-  return {
-    isWyoming: true,
-    delegate: true,
-    reason: 'delegation_enabled',
-    routing,
   };
 }
 

@@ -16,6 +16,7 @@ import type { MessageSender } from '../lifecycle/notifications.js';
 import type { PostTurnActionCandidate } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { isBusyTurnError } from '../lifecycle/turn-contention.js';
 
 // ── Helpers ──
 
@@ -405,7 +406,7 @@ export function createScheduleTaskTool(
           intervalMs: 0,
           runAt,
           handler: async () => {
-            try {
+            const runPlannedPrompt = async (): Promise<void> => {
               const response = await agentLoop.handleMessage({
                 id: `planned-${Date.now()}`,
                 channelId: `internal:planned:${taskId}`,
@@ -420,8 +421,16 @@ export function createScheduleTaskTool(
               if (sender && heartbeatChannelId) {
                 await sender.send(heartbeatChannelId, response.content);
               }
+            };
+
+            try {
+              await runPlannedPrompt();
             } catch (err) {
-              // Logged by scheduler's own error handling
+              if (!isBusyTurnError(err)) {
+                throw err;
+              }
+              await agentLoop.waitForIdle?.();
+              await runPlannedPrompt();
             }
           },
           state: 'idle',

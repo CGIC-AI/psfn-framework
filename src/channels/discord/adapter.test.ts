@@ -776,13 +776,28 @@ describe('DiscordAdapter status visibility', () => {
     );
 
     expect(steerSpy).toHaveBeenCalledTimes(1);
-    expect(queueEvents.some(event => event.phase === 'acquired' && event.queueDepth === 0)).toBe(true);
-    expect(queueEvents.some(event => event.phase === 'contended' && event.queueDepth === 1)).toBe(true);
+    expect(queueEvents.some(event =>
+      event.phase === 'acquired'
+      && event.queueDepth === 0
+      && event.policy === 'steer'
+      && event.source === 'discord'
+    )).toBe(true);
+    expect(queueEvents.some(event =>
+      event.phase === 'contended'
+      && event.queueDepth === 1
+      && event.policy === 'steer'
+      && event.source === 'discord'
+    )).toBe(true);
 
     releaseFirstTurn?.();
     await firstTurn;
 
-    expect(queueEvents.some(event => event.phase === 'released' && event.waitMs >= 0)).toBe(true);
+    expect(queueEvents.some(event =>
+      event.phase === 'released'
+      && event.waitMs >= 0
+      && event.policy === 'steer'
+      && event.source === 'discord'
+    )).toBe(true);
   });
 
   it('suppresses empty handler responses instead of sending empty Discord messages', async () => {

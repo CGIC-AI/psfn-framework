@@ -109,6 +109,16 @@ async function reservePort(): Promise<number> {
   return address.port;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('TelegramAdapter', () => {
   it('exposes channel adapter facets and task-kind routing hook', () => {
     const { fetchImpl } = makeFetchMock({});
@@ -302,6 +312,65 @@ describe('TelegramAdapter', () => {
     expect(sendDocumentCall?.body.chat_id).toBe('321');
     expect(sendDocumentCall?.body.message_thread_id).toBe(9);
     expect(sendDocumentCall?.body.document).toBe('https://example.com/spec.pdf');
+  });
+
+  it('defers same-channel concurrent updates and processes the deferred turn', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 700 }),
+    });
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    const handled: string[] = [];
+    const firstTurnStarted = createDeferred<void>();
+    const releaseFirstTurn = createDeferred<void>();
+
+    adapter.onMessage(async (message) => {
+      handled.push(message.content);
+      if (message.content === 'first') {
+        firstTurnStarted.resolve();
+        await releaseFirstTurn.promise;
+      }
+      return okResponse(message.channelId);
+    });
+
+    const firstTurn = (adapter as any).handleUpdate({
+      update_id: 1,
+      message: {
+        message_id: 10,
+        date: 1_700_000_000,
+        text: 'first',
+        chat: { id: 600, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'user' },
+      },
+    });
+    await firstTurnStarted.promise;
+
+    await (adapter as any).handleUpdate({
+      update_id: 2,
+      message: {
+        message_id: 11,
+        date: 1_700_000_001,
+        text: 'second',
+        chat: { id: 600, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'user' },
+      },
+    });
+
+    releaseFirstTurn.resolve();
+    await firstTurn;
+
+    for (let i = 0; i < 40; i += 1) {
+      const sentCount = calls.filter(call => call.method === 'sendMessage').length;
+      if (handled.length >= 2 && sentCount >= 2) {
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+
+    expect(handled).toEqual(['first', 'second']);
+    const sendCalls = calls.filter(call => call.method === 'sendMessage');
+    expect(sendCalls).toHaveLength(2);
+    expect(sendCalls[1]?.body.reply_to_message_id).toBe(11);
   });
 
   it('registers webhook mode lifecycle and routes incoming updates through listener', async () => {

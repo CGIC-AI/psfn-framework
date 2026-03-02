@@ -1149,6 +1149,184 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
   });
 
+  it('activates promoted extended tools each turn without load_tools calls', async () => {
+    const config = makeConfig({
+      promotedExtendedTools: ['extended_probe_tool'],
+    });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    const extendedProbeTool = {
+      name: 'extended_probe_tool',
+      label: 'extended_probe_tool',
+      description: 'test-only probe tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({
+        role: 'tool',
+        content: [{ type: 'text', text: 'ok' }],
+      })),
+    } as any;
+    agent.registerTool(extendedProbeTool, 'extended');
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    await agent.handleMessage(makeMessage({ id: 'msg-promoted-1' }));
+    await agent.handleMessage(makeMessage({ id: 'msg-promoted-2' }));
+
+    const setToolNamesByCall = setToolsSpy.mock.calls.map(
+      (call) => (call[0] as Array<{ name: string }>).map((tool) => tool.name),
+    );
+    expect(setToolNamesByCall.length).toBeGreaterThanOrEqual(2);
+    expect(setToolNamesByCall[0]).toContain('extended_probe_tool');
+    expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
+  });
+
+  it('deduplicates active tool registration when a promoted tool is also manually loaded', async () => {
+    const config = makeConfig({
+      promotedExtendedTools: ['extended_probe_tool'],
+    });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    const extendedProbeTool = {
+      name: 'extended_probe_tool',
+      label: 'extended_probe_tool',
+      description: 'test-only probe tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({
+        role: 'tool',
+        content: [{ type: 'text', text: 'ok' }],
+      })),
+    } as any;
+    agent.registerTool(extendedProbeTool, 'extended');
+
+    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
+    expect(loadTools).toBeDefined();
+    await (loadTools as any).execute('load-promoted-dedupe', { tools: ['extended_probe_tool'] });
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    await agent.handleMessage(makeMessage({ id: 'msg-promoted-dedupe' }));
+
+    for (const call of setToolsSpy.mock.calls) {
+      const toolNames = (call[0] as Array<{ name: string }>).map((tool) => tool.name);
+      expect(toolNames.filter(name => name === 'extended_probe_tool')).toHaveLength(1);
+    }
+  });
+
+  it('supports promoted-tool add/remove/swap mutations with bounds and persistence hooks', () => {
+    const persistPromotedExtendedTools = vi.fn();
+    const config = makeConfig({
+      runtimeHooks: {
+        persistPromotedExtendedTools,
+      },
+    });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    for (const name of ['tool_one', 'tool_two', 'tool_three', 'tool_four', 'tool_five']) {
+      agent.registerTool({
+        name,
+        label: name,
+        description: `${name} test tool`,
+        parameters: {} as any,
+        execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
+      } as any, 'extended');
+    }
+
+    expect(agent.addPromotedExtendedTool('tool_one').ok).toBe(true);
+    expect(agent.addPromotedExtendedTool('tool_one').changed).toBe(false);
+    expect(agent.addPromotedExtendedTool('tool_two').ok).toBe(true);
+    expect(agent.addPromotedExtendedTool('tool_three').ok).toBe(true);
+    expect(agent.addPromotedExtendedTool('tool_four').ok).toBe(true);
+
+    const overLimit = agent.addPromotedExtendedTool('tool_five');
+    expect(overLimit.ok).toBe(false);
+    expect(overLimit.errorCode).toBe('max_slots');
+    expect(agent.getPromotedExtendedTools()).toEqual(['tool_one', 'tool_two', 'tool_three', 'tool_four']);
+
+    const swapped = agent.swapPromotedExtendedTools(1, 2);
+    expect(swapped.ok).toBe(true);
+    expect(swapped.promotedTools).toEqual(['tool_two', 'tool_one', 'tool_three', 'tool_four']);
+
+    const removed = agent.removePromotedExtendedTool('tool_one');
+    expect(removed.ok).toBe(true);
+    expect(removed.promotedTools).toEqual(['tool_two', 'tool_three', 'tool_four']);
+    expect(persistPromotedExtendedTools).toHaveBeenCalled();
+  });
+
+  it('rejects invalid or capability-denied promoted tools', () => {
+    const config = makeConfig({ capabilityTier: 'custom' });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    const invalidName = agent.addPromotedExtendedTool('not_registered');
+    expect(invalidName.ok).toBe(false);
+    expect(invalidName.errorCode).toBe('tool_not_extended');
+
+    const deniedTool = {
+      name: 'repo_commit',
+      label: 'repo_commit',
+      description: 'commit test tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
+    } as any;
+    agent.registerTool(deniedTool, 'extended');
+
+    const denied = agent.addPromotedExtendedTool('repo_commit');
+    expect(denied.ok).toBe(false);
+    expect(denied.errorCode).toBe('capability_denied');
+    expect(denied.missingTokens).toContain('git.write');
+  });
+
+  it('keeps runtime state unchanged when promoted-tool persistence fails', () => {
+    const config = makeConfig({
+      runtimeHooks: {
+        persistPromotedExtendedTools: vi.fn(() => {
+          throw new Error('disk failure');
+        }),
+      },
+    });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool({
+      name: 'tool_one',
+      label: 'tool_one',
+      description: 'tool one',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
+    } as any, 'extended');
+
+    const result = agent.addPromotedExtendedTool('tool_one');
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('persist_failed');
+    expect(agent.getPromotedExtendedTools()).toEqual([]);
+  });
+
   it('freezes static prompt prefix per session while dynamic suffix updates each turn', async () => {
     vi.useFakeTimers();
     try {

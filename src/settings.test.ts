@@ -272,6 +272,27 @@ describe('settings', () => {
       expect(config.retryBaseDelayMs).toBe(4000);
     });
 
+    it('normalizes promotedExtendedTools with de-duplication and max slot bound', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        promotedExtendedTools: [
+          'repo_status',
+          'session_list',
+          'repo_status',
+          'prompt_layer_list',
+          'settings_get',
+          'contact_lookup',
+        ],
+      });
+
+      expect(config.promotedExtendedTools).toEqual([
+        'repo_status',
+        'session_list',
+        'prompt_layer_list',
+        'settings_get',
+      ]);
+    });
+
     it('applies import-processing routing controls', () => {
       const config = makeConfig({
         openRouterProviderOrder: ['openai'],
@@ -772,6 +793,7 @@ describe('settings', () => {
       expect(snapshot.webFetchLocalCrawlerHostAllowlist).toEqual([]);
       expect(snapshot.webFetchLocalCrawlerDomainAllowlist).toEqual([]);
       expect(snapshot.webFetchTlsCaCertPaths).toEqual([]);
+      expect(snapshot.promotedExtendedTools).toEqual([]);
     });
 
     it('resolves budget percentages and nullable hard overrides', () => {
@@ -791,7 +813,15 @@ describe('settings', () => {
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('thinkMaxSubQueries')).toBe(true);
       expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);
+      expect(isRuntimeSettingKey('promotedExtendedTools')).toBe(true);
       expect(isRuntimeSettingKey('discordToken')).toBe(false);
+    });
+
+    it('includes promotedExtendedTools in snapshot when configured', () => {
+      const config = makeConfig();
+      config.promotedExtendedTools = ['repo_status', 'session_list'];
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.promotedExtendedTools).toEqual(['repo_status', 'session_list']);
     });
 
     it('honors explicit sttProvider override before api-key fallback in snapshot', () => {
@@ -1059,6 +1089,21 @@ describe('settings', () => {
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.telegramEnabled).toBe(true);
       expect(snapshot.telegramAuthorizedUsers).toBe('111, 222');
+    });
+
+    it('parseSettingsForm bounds promotedExtendedTools to four slots', () => {
+      const params = new URLSearchParams({
+        promotedExtendedTools: 'repo_status, session_list, prompt_layer_list, settings_get, contact_lookup',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.promotedExtendedTools).toEqual([
+        'repo_status',
+        'session_list',
+        'prompt_layer_list',
+        'settings_get',
+      ]);
     });
 
     it('parseSettingsForm parses discord trigger form fields', () => {

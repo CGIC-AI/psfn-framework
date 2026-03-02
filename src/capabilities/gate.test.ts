@@ -3,7 +3,11 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier } from '../types.js';
 import type { CapabilityToken } from './tokens.js';
-import { gateToolWithCapabilities, type CapabilityAccess } from './gate.js';
+import {
+  evaluateToolCapabilityEligibility,
+  gateToolWithCapabilities,
+  type CapabilityAccess,
+} from './gate.js';
 import { resolveTierCapabilityTokens } from './tiers.js';
 import { withCapabilityRequirement } from './requirements.js';
 
@@ -235,5 +239,26 @@ describe('capability tool gating', () => {
     const resumeDenied = await resumeGated.execute('session-resume', {});
     expect(sessionResume.executeSpy).not.toHaveBeenCalled();
     expect((resumeDenied.content[0] as any).text).toContain('identity.write.runtime');
+  });
+
+  it('evaluates promoted tools capability requirements', () => {
+    const promotedAdd = createTool('promoted_tools_add');
+    const deniedEligibility = evaluateToolCapabilityEligibility(
+      promotedAdd.tool,
+      {},
+      accessForTier('custom', ['identity.read']),
+    );
+    expect(deniedEligibility.allowed).toBe(false);
+    expect(deniedEligibility.requiredTokens).toEqual(['identity.write.runtime']);
+    expect(deniedEligibility.missingTokens).toEqual(['identity.write.runtime']);
+
+    const promotedList = createTool('promoted_tools_list');
+    const allowedEligibility = evaluateToolCapabilityEligibility(
+      promotedList.tool,
+      {},
+      accessForTier('custom', ['identity.read']),
+    );
+    expect(allowedEligibility.allowed).toBe(true);
+    expect(allowedEligibility.missingTokens).toEqual([]);
   });
 });

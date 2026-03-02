@@ -73,9 +73,12 @@ interface RetrievalTelemetry {
   channelId: string;
   count: number;
   reason: 'ok' | 'empty_input' | 'no_candidates' | 'score_filtered' | 'trust_filtered' | 'error';
+  retrievalSource: 'embedding' | 'lexical_fallback';
   trustLevel: TrustLevel;
   channelVisibility: string;
   candidateCount: number;
+  semanticCandidateCount: number;
+  lexicalCandidateCount: number;
   rankedCount: number;
   returnedCount: number;
   retrievalLimit: number;
@@ -217,9 +220,12 @@ export class MemoryRetriever implements MemoryProvider {
       channelId,
       count: 0,
       reason: 'ok',
+      retrievalSource: 'embedding',
       trustLevel: effectiveTrust,
       channelVisibility,
       candidateCount: 0,
+      semanticCandidateCount: 0,
+      lexicalCandidateCount: 0,
       rankedCount: 0,
       returnedCount: 0,
       retrievalLimit: limit,
@@ -269,31 +275,50 @@ export class MemoryRetriever implements MemoryProvider {
       // Oversample candidates: trust/score filtering can drop many, so fetch 4x budget
       const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
 
-      const memories = this.memoryStore.searchByEmbedding(
+      const semanticMemories = this.memoryStore.searchByEmbedding(
         embedding,
         this.retrievalThreshold,
         candidateLimit,
       );
+      telemetry.semanticCandidateCount = semanticMemories.length;
+
+      let memories = semanticMemories;
+      if (semanticMemories.length === 0) {
+        const lexicalMemories = this.memoryStore.searchByText(contextText, candidateLimit);
+        telemetry.lexicalCandidateCount = lexicalMemories.length;
+        if (lexicalMemories.length > 0) {
+          memories = lexicalMemories;
+          telemetry.retrievalSource = 'lexical_fallback';
+          log.info('Retrieval: lexical fallback activated after semantic miss', {
+            channelId,
+            trustLevel: effectiveTrust,
+            threshold: this.retrievalThreshold,
+            semanticCandidates: 0,
+            lexicalCandidates: lexicalMemories.length,
+            queryLength: contextText.length,
+          });
+        } else {
+          telemetry.reason = 'no_candidates';
+          log.info('Retrieval: no candidates (semantic + lexical)', {
+            channelId,
+            trustLevel: effectiveTrust,
+            threshold: this.retrievalThreshold,
+            semanticCandidates: 0,
+            lexicalCandidates: 0,
+            queryLength: contextText.length,
+          });
+          await this.emitRetrievalTelemetry(telemetry);
+          return renderPromptBlock(profile, [], {
+            emotionalSnapshot,
+            emotionalContinuityMemories: fallbackEmotionalContinuity,
+          });
+        }
+      }
       telemetry.candidateCount = memories.length;
 
       if (memories.length > 0) {
         telemetry.topSimilarity = memories[0].similarity;
         telemetry.bottomSimilarity = memories[memories.length - 1].similarity;
-      }
-
-      if (memories.length === 0) {
-        telemetry.reason = 'no_candidates';
-        log.info('Retrieval: no embedding candidates above threshold', {
-          channelId,
-          trustLevel: effectiveTrust,
-          threshold: this.retrievalThreshold,
-          queryLength: contextText.length,
-        });
-        await this.emitRetrievalTelemetry(telemetry);
-        return renderPromptBlock(profile, [], {
-          emotionalSnapshot,
-          emotionalContinuityMemories: fallbackEmotionalContinuity,
-        });
       }
 
       const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
@@ -434,6 +459,9 @@ export class MemoryRetriever implements MemoryProvider {
         channelId,
         trustLevel: effectiveTrust,
         channelVisibility,
+        retrievalSource: telemetry.retrievalSource,
+        semanticCandidates: telemetry.semanticCandidateCount,
+        lexicalCandidates: telemetry.lexicalCandidateCount,
         pipeline: `${diagnostics.candidateCount} candidates -> ${diagnostics.policyAllowedCount} policy-allowed -> ${scored.length} scored -> ${ranked.length} ranked -> ${selected.length} selected`,
         rejectedBySensitivity: diagnostics.rejectedBySensitivity,
         rejectedByPolicy: diagnostics.rejectedByPolicy,
@@ -458,7 +486,10 @@ export class MemoryRetriever implements MemoryProvider {
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
-      telemetry.provenanceRefs = collectSelectedProvenanceRefs(selected);
+      telemetry.provenanceRefs = collectSelectedProvenanceRefs(
+        selected,
+        telemetry.retrievalSource,
+      );
 
       // Update access stats (fire-and-forget)
       for (const s of selected) {
@@ -673,8 +704,14 @@ export class MemoryRetriever implements MemoryProvider {
   }
 }
 
-function collectSelectedProvenanceRefs(scored: ScoredMemory[]): string[] {
+function collectSelectedProvenanceRefs(
+  scored: ScoredMemory[],
+  retrievalSource: 'embedding' | 'lexical_fallback' = 'embedding',
+): string[] {
   const refs = new Set<string>();
+  if (retrievalSource === 'lexical_fallback') {
+    refs.add('retrieval:lexical_fallback');
+  }
   for (const item of scored) {
     if (item.memory.sourceRef?.trim()) {
       refs.add(item.memory.sourceRef.trim());

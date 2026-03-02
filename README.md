@@ -208,6 +208,9 @@ LITELLM_BASE_URL=http://localhost:4000/v1 # Enable in .env
 ```bash
 DISCORD_HEARTBEAT_CHANNEL=...        # Lifecycle/heartbeat notification destination
 DISCORD_BACKFILL_ON_STARTUP=true     # Process recent backlog after reconnect
+DISCORD_START_RETRY_MAX_ATTEMPTS=0   # 0 = unbounded retries for transient Discord startup failures
+DISCORD_START_RETRY_BASE_DELAY_MS=2000
+DISCORD_START_RETRY_MAX_DELAY_MS=30000
 EXTRACTION_DRAIN_TIMEOUT_MS=10000    # Graceful shutdown wait for extraction drain
 PSFN_RUNTIME_MODE=split              # split default; yolo enables full-codebase fs.read
 LIFECYCLE_RESTART_COMMAND=npm run split

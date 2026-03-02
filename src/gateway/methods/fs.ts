@@ -1,5 +1,6 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { readFile, writeFile, glob as fsGlob } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import type { FsListParams, FsReadParams, FsWriteParams } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
 import { isInsideAllowedPaths } from '../policy.js';
@@ -11,12 +12,27 @@ import {
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 
+function resolveReadRoot(runtime: GatewayMethodRuntime): string {
+  const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+  const fullCodebaseReadRoot = runtime.policyConfig.fullCodebaseReadRoot;
+  if (typeof fullCodebaseReadRoot !== 'string' || fullCodebaseReadRoot.trim().length === 0) {
+    return workspaceRoot;
+  }
+  return resolveWorkspaceRoot(fullCodebaseReadRoot);
+}
+
+function resolveReadPath(path: string, runtime: GatewayMethodRuntime): string {
+  if (isAbsolute(path)) {
+    return resolveWorkspaceFsPathFromRoot(path, resolveWorkspaceRoot(runtime.workspacePath));
+  }
+  return resolveWorkspaceFsPathFromRoot(path, resolveReadRoot(runtime));
+}
+
 const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.read',
     handler: async (params: FsReadParams, runtime) => {
-      const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
-      const resolvedPath = resolveWorkspaceFsPathFromRoot(params.path, workspaceRoot);
+      const resolvedPath = resolveReadPath(params.path, runtime);
       const content = await readFile(resolvedPath, 'utf-8');
       return { content };
     },
@@ -51,16 +67,16 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         ? Math.max(1, Math.min(500, Math.floor(Number(params.maxEntries))))
         : 200;
 
-      const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+      const readRoot = resolveReadRoot(runtime);
       const paths: string[] = [];
       for await (const match of fsGlob(normalizedGlob, {
-        cwd: workspaceRoot,
+        cwd: readRoot,
         withFileTypes: false,
         dot: true,
       })) {
         const relative = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
-        const absolute = resolveWorkspaceFsPathFromRoot(relative, workspaceRoot);
-        if (!isInsideAllowedPaths(absolute, [workspaceRoot])) {
+        const absolute = resolveWorkspaceFsPathFromRoot(relative, readRoot);
+        if (!isInsideAllowedPaths(absolute, [readRoot])) {
           continue;
         }
         paths.push(relative);

@@ -377,6 +377,43 @@ describe('GatewayServer', () => {
     }
   });
 
+  it('roots relative fs.read and fs.list to full codebase root in yolo mode while keeping writes in workspace', async () => {
+    const codebaseRoot = mkdtempSync(join(tmpdir(), 'gw-yolo-root-'));
+    const workspace = join(codebaseRoot, 'workspace');
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(codebaseRoot, 'AGENTS.md'), 'root-agents');
+    writeFileSync(join(workspace, 'AGENTS.md'), 'workspace-agents');
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+          fullCodebaseReadRoot: codebaseRoot,
+        },
+      });
+
+      const readResponse = await invokeRpc(conn, 970, 'fs.read', { path: 'AGENTS.md' });
+      expect(readResponse.result.content).toBe('root-agents');
+
+      const listResponse = await invokeRpc(conn, 971, 'fs.list', {
+        glob: '*.md',
+        maxEntries: 20,
+      });
+      expect(listResponse.result.paths).toContain('AGENTS.md');
+
+      const writeResponse = await invokeRpc(conn, 972, 'fs.write', {
+        path: 'yolo-note.txt',
+        content: 'workspace-write-only',
+      });
+      expect(writeResponse.result).toEqual({ success: true });
+      expect(readFileSync(join(workspace, 'yolo-note.txt'), 'utf-8')).toBe('workspace-write-only');
+      expect(existsSync(join(codebaseRoot, 'yolo-note.txt'))).toBe(false);
+    } finally {
+      rmSync(codebaseRoot, { recursive: true, force: true });
+    }
+  });
+
   describe('confirmation queue', () => {
     let tempDir: string;
 

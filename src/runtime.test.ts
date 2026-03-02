@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SubstrateRuntime, buildRuntimeChannelsConfigOverrides } from './runtime.js';
+import {
+  SubstrateRuntime,
+  buildRuntimeChannelsConfigOverrides,
+  createEmbeddingDimensionMismatchFatalMessage,
+} from './runtime.js';
 import { buildSessionHmacKeyring } from './session/journal-utils.js';
 import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { composeSessionRuntime } from './bootstrap/composition.js';
@@ -97,6 +101,28 @@ describe('buildRuntimeChannelsConfigOverrides', () => {
         allowedUsers: [],
       },
     });
+  });
+});
+
+describe('createEmbeddingDimensionMismatchFatalMessage', () => {
+  it('returns a fatal startup message for embedding dimension mismatch', () => {
+    const message = createEmbeddingDimensionMismatchFatalMessage({
+      status: 'mismatch',
+      configuredDims: 1024,
+      storedDims: 768,
+    });
+
+    expect(message).toContain('Embedding dimension mismatch detected at startup');
+    expect(message).toContain('configured=1024');
+    expect(message).toContain('stored=768');
+  });
+
+  it('returns null when embedding dimensions are compatible', () => {
+    expect(createEmbeddingDimensionMismatchFatalMessage({
+      status: 'match',
+      configuredDims: 1024,
+      storedDims: 1024,
+    })).toBeNull();
   });
 });
 

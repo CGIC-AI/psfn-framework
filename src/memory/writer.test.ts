@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import Database from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 import { MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
 import type { EmbeddingService } from '../agent/contracts.js';
-import type { MemoryStore } from './store.js';
+import { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
 
@@ -29,6 +31,7 @@ function mockMemoryStore(): {
   insertMemory: ReturnType<typeof vi.fn>;
   searchByEmbedding: ReturnType<typeof vi.fn>;
   updateMemory: ReturnType<typeof vi.fn>;
+  runInTransaction: ReturnType<typeof vi.fn>;
   softDeleteMemory: ReturnType<typeof vi.fn>;
   recordAbstractionLink: ReturnType<typeof vi.fn>;
   getAllActiveMemories: ReturnType<typeof vi.fn>;
@@ -40,6 +43,7 @@ function mockMemoryStore(): {
     insertMemory: vi.fn(),
     searchByEmbedding: vi.fn(() => []),
     updateMemory: vi.fn(),
+    runInTransaction: vi.fn((handler: () => unknown) => handler()),
     softDeleteMemory: vi.fn(),
     recordAbstractionLink: vi.fn(),
     getAllActiveMemories: vi.fn(() => []),
@@ -332,6 +336,28 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).toHaveBeenCalledOnce();
     });
 
+    it('runs supersede and insert in a single transaction for write replacements', async () => {
+      const oldMemory = makeExistingMemory({
+        type: 'semantic',
+        confidence: 0.6,
+      });
+      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
+
+      const result = await writer.write({
+        text: 'Replacement with transactional write path',
+        type: 'semantic',
+        confidence: 0.95,
+      });
+
+      expect(result.action).toBe('superseded');
+      expect(store.runInTransaction).toHaveBeenCalledTimes(1);
+      expect(store.updateMemory).toHaveBeenCalledWith('existing-001', {
+        supersededBy: result.memory.id,
+      });
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
     it('does not supersede when old memory has higher confidence', async () => {
       const oldMemory = makeExistingMemory({
         type: 'semantic',
@@ -553,6 +579,24 @@ describe('MemoryWriter', () => {
       expect(result.memory.text).toBe('Updated fact about V');
     });
 
+    it('runs supersede and insert in a single transaction for upsert replacements', async () => {
+      const existing = makeExistingMemory({ type: 'semantic', confidence: 0.7 });
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+
+      const result = await writer.upsert({
+        text: 'Updated fact in upsert transaction',
+        type: 'semantic',
+        confidence: 0.95,
+      });
+
+      expect(result.action).toBe('superseded');
+      expect(store.runInTransaction).toHaveBeenCalledTimes(1);
+      expect(store.updateMemory).toHaveBeenCalledWith('existing-001', {
+        supersededBy: result.memory.id,
+      });
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
     it('supersedes regardless of confidence (unlike write)', async () => {
       // In write(), low confidence wouldn't supersede. In upsert(), it always does.
       const existing = makeExistingMemory({ type: 'semantic', confidence: 0.95 });
@@ -612,6 +656,57 @@ describe('MemoryWriter', () => {
       expect(result.action).toBe('created');
       expect(store.updateMemory).not.toHaveBeenCalled();
       expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('transactional replacement guarantees', () => {
+    it('rolls back supersede markers when replacement insert fails', async () => {
+      const db = new Database(':memory:');
+      sqliteVec.load(db);
+      const realStore = new MemoryStore(db, 4);
+
+      const existing = makeExistingMemory({
+        id: 'existing-transactional',
+        confidence: 0.6,
+        similarity: 0.8,
+      });
+      realStore.insertMemory(existing, makeEmbedding(1));
+
+      const embeddingService: EmbeddingService = {
+        embed: vi.fn(async () => makeEmbedding(2)),
+        embedBatch: vi.fn(async (texts: string[]) => texts.map(() => makeEmbedding(2))),
+        dims: 4,
+      };
+      const transactionalWriter = new MemoryWriter(realStore, embeddingService);
+
+      const storedExisting = realStore.getById(existing.id);
+      expect(storedExisting).toBeDefined();
+      const broaderCandidate = {
+        ...(storedExisting as PurrMemory),
+        similarity: 0.8,
+      };
+
+      const searchSpy = vi.spyOn(realStore, 'searchByEmbedding')
+        .mockReturnValueOnce([])
+        .mockReturnValueOnce([broaderCandidate]);
+      const insertSpy = vi.spyOn(realStore, 'insertMemory').mockImplementation(() => {
+        throw new Error('simulated insert failure');
+      });
+
+      try {
+        await expect(transactionalWriter.write({
+          text: 'Replacement that should fail insert',
+          type: 'semantic',
+          confidence: 0.9,
+        })).rejects.toThrow('simulated insert failure');
+
+        const afterFailure = realStore.getById(existing.id);
+        expect(afterFailure?.supersededBy).toBeUndefined();
+      } finally {
+        searchSpy.mockRestore();
+        insertSpy.mockRestore();
+        db.close();
+      }
     });
   });
 

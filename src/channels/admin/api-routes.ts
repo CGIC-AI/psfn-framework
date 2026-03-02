@@ -3,6 +3,7 @@ import { parseJsonBody, sendJson } from '../http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
 import { handleMultipartUpload, validateAndParseJsonFile } from './multipart.js';
 import type {
+  AdminAdaptiveToolsService,
   AdminContactsService,
   AdminDashboardService,
   AdminIdentityService,
@@ -138,6 +139,7 @@ function toMemoryType(value: string | null): MemoryType | undefined {
 
 export function buildAdminApiRoutes(options: {
   dashboardService: AdminDashboardService;
+  adaptiveToolsService?: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
@@ -159,6 +161,7 @@ export function buildAdminApiRoutes(options: {
 }): AdminApiRoute[] {
   const {
     dashboardService,
+    adaptiveToolsService,
     memoryService,
     sessionService,
     contactsService,
@@ -203,6 +206,20 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/dashboard'),
       handle: (_req, res) => {
         sendJson(res, 200, dashboardService.getDashboardData());
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/tools/adaptive'),
+      handle: (_req, res) => {
+        if (!adaptiveToolsService) {
+          sendJson(res, 200, {
+            state: null,
+            recentTelemetry: [],
+          });
+          return;
+        }
+        sendJson(res, 200, adaptiveToolsService.getAdaptiveToolsData());
       },
     },
     {

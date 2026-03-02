@@ -685,6 +685,7 @@ async function main(): Promise<void> {
       skillsRuntime,
       confirmationQueueApi,
       cardVersionStore,
+      adaptiveToolsStateProvider: agentLoop,
     });
     await adminServer.init();
     await adminServer.start();

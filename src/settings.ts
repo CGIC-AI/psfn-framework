@@ -10,6 +10,7 @@ import type {
   ModelContextBudgetConfig,
   ModelPurpose,
   ModelRoleAssignments,
+  SessionRestartBehavior,
   ModelSlot,
   ModelSlotDefaults,
   ModelSlotOverrides,
@@ -38,6 +39,10 @@ const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
   'openrouter_zdr',
   'local_endpoint',
 ]);
+const SESSION_RESTART_BEHAVIOR_VALUES = new Set<SessionRestartBehavior>([
+  'reuse_latest_session',
+  'new_session',
+]);
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -64,6 +69,7 @@ export interface EditableSettings {
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
   sessionMessageLimit?: number;
+  sessionRestartBehavior?: SessionRestartBehavior;
   memoryRetrievalLimit?: number;
   extractionInterval?: number;
   maintenanceIntervalMs?: number;
@@ -150,6 +156,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'sessionHistoryBudgetPct',
   'memoryRetrievalBudgetPct',
   'sessionMessageLimit',
+  'sessionRestartBehavior',
   'memoryRetrievalLimit',
   'extractionInterval',
   'maintenanceIntervalMs',
@@ -291,6 +298,13 @@ function toImportProcessingRouteMode(value: unknown): ImportProcessingRouteMode 
   const trimmed = value.trim().toLowerCase();
   if (!IMPORT_PROCESSING_ROUTE_MODE_VALUES.has(trimmed as ImportProcessingRouteMode)) return undefined;
   return trimmed as ImportProcessingRouteMode;
+}
+
+function toSessionRestartBehavior(value: unknown): SessionRestartBehavior | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!SESSION_RESTART_BEHAVIOR_VALUES.has(trimmed as SessionRestartBehavior)) return undefined;
+  return trimmed as SessionRestartBehavior;
 }
 
 function sanitizeModelContextBudget(value: unknown): ModelContextBudgetConfig | undefined {
@@ -627,6 +641,15 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     }
   }
 
+  if ('sessionRestartBehavior' in settings) {
+    const behavior = toSessionRestartBehavior(settings.sessionRestartBehavior);
+    if (behavior) {
+      normalized.sessionRestartBehavior = behavior;
+    } else {
+      delete normalized.sessionRestartBehavior;
+    }
+  }
+
   if ('chatApiBaseUrl' in settings) {
     normalized.chatApiBaseUrl = typeof settings.chatApiBaseUrl === 'string'
       ? settings.chatApiBaseUrl.trim()
@@ -881,6 +904,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     sessionHistoryBudgetPct: sessionBudgetPct,
     memoryRetrievalBudgetPct: retrievalBudgetPct,
     sessionMessageLimit: config.sessionMessageLimit ?? null,
+    sessionRestartBehavior: config.sessionRestartBehavior ?? 'reuse_latest_session',
     memoryRetrievalLimit: config.memoryRetrievalLimit ?? null,
     extractionInterval: config.extractionInterval,
     maintenanceIntervalMs: config.maintenanceIntervalMs,
@@ -975,6 +999,10 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     config.memoryRetrievalBudgetPct = settings.memoryRetrievalBudgetPct;
   }
   if (settings.sessionMessageLimit !== undefined) config.sessionMessageLimit = settings.sessionMessageLimit;
+  if ('sessionRestartBehavior' in settings) {
+    const behavior = settings.sessionRestartBehavior;
+    config.sessionRestartBehavior = behavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
+  }
   if (settings.memoryRetrievalLimit !== undefined) config.memoryRetrievalLimit = settings.memoryRetrievalLimit;
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
   if (settings.compactionEmotionalSalienceThresholdPct !== undefined) {
@@ -1320,6 +1348,16 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
       errors.push('capabilityTier must be one of: nursery, apprentice, autonomous, custom');
     } else {
       settings.capabilityTier = tier;
+    }
+  }
+
+  const sessionRestartBehaviorRaw = params.get('sessionRestartBehavior');
+  if (sessionRestartBehaviorRaw !== null) {
+    const behavior = toSessionRestartBehavior(sessionRestartBehaviorRaw);
+    if (!behavior) {
+      errors.push('sessionRestartBehavior must be one of: reuse_latest_session, new_session');
+    } else {
+      settings.sessionRestartBehavior = behavior;
     }
   }
 

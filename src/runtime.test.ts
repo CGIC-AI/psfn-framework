@@ -10,7 +10,6 @@ import { SessionStore } from './session/store.js';
 import { SessionManager } from './session/manager.js';
 import {
   readLastActiveSession,
-  writeLastActiveSession,
 } from './lifecycle/notifications.js';
 
 function makeRuntime(): SubstrateRuntime {
@@ -268,35 +267,47 @@ describe('SubstrateRuntime latest session restoration', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('falls back to computed latest session metadata when persisted session is stale', () => {
-    writeLastActiveSession(dataDir, {
-      sessionId: 'api:stale',
-      channelType: 'api',
-      timestamp: 1_000,
-    });
-
+  it('reuses latest session metadata by default at startup', () => {
     const runtime = new SubstrateRuntime({
       dataDir,
     } as any) as any;
-    runtime.sessionStore = {
-      getLatestSessionByTimestamp: vi.fn().mockReturnValue({
+    runtime.sessionManager = {
+      resolveStartupSessionMetadata: vi.fn().mockReturnValue({
         sessionId: '123456789012345678',
         channelType: 'discord',
         timestamp: 2_000,
       }),
-      count: vi.fn((sessionId: string) => (
-        sessionId === 'api:stale' || sessionId === '123456789012345678'
-          ? 1
-          : 0
-      )),
     };
 
     runtime.restoreLatestSessionMetadata();
 
+    expect(runtime.sessionManager.resolveStartupSessionMetadata).toHaveBeenCalledWith('reuse_latest_session');
     const restored = readLastActiveSession(dataDir);
     expect(restored?.sessionId).toBe('123456789012345678');
     expect(restored?.channelType).toBe('discord');
     expect(restored?.timestamp).toBe(2_000);
+  });
+
+  it('writes a fresh startup session when sessionRestartBehavior is new_session', () => {
+    const runtime = new SubstrateRuntime({
+      dataDir,
+      sessionRestartBehavior: 'new_session',
+    } as any) as any;
+    runtime.sessionManager = {
+      resolveStartupSessionMetadata: vi.fn().mockReturnValue({
+        sessionId: 'api:restart-test-session',
+        channelType: 'api',
+        timestamp: 3_000,
+      }),
+    };
+
+    runtime.restoreLatestSessionMetadata();
+
+    expect(runtime.sessionManager.resolveStartupSessionMetadata).toHaveBeenCalledWith('new_session');
+    const restored = readLastActiveSession(dataDir);
+    expect(restored?.sessionId).toBe('api:restart-test-session');
+    expect(restored?.channelType).toBe('api');
+    expect(restored?.timestamp).toBe(3_000);
   });
 });
 

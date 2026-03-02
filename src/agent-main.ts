@@ -57,6 +57,11 @@ import {
   writeLastActiveSession,
 } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
+import {
+  RUNTIME_MODE,
+  resolveRuntimeModeContract,
+  toRuntimeStatusMetadata,
+} from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
@@ -242,11 +247,18 @@ async function main(): Promise<void> {
     envTier: config.capabilityTier,
   });
   config.capabilityTier = capabilityRuntime.getTier();
+  const lifecycleRuntimeContract = resolveRuntimeModeContract({
+    entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
+    runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
+    restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
+  });
+  const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
 
   log.info('Initializing...');
+  log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
   await enforceNetworkIsolationOnStartup();
 
   // ── Connect to gateway ──
@@ -501,7 +513,8 @@ async function main(): Promise<void> {
   const moduleSummary = await moduleLoader.loadEnabledModules();
   log.info('Runtime modules initialized', moduleSummary);
   log.info('Re-validating tool wiring after module load', {
-    mode: 'gateway',
+    mode: lifecycleRuntimeContract.mode,
+    wiringMode: 'gateway',
     loadedModules: moduleSummary.loaded,
     failedModules: moduleSummary.failed,
   });
@@ -537,6 +550,7 @@ async function main(): Promise<void> {
             meta: {
               total: stats.total,
               avgSalience: Number(stats.avgSalience.toFixed(4)),
+              ...runtimeStatusMeta,
             },
           };
         },
@@ -546,6 +560,7 @@ async function main(): Promise<void> {
             provider: config.primaryProvider ?? null,
             model: config.primaryModel ?? null,
             ...toActiveProbeMeta(activeProbeConfig),
+            ...runtimeStatusMeta,
           };
 
           if (!configured) {
@@ -594,11 +609,13 @@ async function main(): Promise<void> {
         discord: () => ({
           status: 'degraded',
           detail: 'Discord transport runs outside the agent container',
+          meta: runtimeStatusMeta,
         }),
         embeddings: async () => {
           const baseMeta = {
             dims: gateway.dims,
             ...toActiveProbeMeta(activeProbeConfig),
+            ...runtimeStatusMeta,
           };
           if (!Number.isFinite(gateway.dims) || gateway.dims <= 0) {
             return {
@@ -648,12 +665,12 @@ async function main(): Promise<void> {
             return {
               status: 'degraded',
               detail: 'Heartbeat task is not registered',
-              meta: { taskCount },
+              meta: { taskCount, ...runtimeStatusMeta },
             };
           }
           return {
             status: 'healthy',
-            meta: { taskCount },
+            meta: { taskCount, ...runtimeStatusMeta },
           };
         },
       },
@@ -728,9 +745,6 @@ async function main(): Promise<void> {
 
   const startTime = Date.now();
   const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
-  const lifecycleRuntimeMode = process.env.PSFN_RUNTIME_MODE?.trim() || 'gateway-agent';
-  const lifecycleRestartCommand = process.env.LIFECYCLE_RESTART_COMMAND?.trim()
-    || (lifecycleRuntimeMode === 'split' ? 'npm run split' : undefined);
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
   };
@@ -769,8 +783,8 @@ async function main(): Promise<void> {
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRestartCommand,
-      runtimeMode: lifecycleRuntimeMode,
+      restartCommand: lifecycleRuntimeContract.restart.command,
+      runtimeMode: lifecycleRuntimeContract.mode,
     },
   ));
   agentLoop.registerTool(createRebuildTool(
@@ -779,8 +793,8 @@ async function main(): Promise<void> {
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRestartCommand,
-      runtimeMode: lifecycleRuntimeMode,
+      restartCommand: lifecycleRuntimeContract.restart.command,
+      runtimeMode: lifecycleRuntimeContract.mode,
     },
   ));
   agentLoop.registerTool(createNotifyOperatorTool(

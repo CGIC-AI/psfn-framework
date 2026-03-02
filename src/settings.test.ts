@@ -254,6 +254,7 @@ describe('settings', () => {
         sessionHistoryBudgetPct: 8,
         memoryRetrievalBudgetPct: 3,
         sessionMessageLimit: 50,
+        sessionRestartBehavior: 'new_session',
         memoryRetrievalLimit: 25,
         extractionInterval: 10,
         compactionEmotionalSalienceThresholdPct: 55,
@@ -263,6 +264,7 @@ describe('settings', () => {
       expect(config.sessionHistoryBudgetPct).toBe(8);
       expect(config.memoryRetrievalBudgetPct).toBe(3);
       expect(config.sessionMessageLimit).toBe(50);
+      expect(config.sessionRestartBehavior).toBe('new_session');
       expect(config.memoryRetrievalLimit).toBe(25);
       expect(config.extractionInterval).toBe(10);
       expect(config.compactionEmotionalSalienceThresholdPct).toBe(55);
@@ -756,6 +758,7 @@ describe('settings', () => {
       expect(snapshot.thinkMaxTokens).toBeNull();
       expect(snapshot.thinkMaxWallTimeMs).toBeNull();
       expect(snapshot.thinkMaxSubQueries).toBeNull();
+      expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
       expect(snapshot.openRouterProviderOrder).toEqual([]);
       expect(snapshot.importProcessingRouteMode).toBe('background');
@@ -787,6 +790,7 @@ describe('settings', () => {
 
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('thinkMaxSubQueries')).toBe(true);
+      expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);
       expect(isRuntimeSettingKey('discordToken')).toBe(false);
     });
 
@@ -957,6 +961,19 @@ describe('settings', () => {
       applySettings(config, loaded);
 
       expect(config.capabilityTier).toBe('autonomous');
+    });
+
+    it('round-trip save -> load -> apply preserves sessionRestartBehavior', () => {
+      saveSettings(tempDir, {
+        sessionRestartBehavior: 'new_session',
+      });
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.sessionRestartBehavior).toBe('new_session');
+
+      const config = makeConfig();
+      applySettings(config, loaded);
+      expect(config.sessionRestartBehavior).toBe('new_session');
     });
 
     it('round-trip save -> load -> apply handles custom capabilityTier', () => {

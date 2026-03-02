@@ -619,17 +619,27 @@ describe('AdminServer JSON API routes', () => {
   it('supports settings, identity, and prompts endpoints', async () => {
     const settingsRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsRes.status).toBe(200);
-    const settingsPayload = JSON.parse(settingsRes.body) as { config: { sessionMessageLimit: number } };
+    const settingsPayload = JSON.parse(settingsRes.body) as {
+      config: { sessionMessageLimit: number; sessionRestartBehavior: string };
+    };
     expect(settingsPayload.config.sessionMessageLimit).toBe(testConfig.sessionMessageLimit);
+    expect(settingsPayload.config.sessionRestartBehavior).toBe('reuse_latest_session');
 
     const settingsPatchRes = await request(
       port,
       'PATCH',
       '/api/admin/settings',
-      JSON.stringify({ sessionMessageLimit: 55 }),
+      JSON.stringify({ sessionMessageLimit: 55, sessionRestartBehavior: 'new_session' }),
       authHeaders,
     );
     expect(settingsPatchRes.status).toBe(200);
+    const settingsAfterPatchRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
+    expect(settingsAfterPatchRes.status).toBe(200);
+    const settingsAfterPatch = JSON.parse(settingsAfterPatchRes.body) as {
+      config: { sessionMessageLimit: number; sessionRestartBehavior: string };
+    };
+    expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
+    expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);

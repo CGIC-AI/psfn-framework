@@ -38,6 +38,10 @@
     { value: 'openrouter_zdr', label: 'OpenRouter ZDR-only' },
     { value: 'local_endpoint', label: 'Local Endpoint Only' },
   ] as const;
+  const SESSION_RESTART_BEHAVIORS = [
+    { value: 'reuse_latest_session', label: 'Reuse latest session' },
+    { value: 'new_session', label: 'Always start a new session' },
+  ] as const;
 
   // ── Budget constants (from context-budget.ts) ──
   const SESSION_HISTORY_TOKENS_PER_MSG = 256;
@@ -69,6 +73,7 @@
     return JSON.stringify({
       primaryModel, extractionModel, memoryBudgetPct,
       memoryRetrievalLimit, sessionMessageLimit,
+      sessionRestartBehavior,
       sessionHistoryBudgetPct, memoryRetrievalBudgetPct,
       extractionThresholdPct, compactionThresholdPct,
       maxResponseTokens, retryMaxAttempts, retryBaseDelayMs,
@@ -120,6 +125,7 @@
   let memoryBudgetPct = $state(20);
   let memoryRetrievalLimit = $state<number | null>(null);
   let sessionMessageLimit = $state<number | null>(null);
+  let sessionRestartBehavior = $state<'reuse_latest_session' | 'new_session'>('reuse_latest_session');
   let sessionHistoryBudgetPct = $state(6);
   let memoryRetrievalBudgetPct = $state(2);
   let extractionThresholdPct = $state(30);
@@ -247,8 +253,12 @@
     },
     {
       id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
-      keys: ['compactionThresholdPct', 'maintenanceIntervalMs'],
-      summary: () => `Compaction at ${compactionThresholdPct}%, Maintenance ${Math.round(maintenanceIntervalMs / 1000)}s`,
+      keys: ['compactionThresholdPct', 'maintenanceIntervalMs', 'sessionRestartBehavior'],
+      summary: () => (
+        `Compaction at ${compactionThresholdPct}%, ` +
+        `Maintenance ${Math.round(maintenanceIntervalMs / 1000)}s, ` +
+        `Restart ${sessionRestartBehavior === 'new_session' ? 'new session' : 'reuse latest'}`
+      ),
     },
     {
       id: 'extraction-tuning', title: 'Memory Extraction Tuning', icon: 'X',
@@ -427,6 +437,7 @@
     memoryBudgetPct = Number(config.memoryBudgetPct ?? 20);
     memoryRetrievalLimit = config.memoryRetrievalLimit != null ? Number(config.memoryRetrievalLimit) : null;
     sessionMessageLimit = config.sessionMessageLimit != null ? Number(config.sessionMessageLimit) : null;
+    sessionRestartBehavior = config.sessionRestartBehavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
     sessionHistoryBudgetPct = Number(config.sessionHistoryBudgetPct ?? 6);
     memoryRetrievalBudgetPct = Number(config.memoryRetrievalBudgetPct ?? 2);
     extractionThresholdPct = Number(config.extractionThresholdPct ?? 30);
@@ -661,6 +672,7 @@
         memoryBudgetPct,
         ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
         ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
+        sessionRestartBehavior,
         sessionHistoryBudgetPct,
         memoryRetrievalBudgetPct,
         extractionThresholdPct,
@@ -1140,6 +1152,15 @@
             <label class={LABEL_CLS}>Maintenance Interval (ms)</label>
             <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Restart Behavior</label>
+            <select bind:value={sessionRestartBehavior} class={INPUT_CLS}>
+              {#each SESSION_RESTART_BEHAVIORS as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+            <p class="text-sm text-shadow-500 mt-1">Choose whether startup resumes the latest session or seeds a fresh one.</p>
           </div>
         </div>
       </div>

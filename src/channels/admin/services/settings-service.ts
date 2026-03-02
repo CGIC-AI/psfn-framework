@@ -80,8 +80,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
   async getSettingsData(): Promise<AdminSettingsData> {
     await loadSettings(this.deps.config.dataDir);
+    const normalizedConfig = normalizeEditableSettings(this.deps.config);
+    normalizedConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     return {
-      config: normalizeEditableSettings(this.deps.config),
+      config: normalizedConfig as SubstrateConfig,
       env: this.getEnvInfo(),
       editors: this.loadSettingsConfigEditors(),
     };

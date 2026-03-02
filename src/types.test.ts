@@ -86,6 +86,24 @@ describe('loadConfig voice DAVE options', () => {
     const config = loadConfig();
     expect(config.telegramAuthorizedUsers).toEqual(['5635268079', '@vega']);
   });
+
+  it('defaults session restart behavior to reuse_latest_session', () => {
+    delete process.env.SESSION_RESTART_BEHAVIOR;
+
+    const config = loadConfig();
+
+    expect(config.sessionRestartBehavior).toBe('reuse_latest_session');
+  });
+
+  it('parses SESSION_RESTART_BEHAVIOR and falls back on invalid values', () => {
+    process.env.SESSION_RESTART_BEHAVIOR = 'new_session';
+    const explicit = loadConfig();
+    expect(explicit.sessionRestartBehavior).toBe('new_session');
+
+    process.env.SESSION_RESTART_BEHAVIOR = 'invalid-value';
+    const fallback = loadConfig();
+    expect(fallback.sessionRestartBehavior).toBe('reuse_latest_session');
+  });
 });
 
 describe('loadConfig gateway TLS options', () => {

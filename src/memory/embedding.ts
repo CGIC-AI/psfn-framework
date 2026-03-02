@@ -36,7 +36,7 @@ export interface ApiEmbeddingConfig {
 }
 
 export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
-  ollamaUrl: 'http://your-ollama-host:11434',
+  ollamaUrl: 'http://localhost:11434',
   model: 'snowflake-arctic-embed2',
   dims: 1024,
 };

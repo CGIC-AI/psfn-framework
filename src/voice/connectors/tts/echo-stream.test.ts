@@ -46,7 +46,7 @@ describe('EchoStreamingTtsConnector', () => {
     const chunks = await collectAsync(session.audio);
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(String(mockFetch.mock.calls[0][0])).toBe('http://220.158.196.150:8001/v1/audio/speech');
+    expect(String(mockFetch.mock.calls[0][0])).toBe('http://localhost:8001/v1/audio/speech');
 
     const options = mockFetch.mock.calls[0][1] as RequestInit;
     const payload = JSON.parse(String(options.body));

@@ -326,7 +326,7 @@ Implementation constraints from the ADR:
 - Current parsed voice keys are ElevenLabs-centric (`DEEPGRAM_API_KEY`, `DEEPGRAM_MODEL`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL_ID`) in `src/types.ts`.
 - Planned provider-switch keys are tracked under `PSFN-mndj.2` assumptions and are documented as:
   - `TTS_PROVIDER`
-  - `ECHO_TTS_URL` (default: `http://220.158.196.150:8001`)
+  - `ECHO_TTS_URL` (default: `http://<your-echo-tts-host>:8001`)
   - `ECHO_TTS_VOICE` (default: `11labs-Allison`)
   - `ECHO_TTS_PRESET` (default: `Independent-High-Speaker-CFG`)
   - `ECHO_TTS_MODEL` (optional override)

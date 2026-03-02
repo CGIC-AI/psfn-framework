@@ -13,6 +13,7 @@ import type {
 import type { Scheduler } from './scheduler.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
+import type { PostTurnActionCandidate } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -64,6 +65,7 @@ interface HeartbeatRunTemplateResult {
   templateName: string;
   reflection: string;
   queued?: boolean;
+  deferredAction?: PostTurnActionCandidate;
 }
 
 // ── Tool 1: heartbeat_get_policy ──
@@ -308,7 +310,7 @@ export function createHeartbeatRunTemplateTool(
     execute: async (
       _toolCallId: string,
       params: { templateId: string; sendToDiscord?: boolean; deferIfBusy?: boolean },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<{ isError?: boolean; deferredAction?: PostTurnActionCandidate }>> => {
       const templateId = params.templateId.trim();
       if (!templateId) {
         return textResultWithError('templateId is required', true);
@@ -327,10 +329,17 @@ export function createHeartbeatRunTemplateTool(
           deferIfBusy: params.deferIfBusy ?? true,
         });
         if (result.queued) {
-          return textResult(
-            `Queued reflection template "${result.templateName}" (${result.templateId}) `
-            + 'for post-reply execution.',
-          );
+          return {
+            content: [{
+              type: 'text',
+              text:
+                `Queued reflection template "${result.templateName}" (${result.templateId}) `
+                + 'for post-reply execution.',
+            }],
+            details: {
+              ...(result.deferredAction ? { deferredAction: result.deferredAction } : {}),
+            },
+          };
         }
         const reflection = result.reflection.trim();
         return textResult(

@@ -118,6 +118,11 @@ import {
   resolveRuntimeVoiceSttProvider,
   resolveRuntimeVoiceTtsProvider,
 } from './runtime/bootstrap-helpers.js';
+import {
+  registerChannelAdapter as registerRuntimeChannelAdapter,
+  startChannelAdapters,
+  stopChannelAdapters,
+} from './runtime/channel-lifecycle.js';
 export {
   buildRuntimeChannelsConfigOverrides,
   createEmbeddingDimensionMismatchFatalMessage,
@@ -162,53 +167,23 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   private registerChannelAdapter(adapter: ChannelAdapter): void {
-    this.channelRegistry.set(adapter.id, adapter);
-    this.agentLoop.setChannelRegistry(this.channelRegistry);
+    registerRuntimeChannelAdapter(
+      this.channelRegistry,
+      adapter,
+      registry => this.agentLoop.setChannelRegistry(registry),
+    );
   }
 
   private async startChannels(): Promise<void> {
-    const adapters = [...this.channelRegistry.values()];
-    if (adapters.length === 0) return;
-
-    const results = await Promise.allSettled(
-      adapters.map(adapter => adapter.gateway.start()),
+    await startChannelAdapters(
+      this.channelRegistry,
+      registry => this.agentLoop.setChannelRegistry(registry),
+      log,
     );
-
-    const failedAdapterIds: string[] = [];
-    for (const [index, result] of results.entries()) {
-      if (result.status === 'fulfilled') continue;
-      const adapterId = adapters[index]?.id ?? `unknown-${index}`;
-      failedAdapterIds.push(adapterId);
-      log.error('Channel adapter failed to start', {
-        adapterId,
-        error: String(result.reason),
-      });
-    }
-
-    if (failedAdapterIds.length === 0) return;
-
-    for (const adapterId of failedAdapterIds) {
-      this.channelRegistry.delete(adapterId);
-    }
-    this.agentLoop.setChannelRegistry(this.channelRegistry);
-
-    const startedCount = adapters.length - failedAdapterIds.length;
-    log.warn('Continuing startup with partially available channel adapters', {
-      startedCount,
-      failedCount: failedAdapterIds.length,
-      failedAdapterIds,
-    });
-
-    if (startedCount === 0) {
-      throw new Error('No channel adapters started successfully');
-    }
   }
 
   private async stopChannels(): Promise<void> {
-    const adapters = [...this.channelRegistry.values()].reverse();
-    for (const adapter of adapters) {
-      await adapter.gateway.stop();
-    }
+    await stopChannelAdapters(this.channelRegistry);
   }
 
   private resolveExtractionDrainTimeoutMs(): number {

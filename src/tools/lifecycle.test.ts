@@ -1,14 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRestartTool, createRebuildTool } from './lifecycle.js';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
 
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
+  spawn: vi.fn(),
 }));
 
 const mockedExecSync = vi.mocked(execSync);
+const mockedSpawn = vi.mocked(spawn);
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -21,6 +24,7 @@ describe('createRestartTool', () => {
 
   beforeEach(() => {
     mockedExecSync.mockReset();
+    mockedSpawn.mockReset();
     mockNotifier = {
       notifyPreRestart: vi.fn(async () => {}),
       notifyReady: vi.fn(async () => {}),
@@ -105,6 +109,39 @@ describe('createRestartTool', () => {
     const hourlyBlocked = await tool.execute('call-6', { reason: 'third' });
     expect(resultText(hourlyBlocked)).toContain('hourly limit');
     expect((hourlyBlocked.details as any).isError).toBe(true);
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('launches configured restart command after shutdown', async () => {
+    const child = new EventEmitter() as EventEmitter & { unref: ReturnType<typeof vi.fn> };
+    child.unref = vi.fn();
+    mockedSpawn.mockReturnValue(child as any);
+
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
+      void fn();
+      return 0 as any;
+    }) as typeof setImmediate;
+
+    const tool = createRestartTool(mockNotifier, mockStopFn, {
+      restartCommand: 'npm run split',
+      runtimeMode: 'split',
+    });
+    await tool.execute('call-7', { reason: 'mode-aware restart' });
+    child.emit('spawn');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(mockedSpawn).toHaveBeenCalledWith('npm run split', {
+      shell: true,
+      detached: true,
+      stdio: 'ignore',
+    });
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(0);
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();

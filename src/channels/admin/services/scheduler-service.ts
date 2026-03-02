@@ -82,13 +82,21 @@ export class AdminSchedulerService {
       return { ok: false, message: `Task "${id}" not found` };
     }
 
-    const taskUpdates: { intervalMs?: number; state?: 'idle' | 'paused'; name?: string } = {};
+    const taskUpdates: {
+      intervalMs?: number;
+      state?: 'idle' | 'paused';
+      name?: string;
+      resetLastRun?: boolean;
+    } = {};
 
     if (updates.intervalMs !== undefined) {
       if (typeof updates.intervalMs !== 'number' || updates.intervalMs < 1000) {
         return { ok: false, message: 'intervalMs must be at least 1000 (1 second)' };
       }
       taskUpdates.intervalMs = updates.intervalMs;
+      if (task.type === 'every') {
+        taskUpdates.resetLastRun = true;
+      }
     }
 
     if (updates.enabled !== undefined) {
@@ -221,7 +229,10 @@ export class AdminSchedulerService {
     // Sync interval change to scheduler if this template has a corresponding task
     const taskId = `reflection:${id}`;
     if (updates.intervalMs !== undefined) {
-      this.scheduler.updateTask(taskId, { intervalMs: updates.intervalMs });
+      this.scheduler.updateTask(taskId, {
+        intervalMs: updates.intervalMs,
+        resetLastRun: true,
+      });
     }
     if (updates.enabled !== undefined) {
       this.scheduler.updateTask(taskId, {

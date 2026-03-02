@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { HeartbeatPolicyStore, validateTemplate } from './heartbeat-policy.js';
@@ -79,6 +79,33 @@ describe('HeartbeatPolicyStore', () => {
     const policy = store.load();
     // Invalid templates (not an array) triggers default
     expect(policy.templates).toHaveLength(5);
+  });
+
+  it('restores defaults when persisted template intervals are invalid', () => {
+    writeFileSync(
+      join(tmpDir, 'heartbeat-policy.json'),
+      JSON.stringify({
+        templates: [
+          {
+            id: 'whisper',
+            name: 'Whisper',
+            prompt: 'This prompt is long enough to pass prompt validation.',
+            intervalMs: 0,
+            enabled: true,
+            sendToDiscord: true,
+          },
+        ],
+        version: 99,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'test',
+      }),
+      'utf-8',
+    );
+
+    const policy = store.load();
+    expect(policy.templates).toHaveLength(5);
+    expect(policy.version).toBe(1);
+    expect(policy.updatedBy).toBe('system');
   });
 });
 

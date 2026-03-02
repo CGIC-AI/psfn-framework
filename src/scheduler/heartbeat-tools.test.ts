@@ -307,7 +307,7 @@ describe('heartbeat_run_template', () => {
     const result = await tool.execute('call-run-1', { templateId: 'whisper' }, new AbortController().signal);
     const text = (result.content[0] as { text: string }).text;
 
-    expect(runTemplate).toHaveBeenCalledWith('whisper', {});
+    expect(runTemplate).toHaveBeenCalledWith('whisper', { deferIfBusy: true });
     expect(text).toContain('Triggered reflection template');
     expect(text).toContain('A quiet reflection');
     expect(result.details.isError).toBeFalsy();
@@ -336,9 +336,32 @@ describe('heartbeat_run_template', () => {
     );
     const text = (result.content[0] as { text: string }).text;
 
-    expect(runTemplate).toHaveBeenCalledWith('whisper', { sendToDiscordOverride: true });
+    expect(runTemplate).toHaveBeenCalledWith('whisper', {
+      sendToDiscordOverride: true,
+      deferIfBusy: true,
+    });
     expect(text).toContain('heartbeat_run_template failed');
     expect(result.details.isError).toBe(true);
+  });
+
+  it('reports queued status when template execution is deferred', async () => {
+    const runTemplate = vi.fn(async () => ({
+      templateId: 'whisper',
+      templateName: 'Whisper',
+      reflection: '',
+      queued: true,
+    }));
+    const tool = createHeartbeatRunTemplateTool(store, runTemplate);
+    const result = await tool.execute(
+      'call-run-4',
+      { templateId: 'whisper', deferIfBusy: true },
+      new AbortController().signal,
+    );
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(runTemplate).toHaveBeenCalledWith('whisper', { deferIfBusy: true });
+    expect(text).toContain('Queued reflection template');
+    expect(result.details.isError).toBeFalsy();
   });
 });
 

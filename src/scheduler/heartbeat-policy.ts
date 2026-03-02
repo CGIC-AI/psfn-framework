@@ -243,8 +243,22 @@ export class HeartbeatPolicyStore {
       const raw = readFileSync(this.filePath, 'utf-8');
       const parsed = JSON.parse(raw) as HeartbeatPolicy;
       if (!Array.isArray(parsed.templates)) {
-        log.warn('Invalid policy file, returning defaults');
-        return getDefaults();
+        log.warn('Invalid policy file, restoring defaults');
+        const defaults = getDefaults();
+        this.save(defaults);
+        return defaults;
+      }
+      for (const template of parsed.templates) {
+        const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
+        if (errors.length > 0) {
+          log.warn('Invalid heartbeat template in policy file, restoring defaults', {
+            templateId: template?.id,
+            errors,
+          });
+          const defaults = getDefaults();
+          this.save(defaults);
+          return defaults;
+        }
       }
       return parsed;
     } catch {

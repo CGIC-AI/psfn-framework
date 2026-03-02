@@ -42,14 +42,34 @@ export class Scheduler {
     if (this.tasks.has(task.id)) {
       throw new Error(`Task "${task.id}" is already registered`);
     }
+    if (task.type === 'every' && (!Number.isFinite(task.intervalMs) || task.intervalMs <= 0)) {
+      throw new Error(`Task "${task.id}" intervalMs must be a positive finite number`);
+    }
     const lastRun = opts?.skipFirstRun ? Date.now() : 0;
     this.tasks.set(task.id, { ...task, lastRun });
   }
 
-  updateTask(id: string, updates: { intervalMs?: number; state?: TaskState; name?: string; runAt?: number }): boolean {
+  updateTask(
+    id: string,
+    updates: {
+      intervalMs?: number;
+      state?: TaskState;
+      name?: string;
+      runAt?: number;
+      resetLastRun?: boolean;
+    },
+  ): boolean {
     const entry = this.tasks.get(id);
     if (!entry) return false;
-    if (updates.intervalMs !== undefined) entry.intervalMs = updates.intervalMs;
+    if (updates.intervalMs !== undefined) {
+      if (entry.type === 'every' && (!Number.isFinite(updates.intervalMs) || updates.intervalMs <= 0)) {
+        return false;
+      }
+      entry.intervalMs = updates.intervalMs;
+      if (updates.resetLastRun) {
+        entry.lastRun = Date.now();
+      }
+    }
     if (updates.state !== undefined) entry.state = updates.state;
     if (updates.name !== undefined) entry.name = updates.name;
     if (updates.runAt !== undefined) entry.runAt = updates.runAt;

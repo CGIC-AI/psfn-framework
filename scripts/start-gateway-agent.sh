@@ -42,6 +42,15 @@ if [ "${DEBUG_MODE}" -eq 1 ]; then
   echo "[split] debug mode enabled (LOG_LEVEL=${LOG_LEVEL})"
 fi
 
+export PSFN_RUNTIME_MODE="${PSFN_RUNTIME_MODE:-split}"
+if [ -z "${LIFECYCLE_RESTART_COMMAND:-}" ]; then
+  if [ "${DEBUG_MODE}" -eq 1 ]; then
+    export LIFECYCLE_RESTART_COMMAND="npm run split:debug"
+  else
+    export LIFECYCLE_RESTART_COMMAND="npm run split"
+  fi
+fi
+
 DEFAULT_SOCKET_PATH="/run/psfn/gateway.sock"
 FALLBACK_SOCKET_PATH="${XDG_RUNTIME_DIR:-/tmp}/psfn-gateway/gateway.sock"
 
@@ -61,20 +70,45 @@ SOCKET_PATH="${GATEWAY_SOCKET}"
 GATEWAY_PID=""
 AGENT_PID=""
 
+start_gateway() {
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    ./node_modules/.bin/tsx src/gateway-main.ts &
+  else
+    npm run gateway &
+  fi
+  GATEWAY_PID=$!
+}
+
+start_agent() {
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    ./node_modules/.bin/tsx src/agent-main.ts &
+  else
+    npm run agent &
+  fi
+  AGENT_PID=$!
+}
+
+stop_pid() {
+  local pid="$1"
+  if [ -z "${pid}" ]; then
+    return
+  fi
+  if kill -0 "${pid}" 2>/dev/null; then
+    pkill -TERM -P "${pid}" 2>/dev/null || true
+    kill "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
+  fi
+}
+
 cleanup() {
-  if [ -n "${AGENT_PID}" ] && kill -0 "${AGENT_PID}" 2>/dev/null; then
-    kill "${AGENT_PID}" 2>/dev/null || true
-  fi
-  if [ -n "${GATEWAY_PID}" ] && kill -0 "${GATEWAY_PID}" 2>/dev/null; then
-    kill "${GATEWAY_PID}" 2>/dev/null || true
-  fi
+  stop_pid "${AGENT_PID}"
+  stop_pid "${GATEWAY_PID}"
 }
 
 trap cleanup INT TERM EXIT
 
 echo "[split] starting gateway..."
-npm run gateway &
-GATEWAY_PID=$!
+start_gateway
 
 echo "[split] waiting for gateway socket: ${SOCKET_PATH}"
 for _ in $(seq 1 200); do
@@ -93,8 +127,7 @@ if [ ! -S "${SOCKET_PATH}" ]; then
 fi
 
 echo "[split] starting agent..."
-npm run agent &
-AGENT_PID=$!
+start_agent
 
 echo "[split] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
 echo "[split] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID})"

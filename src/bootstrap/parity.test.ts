@@ -208,4 +208,61 @@ describe('wireHeartbeatRuntime', () => {
       nowSpy.mockRestore();
     }
   });
+
+  it('defers manual template runs when the agent is busy and executes them after idle', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Agent is already processing another prompt'))
+        .mockResolvedValue({ content: 'Deferred reflection output' }),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      wireHeartbeatRuntime(
+        target,
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+      );
+
+      const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
+      const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool?.name === 'heartbeat_run_template');
+      expect(runTemplateTool).toBeDefined();
+
+      const runResult = await runTemplateTool.execute(
+        'manual-1',
+        { templateId: 'whisper' },
+        new AbortController().signal,
+      );
+      const runText = runResult.content.map((part: { text: string }) => part.text).join('');
+      expect(runText).toContain('Queued reflection template');
+
+      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:'));
+      expect(deferredTask).toBeDefined();
+
+      nowSpy.mockReturnValue((deferredTask?.runAt ?? 0) + 1);
+      await scheduler.tick();
+
+      expect(agentLoop.waitForIdle).toHaveBeenCalledOnce();
+      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
+      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 });

@@ -11,6 +11,7 @@ import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { createSettingsGetTool } from '../settings-tools.js';
+import { createSessionNewTool } from '../tools/session.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -236,6 +237,28 @@ export function wireSettingsRuntime(
   config: SubstrateConfig,
 ): void {
   target.registerTool(createSettingsGetTool(config), 'extended');
+}
+
+interface SessionRuntimeManager {
+  appendSystemNote(channelId: string, note: string): void;
+}
+
+export function wireSessionRuntime(
+  target: ToolRegistrarTarget,
+  options: {
+    dataDir: string;
+    sessionManager: SessionRuntimeManager;
+  },
+): void {
+  target.registerTool(createSessionNewTool({
+    dataDir: options.dataDir,
+    seedSession: (sessionId) => {
+      options.sessionManager.appendSystemNote(
+        sessionId,
+        'Session initialized via session_new.',
+      );
+    },
+  }), 'extended');
 }
 
 /**

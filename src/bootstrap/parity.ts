@@ -37,10 +37,15 @@ import {
   createScheduleTaskTool,
 } from '../scheduler/heartbeat-tools.js';
 import type { ReflectionTemplate } from '../scheduler/heartbeat-policy.js';
-import type { SessionManager } from '../session/manager.js';
 import type { MemoryWriter } from '../memory/writer.js';
 import { ValuesJournalStore } from '../values/store.js';
 import type { ValuesDeliberationMetadata } from '../values/store.js';
+import {
+  resolveLegacyValuesJournalPath,
+  resolveReflectionJournalPath,
+  resolveValuesJournalPath,
+} from '../persistence/layout.js';
+import { ReflectionJournalStore } from '../notes/reflection-journal.js';
 
 const log = createComponentLogger('SharedWiring');
 
@@ -59,7 +64,6 @@ interface HeartbeatAgent {
 
 interface HeartbeatRuntimeOptions {
   llmProvider?: LLMProvider;
-  sessionManager?: Pick<SessionManager, 'recordAssistantMessage' | 'appendSystemNote'>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
 }
 
@@ -162,7 +166,10 @@ export function wireHeartbeatRuntime(
   const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
   const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
   const store = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
-  const valuesJournal = new ValuesJournalStore(join(dataDir, 'values.jsonl'));
+  const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
+    legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
+  });
+  const reflectionJournal = new ReflectionJournalStore(resolveReflectionJournalPath(dataDir));
   const policy = store.load();
   const pendingDeferredTemplates = new Set<string>();
   const lastScheduledRunAt = new Map<string, number>();
@@ -186,29 +193,6 @@ export function wireHeartbeatRuntime(
     estimatedCostUsd: result.estimatedCostUsd,
     durationMs: result.durationMs,
   });
-
-  const persistDeliberationJournalEntry = (
-    reflectionChannelId: string,
-    reflection: string,
-    metadata: ValuesDeliberationMetadata,
-  ): void => {
-    if (!runtimeOptions.sessionManager) return;
-    runtimeOptions.sessionManager.recordAssistantMessage(
-      reflectionChannelId,
-      reflection,
-      undefined,
-      false,
-      undefined,
-      {
-        trustLevel: 'trusted',
-        mirror: false,
-      },
-    );
-    runtimeOptions.sessionManager.appendSystemNote(
-      reflectionChannelId,
-      `[Deliberation metadata] ${JSON.stringify(metadata)}`,
-    );
-  };
 
   const persistDeliberationMemory = async (
     template: ReflectionTemplate,
@@ -287,22 +271,13 @@ export function wireHeartbeatRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
+    let reflectionMode: 'agent' | 'deliberation' = 'agent';
 
     if (shouldUseDeliberation(template)) {
       const deliberationResult = await runTemplateDeliberation(template);
       reflectionText = deliberationResult.reflection;
       deliberationMetadata = deliberationResult.metadata;
-      try {
-        persistDeliberationJournalEntry(
-          reflectionChannelId,
-          reflectionText,
-          deliberationMetadata,
-        );
-      } catch (error) {
-        log.warn(`Reflection "${template.id}" journal persistence skipped`, {
-          error: String(error),
-        });
-      }
+      reflectionMode = 'deliberation';
       try {
         await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
       } catch (error) {
@@ -330,6 +305,22 @@ export function wireHeartbeatRuntime(
         prompt: template.prompt,
         reflection: reflectionText,
         ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+      });
+    }
+
+    try {
+      reflectionJournal.append({
+        templateId: template.id,
+        templateName: template.name,
+        prompt: template.prompt,
+        reflection: reflectionText,
+        channelId: reflectionChannelId,
+        mode: reflectionMode,
+        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+      });
+    } catch (error) {
+      log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
+        error: String(error),
       });
     }
 

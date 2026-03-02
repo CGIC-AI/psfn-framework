@@ -53,7 +53,7 @@ describe('wireHeartbeatRuntime', () => {
       nowSpy.mockReturnValue(1_700_000_000_000 + task!.intervalMs + 1);
       await scheduler.tick();
 
-      const raw = readFileSync(join(tempDir, 'values.jsonl'), 'utf-8').trim();
+      const raw = readFileSync(join(tempDir, 'notes', 'values.jsonl'), 'utf-8').trim();
       const lines = raw.split('\n');
       expect(lines).toHaveLength(1);
       const entry = JSON.parse(lines[0] ?? '{}') as {
@@ -149,10 +149,6 @@ describe('wireHeartbeatRuntime', () => {
         };
       }),
     };
-    const sessionManager = {
-      recordAssistantMessage: vi.fn(),
-      appendSystemNote: vi.fn(),
-    };
     const memoryWriter = {
       write: vi.fn().mockResolvedValue({
         action: 'created',
@@ -172,7 +168,6 @@ describe('wireHeartbeatRuntime', () => {
         undefined,
         {
           llmProvider,
-          sessionManager,
           memoryWriter,
         },
       );
@@ -187,11 +182,9 @@ describe('wireHeartbeatRuntime', () => {
         .map(call => call[0]?.channelId);
       expect(handledChannels).not.toContain('internal:reflection:values-reflection');
       expect(purposes).toEqual(['reasoning', 'background', 'reasoning']);
-      expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
-      expect(sessionManager.appendSystemNote).toHaveBeenCalledTimes(1);
       expect(memoryWriter.write).toHaveBeenCalledTimes(1);
 
-      const raw = readFileSync(join(tempDir, 'values.jsonl'), 'utf-8').trim();
+      const raw = readFileSync(join(tempDir, 'notes', 'values.jsonl'), 'utf-8').trim();
       const entry = JSON.parse(raw) as {
         reflection: string;
         deliberation?: {
@@ -204,6 +197,16 @@ describe('wireHeartbeatRuntime', () => {
       expect(entry.deliberation?.rounds).toBe(1);
       expect(entry.deliberation?.totalTokens).toBe(190);
       expect(entry.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
+
+      const reflectionRaw = readFileSync(join(tempDir, 'notes', 'reflections', 'journal.jsonl'), 'utf-8').trim();
+      const reflectionLines = reflectionRaw.split('\n').filter(line => line.trim().length > 0);
+      expect(reflectionLines.length).toBeGreaterThan(0);
+      const reflectionEntry = JSON.parse(reflectionLines[reflectionLines.length - 1] ?? '{}') as {
+        mode: string;
+        templateId: string;
+      };
+      expect(reflectionEntry.templateId).toBe('values-reflection');
+      expect(reflectionEntry.mode).toBe('deliberation');
     } finally {
       nowSpy.mockRestore();
     }

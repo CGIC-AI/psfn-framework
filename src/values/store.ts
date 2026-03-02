@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 
@@ -26,6 +27,10 @@ export interface ValuesJournalAppendInput {
 
 interface ValuesJournalListOptions {
   limit?: number;
+}
+
+interface ValuesJournalStoreOptions {
+  legacyFilePaths?: string[];
 }
 
 export interface ValuesDeliberationMetadata {
@@ -129,12 +134,18 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
 
 export class ValuesJournalStore {
   private readonly filePath: string;
+  private readonly legacyFilePaths: string[];
+  private migratedLegacy = false;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: ValuesJournalStoreOptions = {}) {
     this.filePath = filePath;
+    this.legacyFilePaths = (options.legacyFilePaths ?? [])
+      .map(path => path.trim())
+      .filter(path => path.length > 0 && path !== filePath);
   }
 
   append(input: ValuesJournalAppendInput): ValuesJournalEntry {
+    this.ensureLegacyMigration();
     const templateId = input.templateId.trim();
     const templateName = input.templateName.trim();
     const prompt = input.prompt.trim();
@@ -162,6 +173,7 @@ export class ValuesJournalStore {
   }
 
   list(options: ValuesJournalListOptions = {}): ValuesJournalEntry[] {
+    this.ensureLegacyMigration();
     const entries = this.readAll().reverse();
     if (options.limit === undefined || options.limit < 1) {
       return entries;
@@ -170,6 +182,7 @@ export class ValuesJournalStore {
   }
 
   private readAll(): ValuesJournalEntry[] {
+    this.ensureLegacyMigration();
     if (!existsSync(this.filePath)) return [];
     const raw = readFileSync(this.filePath, 'utf-8');
     if (raw.trim().length === 0) return [];
@@ -197,5 +210,28 @@ export class ValuesJournalStore {
 
     entries.sort((left, right) => left.version - right.version);
     return entries;
+  }
+
+  private ensureLegacyMigration(): void {
+    if (this.migratedLegacy) return;
+    this.migratedLegacy = true;
+
+    if (existsSync(this.filePath)) return;
+    for (const legacyPath of this.legacyFilePaths) {
+      if (!existsSync(legacyPath)) continue;
+      try {
+        const raw = readFileSync(legacyPath, 'utf-8');
+        if (raw.trim().length === 0) continue;
+        mkdirSync(dirname(this.filePath), { recursive: true });
+        writeFileSync(this.filePath, raw, 'utf-8');
+        return;
+      } catch (error) {
+        log.warn('Failed to migrate legacy values journal', {
+          legacyPath,
+          filePath: this.filePath,
+          error: String(error),
+        });
+      }
+    }
   }
 }

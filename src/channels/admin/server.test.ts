@@ -2347,8 +2347,9 @@ describe('AdminServer', () => {
     });
 
     it('renders persisted values reflection entries', async () => {
+      mkdirSync(join(tempDir, 'notes'), { recursive: true });
       writeFileSync(
-        join(tempDir, 'values.jsonl'),
+        join(tempDir, 'notes', 'values.jsonl'),
         [
           '{"id":"values-1","version":1,"templateId":"values-reflection","templateName":"Values Reflection","prompt":"What matters to me and why?","reflection":"Integrity matters because trust compounds.","createdAt":"2026-02-26T00:00:00.000Z"}',
           '{"id":"values-2","version":2,"templateId":"values-reflection","templateName":"Values Reflection","prompt":"What matters to me and why?","reflection":"Care matters because continuity protects identity.","createdAt":"2026-02-26T01:00:00.000Z"}',

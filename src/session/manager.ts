@@ -40,6 +40,12 @@ export type {
   PreCompactionExtractionHandler,
 };
 
+const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
+
+function shouldPersistSessionChannel(channelId: string): boolean {
+  return !channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
+}
+
 export interface LegacyChatImportRunRequest extends LegacyChatImportRequest {
   canonicalContactId?: string;
   bootstrap?: boolean;
@@ -83,6 +89,7 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): void {
+    if (!shouldPersistSessionChannel(channelId)) return;
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
     const channelVisibility = classifyChannel(channelId, meta);
     const timestamp = Date.now();
@@ -131,6 +138,7 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): void {
+    if (!shouldPersistSessionChannel(channelId)) return;
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
     const channelVisibility = classifyChannel(channelId, meta);
     const timestamp = Date.now();
@@ -215,6 +223,7 @@ export class SessionManager {
 
   /** Append a system note to a session. Visible in subsequent context builds. */
   appendSystemNote(channelId: string, note: string): void {
+    if (!shouldPersistSessionChannel(channelId)) return;
     this.store.append({
       channelId,
       role: 'system',

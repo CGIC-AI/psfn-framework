@@ -532,6 +532,7 @@ describe('REPLSandbox', () => {
       insertMemory: vi.fn(),
       getAllActiveMemories: vi.fn(() => []),
       updateMemory: vi.fn(),
+      runInTransaction: vi.fn((handler: () => unknown) => handler()),
     } as unknown as MemoryStore;
 
     const sandbox = new REPLSandbox({
@@ -657,6 +658,7 @@ describe('REPLSandbox', () => {
       searchByEmbedding: vi.fn(() => []),
       insertMemory: vi.fn(),
       getAllActiveMemories: vi.fn(() => []),
+      runInTransaction: vi.fn((handler: () => unknown) => handler()),
       getById: vi.fn(() => ({
         id: 'mem-1',
         text: 'V missed meds Tuesday at 9am after a long shift.',

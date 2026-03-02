@@ -200,4 +200,22 @@ describe('capability tool gating', () => {
     expect(scratchpadWrite.executeSpy).not.toHaveBeenCalled();
     expect((writeDenied.content[0] as any).text).toContain('memory.write');
   });
+
+  it('gates session_new using static capability requirements', async () => {
+    const sessionNew = createTool('session_new');
+    const deniedGated = gateToolWithCapabilities(
+      sessionNew.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const denied = await deniedGated.execute('call-denied', {});
+    expect(sessionNew.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const allowedGated = gateToolWithCapabilities(
+      sessionNew.tool,
+      () => accessForTier('nursery'),
+    );
+    await allowedGated.execute('call-allowed', {});
+    expect(sessionNew.executeSpy).toHaveBeenCalledTimes(1);
+  });
 });

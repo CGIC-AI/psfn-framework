@@ -286,9 +286,6 @@ describe('wireHeartbeatRuntime', () => {
         .mockResolvedValue({ content: 'Deferred reflection output' }),
       waitForIdle: vi.fn().mockResolvedValue(undefined),
       registerPostTurnActionInferer,
-        .mockResolvedValue({ content: 'Deferred reflection output' }),
-      waitForIdle: vi.fn().mockResolvedValue(undefined),
-      registerPostTurnActionInferer,
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),

@@ -208,6 +208,62 @@ describe('TelegramAdapter', () => {
     expect(typingCalls.length).toBeGreaterThan(0);
   });
 
+  it('sends rate-limited long-running think status updates and clears them after tool completion', async () => {
+    vi.useFakeTimers();
+    try {
+      let sentMessageId = 900;
+      const { fetchImpl, calls } = makeFetchMock({
+        sendChatAction: () => true,
+        sendMessage: () => ({ message_id: sentMessageId++ }),
+        editMessageText: () => true,
+        deleteMessage: () => true,
+      });
+      const eventBus = new EventBus();
+      const adapter = new TelegramAdapter(makeConfig(), eventBus, { fetchImpl });
+
+      adapter.onMessage(async (message) => {
+        await eventBus.emit('agent.tool.start', {
+          channelId: message.channelId,
+          toolCallId: 'think-call-1',
+          toolName: 'think',
+        });
+        await vi.advanceTimersByTimeAsync(16_000);
+        await vi.advanceTimersByTimeAsync(25_000);
+        await eventBus.emit('agent.tool.end', {
+          channelId: message.channelId,
+          toolCallId: 'think-call-1',
+          toolName: 'think',
+          isError: false,
+        });
+        return okResponse(message.channelId);
+      });
+
+      await (adapter as any).handleUpdate({
+        update_id: 3,
+        message: {
+          message_id: 12,
+          date: 1_700_000_200,
+          text: 'please think',
+          chat: { id: 333, type: 'private' },
+          from: { id: 42, is_bot: false, username: 'think_user' },
+        },
+      });
+
+      const longRunningSends = calls.filter(call =>
+        call.method === 'sendMessage'
+        && String(call.body.text ?? '').includes('Still thinking deeply'),
+      );
+      const longRunningEdits = calls.filter(call => call.method === 'editMessageText');
+      const longRunningDeletes = calls.filter(call => call.method === 'deleteMessage');
+
+      expect(longRunningSends).toHaveLength(1);
+      expect(longRunningEdits).toHaveLength(1);
+      expect(longRunningDeletes).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('enforces allowlist checks for inbound users', async () => {
     const { fetchImpl } = makeFetchMock({
       sendChatAction: () => true,

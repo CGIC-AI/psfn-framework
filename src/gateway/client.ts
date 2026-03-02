@@ -8,6 +8,7 @@ import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type {
   AgentResponse,
   CompletionPurpose,
+  CorrelationMetadata,
   LLMContext,
   LLMResponse,
   StreamCallbacks,
@@ -364,8 +365,12 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     // Generate a unique per-request ID for routing streaming chunks
     const requestId = context.correlation?.requestId?.trim() || `req-${++this.requestCounter}`;
-    const callType = context.correlation?.callType ?? 'chat';
-    const purpose = context.correlation?.purpose?.trim() || 'chat';
+    const callType = context.correlation?.callType
+      ?? context.correlation?.originType
+      ?? 'chat';
+    const purpose = context.correlation?.purpose
+      ?? context.correlation?.originStage
+      ?? 'chat';
 
     // Register chunk handler before sending the RPC so no chunks are missed
     if (callbacks?.onText) {
@@ -383,7 +388,10 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
         ...(context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
         ...(context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
         ...(context.correlation?.toolName ? { toolName: context.correlation.toolName } : {}),
+        ...(context.correlation?.toolCallId ? { toolCallId: context.correlation.toolCallId } : {}),
         callType,
+        ...(context.correlation?.originType ? { originType: context.correlation.originType } : {}),
+        ...(context.correlation?.originStage ? { originStage: context.correlation.originStage } : {}),
         purpose,
         ...(context.tools?.length ? { tools: context.tools } : {}),
       }) as LLMChatResult;
@@ -411,21 +419,39 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   async complete(
     context: LLMContext,
     purpose: CompletionPurpose,
-    options: { signal?: AbortSignal } = {},
+    options: {
+      signal?: AbortSignal;
+      modelHint?: { model?: string; provider?: string; maxTokens?: number };
+      correlation?: Partial<CorrelationMetadata>;
+    } = {},
   ): Promise<LLMResponse> {
+    const correlation = {
+      ...(context.correlation ?? {}),
+      ...(options.correlation ?? {}),
+    };
+    const hintedModel = normalizeCorrelationText(options.modelHint?.model);
+    const hintedProvider = normalizeCorrelationText(options.modelHint?.provider);
+    const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
+    const model = qualifiedHint?.model ?? hintedModel ?? '';
+    const provider = hintedProvider ?? qualifiedHint?.provider ?? '';
+
     const result = await this.requestWithAbortSignal<LLMCompleteResult>(
       'llm.complete',
       {
-        model: '',
-        provider: '',
+        model,
+        provider,
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         purpose,
-        ...(context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
-        ...(context.correlation?.requestId ? { requestId: context.correlation.requestId } : {}),
-        ...(context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
-        ...(context.correlation?.toolName ? { toolName: context.correlation.toolName } : {}),
-        ...(context.correlation?.callType ? { callType: context.correlation.callType } : {}),
+        ...(options.modelHint?.maxTokens !== undefined ? { maxTokens: options.modelHint.maxTokens } : {}),
+        ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
+        ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
+        ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
+        ...(correlation.toolName ? { toolName: correlation.toolName } : {}),
+        ...(correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+        ...(correlation.callType ? { callType: correlation.callType } : {}),
+        ...(correlation.originType ? { originType: correlation.originType } : {}),
+        ...(correlation.originStage ? { originStage: correlation.originStage } : {}),
       },
       options.signal,
     );
@@ -998,6 +1024,23 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     }
     this.conn.destroy();
   }
+}
+
+function normalizeCorrelationText(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseProviderQualifiedModel(value: string): { provider: string; model: string } | null {
+  const separator = value.indexOf(':');
+  if (separator <= 0 || separator >= value.length - 1) {
+    return null;
+  }
+  const provider = value.slice(0, separator).trim();
+  const model = value.slice(separator + 1).trim();
+  if (!provider || !model) return null;
+  return { provider, model };
 }
 
 function createAbortError(reason?: unknown): Error {

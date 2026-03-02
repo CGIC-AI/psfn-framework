@@ -2,6 +2,7 @@ import { createComponentLogger } from '../logger.js';
 import type { CorrelationMetadata } from '../types.js';
 import { classifyLLMError } from './error-classify.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
+import { toCorrelationLogFields } from './correlation.js';
 
 const log = createComponentLogger('ModelFallback');
 
@@ -201,15 +202,16 @@ function buildFallbackCorrelation(
   correlation: Partial<CorrelationMetadata> | undefined,
   purpose: RoutingPurpose,
 ): Partial<CorrelationMetadata> {
-  if (!correlation) {
-    return { purpose };
-  }
+  const normalized = toCorrelationLogFields(correlation);
   return {
-    ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
-    ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
-    ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
-    ...(correlation.callType ? { callType: correlation.callType } : {}),
-    ...(correlation.toolName ? { toolName: correlation.toolName } : {}),
-    purpose: correlation.purpose ?? purpose,
+    ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
+    requestId: normalized.requestId,
+    ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+    ...(correlation?.callType ? { callType: correlation.callType } : {}),
+    ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
+    ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+    purpose: correlation?.purpose ?? purpose,
+    originType: normalized.originType,
+    originStage: normalized.originStage,
   };
 }

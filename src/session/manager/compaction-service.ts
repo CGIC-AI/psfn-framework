@@ -22,6 +22,7 @@ import {
 } from '../manager-primitives.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages } from './context-support.js';
+import { getRequestContext } from '../../llm/request-context.js';
 
 const log = createComponentLogger('CompactionService');
 
@@ -138,6 +139,10 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
   let lastRetryAttempt = 1;
   const retryMaxRetries = 2;
   const retryMaxAttempts = retryMaxRetries + 1;
+  const requestContext = getRequestContext();
+  const compactionRequestIdBase = requestContext?.requestId
+    ? `${requestContext.requestId}:compaction`
+    : `compaction:${params.channelId}:${Date.now()}`;
   try {
     const compactionPrompt = params.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
@@ -148,10 +153,15 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
           systemPrompt: runtimeCompactionPrompt,
           messages: [{ role: 'user', content: compactText }],
           correlation: {
-            requestId: `compaction:${params.channelId}:${Date.now()}`,
+            ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
+            requestId: `${compactionRequestIdBase}:summary`,
             channelId: params.channelId,
             callType: 'summary',
             purpose: 'session.compaction.summary',
+            originType: 'summary',
+            originStage: 'session.compaction.summary',
+            ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
+            ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
           },
         },
         'background',

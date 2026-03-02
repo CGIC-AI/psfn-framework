@@ -18,7 +18,10 @@ export interface GatewayCorrelationParams {
   requestId?: string;
   channelId?: string;
   callType?: ObservabilityCallType;
+  originType?: ObservabilityCallType;
+  originStage?: string;
   toolName?: string;
+  toolCallId?: string;
   purpose?: string;
 }
 

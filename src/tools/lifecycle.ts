@@ -4,6 +4,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
+import { spawn } from 'node:child_process';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
 import { createComponentLogger } from '../logger.js';
 import type { CapabilityTier } from '../types.js';
@@ -16,6 +17,28 @@ const log = createComponentLogger('LifecycleTools');
 interface LifecycleToolOptions {
   restartSafeguard?: LifecycleRestartSafeguard;
   getCapabilityTier?: () => CapabilityTier;
+  restartCommand?: string;
+  runtimeMode?: string;
+}
+
+function resolveRestartCommand(command: string | undefined): string | null {
+  const normalized = command?.trim();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+async function launchRestartCommand(command: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, {
+      shell: true,
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
 
 /**
@@ -68,12 +91,19 @@ export function createRestartTool(
 
       // Send pre-restart notification — must complete before we exit
       await notifier.notifyPreRestart(reason);
+      const restartCommand = resolveRestartCommand(options.restartCommand);
 
       // Schedule clean shutdown + exit after returning the tool result
       // Use setImmediate so the tool result gets back to the LLM first
       setImmediate(async () => {
         try {
           await stopFn();
+          if (restartCommand) {
+            await launchRestartCommand(restartCommand);
+            log.info('Spawned restart command', {
+              runtimeMode: options.runtimeMode ?? 'unknown',
+            });
+          }
         } catch (err) {
           log.error('Error during shutdown', { error: String(err) });
         }
@@ -130,6 +160,7 @@ export function createRebuildTool(
         }
       }
       const fullReason = `rebuild: ${reason}`;
+      const restartCommand = resolveRestartCommand(options.restartCommand);
 
       log.info('Self-rebuild requested', { reason, tier });
 
@@ -159,6 +190,12 @@ export function createRebuildTool(
         if (buildSucceeded) {
           try {
             await stopFn();
+            if (restartCommand) {
+              await launchRestartCommand(restartCommand);
+              log.info('Spawned restart command after rebuild', {
+                runtimeMode: options.runtimeMode ?? 'unknown',
+              });
+            }
           } catch (err) {
             log.error('Error during shutdown', { error: String(err) });
           }

@@ -686,6 +686,9 @@ async function main(): Promise<void> {
 
   const startTime = Date.now();
   const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
+  const lifecycleRuntimeMode = process.env.PSFN_RUNTIME_MODE?.trim() || 'gateway-agent';
+  const lifecycleRestartCommand = process.env.LIFECYCLE_RESTART_COMMAND?.trim()
+    || (lifecycleRuntimeMode === 'split' ? 'npm run split' : undefined);
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
   };
@@ -724,6 +727,8 @@ async function main(): Promise<void> {
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
+      restartCommand: lifecycleRestartCommand,
+      runtimeMode: lifecycleRuntimeMode,
     },
   ));
   agentLoop.registerTool(createRebuildTool(
@@ -732,6 +737,8 @@ async function main(): Promise<void> {
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
+      restartCommand: lifecycleRestartCommand,
+      runtimeMode: lifecycleRuntimeMode,
     },
   ));
   agentLoop.registerTool(createNotifyOperatorTool(

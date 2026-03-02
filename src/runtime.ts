@@ -564,6 +564,8 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
     const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
+    const lifecycleRuntimeMode = process.env.PSFN_RUNTIME_MODE?.trim() || 'single';
+    const lifecycleRestartCommand = process.env.LIFECYCLE_RESTART_COMMAND?.trim() || undefined;
     this.lifecycleNotifier = new DiscordLifecycleNotifier({
       sender: this.discord,
       heartbeatChannelId,
@@ -583,6 +585,8 @@ export class SubstrateRuntime implements Lifecycle {
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
+        restartCommand: lifecycleRestartCommand,
+        runtimeMode: lifecycleRuntimeMode,
       },
     ));
     this.agentLoop.registerTool(createRebuildTool(
@@ -591,6 +595,8 @@ export class SubstrateRuntime implements Lifecycle {
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
+        restartCommand: lifecycleRestartCommand,
+        runtimeMode: lifecycleRuntimeMode,
       },
     ));
     this.agentLoop.registerTool(createNotifyOperatorTool(

@@ -54,6 +54,7 @@ interface HeartbeatAgent {
     content: string;
     timestamp: Date;
   }): Promise<{ content: string }>;
+  waitForIdle?(): Promise<void>;
 }
 
 interface HeartbeatRuntimeOptions {
@@ -158,9 +159,20 @@ export function wireHeartbeatRuntime(
   heartbeatChannelId?: string,
   runtimeOptions: HeartbeatRuntimeOptions = {},
 ): void {
+  const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
+  const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
   const store = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
   const valuesJournal = new ValuesJournalStore(join(dataDir, 'values.jsonl'));
   const policy = store.load();
+  const pendingDeferredTemplates = new Set<string>();
+  const lastScheduledRunAt = new Map<string, number>();
+
+  const isBusyReflectionError = (error: unknown): boolean => {
+    const text = String(error ?? '').toLowerCase();
+    return text.includes('already processing')
+      || text.includes('agent_busy')
+      || text.includes('channel_busy');
+  };
 
   const toDeliberationMetadata = (
     result: DeliberationResult,
@@ -333,23 +345,106 @@ export function wireHeartbeatRuntime(
     };
   };
 
-  const runTemplateNow = async (
+  const executeScheduledTemplate = async (template: ReflectionTemplate): Promise<void> => {
+    const now = Date.now();
+    const lastRunAt = lastScheduledRunAt.get(template.id);
+    if (lastRunAt !== undefined && now - lastRunAt < MIN_SCHEDULED_TEMPLATE_GAP_MS) {
+      log.warn(`Skipping reflection "${template.id}" due to rapid re-fire guard`, {
+        templateId: template.id,
+        sinceLastMs: now - lastRunAt,
+      });
+      return;
+    }
+    lastScheduledRunAt.set(template.id, now);
+    await executeTemplate(template);
+  };
+
+  const queueDeferredTemplateRun = (
     templateId: string,
     options: { sendToDiscordOverride?: boolean } = {},
-  ): Promise<{ templateId: string; templateName: string; reflection: string }> => {
+  ): { templateName: string; queuedNow: boolean } => {
     const current = store.load();
     const template = current.templates.find(candidate => candidate.id === templateId);
     if (!template) {
       throw new Error(`Template "${templateId}" not found`);
     }
-    return executeTemplate(template, options);
+    if (pendingDeferredTemplates.has(template.id)) {
+      return { templateName: template.name, queuedNow: false };
+    }
+
+    pendingDeferredTemplates.add(template.id);
+    const taskId = `${DEFERRED_REFLECTION_TASK_PREFIX}${template.id}:${Date.now()}`;
+    try {
+      scheduler.register({
+        id: taskId,
+        name: `${template.name} (deferred)`,
+        type: 'one-shot',
+        intervalMs: 0,
+        runAt: Date.now() + 250,
+        handler: async () => {
+          try {
+            await agentLoop.waitForIdle?.();
+            const latestPolicy = store.load();
+            const latestTemplate = latestPolicy.templates.find(candidate => candidate.id === template.id);
+            if (!latestTemplate) {
+              log.warn('Skipped deferred reflection; template removed before execution', {
+                templateId: template.id,
+                taskId,
+              });
+              return;
+            }
+            await executeTemplate(latestTemplate, options);
+          } catch (error) {
+            log.error(`Deferred reflection "${template.id}" failed`, { error: String(error) });
+          } finally {
+            pendingDeferredTemplates.delete(template.id);
+          }
+        },
+        state: 'idle',
+      });
+      return { templateName: template.name, queuedNow: true };
+    } catch (error) {
+      pendingDeferredTemplates.delete(template.id);
+      throw error;
+    }
+  };
+
+  const runTemplateNow = async (
+    templateId: string,
+    options: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean } = {},
+  ): Promise<{ templateId: string; templateName: string; reflection: string; queued?: boolean }> => {
+    const current = store.load();
+    const template = current.templates.find(candidate => candidate.id === templateId);
+    if (!template) {
+      throw new Error(`Template "${templateId}" not found`);
+    }
+    try {
+      return await executeTemplate(template, options);
+    } catch (error) {
+      if (options.deferIfBusy === false || !isBusyReflectionError(error)) {
+        throw error;
+      }
+      const deferred = queueDeferredTemplateRun(template.id, {
+        sendToDiscordOverride: options.sendToDiscordOverride,
+      });
+      log.info('Deferred manual reflection template execution', {
+        templateId: template.id,
+        queuedNow: deferred.queuedNow,
+      });
+      return {
+        templateId: template.id,
+        templateName: deferred.templateName,
+        reflection: '',
+        queued: true,
+      };
+    }
   };
 
   // Create sync function that re-registers all reflection tasks
   const syncReflectionTasks = (): void => {
     // Unregister all existing reflection:* tasks
     for (const task of scheduler.listTasks()) {
-      if (task.id.startsWith('reflection:')) {
+      if (task.id.startsWith('reflection:') && !task.id.startsWith(DEFERRED_REFLECTION_TASK_PREFIX)) {
         scheduler.unregister(task.id);
       }
     }
@@ -366,7 +461,7 @@ export function wireHeartbeatRuntime(
           intervalMs: template.intervalMs,
           handler: async () => {
             try {
-              await executeTemplate(template);
+              await executeScheduledTemplate(template);
             } catch (err) {
               log.error(`Reflection "${template.id}" error`, { error: String(err) });
             }

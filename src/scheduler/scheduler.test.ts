@@ -49,6 +49,17 @@ describe('Scheduler', () => {
       expect(() => scheduler.register(task)).toThrow('already registered');
     });
 
+    it('rejects recurring task registration with non-positive interval', () => {
+      expect(() => scheduler.register({
+        id: 'bad-every',
+        name: 'Bad Every',
+        type: 'every',
+        intervalMs: 0,
+        handler: () => {},
+        state: 'idle',
+      })).toThrow('intervalMs must be a positive finite number');
+    });
+
     it('unregisters tasks', () => {
       scheduler.register({
         id: 'rm-me',
@@ -295,6 +306,21 @@ describe('Scheduler', () => {
     it('returns false for nonexistent task', () => {
       const result = scheduler.updateTask('does-not-exist', { intervalMs: 5000 });
       expect(result).toBe(false);
+    });
+
+    it('rejects invalid recurring interval updates', () => {
+      scheduler.register({
+        id: 'upd-invalid',
+        name: 'Updatable',
+        type: 'every',
+        intervalMs: 1_000,
+        handler: () => {},
+        state: 'idle',
+      });
+
+      const result = scheduler.updateTask('upd-invalid', { intervalMs: 0 });
+      expect(result).toBe(false);
+      expect(scheduler.getTask('upd-invalid')?.intervalMs).toBe(1_000);
     });
   });
 

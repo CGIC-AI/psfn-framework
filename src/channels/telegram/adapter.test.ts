@@ -388,4 +388,77 @@ describe('TelegramAdapter', () => {
       vi.useRealTimers();
     }
   });
+
+  it('backs off polling delay after consecutive transport failures', async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const { fetchImpl, calls } = makeFetchMock({
+        getUpdates: () => {
+          attempts += 1;
+          throw new Error('fetch failed');
+        },
+      });
+      const adapter = new TelegramAdapter(makeConfig({ pollIntervalMs: 10 }), new EventBus(), {
+        fetchImpl,
+        longPollTimeoutSeconds: 1,
+      });
+
+      await adapter.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(calls.filter(call => call.method === 'getUpdates')).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(9);
+      expect(calls.filter(call => call.method === 'getUpdates')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      expect(calls.filter(call => call.method === 'getUpdates')).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(19);
+      expect(calls.filter(call => call.method === 'getUpdates')).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      expect(calls.filter(call => call.method === 'getUpdates')).toHaveLength(3);
+      expect(attempts).toBe(3);
+
+      await adapter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('recovers from polling 409 conflict by clearing webhook and retrying getUpdates', async () => {
+    vi.useFakeTimers();
+    try {
+      let getUpdatesAttempts = 0;
+      const { fetchImpl, calls } = makeFetchMock({
+        deleteWebhook: () => true,
+        getUpdates: () => {
+          getUpdatesAttempts += 1;
+          if (getUpdatesAttempts === 1) {
+            throw new Error('Telegram API HTTP 409: terminated by other getUpdates request');
+          }
+          return [];
+        },
+      });
+      const adapter = new TelegramAdapter(makeConfig({ pollIntervalMs: 25 }), new EventBus(), {
+        fetchImpl,
+        longPollTimeoutSeconds: 1,
+      });
+
+      await adapter.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+
+      const deleteWebhookCalls = calls.filter(call => call.method === 'deleteWebhook');
+      const getUpdatesCalls = calls.filter(call => call.method === 'getUpdates');
+      expect(deleteWebhookCalls.length).toBeGreaterThanOrEqual(2);
+      expect(getUpdatesCalls).toHaveLength(2);
+
+      await adapter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

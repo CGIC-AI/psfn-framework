@@ -63,6 +63,7 @@ interface HeartbeatRunTemplateResult {
   templateId: string;
   templateName: string;
   reflection: string;
+  queued?: boolean;
 }
 
 // ── Tool 1: heartbeat_get_policy ──
@@ -283,7 +284,7 @@ export function createHeartbeatRunTemplateTool(
   store: HeartbeatPolicyStore,
   runTemplate: (
     templateId: string,
-    options?: { sendToDiscordOverride?: boolean },
+    options?: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean },
   ) => Promise<HeartbeatRunTemplateResult>,
 ): AgentTool<any> {
   return {
@@ -297,10 +298,16 @@ export function createHeartbeatRunTemplateTool(
       sendToDiscord: Type.Optional(
         Type.Boolean({ description: 'Override whether this manual run should be sent to Discord' }),
       ),
+      deferIfBusy: Type.Optional(
+        Type.Boolean({
+          description:
+            'Queue this reflection for post-reply execution if the runtime is currently busy. Default: true.',
+        }),
+      ),
     }),
     execute: async (
       _toolCallId: string,
-      params: { templateId: string; sendToDiscord?: boolean },
+      params: { templateId: string; sendToDiscord?: boolean; deferIfBusy?: boolean },
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const templateId = params.templateId.trim();
       if (!templateId) {
@@ -317,7 +324,14 @@ export function createHeartbeatRunTemplateTool(
           ...(params.sendToDiscord !== undefined
             ? { sendToDiscordOverride: params.sendToDiscord }
             : {}),
+          deferIfBusy: params.deferIfBusy ?? true,
         });
+        if (result.queued) {
+          return textResult(
+            `Queued reflection template "${result.templateName}" (${result.templateId}) `
+            + 'for post-reply execution.',
+          );
+        }
         const reflection = result.reflection.trim();
         return textResult(
           `Triggered reflection template "${result.templateName}" (${result.templateId}).\n\n`

@@ -27,6 +27,7 @@ const DEFAULT_LONG_POLL_TIMEOUT_SECONDS = 20;
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 512 * 1_024;
 const THREAD_DELIMITER = '/thread/';
 const MAX_CONTEXT_MAP_SIZE = 2_000;
+const MAX_POLL_BACKOFF_MS = 30_000;
 
 type FetchLike = typeof fetch;
 type TelegramChatType = 'private' | 'group' | 'supergroup' | 'channel';
@@ -220,6 +221,8 @@ export class TelegramAdapter implements ChannelAdapter {
   private allowlist = new Set<string>();
   private longPollTimeoutSeconds: number;
   private commandRouter?: TelegramCommandRouter;
+  private consecutivePollFailures = 0;
+  private attemptedPollingConflictRecovery = false;
 
   constructor(
     telegramConfig: TelegramChannelConfig,
@@ -302,17 +305,28 @@ export class TelegramAdapter implements ChannelAdapter {
     }
 
     this.running = true;
+    this.consecutivePollFailures = 0;
+    this.attemptedPollingConflictRecovery = false;
     if (this.telegram.mode === 'webhook') {
       await this.startWebhookMode();
       return;
     }
 
+    try {
+      await this.callApi('deleteWebhook', { drop_pending_updates: false });
+    } catch (error) {
+      log.warn('Telegram polling startup could not clear webhook state', {
+        error: toErrorMessage(error),
+      });
+    }
     this.schedulePoll(0);
   }
 
   async stop(): Promise<void> {
     const wasRunning = this.running;
     this.running = false;
+    this.consecutivePollFailures = 0;
+    this.attemptedPollingConflictRecovery = false;
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -353,24 +367,78 @@ export class TelegramAdapter implements ChannelAdapter {
     if (!this.running) return;
     this.pollTimer = setTimeout(() => {
       this.activePoll = this.pollOnce()
+        .then(() => {
+          this.consecutivePollFailures = 0;
+        })
         .catch((error: unknown) => {
+          if (this.isAbortError(error) && !this.running) {
+            return;
+          }
+          this.consecutivePollFailures += 1;
+          const errorText = toErrorMessage(error);
           log.error('Telegram polling error', {
-            error: toErrorMessage(error),
+            error: errorText,
+            consecutiveFailures: this.consecutivePollFailures,
           });
         })
         .finally(() => {
           this.activePoll = undefined;
-          this.schedulePoll(this.telegram.pollIntervalMs);
+          const delay = this.resolveNextPollDelayMs();
+          this.schedulePoll(delay);
         });
     }, delayMs);
   }
 
+  private resolveNextPollDelayMs(): number {
+    if (this.consecutivePollFailures <= 0) {
+      return this.telegram.pollIntervalMs;
+    }
+    const exponent = Math.max(0, this.consecutivePollFailures - 1);
+    const nextDelay = this.telegram.pollIntervalMs * (2 ** exponent);
+    return Math.min(MAX_POLL_BACKOFF_MS, nextDelay);
+  }
+
+  private isAbortError(error: unknown): boolean {
+    if (error instanceof Error && error.name === 'AbortError') return true;
+    return toErrorMessage(error).toLowerCase().includes('aborted');
+  }
+
+  private isPollingConflictError(error: unknown): boolean {
+    const text = toErrorMessage(error).toLowerCase();
+    return text.includes('http 409')
+      || text.includes('terminated by other getupdates request')
+      || text.includes('webhook is active');
+  }
+
   private async pollOnce(): Promise<void> {
-    const updates = await this.callApi<TelegramUpdate[]>('getUpdates', {
-      offset: this.nextUpdateOffset,
-      timeout: this.longPollTimeoutSeconds,
-      allowed_updates: ['message', 'edited_message'],
-    });
+    let updates: TelegramUpdate[] = [];
+    try {
+      updates = await this.callApi<TelegramUpdate[]>('getUpdates', {
+        offset: this.nextUpdateOffset,
+        timeout: this.longPollTimeoutSeconds,
+        allowed_updates: ['message', 'edited_message'],
+      });
+      this.attemptedPollingConflictRecovery = false;
+    } catch (error) {
+      if (this.isPollingConflictError(error) && !this.attemptedPollingConflictRecovery) {
+        this.attemptedPollingConflictRecovery = true;
+        log.warn('Telegram polling conflict detected; attempting webhook cleanup and retry', {
+          error: toErrorMessage(error),
+        });
+        await this.callApi('deleteWebhook', { drop_pending_updates: false }).catch((cleanupError: unknown) => {
+          log.warn('Telegram polling conflict cleanup failed', {
+            error: toErrorMessage(cleanupError),
+          });
+        });
+        updates = await this.callApi<TelegramUpdate[]>('getUpdates', {
+          offset: this.nextUpdateOffset,
+          timeout: this.longPollTimeoutSeconds,
+          allowed_updates: ['message', 'edited_message'],
+        });
+      } else {
+        throw error;
+      }
+    }
 
     for (const update of updates) {
       this.nextUpdateOffset = Math.max(this.nextUpdateOffset, update.update_id + 1);
@@ -839,7 +907,14 @@ export class TelegramAdapter implements ChannelAdapter {
         },
       );
       if (!response.ok) {
-        throw new Error(`Telegram API HTTP ${response.status}`);
+        let description = '';
+        try {
+          const errorBody = await response.json() as Partial<TelegramApiResponse<unknown>>;
+          description = typeof errorBody.description === 'string' ? errorBody.description.trim() : '';
+        } catch {
+          description = '';
+        }
+        throw new Error(`Telegram API HTTP ${response.status}${description ? `: ${description}` : ''}`);
       }
       const body = await response.json() as TelegramApiResponse<T>;
       if (!body.ok) {

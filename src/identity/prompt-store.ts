@@ -25,6 +25,13 @@ import { writeJsonAtomic } from '../utils/fs.js';
 
 const log = createComponentLogger('PromptStore');
 const HISTORY_SCAN_CHUNK_BYTES = 32 * 1024;
+const HISTORY_CORRUPTION_DETAIL_LIMIT = 5;
+
+interface HistoryCorruptionDetail {
+  lineNumber: number;
+  error: string;
+  linePreview: string;
+}
 
 function contentChecksum(content: string): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16);
@@ -63,6 +70,28 @@ function validatePriority(priority: unknown): number {
     throw new Error('priority must be an integer');
   }
   return priority;
+}
+
+function historyLinePreview(line: string): string {
+  const compact = line.trim().replace(/\s+/g, ' ');
+  if (compact.length <= 120) return compact;
+  return `${compact.slice(0, 117)}...`;
+}
+
+function isPromptHistoryEntry(value: unknown): value is PromptHistoryEntry {
+  if (!value || typeof value !== 'object') return false;
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.layerId !== 'string') return false;
+  if (typeof entry.layerName !== 'string') return false;
+  if (typeof entry.previousContent !== 'string') return false;
+  if (typeof entry.previousChecksum !== 'string') return false;
+  if (typeof entry.newContent !== 'string') return false;
+  if (typeof entry.newChecksum !== 'string') return false;
+  if (typeof entry.updatedBy !== 'string') return false;
+  if (typeof entry.timestamp !== 'string') return false;
+  if (typeof entry.version !== 'number') return false;
+  if (entry.reason !== undefined && typeof entry.reason !== 'string') return false;
+  return true;
 }
 
 export interface PromptLayerMetadataUpdate {
@@ -112,7 +141,7 @@ export class PromptLayerStore {
     }
   }
 
-  private scanHistoryLines(onLine: (line: string) => boolean | void): void {
+  private scanHistoryLines(onLine: (line: string, lineNumber: number) => boolean | void): void {
     if (!existsSync(this.historyPath)) return;
 
     const fd = openSync(this.historyPath, 'r');
@@ -123,6 +152,7 @@ export class PromptLayerStore {
       const buffer = Buffer.allocUnsafe(HISTORY_SCAN_CHUNK_BYTES);
       let offset = 0;
       let remainder = Buffer.alloc(0);
+      let lineNumber = 0;
 
       while (offset < fileSize) {
         const bytesToRead = Math.min(HISTORY_SCAN_CHUNK_BYTES, fileSize - offset);
@@ -140,7 +170,8 @@ export class PromptLayerStore {
           if (lineBuffer.length > 0 && lineBuffer[lineBuffer.length - 1] === 0x0D) {
             lineBuffer = lineBuffer.subarray(0, lineBuffer.length - 1);
           }
-          if (onLine(lineBuffer.toString('utf8'))) return;
+          lineNumber += 1;
+          if (onLine(lineBuffer.toString('utf8'), lineNumber)) return;
           start = newlineIndex + 1;
           newlineIndex = combined.indexOf(0x0A, start);
         }
@@ -151,37 +182,109 @@ export class PromptLayerStore {
       }
 
       if (remainder.length > 0) {
-        if (onLine(remainder.toString('utf8'))) return;
+        lineNumber += 1;
+        if (onLine(remainder.toString('utf8'), lineNumber)) return;
       }
     } finally {
       closeSync(fd);
     }
   }
 
+  private tryParseHistoryEntry(
+    line: string,
+    lineNumber: number,
+    corruptionDetails: HistoryCorruptionDetail[],
+  ): PromptHistoryEntry | null {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (!isPromptHistoryEntry(parsed)) {
+        throw new Error('Invalid prompt history entry schema');
+      }
+      return parsed;
+    } catch (error) {
+      if (corruptionDetails.length < HISTORY_CORRUPTION_DETAIL_LIMIT) {
+        corruptionDetails.push({
+          lineNumber,
+          error: String(error),
+          linePreview: historyLinePreview(line),
+        });
+      }
+      return null;
+    }
+  }
+
+  private logHistoryRecoveryWarning(
+    invalidLineCount: number,
+    recoveredEntryCount: number,
+    corruptionDetails: HistoryCorruptionDetail[],
+    context: string,
+  ): void {
+    if (invalidLineCount <= 0) return;
+    log.warn('Recovered prompt history with skipped corrupted lines', {
+      historyPath: this.historyPath,
+      context,
+      invalidLineCount,
+      recoveredEntryCount,
+      corruptionDetails,
+    });
+  }
+
   private collectHistoryEntries(filter?: (entry: PromptHistoryEntry) => boolean): PromptHistoryEntry[] {
     const entries: PromptHistoryEntry[] = [];
-    this.scanHistoryLines((line) => {
+    const corruptionDetails: HistoryCorruptionDetail[] = [];
+    let invalidLineCount = 0;
+
+    this.scanHistoryLines((line, lineNumber) => {
       if (line.trim().length === 0) return false;
-      const entry = JSON.parse(line) as PromptHistoryEntry;
+      const entry = this.tryParseHistoryEntry(line, lineNumber, corruptionDetails);
+      if (!entry) {
+        invalidLineCount += 1;
+        return false;
+      }
       if (!filter || filter(entry)) {
         entries.push(entry);
       }
       return false;
     });
+
+    this.logHistoryRecoveryWarning(
+      invalidLineCount,
+      entries.length,
+      corruptionDetails,
+      filter ? 'filtered-history-read' : 'history-read',
+    );
+
     return entries;
   }
 
   private findHistoryEntry(layerId: string, version: number): PromptHistoryEntry | null {
     let found: PromptHistoryEntry | null = null;
-    this.scanHistoryLines((line) => {
+    const corruptionDetails: HistoryCorruptionDetail[] = [];
+    let invalidLineCount = 0;
+    let recoveredEntryCount = 0;
+
+    this.scanHistoryLines((line, lineNumber) => {
       if (line.trim().length === 0) return false;
-      const entry = JSON.parse(line) as PromptHistoryEntry;
+      const entry = this.tryParseHistoryEntry(line, lineNumber, corruptionDetails);
+      if (!entry) {
+        invalidLineCount += 1;
+        return false;
+      }
+      recoveredEntryCount += 1;
       if (entry.layerId === layerId && entry.version === version) {
         found = entry;
         return true;
       }
       return false;
     });
+
+    this.logHistoryRecoveryWarning(
+      invalidLineCount,
+      recoveredEntryCount,
+      corruptionDetails,
+      'history-lookup',
+    );
+
     return found;
   }
 
@@ -546,5 +649,10 @@ export class PromptLayerStore {
   /** Get count of layers */
   get count(): number {
     return this.layers.length;
+  }
+
+  /** Location of the prompt layer JSON file. */
+  get layerFilePath(): string {
+    return this.filePath;
   }
 }

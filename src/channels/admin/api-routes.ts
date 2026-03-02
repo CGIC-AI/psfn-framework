@@ -568,7 +568,10 @@ export function buildAdminApiRoutes(options: {
           }
           const result = settingsService.updateSettings(JSON.stringify(parsed.value));
           if (!result.ok) {
-            sendJson(res, 400, { error: result.message });
+            sendJson(res, 400, {
+              error: result.message,
+              ...result,
+            });
             return;
           }
           sendJson(res, 200, result);

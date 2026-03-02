@@ -201,7 +201,16 @@ describe('capability tool gating', () => {
     expect((writeDenied.content[0] as any).text).toContain('memory.write');
   });
 
-  it('gates session_new using static capability requirements', async () => {
+  it('gates session tools using static capability requirements', async () => {
+    const sessionList = createTool('session_list');
+    const listGated = gateToolWithCapabilities(
+      sessionList.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const listDenied = await listGated.execute('session-list', {});
+    expect(sessionList.executeSpy).not.toHaveBeenCalled();
+    expect((listDenied.content[0] as any).text).toContain('identity.read');
+
     const sessionNew = createTool('session_new');
     const deniedGated = gateToolWithCapabilities(
       sessionNew.tool,
@@ -217,5 +226,14 @@ describe('capability tool gating', () => {
     );
     await allowedGated.execute('call-allowed', {});
     expect(sessionNew.executeSpy).toHaveBeenCalledTimes(1);
+
+    const sessionResume = createTool('session_resume');
+    const resumeGated = gateToolWithCapabilities(
+      sessionResume.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const resumeDenied = await resumeGated.execute('session-resume', {});
+    expect(sessionResume.executeSpy).not.toHaveBeenCalled();
+    expect((resumeDenied.content[0] as any).text).toContain('identity.write.runtime');
   });
 });

@@ -46,6 +46,7 @@ import {
   writeLastActiveSession,
 } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
+import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
 import { MemoryWriter } from './memory/writer.js';
@@ -74,8 +75,8 @@ import {
   wirePromptRuntime,
   wireCharacterCardRuntime,
   wireStaticPromptRegistry,
+  wireSessionToolsRuntime,
   buildReplConfig,
-  wireSessionRuntime,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
@@ -452,10 +453,7 @@ export class SubstrateRuntime implements Lifecycle {
       getCapabilityTier: () => this.capabilityRuntime.getTier(),
       confirmationQueue: cardProposalQueue,
     });
-    wireSessionRuntime(this.agentLoop, {
-      dataDir: this.config.dataDir,
-      sessionManager: this.sessionManager,
-    });
+    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, this.config.dataDir);
 
     // Contact store + tools — trust-gated privacy system
     const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
@@ -629,9 +627,10 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Track last-active channel on every incoming message
     this.eventBus.on('message.received', ({ message }) => {
+      const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
       writeLastActiveSession(this.config.dataDir, {
-        sessionId: message.channelId,
-        channelType: message.channelType,
+        sessionId,
+        channelType: inferSessionChannelType(sessionId) ?? message.channelType,
         timestamp: message.timestamp instanceof Date
           ? message.timestamp.getTime()
           : Date.now(),

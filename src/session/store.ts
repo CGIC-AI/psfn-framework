@@ -73,6 +73,26 @@ export interface LatestSessionSummary {
   channelType?: string;
 }
 
+export interface SessionActivitySummary {
+  sessionId: string;
+  channelType?: string;
+  lastActivityAt: number;
+  messageCount: number;
+  lastRole: SessionEntry['role'];
+  lastAuthorName?: string;
+  lastMessagePreview: string;
+}
+
+const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
+
+function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CHARS): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
 export class SessionStore {
   private sessionsDir: string;
   private channels: Map<string, ChannelCache> = new Map();
@@ -328,9 +348,25 @@ export class SessionStore {
     const cache = this.ensureChannelFullyLoaded(channelId);
     return cache ? [...cache.compactions] : [];
   }
-  getLatestSessionByTimestamp(): LatestSessionSummary | null {
+  getSessionActivity(channelId: string): SessionActivitySummary | null {
+    const messageCount = this.count(channelId);
+    if (messageCount <= 0) return null;
+    const lastEntry = this.getLastEntry(channelId);
+    if (!lastEntry || !Number.isFinite(lastEntry.timestamp) || lastEntry.timestamp <= 0) return null;
+    return {
+      sessionId: channelId,
+      channelType: inferSessionChannelType(channelId),
+      lastActivityAt: lastEntry.timestamp,
+      messageCount,
+      lastRole: lastEntry.role,
+      lastAuthorName: lastEntry.authorName,
+      lastMessagePreview: toMessagePreview(lastEntry.content ?? ''),
+    };
+  }
+  listSessionsByRecentActivity(limit = 20): SessionActivitySummary[] {
+    if (limit <= 0) return [];
     this.primeChannelIndexFromDisk();
-    let latest: LatestSessionSummary | null = null;
+    const sessions: SessionActivitySummary[] = [];
 
     for (const [channelId, indexEntry] of this.channelIndex.entries()) {
       const filePath = join(this.sessionsDir, indexEntry.filename);
@@ -340,23 +376,28 @@ export class SessionStore {
       const messageCount = normalizeOptionalNonNegativeNumber(ensured.messageCount) ?? 0;
       if (messageCount <= 0) continue;
 
-      const lastEntry = this.getLastEntry(channelId);
-      if (!lastEntry || !Number.isFinite(lastEntry.timestamp) || lastEntry.timestamp <= 0) continue;
-
-      if (
-        !latest
-        || lastEntry.timestamp > latest.timestamp
-        || (lastEntry.timestamp === latest.timestamp && channelId.localeCompare(latest.sessionId) < 0)
-      ) {
-        latest = {
-          sessionId: channelId,
-          timestamp: lastEntry.timestamp,
-          channelType: inferSessionChannelType(channelId),
-        };
-      }
+      const summary = this.getSessionActivity(channelId);
+      if (!summary) continue;
+      sessions.push(summary);
     }
 
-    return latest;
+    sessions.sort((left, right) => {
+      if (right.lastActivityAt !== left.lastActivityAt) {
+        return right.lastActivityAt - left.lastActivityAt;
+      }
+      return left.sessionId.localeCompare(right.sessionId);
+    });
+
+    return sessions.slice(0, limit);
+  }
+  getLatestSessionByTimestamp(): LatestSessionSummary | null {
+    const latest = this.listSessionsByRecentActivity(1)[0];
+    if (!latest) return null;
+    return {
+      sessionId: latest.sessionId,
+      timestamp: latest.lastActivityAt,
+      channelType: latest.channelType,
+    };
   }
   listChannels(): Array<{ channelId: string; messageCount: number }> {
     this.primeChannelIndexFromDisk();

@@ -7,7 +7,61 @@ import { Scheduler } from '../scheduler/scheduler.js';
 import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { readLastActiveSession } from '../lifecycle/notifications.js';
-import { wireHeartbeatRuntime, wireSessionRuntime } from './parity.js';
+import { wireHeartbeatRuntime, wireSessionToolsRuntime } from './parity.js';
+
+describe('wireSessionToolsRuntime', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'session-tools-runtime-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('registers session tools as extended tools and wires session_new state updates', async () => {
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const sessionManager = {
+      appendSystemNote: vi.fn(),
+      listRecentSessions: vi.fn(() => []),
+      getSessionActivity: vi.fn(() => null),
+      setActiveContextSession: vi.fn(),
+      getActiveContextSession: vi.fn(() => null),
+    } as any;
+
+    wireSessionToolsRuntime(target, sessionManager, tempDir);
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    expect(calls).toHaveLength(3);
+    expect(calls.map(([tool]) => tool.name).sort()).toEqual(['session_list', 'session_new', 'session_resume']);
+    expect(calls.every(([, category]) => category === 'extended')).toBe(true);
+
+    const sessionNewTool = calls.find(([tool]) => tool.name === 'session_new')?.[0] as {
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ details: Record<string, unknown> }>;
+    };
+    expect(sessionNewTool).toBeDefined();
+
+    const result = await sessionNewTool.execute('call-session-new', {});
+    const details = result.details as {
+      newSessionId: string;
+      previousSessionId: string | null;
+    };
+    expect(details.previousSessionId).toBe(null);
+    expect(details.newSessionId.startsWith('api:session-')).toBe(true);
+    expect(sessionManager.setActiveContextSession).toHaveBeenCalledWith(details.newSessionId);
+    expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
+      details.newSessionId,
+      'Session initialized via session_new.',
+    );
+
+    const active = readLastActiveSession(tempDir);
+    expect(active?.sessionId).toBe(details.newSessionId);
+    expect(active?.channelType).toBe('api');
+  });
+});
 
 describe('wireHeartbeatRuntime', () => {
   let tempDir: string;
@@ -434,54 +488,5 @@ describe('wireHeartbeatRuntime', () => {
     } finally {
       nowSpy.mockRestore();
     }
-  });
-});
-
-describe('wireSessionRuntime', () => {
-  let tempDir: string;
-
-  beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'session-runtime-'));
-  });
-
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it('registers session_new as an extended tool and switches active session', async () => {
-    const registerTool = vi.fn();
-    const appendSystemNote = vi.fn();
-    wireSessionRuntime(
-      { registerTool },
-      {
-        dataDir: tempDir,
-        sessionManager: { appendSystemNote },
-      },
-    );
-
-    expect(registerTool).toHaveBeenCalledTimes(1);
-    expect(registerTool.mock.calls[0]?.[1]).toBe('extended');
-    const tool = registerTool.mock.calls[0]?.[0] as {
-      name?: string;
-      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ details: Record<string, unknown> }>;
-    };
-    expect(tool.name).toBe('session_new');
-
-    const result = await tool.execute('call-session-new', {});
-    const details = result.details as {
-      newSessionId: string;
-      previousSessionId: string | null;
-    };
-
-    expect(details.previousSessionId).toBe(null);
-    expect(details.newSessionId.startsWith('api:session-')).toBe(true);
-    expect(appendSystemNote).toHaveBeenCalledWith(
-      details.newSessionId,
-      'Session initialized via session_new.',
-    );
-
-    const active = readLastActiveSession(tempDir);
-    expect(active?.sessionId).toBe(details.newSessionId);
-    expect(active?.channelType).toBe('api');
   });
 });

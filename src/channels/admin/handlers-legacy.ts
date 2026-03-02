@@ -494,35 +494,6 @@ export class LegacyAdminHandlers {
     return tpl.loginPage(error);
   }
 
-  // ── Dashboard ──
-
-  dashboard(): string {
-    const memStats = this.memoryStore.getStats();
-    const channels = this.sessionStore.listChannels();
-    const stats: DashboardStats = {
-      memoryTotal: memStats.total,
-      memoryByType: memStats.byType,
-      avgSalience: memStats.avgSalience,
-      sessionCount: channels.length,
-      schedulerTasks: this.scheduler.taskCount,
-      activeShards: this.shardManager.getActiveCount(),
-      sessionUsage: {
-        turns: this.usageTotals.turns,
-        inputTokens: this.usageTotals.inputTokens,
-        outputTokens: this.usageTotals.outputTokens,
-        cacheReadTokens: this.usageTotals.cacheReadTokens,
-        llmCalls: this.usageTotals.llmCalls,
-        toolCalls: this.usageTotals.toolCalls,
-        avgContextUtilization: this.usageTotals.turns > 0
-          ? this.usageTotals.contextUtilizationSum / this.usageTotals.turns
-          : 0,
-        estimatedCostUsd: this.usageTotals.estimatedCostUsd,
-      },
-      recentThinkTraces: this.thinkTraces,
-    };
-    return tpl.layout('Dashboard', tpl.dashboardPage(stats), 'dashboard');
-  }
-
   // ── Memory ──
 
   private buildContactSummaryMap(): Map<string, { id: string; displayName: string }> {
@@ -546,75 +517,6 @@ export class LegacyAdminHandlers {
     );
     const offset = parsePositiveInteger(params?.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
     return { limit, offset };
-  }
-
-  memoryList(params?: URLSearchParams): string {
-    const { limit, offset } = this.resolveMemoryListPagination(params);
-    const memories = this.memoryStore.listActiveMemories({ limit, offset });
-    const total = this.memoryStore.countActiveMemories();
-    return tpl.layout(
-      'Memory Blossoms',
-      tpl.memoryListPage(
-        memories,
-        this.buildContactSummaryMap(),
-        {
-          limit,
-          offset,
-          total,
-          hasPrevious: offset > 0,
-          hasNext: offset + memories.length < total,
-        },
-      ),
-      'memory',
-    );
-  }
-
-  memoryDetail(id: string): string | null {
-    const m = this.memoryStore.getById(id);
-    if (!m) return null;
-    const linkedContact = m.contactId ? this.buildContactSummaryMap().get(m.contactId) : undefined;
-    return tpl.layout(`Memory: ${m.text.slice(0, 40)}...`, tpl.memoryDetailPage(m, linkedContact), 'memory');
-  }
-
-  memoryListFragment(params?: URLSearchParams): string {
-    const { limit, offset } = this.resolveMemoryListPagination(params);
-    const memories = this.memoryStore.listActiveMemories({ limit, offset });
-    const contactsById = this.buildContactSummaryMap();
-    return memories.length > 0
-      ? memories.map(m => tpl.memoryRow(m, m.contactId ? contactsById.get(m.contactId) : undefined)).join('')
-      : '<tr><td colspan="8" class="empty">No memories found</td></tr>';
-  }
-
-  async memorySearch(query: string): Promise<string> {
-    if (!this.embeddingService) {
-      return '<tr><td colspan="8" class="empty">Embedding service not available</td></tr>';
-    }
-    const embedding = await this.embeddingService.embed(query);
-    const results = this.memoryStore.searchByEmbedding(embedding, 0.1, 50);
-    const contactsById = this.buildContactSummaryMap();
-    return results.length > 0
-      ? results.map(m => tpl.memoryRow(m, m.contactId ? contactsById.get(m.contactId) : undefined)).join('')
-      : '<tr><td colspan="8" class="empty">No matching memories</td></tr>';
-  }
-
-  memorySupersede(id: string): string {
-    const m = this.memoryStore.getById(id);
-    if (!m) {
-      this.appendAuditTimelineEntry(
-        'memory_mutation',
-        'denied',
-        `Memory supersede failed: memory "${id}" was not found.`,
-      );
-      return '';
-    }
-    this.memoryStore.updateMemory(id, { supersededBy: `admin-${randomUUID()}` });
-    this.appendAuditTimelineEntry(
-      'memory_mutation',
-      'allowed',
-      `PSFN superseded memory "${m.id}".`,
-      [`source=${m.sourceRef}`],
-    );
-    return '';  // Remove the row
   }
 
   // ── Sessions ──
@@ -714,36 +616,6 @@ export class LegacyAdminHandlers {
       verification: 'verified',
       verificationDetail: 'Verified against JSONL source block.',
     };
-  }
-
-  sessionList(): string {
-    const channels = this.sessionStore.listChannels();
-    const contacts = this.contactStore?.listAll() ?? [];
-    const renderedChannels = channels.map(channel => {
-      const linkedContact = this.getLinkedContactForSession(channel.channelId, contacts);
-      if (!linkedContact) return channel;
-      return {
-        ...channel,
-        linkedContactId: linkedContact.id,
-        linkedContactName: linkedContact.displayName,
-      };
-    });
-    return tpl.layout('Conversation Roots', tpl.sessionListPage(renderedChannels), 'sessions');
-  }
-
-  sessionMessages(channelId: string): string {
-    const messages = this.sessionManager.getRecentMessages(channelId, 100);
-    const compactionAuditViews = this.buildCompactionAuditViews(channelId);
-    return tpl.layout(
-      `Session: ${channelId}`,
-      tpl.sessionMessagesPage(channelId, messages, compactionAuditViews),
-      'sessions',
-    );
-  }
-
-  sessionMessagesFragment(channelId: string): string {
-    const messages = this.sessionManager.getRecentMessages(channelId, 100);
-    return messages.map(m => tpl.messageCard(m)).join('');
   }
 
   // ── Scheduler ──
@@ -2214,117 +2086,6 @@ export class LegacyAdminHandlers {
     return tpl.layout('Garden Chat', tpl.chatPage(), 'chat');
   }
 
-  async confirmationsPage(): Promise<string> {
-    const body = await this.renderConfirmationQueueFragment();
-    return tpl.layout('Confirmations', tpl.confirmationsPage(body), 'confirmations');
-  }
-
-  async confirmationsListFragment(): Promise<string> {
-    return this.renderConfirmationQueueFragment();
-  }
-
-  async resolveConfirmation(body: string): Promise<string> {
-    if (!this.confirmationQueueApi) {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'denied',
-        'Confirmation decision was denied: confirmation queue is unavailable.',
-      );
-      return this.renderConfirmationQueueFragment(
-        'Confirmation queue is unavailable (gateway integration not configured).',
-        true,
-      );
-    }
-
-    const params = new URLSearchParams(body);
-    const id = (params.get('id') ?? '').trim();
-    const decisionRaw = (params.get('decision') ?? '').trim();
-    if (!id) {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'denied',
-        'Confirmation decision was denied: missing confirmation id.',
-      );
-      return this.renderConfirmationQueueFragment('Confirmation ID is required.', true);
-    }
-
-    if (decisionRaw !== 'approve' && decisionRaw !== 'deny' && decisionRaw !== 'modify') {
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'denied',
-        `Confirmation ${id} was denied: invalid decision "${decisionRaw}".`,
-      );
-      return this.renderConfirmationQueueFragment('Invalid confirmation decision.', true);
-    }
-
-    const resolveParams: ConfirmationResolveParams = {
-      id,
-      decision: decisionRaw,
-    };
-
-    if (decisionRaw === 'modify') {
-      const modifiedParamsRaw = (params.get('modifiedParamsJson') ?? '').trim();
-      if (!modifiedParamsRaw) {
-        this.appendAuditTimelineEntry(
-          'external_action',
-          'denied',
-          `Confirmation ${id} modify request was denied: modified params were not provided.`,
-        );
-        return this.renderConfirmationQueueFragment('Modified params JSON is required for modify.', true);
-      }
-      try {
-        const parsed = JSON.parse(modifiedParamsRaw);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          this.appendAuditTimelineEntry(
-            'external_action',
-            'denied',
-            `Confirmation ${id} modify request was denied: modified params were not a JSON object.`,
-          );
-          return this.renderConfirmationQueueFragment('Modified params must be a JSON object.', true);
-        }
-        resolveParams.modifiedParams = parsed as Record<string, unknown>;
-      } catch {
-        this.appendAuditTimelineEntry(
-          'external_action',
-          'denied',
-          `Confirmation ${id} modify request was denied: modified params JSON was invalid.`,
-        );
-        return this.renderConfirmationQueueFragment('Modified params JSON is invalid.', true);
-      }
-    }
-
-    let result: ConfirmationResolveResult;
-    try {
-      result = await this.confirmationQueueApi.resolveConfirmationQueue(resolveParams);
-    } catch (error) {
-      const message = toErrorMessage(error);
-      this.appendAuditTimelineEntry(
-        'external_action',
-        'denied',
-        `Confirmation ${id} failed to resolve: ${message}`,
-      );
-      return this.renderConfirmationQueueFragment(`Confirmation update failed: ${message}`, true);
-    }
-
-    const isError = result.status === 'failed';
-    const decision: AdminAuditDecision = (
-      result.status === 'denied'
-      || result.status === 'failed'
-      || result.status === 'expired'
-      || result.status === 'not_found'
-    ) ? 'denied' : 'allowed';
-    const decisionLabel = decisionRaw === 'modify'
-      ? 'modified'
-      : (decisionRaw === 'approve' ? 'approved' : 'denied');
-    this.appendAuditTimelineEntry(
-      'external_action',
-      decision,
-      `Operator ${decisionLabel} confirmation ${id}.`,
-      [`status=${result.status}`, `executed=${result.executed}`],
-    );
-    return this.renderConfirmationQueueFragment(result.message, isError);
-  }
-
   chatBootstrap(requestOrigin?: string): AdminChatBootstrapResponse {
     const settingsApiBaseUrl = this.resolveChatApiBaseUrlFromSettings();
     return this.chatBootstrapService.buildBootstrap({ requestOrigin, settingsApiBaseUrl });
@@ -3068,67 +2829,6 @@ export class LegacyAdminHandlers {
   }
 
   // ── Events (SSE) ──
-
-  valuesTimelinePageHtml(): string {
-    const entries = this.valuesJournal.list({ limit: 250 });
-    return tpl.layout('Values Timeline', tpl.valuesTimelinePage({ entries }), 'values');
-  }
-
-  eventsPageHtml(searchParams?: URLSearchParams): string {
-    const filters = this.auditTimeline.parseFilters(searchParams);
-    const entries = this.auditTimeline.list(filters);
-    return tpl.layout('Audit Timeline', tpl.auditTimelinePage({ entries, filters }), 'events');
-  }
-
-  setupSSE(res: ServerResponse): () => void {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
-    // Flush headers to client immediately (SSE requires this)
-    res.write(':ok\n\n');
-
-    const sseEvents: EventName[] = [
-      'agent.turn.end',
-      'agent.turn.usage',
-      'agent.tool.start',
-      'agent.tool.end',
-      'agent.tools.adaptive.decision',
-      'agent.tools.adaptive.snapshot',
-      'agent.compaction.start',
-      'agent.compaction.end',
-      'agent.retry.start',
-      'agent.retry.end',
-      'agent.think.trace',
-      'agent.error',
-      'memory.extraction.end',
-      'memory.retrieval',
-      'schedule.task.run',
-      'schedule.heartbeat',
-      'wyoming.session.start',
-      'wyoming.session.end',
-      'wyoming.connection.error',
-      'wyoming.policy.violation',
-      'wyoming.audit.summary',
-      'system.error',
-    ];
-
-    const unsubscribers: Array<() => void> = [];
-
-    for (const eventName of sseEvents) {
-      const unsub = this.eventBus.on(eventName, (data: EventMap[typeof eventName]) => {
-        const now = Date.now();
-        const html = tpl.eventItem(eventName, now, data as Record<string, unknown>);
-        res.write(`event: admin-event\ndata: ${html}\n\n`);
-      });
-      unsubscribers.push(unsub);
-    }
-
-    return () => {
-      for (const unsub of unsubscribers) unsub();
-    };
-  }
 
   setupChatDebugSSE(
     res: ServerResponse,

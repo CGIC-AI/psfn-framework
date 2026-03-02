@@ -47,6 +47,11 @@ import {
   writeLastActiveSession,
 } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
+import {
+  RUNTIME_MODE,
+  resolveRuntimeModeContract,
+  toRuntimeStatusMetadata,
+} from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
@@ -340,6 +345,13 @@ export class SubstrateRuntime implements Lifecycle {
       envTier: this.config.capabilityTier,
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
+    const lifecycleRuntimeContract = resolveRuntimeModeContract({
+      entrypoint: RUNTIME_MODE.SINGLE,
+      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
+      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
+    });
+    const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
+    log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
 
     // Open database
     this.db = initDatabase(this.config.databasePath);
@@ -594,7 +606,7 @@ export class SubstrateRuntime implements Lifecycle {
     const moduleSummary = await this.moduleLoader.loadEnabledModules();
     log.info('Runtime modules initialized', moduleSummary);
     log.info('Re-validating tool wiring after module load', {
-      mode: 'single',
+      mode: lifecycleRuntimeContract.mode,
       loadedModules: moduleSummary.loaded,
       failedModules: moduleSummary.failed,
     });
@@ -627,8 +639,6 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
     const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
-    const lifecycleRuntimeMode = process.env.PSFN_RUNTIME_MODE?.trim() || 'single';
-    const lifecycleRestartCommand = process.env.LIFECYCLE_RESTART_COMMAND?.trim() || undefined;
     this.lifecycleNotifier = new DiscordLifecycleNotifier({
       sender: this.discord,
       heartbeatChannelId,
@@ -655,8 +665,8 @@ export class SubstrateRuntime implements Lifecycle {
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
-        restartCommand: lifecycleRestartCommand,
-        runtimeMode: lifecycleRuntimeMode,
+        restartCommand: lifecycleRuntimeContract.restart.command,
+        runtimeMode: lifecycleRuntimeContract.mode,
       },
     ));
     this.agentLoop.registerTool(createRebuildTool(
@@ -665,8 +675,8 @@ export class SubstrateRuntime implements Lifecycle {
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
-        restartCommand: lifecycleRestartCommand,
-        runtimeMode: lifecycleRuntimeMode,
+        restartCommand: lifecycleRuntimeContract.restart.command,
+        runtimeMode: lifecycleRuntimeContract.mode,
       },
     ));
     this.agentLoop.registerTool(createNotifyOperatorTool(
@@ -722,6 +732,7 @@ export class SubstrateRuntime implements Lifecycle {
               meta: {
                 total: stats.total,
                 avgSalience: Number(stats.avgSalience.toFixed(4)),
+                ...runtimeStatusMeta,
               },
             };
           },
@@ -731,6 +742,7 @@ export class SubstrateRuntime implements Lifecycle {
               provider: this.config.primaryProvider ?? null,
               model: this.config.primaryModel ?? null,
               ...toActiveProbeMeta(activeProbeConfig),
+              ...runtimeStatusMeta,
             };
 
             if (!configured) {
@@ -781,18 +793,21 @@ export class SubstrateRuntime implements Lifecycle {
               return {
                 status: 'degraded',
                 detail: 'Discord adapter is disabled',
+                meta: runtimeStatusMeta,
               };
             }
             if (!this.discord.isConnected()) {
               return {
                 status: 'degraded',
                 detail: 'Discord client is not connected',
+                meta: runtimeStatusMeta,
               };
             }
             return {
               status: 'healthy',
               meta: {
                 accountId: this.discord.config.accountId ?? null,
+                ...runtimeStatusMeta,
               },
             };
           },
@@ -800,6 +815,7 @@ export class SubstrateRuntime implements Lifecycle {
             const baseMeta = {
               dims: embeddingProvider.dims,
               ...toActiveProbeMeta(activeProbeConfig),
+              ...runtimeStatusMeta,
             };
             if (!Number.isFinite(embeddingProvider.dims) || embeddingProvider.dims <= 0) {
               return {
@@ -848,12 +864,12 @@ export class SubstrateRuntime implements Lifecycle {
               return {
                 status: 'degraded',
                 detail: 'Heartbeat task is not registered',
-                meta: { taskCount },
+                meta: { taskCount, ...runtimeStatusMeta },
               };
             }
             return {
               status: 'healthy',
-              meta: { taskCount },
+              meta: { taskCount, ...runtimeStatusMeta },
             };
           },
         },

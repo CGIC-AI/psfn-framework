@@ -1052,6 +1052,104 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).toContain('honne');
   });
 
+  it('injects expressive style guidance for API turns', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'api:session-1',
+      channelType: 'api',
+    }));
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const prompt = buildCall[1] as string;
+    expect(prompt).toContain('[Response Style Guidance]');
+    expect(prompt).toContain('Response style preference: expressive');
+    expect(prompt).toContain('Prefer expressive responses');
+  });
+
+  it('injects concise style guidance for Discord guild/voice and Telegram turns', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'style-discord-guild',
+      channelId: '1234567890',
+      channelType: 'discord',
+      isDirectMessage: false,
+    }));
+    await agent.handleMessage(makeMessage({
+      id: 'style-discord-voice',
+      channelId: 'discord-voice:guild:user',
+      channelType: 'terminal',
+    }));
+    await agent.handleMessage(makeMessage({
+      id: 'style-telegram',
+      channelId: 'telegram:5635268079',
+      channelType: 'telegram',
+    }));
+
+    const guildPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const voicePrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    const telegramPrompt = (sessionManager.buildContext as any).mock.calls[2][1] as string;
+
+    expect(guildPrompt).toContain('Response style preference: concise');
+    expect(voicePrompt).toContain('Response style preference: concise');
+    expect(telegramPrompt).toContain('Response style preference: concise');
+    expect(guildPrompt).toContain('Prefer concise responses');
+  });
+
+  it('honors routing responseStyle overrides ahead of channel defaults', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'style-routing-override',
+      channelId: 'api:session-2',
+      channelType: 'api',
+      routing: {
+        source: 'api',
+        responseStyle: 'concise',
+      },
+    }));
+
+    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    expect(prompt).toContain('Response style preference: concise');
+    expect(prompt).toContain('Prefer concise responses');
+  });
+
+  it('honors config responseStyleOverrides for channelType defaults', async () => {
+    const config = makeConfig({
+      responseStyleOverrides: {
+        channelType: {
+          api: 'concise',
+        },
+      },
+    });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'style-config-override',
+      channelId: 'api:session-3',
+      channelType: 'api',
+    }));
+
+    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    expect(prompt).toContain('Response style preference: concise');
+  });
+
   it('interpolates {{user}} and {{char}} variables per turn before context build', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

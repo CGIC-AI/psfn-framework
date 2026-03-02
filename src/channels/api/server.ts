@@ -11,6 +11,7 @@ import type {
   MessageModelOverride,
   MessagePromptOverride,
   MessageRoutingMetadata,
+  ResponseStyle,
   SubstrateMessage,
 } from '../../types.js';
 import type { ContactStore } from '../../contacts/store.js';
@@ -118,6 +119,7 @@ interface PreparedTurn {
 interface TurnRoutingOverrides {
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
+  responseStyle?: ResponseStyle;
 }
 
 interface IdentityClaimHeaders {
@@ -762,8 +764,9 @@ export class ApiServer implements ChannelAdapter {
         : {}),
       ...(overrides.modelOverride ? { modelOverride: overrides.modelOverride } : {}),
       ...(overrides.promptOverride ? { promptOverride: overrides.promptOverride } : {}),
+      ...(overrides.responseStyle ? { responseStyle: overrides.responseStyle } : {}),
     };
-    const hasRouting = routing.broadcast || routing.modelOverride || routing.promptOverride;
+    const hasRouting = routing.broadcast || routing.modelOverride || routing.promptOverride || routing.responseStyle;
 
     return {
       id: `api-${randomUUID()}`,
@@ -902,11 +905,26 @@ export class ApiServer implements ChannelAdapter {
       }
     }
 
+    const responseStyleRaw = typeof request.response_style === 'string'
+      ? request.response_style.trim().toLowerCase()
+      : '';
+    let responseStyle: ResponseStyle | undefined;
+    if (responseStyleRaw) {
+      if (responseStyleRaw !== 'concise' && responseStyleRaw !== 'expressive') {
+        return {
+          ok: false,
+          error: 'response_style must be one of: concise, expressive',
+        };
+      }
+      responseStyle = responseStyleRaw;
+    }
+
     return {
       ok: true,
       value: {
         ...(modelOverride ? { modelOverride } : {}),
         ...(promptOverride ? { promptOverride } : {}),
+        ...(responseStyle ? { responseStyle } : {}),
       },
     };
   }

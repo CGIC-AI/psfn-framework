@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { LLMContext, SubstrateConfig } from '../types.js';
+import type { SessionRestartBehavior } from '../types.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type {
   SessionStore,
@@ -55,6 +57,12 @@ export interface LegacyChatImportRunRequest extends LegacyChatImportRequest {
 export interface LegacyChatImportRunResult {
   importResult: LegacyChatImportResult;
   bootstrapResult: ImportedHistoryBootstrapResult | null;
+}
+
+export interface StartupSessionMetadata {
+  sessionId: string;
+  channelType?: string;
+  timestamp: number;
 }
 
 export class SessionManager {
@@ -296,5 +304,26 @@ export class SessionManager {
 
   searchTranscripts(query: string, limit?: number): SessionSearchHit[] {
     return this.store.searchByKeywords(query, limit);
+  }
+
+  resolveStartupSessionMetadata(
+    behavior: SessionRestartBehavior = 'reuse_latest_session',
+  ): StartupSessionMetadata | null {
+    if (behavior === 'new_session') {
+      const timestamp = Date.now();
+      return {
+        sessionId: `api:restart-${timestamp.toString(36)}-${randomUUID().slice(0, 8)}`,
+        channelType: 'api',
+        timestamp,
+      };
+    }
+
+    const latest = this.store.getLatestSessionByTimestamp();
+    if (!latest || this.store.count(latest.sessionId) <= 0) return null;
+    return {
+      sessionId: latest.sessionId,
+      channelType: latest.channelType,
+      timestamp: latest.timestamp,
+    };
   }
 }

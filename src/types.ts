@@ -207,6 +207,7 @@ export interface RuntimeConfigHooks {
 
 export type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous' | 'custom';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
+export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
 
 export interface WyomingShardRoutingConfig {
   enabled: boolean;
@@ -227,6 +228,7 @@ export interface SubstrateConfig {
   dataDir: string;
   databasePath: string;
   sessionMessageLimit?: number;
+  sessionRestartBehavior?: SessionRestartBehavior;
   continuityMessageLimit?: number;
   memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;
@@ -430,6 +432,10 @@ export function loadConfig(): SubstrateConfig {
   const sessionMirrorActiveWindowMs = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS, 1_000);
   const sessionMirrorChannelOverrides = parseBooleanMapEnv(process.env.SESSION_MIRROR_CHANNEL_OVERRIDES);
   const sessionMessageLimit = parseOptionalIntegerEnv(process.env.SESSION_MESSAGE_LIMIT, 1);
+  const sessionRestartBehavior = parseSessionRestartBehaviorEnv(
+    process.env.SESSION_RESTART_BEHAVIOR,
+    'reuse_latest_session',
+  );
   const continuityMessageLimit = parseOptionalIntegerEnv(process.env.CONTINUITY_MESSAGE_LIMIT, 1);
   const memoryRetrievalLimit = parseOptionalIntegerEnv(process.env.MEMORY_RETRIEVAL_LIMIT, 1);
   const sessionHistoryBudgetPct = parseBoundedIntegerEnv(
@@ -475,6 +481,7 @@ export function loadConfig(): SubstrateConfig {
     dataDir: process.env.DATA_DIR ?? './data',
     databasePath: process.env.DATABASE_PATH ?? './data/purrsephone.db',
     ...(sessionMessageLimit !== undefined ? { sessionMessageLimit } : {}),
+    sessionRestartBehavior,
     ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
     ...(memoryRetrievalLimit !== undefined ? { memoryRetrievalLimit } : {}),
     sessionHistoryBudgetPct,
@@ -612,6 +619,18 @@ function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined
     return false;
   }
   return undefined;
+}
+
+function parseSessionRestartBehaviorEnv(
+  value: string | undefined,
+  fallback: SessionRestartBehavior,
+): SessionRestartBehavior {
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'reuse_latest_session' || normalized === 'new_session') {
+    return normalized;
+  }
+  return fallback;
 }
 
 function parseBoundedIntegerEnv(

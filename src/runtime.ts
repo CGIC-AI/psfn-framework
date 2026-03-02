@@ -43,7 +43,6 @@ import { initDatabase } from './persistence/sqlite-utils.js';
 import { parseOptionalPositiveIntEnv } from './utils/env.js';
 import {
   DiscordLifecycleNotifier,
-  restoreLastActiveSession,
   writeLastActiveSession,
 } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
@@ -272,12 +271,19 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   private restoreLatestSessionMetadata(): void {
-    const resolved = restoreLastActiveSession({
-      dataDir: this.config.dataDir,
-      computedLatestSession: this.sessionStore.getLatestSessionByTimestamp(),
-      isSessionValid: (sessionId) => this.sessionStore.count(sessionId) > 0,
-    });
+    const behavior = this.config.sessionRestartBehavior ?? 'reuse_latest_session';
+    const resolved = this.sessionManager.resolveStartupSessionMetadata(behavior);
     if (!resolved) return;
+
+    writeLastActiveSession(this.config.dataDir, resolved);
+    if (behavior === 'new_session') {
+      log.info('Initialized fresh startup session metadata', {
+        sessionId: resolved.sessionId,
+        channelType: resolved.channelType ?? 'unknown',
+        timestamp: resolved.timestamp,
+      });
+      return;
+    }
 
     log.info('Restored latest session metadata', {
       sessionId: resolved.sessionId,

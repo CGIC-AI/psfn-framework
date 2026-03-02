@@ -15,12 +15,20 @@ import type {
   ChannelVisibility,
   ConsentFlags,
 } from './types.js';
+import type { ResponseStyle, ResponseStyleOverrides } from '../types.js';
 import { getRuntimeTrustPolicy } from './runtime-policy.js';
 
 export interface ChannelMeta {
   isDirectMessage?: boolean;
   broadcastApprovalToken?: string;
 }
+
+const RESPONSE_STYLE_BY_VISIBILITY: Record<ChannelVisibility, ResponseStyle> = {
+  private: 'expressive',
+  semi_private: 'concise',
+  public: 'concise',
+  broadcast: 'concise',
+};
 
 // ── Policy evaluation ──
 
@@ -125,6 +133,103 @@ export function classifyChannel(
   }
 
   return trustPolicy.channelClassification.defaultVisibility;
+}
+
+function resolvePrefixStyleOverride(
+  channelId: string,
+  prefixOverrides: Record<string, ResponseStyle>,
+): ResponseStyle | undefined {
+  let bestMatch: { prefix: string; style: ResponseStyle } | undefined;
+  for (const [prefix, style] of Object.entries(prefixOverrides)) {
+    if (!channelId.startsWith(prefix)) continue;
+    if (!bestMatch || prefix.length > bestMatch.prefix.length) {
+      bestMatch = { prefix, style };
+    }
+  }
+  return bestMatch?.style;
+}
+
+function resolveChannelTypeStyleOverride(
+  channelType: string,
+  channelTypeOverrides: Record<string, ResponseStyle>,
+): ResponseStyle | undefined {
+  if (Object.prototype.hasOwnProperty.call(channelTypeOverrides, channelType)) {
+    return channelTypeOverrides[channelType];
+  }
+
+  const normalized = channelType.trim().toLowerCase();
+  if (!normalized) return undefined;
+  for (const [key, style] of Object.entries(channelTypeOverrides)) {
+    if (key.trim().toLowerCase() === normalized) return style;
+  }
+  return undefined;
+}
+
+export function resolveChannelResponseStyle(
+  channelId: string,
+  options: {
+    channelType?: string;
+    meta?: ChannelMeta;
+    overrides?: ResponseStyleOverrides;
+  } = {},
+): ResponseStyle {
+  const overrides = options.overrides;
+  const exactOverride = overrides?.exact && Object.prototype.hasOwnProperty.call(overrides.exact, channelId)
+    ? overrides.exact[channelId]
+    : undefined;
+  if (exactOverride) return exactOverride;
+
+  const prefixOverride = overrides?.prefix
+    ? resolvePrefixStyleOverride(channelId, overrides.prefix)
+    : undefined;
+  if (prefixOverride) return prefixOverride;
+
+  const channelType = options.channelType?.trim();
+  if (channelType && overrides?.channelType) {
+    const byChannelType = resolveChannelTypeStyleOverride(channelType, overrides.channelType);
+    if (byChannelType) return byChannelType;
+  }
+
+  if (options.meta?.isDirectMessage) return 'expressive';
+
+  const normalizedChannelType = channelType?.toLowerCase();
+  if (channelId.startsWith('discord-voice:') || normalizedChannelType === 'discord_voice') {
+    return 'concise';
+  }
+  if (
+    normalizedChannelType === 'telegram'
+    || normalizedChannelType === 'telegram_group'
+    || normalizedChannelType === 'telegram_dm'
+    || channelId.startsWith('telegram:')
+  ) {
+    return 'concise';
+  }
+  if (normalizedChannelType === 'internal' || channelId.startsWith('internal:')) {
+    return 'concise';
+  }
+  if (normalizedChannelType === 'api' || channelId.startsWith('api:')) {
+    return 'expressive';
+  }
+  if (normalizedChannelType === 'discord' || normalizedChannelType === 'discord_text') {
+    return 'concise';
+  }
+  if (
+    normalizedChannelType?.includes('webui')
+    || channelId.startsWith('openwebui:')
+    || channelId.startsWith('webui:')
+  ) {
+    return 'expressive';
+  }
+
+  const visibility = classifyChannel(channelId, options.meta);
+  return overrides?.defaultStyle ?? RESPONSE_STYLE_BY_VISIBILITY[visibility];
+}
+
+export function getResponseStylePromptGuidance(style: ResponseStyle): string {
+  if (style === 'concise') {
+    return 'Prefer concise responses: answer directly, keep wording tight, and expand only when the user asks for more detail.';
+  }
+  return 'Prefer expressive responses: keep your voice warm and vivid, and add personality-rich detail when it helps clarity.';
 }
 
 // ── Continuity sharing ──

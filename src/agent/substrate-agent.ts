@@ -24,6 +24,7 @@ import type {
   LLMContext,
   MessageModelOverride,
   MessagePromptOverride,
+  ResponseStyle,
   ObservabilityCallType,
   PostTurnActionCandidate,
   SubstrateConfig,
@@ -35,7 +36,12 @@ import type { ContactStore } from '../contacts/store.js';
 import type { Contact } from '../contacts/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
-import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
+import {
+  classifyChannel,
+  getResponseStylePromptGuidance,
+  resolveChannelResponseStyle,
+  type ChannelMeta,
+} from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
 import type { ComposeContext, ComposeSplitResult } from '../identity/prompt-types.js';
@@ -403,6 +409,28 @@ export class SubstrateAgent {
       return { mode: 'none' };
     }
     return { mode: 'default' };
+  }
+
+  private normalizeTurnResponseStyleOverride(message: SubstrateMessage): ResponseStyle | null {
+    const raw = message.routing?.responseStyle;
+    return raw === 'concise' || raw === 'expressive'
+      ? raw
+      : null;
+  }
+
+  private resolveResponseStyle(
+    message: SubstrateMessage,
+    channelType: string | undefined,
+    channelMeta: ChannelMeta,
+  ): ResponseStyle {
+    const turnOverride = this.normalizeTurnResponseStyleOverride(message);
+    if (turnOverride) return turnOverride;
+
+    return resolveChannelResponseStyle(message.channelId, {
+      channelType,
+      meta: channelMeta,
+      overrides: this.config.responseStyleOverrides,
+    });
   }
 
   private getTurnModelSignature(message?: SubstrateMessage): string {
@@ -1464,6 +1492,7 @@ export class SubstrateAgent {
       const channelType = this.resolveChannelType(message);
       const runtimeNow = new Date();
       const promptOverride = this.normalizeTurnPromptOverride(message);
+      const responseStyle = this.resolveResponseStyle(message, channelType, channelMeta);
       const templateVariables = this.buildPromptTemplateVariables(
         message,
         authorContext.resolvedUserName,
@@ -1478,6 +1507,7 @@ export class SubstrateAgent {
         trustLevel,
         channelType,
         authorContext.canonicalContactKey,
+        responseStyle,
         runtimeNow,
       );
       let fullPrompt = '';
@@ -2455,6 +2485,7 @@ export class SubstrateAgent {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey?: string,
+    responseStyle: ResponseStyle = 'concise',
     now: Date = new Date(),
   ): string {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
@@ -2473,6 +2504,7 @@ export class SubstrateAgent {
     const capabilityAccess = this.resolveCapabilityAccess();
     const capabilityTier = capabilityAccess.getTier();
     const skillsContext = this.skillsRuntime?.getPromptXml() ?? '';
+    const responseStyleGuidance = getResponseStylePromptGuidance(responseStyle);
     const extendedBreakdown = [
       extendedLoadedCount > 0 ? `${extendedLoadedCount} loaded` : null,
       autoloadCount > 0 ? `${autoloadCount} autoload` : null,
@@ -2485,6 +2517,7 @@ export class SubstrateAgent {
       `Channel: ${message.channelId} (type: ${channelType ?? 'unknown'}, visibility: ${visibility})`,
       `Speaking with: ${resolvedUserName} (userId: ${message.authorId}, canonicalId: ${canonicalContactKey ?? message.authorId}, trust: ${trustLevel})`,
       `Model: ${modelId}`,
+      `Response style preference: ${responseStyle}`,
       `Capability tier: ${capabilityTier}`,
       `Context window: ${contextWindow} tokens`,
       `Tools: ${activeCount} active`
@@ -2515,6 +2548,10 @@ export class SubstrateAgent {
         lines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
       }
     }
+
+    lines.push('');
+    lines.push('[Response Style Guidance]');
+    lines.push(responseStyleGuidance);
 
     if (skillsContext) {
       lines.push('');

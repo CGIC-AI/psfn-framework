@@ -456,7 +456,7 @@ describe('ApiServer', () => {
       expect(call.authorName).toBe('V');
     });
 
-    it('passes direct-provider model override and prompt mode to substrate messages', async () => {
+    it('passes direct-provider, prompt, and style overrides to substrate messages', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
       server = new ApiServer({
@@ -472,6 +472,7 @@ describe('ApiServer', () => {
         model: 'claude-opus-4',
         provider: 'anthropic',
         system_prompt_mode: 'none',
+        response_style: 'concise',
         messages: [{ role: 'user', content: 'Talk with PSFN.' }],
       });
       expect(res.status).toBe(200);
@@ -484,6 +485,20 @@ describe('ApiServer', () => {
       expect(call.routing?.promptOverride).toEqual({
         mode: 'none',
       });
+      expect(call.routing?.responseStyle).toBe('concise');
+    });
+
+    it('rejects invalid response_style overrides', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'psfn',
+        response_style: 'verbose',
+        messages: [{ role: 'user', content: 'test' }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('response_style must be one of');
     });
 
     it('rejects provider overrides outside the direct-provider allowlist', async () => {

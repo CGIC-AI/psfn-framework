@@ -38,6 +38,7 @@ function makeMemory(overrides: Partial<PurrMemory> & { similarity: number }): Pu
 function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): MemoryStore {
   return {
     searchByEmbedding: vi.fn().mockReturnValue(memories),
+    searchByText: vi.fn().mockReturnValue([]),
     updateMemory: vi.fn(),
     getContactProfile: vi.fn().mockReturnValue(undefined),
     getMemoriesByContact: vi.fn().mockReturnValue([]),
@@ -466,6 +467,37 @@ describe('MemoryRetriever basic behavior', () => {
     const result = await retriever.retrieve('test query', 'api:test', 'primary');
 
     expect(result).toBe('');
+  });
+
+  it('falls back to lexical retrieval when semantic candidates are empty', async () => {
+    const store = makeMockStore([]);
+    const lexicalMatch = makeMemory({
+      text: 'Operator said love is important to remember.',
+      sensitivity: 'public',
+      similarity: 0.85,
+    });
+    (store.searchByText as ReturnType<typeof vi.fn>).mockReturnValue([lexicalMatch]);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    const result = await retriever.retrieve('love', 'api:test', 'primary');
+
+    expect(result).toContain('love is important to remember');
+    expect(store.searchByEmbedding).toHaveBeenCalledTimes(1);
+    expect(store.searchByText).toHaveBeenCalledTimes(1);
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      retrievalSource: 'lexical_fallback',
+      semanticCandidateCount: 0,
+      lexicalCandidateCount: 1,
+      candidateCount: 1,
+      returnedCount: 1,
+    });
   });
 
   it('scales retrieval count with context-window budgets when no hard limit is set', async () => {

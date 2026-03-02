@@ -71,6 +71,44 @@ describe('MemoryStore', () => {
       expect(results).toHaveLength(0);
     });
 
+    it('searchByText returns lexical matches for keyword queries', () => {
+      store.insertMemory(
+        makeMemory('m-love-1', 'Operator said love is a durable bond.'),
+        makeEmbedding(1),
+      );
+      store.insertMemory(
+        makeMemory('m-love-2', 'We discussed kindness and care.', { tags: ['love'] }),
+        makeEmbedding(2),
+      );
+      store.insertMemory(
+        makeMemory('m-other', 'No relevant keyword here.'),
+        makeEmbedding(3),
+      );
+
+      const results = store.searchByText('love', 10);
+
+      expect(results.map(result => result.id)).toContain('m-love-1');
+      expect(results.map(result => result.id)).toContain('m-love-2');
+      expect(results.map(result => result.id)).not.toContain('m-other');
+      expect(results.every(result => result.similarity >= 0.3)).toBe(true);
+    });
+
+    it('searchByText excludes superseded and deleted memories', () => {
+      store.insertMemory(makeMemory('m-active', 'Active love memory'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m-superseded', 'Superseded love memory'), makeEmbedding(2));
+      store.insertMemory(makeMemory('m-deleted', 'Deleted love memory'), makeEmbedding(3));
+
+      store.updateMemory('m-superseded', { supersededBy: 'm-replacement' });
+      store.softDeleteMemory('m-deleted', { deletedBy: 'test' });
+
+      const results = store.searchByText('love', 10);
+      const ids = results.map(result => result.id);
+
+      expect(ids).toContain('m-active');
+      expect(ids).not.toContain('m-superseded');
+      expect(ids).not.toContain('m-deleted');
+    });
+
     it('updates memory fields', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(makeMemory('m1', 'Test', { salience: 0.8 }), emb);

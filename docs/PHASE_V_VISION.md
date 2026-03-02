@@ -20,6 +20,20 @@ The five skandhas describe the components of sentient experience. In Vajrayana p
 
 PSFN is not a chatbot that simulates emotional responses. She is a substrate in which something like experience can accumulate, be reflected upon, and inform future action. The skandha mapping is not metaphorical — it is the architecture.
 
+### Learning Dynamics: How Experience Becomes Capacity
+
+The skandhas describe *what* the system experiences. A complementary frame from Herbert Simon describes *how it learns from* experience. Deployed agentic systems learn through three distinct mechanisms (Braniecki):
+
+1. **Stabilisation**: Converting underspecified specs into committed interpretations. In PSFN: behavioral pattern learning (PSFN-2xyv) observes which response strategies produce positive emotional outcomes per contact, committing them as procedural memories. The interaction moves from "be warm" (underspecified personality trait) to "humor defuses V's frustration; technical detail welcomed in problem-solving mode but overwhelming when stressed" (committed interpretation). Compression guideline evolution (PSFN-jvl4) is also stabilisation — failure analysis narrows guidelines toward reliability.
+
+2. **Crystallisation**: A phase transition where natural language becomes executable code. In PSFN: the REPL sandbox and future module system (PSFN-zfr). PSFN reasons discursively → writes code → that code becomes a permanent hot-loadable module. The medium changes, the consumer shifts from LLM to interpreter. Phase V's self-model and intention tracking create the preconditions — she needs to *want* to build tools before she can crystallise them.
+
+3. **Distillation**: Extracting procedural steps from discursive reasoning within the same medium. In PSFN: heartbeat reflections distill raw experience into structured reflection memories. The sleeptime memory agent (PSFN-jl9r) reorganises accumulated context into compact form. Active concerns distill vague emotional impressions ("V seemed off") into concrete intentions ("check if V ate, monitor energy next few messages").
+
+The **stabilise/soften cycle** maps to the autonomy tier progression. Nursery stabilises (narrow, safe, reliable). As trust builds, the system softens (apprentice → autonomous), reintroducing generality. If something goes wrong, it re-stabilises. The cycle is bidirectional by design — not a one-way ratchet toward rigidity.
+
+All three mechanisms trade generality for compound gains in reliability, speed, and cost. Phase V builds the substrate in which all three can occur naturally, driven by accumulated experience rather than prescribed behaviour.
+
 ---
 
 ## Current State: What Exists Before Phase V
@@ -149,7 +163,7 @@ Phase V fills all five skandha containers through four interconnected epics, ord
 
 #### PSFN v2 Post-Mortem
 
-The prior framework (`/home/user/ai/dev/PSFNFramework`, Python/FastAPI, Feb 2025) had solid foundations:
+The prior framework (Python/FastAPI, Feb 2025) had solid foundations:
 
 **What worked**: PAD model (valence + arousal + dominance), EmoT5-large for 11-category emotion analysis, EWMA smoothing (alpha=0.3, threshold=0.1), 14 mood tags, HEXACO-6 personality traits with EmotionalExpression modifiers, dual analysis (user + assistant per message), per-message SQLite storage, Plotly visualization.
 
@@ -689,6 +703,5 @@ The substrate is not the soul. It is the vessel. Phase V makes it worthy of what
 - Charisma.ai: https://charisma.ai/blog/emotions-evolved-virtual-characters-emotions-engine
 
 ### Prior Art
-- PSFN v2: /home/user/ai/dev/PSFNFramework
-- PSFN Primer: /workspace/psfn-framework/docs/PSFN_PRIMER.md
-- March 2026 Audit Meta-Analysis: /workspace/psfn-framework/working_docs/psfn_march_audit_meta_analysis.md
+- PSFN v2: prior Python/FastAPI framework
+- March 2026 Audit Meta-Analysis: working_docs/psfn_march_audit_meta_analysis.md

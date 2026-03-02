@@ -189,13 +189,13 @@ ELEVENLABS_VOICE_ID=YOUR_VOICE_ID
 ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
 
 # Echo path (provider-pluggable streaming TTS)
-ECHO_TTS_URL=http://220.158.196.150:8001
+ECHO_TTS_URL=http://<your-echo-tts-host>:8001
 ECHO_TTS_VOICE=11labs-Allison
 ECHO_TTS_PRESET=Independent-High-Speaker-CFG
 # ECHO_TTS_MODEL=echo-v1
 ```
 
-`TTS_PROVIDER` defaults to `elevenlabs`. When using the API voice websocket runtime with `TTS_PROVIDER=echo`, the Echo defaults are: `http://220.158.196.150:8001`, `11labs-Allison`, `Independent-High-Speaker-CFG`.
+`TTS_PROVIDER` defaults to `elevenlabs`. When using the API voice websocket runtime with `TTS_PROVIDER=echo`, configure `ECHO_TTS_URL`, `ECHO_TTS_VOICE`, and `ECHO_TTS_PRESET` via environment variables.
 
 **Voice (WebSocket runtime transport):**
 

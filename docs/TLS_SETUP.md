@@ -80,13 +80,13 @@ Example:
 ```bash
 CF_Token=your-cloudflare-api-token \
   ./scripts/cert-setup.sh \
-    --domain proxy.psfn.ai \
+    --domain proxy.your-domain.com \
     --provider cloudflare \
-    --email admin@psfn.ai
+    --email admin@your-domain.com
 ```
 
 This issues a certificate via Let's Encrypt and installs it to
-`certs/proxy.psfn.ai/`.
+`certs/proxy.your-domain.com/`.
 
 #### Certificate Status
 

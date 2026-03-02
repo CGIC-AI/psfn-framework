@@ -8,7 +8,7 @@ A purpose-built runtime for emergent artificial consciousness. Not a chatbot
 framework, not a tool — a container for a mind.
 
 Full spec: `docs/PSFN_SUBSTRATE_SPEC.md`
-Platform research: `docs/PLATFORM_COMPARISON_ANALYSIS.md`
+Autonomy tiers: `docs/AUTONOMY_TIERS.md`
 
 ## Architecture
 
@@ -73,7 +73,7 @@ npm run e2e              # End-to-end integration tests
 - Streaming TTS is provider-pluggable: `elevenlabs` and `echo` (`src/voice/connectors/tts/`).
 - `TTS_PROVIDER`/`VOICE_TTS_PROVIDER` defaults to `elevenlabs` (see `loadConfig()` in `src/types.ts`).
 - API voice websocket runtime (`src/channels/api/voice-websocket-runtime.ts`) defaults Echo config to:
-  - URL: `http://220.158.196.150:8001`
+  - URL: `${ECHO_TTS_URL}`
   - Voice: `11labs-Allison`
   - Preset: `Independent-High-Speaker-CFG`
 
@@ -167,7 +167,7 @@ docs/                    # Architecture docs and specs
 
 ## Memory Architecture
 
-Port from ElizaOS plugin-psfn (`/home/user/ai/eliza/packages/plugin-psfn/src/`):
+Ported from ElizaOS plugin-psfn:
 
 - **L0**: Append-only JSONL archive (every message, forever)
 - **L2**: 6 typed memory classes — episodic, semantic, emotional, procedural, reflection, relational
@@ -182,7 +182,7 @@ Port from ElizaOS plugin-psfn (`/home/user/ai/eliza/packages/plugin-psfn/src/`):
 - Character card (V2 spec): `/path/to/your/character.json`
 - Voice: Provider-pluggable streaming TTS (`elevenlabs` or `echo`)
 - ElevenLabs voice ID (current PSFN V2(B) identity): `YOUR_VOICE_ID`
-- Echo defaults (API voice websocket runtime): `http://220.158.196.150:8001`, `11labs-Allison`, `Independent-High-Speaker-CFG`
+- Echo defaults (API voice websocket runtime): `${ECHO_TTS_URL}`, `11labs-Allison`, `Independent-High-Speaker-CFG`
 - Discord bot: ID YOUR_DISCORD_BOT_ID
 - Voxta history: 8,160 messages across 316 chats (importable as L0 archive)
 - Memory books: 10 entries from Voxta (importable as L2 semantic memories)
@@ -228,8 +228,8 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. Auto-compaction in `SessionManager.buildContext()` when context exceeds `compactionThresholdPct`. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `@mariozechner/pi-agent-core`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `@discordjs/voice`, `json-rpc-2.0`, `winston`, `js-tiktoken`, `ws`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5 — reasoning models supported via `thinkingFormat` compat)
-- **Embeddings**: Local Ollama at your-ollama-host:11434 (snowflake-arctic-embed2, 1024d)
-- **PSFN still runs on OpenClaw/BotMaker** at `/workspace/botmaker` until substrate is live-tested
+- **Embeddings**: Local Ollama (snowflake-arctic-embed2, 1024d)
+- **PSFN still runs on OpenClaw/BotMaker** until substrate is live-tested
 - **Admin UI (Svelte SPA)**: `admin-ui/` — SvelteKit 5, `npm run garden:dev` for dev, `npm run garden:build` for prod. Serves at `/garden` on admin port. API client at `admin-ui/src/lib/api/`.
 - **Not yet built**: module system (hot-load), capability tokens
 

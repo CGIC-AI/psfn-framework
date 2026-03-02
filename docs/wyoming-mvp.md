@@ -56,7 +56,7 @@ TTS_PROVIDER=elevenlabs
 
 # Echo mode
 TTS_PROVIDER=echo
-ECHO_TTS_URL=http://220.158.196.150:8001
+ECHO_TTS_URL=http://<your-echo-tts-host>:8001
 ECHO_TTS_VOICE=11labs-Allison
 ECHO_TTS_PRESET=Independent-High-Speaker-CFG
 ```

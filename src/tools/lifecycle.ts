@@ -6,6 +6,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { spawn } from 'node:child_process';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
+import { normalizeRestartCommand, type RuntimeMode } from '../lifecycle/runtime-mode.js';
 import { createComponentLogger } from '../logger.js';
 import type { CapabilityTier } from '../types.js';
 import type { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
@@ -18,12 +19,7 @@ interface LifecycleToolOptions {
   restartSafeguard?: LifecycleRestartSafeguard;
   getCapabilityTier?: () => CapabilityTier;
   restartCommand?: string;
-  runtimeMode?: string;
-}
-
-function resolveRestartCommand(command: string | undefined): string | null {
-  const normalized = command?.trim();
-  return normalized && normalized.length > 0 ? normalized : null;
+  runtimeMode?: RuntimeMode;
 }
 
 async function launchRestartCommand(command: string): Promise<void> {
@@ -91,7 +87,7 @@ export function createRestartTool(
 
       // Send pre-restart notification — must complete before we exit
       await notifier.notifyPreRestart(reason);
-      const restartCommand = resolveRestartCommand(options.restartCommand);
+      const restartCommand = normalizeRestartCommand(options.restartCommand);
 
       // Schedule clean shutdown + exit after returning the tool result
       // Use setImmediate so the tool result gets back to the LLM first
@@ -160,7 +156,7 @@ export function createRebuildTool(
         }
       }
       const fullReason = `rebuild: ${reason}`;
-      const restartCommand = resolveRestartCommand(options.restartCommand);
+      const restartCommand = normalizeRestartCommand(options.restartCommand);
 
       log.info('Self-rebuild requested', { reason, tier });
 

@@ -14,6 +14,8 @@
     "agent:start": "node dist/agent-main.js",
     "split": "./scripts/start-gateway-agent.sh",
     "split:debug": "./scripts/start-gateway-agent.sh --debug",
+    "yolo": "./scripts/start-gateway-agent.sh --yolo",
+    "yolo:debug": "./scripts/start-gateway-agent.sh --yolo --debug",
     "agent:docker": "docker compose -f docker/docker-compose.yml up --build",
     "proxy:up": "docker compose -f proxy/docker-compose.yml up -d",
     "proxy:down": "docker compose -f proxy/docker-compose.yml down",

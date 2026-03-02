@@ -5,10 +5,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 DEBUG_MODE=0
+YOLO_MODE=0
 for arg in "$@"; do
   case "$arg" in
     --debug|-d)
       DEBUG_MODE=1
+      ;;
+    --yolo)
+      YOLO_MODE=1
       ;;
   esac
 done
@@ -20,7 +24,7 @@ if [ -f ".env" ]; then
   set +a
 fi
 
-# Local-dev defaults so split mode is one-command.
+# Local-dev defaults so split/yolo mode is one-command.
 if [ -z "${ADMIN_PORT:-}" ]; then
   export ADMIN_PORT=3001
 fi
@@ -33,22 +37,39 @@ if [ -z "${ADMIN_TOKEN:-}" ] && [ -z "${ADMIN_ALLOW_INSECURE:-}" ]; then
   export ADMIN_ALLOW_INSECURE=true
 fi
 
+if [ "${YOLO_MODE}" -eq 1 ]; then
+  export PSFN_RUNTIME_MODE="yolo"
+else
+  export PSFN_RUNTIME_MODE="${PSFN_RUNTIME_MODE:-split}"
+fi
+export PSFN_RUNTIME_MODE="$(printf '%s' "${PSFN_RUNTIME_MODE}" | tr '[:upper:]' '[:lower:]')"
+
+MODE_LABEL="split"
+RESTART_BASE="split"
+if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
+  MODE_LABEL="yolo"
+  RESTART_BASE="yolo"
+fi
+
 if [ "${DEBUG_MODE}" -eq 1 ]; then
   export LOG_LEVEL="${LOG_LEVEL:-debug}"
   export PSFN_DEBUG_MODE=true
   export PSFN_DEBUG_EVENTS="${PSFN_DEBUG_EVENTS:-true}"
   export PSFN_DEBUG_THINKING="${PSFN_DEBUG_THINKING:-true}"
   export PSFN_DEBUG_TEXT="${PSFN_DEBUG_TEXT:-true}"
-  echo "[split] debug mode enabled (LOG_LEVEL=${LOG_LEVEL})"
+  echo "[${MODE_LABEL}] debug mode enabled (LOG_LEVEL=${LOG_LEVEL})"
 fi
 
-export PSFN_RUNTIME_MODE="${PSFN_RUNTIME_MODE:-split}"
 if [ -z "${LIFECYCLE_RESTART_COMMAND:-}" ]; then
   if [ "${DEBUG_MODE}" -eq 1 ]; then
-    export LIFECYCLE_RESTART_COMMAND="npm run split:debug"
+    export LIFECYCLE_RESTART_COMMAND="npm run ${RESTART_BASE}:debug"
   else
-    export LIFECYCLE_RESTART_COMMAND="npm run split"
+    export LIFECYCLE_RESTART_COMMAND="npm run ${RESTART_BASE}"
   fi
+fi
+
+if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
+  echo "[${MODE_LABEL}] YOLO mode active: gateway fs.read can access full codebase paths; fs.write remains workspace-scoped."
 fi
 
 DEFAULT_SOCKET_PATH="/run/psfn/gateway.sock"
@@ -62,7 +83,7 @@ if [ -z "${GATEWAY_SOCKET:-}" ]; then
     fallback_dir="$(dirname "${FALLBACK_SOCKET_PATH}")"
     mkdir -p "${fallback_dir}"
     export GATEWAY_SOCKET="${FALLBACK_SOCKET_PATH}"
-    echo "[split] /run/psfn not writable; using GATEWAY_SOCKET=${GATEWAY_SOCKET}"
+    echo "[${MODE_LABEL}] /run/psfn not writable; using GATEWAY_SOCKET=${GATEWAY_SOCKET}"
   fi
 fi
 
@@ -107,28 +128,28 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-echo "[split] starting gateway..."
+echo "[${MODE_LABEL}] starting gateway..."
 start_gateway
 
-echo "[split] waiting for gateway socket: ${SOCKET_PATH}"
+echo "[${MODE_LABEL}] waiting for gateway socket: ${SOCKET_PATH}"
 for _ in $(seq 1 200); do
   if [ -S "${SOCKET_PATH}" ]; then
     break
   fi
   if ! kill -0 "${GATEWAY_PID}" 2>/dev/null; then
-    echo "[split] gateway exited before socket became ready"
+    echo "[${MODE_LABEL}] gateway exited before socket became ready"
     exit 1
   fi
   sleep 0.1
 done
 
 if [ ! -S "${SOCKET_PATH}" ]; then
-  echo "[split] warning: gateway socket not detected yet, starting agent anyway"
+  echo "[${MODE_LABEL}] warning: gateway socket not detected yet, starting agent anyway"
 fi
 
-echo "[split] starting agent..."
+echo "[${MODE_LABEL}] starting agent..."
 start_agent
 
-echo "[split] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
-echo "[split] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID})"
+echo "[${MODE_LABEL}] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
+echo "[${MODE_LABEL}] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID})"
 wait -n "${GATEWAY_PID}" "${AGENT_PID}"

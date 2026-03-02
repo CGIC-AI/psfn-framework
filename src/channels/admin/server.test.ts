@@ -28,6 +28,7 @@ import type {
 } from './chat/index.js';
 import { classifyChannel } from '../../trust/policy.js';
 import { resetRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
+import { writeLastActiveSession } from '../../lifecycle/notifications.js';
 import type { ConfirmationQueueEntry, ConfirmationResolveParams } from '../../gateway/protocol.js';
 
 // ── Helpers ──
@@ -854,6 +855,32 @@ describe('AdminServer', () => {
       expect(payload.defaultSessionId).toBe('api:admin-user');
       expect(payload.defaultAuthorName).toBe('Primary Contact');
       expect(payload.defaultAuthorId).toBe('admin-user');
+    });
+
+    it('uses computed latest session when persisted metadata is stale', async () => {
+      sessionStore.append({
+        channelId: 'api:admin-user',
+        role: 'user',
+        content: 'older api session',
+        timestamp: 1_000,
+      });
+      sessionStore.append({
+        channelId: '123456789012345678',
+        role: 'user',
+        content: 'newer discord session',
+        timestamp: 2_000,
+      });
+      writeLastActiveSession(tempDir, {
+        sessionId: 'api:admin-user',
+        channelType: 'api',
+        timestamp: 1_000,
+      });
+
+      const res = await request(port, 'GET', '/api/chat/bootstrap');
+      expect(res.status).toBe(200);
+      const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
+      expect(payload.defaultSessionId).toBe('123456789012345678');
+      expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('123456789012345678');
     });
 
     it('uses request origin host for wildcard API bind host', async () => {

@@ -118,6 +118,26 @@ npm run dev          # Hot-reload via tsx
 
 **Gateway + Agent split (production):**
 ```bash
+npm run split
+```
+
+This launcher starts gateway + agent together, sets `PSFN_RUNTIME_MODE=split`, and keeps `fs.read` scoped to workspace plus explicit allowlist paths.
+
+**YOLO split startup (broader read scope):**
+```bash
+npm run yolo
+```
+
+`npm run yolo` runs the same split runtime but with `PSFN_RUNTIME_MODE=yolo`. In YOLO mode, gateway policy allows `fs.read` across the full local codebase root while preserving existing `fs.write` restrictions to workspace scope.
+
+To return to normal split behavior:
+```bash
+npm run split
+# or set PSFN_RUNTIME_MODE=split
+```
+
+**Manual split (two terminals):**
+```bash
 # Terminal 1 — Gateway (holds secrets, loads .env via dotenv)
 npm run gateway
 
@@ -189,6 +209,8 @@ LITELLM_BASE_URL=http://localhost:4000/v1 # Enable in .env
 DISCORD_HEARTBEAT_CHANNEL=...        # Lifecycle/heartbeat notification destination
 DISCORD_BACKFILL_ON_STARTUP=true     # Process recent backlog after reconnect
 EXTRACTION_DRAIN_TIMEOUT_MS=10000    # Graceful shutdown wait for extraction drain
+PSFN_RUNTIME_MODE=split              # split default; yolo enables full-codebase fs.read
+LIFECYCLE_RESTART_COMMAND=npm run split
 ALLOW_HTTP_FETCH=false               # Gateway web fetch policy
 FETCH_DOMAIN_ALLOWLIST=example.com   # Optional gateway fetch domain restriction
 MODULE_REGISTRY_TRUSTED_READ=false   # Optional explicit allow for module registry reads

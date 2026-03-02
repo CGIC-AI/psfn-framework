@@ -20,6 +20,7 @@ import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
 import {
   resolveAllowedReadPathsFromEnv,
+  resolveFullCodebaseReadRootFromEnv,
   resolveTrustedModuleRegistryPathFromEnv,
 } from './gateway/policy-config.js';
 import { MODULE_REGISTRY_PATH } from './security/policy-constants.js';
@@ -223,8 +224,20 @@ async function main(): Promise<void> {
 
   // Ensure gateway socket directory exists
   mkdirSync(dirname(socketPath), { recursive: true });
+  const runtimeMode = process.env.PSFN_RUNTIME_MODE?.trim().toLowerCase() || 'gateway';
+  const codebaseRoot = resolve('.');
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
   mkdirSync(workspaceRoot, { recursive: true });
+  const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(process.env, codebaseRoot);
+  if (fullCodebaseReadRoot) {
+    log.warn('YOLO runtime mode active: full-codebase fs.read is enabled', {
+      runtimeMode,
+      fullCodebaseReadRoot,
+      workspaceWriteScope: workspaceRoot,
+    });
+  } else {
+    log.info('Gateway runtime mode', { runtimeMode });
+  }
 
   // Ensure the module registry file exists regardless of policy — prevents
   // ENOENT when the REPL sandbox or ModuleLoader reads it for the first time.
@@ -271,6 +284,7 @@ async function main(): Promise<void> {
     policyConfig: {
       workspacePath: workspaceRoot,
       allowedReadPaths: resolveAllowedReadPathsFromEnv(process.env, workspaceRoot),
+      ...(fullCodebaseReadRoot ? { fullCodebaseReadRoot } : {}),
       urlPolicy: {
         allowHttp: config.webFetchAllowHttp === true,
         ...(config.webFetchDomainAllowlist && config.webFetchDomainAllowlist.length > 0

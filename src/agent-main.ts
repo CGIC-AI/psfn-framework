@@ -52,7 +52,11 @@ import {
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
-import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
+import {
+  DiscordLifecycleNotifier,
+  restoreLastActiveSession,
+  writeLastActiveSession,
+} from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
@@ -291,6 +295,18 @@ async function main(): Promise<void> {
   });
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
+  const restoredLatestSession = restoreLastActiveSession({
+    dataDir: config.dataDir,
+    computedLatestSession: sessionStore.getLatestSessionByTimestamp(),
+    isSessionValid: (sessionId) => sessionStore.count(sessionId) > 0,
+  });
+  if (restoredLatestSession) {
+    log.info('Restored latest session metadata', {
+      sessionId: restoredLatestSession.sessionId,
+      channelType: restoredLatestSession.channelType ?? 'unknown',
+      timestamp: restoredLatestSession.timestamp,
+    });
+  }
 
   const memoryStore = new MemoryStore(db, gateway.dims);
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
@@ -768,7 +784,13 @@ async function main(): Promise<void> {
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
 
   gateway.onHandleMessage(async (message: SubstrateMessage) => {
-    writeLastActiveChannel(config.dataDir, message.channelId);
+    writeLastActiveSession(config.dataDir, {
+      sessionId: message.channelId,
+      channelType: message.channelType,
+      timestamp: message.timestamp instanceof Date
+        ? message.timestamp.getTime()
+        : Date.now(),
+    });
     log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
     const routingDecision = evaluateWyomingDelegation(message, config);
     if (routingDecision.isWyoming) {
@@ -854,7 +876,13 @@ async function main(): Promise<void> {
     }
 
     // Track last-active channel for lifecycle notifications
-    writeLastActiveChannel(config.dataDir, message.channelId);
+    writeLastActiveSession(config.dataDir, {
+      sessionId: message.channelId,
+      channelType: message.channelType,
+      timestamp: message.timestamp instanceof Date
+        ? message.timestamp.getTime()
+        : Date.now(),
+    });
 
     log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
 

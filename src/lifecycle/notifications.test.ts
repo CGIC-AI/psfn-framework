@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   DiscordLifecycleNotifier,
+  readLastActiveSession,
+  resolveLastActiveSession,
+  restoreLastActiveSession,
   readLastActiveChannel,
+  writeLastActiveSession,
   writeLastActiveChannel,
 } from './notifications.js';
 import type { MessageSender } from './notifications.js';
@@ -81,6 +85,25 @@ describe('DiscordLifecycleNotifier', () => {
       await notifier.notifyPreRestart();
 
       expect(sentMessages[0].channelId).toBe('active-channel');
+    });
+
+    it('falls back to heartbeat when latest active session is non-discord', async () => {
+      writeLastActiveSession(tempDir, {
+        sessionId: 'api:admin-user',
+        channelType: 'api',
+        timestamp: Date.now(),
+      });
+
+      const notifier = new DiscordLifecycleNotifier({
+        sender: mockSender,
+        heartbeatChannelId: 'hb-channel',
+        dataDir: tempDir,
+        startTime: Date.now(),
+      });
+
+      await notifier.notifyPreRestart();
+
+      expect(sentMessages[0].channelId).toBe('hb-channel');
     });
 
     it('does not throw when sender fails', async () => {
@@ -216,5 +239,61 @@ describe('Last-active channel tracking', () => {
     const data = JSON.parse(raw);
     expect(data.timestamp).toBeGreaterThan(0);
     expect(data.channelId).toBe('timestamped-channel');
+  });
+
+  it('reads and writes last-active session metadata', () => {
+    writeLastActiveSession(tempDir, {
+      sessionId: '123456789012345678',
+      channelType: 'discord',
+      timestamp: 1234,
+    });
+    const session = readLastActiveSession(tempDir);
+    expect(session).toEqual({
+      sessionId: '123456789012345678',
+      channelId: '123456789012345678',
+      channelType: 'discord',
+      timestamp: 1234,
+    });
+  });
+
+  it('prefers persisted latest session when valid and newer than computed latest', () => {
+    writeLastActiveSession(tempDir, {
+      sessionId: 'api:persisted',
+      channelType: 'api',
+      timestamp: 3000,
+    });
+
+    const resolved = resolveLastActiveSession({
+      dataDir: tempDir,
+      computedLatestSession: {
+        sessionId: 'api:computed',
+        channelType: 'api',
+        timestamp: 2000,
+      },
+      isSessionValid: () => true,
+    });
+
+    expect(resolved?.sessionId).toBe('api:persisted');
+  });
+
+  it('falls back to computed latest session when persisted metadata is stale', () => {
+    writeLastActiveSession(tempDir, {
+      sessionId: 'api:stale',
+      channelType: 'api',
+      timestamp: 1000,
+    });
+
+    const resolved = restoreLastActiveSession({
+      dataDir: tempDir,
+      computedLatestSession: {
+        sessionId: 'api:latest',
+        channelType: 'api',
+        timestamp: 2000,
+      },
+      isSessionValid: () => true,
+    });
+
+    expect(resolved?.sessionId).toBe('api:latest');
+    expect(readLastActiveSession(tempDir)?.sessionId).toBe('api:latest');
   });
 });

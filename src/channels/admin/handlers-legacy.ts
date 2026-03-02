@@ -123,6 +123,7 @@ import {
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
 } from '../../session/compaction-audit.js';
+import { restoreLastActiveSession } from '../../lifecycle/notifications.js';
 import { parseJsonBody } from '../http/primitives.js';
 import type {
   IdentityIntakeChatChunk,
@@ -396,6 +397,7 @@ export class LegacyAdminHandlers {
       apiHost: deps.apiHost,
       apiPort: deps.apiPort,
       config: this.config,
+      resolveGlobalDefaultSessionId: () => this.resolveGlobalDefaultSessionId(),
     });
     this.valuesJournal = new ValuesJournalStore(join(this.config.dataDir, 'values.jsonl'));
 
@@ -2320,6 +2322,15 @@ export class LegacyAdminHandlers {
   chatBootstrap(requestOrigin?: string): AdminChatBootstrapResponse {
     const settingsApiBaseUrl = this.resolveChatApiBaseUrlFromSettings();
     return this.chatBootstrapService.buildBootstrap({ requestOrigin, settingsApiBaseUrl });
+  }
+
+  private resolveGlobalDefaultSessionId(): string | null {
+    const restored = restoreLastActiveSession({
+      dataDir: this.config.dataDir,
+      computedLatestSession: this.sessionStore.getLatestSessionByTimestamp(),
+      isSessionValid: (sessionId) => this.sessionStore.count(sessionId) > 0,
+    });
+    return restored?.sessionId ?? null;
   }
 
   chatModelRoomBootstrap(requestOrigin?: string): AdminModelRoomBootstrapResponse {

@@ -209,6 +209,39 @@ describe('evaluatePolicy', () => {
     )).toBe('NEEDS_APPROVAL');
   });
 
+  it('allows fs.read outside workspace when full codebase root is configured', () => {
+    const yoloConfig: PolicyConfig = {
+      ...policyConfig,
+      fullCodebaseReadRoot: '/app',
+    };
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: '/app/src/gateway-main.ts' } },
+      yoloConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('still requires approval for fs.read outside configured full codebase root', () => {
+    const yoloConfig: PolicyConfig = {
+      ...policyConfig,
+      fullCodebaseReadRoot: '/app',
+    };
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: '/etc/passwd' } },
+      yoloConfig,
+    )).toBe('NEEDS_APPROVAL');
+  });
+
+  it('keeps fs.write outside workspace blocked in yolo mode', () => {
+    const yoloConfig: PolicyConfig = {
+      ...policyConfig,
+      fullCodebaseReadRoot: '/app',
+    };
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: '/app/src/gateway-main.ts' } },
+      yoloConfig,
+    )).toBe('NEEDS_APPROVAL');
+  });
+
   it('blocks path traversal attempts', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: '/app/workspace/../../../etc/passwd' } },

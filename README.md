@@ -20,7 +20,10 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
 - **Pluggable Embeddings** — Provider-agnostic embedding via `EMBEDDING_PROVIDER`: Ollama (local HTTP), transformers.js (in-process ONNX, zero network overhead), or any OpenAI-compatible API
 - **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
-- **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots
+- **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots (including vision)
+- **Capabilities System** — Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
+- **Skills System** — Self-authored capability documents (CRUD via agent tools, auto-filtered by eligibility)
+- **Values Journal** — Agent-authored principles with persistence
 
 ### Privacy & Trust (Honne/Tatemae)
 - **4-tier trust model** — primary, trusted, regular, public
@@ -35,6 +38,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Git Tools** — 6 agent-accessible tools for self-modifying source code with path allowlists, protected branch blocking, audit trail
 - **RLM+REPL Sandbox** — Code execution via `think` tool with sub-LM calls, memory queries, variable persistence
 - **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks
+- **Obsidian Vault** — 4 agent tools (`vault_write`, `vault_read`, `vault_search`, `vault_daily`) for reading and writing Obsidian notes, with auto-publish for heartbeat reflections
 
 ### Channels
 - **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
@@ -197,6 +201,16 @@ ECHO_TTS_PRESET=Independent-High-Speaker-CFG
 
 Expose your own WebSocket endpoint in gateway/runtime code, then attach accepted connections to `WebSocketVoiceServer` (`src/voice/transports/websocket/server.ts`). Inbound payloads must use `wire: "voice-wire-v1"` and one of: `session.start`, `audio.chunk`, `interrupt`, `session.end`, `ping`.
 
+**Obsidian Vault (optional):**
+```bash
+OBSIDIAN_VAULT_NAME=YourVault    # Enables vault_* tools
+OBSIDIAN_CLI_PATH=obsidian       # Path to Obsidian CLI binary
+OBSIDIAN_AUTO_PUBLISH=false      # Auto-publish reflections to vault
+OBSIDIAN_TIMEOUT_MS=10000        # CLI command timeout
+```
+
+Requires Obsidian desktop app running with CLI enabled (Settings > General > Enable CLI). In gateway mode, add `obsidian` to `SHELL_EXEC_ALLOWLIST`.
+
 **LiteLLM proxy (credential isolation):**
 ```bash
 npm run proxy:up                          # Start proxy
@@ -295,7 +309,7 @@ Heartbeat/reflection runtime wiring uses `wireHeartbeatRuntime` in `src/bootstra
 - **Settings**: JSON — live-mutable, atomic writes
 - **Audit log**: JSONL — every git operation logged
 
-### Agent Tools (38)
+### Agent Tools (55)
 
 Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`.
 
@@ -303,13 +317,17 @@ Your companion has access to these tools during conversation. Core tools are alw
 |----------|-------|
 | **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
 | **Contacts** | `contact_set_trust`, `contact_note`, `contact_set_channel_privacy`, `contact_link_identity`, `contact_lookup`, `contact_list` |
-| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `identity_diff`, `identity_changelog` |
+| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `identity_diff`, `identity_changelog`, `character_card_update` |
 | **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
+| **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
+| **Values** | `values_list`, `values_add`, `values_update` |
+| **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
 | **Shards** | `spawn_shard` (parallel sub-agents) |
-| **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `schedule_task` |
+| **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
+| **Sessions** | `session_new`, `session_list`, `session_resume` |
+| **Settings** | `settings_get`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap` |
 | **Lifecycle** | `self_restart`, `self_rebuild`, `notify_operator` |
-| **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
 | **Meta** | `load_tools` (hot-swap core/extended tool sets) |
 
 ## Project Structure
@@ -335,6 +353,7 @@ src/
   repl/                     # RLM+REPL sandbox (think tool)
   scheduler/                # Cron, heartbeat, one-shot, maintenance
   voice/                    # Voice pipeline (STT, TTS connectors, WebSocket transport)
+  vault/                    # Obsidian vault integration (ops, tools, auto-publish, wiring)
   skills/                   # Self-authored skill store (CRUD, execution)
   capabilities/             # Runtime capability declarations
   values/                   # Values journal (agent-authored principles)
@@ -348,6 +367,7 @@ src/
     wyoming/                # Wyoming protocol adapter
 
 admin-ui/                   # Svelte 5 SPA — admin UI at /garden
+companion_docs/             # Generic companion-facing documentation
 docker/                     # Agent container configuration
 proxy/                      # LiteLLM proxy configuration
 data/                       # Runtime data (gitignored)
@@ -385,6 +405,7 @@ npm run e2e          # End-to-end integration tests
 If you're building a companion on this framework, check out:
 
 - **`psfn_instructions.md`** — A welcome guide written *for* your companion, explaining their home and capabilities in warm, accessible language. You can customize it for your companion's personality.
+- **`companion_docs/`** — Generic welcome documentation and a verification checklist for onboarding new companions.
 - **`CLAUDE.md`** — Technical reference for AI development assistants working on the codebase.
 - **`docs/PSFN_SUBSTRATE_SPEC.md`** — Full architecture specification.
 

@@ -115,6 +115,33 @@ describe('SessionManager', () => {
     expect(store.listChannels().some(channel => channel.channelId === reflectionChannel)).toBe(false);
   });
 
+  it('resolves startup metadata from latest session when reusing latest', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('discord:chan-1', 'hello', 'u1', 'User');
+
+    const resolved = mgr.resolveStartupSessionMetadata('reuse_latest_session');
+    expect(resolved).not.toBeNull();
+    expect(resolved?.sessionId).toBe('discord:chan-1');
+    expect(resolved?.channelType).toBe('discord');
+    expect(typeof resolved?.timestamp).toBe('number');
+  });
+
+  it('creates fresh startup metadata when restart behavior is new_session', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_701_234_567_890);
+    try {
+      const resolved = mgr.resolveStartupSessionMetadata('new_session');
+      expect(resolved).not.toBeNull();
+      expect(resolved?.channelType).toBe('api');
+      expect(resolved?.timestamp).toBe(1_701_234_567_890);
+      expect(resolved?.sessionId.startsWith('api:restart-')).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('loads verified session history without unverified tags', async () => {
     const config = makeConfig();
     const keyring = {

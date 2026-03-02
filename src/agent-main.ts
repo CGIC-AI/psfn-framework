@@ -54,7 +54,6 @@ import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
 import {
   DiscordLifecycleNotifier,
-  restoreLastActiveSession,
   writeLastActiveSession,
 } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
@@ -301,17 +300,23 @@ async function main(): Promise<void> {
   });
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
-  const restoredLatestSession = restoreLastActiveSession({
-    dataDir: config.dataDir,
-    computedLatestSession: sessionStore.getLatestSessionByTimestamp(),
-    isSessionValid: (sessionId) => sessionStore.count(sessionId) > 0,
-  });
-  if (restoredLatestSession) {
-    log.info('Restored latest session metadata', {
-      sessionId: restoredLatestSession.sessionId,
-      channelType: restoredLatestSession.channelType ?? 'unknown',
-      timestamp: restoredLatestSession.timestamp,
-    });
+  const restartBehavior = config.sessionRestartBehavior ?? 'reuse_latest_session';
+  const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
+  if (startupSession) {
+    writeLastActiveSession(config.dataDir, startupSession);
+    if (restartBehavior === 'new_session') {
+      log.info('Initialized fresh startup session metadata', {
+        sessionId: startupSession.sessionId,
+        channelType: startupSession.channelType ?? 'unknown',
+        timestamp: startupSession.timestamp,
+      });
+    } else {
+      log.info('Restored latest session metadata', {
+        sessionId: startupSession.sessionId,
+        channelType: startupSession.channelType ?? 'unknown',
+        timestamp: startupSession.timestamp,
+      });
+    }
   }
 
   const memoryStore = new MemoryStore(db, gateway.dims, {

@@ -76,6 +76,7 @@ import {
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
+import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createSafeguardAuditTrail,
@@ -443,6 +444,11 @@ async function main(): Promise<void> {
     const now = Date.now();
     await eventBus.emit('schedule.heartbeat', { timestamp: now, taskCount: scheduler.taskCount });
   });
+  const postTurnActions = wirePostTurnActionRuntime({
+    eventBus,
+    scheduler,
+    agentLoop,
+  });
   scheduler.start();
   log.info(`Memory system enabled (${gateway.dims}d embeddings via gateway)`);
 
@@ -793,6 +799,7 @@ async function main(): Promise<void> {
     {
       llmProvider: gateway,
       memoryWriter,
+      postTurnActions,
     },
   );
 

@@ -75,6 +75,7 @@ import {
   resolveBroadcastVisibilityScope,
 } from '../broadcast/safety.js';
 import { runDeliberation } from '../llm/deliberation.js';
+import { runWithRequestContext } from '../llm/request-context.js';
 import {
   normalizeDeferredToolHandoffIntent,
   normalizeToolNameList,
@@ -1521,14 +1522,17 @@ export class SubstrateAgent {
 
       // Build context (with auto-compaction + cross-channel continuity)
       const contextStageStart = Date.now();
-      const context = await this.sessionManager.buildContext(
-        message.channelId,
-        fullPrompt,
-        memoryContextBlock,
-        this.llmClient,
-        authorContext.canonicalContactKey ?? message.authorId,
-        channelMeta,
-        authorContext.continuityFallbackKeys,
+      const context = await runWithRequestContext(
+        this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.context'),
+        async () => this.sessionManager.buildContext(
+          message.channelId,
+          fullPrompt,
+          memoryContextBlock,
+          this.llmClient,
+          authorContext.canonicalContactKey ?? message.authorId,
+          channelMeta,
+          authorContext.continuityFallbackKeys,
+        ),
       );
       this.emitTurnStage(message, startTime, 'context', turnCallType, {
         durationMs: Date.now() - contextStageStart,
@@ -1601,15 +1605,21 @@ export class SubstrateAgent {
           turnId: message.id,
           requestId: message.id,
           callType: turnCallType,
+          originType: turnCallType,
+          originStage: 'agent.turn.prompt',
+          purpose: 'agent.turn.prompt',
         });
         this.activeTurnCorrelation = turnCorrelationBase;
         try {
           // Run the agent — pi-agent-core handles tool loop internally
-          await this.agent.prompt({
-            role: 'user',
-            content: message.content,
-            timestamp: Date.now(),
-          } satisfies UserMessage);
+          await runWithRequestContext(
+            this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
+            async () => this.agent.prompt({
+              role: 'user',
+              content: message.content,
+              timestamp: Date.now(),
+            } satisfies UserMessage),
+          );
         } finally {
           unsubscribeFirstToken();
           this.bridge.clearChannel();
@@ -1870,6 +1880,8 @@ export class SubstrateAgent {
           requestId: message.id,
           channelId: message.channelId,
           callType: this.resolveTurnCallType(message, this.resolveTaskKind(message)),
+          originType: this.resolveTurnCallType(message, this.resolveTaskKind(message)),
+          originStage: 'agent.moa.turn',
           purpose: 'agent.moa.turn',
         },
         ...(settings.referenceModels.length > 0 ? { referenceModels: settings.referenceModels } : {}),
@@ -1979,6 +1991,8 @@ export class SubstrateAgent {
       channelId: message.channelId,
       callType,
       purpose: 'agent.turn',
+      originType: callType,
+      originStage: 'agent.turn',
     };
   }
 
@@ -1989,6 +2003,7 @@ export class SubstrateAgent {
     return {
       ...correlation,
       purpose,
+      originStage: purpose,
     };
   }
 

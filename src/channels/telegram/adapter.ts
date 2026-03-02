@@ -33,6 +33,9 @@ const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 512 * 1_024;
 const THREAD_DELIMITER = '/thread/';
 const MAX_CONTEXT_MAP_SIZE = 2_000;
 const MAX_POLL_BACKOFF_MS = 30_000;
+const LONG_RUNNING_STATUS_INITIAL_DELAY_MS = 12_000;
+const LONG_RUNNING_STATUS_POLL_MS = 5_000;
+const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
 
 type FetchLike = typeof fetch;
 type TelegramChatType = 'private' | 'group' | 'supergroup' | 'channel';
@@ -137,6 +140,21 @@ interface OutboundTarget {
   replyToMessageId?: number;
 }
 
+interface LongRunningToolState {
+  channelId: string;
+  toolName: string;
+  startedAt: number;
+  timer: ReturnType<typeof setInterval>;
+  lastStatusAt: number;
+  statusSent: boolean;
+  inFlight: boolean;
+}
+
+interface TelegramStatusMessageRef {
+  chatId: string;
+  messageId: number;
+}
+
 type TelegramMediaMethod = 'sendPhoto' | 'sendDocument' | 'sendVoice';
 type TelegramMediaField = 'photo' | 'document' | 'voice';
 
@@ -231,6 +249,9 @@ export class TelegramAdapter implements ChannelAdapter {
   private commandRouter?: TelegramCommandRouter;
   private consecutivePollFailures = 0;
   private attemptedPollingConflictRecovery = false;
+  private statusUnsubscribers: Array<() => void> = [];
+  private longRunningTools = new Map<string, LongRunningToolState>();
+  private longRunningStatusMessages = new Map<string, TelegramStatusMessageRef>();
 
   constructor(
     telegramConfig: TelegramChannelConfig,
@@ -295,13 +316,16 @@ export class TelegramAdapter implements ChannelAdapter {
         return parseTelegramCommand(message.content) ? 'telegram_command' : undefined;
       },
     };
+    this.registerStatusListeners();
   }
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
   }
 
-  async init(): Promise<void> {}
+  async init(): Promise<void> {
+    this.registerStatusListeners();
+  }
 
   async start(): Promise<void> {
     if (!this.telegram.enabled) {
@@ -335,6 +359,10 @@ export class TelegramAdapter implements ChannelAdapter {
     this.running = false;
     this.consecutivePollFailures = 0;
     this.attemptedPollingConflictRecovery = false;
+    for (const unsub of this.statusUnsubscribers) unsub();
+    this.statusUnsubscribers = [];
+    this.clearAllLongRunningTools();
+    await this.clearAllLongRunningStatusMessages();
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -721,6 +749,8 @@ export class TelegramAdapter implements ChannelAdapter {
       this.lockStartedAt.delete(channelId);
       this.lockContention.delete(channelId);
       this.processingChannels.delete(channelId);
+      this.clearLongRunningToolsForChannel(channelId);
+      await this.clearLongRunningStatus(channelId);
       const pending = this.pendingByChannel.take(channelId);
       if (pending) {
         queueMicrotask(() => {
@@ -758,6 +788,172 @@ export class TelegramAdapter implements ChannelAdapter {
       processingChannels: this.processingChannels.size,
       ...(details.superseded !== undefined ? { superseded: details.superseded } : {}),
     });
+  }
+
+  private registerStatusListeners(): void {
+    if (this.statusUnsubscribers.length > 0) return;
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.tool.start', async ({
+      channelId,
+      toolCallId,
+      toolName,
+    }) => {
+      if (!this.processingChannels.has(channelId)) return;
+      if (!this.isLongRunningTool(toolName)) return;
+      this.startLongRunningToolStatus(toolCallId, channelId, toolName);
+    }));
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.tool.end', async ({
+      channelId,
+      toolCallId,
+      toolName,
+    }) => {
+      if (!this.isLongRunningTool(toolName)) return;
+      await this.stopLongRunningToolStatus(toolCallId, channelId);
+    }));
+  }
+
+  private isLongRunningTool(toolName: string): boolean {
+    return toolName === 'think';
+  }
+
+  private buildLongRunningStatusText(toolName: string, elapsedMs: number): string {
+    const elapsedSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
+    if (toolName === 'think') {
+      return `Still thinking deeply (${elapsedSeconds}s elapsed)...`;
+    }
+    return `Still running ${toolName} (${elapsedSeconds}s elapsed)...`;
+  }
+
+  private startLongRunningToolStatus(toolCallId: string, channelId: string, toolName: string): void {
+    if (this.longRunningTools.has(toolCallId)) return;
+    const state: LongRunningToolState = {
+      channelId,
+      toolName,
+      startedAt: Date.now(),
+      timer: setInterval(() => {
+        this.tickLongRunningToolStatus(toolCallId).catch(() => undefined);
+      }, LONG_RUNNING_STATUS_POLL_MS),
+      lastStatusAt: 0,
+      statusSent: false,
+      inFlight: false,
+    };
+    this.longRunningTools.set(toolCallId, state);
+  }
+
+  private async tickLongRunningToolStatus(toolCallId: string): Promise<void> {
+    const state = this.longRunningTools.get(toolCallId);
+    if (!state) return;
+    if (state.inFlight) return;
+    if (!this.processingChannels.has(state.channelId)) return;
+
+    const now = Date.now();
+    const elapsedMs = now - state.startedAt;
+    if (!state.statusSent && elapsedMs < LONG_RUNNING_STATUS_INITIAL_DELAY_MS) {
+      return;
+    }
+    if (state.statusSent && (now - state.lastStatusAt) < LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS) {
+      return;
+    }
+
+    state.inFlight = true;
+    try {
+      await this.streaming.sendTyping(state.channelId).catch(() => undefined);
+      await this.setLongRunningStatus(
+        state.channelId,
+        this.buildLongRunningStatusText(state.toolName, elapsedMs),
+      );
+      state.statusSent = true;
+      state.lastStatusAt = now;
+    } finally {
+      state.inFlight = false;
+    }
+  }
+
+  private async stopLongRunningToolStatus(toolCallId: string, channelId: string): Promise<void> {
+    const state = this.longRunningTools.get(toolCallId);
+    if (state) {
+      clearInterval(state.timer);
+      this.longRunningTools.delete(toolCallId);
+    }
+    if (this.hasActiveLongRunningToolForChannel(channelId)) return;
+    await this.clearLongRunningStatus(channelId);
+  }
+
+  private hasActiveLongRunningToolForChannel(channelId: string): boolean {
+    for (const state of this.longRunningTools.values()) {
+      if (state.channelId === channelId) return true;
+    }
+    return false;
+  }
+
+  private clearLongRunningToolsForChannel(channelId: string): void {
+    for (const [toolCallId, state] of this.longRunningTools.entries()) {
+      if (state.channelId !== channelId) continue;
+      clearInterval(state.timer);
+      this.longRunningTools.delete(toolCallId);
+    }
+  }
+
+  private clearAllLongRunningTools(): void {
+    for (const state of this.longRunningTools.values()) {
+      clearInterval(state.timer);
+    }
+    this.longRunningTools.clear();
+  }
+
+  private async setLongRunningStatus(channelId: string, content: string): Promise<void> {
+    const existing = this.longRunningStatusMessages.get(channelId);
+    if (existing) {
+      try {
+        await this.callApi('editMessageText', {
+          chat_id: existing.chatId,
+          message_id: existing.messageId,
+          text: content,
+        });
+        return;
+      } catch {
+        this.longRunningStatusMessages.delete(channelId);
+      }
+    }
+
+    const parsed = this.parseChannelId(channelId);
+    if (!parsed) return;
+    try {
+      const sent = await this.callApi<TelegramSentMessage>('sendMessage', {
+        chat_id: parsed.chatId,
+        text: content,
+        ...(parsed.threadId ? { message_thread_id: Number(parsed.threadId) } : {}),
+      });
+      this.longRunningStatusMessages.set(channelId, {
+        chatId: parsed.chatId,
+        messageId: sent.message_id,
+      });
+    } catch {
+      // Ignore status send failures to avoid blocking primary response flow.
+    }
+  }
+
+  private async clearLongRunningStatus(channelId: string): Promise<void> {
+    const existing = this.longRunningStatusMessages.get(channelId);
+    if (!existing) return;
+    this.longRunningStatusMessages.delete(channelId);
+    await this.callApi('deleteMessage', {
+      chat_id: existing.chatId,
+      message_id: existing.messageId,
+    }).catch(() => undefined);
+  }
+
+  private async clearAllLongRunningStatusMessages(): Promise<void> {
+    const pending: Promise<unknown>[] = [];
+    for (const [channelId, ref] of this.longRunningStatusMessages.entries()) {
+      this.longRunningStatusMessages.delete(channelId);
+      pending.push(this.callApi('deleteMessage', {
+        chat_id: ref.chatId,
+        message_id: ref.messageId,
+      }).catch(() => undefined));
+    }
+    await Promise.allSettled(pending);
   }
 
   private isAllowed(user: TelegramUser): boolean {

@@ -168,4 +168,47 @@ describe('runDeliberation', () => {
     expect(result.rounds[0].voices).toHaveLength(1);
     expect(calls).toEqual(['reasoning']);
   });
+
+  it('propagates structured origin metadata across deliberation voice and aggregator calls', async () => {
+    const { provider, options } = scriptedProvider([
+      { purpose: 'reasoning', content: 'Voice one', model: 'model-a', inputTokens: 10, outputTokens: 10 },
+      { purpose: 'background', content: 'Voice two', model: 'model-b', inputTokens: 10, outputTokens: 10 },
+      { purpose: 'reasoning', content: 'Synthesis output', model: 'model-agg', inputTokens: 10, outputTokens: 10 },
+    ]);
+
+    await runDeliberation(provider, 'Origin metadata check', {
+      correlation: {
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        channelId: 'internal:heartbeat',
+        callType: 'scheduled',
+        originType: 'scheduled',
+        originStage: 'heartbeat.deliberation',
+        toolName: 'heartbeat_run_template',
+        toolCallId: 'tool-77',
+        purpose: 'heartbeat.deliberation',
+      },
+      caps: { maxRounds: 1, maxTotalTokens: 10_000, maxWallTimeMs: 20_000 },
+    });
+
+    expect(options[0]).toMatchObject({
+      correlation: {
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        channelId: 'internal:heartbeat',
+        callType: 'scheduled',
+        originType: 'scheduled',
+        originStage: 'deliberation.voice.reasoning',
+        toolName: 'heartbeat_run_template',
+        toolCallId: 'tool-77',
+        purpose: 'deliberation.voice.reasoning',
+      },
+    });
+    expect(options[2]).toMatchObject({
+      correlation: {
+        originStage: 'deliberation.aggregator',
+        toolCallId: 'tool-77',
+      },
+    });
+  });
 });

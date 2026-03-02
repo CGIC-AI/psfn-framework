@@ -74,6 +74,7 @@ export class REPLSandbox {
       llmProvider: this.deps.llmProvider,
       budgetRef: this.budgetRef,
       pushEvidence,
+      requestMetadata: this.deps.requestMetadata,
     });
 
     const memory = createMemoryCapabilities({

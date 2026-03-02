@@ -10,7 +10,6 @@ import type {
   CorrelationMetadata,
   LLMContext,
   LLMResponse,
-  ObservabilityCallType,
   StreamCallbacks,
   SubstrateConfig,
   ToolCall,
@@ -28,6 +27,11 @@ import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
 import { resolveRegisteredModel } from './models.js';
+import {
+  type ResolvedCorrelationMetadata,
+  inferCallType as inferCorrelationCallType,
+  resolveCorrelationMetadata,
+} from './correlation.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -47,15 +51,6 @@ export interface LLMCompletionOptions {
   disableRetry?: boolean;
   modelHint?: LLMCompletionModelHint;
   correlation?: Partial<CorrelationMetadata>;
-}
-
-interface ResolvedCorrelationMetadata {
-  turnId?: string;
-  requestId: string;
-  channelId?: string;
-  callType: ObservabilityCallType;
-  toolName?: string;
-  purpose: string;
 }
 
 export class SensitiveImportRoutePolicyError extends Error {
@@ -504,28 +499,7 @@ export class LLMClient {
     optionCorrelation: Partial<CorrelationMetadata> | undefined,
     purpose: CompletionPurpose | 'chat',
   ): ResolvedCorrelationMetadata {
-    const merged: Partial<CorrelationMetadata> = {
-      ...(contextCorrelation ?? {}),
-      ...(optionCorrelation ?? {}),
-    };
-
-    const turnId = normalizeCorrelationValue(merged.turnId);
-    const channelId = normalizeCorrelationValue(merged.channelId);
-    const requestId = normalizeCorrelationValue(merged.requestId) ?? turnId ?? 'unknown';
-    const toolName = normalizeCorrelationValue(merged.toolName);
-    const resolvedPurpose = normalizeCorrelationValue(merged.purpose) ?? String(purpose);
-    const callType = isObservabilityCallType(merged.callType)
-      ? merged.callType
-      : inferCallType(purpose, channelId);
-
-    return {
-      ...(turnId ? { turnId } : {}),
-      requestId,
-      ...(channelId ? { channelId } : {}),
-      callType,
-      ...(toolName ? { toolName } : {}),
-      purpose: resolvedPurpose,
-    };
+    return resolveCorrelationMetadata(contextCorrelation, optionCorrelation, purpose);
   }
 
   private toRoutingPurpose(purpose: CompletionPurpose): RoutingPurpose {
@@ -602,48 +576,11 @@ export function normalizeContent(content: string): string {
   return result;
 }
 
-const OBSERVABILITY_CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-]);
-
-function isObservabilityCallType(value: unknown): value is ObservabilityCallType {
-  return typeof value === 'string' && OBSERVABILITY_CALL_TYPES.has(value as ObservabilityCallType);
-}
-
-function normalizeCorrelationValue(value: string | undefined): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 export function inferCallType(
   purpose: CompletionPurpose | 'chat',
   channelId?: string,
-): ObservabilityCallType {
-  const normalizedChannelId = normalizeCorrelationValue(channelId)?.toLowerCase();
-  if (normalizedChannelId?.startsWith('internal:')) {
-    return 'scheduled';
-  }
-
-  switch (purpose) {
-    case 'chat':
-      return 'chat';
-    case 'reasoning':
-      return 'tool';
-    case 'extraction':
-      return 'memory';
-    case 'summary':
-      return 'summary';
-    case 'background':
-    case 'import_processing':
-    default:
-      return 'background';
-  }
+) {
+  return inferCorrelationCallType(purpose, channelId);
 }
 
 export { toPiTools } from './conversion.js';

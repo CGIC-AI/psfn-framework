@@ -23,7 +23,7 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
       maxTokens: Type.Optional(Type.Number({ description: 'Override max tokens (default 100000)' })),
     }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: { task: string; maxIterations?: number; maxTokens?: number },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
@@ -41,7 +41,16 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
           };
         }
 
-        const result = await runRLMLoop(params.task, effectiveDeps);
+        const result = await runRLMLoop(
+          params.task,
+          effectiveDeps,
+          {
+            toolName: 'think',
+            toolCallId,
+            originType: 'tool',
+            originStage: 'repl.think.tool',
+          },
+        );
 
         if (effectiveDeps.eventBus) {
           await effectiveDeps.eventBus.emit('agent.think.trace', {

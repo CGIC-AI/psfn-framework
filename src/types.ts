@@ -46,6 +46,15 @@ export interface MessagePromptOverride {
   systemPrompt?: string;
 }
 
+export type ResponseStyle = 'concise' | 'expressive';
+
+export interface ResponseStyleOverrides {
+  exact?: Record<string, ResponseStyle>;
+  prefix?: Record<string, ResponseStyle>;
+  channelType?: Record<string, ResponseStyle>;
+  defaultStyle?: ResponseStyle;
+}
+
 export type ObservabilityCallType =
   | 'chat'
   | 'tool'
@@ -75,6 +84,7 @@ export interface MessageRoutingMetadata {
   broadcast?: BroadcastRoutingMetadata;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
+  responseStyle?: ResponseStyle;
 }
 
 export interface SubstrateMessage {
@@ -306,6 +316,7 @@ export interface SubstrateConfig {
   modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
+  responseStyleOverrides?: ResponseStyleOverrides;
   runtimeHooks?: RuntimeConfigHooks;
   promotedExtendedTools?: string[];
   capabilityTier?: CapabilityTier;
@@ -452,6 +463,7 @@ export function loadConfig(): SubstrateConfig {
   const retryMaxAttempts = parseInt(process.env.RETRY_MAX_ATTEMPTS ?? '3', 10);
   const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
   const openRouterProviderOrder = parseStringListEnv(process.env.OPENROUTER_PROVIDER_ORDER);
+  const responseStyleOverrides = parseResponseStyleOverridesEnv(process.env.RESPONSE_STYLE_OVERRIDES);
   const importProcessingRouteMode = parseImportProcessingRouteMode(
     process.env.IMPORT_PROCESSING_ROUTE_MODE,
     'background',
@@ -603,6 +615,7 @@ export function loadConfig(): SubstrateConfig {
     retryMaxAttempts,
     retryBaseDelayMs,
     ...(openRouterProviderOrder.length > 0 ? { openRouterProviderOrder } : {}),
+    ...(responseStyleOverrides ? { responseStyleOverrides } : {}),
     importProcessingRouteMode,
     importProcessingStrictPolicy,
     ...(importProcessingLocalEndpointUrl ? { importProcessingLocalEndpointUrl } : {}),
@@ -768,6 +781,56 @@ function parseShardToolsetEnv(
     }
   }
   return result;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseResponseStyle(value: unknown): ResponseStyle | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'concise' || normalized === 'expressive') {
+    return normalized;
+  }
+  return undefined;
+}
+
+function parseResponseStyleMap(value: unknown): Record<string, ResponseStyle> | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const parsed: Record<string, ResponseStyle> = {};
+  for (const [rawKey, rawStyle] of Object.entries(value)) {
+    const key = rawKey.trim();
+    const style = parseResponseStyle(rawStyle);
+    if (!key || !style) continue;
+    parsed[key] = style;
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function parseResponseStyleOverridesEnv(value: string | undefined): ResponseStyleOverrides | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!isPlainRecord(parsed)) return undefined;
+    const exact = parseResponseStyleMap(parsed.exact);
+    const prefix = parseResponseStyleMap(parsed.prefix);
+    const channelType = parseResponseStyleMap(parsed.channelType);
+    const defaultStyle = parseResponseStyle(parsed.defaultStyle);
+
+    if (!exact && !prefix && !channelType && !defaultStyle) return undefined;
+    return {
+      ...(exact ? { exact } : {}),
+      ...(prefix ? { prefix } : {}),
+      ...(channelType ? { channelType } : {}),
+      ...(defaultStyle ? { defaultStyle } : {}),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseStringListEnv(value: string | undefined): string[] {

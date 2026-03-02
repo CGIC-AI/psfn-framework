@@ -90,10 +90,9 @@ OLLAMA_URL=http://localhost:11434
 
 # Transformers embedding provider
 # EMBEDDING_PROVIDER=transformers
-# TRANSFORMERS_EMBEDDING_URL=http://localhost:8080/embed
-# TRANSFORMERS_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-# TRANSFORMERS_EMBEDDING_DIMS=384
-# TRANSFORMERS_API_KEY=
+# TRANSFORMERS_MODEL=Xenova/bge-large-en-v1.5
+# TRANSFORMERS_EMBEDDING_DIMS=1024
+# TRANSFORMERS_CACHE_DIR=./data/models/transformers
 
 # OpenAI-compatible API embedding provider
 # EMBEDDING_PROVIDER=api

@@ -48,6 +48,8 @@ const DISCORD_LISTEN_WINDOW_DEFAULT_MS = 120_000;
 const DISCORD_LISTEN_WINDOW_MIN_MS = 10_000;
 const DISCORD_LISTEN_WINDOW_MAX_MS = 600_000;
 const DISCORD_TRIGGER_OPT_OUT_PREFIX = '!i';
+const DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE = 4;
+const DISCORD_MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const LONG_RUNNING_STATUS_INITIAL_DELAY_MS = 12_000;
 const LONG_RUNNING_STATUS_POLL_MS = 5_000;
 const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
@@ -464,6 +466,7 @@ export class DiscordAdapter implements ChannelAdapter {
     isDirectMessage: boolean,
     runtimeBotId?: string,
   ): SubstrateMessage {
+    const attachments = this.extractAttachments(msg);
     return {
       id: msg.id,
       channelId: msg.channelId,
@@ -472,8 +475,46 @@ export class DiscordAdapter implements ChannelAdapter {
       authorId: msg.author.id,
       authorName: msg.author.displayName ?? msg.author.username,
       content: this.sanitizeMessageContent(msg.content, runtimeBotId),
+      ...(attachments.length > 0 ? { attachments } : {}),
       timestamp: msg.createdAt,
     };
+  }
+
+  private extractAttachments(msg: Message): SubstrateMessage['attachments'] {
+    const rawAttachments = msg.attachments?.values();
+    if (!rawAttachments) return [];
+
+    const attachments: NonNullable<SubstrateMessage['attachments']> = [];
+    for (const raw of rawAttachments) {
+      if (attachments.length >= DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) break;
+
+      const contentType = raw.contentType?.trim().toLowerCase();
+      if (!contentType || !contentType.startsWith('image/')) continue;
+
+      const size = typeof raw.size === 'number' && Number.isFinite(raw.size)
+        ? Math.max(0, Math.trunc(raw.size))
+        : 0;
+      if (size > DISCORD_MAX_IMAGE_ATTACHMENT_BYTES) {
+        log.debug('Skipping oversized Discord image attachment', {
+          channelId: msg.channelId,
+          messageId: msg.id,
+          name: raw.name ?? raw.id,
+          size,
+        });
+        continue;
+      }
+
+      const url = (raw.proxyURL ?? raw.url ?? '').trim();
+      if (!url) continue;
+
+      attachments.push({
+        url,
+        contentType,
+        name: raw.name ?? `attachment-${raw.id ?? attachments.length + 1}`,
+      });
+    }
+
+    return attachments;
   }
 
   private sanitizeMessageContent(content: string, runtimeBotId?: string): string {

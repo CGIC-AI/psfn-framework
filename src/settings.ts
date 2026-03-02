@@ -34,7 +34,7 @@ const SETTINGS_FILE = 'settings.json';
 const SETTINGS_SEED_FILE = 'settings.seed.json';
 const PRIMARY_MODEL_SLOT_KEY = 'primary';
 const EXTRACTION_MODEL_SLOT_KEY = 'extraction';
-const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'reasoning', 'longContext'];
+const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'reasoning', 'longContext', 'vision'];
 const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
   'background',
   'openrouter_zdr',
@@ -54,6 +54,7 @@ export const DEFAULT_MODEL_ROLE_ASSIGNMENTS: Readonly<ModelRoleAssignments> = {
   summary: PRIMARY_MODEL_SLOT_KEY,
   reasoning: PRIMARY_MODEL_SLOT_KEY,
   longContext: PRIMARY_MODEL_SLOT_KEY,
+  vision: PRIMARY_MODEL_SLOT_KEY,
   import_processing: EXTRACTION_MODEL_SLOT_KEY,
 };
 
@@ -893,6 +894,18 @@ export function normalizeEditableSettings(
     assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
   );
 
+  const visionSlot = resolvePurposeSlot(
+    catalog,
+    assignments,
+    'vision',
+    {
+      maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
+      contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
+      contextBudget: chatSlot?.contextBudget,
+    },
+    assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
+  );
+
   const nextRoster: Partial<Record<ModelPurpose, ModelSlot>> = {
     ...roster,
   };
@@ -900,6 +913,7 @@ export function normalizeEditableSettings(
   if (backgroundSlot) nextRoster.background = backgroundSlot;
   if (reasoningSlot) nextRoster.reasoning = reasoningSlot;
   if (longContextSlot) nextRoster.longContext = longContextSlot;
+  if (visionSlot) nextRoster.vision = visionSlot;
 
   if (chatSlot) {
     normalized.primaryModel = chatSlot.model;

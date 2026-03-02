@@ -12,10 +12,11 @@ import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
 import { createHash } from 'node:crypto';
-import type { AssistantMessage, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, ImageContent, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type {
+  Attachment,
   AgentResponse,
   CapabilityTier,
   CorrelationMetadata,
@@ -30,6 +31,7 @@ import type {
   SubstrateConfig,
   SubstrateMessage,
   TurnUsage,
+  ModelPurpose,
 } from '../types.js';
 import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
@@ -198,6 +200,13 @@ const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
 const SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS = 240;
 const SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS = 1_600;
 const PROMPT_HASH_LENGTH = 16;
+const VISION_ATTACHMENT_MAX_COUNT = 4;
+const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+const VISION_ATTACHMENT_FETCH_TIMEOUT_MS = 12_000;
+const DISCORD_VISION_ATTACHMENT_HOSTS = new Set([
+  'cdn.discordapp.com',
+  'media.discordapp.net',
+]);
 const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
   autoload: 1,
   extended_loaded: 2,
@@ -370,13 +379,26 @@ export class SubstrateAgent {
     });
   }
 
-  private getChatModelSignature(): string {
-    const chatSlot = this.config.modelRoster.chat;
-    const model = chatSlot?.model ?? this.config.primaryModel;
-    const provider = chatSlot?.provider ?? this.config.primaryProvider;
-    const maxTokens = chatSlot?.maxTokens ?? this.config.primaryMaxTokens;
-    const contextWindow = chatSlot?.contextWindow ?? this.config.defaultContextWindow;
-    return `${provider}::${model}::${maxTokens}::${contextWindow}`;
+  private getModelSignatureForPurpose(purpose: ModelPurpose): string {
+    const slot = this.config.modelRoster[purpose]
+      ?? (purpose !== 'chat' ? this.config.modelRoster.chat : undefined);
+    const model = slot?.model ?? this.config.primaryModel;
+    const provider = slot?.provider ?? this.config.primaryProvider;
+    const maxTokens = slot?.maxTokens ?? this.config.primaryMaxTokens;
+    const contextWindow = slot?.contextWindow ?? this.config.defaultContextWindow;
+    return `${purpose}::${provider}::${model}::${maxTokens}::${contextWindow}`;
+  }
+
+  private hasVisionAttachments(message?: SubstrateMessage): boolean {
+    if (!message?.attachments || message.attachments.length === 0) return false;
+    return message.attachments.some((attachment) => {
+      const contentType = attachment.contentType.trim().toLowerCase();
+      return contentType.startsWith('image/');
+    });
+  }
+
+  private resolveTurnModelPurpose(message?: SubstrateMessage): ModelPurpose {
+    return this.hasVisionAttachments(message) ? 'vision' : 'chat';
   }
 
   private normalizeTurnModelOverride(message?: SubstrateMessage): MessageModelOverride | null {
@@ -435,7 +457,10 @@ export class SubstrateAgent {
 
   private getTurnModelSignature(message?: SubstrateMessage): string {
     const override = this.normalizeTurnModelOverride(message);
-    if (!override) return this.getChatModelSignature();
+    if (!override) {
+      const purpose = this.resolveTurnModelPurpose(message);
+      return this.getModelSignatureForPurpose(purpose);
+    }
     return `override::${override.provider}::${override.model}::${override.maxTokens ?? ''}::${override.contextWindow ?? ''}`;
   }
 
@@ -444,6 +469,7 @@ export class SubstrateAgent {
     message?: SubstrateMessage,
   ): void {
     const override = this.normalizeTurnModelOverride(message);
+    const purpose = override ? null : this.resolveTurnModelPurpose(message);
     const nextSignature = this.getTurnModelSignature(message);
     if (this.modelResolved && this.modelSignature === nextSignature && this.agent.state.model) {
       return;
@@ -452,14 +478,15 @@ export class SubstrateAgent {
     try {
       const resolved = override
         ? resolveExplicitModel(override)
-        : resolveModel(this.config);
+        : resolveModel(this.config, purpose ?? 'chat');
       this.agent.setModel(resolved);
       this.modelResolved = true;
       this.modelSignature = nextSignature;
-      log.info('Resolved runtime chat model', {
+      log.info('Resolved runtime model', {
         reason,
         model: resolved.id,
         override: Boolean(override),
+        ...(purpose ? { purpose } : {}),
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -1346,6 +1373,113 @@ export class SubstrateAgent {
     };
   }
 
+  private async buildTurnUserContent(message: SubstrateMessage): Promise<UserMessage['content']> {
+    const imageBlocks = await this.resolveVisionImageContentBlocks(message);
+    if (imageBlocks.length === 0) return message.content;
+
+    return [
+      { type: 'text', text: message.content },
+      ...imageBlocks,
+    ];
+  }
+
+  private async resolveVisionImageContentBlocks(message: SubstrateMessage): Promise<ImageContent[]> {
+    const attachments = message.attachments ?? [];
+    if (attachments.length === 0) return [];
+
+    const imageAttachments = attachments
+      .filter((attachment) => {
+        const contentType = attachment.contentType.trim().toLowerCase();
+        return contentType.startsWith('image/');
+      })
+      .slice(0, VISION_ATTACHMENT_MAX_COUNT);
+    if (imageAttachments.length === 0) return [];
+
+    const resolved = await Promise.all(
+      imageAttachments.map(attachment => this.resolveVisionAttachmentContent(message, attachment)),
+    );
+    return resolved.filter((block): block is ImageContent => block !== null);
+  }
+
+  private async resolveVisionAttachmentContent(
+    message: SubstrateMessage,
+    attachment: Attachment,
+  ): Promise<ImageContent | null> {
+    if (message.channelType !== 'discord') {
+      return null;
+    }
+
+    let attachmentUrl: URL;
+    try {
+      attachmentUrl = new URL(attachment.url);
+    } catch {
+      return null;
+    }
+    if (attachmentUrl.protocol !== 'https:' || !this.isAllowedDiscordVisionAttachmentHost(attachmentUrl.hostname)) {
+      return null;
+    }
+
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), VISION_ATTACHMENT_FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(attachmentUrl.toString(), {
+        signal: abortController.signal,
+      });
+      if (!response.ok) {
+        log.debug('Skipping Discord image attachment due to fetch failure', {
+          channelId: message.channelId,
+          status: response.status,
+          url: attachmentUrl.toString(),
+        });
+        return null;
+      }
+
+      const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+      if (Number.isFinite(reportedLength) && reportedLength > VISION_ATTACHMENT_MAX_BYTES) {
+        log.debug('Skipping Discord image attachment over byte budget', {
+          channelId: message.channelId,
+          size: reportedLength,
+          url: attachmentUrl.toString(),
+        });
+        return null;
+      }
+
+      const responseMimeType = (response.headers.get('content-type') ?? attachment.contentType)
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      if (!responseMimeType.startsWith('image/')) {
+        return null;
+      }
+
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length === 0 || bytes.length > VISION_ATTACHMENT_MAX_BYTES) {
+        return null;
+      }
+
+      return {
+        type: 'image',
+        data: bytes.toString('base64'),
+        mimeType: responseMimeType,
+      };
+    } catch (error) {
+      log.debug('Skipping Discord image attachment due to retrieval error', {
+        channelId: message.channelId,
+        url: attachmentUrl.toString(),
+        error: toErrorMessage(error),
+      });
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private isAllowedDiscordVisionAttachmentHost(hostname: string): boolean {
+    const normalized = hostname.trim().toLowerCase();
+    if (!normalized) return false;
+    return DISCORD_VISION_ATTACHMENT_HOSTS.has(normalized);
+  }
+
   // ── Steering + follow-up + lifecycle ──
 
   /** Whether the agent is currently processing a prompt */
@@ -1641,13 +1775,14 @@ export class SubstrateAgent {
           purpose: 'agent.turn.prompt',
         });
         this.activeTurnCorrelation = turnCorrelationBase;
+        const turnUserContent = await this.buildTurnUserContent(message);
         try {
           // Run the agent — pi-agent-core handles tool loop internally
           await runWithRequestContext(
             this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
             async () => this.agent.prompt({
               role: 'user',
-              content: message.content,
+              content: turnUserContent,
               timestamp: Date.now(),
             } satisfies UserMessage),
           );

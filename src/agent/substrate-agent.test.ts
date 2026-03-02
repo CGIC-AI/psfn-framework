@@ -834,6 +834,91 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('routes Discord image turns through vision model slot and forwards image blocks', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (name: string) => {
+          if (name === 'content-type') return 'image/png';
+          if (name === 'content-length') return '3';
+          return null;
+        },
+      },
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
+    }));
+    (globalThis as any).fetch = fetchMock;
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toEqual([
+        { type: 'text', text: 'Hello, Purrsephone!' },
+        { type: 'image', data: 'AQID', mimeType: 'image/png' },
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('routes Telegram image turns through vision model slot even without fetchable image URLs', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'telegram',
+        channelId: 'telegram:5635268079',
+        attachments: [{
+          url: 'telegram://file/abc123',
+          contentType: 'image/jpeg',
+          name: 'photo.jpg',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toBe('Hello, Purrsephone!');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
   it('routes normal response turns through MoA deliberation when enabled', async () => {
     const config = makeConfig({
       moaEnabled: true,

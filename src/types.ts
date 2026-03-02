@@ -239,7 +239,7 @@ export interface ModelCatalogEntry {
 
 export type ModelRoleAssignments = Record<string, string>;
 
-export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext';
+export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext' | 'vision';
 export type CompletionPurpose = 'background' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
 
@@ -430,6 +430,7 @@ export function loadConfig(): SubstrateConfig {
     summary: 'primary',
     reasoning: 'primary',
     longContext: 'primary',
+    vision: 'primary',
     import_processing: 'extraction',
   };
   const memoryExtractionMinImportance = parseNumberEnv(

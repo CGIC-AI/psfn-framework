@@ -8,6 +8,8 @@ import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { readLastActiveSession } from '../lifecycle/notifications.js';
 import { wireHeartbeatRuntime, wireSessionToolsRuntime } from './parity.js';
+import { wirePostTurnActionRuntime } from './post-turn-actions.js';
+import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../agent/deferred-tool-handoff.js';
 
 describe('wireSessionToolsRuntime', () => {
   let tempDir: string;
@@ -358,12 +360,16 @@ describe('wireHeartbeatRuntime', () => {
       tempDir,
       undefined,
       {
+        eventBus,
         postTurnActions,
       },
     );
 
-    expect(postTurnActions.registerHandler).toHaveBeenCalledTimes(1);
-    expect(postTurnActions.registerHandler.mock.calls[0]?.[0]).toBe('heartbeat.run_template');
+    expect(postTurnActions.registerHandler).toHaveBeenCalledTimes(2);
+    const heartbeatRegisterCall = postTurnActions.registerHandler.mock.calls.find(
+      (call) => call[0] === 'heartbeat.run_template',
+    );
+    expect(heartbeatRegisterCall).toBeDefined();
     expect(registerPostTurnActionInferer).toHaveBeenCalledTimes(1);
     const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
       context: {
@@ -414,7 +420,7 @@ describe('wireHeartbeatRuntime', () => {
     const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:'));
     expect(deferredTask).toBeUndefined();
 
-    const deferredHandler = postTurnActions.registerHandler.mock.calls[0]?.[1] as (
+    const deferredHandler = heartbeatRegisterCall?.[1] as (
       action: {
         id: string;
         kind: string;
@@ -437,6 +443,368 @@ describe('wireHeartbeatRuntime', () => {
 
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
     expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+  });
+
+  it('infers deferred tool-handoff actions from late load_tools discovery payloads', () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+      activateExtendedTools: vi.fn().mockReturnValue({
+        requestedTools: ['extended_probe_tool'],
+        activatedTools: ['extended_probe_tool'],
+        missingTools: [],
+      }),
+      registerPostTurnActionInferer,
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const postTurnActions = {
+      registerHandler: vi.fn().mockReturnValue(() => {}),
+      listQueued: vi.fn().mockReturnValue([]),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+      undefined,
+      {
+        eventBus,
+        postTurnActions,
+      },
+    );
+
+    const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
+      context: {
+        message: {
+          id: string;
+          channelId: string;
+          channelType: 'terminal';
+          authorId: string;
+          authorName: string;
+          content: string;
+          timestamp: Date;
+        };
+        response: { content: string };
+        turnMessages: unknown[];
+      },
+    ) => Array<{
+      kind: string;
+      payload?: {
+        toolNames?: string[];
+        intendedAction?: string;
+        turn?: {
+          turnId?: string;
+          requestId?: string;
+          channelId?: string;
+          channelType?: string;
+          callType?: string;
+        };
+      };
+      dedupeKey?: string;
+      maxRetries?: number;
+    }>;
+    const inferredActions = inferer({
+      message: {
+        id: 'msg-1',
+        channelId: 'test-channel',
+        channelType: 'terminal',
+        authorId: 'user-1',
+        authorName: 'Test User',
+        content: 'hello',
+        timestamp: new Date(),
+      },
+      response: { content: 'ok' },
+      turnMessages: [{
+        role: 'toolResult',
+        toolName: 'load_tools',
+        result: {
+          details: {
+            deferredToolHandoff: {
+              toolNames: ['extended_probe_tool'],
+              intendedAction: 'Use extended_probe_tool to collect diagnostics.',
+              maxRetries: 1,
+            },
+          },
+        },
+      }],
+    });
+
+    expect(inferredActions).toHaveLength(1);
+    expect(inferredActions[0]).toMatchObject({
+      kind: DEFERRED_TOOL_HANDOFF_ACTION_KIND,
+      maxRetries: 1,
+      payload: {
+        toolNames: ['extended_probe_tool'],
+        intendedAction: 'Use extended_probe_tool to collect diagnostics.',
+        turn: {
+          turnId: 'msg-1',
+          requestId: 'msg-1',
+          channelId: 'test-channel',
+          channelType: 'terminal',
+          callType: 'chat',
+        },
+      },
+    });
+    expect(inferredActions[0]?.dedupeKey).toContain(`${DEFERRED_TOOL_HANDOFF_ACTION_KIND}:msg-1:`);
+  });
+
+  it('continues deferred tool handoff after idle and emits queued/activated/executed telemetry', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'Deferred continuation output' }),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+      activateExtendedTools: vi.fn().mockReturnValue({
+        requestedTools: ['extended_probe_tool'],
+        activatedTools: ['extended_probe_tool'],
+        missingTools: [],
+      }),
+      registerPostTurnActionInferer,
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const postTurnActions = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop,
+      intervalMs: 1,
+    });
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+      undefined,
+      {
+        eventBus,
+        postTurnActions,
+      },
+    );
+
+    const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
+      context: {
+        message: {
+          id: string;
+          channelId: string;
+          channelType: 'terminal';
+          authorId: string;
+          authorName: string;
+          content: string;
+          timestamp: Date;
+        };
+        response: { content: string };
+        turnMessages: unknown[];
+      },
+    ) => Array<any>;
+    const message = {
+      id: 'msg-load-tools-1',
+      channelId: 'test-channel',
+      channelType: 'terminal' as const,
+      authorId: 'user-1',
+      authorName: 'Test User',
+      content: 'hello',
+      timestamp: new Date(),
+    };
+    const inferredActions = inferer({
+      message,
+      response: { content: 'ok' },
+      turnMessages: [{
+        role: 'toolResult',
+        toolName: 'load_tools',
+        result: {
+          details: {
+            deferredToolHandoff: {
+              toolNames: ['extended_probe_tool'],
+              intendedAction: 'Use extended_probe_tool to collect diagnostics.',
+              maxRetries: 1,
+            },
+          },
+        },
+      }],
+    });
+
+    const phases: string[] = [];
+    eventBus.on('agent.tool_handoff.telemetry', ({ phase }) => {
+      phases.push(phase);
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message,
+      response: {
+        content: 'ok',
+        channelId: message.channelId,
+        metadata: {
+          model: 'mock-model',
+          inputTokens: 1,
+          outputTokens: 1,
+          durationMs: 1,
+        },
+      },
+      actions: inferredActions,
+    });
+
+    await scheduler.tick();
+
+    expect(agentLoop.waitForIdle).toHaveBeenCalled();
+    expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
+    expect(agentLoop.activateExtendedTools).toHaveBeenCalledWith(['extended_probe_tool']);
+    expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith('test-channel', 'Deferred continuation output');
+    expect(phases).toEqual(expect.arrayContaining(['queued', 'activated', 'executed']));
+  });
+
+  it('bounds deferred tool-handoff retries and emits failed telemetry once exhausted', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const target = {
+        registerTool: vi.fn(),
+      };
+      const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
+      const agentLoop = {
+        handleMessage: vi.fn().mockRejectedValue(new Error('continuation failed')),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        activateExtendedTools: vi.fn().mockReturnValue({
+          requestedTools: ['extended_probe_tool'],
+          activatedTools: ['extended_probe_tool'],
+          missingTools: [],
+        }),
+        registerPostTurnActionInferer,
+      };
+      const sender = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      const postTurnActions = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop,
+        intervalMs: 1,
+        baseRetryDelayMs: 10,
+        maxRetryDelayMs: 10,
+      });
+
+      wireHeartbeatRuntime(
+        target,
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+        undefined,
+        {
+          eventBus,
+          postTurnActions,
+        },
+      );
+
+      const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
+        context: {
+          message: {
+            id: string;
+            channelId: string;
+            channelType: 'terminal';
+            authorId: string;
+            authorName: string;
+            content: string;
+            timestamp: Date;
+          };
+          response: { content: string };
+          turnMessages: unknown[];
+        },
+      ) => Array<any>;
+      const message = {
+        id: 'msg-load-tools-fail-1',
+        channelId: 'test-channel',
+        channelType: 'terminal' as const,
+        authorId: 'user-1',
+        authorName: 'Test User',
+        content: 'hello',
+        timestamp: new Date(),
+      };
+      const inferredActions = inferer({
+        message,
+        response: { content: 'ok' },
+        turnMessages: [{
+          role: 'toolResult',
+          toolName: 'load_tools',
+          result: {
+            details: {
+              deferredToolHandoff: {
+                toolNames: ['extended_probe_tool'],
+                intendedAction: 'Use extended_probe_tool to collect diagnostics.',
+                maxRetries: 1,
+              },
+            },
+          },
+        }],
+      });
+
+      const phases: string[] = [];
+      eventBus.on('agent.tool_handoff.telemetry', ({ phase }) => {
+        phases.push(phase);
+      });
+
+      nowSpy.mockReturnValue(1_700_000_000_101);
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message,
+        response: {
+          content: 'ok',
+          channelId: message.channelId,
+          metadata: {
+            model: 'mock-model',
+            inputTokens: 1,
+            outputTokens: 1,
+            durationMs: 1,
+          },
+        },
+        actions: inferredActions,
+      });
+
+      await scheduler.tick();
+      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+      expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(1_700_000_000_150);
+      await scheduler.tick();
+      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(1_700_000_000_250);
+      await scheduler.tick();
+      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
+      expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
+      expect(sender.send).not.toHaveBeenCalled();
+      expect(phases).toEqual(expect.arrayContaining(['queued', 'activated', 'failed']));
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('defers scheduled template runs when the agent is busy and executes after idle', async () => {

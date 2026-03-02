@@ -697,6 +697,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.config.dataDir,
       heartbeatChannelId,
       {
+        eventBus: this.eventBus,
         llmProvider: this.llmClient,
         memoryWriter,
         postTurnActions,

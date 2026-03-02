@@ -8,7 +8,7 @@
     listModels,
     refreshModels,
   } from '$lib/api/endpoints/settings';
-  import type { AdminSettingsData, DiscoveredModel } from '$lib/types';
+  import type { AdminSettingsData, ConfigUpdateResult, DiscoveredModel } from '$lib/types';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -220,7 +220,9 @@
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
   let capabilitiesJson = $state('');
+  let settingsJson = $state('');
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
+  let validationErrorsByField = $state<Record<string, string[]>>({});
 
   // ── Collapsible sections ──
   let openSections = $state(new Set<string>(['models']));
@@ -373,6 +375,46 @@
     { key: 'trust-policy', label: 'trust-policy.json' },
     { key: 'capabilities', label: 'capabilities.json' },
   ] as const;
+
+  function fieldErrors(field: string): string[] {
+    return validationErrorsByField[field] ?? [];
+  }
+
+  function hasFieldErrors(field: string): boolean {
+    return fieldErrors(field).length > 0;
+  }
+
+  function applyValidationErrors(result: ConfigUpdateResult): number {
+    const next: Record<string, string[]> = {};
+    for (const entry of result.validationErrors ?? []) {
+      const field = entry.field?.trim();
+      const message = entry.message?.trim();
+      if (!field || !message) continue;
+      const existing = next[field] ?? [];
+      if (!existing.includes(message)) {
+        existing.push(message);
+      }
+      next[field] = existing;
+    }
+    validationErrorsByField = next;
+
+    const invalidFields = new Set(Object.keys(next).filter((field) => field !== '$root'));
+    if (invalidFields.size > 0) {
+      const nextOpenSections = new Set(openSections);
+      for (const section of SECTIONS) {
+        if (section.keys.some((key) => invalidFields.has(key))) {
+          nextOpenSections.add(section.id);
+        }
+      }
+      const categorizedKeys = new Set(SECTIONS.flatMap((section) => section.keys));
+      if (Array.from(invalidFields).some((field) => !categorizedKeys.has(field))) {
+        nextOpenSections.add('other');
+      }
+      openSections = nextOpenSections;
+    }
+
+    return invalidFields.size;
+  }
 
   // ── Source attribution ──
   type SettingSource = 'default' | 'settings.json' | 'env var';
@@ -791,10 +833,14 @@
     try {
       const catalogPayload = buildCatalogPayload();
       const result = await updateSettings(collectSimplePayload(catalogPayload));
+      const invalidFieldCount = applyValidationErrors(result);
       flash(result.ok, result.message || 'Settings saved');
       if (result.ok) {
         data = await getSettings();
         populateSimpleFields(data.config as Record<string, unknown>);
+        settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
+      } else if (invalidFieldCount > 0) {
+        mode = 'advanced';
       }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
@@ -808,10 +854,49 @@
     saving = true;
     try {
       const result = await updateSettings(data.config as Record<string, unknown>);
+      const invalidFieldCount = applyValidationErrors(result);
       flash(result.ok, result.message || 'Settings saved');
-      if (result.ok) { data = await getSettings(); }
+      if (result.ok) {
+        data = await getSettings();
+        populateSimpleFields(data.config as Record<string, unknown>);
+        settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
+      } else if (invalidFieldCount > 0) {
+        mode = 'advanced';
+      }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function saveRawSettings() {
+    saving = true;
+    try {
+      const parsed = JSON.parse(settingsJson);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        applyValidationErrors({
+          ok: false,
+          message: 'settings.json must be a JSON object',
+          validationErrors: [{ field: '$root', message: 'settings.json must be a JSON object', code: 'invalid_payload' }],
+        });
+        flashRaw('settings', false, 'settings.json must be a JSON object');
+        return;
+      }
+
+      const result = await updateSettings(parsed as Record<string, unknown>);
+      applyValidationErrors(result);
+      if (!result.ok) {
+        flashRaw('settings', false, result.message || 'Failed to save settings.json');
+        return;
+      }
+
+      flashRaw('settings', true, result.message || 'settings.json saved');
+      data = await getSettings();
+      populateSimpleFields(data.config as Record<string, unknown>);
+      settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
+    } catch (e) {
+      flashRaw('settings', false, e instanceof Error ? e.message : 'Failed to save settings.json');
     } finally {
       saving = false;
     }
@@ -823,6 +908,7 @@
       const json = getRawJson(key);
       JSON.parse(json);
       await saveSubConfig(key, json);
+      applyValidationErrors({ ok: true, message: '' });
       flashRaw(key, true, `${label} saved`);
     } catch (e) {
       flashRaw(key, false, e instanceof Error ? e.message : `Failed to save ${label}`);
@@ -855,6 +941,7 @@
       data = settingsData;
       discoveredModels = models;
       populateSimpleFields(data.config as Record<string, unknown>);
+      settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
       const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([
         getSubConfig('models').catch(() => '{}'),
@@ -2057,6 +2144,13 @@
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
                     {/if}
                   </div>
+                  {#if hasFieldErrors(key)}
+                    <div class="sm:pl-60 space-y-1">
+                      {#each fieldErrors(key) as fieldError}
+                        <p class="text-sm text-wilt-600">{fieldError}</p>
+                      {/each}
+                    </div>
+                  {/if}
                 {/each}
               </div>
             {/if}
@@ -2133,6 +2227,13 @@
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
                     {/if}
                   </div>
+                  {#if hasFieldErrors(key)}
+                    <div class="sm:pl-60 space-y-1">
+                      {#each fieldErrors(key) as fieldError}
+                        <p class="text-sm text-wilt-600">{fieldError}</p>
+                      {/each}
+                    </div>
+                  {/if}
                 {/each}
               </div>
             {/if}
@@ -2163,6 +2264,46 @@
           </button>
         </div>
       {/if}
+
+      <div class="card-garden overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-bark-300">
+          <h3 class="text-sm font-serif font-semibold text-shadow-800">settings.json (full runtime object)</h3>
+          <div class="flex items-center gap-3">
+            {#if rawSaveStatus['settings']}
+              <span class="text-sm font-medium {rawSaveStatus['settings'].ok ? 'text-moss-600' : 'text-wilt-600'}">
+                {rawSaveStatus['settings'].msg}
+              </span>
+            {/if}
+            <button
+              onclick={saveRawSettings}
+              disabled={saving}
+              class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium
+                     hover:bg-gold-700 disabled:opacity-50 transition-colors"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+        <textarea
+          bind:value={settingsJson}
+          rows="18"
+          class="w-full font-mono text-sm text-shadow-800 bg-white p-4
+                 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
+                 resize-y border-0"
+          spellcheck="false"
+        ></textarea>
+        {#if Object.keys(validationErrorsByField).length > 0}
+          <div class="px-5 pb-4 border-t border-bark-300 space-y-1">
+            {#each Object.entries(validationErrorsByField) as [field, messages]}
+              {#each messages as message}
+                <p class="text-sm text-wilt-600">
+                  <span class="font-mono">{field}</span>: {message}
+                </p>
+              {/each}
+            {/each}
+          </div>
+        {/if}
+      </div>
 
       {#each RAW_EDITORS as editor}
         {@const status = rawSaveStatus[editor.key]}

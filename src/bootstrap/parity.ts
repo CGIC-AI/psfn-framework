@@ -11,7 +11,8 @@ import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { createSettingsGetTool } from '../settings-tools.js';
-import { createSessionNewTool } from '../tools/session.js';
+import type { SessionManager } from '../session/manager.js';
+import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -239,26 +240,23 @@ export function wireSettingsRuntime(
   target.registerTool(createSettingsGetTool(config), 'extended');
 }
 
-interface SessionRuntimeManager {
-  appendSystemNote(channelId: string, note: string): void;
-}
-
-export function wireSessionRuntime(
+export function wireSessionToolsRuntime(
   target: ToolRegistrarTarget,
-  options: {
-    dataDir: string;
-    sessionManager: SessionRuntimeManager;
-  },
+  sessionManager: SessionManager,
+  dataDir: string,
 ): void {
   target.registerTool(createSessionNewTool({
-    dataDir: options.dataDir,
+    dataDir,
+    setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
     seedSession: (sessionId) => {
-      options.sessionManager.appendSystemNote(
+      sessionManager.appendSystemNote(
         sessionId,
         'Session initialized via session_new.',
       );
     },
   }), 'extended');
+  target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'extended');
+  target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
 }
 
 /**

@@ -142,6 +142,24 @@ describe('SessionManager', () => {
     }
   });
 
+  it('routes API session operations through active context overrides', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordAssistantMessage('api:resume-target', 'older context');
+    mgr.setActiveContextSession('api:resume-target');
+
+    mgr.recordUserMessage('api:transient-request', 'continued user turn', 'u1', 'User');
+    mgr.recordAssistantMessage('api:transient-request', 'continued assistant turn');
+
+    expect(store.count('api:transient-request')).toBe(0);
+    expect(store.count('api:resume-target')).toBe(3);
+    expect(store.getLastEntry('api:resume-target')?.content).toBe('continued assistant turn');
+
+    const context = await mgr.buildContext('api:transient-request', 'System', '');
+    expect(context.messages.some(message => message.content.includes('continued user turn'))).toBe(true);
+    expect(context.messages.some(message => message.content.includes('continued assistant turn'))).toBe(true);
+  });
+
   it('loads verified session history without unverified tags', async () => {
     const config = makeConfig();
     const keyring = {

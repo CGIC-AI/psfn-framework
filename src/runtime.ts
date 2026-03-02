@@ -38,6 +38,7 @@ import {
   createEmbeddingDimensionMismatchWarning,
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
+  type EmbeddingDimensionValidationResult,
 } from './backup/startup-checks.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parseOptionalPositiveIntEnv } from './utils/env.js';
@@ -147,6 +148,14 @@ export function buildRuntimeChannelsConfigOverrides(
   return {
     telegram: telegramOverride,
   };
+}
+
+export function createEmbeddingDimensionMismatchFatalMessage(
+  result: EmbeddingDimensionValidationResult,
+): string | null {
+  const mismatchWarning = createEmbeddingDimensionMismatchWarning(result);
+  if (!mismatchWarning) return null;
+  return `${mismatchWarning.message}: configured=${mismatchWarning.configuredDims}, stored=${mismatchWarning.storedDims}. ${mismatchWarning.recommendation}`;
 }
 
 export class SubstrateRuntime implements Lifecycle {
@@ -398,15 +407,17 @@ export class SubstrateRuntime implements Lifecycle {
       this.db,
       embeddingProvider.dims,
     );
-    const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
+    const embeddingDimensionFatalMessage = createEmbeddingDimensionMismatchFatalMessage(
       embeddingDimensionCheck,
     );
-    if (embeddingDimensionWarning) {
-      log.warn(embeddingDimensionWarning.message, {
-        configuredDims: embeddingDimensionWarning.configuredDims,
-        storedDims: embeddingDimensionWarning.storedDims,
-        recommendation: embeddingDimensionWarning.recommendation,
+    if (embeddingDimensionFatalMessage) {
+      log.error('Fatal startup guard: embedding dimension mismatch', {
+        configuredDims: embeddingDimensionCheck.configuredDims,
+        storedDims: embeddingDimensionCheck.storedDims,
+        action: 'startup_aborted',
+        message: embeddingDimensionFatalMessage,
       });
+      throw new Error(embeddingDimensionFatalMessage);
     }
 
     // Agent loop

@@ -441,7 +441,6 @@ export class MemoryWriter {
       5,
     );
 
-    let didSupersede = false;
     const sameTypeBroader = broader.filter(b => b.type === type);
     const sameContactBroader = contactId
       ? sameTypeBroader.filter(b => b.contactId === contactId)
@@ -485,15 +484,8 @@ export class MemoryWriter {
       text: text.slice(0, 60),
     });
 
-    for (const old of sameContactBroader) {
-      if (confidence > old.confidence) {
-        this.memoryStore.updateMemory(old.id, {
-          supersededBy: uuidv4(),
-        });
-        didSupersede = true;
-        log.debug('Superseded memory', { oldId: old.id, text: text.slice(0, 60) });
-      }
-    }
+    const supersededMemories = sameContactBroader.filter(old => confidence > old.confidence);
+    const didSupersede = supersededMemories.length > 0;
 
     // 3. Insert new memory
     const now = Date.now();
@@ -517,7 +509,16 @@ export class MemoryWriter {
       contactId,
     };
 
-    this.memoryStore.insertMemory(memory, embedding);
+    this.memoryStore.runInTransaction(() => {
+      for (const old of supersededMemories) {
+        this.memoryStore.updateMemory(old.id, { supersededBy: memory.id });
+      }
+      this.memoryStore.insertMemory(memory, embedding);
+    });
+
+    for (const old of supersededMemories) {
+      log.debug('Superseded memory', { oldId: old.id, replacementId: memory.id, text: text.slice(0, 60) });
+    }
     log.debug('Created memory', { id: memory.id, type, text: text.slice(0, 60) });
 
     return {
@@ -574,7 +575,6 @@ export class MemoryWriter {
       5,
     );
 
-    let didSupersede = false;
     const sameType = similar.filter(s => (
       s.type === type && (
         !contactId
@@ -624,11 +624,8 @@ export class MemoryWriter {
       text: text.slice(0, 60),
     });
 
-    for (const old of sameType) {
-      this.memoryStore.updateMemory(old.id, { supersededBy: uuidv4() });
-      didSupersede = true;
-      log.debug('Upsert superseded memory', { oldId: old.id, text: text.slice(0, 60) });
-    }
+    const supersededMemories = [...sameType];
+    const didSupersede = supersededMemories.length > 0;
 
     // Always insert the new memory
     const now = Date.now();
@@ -652,7 +649,15 @@ export class MemoryWriter {
       contactId,
     };
 
-    this.memoryStore.insertMemory(memory, embedding);
+    this.memoryStore.runInTransaction(() => {
+      for (const old of supersededMemories) {
+        this.memoryStore.updateMemory(old.id, { supersededBy: memory.id });
+      }
+      this.memoryStore.insertMemory(memory, embedding);
+    });
+    for (const old of supersededMemories) {
+      log.debug('Upsert superseded memory', { oldId: old.id, replacementId: memory.id, text: text.slice(0, 60) });
+    }
     log.debug('Upsert created memory', { id: memory.id, type, superseded: didSupersede, text: text.slice(0, 60) });
 
     return {

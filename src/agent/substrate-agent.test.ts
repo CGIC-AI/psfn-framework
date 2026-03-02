@@ -173,6 +173,19 @@ function makeScriptedMoaProvider(steps: ScriptedCompletionStep[]): {
   };
 }
 
+function makeExtendedProbeTool(name: string): any {
+  return {
+    name,
+    label: name,
+    description: `${name} test probe`,
+    parameters: {} as any,
+    execute: vi.fn(async () => ({
+      role: 'tool',
+      content: [{ type: 'text', text: 'ok' }],
+    })),
+  };
+}
+
 // ── Tests ──
 
 describe('SubstrateAgent construction', () => {
@@ -1183,6 +1196,132 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(setToolNamesByCall.length).toBeGreaterThanOrEqual(2);
     expect(setToolNamesByCall[0]).toContain('extended_probe_tool');
     expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
+  });
+
+  it('autoloads bounded dev tools before prompt in deterministic candidate order', async () => {
+    const config = makeConfig({ capabilityTier: 'autonomous' });
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-autoload-order',
+      channelType: 'terminal',
+      content: 'Please inspect repo diff and patch the bug',
+    }));
+
+    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    const toolNames = configuredTools.map(tool => tool.name);
+    expect(toolNames).toContain('repo_status');
+    expect(toolNames).toContain('repo_diff');
+    expect(toolNames).toContain('repo_apply_patch');
+    expect(toolNames).not.toContain('repo_commit');
+
+    const statusIndex = toolNames.indexOf('repo_status');
+    const diffIndex = toolNames.indexOf('repo_diff');
+    const patchIndex = toolNames.indexOf('repo_apply_patch');
+    expect(statusIndex).toBeGreaterThanOrEqual(0);
+    expect(diffIndex).toBeGreaterThan(statusIndex);
+    expect(patchIndex).toBeGreaterThan(diffIndex);
+  });
+
+  it('skips capability-denied autoload candidates and emits skip telemetry', async () => {
+    const config = makeConfig({ capabilityTier: 'nursery' });
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
+
+    const autoloadSummaries: any[] = [];
+    const autoloadSkips: any[] = [];
+    (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
+    (eventBus as any).on('agent.tools.autoload.skipped', (payload: any) => { autoloadSkips.push(payload); });
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-autoload-denied',
+      channelType: 'terminal',
+      content: 'repo diff this branch and apply patch',
+    }));
+
+    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    const toolNames = configuredTools.map(tool => tool.name);
+    expect(toolNames).toContain('repo_status');
+    expect(toolNames).toContain('repo_diff');
+    expect(toolNames).not.toContain('repo_apply_patch');
+
+    const summary = autoloadSummaries.at(-1);
+    expect(summary?.intent).toBe('dev');
+    expect(summary?.skippedDenied).toEqual([
+      {
+        toolName: 'repo_apply_patch',
+        missingTokens: ['git.write'],
+      },
+    ]);
+
+    expect(autoloadSkips).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: 'capability_denied',
+          toolName: 'repo_apply_patch',
+        }),
+      ]),
+    );
+  });
+
+  it('falls back cleanly when autoload candidates are unavailable', async () => {
+    const config = makeConfig({ capabilityTier: 'autonomous' });
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+    agent.registerTool(makeExtendedProbeTool('prompt_layer_list'), 'extended');
+
+    const autoloadSummaries: any[] = [];
+    (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-autoload-fallback',
+      channelType: 'terminal',
+      content: 'Please check repo status for me',
+    }));
+
+    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    const toolNames = configuredTools.map(tool => tool.name);
+    expect(toolNames).toEqual(['load_tools']);
+
+    const summary = autoloadSummaries.at(-1);
+    expect(summary?.intent).toBe('dev');
+    expect(summary?.activated).toEqual([]);
+    expect(summary?.unavailable).toEqual(['repo_status', 'repo_diff', 'repo_apply_patch']);
   });
 
   it('deduplicates active tool registration when a promoted tool is also manually loaded', async () => {

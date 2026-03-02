@@ -4,6 +4,7 @@
     bulkDeleteMemories,
     bulkUpdateMemories,
     deleteMemory,
+    getMemoryDetail,
     getMemoryLinks,
     linkMemories,
     listMemories,
@@ -13,6 +14,7 @@
   import type {
     AdminBulkMutationResult,
     AdminMemoryContactSummary,
+    AdminMemoryDetailData,
     AdminMemoryLink,
     AdminMemoryListData,
     AdminMemorySearchResult,
@@ -32,10 +34,19 @@
   let actionOk = $state(true);
 
   let typeFilter = $state('');
+  let sensitivityFilter = $state('');
+  let startDateFilter = $state('');
+  let endDateFilter = $state('');
   let searchQuery = $state('');
   let searchActive = $state(false);
   let offset = $state(0);
-  let expandedId = $state<string | null>(null);
+
+  let detailModalId = $state<string | null>(null);
+  let detailModalData = $state<AdminMemoryDetailData | null>(null);
+  let detailModalLoading = $state(false);
+  let detailModalError = $state('');
+  let detailMemoryId = $derived(detailModalData?.memory.id ?? '');
+
   let supersedeConfirmId = $state<string | null>(null);
   let selectedIds = $state<string[]>([]);
   let bulkMemoryType = $state('');
@@ -81,6 +92,10 @@
     setTimeout(() => { actionMessage = ''; }, 4000);
   }
 
+  function hasInvalidDateRange(): boolean {
+    return Boolean(startDateFilter && endDateFilter && startDateFilter > endDateFilter);
+  }
+
   function isSelected(id: string): boolean {
     return selectedIds.includes(id);
   }
@@ -112,26 +127,47 @@
     selectVisible();
   }
 
+  function applyListFilters(): void {
+    if (hasInvalidDateRange()) {
+      flash(false, 'Start date must be before or equal to end date');
+      return;
+    }
+    offset = 0;
+    void loadMemories();
+  }
+
+  function clearListFilters(): void {
+    typeFilter = '';
+    sensitivityFilter = '';
+    startDateFilter = '';
+    endDateFilter = '';
+    offset = 0;
+    void loadMemories();
+  }
+
   async function loadMemories() {
     loading = true;
     error = '';
     searchActive = false;
     searchResults = null;
+
+    if (hasInvalidDateRange()) {
+      error = 'Start date must be before or equal to end date.';
+      loading = false;
+      return;
+    }
+
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
       data = await listMemories({
         type: typeFilter || undefined,
+        sensitivity: sensitivityFilter || undefined,
+        startDate: startDateFilter || undefined,
+        endDate: endDateFilter || undefined,
         limit: PAGE_SIZE,
         offset,
       });
-      clearTimeout(timeoutId);
     } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') {
-        error = 'Request timed out (10s). The server may be slow or unresponsive.';
-      } else {
-        error = e instanceof Error ? e.message : 'Failed to load memories';
-      }
+      error = e instanceof Error ? e.message : 'Failed to load memories';
     } finally {
       loading = false;
     }
@@ -155,11 +191,39 @@
     }
   }
 
+  function closeDetailModal(): void {
+    detailModalId = null;
+    detailModalData = null;
+    detailModalLoading = false;
+    detailModalError = '';
+    supersedeConfirmId = null;
+  }
+
+  async function openDetailModal(id: string): Promise<void> {
+    detailModalId = id;
+    detailModalData = null;
+    detailModalError = '';
+    detailModalLoading = true;
+    supersedeConfirmId = null;
+
+    try {
+      detailModalData = await getMemoryDetail(id);
+      await ensureLinksLoaded(id);
+    } catch (e) {
+      detailModalError = e instanceof Error ? e.message : 'Failed to load memory detail';
+    } finally {
+      detailModalLoading = false;
+    }
+  }
+
   async function handleSupersede(id: string) {
     try {
       await deleteMemory(id);
       supersedeConfirmId = null;
       selectedIds = selectedIds.filter(existing => existing !== id);
+      if (detailModalId === id) {
+        closeDetailModal();
+      }
       flash(true, 'Memory superseded successfully');
       await loadMemories();
     } catch (e) {
@@ -304,6 +368,15 @@
     });
   }
 
+  function saliencePercent(value: number | undefined): string {
+    const clamped = Math.max(0, Math.min(1, value ?? 0));
+    return (clamped * 100).toFixed(0);
+  }
+
+  function salienceBarStyle(value: number | undefined): string {
+    return `width: ${saliencePercent(value)}%`;
+  }
+
   // Backend uses `text`, old frontend used `content` -- handle both
   function memText(m: PurrMemory): string {
     return m.text ?? m.content ?? '';
@@ -357,11 +430,11 @@
   {/if}
 
   <!-- Filter bar -->
-  <div class="card-garden p-4">
-    <div class="flex flex-col sm:flex-row gap-3">
+  <div class="card-garden p-4 space-y-3">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
       <select
         bind:value={typeFilter}
-        onchange={() => { offset = 0; loadMemories(); }}
+        onchange={applyListFilters}
         class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
                focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
       >
@@ -371,40 +444,84 @@
         {/each}
       </select>
 
-      <div class="flex flex-1 gap-2">
-        <input
-          type="text"
-          bind:value={searchQuery}
-          placeholder="Search memories..."
-          onkeydown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-          class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
-                 placeholder:text-shadow-400 focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
-        />
+      <select
+        bind:value={sensitivityFilter}
+        onchange={applyListFilters}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
+               focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
+      >
+        <option value="">All Sensitivity</option>
+        {#each SENSITIVITY_LEVELS.filter(level => level) as level}
+          <option value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>
+        {/each}
+      </select>
+
+      <input
+        type="date"
+        bind:value={startDateFilter}
+        onchange={applyListFilters}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm
+               focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300"
+        title="Start date"
+      />
+
+      <input
+        type="date"
+        bind:value={endDateFilter}
+        onchange={applyListFilters}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm
+               focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300"
+        title="End date"
+      />
+
+      <button
+        onclick={clearListFilters}
+        class="px-3 py-2 rounded-lg border border-bark-300 text-shadow-700 text-sm font-medium
+               hover:bg-bark-200 transition-colors"
+      >
+        Reset Filters
+      </button>
+    </div>
+
+    {#if hasInvalidDateRange()}
+      <p class="text-sm text-wilt-600">
+        Start date must be before or equal to end date.
+      </p>
+    {/if}
+
+    <div class="flex flex-col sm:flex-row gap-2">
+      <input
+        type="text"
+        bind:value={searchQuery}
+        placeholder="Search memories..."
+        onkeydown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+        class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
+               placeholder:text-shadow-400 focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
+      />
+      <button
+        onclick={handleSearch}
+        class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium
+               hover:bg-gold-700 transition-colors"
+      >
+        Search
+      </button>
+      {#if searchActive}
         <button
-          onclick={handleSearch}
-          class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium
-                 hover:bg-gold-700 transition-colors"
+          onclick={() => { searchQuery = ''; searchActive = false; searchResults = null; loadMemories(); }}
+          class="px-3 py-2 rounded-lg border border-bark-300 text-shadow-700 text-sm
+                 hover:bg-bark-200 transition-colors"
         >
-          Search
+          Clear
         </button>
-        {#if searchActive}
-          <button
-            onclick={() => { searchQuery = ''; searchActive = false; searchResults = null; loadMemories(); }}
-            class="px-3 py-2 rounded-lg border border-bark-300 text-shadow-700 text-sm
-                   hover:bg-bark-200 transition-colors"
-          >
-            Clear
-          </button>
-        {/if}
-      </div>
+      {/if}
     </div>
 
     {#if searchActive && searchResults}
-      <p class="text-sm text-shadow-700 mt-2">
+      <p class="text-sm text-shadow-700 mt-1">
         Found {searchResults.results?.length ?? 0} results for "{searchResults.query}"
       </p>
     {:else if data?.pagination}
-      <p class="text-sm text-shadow-700 mt-2">
+      <p class="text-sm text-shadow-700 mt-1">
         Showing {(data.pagination.offset ?? 0) + 1}--{Math.min((data.pagination.offset ?? 0) + (data.pagination.limit ?? PAGE_SIZE), data.pagination.total ?? 0)} of {data.pagination.total ?? 0}
       </p>
     {/if}
@@ -524,154 +641,40 @@
               {/if}
             </div>
             <button
-              onclick={() => {
-                expandedId = expandedId === memory.id ? null : memory.id;
-                if (expandedId === memory.id) {
-                  void ensureLinksLoaded(memory.id);
-                }
-              }}
+              onclick={() => { void openDetailModal(memory.id); }}
               class="text-sm text-gold-700 hover:text-gold-600 transition-colors shrink-0 font-medium"
             >
-              {expandedId === memory.id ? 'Collapse' : 'Expand'}
+              Details
             </button>
           </div>
 
           <!-- Content preview -->
           <p class="text-shadow-800 text-sm mt-2 leading-relaxed">
-            {#if expandedId === memory.id}
-              {memText(memory)}
-            {:else}
-              {memText(memory).slice(0, 200)}{memText(memory).length > 200 ? '...' : ''}
-            {/if}
+            {memText(memory).slice(0, 220)}{memText(memory).length > 220 ? '...' : ''}
           </p>
 
           <!-- Metrics -->
-          <div class="flex items-center gap-4 mt-3 text-sm text-shadow-600">
-            <span title="Importance">
-              Imp: <span class="text-shadow-800 tabular-nums font-medium">{((memory.importance ?? 0) * 100).toFixed(0)}%</span>
-            </span>
-            <span title="Salience">
-              Sal: <span class="text-shadow-800 tabular-nums font-medium">{((memory.salience ?? 0) * 100).toFixed(0)}%</span>
-            </span>
-            <span title="Emotional Valence">
-              Emo: <span class="text-shadow-800 tabular-nums font-medium">{(memEmotion(memory) * 100).toFixed(0)}%</span>
-            </span>
-            <span class="ml-auto text-shadow-700">{formatDate(memCreated(memory))}</span>
-          </div>
-
-          <!-- Expanded details -->
-          {#if expandedId === memory.id}
-            <div class="mt-4 pt-3 border-t border-bark-200 space-y-3 text-sm">
-              <div class="grid grid-cols-2 gap-2 text-shadow-700">
-                <span>ID: <code class="text-shadow-800 bg-bark-200 px-1 rounded">{memory.id}</code></span>
-                <span>Extracted: <span class="text-shadow-800">{formatDate(memCreated(memory))}</span></span>
-                <span>Last Accessed: <span class="text-shadow-800">{formatDate(memUpdated(memory))}</span></span>
-                {#if memory.confidence !== undefined}
-                  <span>Confidence: <span class="text-shadow-800">{((memory.confidence ?? 0) * 100).toFixed(0)}%</span></span>
-                {/if}
-                {#if memSuperseded(memory)}
-                  <span>Superseded: <span class="text-shadow-800">{formatDate(memSuperseded(memory))}</span></span>
-                {/if}
-                {#if memory.sourceRef}
-                  <span class="col-span-2">Source: <code class="text-shadow-800 bg-bark-200 px-1 rounded text-sm break-all">{memory.sourceRef}</code></span>
-                {/if}
-                {#if memTags(memory)}
-                  <span class="col-span-2">Tags: <span class="text-shadow-800">{memTags(memory)}</span></span>
-                {/if}
-                {#if memory.accessCount !== undefined}
-                  <span>Access Count: <span class="text-shadow-800">{memory.accessCount}</span></span>
-                {/if}
-              </div>
-
-              <!-- Supersede button (not "Delete" — backend calls supersedeMemory) -->
-              <div class="flex justify-end pt-2">
-                {#if supersedeConfirmId === memory.id}
-                  <div class="flex items-center gap-2">
-                    <span class="text-shadow-700">
-                      Supersede this memory? It won't be deleted, but marked as replaced.
-                    </span>
-                    <button
-                      onclick={() => handleSupersede(memory.id)}
-                      class="px-3 py-1 rounded bg-wilt-400 text-white hover:bg-wilt-600 transition-colors text-sm font-medium"
-                    >
-                      Yes, Supersede
-                    </button>
-                    <button
-                      onclick={() => supersedeConfirmId = null}
-                      class="px-3 py-1 rounded border border-bark-300 text-shadow-700 hover:bg-bark-200 transition-colors text-sm"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                {:else}
-                  <button
-                    onclick={() => supersedeConfirmId = memory.id}
-                    class="px-3 py-1 rounded border border-wilt-200 text-wilt-600 hover:bg-wilt-50 transition-colors text-sm font-medium"
-                    title="Mark this memory as superseded (replaced). The original is preserved but hidden from active retrieval."
-                  >
-                    Supersede
-                  </button>
-                {/if}
-              </div>
-
-              <!-- Memory links -->
-              <div class="pt-2 border-t border-bark-200 space-y-2">
-                <p class="text-shadow-700 font-medium text-sm">Memory Links</p>
-                <div class="flex flex-col sm:flex-row gap-2">
-                  <input
-                    type="text"
-                    placeholder="Target memory ID"
-                    value={linkTargetById[memory.id] ?? ''}
-                    oninput={(event) => {
-                      const next = (event.currentTarget as HTMLInputElement).value;
-                      linkTargetById = { ...linkTargetById, [memory.id]: next };
-                    }}
-                    class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
-                  />
-                  <select
-                    value={linkTypeById[memory.id] ?? 'related'}
-                    onchange={(event) => {
-                      const next = (event.currentTarget as HTMLSelectElement).value;
-                      linkTypeById = { ...linkTypeById, [memory.id]: next };
-                    }}
-                    class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
-                  >
-                    {#each MEMORY_LINK_TYPES as linkType}
-                      <option value={linkType}>{linkType}</option>
-                    {/each}
-                  </select>
-                  <button
-                    onclick={() => handleLinkMemory(memory.id)}
-                    class="px-3 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 transition-colors"
-                  >
-                    Link
-                  </button>
-                </div>
-
-                {#if loadingLinksFor === memory.id}
-                  <p class="text-shadow-600 text-sm">Loading links...</p>
-                {:else if (linksById[memory.id] ?? []).length === 0}
-                  <p class="text-shadow-600 text-sm">No links for this memory.</p>
-                {:else}
-                  <div class="space-y-1">
-                    {#each linksById[memory.id] ?? [] as link}
-                      <div class="flex items-center justify-between rounded border border-bark-200 bg-bark-50 px-2 py-1 text-sm">
-                        <span class="text-shadow-800">
-                          <code>{link.id1}</code> ↔ <code>{link.id2}</code> ({link.linkType})
-                        </span>
-                        <button
-                          onclick={() => handleUnlinkMemory(memory.id, link.id1, link.id2)}
-                          class="text-wilt-600 hover:text-wilt-700 font-medium"
-                        >
-                          Unlink
-                        </button>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
+          <div class="mt-3 space-y-2 text-sm text-shadow-600">
+            <div class="flex items-center gap-4">
+              <span title="Importance">
+                Imp: <span class="text-shadow-800 tabular-nums font-medium">{((memory.importance ?? 0) * 100).toFixed(0)}%</span>
+              </span>
+              <span title="Salience">
+                Sal: <span class="text-shadow-800 tabular-nums font-medium">{saliencePercent(memory.salience)}%</span>
+              </span>
+              <span title="Emotional Valence">
+                Emo: <span class="text-shadow-800 tabular-nums font-medium">{(memEmotion(memory) * 100).toFixed(0)}%</span>
+              </span>
+              <span class="ml-auto text-shadow-700">{formatDate(memCreated(memory))}</span>
             </div>
-          {/if}
+            <div class="flex items-center gap-2">
+              <span class="text-xs uppercase tracking-wide text-shadow-600">Salience</span>
+              <div class="h-2 flex-1 rounded-full bg-bark-200 overflow-hidden">
+                <div class="h-full rounded-full bg-gold-500" style={salienceBarStyle(memory.salience)}></div>
+              </div>
+              <span class="w-11 text-right text-shadow-800 tabular-nums font-medium">{saliencePercent(memory.salience)}%</span>
+            </div>
+          </div>
         </div>
       {/each}
 
@@ -708,3 +711,186 @@
     </div>
   {/if}
 </div>
+
+{#if detailModalId}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+    role="presentation"
+    onclick={(event) => {
+      if (event.currentTarget === event.target) {
+        closeDetailModal();
+      }
+    }}
+  >
+    <div
+      class="card-garden w-full max-w-4xl max-h-[90vh] overflow-y-auto p-5 space-y-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Memory detail"
+    >
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h2 class="font-serif text-xl text-shadow-900 font-semibold">Memory Detail</h2>
+          {#if detailModalData}
+            <p class="text-shadow-600 text-xs mt-1">
+              ID: <code class="text-shadow-800 bg-bark-200 px-1 rounded">{detailModalData.memory.id}</code>
+            </p>
+          {/if}
+        </div>
+        <button
+          onclick={closeDetailModal}
+          class="px-3 py-1 rounded border border-bark-300 text-shadow-700 hover:bg-bark-200 transition-colors text-sm"
+        >
+          Close
+        </button>
+      </div>
+
+      {#if detailModalLoading}
+        <div class="space-y-2">
+          <div class="h-4 bg-bark-200 rounded w-1/3 animate-pulse"></div>
+          <div class="h-3 bg-bark-200 rounded w-full animate-pulse"></div>
+          <div class="h-3 bg-bark-200 rounded w-5/6 animate-pulse"></div>
+        </div>
+      {:else if detailModalError}
+        <div class="rounded-lg border border-wilt-200 bg-wilt-50 p-3">
+          <p class="text-sm text-wilt-600">{detailModalError}</p>
+        </div>
+      {:else if detailModalData}
+        <div class="space-y-4 text-sm">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={typeBadgeStyle(detailModalData.memory.type ?? 'unknown')}>
+              {detailModalData.memory.type ?? 'unknown'}
+            </span>
+            {#if detailModalData.memory.sensitivity}
+              <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={sensitivityBadgeStyle(detailModalData.memory.sensitivity)}>
+                {detailModalData.memory.sensitivity}
+              </span>
+            {/if}
+            {#if detailModalData.linkedContact}
+              <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-800 border-bark-300">
+                {detailModalData.linkedContact.displayName}
+              </span>
+            {:else if detailModalData.memory.contactId && contactsById[detailModalData.memory.contactId]}
+              <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-800 border-bark-300">
+                {contactsById[detailModalData.memory.contactId].displayName}
+              </span>
+            {/if}
+          </div>
+
+          <p class="text-shadow-800 leading-relaxed">{memText(detailModalData.memory)}</p>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-shadow-700">
+            <span>Extracted: <span class="text-shadow-800">{formatDate(memCreated(detailModalData.memory))}</span></span>
+            <span>Last Accessed: <span class="text-shadow-800">{formatDate(memUpdated(detailModalData.memory))}</span></span>
+            <span>Importance: <span class="text-shadow-800">{((detailModalData.memory.importance ?? 0) * 100).toFixed(0)}%</span></span>
+            <span>Salience: <span class="text-shadow-800">{saliencePercent(detailModalData.memory.salience)}%</span></span>
+            {#if detailModalData.memory.confidence !== undefined}
+              <span>Confidence: <span class="text-shadow-800">{((detailModalData.memory.confidence ?? 0) * 100).toFixed(0)}%</span></span>
+            {/if}
+            <span>Emotional Valence: <span class="text-shadow-800">{(memEmotion(detailModalData.memory) * 100).toFixed(0)}%</span></span>
+            {#if memSuperseded(detailModalData.memory)}
+              <span>Superseded: <span class="text-shadow-800">{formatDate(memSuperseded(detailModalData.memory))}</span></span>
+            {/if}
+            {#if detailModalData.memory.accessCount !== undefined}
+              <span>Access Count: <span class="text-shadow-800">{detailModalData.memory.accessCount}</span></span>
+            {/if}
+            {#if detailModalData.memory.sourceRef}
+              <span class="sm:col-span-2">Source: <code class="text-shadow-800 bg-bark-200 px-1 rounded text-sm break-all">{detailModalData.memory.sourceRef}</code></span>
+            {/if}
+            {#if memTags(detailModalData.memory)}
+              <span class="sm:col-span-2">Tags: <span class="text-shadow-800">{memTags(detailModalData.memory)}</span></span>
+            {/if}
+          </div>
+
+          <!-- Supersede button (not "Delete" — backend calls supersedeMemory) -->
+          <div class="flex justify-end pt-2 border-t border-bark-200">
+            {#if supersedeConfirmId === detailModalData.memory.id}
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <span class="text-shadow-700">
+                  Supersede this memory? It will be marked as replaced.
+                </span>
+                <button
+                  onclick={() => handleSupersede(detailMemoryId)}
+                  class="px-3 py-1 rounded bg-wilt-400 text-white hover:bg-wilt-600 transition-colors text-sm font-medium"
+                >
+                  Yes, Supersede
+                </button>
+                <button
+                  onclick={() => supersedeConfirmId = null}
+                  class="px-3 py-1 rounded border border-bark-300 text-shadow-700 hover:bg-bark-200 transition-colors text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            {:else}
+              <button
+                onclick={() => supersedeConfirmId = detailMemoryId}
+                class="px-3 py-1 rounded border border-wilt-200 text-wilt-600 hover:bg-wilt-50 transition-colors text-sm font-medium"
+                title="Mark this memory as superseded (replaced). The original is preserved but hidden from active retrieval."
+              >
+                Supersede
+              </button>
+            {/if}
+          </div>
+
+          <!-- Memory links -->
+          <div class="pt-2 border-t border-bark-200 space-y-2">
+            <p class="text-shadow-700 font-medium text-sm">Memory Links</p>
+            <div class="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                placeholder="Target memory ID"
+                value={linkTargetById[detailModalData.memory.id] ?? ''}
+                oninput={(event) => {
+                  const next = (event.currentTarget as HTMLInputElement).value;
+                  linkTargetById = { ...linkTargetById, [detailMemoryId]: next };
+                }}
+                class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
+              />
+              <select
+                value={linkTypeById[detailModalData.memory.id] ?? 'related'}
+                onchange={(event) => {
+                  const next = (event.currentTarget as HTMLSelectElement).value;
+                  linkTypeById = { ...linkTypeById, [detailMemoryId]: next };
+                }}
+                class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
+              >
+                {#each MEMORY_LINK_TYPES as linkType}
+                  <option value={linkType}>{linkType}</option>
+                {/each}
+              </select>
+              <button
+                onclick={() => handleLinkMemory(detailMemoryId)}
+                class="px-3 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 transition-colors"
+              >
+                Link
+              </button>
+            </div>
+
+            {#if loadingLinksFor === detailModalData.memory.id}
+              <p class="text-shadow-600 text-sm">Loading links...</p>
+            {:else if (linksById[detailModalData.memory.id] ?? []).length === 0}
+              <p class="text-shadow-600 text-sm">No links for this memory.</p>
+            {:else}
+              <div class="space-y-1">
+                {#each linksById[detailModalData.memory.id] ?? [] as link}
+                  <div class="flex items-center justify-between rounded border border-bark-200 bg-bark-50 px-2 py-1 text-sm">
+                    <span class="text-shadow-800">
+                      <code>{link.id1}</code> <span class="mx-1">↔</span> <code>{link.id2}</code> ({link.linkType})
+                    </span>
+                    <button
+                      onclick={() => handleUnlinkMemory(detailMemoryId, link.id1, link.id2)}
+                      class="text-wilt-600 hover:text-wilt-700 font-medium"
+                    >
+                      Unlink
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}

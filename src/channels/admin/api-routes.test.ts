@@ -427,7 +427,9 @@ describe('AdminServer JSON API routes', () => {
     ]));
   });
 
-  it('supports memory list/detail/search/supersede endpoints', async () => {
+  it('supports memory list filters and detail fetch path for modal', async () => {
+    const semanticTimestamp = Date.UTC(2026, 0, 10, 12, 0, 0);
+    const episodicTimestamp = Date.UTC(2026, 1, 22, 9, 30, 0);
     memoryStore.insertMemory({
       id: 'api-mem-1',
       text: 'API semantic memory one',
@@ -437,8 +439,8 @@ describe('AdminServer JSON API routes', () => {
       emotionalValence: 0.1,
       salience: 0.5,
       sourceRef: 'api:test:1',
-      extractedAt: Date.now(),
-      lastAccessed: Date.now(),
+      extractedAt: semanticTimestamp,
+      lastAccessed: semanticTimestamp,
       accessCount: 0,
       tags: ['api'],
       sensitivity: 'personal',
@@ -452,11 +454,11 @@ describe('AdminServer JSON API routes', () => {
       emotionalValence: 0,
       salience: 0.6,
       sourceRef: 'api:test:2',
-      extractedAt: Date.now(),
-      lastAccessed: Date.now(),
+      extractedAt: episodicTimestamp,
+      lastAccessed: episodicTimestamp,
       accessCount: 0,
       tags: ['api'],
-      sensitivity: 'personal',
+      sensitivity: 'confidential',
     }, new Float32Array([0.2, 0.3, 0.4]));
 
     const listRes = await request(port, 'GET', '/api/admin/memory?limit=1&offset=1', undefined, authHeaders);
@@ -468,6 +470,36 @@ describe('AdminServer JSON API routes', () => {
     expect(filteredRes.status).toBe(200);
     const filteredPayload = JSON.parse(filteredRes.body) as { memories: Array<{ type: string }> };
     expect(filteredPayload.memories.every(memory => memory.type === 'semantic')).toBe(true);
+
+    const sensitivityRes = await request(port, 'GET', '/api/admin/memory?sensitivity=confidential', undefined, authHeaders);
+    expect(sensitivityRes.status).toBe(200);
+    const sensitivityPayload = JSON.parse(sensitivityRes.body) as { memories: Array<{ sensitivity: string }> };
+    expect(sensitivityPayload.memories).toHaveLength(1);
+    expect(sensitivityPayload.memories[0]?.sensitivity).toBe('confidential');
+
+    const dateRangeRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory?startDate=2026-01-01&endDate=2026-01-31',
+      undefined,
+      authHeaders,
+    );
+    expect(dateRangeRes.status).toBe(200);
+    const dateRangePayload = JSON.parse(dateRangeRes.body) as { memories: Array<{ id: string }> };
+    expect(dateRangePayload.memories).toHaveLength(1);
+    expect(dateRangePayload.memories[0]?.id).toBe('api-mem-1');
+
+    const combinedFilterRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory?type=episodic&sensitivity=confidential&startDate=2026-02-01&endDate=2026-02-28',
+      undefined,
+      authHeaders,
+    );
+    expect(combinedFilterRes.status).toBe(200);
+    const combinedFilterPayload = JSON.parse(combinedFilterRes.body) as { memories: Array<{ id: string }> };
+    expect(combinedFilterPayload.memories).toHaveLength(1);
+    expect(combinedFilterPayload.memories[0]?.id).toBe('api-mem-2');
 
     const detailRes = await request(port, 'GET', '/api/admin/memory/api-mem-1', undefined, authHeaders);
     expect(detailRes.status).toBe(200);
@@ -488,6 +520,21 @@ describe('AdminServer JSON API routes', () => {
 
     const badType = await request(port, 'GET', '/api/admin/memory?type=not-a-type', undefined, authHeaders);
     expect(badType.status).toBe(400);
+
+    const badSensitivity = await request(port, 'GET', '/api/admin/memory?sensitivity=top-secret', undefined, authHeaders);
+    expect(badSensitivity.status).toBe(400);
+
+    const badStartDate = await request(port, 'GET', '/api/admin/memory?startDate=2026-02-30', undefined, authHeaders);
+    expect(badStartDate.status).toBe(400);
+
+    const badRange = await request(
+      port,
+      'GET',
+      '/api/admin/memory?startDate=2026-02-10&endDate=2026-02-01',
+      undefined,
+      authHeaders,
+    );
+    expect(badRange.status).toBe(400);
   });
 
   it('supports memory bulk update/delete and link/unlink endpoints', async () => {

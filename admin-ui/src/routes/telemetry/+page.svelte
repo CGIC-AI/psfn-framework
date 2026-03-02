@@ -21,6 +21,8 @@
   // LIVE EVENTS tab state
   // ══════════════════════════════════════════════
   let filterText = $state('');
+  let debouncedFilterText = $state('');
+  let filterDebounce: ReturnType<typeof setTimeout> | undefined;
   let scrollContainer: HTMLDivElement | undefined = $state();
   let autoScroll = $state(true);
   let expandedIdx = $state<number | null>(null);
@@ -78,7 +80,7 @@
 
   // Filtered events (oldest first for terminal display)
   let filteredEvents = $derived.by(() => {
-    let evts = filterText ? filterEvents(filterText) : getEvents();
+    let evts = debouncedFilterText ? filterEvents(debouncedFilterText) : getEvents();
     evts = evts.filter(e => isCategoryEnabled(categorize(e.type)));
     return evts;
   });
@@ -353,6 +355,22 @@
     }
   });
 
+  // Debounce free-text filter updates for large event lists.
+  $effect(() => {
+    const nextFilter = filterText.trim();
+    if (filterDebounce) {
+      clearTimeout(filterDebounce);
+    }
+    filterDebounce = setTimeout(() => {
+      debouncedFilterText = nextFilter;
+    }, 180);
+    return () => {
+      if (filterDebounce) {
+        clearTimeout(filterDebounce);
+      }
+    };
+  });
+
   function handleScroll() {
     if (!scrollContainer) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
@@ -373,12 +391,14 @@
   // ── Lifecycle ──
   onMount(() => {
     uptimeInterval = setInterval(updateUptime, 1000);
+    debouncedFilterText = filterText.trim();
     if (isConnected()) {
       connectedSince = Date.now();
     }
   });
 
   onDestroy(() => {
+    if (filterDebounce) clearTimeout(filterDebounce);
     if (uptimeInterval) clearInterval(uptimeInterval);
   });
 </script>
@@ -482,9 +502,10 @@
         <div class="flex-1"></div>
 
         <input
+          data-search-shortcut
           type="text"
           bind:value={filterText}
-          placeholder="Filter by type prefix..."
+          placeholder="Filter by type prefix... (press /)"
           class="text-sm px-3 py-2 rounded-lg border border-bark-300
                  bg-bark-50 text-shadow-800
                  placeholder:text-shadow-600

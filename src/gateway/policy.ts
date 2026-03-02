@@ -21,6 +21,7 @@ export interface ShellExecPolicyConfig {
 export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
+  fullCodebaseReadRoot?: string;
   urlPolicy?: UrlPolicyConfig;
   webFetchTlsCaCertPaths?: string[];
   shellExec?: ShellExecPolicyConfig;
@@ -118,9 +119,16 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
       // Build list of all allowed prefixes for this operation
       const allowedPrefixes = [workspaceRoot];
-      if (method === 'fs.read' && policyConfig.allowedReadPaths) {
-        for (const allowed of policyConfig.allowedReadPaths) {
-          allowedPrefixes.push(resolveWorkspaceFsPathFromRoot(allowed, workspaceRoot));
+      if (method === 'fs.read') {
+        if (policyConfig.allowedReadPaths) {
+          for (const allowed of policyConfig.allowedReadPaths) {
+            allowedPrefixes.push(resolveWorkspaceFsPathFromRoot(allowed, workspaceRoot));
+          }
+        }
+        if (policyConfig.fullCodebaseReadRoot) {
+          allowedPrefixes.push(
+            resolveWorkspaceFsPathFromRoot(policyConfig.fullCodebaseReadRoot, workspaceRoot),
+          );
         }
       }
 

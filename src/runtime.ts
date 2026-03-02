@@ -41,7 +41,11 @@ import {
 } from './backup/startup-checks.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parseOptionalPositiveIntEnv } from './utils/env.js';
-import { DiscordLifecycleNotifier, writeLastActiveChannel } from './lifecycle/notifications.js';
+import {
+  DiscordLifecycleNotifier,
+  restoreLastActiveSession,
+  writeLastActiveSession,
+} from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
@@ -261,6 +265,21 @@ export class SubstrateRuntime implements Lifecycle {
     }
   }
 
+  private restoreLatestSessionMetadata(): void {
+    const resolved = restoreLastActiveSession({
+      dataDir: this.config.dataDir,
+      computedLatestSession: this.sessionStore.getLatestSessionByTimestamp(),
+      isSessionValid: (sessionId) => this.sessionStore.count(sessionId) > 0,
+    });
+    if (!resolved) return;
+
+    log.info('Restored latest session metadata', {
+      sessionId: resolved.sessionId,
+      channelType: resolved.channelType ?? 'unknown',
+      timestamp: resolved.timestamp,
+    });
+  }
+
   async init(): Promise<void> {
     log.info('Initializing...');
 
@@ -348,6 +367,7 @@ export class SubstrateRuntime implements Lifecycle {
       });
     }
     this.crashRecoveryQueue = this.sessionStore.getCrashRecoveryExtractionCandidates();
+    this.restoreLatestSessionMetadata();
 
     // Embedding provider (Ollama local)
     const embeddingProvider = createEmbeddingProviderFromEnv();
@@ -575,7 +595,13 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Track last-active channel on every incoming message
     this.eventBus.on('message.received', ({ message }) => {
-      writeLastActiveChannel(this.config.dataDir, message.channelId);
+      writeLastActiveSession(this.config.dataDir, {
+        sessionId: message.channelId,
+        channelType: message.channelType,
+        timestamp: message.timestamp instanceof Date
+          ? message.timestamp.getTime()
+          : Date.now(),
+      });
     });
 
     // Lifecycle tools — self_restart and self_rebuild

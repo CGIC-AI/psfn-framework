@@ -397,6 +397,34 @@ describe('SessionStore', () => {
     expect(ids).toContain('discord/guild/ch');
   });
 
+  it('resolves latest session by last message timestamp across channels', () => {
+    store.append({
+      channelId: 'api:older',
+      role: 'user',
+      content: 'older',
+      timestamp: 2_000,
+    });
+    store.append({
+      channelId: 'api:newer',
+      role: 'assistant',
+      content: 'newer',
+      timestamp: 3_000,
+    });
+
+    // Graceful markers are newer than messages and should not affect latest-session selection.
+    store.markGracefulShutdownForActiveChannels(4_000);
+
+    expect(store.getLatestSessionByTimestamp()).toEqual({
+      sessionId: 'api:newer',
+      timestamp: 3_000,
+      channelType: 'api',
+    });
+  });
+
+  it('returns null for latest session when no messages exist', () => {
+    expect(store.getLatestSessionByTimestamp()).toBeNull();
+  });
+
   it('backward compat: appends to legacy file (no split-brain)', () => {
     // Simulate old-format file
     const oldFilename = 'api-session-1.jsonl';

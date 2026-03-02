@@ -27,6 +27,7 @@ import {
   type SessionIntegrityProvider,
   type SessionStoreOptions,
 } from './store-primitives.js';
+import { inferSessionChannelType } from './session-id.js';
 import {
   getCrashRecoveryExtractionCandidates,
   getUncleanShutdownChannels,
@@ -65,6 +66,13 @@ export type {
   SessionIntegrityProvider,
   SessionStoreOptions,
 } from './store-primitives.js';
+
+export interface LatestSessionSummary {
+  sessionId: string;
+  timestamp: number;
+  channelType?: string;
+}
+
 export class SessionStore {
   private sessionsDir: string;
   private channels: Map<string, ChannelCache> = new Map();
@@ -319,6 +327,36 @@ export class SessionStore {
   getCompactionSummaries(channelId: string): CompactionSummary[] {
     const cache = this.ensureChannelFullyLoaded(channelId);
     return cache ? [...cache.compactions] : [];
+  }
+  getLatestSessionByTimestamp(): LatestSessionSummary | null {
+    this.primeChannelIndexFromDisk();
+    let latest: LatestSessionSummary | null = null;
+
+    for (const [channelId, indexEntry] of this.channelIndex.entries()) {
+      const filePath = join(this.sessionsDir, indexEntry.filename);
+      if (!existsSync(filePath)) continue;
+
+      const ensured = this.ensureChannelIndexEntry(channelId, filePath);
+      const messageCount = normalizeOptionalNonNegativeNumber(ensured.messageCount) ?? 0;
+      if (messageCount <= 0) continue;
+
+      const lastEntry = this.getLastEntry(channelId);
+      if (!lastEntry || !Number.isFinite(lastEntry.timestamp) || lastEntry.timestamp <= 0) continue;
+
+      if (
+        !latest
+        || lastEntry.timestamp > latest.timestamp
+        || (lastEntry.timestamp === latest.timestamp && channelId.localeCompare(latest.sessionId) < 0)
+      ) {
+        latest = {
+          sessionId: channelId,
+          timestamp: lastEntry.timestamp,
+          channelType: inferSessionChannelType(channelId),
+        };
+      }
+    }
+
+    return latest;
   }
   listChannels(): Array<{ channelId: string; messageCount: number }> {
     this.primeChannelIndexFromDisk();

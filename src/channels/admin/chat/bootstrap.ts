@@ -59,6 +59,7 @@ interface AdminChatBootstrapServiceOptions {
   apiHost?: string;
   apiPort?: number;
   config?: SubstrateConfig;
+  resolveGlobalDefaultSessionId?: () => string | null;
 }
 
 interface AdminChatBootstrapRuntimeOptions {
@@ -114,7 +115,9 @@ export class AdminChatBootstrapService {
   private readonly configuredApiHost?: string;
   private readonly configuredApiPort?: number;
   private readonly runtimeConfig?: SubstrateConfig;
+  private readonly resolveGlobalDefaultSessionIdFn: (() => string | null) | null;
   private selection: SelectionState = {};
+  private selectionPinnedByUser = false;
 
   constructor(contactStore?: ContactStore | null, options: AdminChatBootstrapServiceOptions = {}) {
     this.contactStore = contactStore ?? null;
@@ -123,6 +126,7 @@ export class AdminChatBootstrapService {
     this.configuredApiHost = normalizeTrimmed(options.apiHost);
     this.configuredApiPort = options.apiPort;
     this.runtimeConfig = options.config;
+    this.resolveGlobalDefaultSessionIdFn = options.resolveGlobalDefaultSessionId ?? null;
   }
 
   buildBootstrap(options: AdminChatBootstrapRuntimeOptions = {}): AdminChatBootstrapResponse {
@@ -134,6 +138,13 @@ export class AdminChatBootstrapService {
     options: AdminChatBootstrapRuntimeOptions = {},
   ): AdminChatBootstrapResponse {
     this.applySelectionInput(input);
+    if (
+      input.canonicalContactId !== undefined
+      || input.channel !== undefined
+      || input.userId !== undefined
+    ) {
+      this.selectionPinnedByUser = true;
+    }
     this.persistSelectionMapping(input);
     return this.composeBootstrap(options);
   }
@@ -275,7 +286,11 @@ export class AdminChatBootstrapService {
     const defaultAuthorId = this.selection.defaultAuthorId ?? selectedIdentity.userId;
     this.selection.defaultAuthorName = defaultAuthorName;
     this.selection.defaultAuthorId = defaultAuthorId;
-    const defaultSessionId = `${selectedIdentity.channel}:${selectedIdentity.userId}`;
+    const selectedIdentitySessionId = `${selectedIdentity.channel}:${selectedIdentity.userId}`;
+    const globalDefaultSessionId = this.selectionPinnedByUser
+      ? undefined
+      : normalizeTrimmed(this.resolveGlobalDefaultSessionIdFn?.() ?? undefined);
+    const defaultSessionId = globalDefaultSessionId ?? selectedIdentitySessionId;
     const apiKey = this.resolveApiKey();
     const transportHeaders = this.buildTransportHeaders(defaultSessionId, defaultAuthorId, defaultAuthorName);
     const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);

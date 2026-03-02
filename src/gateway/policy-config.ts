@@ -6,6 +6,7 @@ export interface GatewayPolicyEnv {
   ALLOWED_READ_PATHS?: string;
   MODULE_REGISTRY_TRUSTED_READ?: string;
   MODULE_REGISTRY_PATH?: string;
+  PSFN_RUNTIME_MODE?: string;
 }
 
 function parseBooleanTrue(value: string | undefined): boolean {
@@ -19,6 +20,11 @@ function splitAllowedReadPaths(raw: string | undefined): string[] {
     .split(':')
     .map(entry => entry.trim())
     .filter(Boolean);
+}
+
+function normalizeRuntimeMode(raw: string | undefined): string {
+  if (!raw) return '';
+  return raw.trim().toLowerCase();
 }
 
 export function resolveAllowedReadPathsFromEnv(
@@ -48,4 +54,13 @@ export function resolveTrustedModuleRegistryPathFromEnv(
   }
   const moduleRegistryPath = env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH;
   return resolve(workspacePath, moduleRegistryPath);
+}
+
+export function resolveFullCodebaseReadRootFromEnv(
+  env: GatewayPolicyEnv,
+  codebaseRoot: string,
+): string | undefined {
+  return normalizeRuntimeMode(env.PSFN_RUNTIME_MODE) === 'yolo'
+    ? resolve(codebaseRoot)
+    : undefined;
 }

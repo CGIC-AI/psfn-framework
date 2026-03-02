@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveAllowedReadPathsFromEnv,
+  resolveFullCodebaseReadRootFromEnv,
   resolveTrustedModuleRegistryPathFromEnv,
 } from './policy-config.js';
 
@@ -51,5 +52,21 @@ describe('resolveAllowedReadPathsFromEnv', () => {
     }, workspacePath);
 
     expect(value).toBeUndefined();
+  });
+});
+
+describe('resolveFullCodebaseReadRootFromEnv', () => {
+  const codebaseRoot = '/app';
+
+  it('returns undefined for non-yolo runtime mode', () => {
+    expect(resolveFullCodebaseReadRootFromEnv({
+      PSFN_RUNTIME_MODE: 'split',
+    }, codebaseRoot)).toBeUndefined();
+  });
+
+  it('returns codebase root for yolo runtime mode', () => {
+    expect(resolveFullCodebaseReadRootFromEnv({
+      PSFN_RUNTIME_MODE: 'YOLO',
+    }, codebaseRoot)).toBe('/app');
   });
 });

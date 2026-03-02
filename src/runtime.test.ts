@@ -8,6 +8,10 @@ import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { composeSessionRuntime } from './bootstrap/composition.js';
 import { SessionStore } from './session/store.js';
 import { SessionManager } from './session/manager.js';
+import {
+  readLastActiveSession,
+  writeLastActiveSession,
+} from './lifecycle/notifications.js';
 
 function makeRuntime(): SubstrateRuntime {
   return new SubstrateRuntime({
@@ -250,6 +254,49 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     runtime.agentLoop = { setChannelRegistry: vi.fn() };
 
     await expect(runtime.startChannels()).rejects.toThrow('No channel adapters started successfully');
+  });
+});
+
+describe('SubstrateRuntime latest session restoration', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-session-restore-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('falls back to computed latest session metadata when persisted session is stale', () => {
+    writeLastActiveSession(dataDir, {
+      sessionId: 'api:stale',
+      channelType: 'api',
+      timestamp: 1_000,
+    });
+
+    const runtime = new SubstrateRuntime({
+      dataDir,
+    } as any) as any;
+    runtime.sessionStore = {
+      getLatestSessionByTimestamp: vi.fn().mockReturnValue({
+        sessionId: '123456789012345678',
+        channelType: 'discord',
+        timestamp: 2_000,
+      }),
+      count: vi.fn((sessionId: string) => (
+        sessionId === 'api:stale' || sessionId === '123456789012345678'
+          ? 1
+          : 0
+      )),
+    };
+
+    runtime.restoreLatestSessionMetadata();
+
+    const restored = readLastActiveSession(dataDir);
+    expect(restored?.sessionId).toBe('123456789012345678');
+    expect(restored?.channelType).toBe('discord');
+    expect(restored?.timestamp).toBe(2_000);
   });
 });
 

@@ -81,6 +81,24 @@ export interface AgentResponse {
   metadata: ResponseMetadata;
 }
 
+export interface PostTurnActionCandidate {
+  kind: string;
+  payload?: Record<string, unknown>;
+  dedupeKey?: string;
+  maxRetries?: number;
+}
+
+export interface InferredPostTurnAction {
+  id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  dedupeKey: string;
+  channelId: string;
+  sourceMessageId: string;
+  inferredAt: number;
+  maxRetries?: number;
+}
+
 export interface ResponseMetadata {
   model: string;
   inputTokens: number;

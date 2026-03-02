@@ -2,10 +2,11 @@
 // Common primitives used by both single-process runtime and gateway agent mode.
 
 import { join } from 'node:path';
-import type { SubstrateConfig } from '../types.js';
+import type { PostTurnActionCandidate, SubstrateConfig } from '../types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
 import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
+import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
@@ -46,8 +47,11 @@ import {
   resolveValuesJournalPath,
 } from '../persistence/layout.js';
 import { ReflectionJournalStore } from '../notes/reflection-journal.js';
+import type { PostTurnActionRuntime } from './post-turn-actions.js';
 
 const log = createComponentLogger('SharedWiring');
+const HEARTBEAT_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
+const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
 interface HeartbeatAgent {
   handleMessage(message: {
@@ -60,11 +64,94 @@ interface HeartbeatAgent {
     timestamp: Date;
   }): Promise<{ content: string }>;
   waitForIdle?(): Promise<void>;
+  registerPostTurnActionInferer?(inferer: PostTurnActionInferer): () => void;
 }
 
 interface HeartbeatRuntimeOptions {
   llmProvider?: LLMProvider;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
+  postTurnActions?: PostTurnActionRuntime;
+}
+
+function normalizeDeferredActionCandidate(raw: unknown): PostTurnActionCandidate | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+
+  const candidate = raw as Record<string, unknown>;
+  const kind = typeof candidate.kind === 'string' ? candidate.kind.trim() : '';
+  if (!kind) {
+    return null;
+  }
+
+  const payload = (
+    candidate.payload
+    && typeof candidate.payload === 'object'
+    && !Array.isArray(candidate.payload)
+  )
+    ? candidate.payload as Record<string, unknown>
+    : undefined;
+  const dedupeKey = typeof candidate.dedupeKey === 'string' ? candidate.dedupeKey.trim() : '';
+  const normalizedMaxRetries = (
+    typeof candidate.maxRetries === 'number'
+    && Number.isFinite(candidate.maxRetries)
+    && candidate.maxRetries >= 0
+  )
+    ? Math.floor(candidate.maxRetries)
+    : undefined;
+
+  return {
+    kind,
+    ...(payload ? { payload } : {}),
+    ...(dedupeKey ? { dedupeKey } : {}),
+    ...(normalizedMaxRetries !== undefined ? { maxRetries: normalizedMaxRetries } : {}),
+  };
+}
+
+function extractDeferredActionCandidate(message: unknown): PostTurnActionCandidate | null {
+  const stack: unknown[] = [message];
+  const seen = new Set<unknown>();
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== 'object') continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+
+    if (Array.isArray(current)) {
+      for (const entry of current) {
+        if (entry && typeof entry === 'object') {
+          stack.push(entry);
+        }
+      }
+      continue;
+    }
+
+    const record = current as Record<string, unknown>;
+    const deferredAction = normalizeDeferredActionCandidate(record.deferredAction);
+    if (deferredAction) {
+      return deferredAction;
+    }
+
+    for (const value of Object.values(record)) {
+      if (value && typeof value === 'object') {
+        stack.push(value);
+      }
+    }
+  }
+
+  return null;
+}
+
+function isHeartbeatRunTemplateToolResult(message: unknown): boolean {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    return false;
+  }
+
+  const candidate = message as Record<string, unknown>;
+  return (
+    candidate.role === 'toolResult'
+    && candidate.toolName === HEARTBEAT_RUN_TEMPLATE_TOOL_NAME
+  );
 }
 
 export interface PromptRuntimeTarget extends ToolRegistrarTarget {
@@ -350,6 +437,25 @@ export function wireHeartbeatRuntime(
     await executeTemplate(template);
   };
 
+  const buildDeferredHeartbeatAction = (
+    template: ReflectionTemplate,
+    options: { sendToDiscordOverride?: boolean } = {},
+  ): PostTurnActionCandidate => ({
+    kind: DEFERRED_HEARTBEAT_ACTION_KIND,
+    payload: {
+      templateId: template.id,
+      ...(options.sendToDiscordOverride !== undefined
+        ? { sendToDiscordOverride: options.sendToDiscordOverride }
+        : {}),
+    },
+    dedupeKey: (
+      options.sendToDiscordOverride === undefined
+        ? `${DEFERRED_HEARTBEAT_ACTION_KIND}:${template.id}`
+        : `${DEFERRED_HEARTBEAT_ACTION_KIND}:${template.id}:discord:${String(options.sendToDiscordOverride)}`
+    ),
+    maxRetries: 2,
+  });
+
   const queueDeferredTemplateRun = (
     templateId: string,
     options: { sendToDiscordOverride?: boolean } = {},
@@ -403,7 +509,13 @@ export function wireHeartbeatRuntime(
   const runTemplateNow = async (
     templateId: string,
     options: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean } = {},
-  ): Promise<{ templateId: string; templateName: string; reflection: string; queued?: boolean }> => {
+  ): Promise<{
+      templateId: string;
+      templateName: string;
+      reflection: string;
+      queued?: boolean;
+      deferredAction?: PostTurnActionCandidate;
+    }> => {
     const current = store.load();
     const template = current.templates.find(candidate => candidate.id === templateId);
     if (!template) {
@@ -415,6 +527,21 @@ export function wireHeartbeatRuntime(
       if (options.deferIfBusy === false || !isBusyReflectionError(error)) {
         throw error;
       }
+      if (runtimeOptions.postTurnActions) {
+        const deferredAction = buildDeferredHeartbeatAction(template, options);
+        log.info('Inferred deferred heartbeat action from busy template execution', {
+          templateId: template.id,
+          dedupeKey: deferredAction.dedupeKey,
+        });
+        return {
+          templateId: template.id,
+          templateName: template.name,
+          reflection: '',
+          queued: true,
+          deferredAction,
+        };
+      }
+
       const deferred = queueDeferredTemplateRun(template.id, {
         sendToDiscordOverride: options.sendToDiscordOverride,
       });
@@ -427,9 +554,50 @@ export function wireHeartbeatRuntime(
         templateName: deferred.templateName,
         reflection: '',
         queued: true,
+        deferredAction: buildDeferredHeartbeatAction(template, options),
       };
     }
   };
+
+  if (runtimeOptions.postTurnActions) {
+    runtimeOptions.postTurnActions.registerHandler(
+      DEFERRED_HEARTBEAT_ACTION_KIND,
+      async (action) => {
+        const templateIdRaw = action.payload.templateId;
+        if (typeof templateIdRaw !== 'string' || !templateIdRaw.trim()) {
+          throw new Error(`Deferred heartbeat action "${action.id}" is missing payload.templateId`);
+        }
+        const templateId = templateIdRaw.trim();
+        const current = store.load();
+        const template = current.templates.find(candidate => candidate.id === templateId);
+        if (!template) {
+          throw new Error(`Template "${templateId}" not found`);
+        }
+        const sendToDiscordOverride = typeof action.payload.sendToDiscordOverride === 'boolean'
+          ? action.payload.sendToDiscordOverride
+          : undefined;
+        await executeTemplate(template, {
+          ...(sendToDiscordOverride !== undefined ? { sendToDiscordOverride } : {}),
+        });
+      },
+    );
+
+    if (agentLoop.registerPostTurnActionInferer) {
+      const inferDeferredHeartbeatActions: PostTurnActionInferer = ({ turnMessages }) => {
+        const inferred: PostTurnActionCandidate[] = [];
+        for (const turnMessage of turnMessages) {
+          if (!isHeartbeatRunTemplateToolResult(turnMessage)) continue;
+          const candidate = extractDeferredActionCandidate(turnMessage);
+          if (!candidate || candidate.kind !== DEFERRED_HEARTBEAT_ACTION_KIND) continue;
+          inferred.push(candidate);
+        }
+        return inferred;
+      };
+      agentLoop.registerPostTurnActionInferer(inferDeferredHeartbeatActions);
+    } else {
+      log.warn('Post-turn action runtime enabled but inferer registration is unavailable');
+    }
+  }
 
   // Create sync function that re-registers all reflection tasks
   const syncReflectionTasks = (): void => {

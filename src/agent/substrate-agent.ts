@@ -19,9 +19,11 @@ import type {
   AgentResponse,
   CapabilityTier,
   ContextMessage,
+  InferredPostTurnAction,
   LLMContext,
   MessageModelOverride,
   MessagePromptOverride,
+  PostTurnActionCandidate,
   SubstrateConfig,
   SubstrateMessage,
   TurnUsage,
@@ -112,6 +114,16 @@ interface ResolvedMoaSettings {
   aggregatorModel?: string;
 }
 
+interface PostTurnInferenceContext {
+  message: SubstrateMessage;
+  response: AgentResponse;
+  turnMessages: AgentMessage[];
+}
+
+export type PostTurnActionInferer = (
+  context: PostTurnInferenceContext,
+) => PostTurnActionCandidate[] | Promise<PostTurnActionCandidate[]>;
+
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
@@ -140,6 +152,7 @@ export class SubstrateAgent {
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
   private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
   private reflectionNudge = new ReflectionNudgeTracker();
+  private postTurnActionInferers: PostTurnActionInferer[] = [];
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -492,6 +505,16 @@ export class SubstrateAgent {
     return this.agent.waitForIdle();
   }
 
+  registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
+    this.postTurnActionInferers.push(inferer);
+    return () => {
+      const index = this.postTurnActionInferers.indexOf(inferer);
+      if (index !== -1) {
+        this.postTurnActionInferers.splice(index, 1);
+      }
+    };
+  }
+
   /** Abort the current prompt, cancelling streaming and tool execution */
   abort(): void {
     this.agent.abort();
@@ -827,8 +850,20 @@ export class SubstrateAgent {
           ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         },
       };
+      const inferredPostTurnActions = await this.inferPostTurnActions({
+        message,
+        response: agentResponse,
+        turnMessages,
+      });
 
       await this.eventBus.emit('agent.turn.end', { message, response: agentResponse });
+      if (inferredPostTurnActions.length > 0) {
+        await this.eventBus.emit('agent.post_turn.actions.inferred', {
+          message,
+          response: agentResponse,
+          actions: inferredPostTurnActions,
+        });
+      }
       await this.eventBus.emit('agent.turn.usage', { message, usage: turnUsage });
       this.emitTurnStage(message, startTime, 'end', {
         durationMs: Date.now() - startTime,
@@ -1279,6 +1314,121 @@ export class SubstrateAgent {
       }
     }
     return { toolCalls, usedThinkTool };
+  }
+
+  private async inferPostTurnActions(
+    context: PostTurnInferenceContext,
+  ): Promise<InferredPostTurnAction[]> {
+    if (this.postTurnActionInferers.length === 0) {
+      return [];
+    }
+
+    const inferred: InferredPostTurnAction[] = [];
+    const seenDedupeKeys = new Set<string>();
+
+    for (const inferer of this.postTurnActionInferers) {
+      let candidates: PostTurnActionCandidate[] = [];
+      try {
+        candidates = await inferer(context);
+      } catch (error) {
+        log.warn('Post-turn action inferer failed', {
+          channelId: context.message.channelId,
+          messageId: context.message.id,
+          error: toErrorMessage(error),
+        });
+        continue;
+      }
+
+      for (const candidate of candidates) {
+        const normalized = this.normalizePostTurnActionCandidate(
+          candidate,
+          context.message,
+          inferred.length,
+        );
+        if (!normalized) continue;
+        if (seenDedupeKeys.has(normalized.dedupeKey)) continue;
+        seenDedupeKeys.add(normalized.dedupeKey);
+        inferred.push(normalized);
+      }
+    }
+
+    return inferred;
+  }
+
+  private normalizePostTurnActionCandidate(
+    candidate: PostTurnActionCandidate | null | undefined,
+    message: SubstrateMessage,
+    ordinal: number,
+  ): InferredPostTurnAction | null {
+    if (!candidate || typeof candidate.kind !== 'string') {
+      return null;
+    }
+
+    const kind = candidate.kind.trim();
+    if (!kind) {
+      return null;
+    }
+
+    const payload = this.normalizePostTurnPayload(candidate.payload);
+    const explicitDedupeKey = typeof candidate.dedupeKey === 'string' ? candidate.dedupeKey.trim() : '';
+    const dedupeKey = explicitDedupeKey || `${kind}:${message.channelId}:${this.hashPostTurnPayload(payload)}`;
+    const inferredAt = Date.now();
+    const id = createHash('sha256')
+      .update(`${message.id}:${kind}:${dedupeKey}:${ordinal}`)
+      .digest('hex')
+      .slice(0, 24);
+
+    const normalizedMaxRetries = (
+      typeof candidate.maxRetries === 'number'
+      && Number.isFinite(candidate.maxRetries)
+      && candidate.maxRetries >= 0
+    )
+      ? Math.floor(candidate.maxRetries)
+      : undefined;
+
+    return {
+      id,
+      kind,
+      payload,
+      dedupeKey,
+      channelId: message.channelId,
+      sourceMessageId: message.id,
+      inferredAt,
+      ...(normalizedMaxRetries !== undefined ? { maxRetries: normalizedMaxRetries } : {}),
+    };
+  }
+
+  private normalizePostTurnPayload(
+    payload: PostTurnActionCandidate['payload'],
+  ): Record<string, unknown> {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return {};
+    }
+    return payload;
+  }
+
+  private hashPostTurnPayload(payload: Record<string, unknown>): string {
+    const serialized = this.stableStringify(payload);
+    return createHash('sha256').update(serialized).digest('hex').slice(0, 16);
+  }
+
+  private stableStringify(value: unknown): string {
+    if (value === null) return 'null';
+    if (value instanceof Date) return JSON.stringify(value.toISOString());
+    if (typeof value === 'bigint') return JSON.stringify(value.toString());
+    if (typeof value !== 'object') {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+      return `[${value.map(item => this.stableStringify(item)).join(',')}]`;
+    }
+
+    const objectValue = value as Record<string, unknown>;
+    const entries = Object.entries(objectValue)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${this.stableStringify(entryValue)}`);
+    return `{${entries.join(',')}}`;
   }
 
   /** Extract text from the last assistant message in Agent state */

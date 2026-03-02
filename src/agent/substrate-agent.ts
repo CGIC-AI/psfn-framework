@@ -51,6 +51,7 @@ import type { SkillsRuntime } from '../skills/runtime.js';
 import { ReflectionNudgeTracker, type TurnToolSummary } from '../skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';
 import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
+import { resolveToolRequiredCapabilities } from '../capabilities/requirements.js';
 import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
@@ -69,6 +70,10 @@ import {
   resolveBroadcastVisibilityScope,
 } from '../broadcast/safety.js';
 import { runDeliberation } from '../llm/deliberation.js';
+import {
+  createDefaultExtendedToolAutoloadPolicy,
+  type ExtendedToolAutoloadPolicy,
+} from './extended-tool-autoload-policy.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -152,6 +157,7 @@ export class SubstrateAgent {
   private channelRegistry = new Map<string, ChannelPromptDock>();
   private capabilityRuntime: CapabilityRuntime | null = null;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
+  private extendedToolAutoloadPolicy: ExtendedToolAutoloadPolicy | null = createDefaultExtendedToolAutoloadPolicy();
   private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
   private reflectionNudge = new ReflectionNudgeTracker();
   private postTurnActionInferers: PostTurnActionInferer[] = [];
@@ -431,6 +437,10 @@ export class SubstrateAgent {
     this.refreshCapabilityRuntime();
   }
 
+  setExtendedToolAutoloadPolicy(policy: ExtendedToolAutoloadPolicy | null): void {
+    this.extendedToolAutoloadPolicy = policy;
+  }
+
   private createLoadToolsTool(): AgentTool<any> {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
@@ -445,11 +455,19 @@ export class SubstrateAgent {
         _toolCallId: string,
         params: { tools: string[] },
       ): Promise<AgentToolResult<any>> => {
-        const matched = self.extendedTools.filter(t => params.tools.includes(t.name));
+        const catalog = new Map(self.extendedTools.map(tool => [tool.name, tool]));
+        const matched: AgentTool<any>[] = [];
+        const seen = new Set<string>();
+        for (const name of params.tools) {
+          if (seen.has(name)) continue;
+          seen.add(name);
+          const tool = catalog.get(name);
+          if (tool) matched.push(tool);
+        }
         for (const t of matched) self.loadedExtended.add(t.name);
         const active = [
           ...self.coreTools,
-          ...self.extendedTools.filter(t => self.loadedExtended.has(t.name)),
+          ...self.getActiveExtendedTools(),
         ];
         self.agent.setTools(self.withCapabilityGates(active));
         if (matched.length) {
@@ -461,6 +479,119 @@ export class SubstrateAgent {
         );
       },
     };
+  }
+
+  private getActiveExtendedTools(): AgentTool<any>[] {
+    if (this.loadedExtended.size === 0) return [];
+
+    const catalog = new Map(this.extendedTools.map(tool => [tool.name, tool]));
+    const active: AgentTool<any>[] = [];
+    const staleNames: string[] = [];
+    for (const name of this.loadedExtended) {
+      const tool = catalog.get(name);
+      if (!tool) {
+        staleNames.push(name);
+        continue;
+      }
+      active.push(tool);
+    }
+    for (const staleName of staleNames) {
+      this.loadedExtended.delete(staleName);
+    }
+    return active;
+  }
+
+  private preloadExtendedToolsForTurn(
+    message: SubstrateMessage,
+    taskKind: string | undefined,
+    correlation: CorrelationMetadata,
+  ): void {
+    const policy = this.extendedToolAutoloadPolicy;
+    if (!policy || this.extendedTools.length === 0) {
+      return;
+    }
+
+    const boundedMax = Number.isFinite(policy.maxPreloadCount)
+      ? Math.max(0, Math.floor(policy.maxPreloadCount))
+      : 0;
+    const intent = policy.classifyIntent(message, taskKind);
+    const candidateNames = policy.getCandidatesForIntent(intent).slice(0, boundedMax);
+    if (candidateNames.length === 0) {
+      this.emitTelemetry('agent.tools.autoload', {
+        channelId: message.channelId,
+        intent,
+        taskKind: taskKind ?? null,
+        boundedMax,
+        candidates: [],
+        activated: [],
+        alreadyActive: [],
+        skippedDenied: [],
+        unavailable: [],
+        ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload'),
+      });
+      return;
+    }
+
+    const access = this.resolveCapabilityAccess();
+    const catalog = new Map(this.extendedTools.map(tool => [tool.name, tool]));
+    const activated: string[] = [];
+    const alreadyActive: string[] = [];
+    const unavailable: string[] = [];
+    const skippedDenied: Array<{ toolName: string; missingTokens: CapabilityToken[] }> = [];
+
+    for (const toolName of candidateNames) {
+      const tool = catalog.get(toolName);
+      if (!tool) {
+        unavailable.push(toolName);
+        this.emitTelemetry('agent.tools.autoload.skipped', {
+          channelId: message.channelId,
+          intent,
+          taskKind: taskKind ?? null,
+          toolName,
+          reason: 'not_registered',
+          ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
+        });
+        continue;
+      }
+
+      const missingTokens = resolveToolRequiredCapabilities(tool, {})
+        .filter(token => !access.has(token));
+      if (missingTokens.length > 0) {
+        skippedDenied.push({ toolName, missingTokens });
+        this.emitTelemetry('agent.tools.autoload.skipped', {
+          channelId: message.channelId,
+          intent,
+          taskKind: taskKind ?? null,
+          toolName,
+          reason: 'capability_denied',
+          missingTokens,
+          tier: access.getTier(),
+          ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
+        });
+        continue;
+      }
+
+      if (this.loadedExtended.has(tool.name)) {
+        alreadyActive.push(tool.name);
+        continue;
+      }
+
+      this.loadedExtended.add(tool.name);
+      activated.push(tool.name);
+    }
+
+    this.emitTelemetry('agent.tools.autoload', {
+      channelId: message.channelId,
+      intent,
+      taskKind: taskKind ?? null,
+      boundedMax,
+      candidates: candidateNames,
+      activated,
+      alreadyActive,
+      skippedDenied,
+      unavailable,
+      ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload'),
+    });
   }
 
   // ── Steering + follow-up + lifecycle ──
@@ -713,9 +844,10 @@ export class SubstrateAgent {
         // Configure pi-agent-core Agent for this turn
         this.ensureModel(message);
         this.agent.setSystemPrompt(context.systemPrompt);
+        this.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
         const activeTools = [
           ...this.coreTools,
-          ...this.extendedTools.filter((tool) => this.loadedExtended.has(tool.name)),
+          ...this.getActiveExtendedTools(),
         ];
         this.agent.setTools(this.withCapabilityGates(activeTools));
 

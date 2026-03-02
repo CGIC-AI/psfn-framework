@@ -6,6 +6,10 @@ import type { PostTurnActionCandidate, SubstrateConfig } from '../types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
 import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
+import {
+  createDefaultExtendedToolAutoloadPolicy,
+  type ExtendedToolAutoloadPolicy,
+} from '../agent/extended-tool-autoload-policy.js';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
@@ -162,6 +166,17 @@ export interface PromptRuntimeTarget extends ToolRegistrarTarget {
 }
 
 export type CharacterCardRuntimeTarget = ToolRegistrarTarget;
+
+export interface ExtendedToolAutoloadRuntimeTarget {
+  setExtendedToolAutoloadPolicy: (policy: ExtendedToolAutoloadPolicy | null) => void;
+}
+
+export function wireExtendedToolAutoloadPolicy(
+  target: ExtendedToolAutoloadRuntimeTarget,
+  policy: ExtendedToolAutoloadPolicy = createDefaultExtendedToolAutoloadPolicy(),
+): void {
+  target.setExtendedToolAutoloadPolicy(policy);
+}
 
 /**
  * Wire prompt stack storage, composition, and tools.

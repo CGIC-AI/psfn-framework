@@ -7,7 +7,12 @@ import { Scheduler } from '../scheduler/scheduler.js';
 import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { readLastActiveSession } from '../lifecycle/notifications.js';
-import { wireHeartbeatRuntime, wireSessionToolsRuntime } from './parity.js';
+import { createDefaultExtendedToolAutoloadPolicy } from '../agent/extended-tool-autoload-policy.js';
+import {
+  wireExtendedToolAutoloadPolicy,
+  wireHeartbeatRuntime,
+  wireSessionToolsRuntime,
+} from './parity.js';
 
 describe('wireSessionToolsRuntime', () => {
   let tempDir: string;
@@ -60,6 +65,36 @@ describe('wireSessionToolsRuntime', () => {
     const active = readLastActiveSession(tempDir);
     expect(active?.sessionId).toBe(details.newSessionId);
     expect(active?.channelType).toBe('api');
+  });
+});
+
+describe('wireExtendedToolAutoloadPolicy', () => {
+  it('applies default autoload policy when no override is provided', () => {
+    const target = {
+      setExtendedToolAutoloadPolicy: vi.fn(),
+    };
+
+    wireExtendedToolAutoloadPolicy(target);
+
+    expect(target.setExtendedToolAutoloadPolicy).toHaveBeenCalledTimes(1);
+    const policy = target.setExtendedToolAutoloadPolicy.mock.calls[0]?.[0];
+    expect(policy.maxPreloadCount).toBeGreaterThan(0);
+    expect(policy.classifyIntent({
+      channelId: 'discord-dev',
+      channelType: 'discord',
+      content: 'check git diff',
+    })).toBe('dev');
+  });
+
+  it('uses caller-provided policy override', () => {
+    const target = {
+      setExtendedToolAutoloadPolicy: vi.fn(),
+    };
+    const customPolicy = createDefaultExtendedToolAutoloadPolicy(1);
+
+    wireExtendedToolAutoloadPolicy(target, customPolicy);
+
+    expect(target.setExtendedToolAutoloadPolicy).toHaveBeenCalledWith(customPolicy);
   });
 });
 

@@ -20,32 +20,37 @@ import type {
 import type { AdminChatDebugStreamOptions } from '../types.js';
 
 export type AdminHandlersDeps = ConstructorParameters<typeof LegacyAdminHandlers>[0];
+export interface AdminHandlersDomains {
+  dashboard: AdminDashboardHandlers;
+  memory: AdminMemoryHandlers;
+  sessions: AdminSessionsHandlers;
+  identity: AdminIdentityHandlers;
+  settings: AdminSettingsHandlers;
+  contacts: AdminContactsHandlers;
+  prompts: AdminPromptsHandlers;
+  chat: AdminChatHandlers;
+  confirmations: AdminConfirmationsHandlers;
+  events: AdminEventsHandlers;
+}
 
 export class AdminHandlers {
   private readonly legacy: LegacyAdminHandlers;
-  private readonly dashboardHandlers: AdminDashboardHandlers;
-  private readonly memoryHandlers: AdminMemoryHandlers;
-  private readonly sessionsHandlers: AdminSessionsHandlers;
-  private readonly identityHandlers: AdminIdentityHandlers;
-  private readonly settingsHandlers: AdminSettingsHandlers;
-  private readonly contactsHandlers: AdminContactsHandlers;
-  private readonly promptsHandlers: AdminPromptsHandlers;
-  private readonly chatHandlers: AdminChatHandlers;
-  private readonly confirmationsHandlers: AdminConfirmationsHandlers;
-  private readonly eventsHandlers: AdminEventsHandlers;
+  readonly domains: AdminHandlersDomains;
 
   constructor(deps: AdminHandlersDeps) {
     this.legacy = new LegacyAdminHandlers(deps);
-    this.dashboardHandlers = new AdminDashboardHandlers(this.legacy);
-    this.memoryHandlers = new AdminMemoryHandlers(this.legacy);
-    this.sessionsHandlers = new AdminSessionsHandlers(this.legacy);
-    this.identityHandlers = new AdminIdentityHandlers(this.legacy);
-    this.settingsHandlers = new AdminSettingsHandlers(this.legacy);
-    this.contactsHandlers = new AdminContactsHandlers(this.legacy);
-    this.promptsHandlers = new AdminPromptsHandlers(this.legacy);
-    this.chatHandlers = new AdminChatHandlers(this.legacy);
-    this.confirmationsHandlers = new AdminConfirmationsHandlers(this.legacy);
-    this.eventsHandlers = new AdminEventsHandlers(this.legacy);
+    this.domains = {
+      dashboard: new AdminDashboardHandlers(this.legacy),
+      memory: new AdminMemoryHandlers(this.legacy),
+      sessions: new AdminSessionsHandlers(this.legacy),
+      identity: new AdminIdentityHandlers(this.legacy),
+      settings: new AdminSettingsHandlers(this.legacy),
+      contacts: new AdminContactsHandlers(this.legacy),
+      prompts: new AdminPromptsHandlers(this.legacy),
+      chat: new AdminChatHandlers(this.legacy),
+      confirmations: new AdminConfirmationsHandlers(this.legacy),
+      events: new AdminEventsHandlers(this.legacy),
+    };
   }
 
   loginPage(error?: string): string {
@@ -53,39 +58,39 @@ export class AdminHandlers {
   }
 
   dashboard(): string {
-    return this.dashboardHandlers.dashboard();
+    return this.domains.dashboard.dashboard();
   }
 
   memoryList(params?: URLSearchParams): string {
-    return this.memoryHandlers.memoryList(params);
+    return this.domains.memory.memoryList(params);
   }
 
   memoryDetail(id: string): string | null {
-    return this.memoryHandlers.memoryDetail(id);
+    return this.domains.memory.memoryDetail(id);
   }
 
   memoryListFragment(params?: URLSearchParams): string {
-    return this.memoryHandlers.memoryListFragment(params);
+    return this.domains.memory.memoryListFragment(params);
   }
 
   async memorySearch(query: string): Promise<string> {
-    return this.memoryHandlers.memorySearch(query);
+    return this.domains.memory.memorySearch(query);
   }
 
   memorySupersede(id: string): string {
-    return this.memoryHandlers.memorySupersede(id);
+    return this.domains.memory.memorySupersede(id);
   }
 
   sessionList(): string {
-    return this.sessionsHandlers.sessionList();
+    return this.domains.sessions.sessionList();
   }
 
   sessionMessages(channelId: string): string {
-    return this.sessionsHandlers.sessionMessages(channelId);
+    return this.domains.sessions.sessionMessages(channelId);
   }
 
   sessionMessagesFragment(channelId: string): string {
-    return this.sessionsHandlers.sessionMessagesFragment(channelId);
+    return this.domains.sessions.sessionMessagesFragment(channelId);
   }
 
   schedulerPage(): string {
@@ -97,79 +102,79 @@ export class AdminHandlers {
   }
 
   identityPage(): string {
-    return this.identityHandlers.identityPage();
+    return this.domains.identity.identityPage();
   }
 
   stageIdentityIntake(body: string): string {
-    return this.identityHandlers.stageIdentityIntake(body);
+    return this.domains.identity.stageIdentityIntake(body);
   }
 
   async commitIdentityIntake(body: string): Promise<string> {
-    return this.identityHandlers.commitIdentityIntake(body);
+    return this.domains.identity.commitIdentityIntake(body);
   }
 
   async importIdentityCard(body: string): Promise<string> {
-    return this.identityHandlers.importIdentityCard(body);
+    return this.domains.identity.importIdentityCard(body);
   }
 
   rollbackIdentityCard(body: string): string {
-    return this.identityHandlers.rollbackIdentityCard(body);
+    return this.domains.identity.rollbackIdentityCard(body);
   }
 
   previewIdentityCardDiff(body: string): string {
-    return this.identityHandlers.previewIdentityCardDiff(body);
+    return this.domains.identity.previewIdentityCardDiff(body);
   }
 
   async settingsPage(): Promise<string> {
-    return this.settingsHandlers.settingsPage();
+    return this.domains.settings.settingsPage();
   }
 
   skillsPage(): string {
-    return this.settingsHandlers.skillsPage();
+    return this.domains.settings.skillsPage();
   }
 
   updateSettings(body: string): string {
-    return this.settingsHandlers.updateSettings(body);
+    return this.domains.settings.updateSettings(body);
   }
 
   modelsConfigJson(): string {
-    return this.settingsHandlers.modelsConfigJson();
+    return this.domains.settings.modelsConfigJson();
   }
 
   updateModelsConfig(body: string): string {
-    return this.settingsHandlers.updateModelsConfig(body);
+    return this.domains.settings.updateModelsConfig(body);
   }
 
   skillsConfigJson(): string {
-    return this.settingsHandlers.skillsConfigJson();
+    return this.domains.settings.skillsConfigJson();
   }
 
   updateSkillsConfig(body: string): string {
-    return this.settingsHandlers.updateSkillsConfig(body);
+    return this.domains.settings.updateSkillsConfig(body);
   }
 
   schedulerConfigJson(): string {
-    return this.settingsHandlers.schedulerConfigJson();
+    return this.domains.settings.schedulerConfigJson();
   }
 
   updateSchedulerConfig(body: string): string {
-    return this.settingsHandlers.updateSchedulerConfig(body);
+    return this.domains.settings.updateSchedulerConfig(body);
   }
 
   trustPolicyConfigJson(): string {
-    return this.settingsHandlers.trustPolicyConfigJson();
+    return this.domains.settings.trustPolicyConfigJson();
   }
 
   updateTrustPolicyConfig(body: string): string {
-    return this.settingsHandlers.updateTrustPolicyConfig(body);
+    return this.domains.settings.updateTrustPolicyConfig(body);
   }
 
   capabilitiesConfigJson(): string {
-    return this.settingsHandlers.capabilitiesConfigJson();
+    return this.domains.settings.capabilitiesConfigJson();
   }
 
   updateCapabilitiesConfig(body: string): string {
-    return this.settingsHandlers.updateCapabilitiesConfig(body);
+    return this.domains.settings.updateCapabilitiesConfig(body);
   }
 
   primerPage(): string {
@@ -177,34 +182,34 @@ export class AdminHandlers {
   }
 
   chatPage(): string {
-    return this.chatHandlers.chatPage();
+    return this.domains.chat.chatPage();
   }
 
   async confirmationsPage(): Promise<string> {
-    return this.confirmationsHandlers.confirmationsPage();
+    return this.domains.confirmations.confirmationsPage();
   }
 
   async confirmationsListFragment(): Promise<string> {
-    return this.confirmationsHandlers.confirmationsListFragment();
+    return this.domains.confirmations.confirmationsListFragment();
   }
 
   async resolveConfirmation(body: string): Promise<string> {
-    return this.confirmationsHandlers.resolveConfirmation(body);
+    return this.domains.confirmations.resolveConfirmation(body);
   }
 
   chatBootstrap(requestOrigin?: string): AdminChatBootstrapResponse {
-    return this.chatHandlers.chatBootstrap(requestOrigin);
+    return this.domains.chat.chatBootstrap(requestOrigin);
   }
 
   chatModelRoomBootstrap(requestOrigin?: string): AdminModelRoomBootstrapResponse {
-    return this.chatHandlers.chatModelRoomBootstrap(requestOrigin);
+    return this.domains.chat.chatModelRoomBootstrap(requestOrigin);
   }
 
   setupChatDebugSSE(
     res: ServerResponse,
     options: AdminChatDebugStreamOptions = {},
   ): () => void {
-    return this.chatHandlers.setupChatDebugSSE(res, options);
+    return this.domains.chat.setupChatDebugSSE(res, options);
   }
 
   updateChatBootstrap(
@@ -212,83 +217,83 @@ export class AdminHandlers {
     contentTypeHeader: string | string[] | undefined,
     requestOrigin?: string,
   ): AdminChatBootstrapResponse {
-    return this.chatHandlers.updateChatBootstrap(body, contentTypeHeader, requestOrigin);
+    return this.domains.chat.updateChatBootstrap(body, contentTypeHeader, requestOrigin);
   }
 
   async modelListJson(): Promise<string> {
-    return this.settingsHandlers.modelListJson();
+    return this.domains.settings.modelListJson();
   }
 
   async refreshModels(): Promise<string> {
-    return this.settingsHandlers.refreshModels();
+    return this.domains.settings.refreshModels();
   }
 
   contactsPage(): string {
-    return this.contactsHandlers.contactsPage();
+    return this.domains.contacts.contactsPage();
   }
 
   contactMutationAuditFragment(params?: URLSearchParams): string {
-    return this.contactsHandlers.contactMutationAuditFragment(params);
+    return this.domains.contacts.contactMutationAuditFragment(params);
   }
 
   contactsListFragment(): string {
-    return this.contactsHandlers.contactsListFragment();
+    return this.domains.contacts.contactsListFragment();
   }
 
   contactEditFormFragment(contactId: string): string {
-    return this.contactsHandlers.contactEditFormFragment(contactId);
+    return this.domains.contacts.contactEditFormFragment(contactId);
   }
 
   handleContactUpdate(contactId: string, body: string): string {
-    return this.contactsHandlers.handleContactUpdate(contactId, body);
+    return this.domains.contacts.handleContactUpdate(contactId, body);
   }
 
   promptsPage(): string {
-    return this.promptsHandlers.promptsPage();
+    return this.domains.prompts.promptsPage();
   }
 
   promptDetail(layerId: string): string | null {
-    return this.promptsHandlers.promptDetail(layerId);
+    return this.domains.prompts.promptDetail(layerId);
   }
 
   promptRegistryDetail(key: string): string | null {
-    return this.promptsHandlers.promptRegistryDetail(key);
+    return this.domains.prompts.promptRegistryDetail(key);
   }
 
   updatePromptLayer(body: string): string {
-    return this.promptsHandlers.updatePromptLayer(body);
+    return this.domains.prompts.updatePromptLayer(body);
   }
 
   updatePromptRegistry(body: string): string {
-    return this.promptsHandlers.updatePromptRegistry(body);
+    return this.domains.prompts.updatePromptRegistry(body);
   }
 
   togglePromptLayer(body: string): string {
-    return this.promptsHandlers.togglePromptLayer(body);
+    return this.domains.prompts.togglePromptLayer(body);
   }
 
   rollbackPromptLayer(body: string): string {
-    return this.promptsHandlers.rollbackPromptLayer(body);
+    return this.domains.prompts.rollbackPromptLayer(body);
   }
 
   rollbackPromptRegistry(body: string): string {
-    return this.promptsHandlers.rollbackPromptRegistry(body);
+    return this.domains.prompts.rollbackPromptRegistry(body);
   }
 
   previewPromptLayerDiff(body: string): string {
-    return this.promptsHandlers.previewPromptLayerDiff(body);
+    return this.domains.prompts.previewPromptLayerDiff(body);
   }
 
   valuesTimelinePageHtml(): string {
-    return this.eventsHandlers.valuesTimelinePageHtml();
+    return this.domains.events.valuesTimelinePageHtml();
   }
 
   eventsPageHtml(searchParams?: URLSearchParams): string {
-    return this.eventsHandlers.eventsPageHtml(searchParams);
+    return this.domains.events.eventsPageHtml(searchParams);
   }
 
   setupSSE(res: ServerResponse): () => void {
-    return this.eventsHandlers.setupSSE(res);
+    return this.domains.events.setupSSE(res);
   }
 
   appendAuditTimelineEntry(

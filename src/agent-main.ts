@@ -94,8 +94,7 @@ import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
-import { toErrorMessage } from './utils/errors.js';
-import { evaluateWyomingDelegation } from './agent-main/wyoming-routing.js';
+import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
 import {
   resolveContactsDir,
   resolveNotesDir,
@@ -800,125 +799,27 @@ async function main(): Promise<void> {
     },
   );
 
-  // ── Register reverse RPC handler for voice messages from gateway ──
+  const trackSessionActivity = (message: SubstrateMessage): void => {
+    const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
+    writeLastActiveSession(config.dataDir, {
+      sessionId,
+      channelType: inferSessionChannelType(sessionId) ?? message.channelType,
+      timestamp: message.timestamp instanceof Date
+        ? message.timestamp.getTime()
+        : Date.now(),
+    });
+  };
+
+  // ── Register gateway inbound message handlers ──
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
-
-  gateway.onHandleMessage(async (message: SubstrateMessage) => {
-    const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
-    writeLastActiveSession(config.dataDir, {
-      sessionId,
-      channelType: inferSessionChannelType(sessionId) ?? message.channelType,
-      timestamp: message.timestamp instanceof Date
-        ? message.timestamp.getTime()
-        : Date.now(),
-    });
-    log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
-    const routingDecision = evaluateWyomingDelegation(message, config);
-    if (routingDecision.isWyoming) {
-      safeguardAuditTrail.append('wyoming.routing.decision', {
-        channelId: message.channelId,
-        messageId: message.id,
-        delegated: routingDecision.delegate,
-        reason: routingDecision.reason,
-        connectionId: routingDecision.routing?.connectionId,
-        sessionId: routingDecision.routing?.sessionId,
-        turnId: routingDecision.routing?.turnId,
-        siteId: routingDecision.routing?.siteId,
-        satelliteId: routingDecision.routing?.satelliteId,
-      });
-    }
-
-    if (routingDecision.delegate) {
-      try {
-        const delegated = await shardManager.delegateWyomingSession({
-          message,
-          routing: routingDecision.routing,
-        });
-        safeguardAuditTrail.append('wyoming.routing.delegated', {
-          channelId: message.channelId,
-          messageId: message.id,
-          shardId: delegated.shardId,
-          connectionId: routingDecision.routing?.connectionId,
-          sessionId: routingDecision.routing?.sessionId,
-          turnId: routingDecision.routing?.turnId,
-          siteId: routingDecision.routing?.siteId,
-          satelliteId: routingDecision.routing?.satelliteId,
-        });
-        return {
-          content: delegated.content,
-          channelId: message.channelId,
-          metadata: {
-            model: delegated.model,
-            inputTokens: delegated.inputTokens,
-            outputTokens: delegated.outputTokens,
-            durationMs: delegated.durationMs,
-          },
-        };
-      } catch (error) {
-        const delegationError = toErrorMessage(error);
-        safeguardAuditTrail.append('wyoming.routing.fallback', {
-          channelId: message.channelId,
-          messageId: message.id,
-          reason: 'delegation_error',
-          error: delegationError,
-          connectionId: routingDecision.routing?.connectionId,
-          sessionId: routingDecision.routing?.sessionId,
-          turnId: routingDecision.routing?.turnId,
-        });
-        log.warn('Wyoming delegation failed; falling back to primary path', {
-          channelId: message.channelId,
-          error: delegationError,
-        });
-      }
-    }
-
-    if (routingDecision.isWyoming) {
-      safeguardAuditTrail.append('wyoming.routing.primary', {
-        channelId: message.channelId,
-        messageId: message.id,
-        reason: routingDecision.reason,
-        connectionId: routingDecision.routing?.connectionId,
-        sessionId: routingDecision.routing?.sessionId,
-        turnId: routingDecision.routing?.turnId,
-        siteId: routingDecision.routing?.siteId,
-        satelliteId: routingDecision.routing?.satelliteId,
-      });
-    }
-    return agentLoop.handleMessage(message);
-    // Note: no discord.send() — gateway voice runtime handles TTS directly
-  });
-
-  // ── Listen for Discord messages from gateway ──
-
-  gateway.onDiscordMessage(async (message: SubstrateMessage) => {
-    // Deserialize Date if it came as string
-    if (typeof message.timestamp === 'string') {
-      message.timestamp = new Date(message.timestamp);
-    }
-
-    // Track last-active channel for lifecycle notifications
-    const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
-    writeLastActiveSession(config.dataDir, {
-      sessionId,
-      channelType: inferSessionChannelType(sessionId) ?? message.channelType,
-      timestamp: message.timestamp instanceof Date
-        ? message.timestamp.getTime()
-        : Date.now(),
-    });
-
-    log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
-
-    try {
-      const response = await agentLoop.handleMessage(message);
-
-      // Send response back through gateway → Discord
-      await gateway.discordSend(message.channelId, response.content);
-    } catch (err) {
-      log.error('Error handling message', { error: String(err) });
-      try {
-        await gateway.discordSend(message.channelId, 'Something went wrong. Please try again.');
-      } catch { /* ignore send errors */ }
-    }
+  registerGatewayMessageHandlers({
+    gateway,
+    agentLoop,
+    shardManager,
+    safeguardAuditTrail,
+    config,
+    log,
+    trackSessionActivity,
   });
 
   await eventBus.emit('system.init', {});

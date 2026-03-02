@@ -18,6 +18,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { TelegramChannelConfig } from '../config.js';
 import { createComponentLogger } from '../../logger.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import {
+  DeferredLatestByChannel,
+  emitTurnContentionTelemetry,
+  type TurnContentionPolicy,
+} from '../../lifecycle/turn-contention.js';
 
 const log = createComponentLogger('Telegram');
 
@@ -217,6 +222,9 @@ export class TelegramAdapter implements ChannelAdapter {
   private webhookServer: Server | undefined;
   private requestControllers = new Set<AbortController>();
   private processingChannels = new Set<string>();
+  private pendingByChannel = new DeferredLatestByChannel<TelegramIncomingMessage>();
+  private lockStartedAt = new Map<string, number>();
+  private lockContention = new Map<string, number>();
   private messagePointers = new Map<string, MessagePointer>();
   private allowlist = new Set<string>();
   private longPollTimeoutSeconds: number;
@@ -647,10 +655,28 @@ export class TelegramAdapter implements ChannelAdapter {
     });
 
     if (this.processingChannels.has(channelId)) {
-      log.debug('Telegram channel already processing turn; dropping concurrent message', { channelId });
+      const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
+      const queueDepth = (this.lockContention.get(channelId) ?? 0) + 1;
+      this.lockContention.set(channelId, queueDepth);
+      const deferred = this.pendingByChannel.set(channelId, message);
+      this.emitQueueTelemetry(channelId, 'contended', 'defer-latest', {
+        queueDepth: deferred.queueDepth,
+        waitMs: Math.max(0, Date.now() - lockStartMs),
+        superseded: deferred.replaced,
+      });
+      log.debug('Telegram channel already processing turn; deferring latest concurrent message', {
+        channelId,
+        superseded: deferred.replaced,
+      });
       return;
     }
     this.processingChannels.add(channelId);
+    this.lockStartedAt.set(channelId, Date.now());
+    this.lockContention.set(channelId, 0);
+    this.emitQueueTelemetry(channelId, 'acquired', 'defer-latest', {
+      queueDepth: 0,
+      waitMs: 0,
+    });
 
     const typingInterval = this.startTypingLoop(channelId);
     const substrateMessage: SubstrateMessage = {
@@ -687,7 +713,25 @@ export class TelegramAdapter implements ChannelAdapter {
       ).catch(() => undefined);
     } finally {
       clearInterval(typingInterval);
+      const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
+      this.emitQueueTelemetry(channelId, 'released', 'defer-latest', {
+        queueDepth: this.lockContention.get(channelId) ?? 0,
+        waitMs: Math.max(0, Date.now() - lockStartMs),
+      });
+      this.lockStartedAt.delete(channelId);
+      this.lockContention.delete(channelId);
       this.processingChannels.delete(channelId);
+      const pending = this.pendingByChannel.take(channelId);
+      if (pending) {
+        queueMicrotask(() => {
+          this.handleIncomingMessage(pending).catch((error) => {
+            log.error('Deferred Telegram message handling error', {
+              channelId,
+              error: toErrorMessage(error),
+            });
+          });
+        });
+      }
     }
   }
 
@@ -696,6 +740,24 @@ export class TelegramAdapter implements ChannelAdapter {
     return setInterval(() => {
       void this.streaming.sendTyping(channelId).catch(() => undefined);
     }, this.streaming.typingIntervalMs ?? DEFAULT_TYPING_INTERVAL_MS);
+  }
+
+  private emitQueueTelemetry(
+    channelId: string,
+    phase: 'acquired' | 'contended' | 'released',
+    policy: TurnContentionPolicy,
+    details: { queueDepth: number; waitMs: number; superseded?: boolean },
+  ): void {
+    emitTurnContentionTelemetry(this.eventBus, {
+      channelId,
+      phase,
+      policy,
+      source: 'telegram',
+      queueDepth: details.queueDepth,
+      waitMs: details.waitMs,
+      processingChannels: this.processingChannels.size,
+      ...(details.superseded !== undefined ? { superseded: details.superseded } : {}),
+    });
   }
 
   private isAllowed(user: TelegramUser): boolean {

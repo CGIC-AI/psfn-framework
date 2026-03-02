@@ -48,6 +48,7 @@ import {
 } from '../persistence/layout.js';
 import { ReflectionJournalStore } from '../notes/reflection-journal.js';
 import type { PostTurnActionRuntime } from './post-turn-actions.js';
+import { isBusyTurnError } from '../lifecycle/turn-contention.js';
 
 const log = createComponentLogger('SharedWiring');
 const HEARTBEAT_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
@@ -261,13 +262,6 @@ export function wireHeartbeatRuntime(
   const pendingDeferredTemplates = new Set<string>();
   const lastScheduledRunAt = new Map<string, number>();
 
-  const isBusyReflectionError = (error: unknown): boolean => {
-    const text = String(error ?? '').toLowerCase();
-    return text.includes('already processing')
-      || text.includes('agent_busy')
-      || text.includes('channel_busy');
-  };
-
   const toDeliberationMetadata = (
     result: DeliberationResult,
   ): ValuesDeliberationMetadata => ({
@@ -434,7 +428,18 @@ export function wireHeartbeatRuntime(
       return;
     }
     lastScheduledRunAt.set(template.id, now);
-    await executeTemplate(template);
+    try {
+      await executeTemplate(template);
+    } catch (error) {
+      if (!isBusyTurnError(error)) {
+        throw error;
+      }
+      const deferred = queueDeferredTemplateRun(template.id);
+      log.info('Deferred scheduled reflection template execution', {
+        templateId: template.id,
+        queuedNow: deferred.queuedNow,
+      });
+    }
   };
 
   const buildDeferredHeartbeatAction = (
@@ -524,7 +529,7 @@ export function wireHeartbeatRuntime(
     try {
       return await executeTemplate(template, options);
     } catch (error) {
-      if (options.deferIfBusy === false || !isBusyReflectionError(error)) {
+      if (options.deferIfBusy === false || !isBusyTurnError(error)) {
         throw error;
       }
       if (runtimeOptions.postTurnActions) {

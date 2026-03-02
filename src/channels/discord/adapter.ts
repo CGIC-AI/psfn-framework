@@ -25,6 +25,12 @@ import type { EventBus } from '../../event-bus.js';
 import type { SessionStore } from '../../session/store.js';
 import { createComponentLogger } from '../../logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
+import {
+  DeferredLatestByChannel,
+  emitTurnContentionTelemetry,
+  type TurnContentionPhase,
+  type TurnContentionPolicy,
+} from '../../lifecycle/turn-contention.js';
 
 const log = createComponentLogger('Discord');
 
@@ -34,7 +40,6 @@ const STARTUP_BACKFILL_LIMIT = 100;
 const BACKFILL_DEDUP_WINDOW = 500;
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 type StatusKind = 'compaction' | 'retry';
-type QueueTelemetryPhase = 'acquired' | 'contended' | 'released';
 
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
@@ -71,9 +76,10 @@ export class DiscordAdapter implements ChannelAdapter {
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
-  private pendingByChannel = new Map<string, Message>();
+  private pendingByChannel = new DeferredLatestByChannel<Message>();
   private lockStartedAt = new Map<string, number>();
   private lockContention = new Map<string, number>();
+  private lockPolicy = new Map<string, TurnContentionPolicy>();
   private voice: DiscordVoiceRuntime;
   private statusMessages = new Map<string, Message>();
   private statusUnsubscribers: Array<() => void> = [];
@@ -247,17 +253,24 @@ export class DiscordAdapter implements ChannelAdapter {
       const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
       const queueDepth = (this.lockContention.get(channelId) ?? 0) + 1;
       this.lockContention.set(channelId, queueDepth);
-      this.emitQueueTelemetry(channelId, 'contended', {
-        queueDepth,
-        waitMs: Math.max(0, Date.now() - lockStartMs),
-      });
-      if (this.agent) {
+      const lockPolicy = this.lockPolicy.get(channelId) ?? (this.agent ? 'steer' : 'defer-latest');
+      const waitMs = Math.max(0, Date.now() - lockStartMs);
+      if (lockPolicy === 'steer' && this.agent) {
+        this.emitQueueTelemetry(channelId, 'contended', lockPolicy, {
+          queueDepth,
+          waitMs,
+        });
         log.debug('Steering message into active stream', { channelId });
         this.agent.steer(substrateMsg);
       } else {
         // Gateway mode has no direct agent instance, so keep latest message queued
         // instead of dropping it during lock contention.
-        this.pendingByChannel.set(channelId, msg);
+        const deferred = this.pendingByChannel.set(channelId, msg);
+        this.emitQueueTelemetry(channelId, 'contended', 'defer-latest', {
+          queueDepth: deferred.queueDepth,
+          waitMs,
+          superseded: deferred.replaced,
+        });
         log.debug('Queueing contended Discord message for deferred processing', { channelId });
       }
       return;
@@ -267,7 +280,9 @@ export class DiscordAdapter implements ChannelAdapter {
     const lockStartMs = Date.now();
     this.lockStartedAt.set(channelId, lockStartMs);
     this.lockContention.set(channelId, 0);
-    this.emitQueueTelemetry(channelId, 'acquired', {
+    const lockPolicy: TurnContentionPolicy = this.agent ? 'steer' : 'defer-latest';
+    this.lockPolicy.set(channelId, lockPolicy);
+    this.emitQueueTelemetry(channelId, 'acquired', lockPolicy, {
       queueDepth: 0,
       waitMs: 0,
     });
@@ -298,16 +313,17 @@ export class DiscordAdapter implements ChannelAdapter {
       clearInterval(typingInterval);
       this.processing.delete(channelId);
       const lockHeldMs = Math.max(0, Date.now() - lockStartMs);
-      this.emitQueueTelemetry(channelId, 'released', {
+      const releasePolicy = this.lockPolicy.get(channelId) ?? lockPolicy;
+      this.emitQueueTelemetry(channelId, 'released', releasePolicy, {
         queueDepth: this.lockContention.get(channelId) ?? 0,
         waitMs: lockHeldMs,
       });
       this.lockStartedAt.delete(channelId);
       this.lockContention.delete(channelId);
+      this.lockPolicy.delete(channelId);
       await this.clearStatus(channelId, 'compaction');
-      const pending = this.pendingByChannel.get(channelId);
+      const pending = this.pendingByChannel.take(channelId);
       if (pending) {
-        this.pendingByChannel.delete(channelId);
         queueMicrotask(() => {
           this.onDiscordMessage(pending).catch((error) => {
             log.error('Deferred Discord message handling error', { channelId, error: String(error) });
@@ -331,22 +347,22 @@ export class DiscordAdapter implements ChannelAdapter {
 
   private emitQueueTelemetry(
     channelId: string,
-    phase: QueueTelemetryPhase,
-    details: { queueDepth: number; waitMs: number },
+    phase: TurnContentionPhase,
+    policy: TurnContentionPolicy,
+    details: { queueDepth: number; waitMs: number; superseded?: boolean },
   ): void {
     const telemetry = {
       channelId,
       phase,
+      policy,
+      source: 'discord',
       queueDepth: details.queueDepth,
       waitMs: details.waitMs,
       processingChannels: this.processing.size,
-      timestamp: Date.now(),
+      ...(details.superseded !== undefined ? { superseded: details.superseded } : {}),
     };
     log.debug('Queue lock telemetry', telemetry);
-    const telemetryBus = this.eventBus as unknown as {
-      emit: (event: string, payload: Record<string, unknown>) => Promise<void>;
-    };
-    telemetryBus.emit('channel.queue.telemetry', telemetry).catch(() => undefined);
+    emitTurnContentionTelemetry(this.eventBus, telemetry);
   }
 
   private registerStatusListeners(): void {

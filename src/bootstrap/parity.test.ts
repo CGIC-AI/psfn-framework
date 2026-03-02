@@ -286,6 +286,9 @@ describe('wireHeartbeatRuntime', () => {
         .mockResolvedValue({ content: 'Deferred reflection output' }),
       waitForIdle: vi.fn().mockResolvedValue(undefined),
       registerPostTurnActionInferer,
+        .mockResolvedValue({ content: 'Deferred reflection output' }),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+      registerPostTurnActionInferer,
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -382,5 +385,56 @@ describe('wireHeartbeatRuntime', () => {
 
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
     expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+  });
+
+  it('defers scheduled template runs when the agent is busy and executes after idle', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Agent is already processing another prompt'))
+        .mockResolvedValue({ content: 'Deferred scheduled output' }),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      wireHeartbeatRuntime(
+        target,
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+      );
+
+      const whisperTask = scheduler.getTask('reflection:whisper');
+      expect(whisperTask).toBeDefined();
+
+      nowSpy.mockReturnValue(1_700_000_000_000 + (whisperTask?.intervalMs ?? 0) + 1);
+      await scheduler.tick();
+
+      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:whisper'));
+      expect(deferredTask).toBeDefined();
+
+      nowSpy.mockReturnValue((deferredTask?.runAt ?? 0) + 1);
+      await scheduler.tick();
+
+      expect(agentLoop.waitForIdle).toHaveBeenCalledOnce();
+      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
+      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

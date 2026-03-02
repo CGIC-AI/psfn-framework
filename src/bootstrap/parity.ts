@@ -17,6 +17,7 @@ import {
   type ExtendedToolAutoloadPolicy,
 } from '../agent/extended-tool-autoload-policy.js';
 import type {
+  ExtendedToolActivationOptions,
   ExtendedToolActivationResult,
   PostTurnActionInferer,
 } from '../agent/substrate-agent.js';
@@ -88,7 +89,10 @@ const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
 interface HeartbeatAgent {
   handleMessage(message: SubstrateMessage): Promise<{ content: string }>;
-  activateExtendedTools?(toolNames: readonly string[]): ExtendedToolActivationResult;
+  activateExtendedTools?(
+    toolNames: readonly string[],
+    options?: ExtendedToolActivationOptions,
+  ): ExtendedToolActivationResult;
   waitForIdle?(): Promise<void>;
   registerPostTurnActionInferer?(inferer: PostTurnActionInferer): () => void;
 }
@@ -418,6 +422,39 @@ export function wireHeartbeatRuntime(
         error: String(error),
       });
     });
+    const adaptiveDecision = payload.phase === 'queued'
+      ? 'queued'
+      : payload.phase === 'executed'
+        ? 'executed'
+        : payload.phase === 'failed'
+          ? 'failed'
+          : null;
+    if (!adaptiveDecision) return;
+    for (const toolName of payload.toolNames) {
+      telemetryEventBus.emit('agent.tools.adaptive.decision', {
+        turnId: payload.sourceMessageId || payload.actionId,
+        requestId: payload.actionId,
+        channelId: payload.channelId,
+        callType: 'tool',
+        purpose: 'agent.tools.adaptive.decision',
+        timestamp: Date.now(),
+        toolName,
+        source: 'deferred',
+        decision: adaptiveDecision,
+        reason: payload.phase === 'failed'
+          ? 'deferred_tool_handoff_failed'
+          : 'deferred_tool_handoff',
+        taskKind: 'deferred_tool_handoff',
+        intent: 'deferred_tool_handoff',
+      }).catch((error) => {
+        log.warn('Deferred adaptive tool telemetry emit failed', {
+          actionId: payload.actionId,
+          toolName,
+          phase: payload.phase,
+          error: String(error),
+        });
+      });
+    }
   };
 
   const toDeliberationMetadata = (
@@ -781,7 +818,18 @@ export function wireHeartbeatRuntime(
         };
 
         if (!executionState.activated) {
-          const activation = agentLoop.activateExtendedTools?.(payload.toolNames);
+          const activation = agentLoop.activateExtendedTools?.(payload.toolNames, {
+            source: 'deferred',
+            correlation: {
+              turnId: action.sourceMessageId || action.id,
+              requestId: action.id,
+              channelId: action.channelId,
+              callType: 'tool',
+              purpose: 'agent.tools.adaptive.decision',
+            },
+            taskKind: 'deferred_tool_handoff',
+            intent: 'deferred_tool_handoff',
+          });
           if (!activation) {
             throw new Error('Agent loop does not support deferred tool activation');
           }

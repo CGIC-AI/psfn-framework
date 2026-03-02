@@ -14,6 +14,7 @@ import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import type { SkillsRuntime } from '../../skills/runtime.js';
+import type { AdaptiveToolRuntimeState } from '../../agent/adaptive-tools-telemetry.js';
 import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
@@ -23,6 +24,10 @@ import type {
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;
   resolveConfirmationQueue(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
+}
+
+export interface AdaptiveToolsStateProvider {
+  getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState;
 }
 
 export interface AdminServerConfig {
@@ -47,6 +52,7 @@ export interface AdminServerConfig {
   cardVersionStore?: CharacterCardVersionStore | null;
   skillsRuntime?: SkillsRuntime | null;
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
+  adaptiveToolsStateProvider?: AdaptiveToolsStateProvider | null;
 }
 
 export interface DashboardStats {

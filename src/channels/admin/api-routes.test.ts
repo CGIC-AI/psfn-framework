@@ -261,6 +261,37 @@ describe('AdminServer JSON API routes', () => {
       config: testConfig,
       parentSystemPrompt: '',
     });
+    const adaptiveToolsStateProvider = {
+      getAdaptiveToolRuntimeState: () => ({
+        generatedAt: 1_701_234_567_890,
+        coreTools: ['load_tools'],
+        extendedTools: ['repo_status', 'repo_diff', 'repo_apply_patch'],
+        promotedToolsConfigured: ['repo_status'],
+        promotedToolsActive: ['repo_status'],
+        promotedToolsSkipped: [
+          {
+            toolName: 'repo_apply_patch',
+            source: 'promoted',
+            reason: 'capability_denied',
+            missingTokens: ['git.write'],
+          },
+        ],
+        loadedExtendedTools: [
+          {
+            toolName: 'repo_diff',
+            source: 'autoload',
+            activatedAt: 1_701_234_560_000,
+            lastActivatedAt: 1_701_234_567_000,
+          },
+        ],
+        activeTools: [
+          { toolName: 'load_tools', source: 'core' },
+          { toolName: 'repo_status', source: 'promoted' },
+          { toolName: 'repo_diff', source: 'autoload' },
+        ],
+        lastSnapshot: null,
+      }),
+    };
 
     port = await allocatePort();
     server = new AdminServer({
@@ -279,6 +310,7 @@ describe('AdminServer JSON API routes', () => {
       promptStore,
       promptRegistry,
       cardVersionStore,
+      adaptiveToolsStateProvider,
       skillsRuntime: {
         getSnapshot: () => null,
         invalidate: () => {},
@@ -304,6 +336,95 @@ describe('AdminServer JSON API routes', () => {
     expect(authorized.status).toBe(200);
     const payload = JSON.parse(authorized.body) as { stats: { memoryTotal: number } };
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns adaptive tool runtime state and recent adaptive telemetry', async () => {
+    await eventBus.emit('agent.tools.adaptive.decision', {
+      turnId: 'turn-adaptive-1',
+      requestId: 'turn-adaptive-1',
+      channelId: 'api-session',
+      callType: 'chat',
+      purpose: 'agent.tools.adaptive.decision',
+      timestamp: Date.now(),
+      toolName: 'repo_diff',
+      source: 'autoload',
+      decision: 'activated',
+      reason: 'autoload_candidate',
+      taskKind: null,
+      intent: 'dev',
+    });
+    await eventBus.emit('agent.tools.adaptive.snapshot', {
+      turnId: 'turn-adaptive-1',
+      requestId: 'turn-adaptive-1',
+      channelId: 'api-session',
+      callType: 'chat',
+      purpose: 'agent.tools.adaptive.snapshot',
+      timestamp: Date.now(),
+      taskKind: null,
+      intent: 'dev',
+      tools: [
+        { toolName: 'load_tools', source: 'core' },
+        { toolName: 'repo_status', source: 'promoted' },
+        { toolName: 'repo_diff', source: 'autoload' },
+      ],
+      skipped: [
+        {
+          toolName: 'repo_apply_patch',
+          source: 'autoload',
+          reason: 'capability_denied',
+          missingTokens: ['git.write'],
+        },
+      ],
+      counts: {
+        core: 1,
+        promoted: 1,
+        extendedLoaded: 0,
+        autoload: 1,
+        deferred: 0,
+        total: 3,
+      },
+    });
+
+    const adaptiveRes = await request(port, 'GET', '/api/admin/tools/adaptive', undefined, authHeaders);
+    expect(adaptiveRes.status).toBe(200);
+    const adaptivePayload = JSON.parse(adaptiveRes.body) as {
+      state: {
+        coreTools: string[];
+        activeTools: Array<{ toolName: string; source: string }>;
+      } | null;
+      recentTelemetry: Array<{
+        type: 'decision' | 'snapshot';
+        payload: Record<string, unknown>;
+      }>;
+    };
+
+    expect(adaptivePayload.state).not.toBeNull();
+    expect(adaptivePayload.state?.coreTools).toContain('load_tools');
+    expect(adaptivePayload.state?.activeTools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
+      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
+    ]));
+    expect(adaptivePayload.recentTelemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'decision',
+        payload: expect.objectContaining({
+          toolName: 'repo_diff',
+          source: 'autoload',
+          decision: 'activated',
+        }),
+      }),
+      expect.objectContaining({
+        type: 'snapshot',
+        payload: expect.objectContaining({
+          tools: expect.arrayContaining([
+            expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
+          ]),
+          skipped: expect.arrayContaining([
+            expect.objectContaining({ toolName: 'repo_apply_patch', reason: 'capability_denied' }),
+          ]),
+        }),
+      }),
+    ]));
   });
 
   it('supports memory list/detail/search/supersede endpoints', async () => {

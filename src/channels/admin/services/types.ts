@@ -34,6 +34,11 @@ import type {
 } from '../types.js';
 import type { ContactConversationChannelView } from './contact-session-linker.js';
 import type { IdentityIntakeReviewState } from '../templates/identity.js';
+import type {
+  AdaptiveToolDecisionTelemetry,
+  AdaptiveToolRuntimeState,
+  AdaptiveToolSnapshotTelemetry,
+} from '../../../agent/adaptive-tools-telemetry.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;
@@ -41,6 +46,27 @@ export interface AdminDashboardData {
 
 export interface AdminDashboardService {
   getDashboardData(): AdminDashboardData;
+}
+
+export type AdminAdaptiveToolTelemetryEvent =
+  | {
+    type: 'decision';
+    timestamp: number;
+    payload: AdaptiveToolDecisionTelemetry;
+  }
+  | {
+    type: 'snapshot';
+    timestamp: number;
+    payload: AdaptiveToolSnapshotTelemetry;
+  };
+
+export interface AdminAdaptiveToolsData {
+  state: AdaptiveToolRuntimeState | null;
+  recentTelemetry: AdminAdaptiveToolTelemetryEvent[];
+}
+
+export interface AdminAdaptiveToolsService {
+  getAdaptiveToolsData(): AdminAdaptiveToolsData;
 }
 
 export interface AdminMemoryContactSummary {

@@ -491,4 +491,41 @@ describe('schedule_task', () => {
     // Instead, let's just verify the task was registered correctly.
     expect(planned!.type).toBe('one-shot');
   });
+
+  it('retries scheduled tasks after busy contention instead of dropping them', async () => {
+    const handleMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Agent is already processing another prompt'))
+      .mockResolvedValue({
+        content: 'recovered response',
+        channelId: 'internal:test',
+        metadata: {},
+      });
+    const waitForIdle = vi.fn().mockResolvedValue(undefined);
+    agentLoop = {
+      handleMessage,
+      waitForIdle,
+      registerTool: vi.fn(),
+    } as unknown as SubstrateAgent;
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    sender = { send };
+
+    const tool = createScheduleTaskTool(scheduler, agentLoop, sender, 'ch-1');
+    await tool.execute('call-8', {
+      name: 'Retry Busy',
+      prompt: 'This task should retry after runtime contention clears.',
+      delay_minutes: 1,
+    }, new AbortController().signal);
+
+    const planned = scheduler.listTasks().find(t => t.id.startsWith('planned:'));
+    expect(planned).toBeDefined();
+    scheduler.updateTask(planned!.id, { runAt: Date.now() - 1 });
+
+    await scheduler.tick();
+
+    expect(waitForIdle).toHaveBeenCalledOnce();
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledOnce();
+  });
 });

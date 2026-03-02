@@ -148,9 +148,13 @@ export interface EventMap {
   'channel.queue.telemetry': {
     channelId: string;
     phase: 'acquired' | 'contended' | 'released';
+    policy?: 'drop' | 'defer-latest' | 'queue' | 'steer';
+    source?: string;
     queueDepth: number;
     waitMs: number;
     processingChannels: number;
+    reason?: string;
+    superseded?: boolean;
     timestamp: number;
   };
   'session.created': { channelId: string };

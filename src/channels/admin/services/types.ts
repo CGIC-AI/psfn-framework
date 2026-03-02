@@ -208,9 +208,16 @@ export interface AdminSettingsData {
   editors: SettingsConfigEditors;
 }
 
+export interface SettingsValidationError {
+  field: string;
+  message: string;
+  code?: string;
+}
+
 export interface ConfigUpdateResult {
   ok: boolean;
   message: string;
+  validationErrors?: SettingsValidationError[];
 }
 
 export interface AdminSettingsService {

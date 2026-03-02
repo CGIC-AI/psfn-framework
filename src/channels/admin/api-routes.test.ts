@@ -907,6 +907,44 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('returns field-level validation details for invalid settings payloads', async () => {
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        sessionMessageLimit: 0,
+        importProcessingRouteMode: 'local_endpoint',
+        importProcessingLocalEndpointUrl: '',
+        importProcessingLocalModel: '',
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as {
+      ok: boolean;
+      message: string;
+      validationErrors?: Array<{ field: string; message: string; code?: string }>;
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain('sessionMessageLimit must be 5-200');
+    expect(payload.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'sessionMessageLimit',
+        message: 'sessionMessageLimit must be 5-200',
+      }),
+      expect.objectContaining({
+        field: 'importProcessingLocalEndpointUrl',
+        message: 'importProcessingLocalEndpointUrl is required when importProcessingRouteMode=local_endpoint',
+      }),
+      expect.objectContaining({
+        field: 'importProcessingLocalModel',
+        message: 'importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint',
+      }),
+    ]));
+  });
+
   it('records operator-attributed audit entries for /api/admin/identity mutation routes and renders actor labels', async () => {
     const fieldPatchRes = await request(
       port,

@@ -4,6 +4,7 @@ import net from 'node:net';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { WebSocket } from 'ws';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { EventBus } from '../../event-bus.js';
@@ -2676,6 +2677,59 @@ describe('AdminServer', () => {
 
       expect(sseBody).toContain('"channelId":"ch-filter"');
       expect(sseBody).not.toContain('"channelId":"other-channel"');
+    });
+
+    it('admin telemetry websocket includes normalized correlation fields', async () => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/admin/events`);
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('WebSocket open timeout')), 1500);
+        ws.once('open', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        ws.once('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+      });
+
+      const received = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('WebSocket message timeout')), 3000);
+        ws.once('message', (payload) => {
+          clearTimeout(timeout);
+          try {
+            resolve(JSON.parse(payload.toString()) as Record<string, unknown>);
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+
+      await eventBus.emit('agent.tool.start', {
+        channelId: 'debug-channel',
+        toolCallId: 'tool-77',
+        toolName: 'memory_search',
+        turnId: 'turn-77',
+        requestId: 'req-77',
+        callType: 'tool',
+        purpose: 'tool_execution',
+      });
+
+      const envelope = await received;
+      expect(envelope.type).toBe('agent.tool.start');
+      expect(envelope).toHaveProperty('data');
+      expect(envelope).toHaveProperty('correlation');
+      expect(envelope.correlation).toMatchObject({
+        turnId: 'turn-77',
+        requestId: 'req-77',
+        channelId: 'debug-channel',
+        callType: 'tool',
+        toolName: 'memory_search',
+        purpose: 'tool_execution',
+      });
+
+      ws.close();
+      await new Promise<void>((resolve) => ws.once('close', () => resolve()));
     });
   });
 

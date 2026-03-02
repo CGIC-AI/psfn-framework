@@ -95,6 +95,12 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       {
         systemPrompt: prompt,
         messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
+        correlation: {
+          requestId: `memory-extraction:${options.channelId}:${options.triggerReason}`,
+          channelId: options.channelId,
+          callType: 'memory',
+          purpose: 'memory.extraction',
+        },
       },
       'background',
     );

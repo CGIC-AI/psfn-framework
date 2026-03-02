@@ -1,7 +1,7 @@
 // ── RLM Iteration Loop ──
 // Runs an ephemeral think cycle: LLM → code → output → repeat until FINAL.
 
-import type { CapabilityTier, ContextMessage, LLMResponse } from '../types.js';
+import type { CapabilityTier, ContextMessage, LLMContext, LLMResponse } from '../types.js';
 import type {
   BudgetStatus,
   REPLDeps,
@@ -294,7 +294,15 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
   };
   const sandboxLLMProvider = Object.create(llmProvider) as typeof llmProvider;
   sandboxLLMProvider.complete = async (context, purpose) => {
-    const response = await llmProvider.complete(context, purpose);
+    const correlatedContext: LLMContext = {
+      ...context,
+      correlation: context.correlation ?? {
+        callType: 'tool',
+        purpose: `repl.sandbox.${purpose}`,
+        toolName: 'think',
+      },
+    };
+    const response = await llmProvider.complete(correlatedContext, purpose);
     sandboxTokenUsage.inputTokens += response.inputTokens;
     sandboxTokenUsage.outputTokens += response.outputTokens;
     return response;
@@ -391,7 +399,16 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
       }
 
       const completion = llmProvider.complete(
-        { systemPrompt, messages },
+        {
+          systemPrompt,
+          messages,
+          correlation: {
+            requestId: `repl-think-${startTime}-${i + 1}`,
+            callType: 'tool',
+            toolName: 'think',
+            purpose: 'repl.think.iteration',
+          },
+        },
         'reasoning',
       );
       response = timeoutMs === null

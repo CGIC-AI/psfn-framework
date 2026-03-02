@@ -9,7 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { Lifecycle } from '../../types.js';
+import type { CorrelationMetadata, Lifecycle, ObservabilityCallType } from '../../types.js';
 import type { AdminServerConfig } from './types.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
@@ -125,6 +125,56 @@ function wrappedParamPath(prefix: string, suffix: string, paramName: string): Ro
     if (!raw) return null;
     return { [paramName]: decodeURIComponent(raw) };
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  return value as Record<string, unknown>;
+}
+
+function readString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+const CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
+  'chat',
+  'tool',
+  'memory',
+  'summary',
+  'background',
+  'scheduled',
+]);
+
+function normalizeCallType(value: string | undefined): ObservabilityCallType | undefined {
+  if (!value) return undefined;
+  return CALL_TYPES.has(value as ObservabilityCallType)
+    ? (value as ObservabilityCallType)
+    : undefined;
+}
+
+function inferTelemetryCallType(eventName: EventName): ObservabilityCallType | undefined {
+  if (eventName === 'agent.tool.start' || eventName === 'agent.tool.end') {
+    return 'tool';
+  }
+  if (eventName === 'memory.extraction.end') {
+    return 'memory';
+  }
+  if (
+    eventName === 'agent.turn.usage'
+    || eventName === 'message.sent'
+    || eventName.startsWith('broadcast.')
+  ) {
+    return 'chat';
+  }
+  if (
+    eventName.startsWith('wyoming.')
+    || eventName === 'external.telemetry.ingested'
+  ) {
+    return 'background';
+  }
+  return undefined;
 }
 
 export class AdminServer implements Lifecycle {
@@ -670,9 +720,11 @@ export class AdminServer implements Lifecycle {
     for (const eventName of telemetryEvents) {
       const unsub = this.eventBus.on(eventName, (data: EventMap[typeof eventName]) => {
         if (ws.readyState !== WebSocket.OPEN) return;
+        const correlation = this.resolveTelemetryCorrelation(eventName, data);
         ws.send(JSON.stringify({
           type: eventName,
           timestamp: Date.now(),
+          correlation,
           data,
         }));
       });
@@ -687,6 +739,35 @@ export class AdminServer implements Lifecycle {
 
     ws.on('close', cleanup);
     ws.on('error', cleanup);
+  }
+
+  private resolveTelemetryCorrelation<E extends EventName>(
+    eventName: E,
+    data: EventMap[E],
+  ): Partial<CorrelationMetadata> {
+    const payload = data as Record<string, unknown>;
+    const nestedMessage = asRecord(payload.message);
+    const nestedResponse = asRecord(payload.response);
+    const nestedExternalEvent = asRecord(payload.event);
+    const turnId = readString(payload.turnId) ?? readString(nestedMessage?.id);
+    const requestId = readString(payload.requestId) ?? turnId;
+    const channelId = readString(payload.channelId)
+      ?? readString(nestedMessage?.channelId)
+      ?? readString(nestedResponse?.channelId)
+      ?? readString(nestedExternalEvent?.channelId);
+    const callType = normalizeCallType(readString(payload.callType))
+      ?? inferTelemetryCallType(eventName);
+    const toolName = readString(payload.toolName);
+    const purpose = readString(payload.purpose) ?? eventName;
+
+    return {
+      ...(turnId ? { turnId } : {}),
+      ...(requestId ? { requestId } : {}),
+      ...(channelId ? { channelId } : {}),
+      ...(callType ? { callType } : {}),
+      ...(toolName ? { toolName } : {}),
+      ...(purpose ? { purpose } : {}),
+    };
   }
 
   private buildRoutes(): AdminRoute[] {

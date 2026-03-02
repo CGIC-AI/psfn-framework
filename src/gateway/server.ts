@@ -373,8 +373,11 @@ export class GatewayServer {
   }
 
   private audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number {
+    const correlation = extractGatewayCorrelation(params);
     if (decision !== 'ALLOW') {
-      log.info(`${method} → ${decision}`);
+      log.info(`${method} → ${decision}`, {
+        ...(Object.keys(correlation).length > 0 ? correlation : {}),
+      });
     }
     if (this.options.auditStore) {
       return this.options.auditStore.log(method, decision, params);
@@ -387,4 +390,19 @@ export class GatewayServer {
       this.options.auditStore.complete(id, Date.now() - startTime, error);
     }
   }
+}
+
+function extractGatewayCorrelation(
+  params: Record<string, unknown> | undefined,
+): Record<string, string> {
+  if (!params) return {};
+  const correlation: Record<string, string> = {};
+  for (const key of ['turnId', 'requestId', 'channelId', 'callType', 'toolName', 'purpose']) {
+    const value = params[key];
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    correlation[key] = trimmed;
+  }
+  return correlation;
 }

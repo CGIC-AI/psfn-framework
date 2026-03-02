@@ -2,6 +2,7 @@ import { beforeEach, describe, it, expect } from 'vitest';
 import {
   evaluateMemoryPolicy,
   classifyChannel,
+  resolveChannelResponseStyle,
   channelsShareContinuity,
   getAllowedSensitivities,
 } from './policy.js';
@@ -348,6 +349,73 @@ describe('classifyChannel', () => {
     expect(classifyChannel('1234567890')).toBe('semi_private');
     expect(classifyChannel('1234567890', undefined)).toBe('semi_private');
     expect(classifyChannel('1234567890', {})).toBe('semi_private');
+  });
+});
+
+describe('resolveChannelResponseStyle', () => {
+  it('resolves Discord DMs as expressive', () => {
+    expect(resolveChannelResponseStyle('1234567890', {
+      channelType: 'discord_text',
+      meta: { isDirectMessage: true },
+    })).toBe('expressive');
+  });
+
+  it('resolves Discord guild and voice channels as concise', () => {
+    expect(resolveChannelResponseStyle('1234567890', {
+      channelType: 'discord_text',
+      meta: { isDirectMessage: false },
+    })).toBe('concise');
+    expect(resolveChannelResponseStyle('discord-voice:guild:user', {
+      channelType: 'discord_voice',
+    })).toBe('concise');
+  });
+
+  it('resolves API and WebUI channels as expressive', () => {
+    expect(resolveChannelResponseStyle('api:session123', {
+      channelType: 'api',
+    })).toBe('expressive');
+    expect(resolveChannelResponseStyle('openwebui:chat-1', {
+      channelType: 'webui',
+    })).toBe('expressive');
+  });
+
+  it('resolves Telegram and internal channels as concise', () => {
+    expect(resolveChannelResponseStyle('telegram:5635268079', {
+      channelType: 'telegram',
+    })).toBe('concise');
+    expect(resolveChannelResponseStyle('internal:heartbeat', {
+      channelType: 'internal',
+    })).toBe('concise');
+  });
+
+  it('supports exact, prefix, channelType, and default overrides', () => {
+    expect(resolveChannelResponseStyle('channel:exact-1', {
+      channelType: 'discord_text',
+      overrides: {
+        exact: { 'channel:exact-1': 'expressive' },
+      },
+    })).toBe('expressive');
+
+    expect(resolveChannelResponseStyle('ops:build-17', {
+      channelType: 'discord_text',
+      overrides: {
+        prefix: { 'ops:': 'expressive' },
+      },
+    })).toBe('expressive');
+
+    expect(resolveChannelResponseStyle('any-channel', {
+      channelType: 'telegram',
+      overrides: {
+        channelType: { telegram: 'expressive' },
+      },
+    })).toBe('expressive');
+
+    expect(resolveChannelResponseStyle('unknown-channel', {
+      channelType: 'terminal',
+      overrides: {
+        defaultStyle: 'expressive',
+      },
+    })).toBe('expressive');
   });
 });
 

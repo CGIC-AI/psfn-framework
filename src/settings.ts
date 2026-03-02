@@ -3,18 +3,19 @@
 // Persisted to data/settings.json. Loaded at startup, merged over env defaults.
 
 import { join } from 'node:path';
-import type {
-  CapabilityTier,
-  ImportProcessingRouteMode,
-  ModelCatalogEntry,
-  ModelContextBudgetConfig,
-  ModelPurpose,
-  ModelRoleAssignments,
-  SessionRestartBehavior,
-  ModelSlot,
-  ModelSlotDefaults,
-  ModelSlotOverrides,
-  SubstrateConfig,
+import {
+  PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
+  type CapabilityTier,
+  type ImportProcessingRouteMode,
+  type ModelCatalogEntry,
+  type ModelContextBudgetConfig,
+  type ModelPurpose,
+  type ModelRoleAssignments,
+  type SessionRestartBehavior,
+  type ModelSlot,
+  type ModelSlotDefaults,
+  type ModelSlotOverrides,
+  type SubstrateConfig,
 } from './types.js';
 import { createComponentLogger } from './logger.js';
 import {
@@ -116,6 +117,7 @@ export interface EditableSettings {
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   capabilityTier?: CapabilityTier;
+  promotedExtendedTools?: string[];
   /** Override the base URL used by Garden Chat to reach the OpenAI-compatible API.
    *  When set, this takes priority over the `API_BASE_URL` env var and the
    *  auto-resolved URL derived from `API_HOST`/`API_PORT`. Useful when the
@@ -187,6 +189,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'webFetchLocalCrawlerDomainAllowlist',
   'webFetchTlsCaCertPaths',
   'capabilityTier',
+  'promotedExtendedTools',
   'chatApiBaseUrl',
   // Voice / TTS
   'ttsProvider',
@@ -257,6 +260,10 @@ function toStringList(value: unknown): string[] | undefined {
     .map(entry => typeof entry === 'string' ? entry.trim() : '')
     .filter(Boolean))];
   return cleaned;
+}
+
+function toPromotedToolList(value: unknown): string[] {
+  return (toStringList(value) ?? []).slice(0, PROMOTED_EXTENDED_TOOL_SLOTS_MAX);
 }
 
 function toBoolean(value: unknown): boolean | undefined {
@@ -647,6 +654,10 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     }
   }
 
+  if ('promotedExtendedTools' in settings) {
+    normalized.promotedExtendedTools = toPromotedToolList(settings.promotedExtendedTools);
+  }
+
   if ('sessionRestartBehavior' in settings) {
     const behavior = toSessionRestartBehavior(settings.sessionRestartBehavior);
     if (behavior) {
@@ -955,6 +966,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     webFetchLocalCrawlerDomainAllowlist: config.webFetchLocalCrawlerDomainAllowlist ?? [],
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
     capabilityTier: config.capabilityTier ?? 'nursery',
+    promotedExtendedTools: config.promotedExtendedTools ?? [],
     chatApiBaseUrl: (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl ?? null,
     // Voice / TTS
     ttsProvider: resolveRuntimeTtsProvider(config),
@@ -1093,6 +1105,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
 
   if (settings.capabilityTier !== undefined && isCapabilityTier(settings.capabilityTier)) {
     config.capabilityTier = settings.capabilityTier;
+  }
+  if ('promotedExtendedTools' in settings) {
+    config.promotedExtendedTools = toPromotedToolList(settings.promotedExtendedTools);
   }
   if ('chatApiBaseUrl' in settings) {
     const trimmed = settings.chatApiBaseUrl?.trim() ?? '';
@@ -1390,6 +1405,12 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     } else {
       settings.capabilityTier = tier;
     }
+  }
+
+  const promotedExtendedToolsRaw = params.get('promotedExtendedTools');
+  if (promotedExtendedToolsRaw !== null) {
+    settings.promotedExtendedTools = parseCsvList(promotedExtendedToolsRaw)
+      .slice(0, PROMOTED_EXTENDED_TOOL_SLOTS_MAX);
   }
 
   const sessionRestartBehaviorRaw = params.get('sessionRestartBehavior');

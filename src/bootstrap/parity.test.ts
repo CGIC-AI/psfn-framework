@@ -7,7 +7,11 @@ import { Scheduler } from '../scheduler/scheduler.js';
 import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { readLastActiveSession } from '../lifecycle/notifications.js';
-import { wireHeartbeatRuntime, wireSessionToolsRuntime } from './parity.js';
+import {
+  wireHeartbeatRuntime,
+  wireSessionToolsRuntime,
+  wireSettingsRuntime,
+} from './parity.js';
 
 describe('wireSessionToolsRuntime', () => {
   let tempDir: string;
@@ -60,6 +64,46 @@ describe('wireSessionToolsRuntime', () => {
     const active = readLastActiveSession(tempDir);
     expect(active?.sessionId).toBe(details.newSessionId);
     expect(active?.channelType).toBe('api');
+  });
+});
+
+describe('wireSettingsRuntime', () => {
+  it('registers settings and promoted-tool runtime helpers when target supports promotions', () => {
+    const target = {
+      registerTool: vi.fn(),
+      getPromotedExtendedToolsLimit: () => 4,
+      getPromotedExtendedTools: () => ['repo_status'],
+      addPromotedExtendedTool: vi.fn(() => ({
+        ok: true,
+        changed: true,
+        promotedTools: ['repo_status'],
+        message: 'ok',
+      })),
+      removePromotedExtendedTool: vi.fn(() => ({
+        ok: true,
+        changed: true,
+        promotedTools: [],
+        message: 'ok',
+      })),
+      swapPromotedExtendedTools: vi.fn(() => ({
+        ok: true,
+        changed: true,
+        promotedTools: ['repo_status'],
+        message: 'ok',
+      })),
+    };
+
+    wireSettingsRuntime(target as any, {} as any);
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    expect(calls.map(([tool]) => tool.name).sort()).toEqual([
+      'promoted_tools_add',
+      'promoted_tools_list',
+      'promoted_tools_remove',
+      'promoted_tools_swap',
+      'settings_get',
+    ]);
+    expect(calls.every(([, category]) => category === 'extended')).toBe(true);
   });
 });
 

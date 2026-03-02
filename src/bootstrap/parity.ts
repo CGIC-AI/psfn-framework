@@ -10,7 +10,14 @@ import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import { createSettingsGetTool } from '../settings-tools.js';
+import {
+  createPromotedToolsAddTool,
+  createPromotedToolsListTool,
+  createPromotedToolsRemoveTool,
+  createPromotedToolsSwapTool,
+  createSettingsGetTool,
+  type PromotedExtendedToolsManager,
+} from '../settings-tools.js';
 import type { SessionManager } from '../session/manager.js';
 import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
@@ -74,6 +81,18 @@ interface HeartbeatRuntimeOptions {
   llmProvider?: LLMProvider;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   postTurnActions?: PostTurnActionRuntime;
+}
+
+function hasPromotedToolsManager(
+  target: ToolRegistrarTarget,
+): target is ToolRegistrarTarget & PromotedExtendedToolsManager {
+  return (
+    typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedToolsLimit === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedTools === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).addPromotedExtendedTool === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).removePromotedExtendedTool === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).swapPromotedExtendedTools === 'function'
+  );
 }
 
 function normalizeDeferredActionCandidate(raw: unknown): PostTurnActionCandidate | null {
@@ -238,6 +257,13 @@ export function wireSettingsRuntime(
   config: SubstrateConfig,
 ): void {
   target.registerTool(createSettingsGetTool(config), 'extended');
+  if (!hasPromotedToolsManager(target)) {
+    return;
+  }
+  target.registerTool(createPromotedToolsListTool(target), 'extended');
+  target.registerTool(createPromotedToolsAddTool(target), 'extended');
+  target.registerTool(createPromotedToolsRemoveTool(target), 'extended');
+  target.registerTool(createPromotedToolsSwapTool(target), 'extended');
 }
 
 export function wireSessionToolsRuntime(

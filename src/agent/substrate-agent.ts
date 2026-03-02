@@ -30,6 +30,7 @@ import type {
   SubstrateMessage,
   TurnUsage,
 } from '../types.js';
+import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { Contact } from '../contacts/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
@@ -50,7 +51,11 @@ import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
 import { ReflectionNudgeTracker, type TurnToolSummary } from '../skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';
-import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
+import {
+  evaluateToolCapabilityEligibility,
+  gateToolWithCapabilities,
+  type CapabilityAccess,
+} from '../capabilities/gate.js';
 import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
@@ -125,6 +130,26 @@ interface PostTurnInferenceContext {
 export type PostTurnActionInferer = (
   context: PostTurnInferenceContext,
 ) => PostTurnActionCandidate[] | Promise<PostTurnActionCandidate[]>;
+
+export type PromotedToolMutationErrorCode =
+  | 'invalid_name'
+  | 'tool_not_extended'
+  | 'duplicate'
+  | 'max_slots'
+  | 'capability_denied'
+  | 'not_found'
+  | 'invalid_slot'
+  | 'persist_failed';
+
+export interface PromotedToolMutationResult {
+  ok: boolean;
+  changed: boolean;
+  promotedTools: string[];
+  message: string;
+  errorCode?: PromotedToolMutationErrorCode;
+  requiredTokens?: CapabilityToken[];
+  missingTokens?: CapabilityToken[];
+}
 
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
@@ -375,6 +400,297 @@ export class SubstrateAgent {
     }
   }
 
+  private normalizePromotedExtendedToolNames(raw: readonly string[] | undefined): string[] {
+    if (!Array.isArray(raw)) return [];
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of raw) {
+      if (typeof entry !== 'string') continue;
+      const name = entry.trim();
+      if (!name || seen.has(name)) continue;
+      normalized.push(name);
+      seen.add(name);
+      if (normalized.length >= PROMOTED_EXTENDED_TOOL_SLOTS_MAX) break;
+    }
+    return normalized;
+  }
+
+  private toolNameListsEqual(a: readonly string[], b: readonly string[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
+
+  private getPromotedExtendedToolNamesInternal(): string[] {
+    const current = this.normalizePromotedExtendedToolNames(this.config.promotedExtendedTools);
+    const configured = this.config.promotedExtendedTools ?? [];
+    if (!this.toolNameListsEqual(current, configured)) {
+      this.config.promotedExtendedTools = current;
+    }
+    return current;
+  }
+
+  private setPromotedExtendedToolNamesInternal(next: readonly string[]): string[] {
+    const normalized = this.normalizePromotedExtendedToolNames(next);
+    this.config.promotedExtendedTools = normalized;
+    return normalized;
+  }
+
+  private persistPromotedExtendedToolNames(next: readonly string[]): string | null {
+    const persist = this.config.runtimeHooks?.persistPromotedExtendedTools;
+    if (!persist) return null;
+    try {
+      persist([...next]);
+      return null;
+    } catch (error) {
+      return toErrorMessage(error);
+    }
+  }
+
+  private getExtendedToolByName(name: string): AgentTool<any> | null {
+    return this.extendedTools.find(tool => tool.name === name) ?? null;
+  }
+
+  private getCapabilityEligiblePromotedToolNames(): Set<string> {
+    const promoted = this.getPromotedExtendedToolNamesInternal();
+    const access = this.resolveCapabilityAccess();
+    const eligible = new Set<string>();
+    for (const toolName of promoted) {
+      const tool = this.getExtendedToolByName(toolName);
+      if (!tool) continue;
+      const eligibility = evaluateToolCapabilityEligibility(tool, {}, access);
+      if (!eligibility.allowed) continue;
+      eligible.add(toolName);
+    }
+    return eligible;
+  }
+
+  private resolveActiveTools(): AgentTool<any>[] {
+    const activeByName = new Map<string, AgentTool<any>>();
+    for (const tool of this.coreTools) {
+      if (!activeByName.has(tool.name)) {
+        activeByName.set(tool.name, tool);
+      }
+    }
+
+    const promotedNames = this.getCapabilityEligiblePromotedToolNames();
+    for (const tool of this.extendedTools) {
+      if (!this.loadedExtended.has(tool.name) && !promotedNames.has(tool.name)) {
+        continue;
+      }
+      if (!activeByName.has(tool.name)) {
+        activeByName.set(tool.name, tool);
+      }
+    }
+
+    return [...activeByName.values()];
+  }
+
+  private applyActiveToolsToAgent(): void {
+    this.agent.setTools(this.withCapabilityGates(this.resolveActiveTools()));
+  }
+
+  getPromotedExtendedToolsLimit(): number {
+    return PROMOTED_EXTENDED_TOOL_SLOTS_MAX;
+  }
+
+  getPromotedExtendedTools(): readonly string[] {
+    return [...this.getPromotedExtendedToolNamesInternal()];
+  }
+
+  addPromotedExtendedTool(toolName: string): PromotedToolMutationResult {
+    const normalizedName = toolName.trim();
+    if (!normalizedName) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: this.getPromotedExtendedToolNamesInternal(),
+        message: 'Tool name cannot be empty.',
+        errorCode: 'invalid_name',
+      };
+    }
+
+    const current = this.getPromotedExtendedToolNamesInternal();
+    if (current.includes(normalizedName)) {
+      return {
+        ok: true,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is already promoted.`,
+        errorCode: 'duplicate',
+      };
+    }
+
+    if (current.length >= PROMOTED_EXTENDED_TOOL_SLOTS_MAX) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Promoted tool slots are full (max ${PROMOTED_EXTENDED_TOOL_SLOTS_MAX}).`,
+        errorCode: 'max_slots',
+      };
+    }
+
+    const tool = this.getExtendedToolByName(normalizedName);
+    if (!tool) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is not available in the extended catalog.`,
+        errorCode: 'tool_not_extended',
+      };
+    }
+
+    const access = this.resolveCapabilityAccess();
+    const eligibility = evaluateToolCapabilityEligibility(tool, {}, access);
+    if (!eligibility.allowed) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is not allowed for capability tier "${access.getTier()}".`,
+        errorCode: 'capability_denied',
+        requiredTokens: eligibility.requiredTokens,
+        missingTokens: eligibility.missingTokens,
+      };
+    }
+
+    const next = [...current, normalizedName];
+    const persistError = this.persistPromotedExtendedToolNames(next);
+    if (persistError) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Failed to persist promoted tools: ${persistError}`,
+        errorCode: 'persist_failed',
+      };
+    }
+
+    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
+    this.applyActiveToolsToAgent();
+    return {
+      ok: true,
+      changed: true,
+      promotedTools,
+      message: `Promoted tool "${normalizedName}".`,
+    };
+  }
+
+  removePromotedExtendedTool(toolName: string): PromotedToolMutationResult {
+    const normalizedName = toolName.trim();
+    if (!normalizedName) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: this.getPromotedExtendedToolNamesInternal(),
+        message: 'Tool name cannot be empty.',
+        errorCode: 'invalid_name',
+      };
+    }
+
+    const current = this.getPromotedExtendedToolNamesInternal();
+    if (!current.includes(normalizedName)) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is not currently promoted.`,
+        errorCode: 'not_found',
+      };
+    }
+
+    const next = current.filter(name => name !== normalizedName);
+    const persistError = this.persistPromotedExtendedToolNames(next);
+    if (persistError) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Failed to persist promoted tools: ${persistError}`,
+        errorCode: 'persist_failed',
+      };
+    }
+
+    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
+    this.applyActiveToolsToAgent();
+    return {
+      ok: true,
+      changed: true,
+      promotedTools,
+      message: `Removed promoted tool "${normalizedName}".`,
+    };
+  }
+
+  swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult {
+    const current = this.getPromotedExtendedToolNamesInternal();
+    if (
+      !Number.isInteger(fromSlot)
+      || !Number.isInteger(toSlot)
+      || fromSlot < 1
+      || toSlot < 1
+      || fromSlot > current.length
+      || toSlot > current.length
+    ) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Slots must be integers between 1 and ${current.length}.`,
+        errorCode: 'invalid_slot',
+      };
+    }
+
+    if (fromSlot === toSlot) {
+      return {
+        ok: true,
+        changed: false,
+        promotedTools: current,
+        message: 'Swap slots are identical; no change made.',
+      };
+    }
+
+    const fromIndex = fromSlot - 1;
+    const toIndex = toSlot - 1;
+    const next = [...current];
+    const fromTool = next[fromIndex];
+    const toTool = next[toIndex];
+    if (!fromTool || !toTool) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Slots must be integers between 1 and ${current.length}.`,
+        errorCode: 'invalid_slot',
+      };
+    }
+    next[fromIndex] = toTool;
+    next[toIndex] = fromTool;
+
+    const persistError = this.persistPromotedExtendedToolNames(next);
+    if (persistError) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Failed to persist promoted tools: ${persistError}`,
+        errorCode: 'persist_failed',
+      };
+    }
+
+    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
+    this.applyActiveToolsToAgent();
+    return {
+      ok: true,
+      changed: true,
+      promotedTools,
+      message: `Swapped promoted tool slots ${fromSlot} and ${toSlot}.`,
+    };
+  }
+
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
     return {
       core: [...this.coreTools],
@@ -418,6 +734,10 @@ export class SubstrateAgent {
     for (const disabledName of disabledSet) {
       this.loadedExtended.delete(disabledName);
     }
+    const filteredPromoted = this
+      .getPromotedExtendedToolNamesInternal()
+      .filter(name => !disabledSet.has(name));
+    this.setPromotedExtendedToolNamesInternal(filteredPromoted);
   }
 
   setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {
@@ -447,11 +767,7 @@ export class SubstrateAgent {
       ): Promise<AgentToolResult<any>> => {
         const matched = self.extendedTools.filter(t => params.tools.includes(t.name));
         for (const t of matched) self.loadedExtended.add(t.name);
-        const active = [
-          ...self.coreTools,
-          ...self.extendedTools.filter(t => self.loadedExtended.has(t.name)),
-        ];
-        self.agent.setTools(self.withCapabilityGates(active));
+        self.applyActiveToolsToAgent();
         if (matched.length) {
           return textResult(`Loaded ${matched.length} tools: ${matched.map(t => t.name).join(', ')}`);
         }
@@ -713,11 +1029,7 @@ export class SubstrateAgent {
         // Configure pi-agent-core Agent for this turn
         this.ensureModel(message);
         this.agent.setSystemPrompt(context.systemPrompt);
-        const activeTools = [
-          ...this.coreTools,
-          ...this.extendedTools.filter((tool) => this.loadedExtended.has(tool.name)),
-        ];
-        this.agent.setTools(this.withCapabilityGates(activeTools));
+        this.applyActiveToolsToAgent();
 
         // Convert ContextMessage[] to AgentMessage[] for the Agent.
         // Exclude the last message (the user message we just recorded) —
@@ -1595,6 +1907,8 @@ export class SubstrateAgent {
     const contextWindow = this.resolveContextWindow();
     const coreCount = this.coreTools.length;
     const extendedCount = this.extendedTools.length;
+    const promotedCount = this.getCapabilityEligiblePromotedToolNames().size;
+    const activeCount = coreCount + promotedCount;
     const capabilityAccess = this.resolveCapabilityAccess();
     const capabilityTier = capabilityAccess.getTier();
     const skillsContext = this.skillsRuntime?.getPromptXml() ?? '';
@@ -1607,15 +1921,19 @@ export class SubstrateAgent {
       `Model: ${modelId}`,
       `Capability tier: ${capabilityTier}`,
       `Context window: ${contextWindow} tokens`,
-      `Tools: ${coreCount} active` + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
+      `Tools: ${activeCount} active`
+      + (promotedCount > 0 ? ` (${coreCount} core + ${promotedCount} promoted)` : '')
+      + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
     ];
 
     // Tool directory for extended tools
     if (extendedCount > 0) {
+      const promotedNames = this.getCapabilityEligiblePromotedToolNames();
       lines.push('');
-      lines.push('Available extended tools (use load_tools to activate):');
+      lines.push('Available extended tools:');
       for (const t of this.extendedTools) {
-        lines.push(`- ${t.name}: ${t.description.split('.')[0]}`);
+        const suffix = promotedNames.has(t.name) ? ' (promoted, always active)' : ' (use load_tools to activate)';
+        lines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
       }
     }
 

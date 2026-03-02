@@ -47,7 +47,15 @@ export class AdminHandlers {
       settings: new AdminSettingsHandlers(this.legacy),
       contacts: new AdminContactsHandlers(this.legacy),
       prompts: new AdminPromptsHandlers(this.legacy),
-      chat: new AdminChatHandlers(this.legacy),
+      chat: new AdminChatHandlers({
+        config: deps.config,
+        sessionStore: deps.sessionStore,
+        eventBus: deps.eventBus,
+        contactStore: deps.contactStore,
+        apiBaseUrl: deps.apiBaseUrl,
+        apiHost: deps.apiHost,
+        apiPort: deps.apiPort,
+      }),
       confirmations: new AdminConfirmationsHandlers(this.legacy),
       events: new AdminEventsHandlers(this.legacy),
     };

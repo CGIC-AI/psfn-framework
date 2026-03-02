@@ -9,6 +9,13 @@ Complete all open beads in a strict, dependency-aware sequence using up to three
 - `PSFN-xfus` is deferred until final sensitive-data cleanup just before repository publication.
 - All other open beads are in scope for Phase IV execution.
 
+## Branch Strategy (Phase IV Release Flow)
+- Create and use `phase-iv` as the dedicated integration branch for all Phase IV work.
+- All Phase IV worktrees branch from `phase-iv` and merge back into `phase-iv` (not `main`).
+- `main` remains protected as the public release target branch during execution.
+- After Phase IV completion, run manual verification with Vega + Purrsephone against `phase-iv`.
+- Only after manual verification passes: merge `phase-iv` into `main` as the first public release cut.
+
 ## Priority and Blocker Order
 
 ### P1 foundations first
@@ -62,9 +69,9 @@ Complete all open beads in a strict, dependency-aware sequence using up to three
 - run targeted tests,
 - commit in its worktree.
 5. When all streams report done:
-- merge each worktree back to `main`,
+- merge each worktree back to `phase-iv`,
 - resolve conflicts at orchestrator level only.
-6. Run validation on `main`:
+6. Run validation on `phase-iv`:
 - required targeted tests for merged areas,
 - broader regression pass as needed.
 7. Update bead states:
@@ -82,6 +89,8 @@ Complete all open beads in a strict, dependency-aware sequence using up to three
 ## Completion Criteria for Phase IV
 
 - All open beads completed except deferred `PSFN-xfus`.
-- `main` is green on required validation gates.
+- `phase-iv` is green on required validation gates.
+- Manual verification by Vega + Purrsephone is completed and accepted.
+- `phase-iv` is merged to `main` for the first public release.
 - Bead tracker reflects final accurate state.
 - Final handoff includes any residual risks and the trigger point for `PSFN-xfus` execution.

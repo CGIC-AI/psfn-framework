@@ -1,4 +1,9 @@
-import type { SubstrateMessage, AgentResponse, TurnUsage } from './types.js';
+import type {
+  SubstrateMessage,
+  AgentResponse,
+  TurnUsage,
+  InferredPostTurnAction,
+} from './types.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -22,6 +27,32 @@ export interface EventMap {
   'message.sent': { response: AgentResponse };
   'agent.turn.start': { message: SubstrateMessage };
   'agent.turn.end': { message: SubstrateMessage; response: AgentResponse };
+  'agent.post_turn.actions.inferred': {
+    message: SubstrateMessage;
+    response: AgentResponse;
+    actions: InferredPostTurnAction[];
+  };
+  'agent.post_turn.action.telemetry': {
+    actionId: string;
+    actionKind: string;
+    channelId: string;
+    sourceMessageId: string;
+    dedupeKey: string;
+    phase:
+      | 'queued'
+      | 'deduplicated'
+      | 'started'
+      | 'succeeded'
+      | 'retry_scheduled'
+      | 'failed';
+    attempt: number;
+    maxAttempts: number;
+    queueDepth: number;
+    timestamp: number;
+    nextRetryAt?: number;
+    delayMs?: number;
+    error?: string;
+  };
   'agent.turn.stage': {
     turnId: string;
     channelId: string;

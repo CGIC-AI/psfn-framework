@@ -268,4 +268,119 @@ describe('wireHeartbeatRuntime', () => {
       nowSpy.mockRestore();
     }
   });
+
+  it('wires post-turn inference/handler runtime when manual run is busy', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
+    const agentLoop = {
+      handleMessage: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Agent is already processing another prompt'))
+        .mockResolvedValue({ content: 'Deferred reflection output' }),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+      registerPostTurnActionInferer,
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const postTurnActions = {
+      registerHandler: vi.fn().mockReturnValue(() => {}),
+      listQueued: vi.fn().mockReturnValue([]),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+      undefined,
+      {
+        postTurnActions,
+      },
+    );
+
+    expect(postTurnActions.registerHandler).toHaveBeenCalledTimes(1);
+    expect(postTurnActions.registerHandler.mock.calls[0]?.[0]).toBe('heartbeat.run_template');
+    expect(registerPostTurnActionInferer).toHaveBeenCalledTimes(1);
+    const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
+      context: {
+        message: { id: string; channelId: string };
+        response: { content: string };
+        turnMessages: unknown[];
+      },
+    ) => Array<{ kind: string; dedupeKey?: string; payload?: Record<string, unknown> }>;
+    const inferredActions = inferer({
+      message: { id: 'msg-1', channelId: 'test-channel' },
+      response: { content: 'ok' },
+      turnMessages: [{
+        role: 'toolResult',
+        toolName: 'heartbeat_run_template',
+        result: {
+          details: {
+            deferredAction: {
+              kind: 'heartbeat.run_template',
+              payload: { templateId: 'whisper' },
+              dedupeKey: 'heartbeat.run_template:whisper',
+              maxRetries: 2,
+            },
+          },
+        },
+      }],
+    });
+    expect(inferredActions).toEqual([{
+      kind: 'heartbeat.run_template',
+      payload: { templateId: 'whisper' },
+      dedupeKey: 'heartbeat.run_template:whisper',
+      maxRetries: 2,
+    }]);
+
+    const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
+    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool?.name === 'heartbeat_run_template');
+    expect(runTemplateTool).toBeDefined();
+
+    const runResult = await runTemplateTool.execute(
+      'manual-2',
+      { templateId: 'whisper' },
+      new AbortController().signal,
+    );
+    const runText = runResult.content.map((part: { text: string }) => part.text).join('');
+    expect(runText).toContain('Queued reflection template');
+    expect((runResult.details as { deferredAction?: { kind?: string } }).deferredAction?.kind)
+      .toBe('heartbeat.run_template');
+
+    const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:'));
+    expect(deferredTask).toBeUndefined();
+
+    const deferredHandler = postTurnActions.registerHandler.mock.calls[0]?.[1] as (
+      action: {
+        id: string;
+        kind: string;
+        payload: Record<string, unknown>;
+        dedupeKey: string;
+        channelId: string;
+        sourceMessageId: string;
+        inferredAt: number;
+      },
+    ) => Promise<void>;
+    await deferredHandler({
+      id: 'deferred-1',
+      kind: 'heartbeat.run_template',
+      payload: { templateId: 'whisper' },
+      dedupeKey: 'heartbeat.run_template:whisper',
+      channelId: 'test-channel',
+      sourceMessageId: 'msg-1',
+      inferredAt: Date.now(),
+    });
+
+    expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
+    expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+  });
 });

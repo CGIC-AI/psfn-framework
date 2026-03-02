@@ -360,6 +360,88 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(order).toEqual(['end', 'usage']);
   });
 
+  it('emits inferred post-turn actions between turn end and usage telemetry', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+    agent.registerPostTurnActionInferer(() => ([
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'whisper' },
+        dedupeKey: 'heartbeat.run_template:whisper',
+      },
+    ]));
+
+    const order: string[] = [];
+    const inferredActions: Array<{ kind: string; dedupeKey: string }> = [];
+    eventBus.on('agent.turn.end', () => { order.push('end'); });
+    eventBus.on('agent.post_turn.actions.inferred', ({ actions }) => {
+      order.push('inferred');
+      inferredActions.push(...actions.map(action => ({
+        kind: action.kind,
+        dedupeKey: action.dedupeKey,
+      })));
+    });
+    eventBus.on('agent.turn.usage', () => { order.push('usage'); });
+
+    await agent.handleMessage(makeMessage());
+
+    expect(order).toEqual(['end', 'inferred', 'usage']);
+    expect(inferredActions).toEqual([
+      {
+        kind: 'heartbeat.run_template',
+        dedupeKey: 'heartbeat.run_template:whisper',
+      },
+    ]);
+  });
+
+  it('deduplicates inferred post-turn actions by dedupe key across inferers', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    agent.registerPostTurnActionInferer(() => ([
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'whisper' },
+        dedupeKey: 'heartbeat.run_template:shared',
+      },
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'whisper' },
+        dedupeKey: 'heartbeat.run_template:shared',
+      },
+    ]));
+    agent.registerPostTurnActionInferer(() => ([
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'values-reflection' },
+        dedupeKey: 'heartbeat.run_template:shared',
+      },
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'daily-integration' },
+        dedupeKey: 'heartbeat.run_template:daily',
+      },
+    ]));
+
+    const inferredEventPayloads: Array<{ dedupeKey: string }> = [];
+    eventBus.on('agent.post_turn.actions.inferred', ({ actions }) => {
+      inferredEventPayloads.push(...actions.map(action => ({ dedupeKey: action.dedupeKey })));
+    });
+
+    await agent.handleMessage(makeMessage());
+
+    expect(inferredEventPayloads.map(action => action.dedupeKey)).toEqual([
+      'heartbeat.run_template:shared',
+      'heartbeat.run_template:daily',
+    ]);
+  });
+
   it('emits stage telemetry for trust, memory, context, prompt, first-token, and end', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

@@ -78,6 +78,7 @@ import {
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
+import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { attachVoiceObservers } from './voice/observers/index.js';
 import { loadRuntimeChannelsConfig, type RuntimeChannelsConfigOverrides } from './channels/config.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
@@ -515,6 +516,11 @@ export class SubstrateRuntime implements Lifecycle {
       const taskCount = this.scheduler.taskCount;
       await this.eventBus.emit('schedule.heartbeat', { timestamp: now, taskCount });
     });
+    const postTurnActions = wirePostTurnActionRuntime({
+      eventBus: this.eventBus,
+      scheduler: this.scheduler,
+      agentLoop: this.agentLoop,
+    });
 
     log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via ${embeddingProvider.kind})`);
 
@@ -661,6 +667,7 @@ export class SubstrateRuntime implements Lifecycle {
       {
         llmProvider: this.llmClient,
         memoryWriter,
+        postTurnActions,
       },
     );
 

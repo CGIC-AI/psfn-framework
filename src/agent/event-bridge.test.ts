@@ -66,6 +66,94 @@ describe('createEventBridge', () => {
     expect(deltas).toEqual(['Hello', ' world']);
   });
 
+  it('emits agent.toolcall.start/delta/end for toolcall message events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const starts: any[] = [];
+    const deltas: any[] = [];
+    const ends: any[] = [];
+    eventBus.on('agent.toolcall.start', (data) => { starts.push(data); });
+    eventBus.on('agent.toolcall.delta', (data) => { deltas.push(data); });
+    eventBus.on('agent.toolcall.end', (data) => { ends.push(data); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'toolcall_start',
+        contentIndex: 1,
+        partial: {
+          content: [
+            { type: 'text', text: 'ignored' },
+            { type: 'toolCall', id: 'call-77', name: 'heartbeat_run_template', arguments: {} },
+          ],
+        },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'toolcall_delta',
+        contentIndex: 1,
+        delta: '{"templateId":"daily-review"}',
+        partial: {
+          content: [
+            { type: 'text', text: 'ignored' },
+            { type: 'toolCall', id: 'call-77', name: 'heartbeat_run_template', arguments: {} },
+          ],
+        },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'toolcall_end',
+        contentIndex: 1,
+        partial: {
+          content: [
+            { type: 'text', text: 'ignored' },
+            {
+              type: 'toolCall',
+              id: 'call-77',
+              name: 'heartbeat_run_template',
+              arguments: { templateId: 'daily-review' },
+            },
+          ],
+        },
+        toolCall: {
+          type: 'toolCall',
+          id: 'call-77',
+          name: 'heartbeat_run_template',
+          arguments: { templateId: 'daily-review' },
+        },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(starts).toEqual([{
+      channelId: 'test-channel',
+      contentIndex: 1,
+      toolCallId: 'call-77',
+      toolName: 'heartbeat_run_template',
+    }]);
+    expect(deltas).toEqual([{
+      channelId: 'test-channel',
+      contentIndex: 1,
+      delta: '{"templateId":"daily-review"}',
+      toolCallId: 'call-77',
+      toolName: 'heartbeat_run_template',
+    }]);
+    expect(ends).toEqual([{
+      channelId: 'test-channel',
+      contentIndex: 1,
+      toolCallId: 'call-77',
+      toolName: 'heartbeat_run_template',
+      arguments: { templateId: 'daily-review' },
+    }]);
+  });
+
   it('emits agent.tool.start for tool_execution_start events', async () => {
     const bridge = createEventBridge(agent, eventBus);
     const events: any[] = [];
@@ -137,6 +225,74 @@ describe('createEventBridge', () => {
     await new Promise(r => setTimeout(r, 10));
     expect(starts[0]?.shardId).toBe('shard-abc');
     expect(ends[0]?.shardId).toBe('shard-abc');
+  });
+
+  it('tags shard toolcall events with shardId derived from channelId', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const starts: any[] = [];
+    const deltas: any[] = [];
+    const ends: any[] = [];
+    eventBus.on('agent.toolcall.start', (data) => { starts.push(data); });
+    eventBus.on('agent.toolcall.delta', (data) => { deltas.push(data); });
+    eventBus.on('agent.toolcall.end', (data) => { ends.push(data); });
+
+    bridge.setChannel('shard:shard-xyz');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'toolcall_start',
+        contentIndex: 0,
+        partial: {
+          content: [
+            { type: 'toolCall', id: 'call-99', name: 'web_search', arguments: {} },
+          ],
+        },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'toolcall_delta',
+        contentIndex: 0,
+        delta: '{"query":"action inference"}',
+        partial: {
+          content: [
+            { type: 'toolCall', id: 'call-99', name: 'web_search', arguments: {} },
+          ],
+        },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        partial: {
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-99',
+              name: 'web_search',
+              arguments: { query: 'action inference' },
+            },
+          ],
+        },
+        toolCall: {
+          type: 'toolCall',
+          id: 'call-99',
+          name: 'web_search',
+          arguments: { query: 'action inference' },
+        },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(starts[0]?.shardId).toBe('shard-xyz');
+    expect(deltas[0]?.shardId).toBe('shard-xyz');
+    expect(ends[0]?.shardId).toBe('shard-xyz');
   });
 
   it('stops emitting after clearChannel', async () => {

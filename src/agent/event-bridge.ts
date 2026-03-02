@@ -3,6 +3,7 @@
 // Persistent subscription — set/clear channel around each prompt call.
 
 import type { Agent, AgentEvent } from '@mariozechner/pi-agent-core';
+import type { ToolCall } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import { createComponentLogger } from '../logger.js';
 
@@ -23,6 +24,9 @@ export interface EventBridge {
  * Maps:
  * - message_update (text_delta) → agent.stream.delta
  * - message_update (thinking_delta) → agent.stream.thinking
+ * - message_update (toolcall_start) → agent.toolcall.start
+ * - message_update (toolcall_delta) → agent.toolcall.delta
+ * - message_update (toolcall_end) → agent.toolcall.end
  * - tool_execution_start → agent.tool.start
  * - tool_execution_end → agent.tool.end
  *
@@ -49,6 +53,34 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
             channelId,
             text: delta.delta,
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.thinking', error: String(err) }));
+        } else if (delta.type === 'toolcall_start') {
+          const toolCall = getToolCallFromPartial(delta.partial, delta.contentIndex);
+          eventBus.emit('agent.toolcall.start', {
+            channelId,
+            contentIndex: delta.contentIndex,
+            ...(toolCall?.id ? { toolCallId: toolCall.id } : {}),
+            ...(toolCall?.name ? { toolName: toolCall.name } : {}),
+            ...(shardId ? { shardId } : {}),
+          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.start', error: String(err) }));
+        } else if (delta.type === 'toolcall_delta') {
+          const toolCall = getToolCallFromPartial(delta.partial, delta.contentIndex);
+          eventBus.emit('agent.toolcall.delta', {
+            channelId,
+            contentIndex: delta.contentIndex,
+            delta: delta.delta,
+            ...(toolCall?.id ? { toolCallId: toolCall.id } : {}),
+            ...(toolCall?.name ? { toolName: toolCall.name } : {}),
+            ...(shardId ? { shardId } : {}),
+          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.delta', error: String(err) }));
+        } else if (delta.type === 'toolcall_end') {
+          eventBus.emit('agent.toolcall.end', {
+            channelId,
+            contentIndex: delta.contentIndex,
+            toolCallId: delta.toolCall.id,
+            toolName: delta.toolCall.name,
+            arguments: delta.toolCall.arguments as Record<string, unknown>,
+            ...(shardId ? { shardId } : {}),
+          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.end', error: String(err) }));
         }
         break;
       }
@@ -83,4 +115,11 @@ function resolveShardId(channelId: string): string | undefined {
   if (!channelId.startsWith('shard:')) return undefined;
   const shardId = channelId.slice('shard:'.length).trim();
   return shardId.length > 0 ? shardId : undefined;
+}
+
+function getToolCallFromPartial(partial: { content?: unknown[] }, contentIndex: number): ToolCall | undefined {
+  const block = partial.content?.[contentIndex];
+  if (!block || typeof block !== 'object') return undefined;
+  if ((block as { type?: string }).type !== 'toolCall') return undefined;
+  return block as ToolCall;
 }

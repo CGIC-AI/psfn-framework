@@ -101,6 +101,8 @@
       // Voice / TTS
       ttsProvider, voiceId, echoTtsUrl, echoTtsVoice, echoTtsPreset,
       sttProvider, deepgramModel,
+      // Obsidian Vault
+      obsidianVaultName, obsidianCliPath, obsidianAutoPublish, obsidianTimeoutMs,
       // Channels
       discordEnabled, discordHeartbeatChannel,
       discordTriggerWords, discordTriggerReactions,
@@ -160,6 +162,12 @@
   let echoTtsPreset = $state('');
   let sttProvider = $state<'deepgram' | 'disabled'>('disabled');
   let deepgramModel = $state('nova-3');
+
+  // ── Obsidian Vault ──
+  let obsidianVaultName = $state('');
+  let obsidianCliPath = $state('obsidian');
+  let obsidianAutoPublish = $state(false);
+  let obsidianTimeoutMs = $state(10000);
 
   // ── Channels ──
   let discordEnabled = $state(false);
@@ -329,6 +337,11 @@
         'sttProvider', 'deepgramModel',
       ],
       summary: () => `TTS: ${ttsProvider}, STT: ${sttProvider}`,
+    },
+    {
+      id: 'obsidian', title: 'Obsidian Vault', icon: 'O',
+      keys: ['obsidianVaultName', 'obsidianCliPath', 'obsidianAutoPublish', 'obsidianTimeoutMs'],
+      summary: () => obsidianVaultName ? `Vault: ${obsidianVaultName}${obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
     },
     {
       id: 'channels', title: 'Channels', icon: 'C',
@@ -511,6 +524,12 @@
     const rawStt = String(config.sttProvider ?? (config.deepgramApiKey ? 'deepgram' : 'disabled'));
     sttProvider = rawStt === 'deepgram' ? 'deepgram' : 'disabled';
     deepgramModel = String(config.deepgramModel ?? 'nova-3');
+
+    // Obsidian Vault
+    obsidianVaultName = String(config.obsidianVaultName ?? '');
+    obsidianCliPath = String(config.obsidianCliPath ?? 'obsidian');
+    obsidianAutoPublish = Boolean(config.obsidianAutoPublish);
+    obsidianTimeoutMs = Number(config.obsidianTimeoutMs ?? 10000);
 
     // Channels
     discordEnabled = Boolean(config.discordEnabled);
@@ -750,6 +769,11 @@
       echoTtsPreset,
       sttProvider,
       deepgramModel,
+      // Obsidian Vault
+      obsidianVaultName: obsidianVaultName || undefined,
+      obsidianCliPath: obsidianCliPath || 'obsidian',
+      obsidianAutoPublish,
+      obsidianTimeoutMs,
       // Channels
       discordEnabled,
       discordHeartbeatChannel,
@@ -1742,6 +1766,48 @@
                   <span class="text-shadow-600 ml-1 font-mono">DEEPGRAM_API_KEY</span>
                 </div>
               </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Obsidian Vault -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('obsidian')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">O</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Obsidian Vault</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('obsidian')}
+              <span class="text-xs text-shadow-600">{obsidianVaultName ? `Vault: ${obsidianVaultName}` : 'Disabled'}</span>
+            {/if}
+            <span class="text-shadow-500">{openSections.has('obsidian') ? '−' : '+'}</span>
+          </div>
+        </button>
+        {#if openSections.has('obsidian')}
+          <div class="px-5 py-4 space-y-4 border-t border-bark-200">
+            <div>
+              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianVaultName">Vault Name</label>
+              <input type="text" id="obsidianVaultName" class="input-garden w-full" bind:value={obsidianVaultName} placeholder="e.g. Purrsephone" />
+              <p class="text-xs text-shadow-500 mt-0.5">Leave empty to disable vault tools. Must match the name in Obsidian.</p>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianCliPath">CLI Path</label>
+              <input type="text" id="obsidianCliPath" class="input-garden w-full" bind:value={obsidianCliPath} placeholder="obsidian" />
+              <p class="text-xs text-shadow-500 mt-0.5">Path to the Obsidian CLI binary. Default: obsidian</p>
+            </div>
+            <div class="flex items-center gap-3">
+              <input type="checkbox" id="obsidianAutoPublish" class="rounded border-bark-400" bind:checked={obsidianAutoPublish} />
+              <label class="text-xs font-semibold text-shadow-700" for="obsidianAutoPublish">Auto-publish reflections to vault</label>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianTimeoutMs">CLI Timeout (ms)</label>
+              <input type="number" id="obsidianTimeoutMs" class="input-garden w-28" bind:value={obsidianTimeoutMs} min={1000} max={30000} step={1000} />
+              <p class="text-xs text-shadow-500 mt-0.5">Timeout for CLI commands (1000-30000ms)</p>
             </div>
           </div>
         {/if}

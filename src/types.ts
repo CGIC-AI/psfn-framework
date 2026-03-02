@@ -377,6 +377,12 @@ export interface SubstrateConfig {
   telegramEnabled?: boolean;
   telegramAuthorizedUsers?: string[];
 
+  // ── Obsidian vault ──
+  obsidianVaultName?: string;
+  obsidianCliPath?: string;
+  obsidianAutoPublish?: boolean;
+  obsidianTimeoutMs?: number;
+
   // ── MoA (Mixture of Agents) ──
   moaEnabled?: boolean;
   moaReferenceModels?: string[];
@@ -640,6 +646,19 @@ export function loadConfig(): SubstrateConfig {
       : {}),
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
+    // Obsidian vault
+    ...(parseOptionalStringEnv(process.env.OBSIDIAN_VAULT_NAME)
+      ? { obsidianVaultName: parseOptionalStringEnv(process.env.OBSIDIAN_VAULT_NAME) }
+      : {}),
+    ...(parseOptionalStringEnv(process.env.OBSIDIAN_CLI_PATH)
+      ? { obsidianCliPath: parseOptionalStringEnv(process.env.OBSIDIAN_CLI_PATH) }
+      : {}),
+    ...(parseOptionalBooleanEnv(process.env.OBSIDIAN_AUTO_PUBLISH) !== undefined
+      ? { obsidianAutoPublish: parseOptionalBooleanEnv(process.env.OBSIDIAN_AUTO_PUBLISH) }
+      : {}),
+    ...(parseOptionalIntegerEnv(process.env.OBSIDIAN_TIMEOUT_MS, 1000) !== undefined
+      ? { obsidianTimeoutMs: parseOptionalIntegerEnv(process.env.OBSIDIAN_TIMEOUT_MS, 1000) }
+      : {}),
   };
 }
 

@@ -40,6 +40,7 @@ import { AdminSettingsDataService } from './services/settings-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
+import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service.js';
 import { ValuesJournalStore } from '../../values/store.js';
 import {
   resolveLegacyValuesJournalPath,
@@ -158,6 +159,9 @@ function inferTelemetryCallType(eventName: EventName): ObservabilityCallType | u
   if (eventName === 'agent.tool.start' || eventName === 'agent.tool.end') {
     return 'tool';
   }
+  if (eventName.startsWith('agent.tools.adaptive.')) {
+    return 'tool';
+  }
   if (eventName === 'memory.extraction.end') {
     return 'memory';
   }
@@ -192,6 +196,7 @@ export class AdminServer implements Lifecycle {
   private settingsService: AdminSettingsDataService;
   private identityService: AdminIdentityDataService;
   private promptsService: AdminPromptsDataService;
+  private adaptiveToolsService: AdminAdaptiveToolsDataService;
   private valuesJournal!: ValuesJournalStore;
   private schedulerService!: AdminSchedulerService;
   private scheduler!: import('../../scheduler/scheduler.js').Scheduler;
@@ -275,6 +280,10 @@ export class AdminServer implements Lifecycle {
       promptRegistry: config.promptRegistry,
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
+    });
+    this.adaptiveToolsService = new AdminAdaptiveToolsDataService({
+      eventBus: config.eventBus,
+      stateProvider: config.adaptiveToolsStateProvider ?? null,
     });
     this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(config.config.dataDir), {
       legacyFilePaths: [resolveLegacyValuesJournalPath(config.config.dataDir)],
@@ -711,6 +720,8 @@ export class AdminServer implements Lifecycle {
       'broadcast.approval.required',
       'broadcast.provenance',
       'external.telemetry.ingested',
+      'agent.tools.adaptive.decision',
+      'agent.tools.adaptive.snapshot',
       'wyoming.session.start',
       'wyoming.session.end',
       'wyoming.policy.violation',
@@ -1273,6 +1284,7 @@ export class AdminServer implements Lifecycle {
       },
       ...buildAdminApiRoutes({
         dashboardService: this.dashboardService,
+        adaptiveToolsService: this.adaptiveToolsService,
         memoryService: this.memoryService,
         sessionService: this.sessionService,
         contactsService: this.contactsService,

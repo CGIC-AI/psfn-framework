@@ -5,6 +5,10 @@ import type {
   InferredPostTurnAction,
   CorrelationMetadata,
 } from './types.js';
+import type {
+  AdaptiveToolDecisionTelemetry,
+  AdaptiveToolSnapshotTelemetry,
+} from './agent/adaptive-tools-telemetry.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -69,6 +73,28 @@ export interface EventMap {
     timestamp: number;
     error?: string;
   };
+  'agent.tools.autoload': {
+    channelId: string;
+    intent: string;
+    taskKind: string | null;
+    boundedMax: number;
+    candidates: string[];
+    activated: string[];
+    alreadyActive: string[];
+    skippedDenied: Array<{ toolName: string; missingTokens: string[] }>;
+    unavailable: string[];
+  } & EventCorrelationFields;
+  'agent.tools.autoload.skipped': {
+    channelId: string;
+    intent: string;
+    taskKind: string | null;
+    toolName: string;
+    reason: 'not_registered' | 'capability_denied';
+    missingTokens?: string[];
+    tier?: string;
+  } & EventCorrelationFields;
+  'agent.tools.adaptive.decision': AdaptiveToolDecisionTelemetry & EventCorrelationFields;
+  'agent.tools.adaptive.snapshot': AdaptiveToolSnapshotTelemetry & EventCorrelationFields;
   'agent.turn.stage': {
     turnId: string;
     channelId: string;

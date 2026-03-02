@@ -1369,6 +1369,93 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(summary?.unavailable).toEqual(['repo_status', 'repo_diff', 'repo_apply_patch']);
   });
 
+  it('emits adaptive decision telemetry and per-turn active-set snapshots with source labels', async () => {
+    const config = makeConfig({
+      capabilityTier: 'nursery',
+      promotedExtendedTools: ['repo_status', 'repo_commit', 'ghost_tool'],
+    });
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('manual_probe'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('deferred_probe'), 'extended');
+
+    const adaptiveDecisions: any[] = [];
+    const adaptiveSnapshots: any[] = [];
+    (eventBus as any).on('agent.tools.adaptive.decision', (payload: any) => { adaptiveDecisions.push(payload); });
+    (eventBus as any).on('agent.tools.adaptive.snapshot', (payload: any) => { adaptiveSnapshots.push(payload); });
+
+    agent.activateExtendedTools(['manual_probe']);
+    agent.activateExtendedTools(['deferred_probe'], {
+      source: 'deferred',
+      correlation: {
+        turnId: 'deferred-turn',
+        requestId: 'deferred-request',
+        channelId: 'test-channel',
+        callType: 'tool',
+        purpose: 'deferred_tool_handoff',
+      },
+      taskKind: 'deferred_tool_handoff',
+      intent: 'deferred_tool_handoff',
+    });
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-adaptive-telemetry',
+      channelType: 'terminal',
+      content: 'Please inspect repo diff and apply patch',
+    }));
+
+    const snapshot = adaptiveSnapshots.at(-1);
+    expect(snapshot).toMatchObject({
+      turnId: 'msg-adaptive-telemetry',
+      requestId: 'msg-adaptive-telemetry',
+      channelId: 'test-channel',
+      callType: 'chat',
+      purpose: 'agent.tools.adaptive.snapshot',
+      taskKind: null,
+    });
+    expect(snapshot?.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'load_tools', source: 'core' }),
+      expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
+      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
+      expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded' }),
+      expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred' }),
+    ]));
+    expect(snapshot?.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'ghost_tool', source: 'promoted', reason: 'not_registered' }),
+      expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', reason: 'capability_denied' }),
+    ]));
+    expect(snapshot?.counts).toMatchObject({
+      core: 1,
+      promoted: 1,
+      autoload: 1,
+      extendedLoaded: 1,
+      deferred: 1,
+      total: 5,
+    });
+
+    expect(adaptiveDecisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded', decision: 'activated' }),
+      expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred', decision: 'activated' }),
+      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload', decision: 'activated' }),
+      expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'load_tools', source: 'core', decision: 'active', reason: 'turn_active_set' }),
+      expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),
+    ]));
+  });
+
   it('deduplicates active tool registration when a promoted tool is also manually loaded', async () => {
     const config = makeConfig({
       promotedExtendedTools: ['extended_probe_tool'],

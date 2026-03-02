@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { getConfirmations, resolveConfirmation } from '$lib/api/endpoints/confirmations';
   import type { ConfirmationQueueEntry, ConfirmationDecision } from '$lib/types';
+  import { pushToast } from '$lib/stores/toast.svelte';
 
   // ── State ──
   let entries = $state<ConfirmationQueueEntry[]>([]);
@@ -66,6 +67,7 @@
       if (!raw) {
         actionMessage = 'Modified params JSON is required for modify.';
         actionIsError = true;
+        pushToast(actionMessage, 'error');
         return;
       }
       try {
@@ -73,12 +75,14 @@
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
           actionMessage = 'Modified params must be a JSON object.';
           actionIsError = true;
+          pushToast(actionMessage, 'error');
           return;
         }
         resolveModifiedParams = parsed as Record<string, unknown>;
       } catch {
         actionMessage = 'Invalid JSON in modified params.';
         actionIsError = true;
+        pushToast(actionMessage, 'error');
         return;
       }
     }
@@ -88,15 +92,18 @@
       if (result.ok) {
         actionMessage = result.message || `Confirmation ${decision}d successfully.`;
         actionIsError = false;
+        pushToast(actionMessage, 'success');
       } else {
         actionMessage = result.message || `Failed to ${decision} confirmation.`;
         actionIsError = true;
+        pushToast(actionMessage, 'error');
       }
       // Reload after action
       await loadData();
     } catch (e) {
       actionMessage = e instanceof Error ? e.message : 'Action failed';
       actionIsError = true;
+      pushToast(actionMessage, 'error');
     }
   }
 
@@ -136,15 +143,34 @@
 
   <!-- Action message -->
   {#if actionMessage}
-    <div class="card-garden p-4 border-l-4 {actionIsError ? 'border-l-wilt-400' : 'border-l-moss-400'}">
-      <p class="text-sm {actionIsError ? 'text-wilt-600' : 'text-moss-700'}">{actionMessage}</p>
+    <div class="card-garden p-4 border-l-4 {actionIsError ? 'border-l-wilt-400' : 'border-l-moss-400'} flex items-start gap-3">
+      <p class="text-sm {actionIsError ? 'text-wilt-600' : 'text-moss-700'} flex-1">{actionMessage}</p>
+      <button
+        data-esc-close
+        onclick={() => actionMessage = ''}
+        class="text-shadow-500 hover:text-shadow-700 leading-none text-lg"
+        aria-label="Dismiss action message"
+      >
+        &times;
+      </button>
     </div>
   {/if}
 
   {#if loading && entries.length === 0}
-    <div class="card-garden p-12 text-center">
-      <div class="w-8 h-8 mx-auto rounded-full bg-bark-200 animate-pulse mb-4"></div>
-      <p class="text-sm text-shadow-600">Loading confirmation queue...</p>
+    <div class="space-y-3">
+      {#each Array(3) as _}
+        <div class="card-garden p-5 animate-pulse space-y-3">
+          <div class="h-4 rounded bg-bark-200 w-2/5"></div>
+          <div class="h-3 rounded bg-bark-200 w-3/5"></div>
+          <div class="h-20 rounded bg-bark-200"></div>
+          <div class="flex gap-2">
+            <div class="h-8 rounded bg-bark-200 w-20"></div>
+            <div class="h-8 rounded bg-bark-200 w-20"></div>
+            <div class="h-8 rounded bg-bark-200 w-20"></div>
+          </div>
+        </div>
+      {/each}
+      <p class="text-sm text-shadow-600 px-1">Loading confirmation queue...</p>
     </div>
   {:else if error}
     <div class="card-garden p-6 border-l-4 border-l-wilt-400">
@@ -275,7 +301,7 @@
             </div>
 
             <!-- Action buttons -->
-            <div class="flex gap-3 pt-2">
+            <div class="flex flex-wrap gap-3 pt-2">
               <button
                 onclick={() => handleResolve(entry.id, 'approve')}
                 class="px-4 py-2 rounded-lg text-sm font-medium

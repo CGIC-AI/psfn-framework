@@ -13,6 +13,7 @@
     SkillSkipRecord,
     ManagedSkill,
   } from '$lib/types';
+  import { pushToast } from '$lib/stores/toast.svelte';
 
   // ── State ──
   let snapshot = $state<SkillSnapshot | null>(null);
@@ -97,9 +98,11 @@
         description: editDescription || undefined,
       });
       editingSkill = null;
+      pushToast(`Saved "${skill.name}"`, 'success');
       await loadData();
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Failed to save skill';
+      pushToast(actionError, 'error');
     } finally {
       savingSkill = null;
     }
@@ -115,9 +118,11 @@
       } else {
         disabledSkills = [...disabledSkills, name];
       }
+      pushToast(`Skill "${name}" ${result.enabled ? 'enabled' : 'disabled'}`, 'success');
       await loadData();
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Failed to toggle skill';
+      pushToast(actionError, 'error');
     } finally {
       togglingSkill = null;
     }
@@ -129,9 +134,11 @@
     actionError = '';
     try {
       await deleteSkill(name);
+      pushToast(`Deleted "${name}"`, 'success');
       await loadData();
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Failed to delete skill';
+      pushToast(actionError, 'error');
     } finally {
       deletingSkill = null;
     }
@@ -140,9 +147,10 @@
   async function handleCreate() {
     creating = true;
     actionError = '';
+    const createdName = newName.trim();
     try {
       await createSkill({
-        name: newName.trim(),
+        name: createdName,
         category: newCategory.trim() || 'custom',
         content: newContent.trim(),
         description: newDescription.trim() || undefined,
@@ -152,9 +160,11 @@
       newDescription = '';
       newContent = '';
       showCreateForm = false;
+      pushToast(`Created "${createdName}"`, 'success');
       await loadData();
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Failed to create skill';
+      pushToast(actionError, 'error');
     } finally {
       creating = false;
     }
@@ -319,14 +329,29 @@
   {#if actionError}
     <div class="card-garden p-4 border-l-4 border-l-wilt-400 flex items-start justify-between">
       <p class="text-sm text-wilt-700">{actionError}</p>
-      <button onclick={() => actionError = ''} class="text-shadow-400 hover:text-shadow-600 ml-4 shrink-0">&times;</button>
+      <button data-esc-close onclick={() => actionError = ''} class="text-shadow-400 hover:text-shadow-600 ml-4 shrink-0">&times;</button>
     </div>
   {/if}
 
   {#if loading}
-    <div class="card-garden p-12 text-center">
-      <div class="w-8 h-8 mx-auto rounded-full bg-bark-200 animate-pulse mb-4"></div>
-      <p class="text-sm text-shadow-600">Loading skills snapshot...</p>
+    <div class="space-y-3">
+      <div class="card-garden p-5 animate-pulse space-y-3">
+        <div class="h-5 rounded bg-bark-200 w-1/3"></div>
+        <div class="h-4 rounded bg-bark-200 w-1/2"></div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
+          {#each Array(4) as _}
+            <div class="h-14 rounded bg-bark-200"></div>
+          {/each}
+        </div>
+      </div>
+      {#each Array(3) as _}
+        <div class="card-garden p-5 animate-pulse space-y-2">
+          <div class="h-4 rounded bg-bark-200 w-2/5"></div>
+          <div class="h-3 rounded bg-bark-200 w-4/5"></div>
+          <div class="h-3 rounded bg-bark-200 w-3/5"></div>
+        </div>
+      {/each}
+      <p class="text-sm text-shadow-600 px-1">Loading skills snapshot...</p>
     </div>
   {:else if error}
     <div class="card-garden p-6 border-l-4 border-l-wilt-400">
@@ -470,6 +495,7 @@
           <div class="flex gap-2 justify-end">
             <button
               onclick={() => { showCreateForm = false; actionError = ''; }}
+              data-esc-close
               class="px-4 py-2 text-sm rounded-lg border border-bark-300
                      text-shadow-600 hover:bg-bark-100 transition-colors"
             >

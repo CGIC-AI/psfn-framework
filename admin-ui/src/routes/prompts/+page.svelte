@@ -704,6 +704,7 @@
             </button>
             <button
               onclick={() => { showNewLayerForm = false; resetNewLayerForm(); }}
+              data-esc-close
               class="px-3 py-1.5 rounded-lg text-shadow-700 text-sm hover:bg-bark-200 transition-colors border border-bark-300"
             >
               Cancel
@@ -1006,6 +1007,7 @@
                             <div class="flex gap-2">
                               <button
                                 onclick={() => { editingContent = false; saveMessage = ''; }}
+                                data-esc-close
                                 class="px-3 py-1.5 rounded-lg text-shadow-700 text-sm hover:bg-bark-200 transition-colors border border-bark-300"
                               >
                                 Cancel

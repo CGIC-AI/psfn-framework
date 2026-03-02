@@ -43,7 +43,24 @@ export class AdminHandlers {
       dashboard: new AdminDashboardHandlers(this.legacy),
       memory: new AdminMemoryHandlers(this.legacy),
       sessions: new AdminSessionsHandlers(this.legacy),
-      identity: new AdminIdentityHandlers(this.legacy),
+      identity: new AdminIdentityHandlers({
+        memoryStore: deps.memoryStore,
+        sessionStore: deps.sessionStore,
+        embeddingService: deps.embeddingService,
+        characterCard: deps.characterCard,
+        config: deps.config,
+        contactStore: deps.contactStore,
+        cardVersionStore: deps.cardVersionStore,
+        appendAuditTimelineEntry: (
+          actionType,
+          decision,
+          narrative,
+          details = [],
+          actor,
+        ) => {
+          this.legacy.appendAuditTimelineEntry(actionType, decision, narrative, details, actor);
+        },
+      }),
       settings: new AdminSettingsHandlers(this.legacy),
       contacts: new AdminContactsHandlers(this.legacy),
       prompts: new AdminPromptsHandlers(this.legacy),

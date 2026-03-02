@@ -369,16 +369,19 @@ function buildCompletionOptions(
 
 function buildDeliberationCorrelation(
   baseCorrelation: Partial<CorrelationMetadata> | undefined,
-  purpose: string,
-  fallbackCallType: ObservabilityCallType,
+  originStage: string,
+  fallbackOriginType: ObservabilityCallType,
 ): CorrelationMetadata {
   return {
     ...(baseCorrelation?.turnId ? { turnId: baseCorrelation.turnId } : {}),
     ...(baseCorrelation?.requestId ? { requestId: baseCorrelation.requestId } : {}),
     ...(baseCorrelation?.channelId ? { channelId: baseCorrelation.channelId } : {}),
-    callType: baseCorrelation?.callType ?? fallbackCallType,
+    callType: baseCorrelation?.callType ?? baseCorrelation?.originType ?? fallbackOriginType,
     ...(baseCorrelation?.toolName ? { toolName: baseCorrelation.toolName } : {}),
-    purpose,
+    ...(baseCorrelation?.toolCallId ? { toolCallId: baseCorrelation.toolCallId } : {}),
+    purpose: originStage,
+    originType: baseCorrelation?.originType ?? baseCorrelation?.callType ?? fallbackOriginType,
+    originStage,
   };
 }
 
@@ -433,15 +436,15 @@ export async function runDeliberation(
           messages: buildVoiceMessages(prompt, previousSynthesis, roundIndex),
         },
         voice.purpose,
-        buildCompletionOptions(
-          voice.requestedModel,
-          roundRemainingTokens,
-          buildDeliberationCorrelation(
-            config.correlation,
-            `deliberation.voice.${voice.purpose}`,
-            voice.purpose === 'background' ? 'background' : 'tool',
+          buildCompletionOptions(
+            voice.requestedModel,
+            roundRemainingTokens,
+            buildDeliberationCorrelation(
+              config.correlation,
+              `deliberation.voice.${voice.purpose}`,
+              voice.purpose === 'background' ? 'background' : 'tool',
+            ),
           ),
-        ),
       );
 
       totalInputTokens += response.inputTokens;

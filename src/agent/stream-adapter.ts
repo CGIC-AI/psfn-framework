@@ -15,6 +15,8 @@ import { createModel, resolveRegisteredModel } from '../llm/models.js';
 import { withRetry } from '../llm/retry.js';
 import { llmRetryConfig } from '../llm/retry-config.js';
 import { createComponentLogger } from '../logger.js';
+import { getRequestContext } from '../llm/request-context.js';
+import { toCorrelationLogFields } from '../llm/correlation.js';
 
 const log = createComponentLogger('StreamAdapter');
 
@@ -31,6 +33,7 @@ export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
 
   return (model, context, options) => {
+    const correlationFields = toCorrelationLogFields(getRequestContext());
     const modelProvider = resolveModelProvider(model);
     // Resolve API key: prefer caller's, then LiteLLM key, then provider env key
     const apiKey = options?.apiKey
@@ -53,6 +56,7 @@ export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
             maxRetries,
             delayMs,
             error: error.message,
+            ...correlationFields,
           });
         },
       },

@@ -7,6 +7,10 @@ import type {
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import type { CorrelationMetadata, CompletionPurpose, ObservabilityCallType } from '../../types.js';
 import { registerAuditedDescriptors } from './register.js';
+import {
+  inferCallType as inferCorrelationCallType,
+  resolveCorrelationMetadata,
+} from '../../llm/correlation.js';
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
@@ -18,7 +22,10 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         requestId,
         channelId: params.channelId,
         callType: params.callType ?? 'chat',
+        originType: params.originType,
+        originStage: params.originStage,
         toolName: params.toolName,
+        toolCallId: params.toolCallId,
         purpose: params.purpose ?? 'chat',
       });
       const response = await runtime.llmProvider.stream(
@@ -53,7 +60,10 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         requestId: p.requestId,
         channelId: p.channelId,
         callType: p.callType ?? 'chat',
+        originType: p.originType,
+        originStage: p.originStage,
         toolName: p.toolName,
+        toolCallId: p.toolCallId,
         purpose: p.purpose ?? 'chat',
       })),
     }),
@@ -66,7 +76,10 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         requestId: params.requestId ?? params.turnId,
         channelId: params.channelId,
         callType: params.callType ?? inferCallType(params.purpose, params.channelId),
+        originType: params.originType,
+        originStage: params.originStage,
         toolName: params.toolName,
+        toolCallId: params.toolCallId,
         purpose: params.purpose,
       });
       const response = await runtime.llmProvider.complete(
@@ -93,7 +106,10 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         requestId: p.requestId ?? p.turnId,
         channelId: p.channelId,
         callType: p.callType ?? inferCallType(p.purpose, p.channelId),
+        originType: p.originType,
+        originStage: p.originStage,
         toolName: p.toolName,
+        toolCallId: p.toolCallId,
         purpose: p.purpose,
       })),
     }),
@@ -117,38 +133,34 @@ function buildCorrelation(params: {
   requestId?: string;
   channelId?: string;
   callType: ObservabilityCallType;
+  originType?: ObservabilityCallType;
+  originStage?: string;
   toolName?: string;
+  toolCallId?: string;
   purpose: string;
 }): CorrelationMetadata {
-  return {
-    ...(params.turnId ? { turnId: params.turnId } : {}),
-    ...(params.requestId ? { requestId: params.requestId } : {}),
-    ...(params.channelId ? { channelId: params.channelId } : {}),
-    callType: params.callType,
-    ...(params.toolName ? { toolName: params.toolName } : {}),
-    purpose: params.purpose,
-  };
+  return resolveCorrelationMetadata(
+    {
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.requestId ? { requestId: params.requestId } : {}),
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      callType: params.callType,
+      ...(params.originType ? { originType: params.originType } : {}),
+      ...(params.originStage ? { originStage: params.originStage } : {}),
+      ...(params.toolName ? { toolName: params.toolName } : {}),
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+      purpose: params.purpose,
+    },
+    undefined,
+    params.purpose === 'chat' ? 'chat' : 'background',
+  );
 }
 
 function inferCallType(
   purpose: CompletionPurpose,
   channelId: string | undefined,
 ): ObservabilityCallType {
-  if (channelId?.toLowerCase().startsWith('internal:')) {
-    return 'scheduled';
-  }
-  switch (purpose) {
-    case 'summary':
-      return 'summary';
-    case 'extraction':
-      return 'memory';
-    case 'reasoning':
-      return 'tool';
-    case 'background':
-    case 'import_processing':
-    default:
-      return 'background';
-  }
+  return inferCorrelationCallType(purpose, channelId);
 }
 
 function toSummaryCorrelation(
@@ -159,7 +171,10 @@ function toSummaryCorrelation(
     ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
     ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
     callType: correlation.callType,
+    ...(correlation.originType ? { originType: correlation.originType } : {}),
+    ...(correlation.originStage ? { originStage: correlation.originStage } : {}),
     ...(correlation.toolName ? { toolName: correlation.toolName } : {}),
+    ...(correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
     purpose: correlation.purpose,
   };
 }

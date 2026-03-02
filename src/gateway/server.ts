@@ -397,7 +397,17 @@ function extractGatewayCorrelation(
 ): Record<string, string> {
   if (!params) return {};
   const correlation: Record<string, string> = {};
-  for (const key of ['turnId', 'requestId', 'channelId', 'callType', 'toolName', 'purpose']) {
+  for (const key of [
+    'turnId',
+    'requestId',
+    'channelId',
+    'callType',
+    'originType',
+    'originStage',
+    'toolName',
+    'toolCallId',
+    'purpose',
+  ]) {
     const value = params[key];
     if (typeof value !== 'string') continue;
     const trimmed = value.trim();

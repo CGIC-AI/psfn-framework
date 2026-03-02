@@ -2,6 +2,7 @@
 // Runs an ephemeral think cycle: LLM → code → output → repeat until FINAL.
 
 import type { CapabilityTier, ContextMessage, LLMContext, LLMResponse } from '../types.js';
+import type { LLMRequestMetadata } from '../agent/contracts.js';
 import type {
   BudgetStatus,
   REPLDeps,
@@ -25,6 +26,7 @@ import {
   updateBudgetProgress,
   updateBudgetRuntime,
 } from './loop-helpers.js';
+import { getRequestContext } from '../llm/request-context.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
@@ -222,9 +224,90 @@ function pushPassiveStep(
   }));
 }
 
-export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkResult> {
+interface ResolvedThinkRequestMetadata {
+  requestId: string;
+  turnId?: string;
+  channelId?: string;
+  toolName?: string;
+  toolCallId?: string;
+  originType: 'tool' | 'background' | 'scheduled' | 'chat' | 'memory' | 'summary';
+}
+
+function normalizeMetadataValue(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeOriginType(value: string | undefined): ResolvedThinkRequestMetadata['originType'] | undefined {
+  if (
+    value === 'tool'
+    || value === 'background'
+    || value === 'scheduled'
+    || value === 'chat'
+    || value === 'memory'
+    || value === 'summary'
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function resolveThinkRequestMetadata(
+  deps: REPLDeps,
+  toolInvocationMetadata: Partial<LLMRequestMetadata> | undefined,
+): ResolvedThinkRequestMetadata {
+  const contextMetadata = getRequestContext();
+  const merged = {
+    ...(contextMetadata ?? {}),
+    ...(deps.requestMetadata ?? {}),
+    ...(toolInvocationMetadata ?? {}),
+  };
+
+  const turnId = normalizeMetadataValue(merged.turnId);
+  const requestId = normalizeMetadataValue(merged.requestId)
+    ?? turnId
+    ?? `repl-think-${Date.now()}`;
+  const originType = normalizeOriginType(normalizeMetadataValue(merged.originType))
+    ?? normalizeOriginType(normalizeMetadataValue(merged.callType))
+    ?? 'tool';
+
+  return {
+    requestId,
+    ...(turnId ? { turnId } : {}),
+    ...(normalizeMetadataValue(merged.channelId) ? { channelId: normalizeMetadataValue(merged.channelId) } : {}),
+    toolName: normalizeMetadataValue(merged.toolName) ?? 'think',
+    ...(normalizeMetadataValue(merged.toolCallId) ? { toolCallId: normalizeMetadataValue(merged.toolCallId) } : {}),
+    originType,
+  };
+}
+
+function buildThinkCorrelation(
+  metadata: ResolvedThinkRequestMetadata,
+  originStage: string,
+  requestSuffix: string,
+): LLMContext['correlation'] {
+  return {
+    ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+    requestId: `${metadata.requestId}:${requestSuffix}`,
+    ...(metadata.channelId ? { channelId: metadata.channelId } : {}),
+    callType: metadata.originType,
+    ...(metadata.toolName ? { toolName: metadata.toolName } : {}),
+    ...(metadata.toolCallId ? { toolCallId: metadata.toolCallId } : {}),
+    purpose: originStage,
+    originType: metadata.originType,
+    originStage,
+  };
+}
+
+export async function runRLMLoop(
+  task: string,
+  deps: REPLDeps,
+  toolInvocationMetadata?: Partial<LLMRequestMetadata>,
+): Promise<ThinkResult> {
   const startTime = Date.now();
   const { config, llmProvider } = deps;
+  const requestMetadata = resolveThinkRequestMetadata(deps, toolInvocationMetadata);
   const tier = deps.getCapabilityTier?.() ?? 'autonomous';
   const budget = resolveEffectiveBudget(config, tier);
 
@@ -294,12 +377,32 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
   };
   const sandboxLLMProvider = Object.create(llmProvider) as typeof llmProvider;
   sandboxLLMProvider.complete = async (context, purpose) => {
+    const incomingCorrelation = context.correlation;
+    const originStage = normalizeMetadataValue(incomingCorrelation?.originStage)
+      ?? normalizeMetadataValue(incomingCorrelation?.purpose)
+      ?? `repl.sandbox.${purpose}`;
+    const correlationBase = buildThinkCorrelation(
+      requestMetadata,
+      originStage,
+      `sandbox-${purpose}-${Date.now()}`,
+    );
     const correlatedContext: LLMContext = {
       ...context,
-      correlation: context.correlation ?? {
-        callType: 'tool',
-        purpose: `repl.sandbox.${purpose}`,
-        toolName: 'think',
+      correlation: {
+        ...correlationBase,
+        ...(incomingCorrelation ?? {}),
+        callType: incomingCorrelation?.callType
+          ?? incomingCorrelation?.originType
+          ?? correlationBase.callType,
+        purpose: incomingCorrelation?.purpose
+          ?? incomingCorrelation?.originStage
+          ?? correlationBase.purpose,
+        originType: incomingCorrelation?.originType
+          ?? incomingCorrelation?.callType
+          ?? correlationBase.originType,
+        originStage: incomingCorrelation?.originStage
+          ?? incomingCorrelation?.purpose
+          ?? correlationBase.originStage,
       },
     };
     const response = await llmProvider.complete(correlatedContext, purpose);
@@ -321,6 +424,7 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
     getCapabilityTier: deps.getCapabilityTier,
     moduleInstallConfirmationQueue: deps.moduleInstallConfirmationQueue,
     onModuleRegistryMutation: deps.onModuleRegistryMutation,
+    requestMetadata,
   }, budgetRef, { memoryCeilingBytes });
 
   // Gather context metadata for system prompt
@@ -402,12 +506,11 @@ export async function runRLMLoop(task: string, deps: REPLDeps): Promise<ThinkRes
         {
           systemPrompt,
           messages,
-          correlation: {
-            requestId: `repl-think-${startTime}-${i + 1}`,
-            callType: 'tool',
-            toolName: 'think',
-            purpose: 'repl.think.iteration',
-          },
+          correlation: buildThinkCorrelation(
+            requestMetadata,
+            'repl.think.iteration',
+            `iteration-${i + 1}`,
+          ),
         },
         'reasoning',
       );

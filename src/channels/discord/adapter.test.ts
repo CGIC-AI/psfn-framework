@@ -1061,6 +1061,49 @@ describe('DiscordAdapter status visibility', () => {
     expect(interactive.edits).toContain('Having trouble reaching my thoughts. Please try again.');
   });
 
+  it('shows rate-limited long-running think status updates and clears them on completion', async () => {
+    vi.useFakeTimers();
+    try {
+      const eventBus = new EventBus();
+      const adapter = new DiscordAdapter(makeConfig(), eventBus);
+      await adapter.init();
+
+      const channelId = 'ch-think';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      adapter.onMessage(async () => {
+        await eventBus.emit('agent.tool.start', {
+          channelId,
+          toolCallId: 'think-call-1',
+          toolName: 'think',
+        });
+        await vi.advanceTimersByTimeAsync(16_000);
+        await vi.advanceTimersByTimeAsync(25_000);
+        await eventBus.emit('agent.tool.end', {
+          channelId,
+          toolCallId: 'think-call-1',
+          toolName: 'think',
+          isError: false,
+        });
+        return {
+          content: 'final reply',
+          channelId,
+          metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      });
+
+      await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+      const longRunningSends = interactive.sent.filter(msg => msg.includes('Still thinking deeply'));
+      expect(longRunningSends).toHaveLength(1);
+      expect(interactive.edits.some(msg => msg.includes('Still thinking deeply'))).toBe(true);
+      expect(interactive.deleted.some(msg => msg.includes('Still thinking deeply'))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('emits queue telemetry for lock acquisition, contention, and release', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

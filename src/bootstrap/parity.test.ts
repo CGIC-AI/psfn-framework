@@ -537,6 +537,7 @@ describe('wireHeartbeatRuntime', () => {
       activateExtendedTools: vi.fn().mockReturnValue({
         requestedTools: ['extended_probe_tool'],
         activatedTools: ['extended_probe_tool'],
+        alreadyActiveTools: [],
         missingTools: [],
       }),
       registerPostTurnActionInferer,
@@ -653,6 +654,7 @@ describe('wireHeartbeatRuntime', () => {
       activateExtendedTools: vi.fn().mockReturnValue({
         requestedTools: ['extended_probe_tool'],
         activatedTools: ['extended_probe_tool'],
+        alreadyActiveTools: [],
         missingTools: [],
       }),
       registerPostTurnActionInferer,
@@ -746,7 +748,18 @@ describe('wireHeartbeatRuntime', () => {
 
     expect(agentLoop.waitForIdle).toHaveBeenCalled();
     expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
-    expect(agentLoop.activateExtendedTools).toHaveBeenCalledWith(['extended_probe_tool']);
+    expect(agentLoop.activateExtendedTools).toHaveBeenCalledWith(
+      ['extended_probe_tool'],
+      expect.objectContaining({
+        source: 'deferred',
+        correlation: expect.objectContaining({
+          callType: 'tool',
+          purpose: 'agent.tools.adaptive.decision',
+        }),
+        taskKind: 'deferred_tool_handoff',
+        intent: 'deferred_tool_handoff',
+      }),
+    );
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
     expect(sender.send).toHaveBeenCalledWith('test-channel', 'Deferred continuation output');
     expect(phases).toEqual(expect.arrayContaining(['queued', 'activated', 'executed']));
@@ -772,6 +785,7 @@ describe('wireHeartbeatRuntime', () => {
         activateExtendedTools: vi.fn().mockReturnValue({
           requestedTools: ['extended_probe_tool'],
           activatedTools: ['extended_probe_tool'],
+          alreadyActiveTools: [],
           missingTools: [],
         }),
         registerPostTurnActionInferer,

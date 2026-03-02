@@ -3094,6 +3094,8 @@ export class LegacyAdminHandlers {
       'agent.turn.usage',
       'agent.tool.start',
       'agent.tool.end',
+      'agent.tools.adaptive.decision',
+      'agent.tools.adaptive.snapshot',
       'agent.compaction.start',
       'agent.compaction.end',
       'agent.retry.start',

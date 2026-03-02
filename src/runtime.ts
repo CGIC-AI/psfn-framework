@@ -930,6 +930,7 @@ export class SubstrateRuntime implements Lifecycle {
         promptRegistry,
         skillsRuntime,
         cardVersionStore,
+        adaptiveToolsStateProvider: this.agentLoop,
         confirmationQueueApi: {
           listConfirmationQueue: async () => ({ entries: cardProposalQueue.listPending() }),
           resolveConfirmationQueue: (params) => cardProposalQueue.resolve(params),

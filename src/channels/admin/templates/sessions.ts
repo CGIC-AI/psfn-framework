@@ -41,7 +41,7 @@ function toReadableChannelLabel(channelId: string): string {
 function renderLinkedContact(channel: ChannelInfo): string {
   if (!channel.linkedContactId || !channel.linkedContactName) return '';
   const fragment = encodeURIComponent(`contact-row-${channel.linkedContactId}`);
-  const viewHref = `/contacts#${fragment}`;
+  const viewHref = `/legacy/contacts#${fragment}`;
   const editHref = `/api/contacts/${encodeURIComponent(channel.linkedContactId)}/edit`;
   return `<div class="crm-notes">Contact: <a href="${viewHref}">${escapeHtml(channel.linkedContactName)}</a> · <a href="${editHref}">edit</a></div>`;
 }
@@ -51,7 +51,7 @@ export function sessionListPage(channels: ChannelInfo[]): string {
   const rows = channels.map(c =>
     `<tr>
       <td>
-        <a href="/sessions/${encodeURIComponent(c.channelId)}">${escapeHtml(c.displayLabel ?? toReadableChannelLabel(c.channelId))}</a>
+        <a href="/legacy/sessions/${encodeURIComponent(c.channelId)}">${escapeHtml(c.displayLabel ?? toReadableChannelLabel(c.channelId))}</a>
         ${c.displayLabel && c.displayLabel !== c.channelId ? `<div class="session-label-muted">id: ${escapeHtml(c.channelId)}</div>` : ''}
         ${renderLinkedContact(c)}
       </td>
@@ -147,7 +147,7 @@ export function sessionMessagesPage(
     <p style="margin-bottom:1rem;color:var(--text-muted)">Channel: ${escapeHtml(channelId)} (${messages.length} messages)</p>
     ${auditHtml}
     <div id="messages">${msgHtml}</div>
-    <a href="/sessions">&larr; Back to Conversation Roots</a>`;
+    <a href="/legacy/sessions">&larr; Back to Conversation Roots</a>`;
 }
 
 export function messageCard(msg: SessionEntry): string {

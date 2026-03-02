@@ -445,17 +445,39 @@ describe('AdminServer', () => {
   });
 
   describe('Dashboard', () => {
-    it('returns 200 with HTML', async () => {
+    it('redirects root route to Garden', async () => {
       const res = await request(port, 'GET', '/');
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe('/garden');
+    });
+
+    it('keeps /garden as a valid entry route', async () => {
+      const res = await request(port, 'GET', '/garden');
+      expect([200, 302]).toContain(res.status);
+      if (res.status === 302) {
+        expect(res.headers.location).toBe('/legacy');
+      }
+    });
+
+    it('redirects legacy root-mounted pages to /legacy', async () => {
+      const res = await request(port, 'GET', '/memory');
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe('/legacy/memory');
+    });
+
+    it('returns legacy dashboard HTML with deprecation headers', async () => {
+      const res = await request(port, 'GET', '/legacy');
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toContain('text/html');
+      expect(res.headers.deprecation).toBe('true');
+      expect(res.headers.warning).toContain('/garden');
       expect(res.body).toContain("admin UI");
       expect(res.body).toContain('Dashboard');
       expect(res.body).toContain('<link rel="stylesheet" href="/static/admin.css">');
     });
 
     it('shows memory stats', async () => {
-      const res = await request(port, 'GET', '/');
+      const res = await request(port, 'GET', '/legacy');
       expect(res.body).toContain('Total Memories');
       expect(res.body).toContain('Scheduled Tasks');
     });
@@ -482,7 +504,7 @@ describe('AdminServer', () => {
         },
       });
 
-      const res = await request(port, 'GET', '/');
+      const res = await request(port, 'GET', '/legacy');
       expect(res.body).toContain('Session Usage');
       expect(res.body).toContain('Tracked Turns');
       expect(res.body).toContain('1.5k');
@@ -530,7 +552,7 @@ describe('AdminServer', () => {
         },
       });
 
-      const res = await request(port, 'GET', '/');
+      const res = await request(port, 'GET', '/legacy');
       expect(res.body).toContain('Reasoning Traces');
       expect(res.body).toContain('Analyze recent memory drift');
       expect(res.body).toContain('Found 3 memories');
@@ -548,7 +570,7 @@ describe('AdminServer', () => {
 
   describe('Memory', () => {
     it('returns memory list page', async () => {
-      const res = await request(port, 'GET', '/memory');
+      const res = await request(port, 'GET', '/legacy/memory');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Memory Blossoms');
     });
@@ -569,7 +591,7 @@ describe('AdminServer', () => {
         tags: ['test'],
       }, new Float32Array([1, 0, 0]));
 
-      const res = await request(port, 'GET', '/memory');
+      const res = await request(port, 'GET', '/legacy/memory');
       expect(res.body).toContain('A test memory about cats');
       expect(res.body).toContain('semantic');
     });
@@ -643,14 +665,14 @@ describe('AdminServer', () => {
         tags: ['detail'],
       }, new Float32Array([0, 1, 0]));
 
-      const res = await request(port, 'GET', '/memory/test-detail-1');
+      const res = await request(port, 'GET', '/legacy/memory/test-detail-1');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Detailed memory content');
       expect(res.body).toContain('episodic');
     });
 
     it('returns 404 for non-existent memory', async () => {
-      const res = await request(port, 'GET', '/memory/nonexistent');
+      const res = await request(port, 'GET', '/legacy/memory/nonexistent');
       expect(res.status).toBe(404);
     });
 
@@ -682,7 +704,7 @@ describe('AdminServer', () => {
 
   describe('Sessions', () => {
     it('returns session list', async () => {
-      const res = await request(port, 'GET', '/sessions');
+      const res = await request(port, 'GET', '/legacy/sessions');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Conversation Roots');
     });
@@ -695,7 +717,7 @@ describe('AdminServer', () => {
         timestamp: Date.now(),
       });
 
-      const res = await request(port, 'GET', '/sessions');
+      const res = await request(port, 'GET', '/legacy/sessions');
       expect(res.body).toContain('API · session-friendly');
     });
 
@@ -707,7 +729,7 @@ describe('AdminServer', () => {
         timestamp: Date.now(),
       });
 
-      const res = await request(port, 'GET', '/sessions');
+      const res = await request(port, 'GET', '/legacy/sessions');
       expect(res.body).toContain('test-channel');
     });
 
@@ -726,7 +748,7 @@ describe('AdminServer', () => {
         timestamp: Date.now(),
       });
 
-      const res = await request(port, 'GET', '/sessions/msg-test');
+      const res = await request(port, 'GET', '/legacy/sessions/msg-test');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Test user message');
       expect(res.body).toContain('Test assistant reply');
@@ -771,7 +793,7 @@ describe('AdminServer', () => {
       ].join('\n\n');
       sessionStore.insertCompaction('compaction-audit', compactionSummary, 4);
 
-      const res = await request(port, 'GET', '/sessions/compaction-audit');
+      const res = await request(port, 'GET', '/legacy/sessions/compaction-audit');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Compaction audit');
       expect(res.body).toContain('Summary #');
@@ -783,7 +805,7 @@ describe('AdminServer', () => {
 
   describe('Scheduler', () => {
     it('returns scheduler page with tasks', async () => {
-      const res = await request(port, 'GET', '/scheduler');
+      const res = await request(port, 'GET', '/legacy/scheduler');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Garden Rhythms');
       expect(res.body).toContain('Test Task');
@@ -792,7 +814,7 @@ describe('AdminServer', () => {
 
   describe('Shards', () => {
     it('returns shards page', async () => {
-      const res = await request(port, 'GET', '/shards');
+      const res = await request(port, 'GET', '/legacy/shards');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Active Branches');
     });
@@ -800,22 +822,22 @@ describe('AdminServer', () => {
 
   describe('Contacts (without contactStore)', () => {
     it('returns contacts page with empty message', async () => {
-      const res = await request(port, 'GET', '/contacts');
+      const res = await request(port, 'GET', '/legacy/contacts');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Garden Visitors');
       expect(res.body).toContain('Contact store not available');
     });
 
     it('navigation includes Garden Visitors', async () => {
-      const res = await request(port, 'GET', '/');
-      expect(res.body).toContain('href="/contacts"');
+      const res = await request(port, 'GET', '/legacy');
+      expect(res.body).toContain('href="/legacy/contacts"');
       expect(res.body).toContain('Garden Visitors');
     });
   });
 
   describe('Chat (without contactStore)', () => {
     it('returns garden chat page shell with non-legacy runtime module wiring', async () => {
-      const res = await request(port, 'GET', '/chat');
+      const res = await request(port, 'GET', '/legacy/chat');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Garden Chat');
       expect(res.body).toContain('Garden Chat Canopy');
@@ -1112,13 +1134,13 @@ describe('AdminServer', () => {
 
   describe('Confirmations', () => {
     it('returns confirmations page and shows navigation link', async () => {
-      const page = await request(port, 'GET', '/confirmations');
+      const page = await request(port, 'GET', '/legacy/confirmations');
       expect(page.status).toBe(200);
       expect(page.body).toContain('Confirmations');
       expect(page.body).toContain('/api/confirmations/list');
 
-      const dashboard = await request(port, 'GET', '/');
-      expect(dashboard.body).toContain('href="/confirmations"');
+      const dashboard = await request(port, 'GET', '/legacy');
+      expect(dashboard.body).toContain('href="/legacy/confirmations"');
     });
 
     it('renders queued actions with approve/deny/modify controls', async () => {
@@ -1135,7 +1157,7 @@ describe('AdminServer', () => {
         },
       ];
 
-      const res = await request(port, 'GET', '/confirmations');
+      const res = await request(port, 'GET', '/legacy/confirmations');
       expect(res.status).toBe(200);
       expect(res.body).toContain('confirm-1');
       expect(res.body).toContain('name="decision" value="approve"');
@@ -1178,7 +1200,7 @@ describe('AdminServer', () => {
 
   describe('Identity', () => {
     it('returns identity page with character info', async () => {
-      const res = await request(port, 'GET', '/identity');
+      const res = await request(port, 'GET', '/legacy/identity');
       expect(res.status).toBe(200);
       expect(res.body).toContain('TestBot');
       expect(res.body).toContain('tester');
@@ -1188,13 +1210,13 @@ describe('AdminServer', () => {
     });
 
     it('shows runtime config without secrets', async () => {
-      const res = await request(port, 'GET', '/identity');
+      const res = await request(port, 'GET', '/legacy/identity');
       expect(res.body).toContain('test-model');
       expect(res.body).not.toContain('discordToken');
     });
 
     it('renders staged intake staging/review controls on identity page', async () => {
-      const res = await request(port, 'GET', '/identity');
+      const res = await request(port, 'GET', '/legacy/identity');
       expect(res.status).toBe(200);
       expect(res.body).toContain('hx-post="/api/identity/intake/stage"');
       expect(res.body).toContain('id="identity-intake-review"');
@@ -1383,7 +1405,7 @@ describe('AdminServer', () => {
       const activeMemories = memoryStore.getAllActiveMemories();
       expect(activeMemories.some(entry => entry.text === 'Committed memory item')).toBe(true);
 
-      const eventsRes = await request(port, 'GET', '/events');
+      const eventsRes = await request(port, 'GET', '/legacy/events');
       expect(eventsRes.body).toContain('staged intake bundle');
       expect(eventsRes.body).toContain('Commit selected artifacts only');
     });
@@ -1420,7 +1442,7 @@ describe('AdminServer', () => {
       expect(rejectRes.body).toContain('Rejected pending changes');
       expect(sessionStore.getRecent('import:reject', 10)).toHaveLength(0);
 
-      const eventsRes = await request(port, 'GET', '/events');
+      const eventsRes = await request(port, 'GET', '/legacy/events');
       expect(eventsRes.body).toContain('rejected staged intake bundle');
       expect(eventsRes.body).toContain('Do not import this source');
     });
@@ -1462,7 +1484,7 @@ describe('AdminServer', () => {
       expect(saved.data.personality).toBe('Imported personality');
       expect(cardVersionStore.getHistory()).toHaveLength(1);
 
-      const identity = await request(port, 'GET', '/identity');
+      const identity = await request(port, 'GET', '/legacy/identity');
       expect(identity.status).toBe(200);
       expect(identity.body).toContain('ImportedBot');
     });
@@ -1514,7 +1536,7 @@ describe('AdminServer', () => {
 
   describe('Settings', () => {
     it('returns settings page with config info', async () => {
-      const res = await request(port, 'GET', '/settings');
+      const res = await request(port, 'GET', '/legacy/settings');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Settings');
       expect(res.body).toContain('Model Catalog (Roster v2)');
@@ -1525,7 +1547,7 @@ describe('AdminServer', () => {
     });
 
     it('shows model configuration in form', async () => {
-      const res = await request(port, 'GET', '/settings');
+      const res = await request(port, 'GET', '/legacy/settings');
       expect(res.body).toContain('test-model');
       expect(res.body).toContain('test-extract');
       expect(res.body).toContain('name="primaryModel"');
@@ -1539,7 +1561,7 @@ describe('AdminServer', () => {
       runtimeConfig.chatApiBaseUrl = 'https://chat-proxy.example:7443';
 
       try {
-        const res = await request(port, 'GET', '/settings');
+        const res = await request(port, 'GET', '/legacy/settings');
         expect(res.status).toBe(200);
         expect(res.body).toContain('name="chatApiBaseUrl"');
         expect(res.body).toContain('value="https://chat-proxy.example:7443"');
@@ -1549,7 +1571,7 @@ describe('AdminServer', () => {
     });
 
     it('shows memory settings', async () => {
-      const res = await request(port, 'GET', '/settings');
+      const res = await request(port, 'GET', '/legacy/settings');
       expect(res.body).toContain('Retrieval Budget %');
       expect(res.body).toContain('Retrieval Hard Override');
       expect(res.body).toContain('Extraction Interval');
@@ -1619,7 +1641,7 @@ describe('AdminServer', () => {
           },
         };
 
-        const res = await request(port, 'GET', '/settings');
+        const res = await request(port, 'GET', '/legacy/settings');
         expect(res.status).toBe(200);
         expect(res.body).toContain('Auto budget: ~17 messages (4,500 tokens of 8,000).');
         expect(res.body).toContain('Auto budget: ~10 memories (1,800 tokens of 8,000).');
@@ -1635,19 +1657,19 @@ describe('AdminServer', () => {
     });
 
     it('masks secrets as not set when unset', async () => {
-      const res = await request(port, 'GET', '/settings');
+      const res = await request(port, 'GET', '/legacy/settings');
       expect(res.body).toContain('not set');
       expect(res.body).not.toContain('discordToken');
     });
 
     it('appears in navigation', async () => {
-      const res = await request(port, 'GET', '/');
-      expect(res.body).toContain('href="/settings"');
+      const res = await request(port, 'GET', '/legacy');
+      expect(res.body).toContain('href="/legacy/settings"');
       expect(res.body).toContain('Settings');
     });
 
     it('renders externalized JSON config editors', async () => {
-      const res = await request(port, 'GET', '/settings');
+      const res = await request(port, 'GET', '/legacy/settings');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Models JSON (models.json)');
       expect(res.body).toContain('Skills JSON (skills.json)');
@@ -1694,7 +1716,7 @@ describe('AdminServer', () => {
       const timeline = await request(
         port,
         'GET',
-        '/events?actionType=settings_change&decision=all&timeRange=all',
+        '/legacy/events?actionType=settings_change&decision=all&timeRange=all',
       );
       expect(timeline.status).toBe(200);
       expect(timeline.body).toContain('data-action-type="settings_change"');
@@ -2057,7 +2079,7 @@ describe('AdminServer', () => {
 
   describe('Skills', () => {
     it('returns skills page with included and filtered metadata', async () => {
-      const res = await request(port, 'GET', '/skills');
+      const res = await request(port, 'GET', '/legacy/skills');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Skills');
       expect(res.body).toContain('Runtime Snapshot');
@@ -2067,15 +2089,15 @@ describe('AdminServer', () => {
     });
 
     it('appears in navigation', async () => {
-      const res = await request(port, 'GET', '/');
-      expect(res.body).toContain('href=\"/skills\"');
+      const res = await request(port, 'GET', '/legacy');
+      expect(res.body).toContain('href=\"/legacy/skills\"');
       expect(res.body).toContain('Skills');
     });
   });
 
   describe('Prompts', () => {
     it('returns prompts page with static prompt key list', async () => {
-      const res = await request(port, 'GET', '/prompts');
+      const res = await request(port, 'GET', '/legacy/prompts');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Prompt Soil');
       expect(res.body).toContain('Macro Catalog');
@@ -2088,7 +2110,7 @@ describe('AdminServer', () => {
     it('returns prompt layer detail page with structured section editors', async () => {
       const layer = promptStore.getAll()[0];
       if (!layer) throw new Error('Expected seeded prompt layer');
-      const res = await request(port, 'GET', `/prompts/${encodeURIComponent(layer.id)}`);
+      const res = await request(port, 'GET', `/legacy/prompts/${encodeURIComponent(layer.id)}`);
       expect(res.status).toBe(200);
       expect(res.body).toContain('name="description"');
       expect(res.body).toContain('name="personality"');
@@ -2258,7 +2280,7 @@ describe('AdminServer', () => {
         'test',
       );
 
-      const res = await request(port, 'GET', `/prompts/${encodeURIComponent(layer.id)}`);
+      const res = await request(port, 'GET', `/legacy/prompts/${encodeURIComponent(layer.id)}`);
       expect(res.status).toBe(200);
       expect(res.body).toContain('Malformed structured prompt content detected');
       expect(res.body).toContain('name="content"');
@@ -2267,7 +2289,7 @@ describe('AdminServer', () => {
 
     it('returns static prompt detail editor page', async () => {
       const key = encodeURIComponent(EXTRACTION_PROMPT_KEY);
-      const res = await request(port, 'GET', `/prompts/static/${key}`);
+      const res = await request(port, 'GET', `/legacy/prompts/static/${key}`);
       expect(res.status).toBe(200);
       expect(res.body).toContain(EXTRACTION_PROMPT_KEY);
       expect(res.body).toContain('name="content"');
@@ -2324,7 +2346,7 @@ describe('AdminServer', () => {
 
   describe('Primer', () => {
     it('returns primer page', async () => {
-      const res = await request(port, 'GET', '/primer');
+      const res = await request(port, 'GET', '/legacy/primer');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Garden Primer');
       expect(res.body).toContain('Primary Model');
@@ -2332,16 +2354,16 @@ describe('AdminServer', () => {
     });
 
     it('appears in navigation', async () => {
-      const res = await request(port, 'GET', '/');
-      expect(res.body).toContain('href="/primer"');
+      const res = await request(port, 'GET', '/legacy');
+      expect(res.body).toContain('href="/legacy/primer"');
       expect(res.body).toContain('Garden Primer');
-      expect(res.body).toContain('href="/values"');
+      expect(res.body).toContain('href="/legacy/values"');
     });
   });
 
   describe('Values timeline', () => {
     it('returns values timeline page', async () => {
-      const res = await request(port, 'GET', '/values');
+      const res = await request(port, 'GET', '/legacy/values');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Values Timeline');
       expect(res.body).toContain('Versioned values journal entries');
@@ -2358,7 +2380,7 @@ describe('AdminServer', () => {
         'utf-8',
       );
 
-      const res = await request(port, 'GET', '/values');
+      const res = await request(port, 'GET', '/legacy/values');
       expect(res.status).toBe(200);
       expect(res.body).toContain('data-version="2"');
       expect(res.body).toContain('Care matters because continuity protects identity');
@@ -2368,7 +2390,7 @@ describe('AdminServer', () => {
 
   describe('Events', () => {
     it('returns events page', async () => {
-      const res = await request(port, 'GET', '/events');
+      const res = await request(port, 'GET', '/legacy/events');
       expect(res.status).toBe(200);
       expect(res.body).toContain('Audit Timeline');
       expect(res.body).toContain('name="actionType"');
@@ -2419,7 +2441,7 @@ describe('AdminServer', () => {
         'Content-Type': 'application/x-www-form-urlencoded',
       });
 
-      const res = await request(port, 'GET', '/events?timeRange=all');
+      const res = await request(port, 'GET', '/legacy/events?timeRange=all');
       expect(res.status).toBe(200);
       expect(res.body).toContain('data-action-type="tool_invocation"');
       expect(res.body).toContain('data-action-type="identity_edit"');
@@ -2442,7 +2464,7 @@ describe('AdminServer', () => {
         isError: false,
       });
 
-      const res = await request(port, 'GET', '/events?timeRange=all');
+      const res = await request(port, 'GET', '/legacy/events?timeRange=all');
       expect(res.status).toBe(200);
       expect(res.body).toContain('data-action-type="identity_edit"');
       expect(res.body).toContain('prompt_layer_update');
@@ -2493,7 +2515,7 @@ describe('AdminServer', () => {
         const filtered = await request(
           port,
           'GET',
-          '/events?actionType=tool_invocation&decision=denied&timeRange=1h',
+          '/legacy/events?actionType=tool_invocation&decision=denied&timeRange=1h',
         );
         expect(filtered.status).toBe(200);
         expect(filtered.body).toContain('write_file');
@@ -2503,7 +2525,7 @@ describe('AdminServer', () => {
         const allTime = await request(
           port,
           'GET',
-          '/events?actionType=tool_invocation&decision=all&timeRange=all',
+          '/legacy/events?actionType=tool_invocation&decision=all&timeRange=all',
         );
         expect(allTime.status).toBe(200);
         expect(allTime.body).toContain('old_tool');
@@ -2513,7 +2535,7 @@ describe('AdminServer', () => {
     });
 
     it('SSE endpoint returns correct headers', async () => {
-      const res = await sseRequest(port, '/events/stream');
+      const res = await sseRequest(port, '/legacy/events/stream');
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toBe('text/event-stream');
       expect(res.headers['cache-control']).toBe('no-cache');
@@ -2528,7 +2550,7 @@ describe('AdminServer', () => {
 
     it('SSE stream includes compaction/retry status events', async () => {
       const sseBody = await new Promise<string>((resolve, reject) => {
-        const req = http.get({ hostname: '127.0.0.1', port, path: '/events/stream' }, (res) => {
+        const req = http.get({ hostname: '127.0.0.1', port, path: '/legacy/events/stream' }, (res) => {
           let body = '';
           let settled = false;
           const timeout = setTimeout(() => {
@@ -2606,7 +2628,7 @@ describe('AdminServer', () => {
     });
 
     it('SSE stream includes Wyoming policy telemetry events', async () => {
-      const sseBody = await captureSseBody(port, '/events/stream', {
+      const sseBody = await captureSseBody(port, '/legacy/events/stream', {
         predicate: (body) => body.includes('wyoming.policy.violation') && body.includes('READ_RATE_LIMIT_EXCEEDED'),
         emit: () => eventBus.emit('wyoming.policy.violation', {
           connectionId: 'wyoming-conn-7',
@@ -2781,7 +2803,7 @@ describe('AdminServer', () => {
     });
 
     it('chat runtime modules referenced by /chat are reachable and wired to bootstrap', async () => {
-      const chatPage = await request(port, 'GET', '/chat');
+      const chatPage = await request(port, 'GET', '/legacy/chat');
       expect(chatPage.status).toBe(200);
 
       const moduleScriptSources = extractModuleScriptSources(chatPage.body)
@@ -2933,7 +2955,7 @@ describe('AdminServer with auth', () => {
   });
 
   it('rejects chat routes without auth', async () => {
-    const chatPage = await request(port, 'GET', '/chat');
+    const chatPage = await request(port, 'GET', '/legacy/chat');
     expect(chatPage.status).toBe(401);
 
     const chatBootstrap = await request(port, 'GET', '/api/chat/bootstrap');
@@ -2954,8 +2976,27 @@ describe('AdminServer with auth', () => {
     const res = await request(port, 'GET', '/', undefined, {
       Authorization: 'Bearer test-admin-secret',
     });
-    expect(res.status).toBe(200);
-    expect(res.body).toContain('Dashboard');
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('/garden');
+
+    const legacy = await request(port, 'GET', '/legacy', undefined, {
+      Authorization: 'Bearer test-admin-secret',
+    });
+    expect(legacy.status).toBe(200);
+    expect(legacy.body).toContain('Dashboard');
+  });
+
+  it('applies token auth middleware consistently for /garden and /legacy', async () => {
+    const unauthorizedGarden = await request(port, 'GET', '/garden');
+    const unauthorizedLegacy = await request(port, 'GET', '/legacy');
+    expect(unauthorizedGarden.status).toBe(401);
+    expect(unauthorizedLegacy.status).toBe(401);
+
+    const authorizedHeaders = { Authorization: 'Bearer test-admin-secret' };
+    const authorizedGarden = await request(port, 'GET', '/garden', undefined, authorizedHeaders);
+    const authorizedLegacy = await request(port, 'GET', '/legacy', undefined, authorizedHeaders);
+    expect(authorizedGarden.status).not.toBe(401);
+    expect(authorizedLegacy.status).not.toBe(401);
   });
 
   it('accepts chat bootstrap with correct token', async () => {
@@ -3086,8 +3127,12 @@ describe('AdminServer auth configuration', () => {
     await insecureServer.init();
     await insecureServer.start();
 
-    const res = await request(port, 'GET', '/');
-    expect(res.status).toBe(200);
+    const rootRes = await request(port, 'GET', '/');
+    expect(rootRes.status).toBe(302);
+    expect(rootRes.headers.location).toBe('/garden');
+
+    const legacyRes = await request(port, 'GET', '/legacy');
+    expect(legacyRes.status).toBe(200);
 
     await insecureServer.stop();
   });
@@ -3148,14 +3193,14 @@ describe('AdminServer with contacts', () => {
   });
 
   it('returns contacts page with Garden Visitors title', async () => {
-    const res = await request(port, 'GET', '/contacts');
+    const res = await request(port, 'GET', '/legacy/contacts');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.body).toContain('Garden Visitors');
   });
 
   it('shows empty message when no contacts exist', async () => {
-    const res = await request(port, 'GET', '/contacts');
+    const res = await request(port, 'GET', '/legacy/contacts');
     expect(res.body).toContain('No visitors have been seen in the garden yet');
   });
 
@@ -3166,7 +3211,7 @@ describe('AdminServer with contacts', () => {
       relationshipType: 'friend',
     });
 
-    const res = await request(port, 'GET', '/contacts');
+    const res = await request(port, 'GET', '/legacy/contacts');
     expect(res.body).toContain('Alice Wonderland');
     expect(res.body).toContain('trusted');
     expect(res.body).toContain('friend');
@@ -3186,7 +3231,7 @@ describe('AdminServer with contacts', () => {
     });
     expect(challenge.status).toBe('challenge_created');
 
-    const res = await request(port, 'GET', '/contacts');
+    const res = await request(port, 'GET', '/legacy/contacts');
     expect(res.status).toBe(200);
     expect(res.body).toContain('Identity link verifications');
     expect(res.body).toContain('src=discord:verifier-discord');
@@ -3203,7 +3248,7 @@ describe('AdminServer with contacts', () => {
     expect(contactStore.setTrustLevel(contact.id, 'trusted', 'admin:gui')).toBe(true);
     expect(contactStore.updateNotes(contact.id, 'Updated through admin', 'admin:gui')).toBe(true);
 
-    const res = await request(port, 'GET', '/contacts');
+    const res = await request(port, 'GET', '/legacy/contacts');
     expect(res.status).toBe(200);
     expect(res.body).toContain('Trust + note mutation audit');
     expect(res.body).toContain('hx-get="/api/contacts/mutations"');
@@ -3262,14 +3307,14 @@ describe('AdminServer with contacts', () => {
       contactId: contact.id,
     }, new Float32Array([0.25, 0.5, 0.75]));
 
-    const listRes = await request(port, 'GET', '/memory');
+    const listRes = await request(port, 'GET', '/legacy/memory');
     expect(listRes.status).toBe(200);
     expect(listRes.body).toContain('Memory Contact');
-    expect(listRes.body).toContain(`/contacts#contact-row-${contact.id}`);
+    expect(listRes.body).toContain(`/legacy/contacts#contact-row-${contact.id}`);
     expect(listRes.body).toContain(`/api/contacts/${contact.id}/edit`);
     expect(listRes.body).toContain('confidential');
 
-    const detailRes = await request(port, 'GET', '/memory/rel-memory-ui-1');
+    const detailRes = await request(port, 'GET', '/legacy/memory/rel-memory-ui-1');
     expect(detailRes.status).toBe(200);
     expect(detailRes.body).toContain('Related Contact');
     expect(detailRes.body).toContain('Consent Flags');
@@ -3460,7 +3505,7 @@ describe('AdminServer with contacts', () => {
       updatedAt: Date.now(),
     });
 
-    const res = await request(port, 'GET', '/contacts');
+    const res = await request(port, 'GET', '/legacy/contacts');
     expect(res.status).toBe(200);
     expect(res.body).toContain('Eve is primary and prefers concise, direct responses.');
     expect(res.body).toContain('Source IDs');

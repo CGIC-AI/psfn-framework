@@ -1,21 +1,23 @@
 import { escapeHtml } from './shared.js';
 
+const LEGACY_PREFIX = '/legacy';
+
 const navItems = [
-  { href: '/', label: 'Dashboard', id: 'dashboard' },
-  { href: '/memory', label: 'Memory Blossoms', id: 'memory' },
-  { href: '/sessions', label: 'Conversation Roots', id: 'sessions' },
-  { href: '/scheduler', label: 'Garden Rhythms', id: 'scheduler' },
-  { href: '/shards', label: 'Active Branches', id: 'shards' },
-  { href: '/contacts', label: 'Garden Visitors', id: 'contacts' },
-  { href: '/chat', label: 'Garden Chat', id: 'chat' },
-  { href: '/confirmations', label: 'Confirmations', id: 'confirmations' },
-  { href: '/identity', label: 'Identity', id: 'identity' },
-  { href: '/settings', label: 'Settings', id: 'settings' },
-  { href: '/skills', label: 'Skills', id: 'skills' },
-  { href: '/prompts', label: 'Prompt Soil', id: 'prompts' },
-  { href: '/primer', label: 'Garden Primer', id: 'primer' },
-  { href: '/values', label: 'Values Timeline', id: 'values' },
-  { href: '/events', label: 'Audit Timeline', id: 'events' },
+  { href: LEGACY_PREFIX, label: 'Dashboard', id: 'dashboard' },
+  { href: `${LEGACY_PREFIX}/memory`, label: 'Memory Blossoms', id: 'memory' },
+  { href: `${LEGACY_PREFIX}/sessions`, label: 'Conversation Roots', id: 'sessions' },
+  { href: `${LEGACY_PREFIX}/scheduler`, label: 'Garden Rhythms', id: 'scheduler' },
+  { href: `${LEGACY_PREFIX}/shards`, label: 'Active Branches', id: 'shards' },
+  { href: `${LEGACY_PREFIX}/contacts`, label: 'Garden Visitors', id: 'contacts' },
+  { href: `${LEGACY_PREFIX}/chat`, label: 'Garden Chat', id: 'chat' },
+  { href: `${LEGACY_PREFIX}/confirmations`, label: 'Confirmations', id: 'confirmations' },
+  { href: `${LEGACY_PREFIX}/identity`, label: 'Identity', id: 'identity' },
+  { href: `${LEGACY_PREFIX}/settings`, label: 'Settings', id: 'settings' },
+  { href: `${LEGACY_PREFIX}/skills`, label: 'Skills', id: 'skills' },
+  { href: `${LEGACY_PREFIX}/prompts`, label: 'Prompt Soil', id: 'prompts' },
+  { href: `${LEGACY_PREFIX}/primer`, label: 'Garden Primer', id: 'primer' },
+  { href: `${LEGACY_PREFIX}/values`, label: 'Values Timeline', id: 'values' },
+  { href: `${LEGACY_PREFIX}/events`, label: 'Audit Timeline', id: 'events' },
 ];
 
 export function layout(title: string, body: string, activePage: string): string {

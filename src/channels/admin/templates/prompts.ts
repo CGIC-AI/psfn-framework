@@ -111,7 +111,7 @@ export function promptRegistryFragment(prompts: PromptRegistryEntry[]): string {
     .sort((a, b) => a.key.localeCompare(b.key))
     .map(prompt => `
       <tr>
-        <td><a href="/prompts/static/${encodeURIComponent(prompt.key)}"><code>${escapeHtml(prompt.key)}</code></a></td>
+        <td><a href="/legacy/prompts/static/${encodeURIComponent(prompt.key)}"><code>${escapeHtml(prompt.key)}</code></a></td>
         <td>${escapeHtml(prompt.description || 'No description')}</td>
         <td>${escapeHtml(prompt.consumers.join(', ') || 'n/a')}</td>
         <td>v${prompt.version}</td>
@@ -157,7 +157,7 @@ export function promptLayersFragment(layers: PromptLayer[]): string {
     return `
       <tr>
         <td><span class="badge" style="background:${color};color:white">${escapeHtml(layer.type)}</span></td>
-        <td><a href="/prompts/${encodeURIComponent(layer.id)}">${escapeHtml(layer.name)}</a></td>
+        <td><a href="/legacy/prompts/${encodeURIComponent(layer.id)}">${escapeHtml(layer.name)}</a></td>
         <td><span class="${statusClass}">${status}</span></td>
         <td>${layer.priority}</td>
         <td>v${layer.version}</td>
@@ -360,7 +360,7 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
       </div>
     ` : ''}
 
-    <p style="margin-top:1rem"><a href="/prompts">&larr; Back to Prompt Soil</a></p>`;
+    <p style="margin-top:1rem"><a href="/legacy/prompts">&larr; Back to Prompt Soil</a></p>`;
 }
 
 export function promptRegistryDetailPage(
@@ -434,5 +434,5 @@ export function promptRegistryDetailPage(
       </div>
     ` : ''}
 
-    <p style="margin-top:1rem"><a href="/prompts">&larr; Back to Prompt Soil</a></p>`;
+    <p style="margin-top:1rem"><a href="/legacy/prompts">&larr; Back to Prompt Soil</a></p>`;
 }

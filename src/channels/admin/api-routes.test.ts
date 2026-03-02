@@ -630,7 +630,7 @@ describe('AdminServer JSON API routes', () => {
     const pageRes = await request(
       port,
       'GET',
-      '/memory',
+      '/legacy/memory',
       undefined,
       { Authorization: `Bearer ${token}` },
     );
@@ -944,7 +944,7 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(uploadDeniedRes.status).toBeGreaterThanOrEqual(400);
 
-    const eventsRes = await request(port, 'GET', '/events?timeRange=all', undefined, authHeaders);
+    const eventsRes = await request(port, 'GET', '/legacy/events?timeRange=all', undefined, authHeaders);
     expect(eventsRes.status).toBe(200);
     expect(eventsRes.body).toContain('Actor: Operator');
     expect(eventsRes.body).toContain('/api/admin/identity/fields');

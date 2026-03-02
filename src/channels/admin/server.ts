@@ -80,6 +80,34 @@ const GARDEN_MIME_TYPES: Record<string, string> = {
 };
 const GARDEN_HTML_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
 const GARDEN_ASSET_CACHE_CONTROL = 'public, max-age=86400';
+const LEGACY_PREFIX = '/legacy';
+const LEGACY_DEPRECATION_HEADERS = {
+  Deprecation: 'true',
+  Warning: '299 - "Legacy admin UI is deprecated; use /garden"',
+  Link: '</garden>; rel="successor-version"',
+} as const;
+const LEGACY_REDIRECT_EXACT_PATHS = new Set([
+  '/memory',
+  '/sessions',
+  '/scheduler',
+  '/shards',
+  '/contacts',
+  '/chat',
+  '/confirmations',
+  '/identity',
+  '/settings',
+  '/skills',
+  '/events',
+  '/events/stream',
+  '/values',
+  '/primer',
+  '/prompts',
+]);
+const LEGACY_REDIRECT_PREFIXES = [
+  '/memory/',
+  '/sessions/',
+  '/prompts/',
+];
 
 type RouteParams = Record<string, string>;
 type RouteMatcher = (path: string) => RouteParams | null;
@@ -373,38 +401,107 @@ export class AdminServer implements Lifecycle {
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-    const path = url.pathname;
-    const isLegacyChatRuntimePath = path === '/static/chat.js';
+    const requestPath = url.pathname;
+    const {
+      path: routedPath,
+      isLegacyPath,
+    } = this.resolveLegacyRequestPath(requestPath);
+    const isLegacyChatRuntimePath = routedPath === '/static/chat.js';
 
     if (isLegacyChatRuntimePath && this.token && !this.hasRequestAuthCredentials(req)) {
-      this.send404(res, path);
+      this.send404(res, routedPath);
       return;
     }
 
-    // Skip auth for OPTIONS, static files, garden SPA, and login page
+    // Skip auth for OPTIONS, static files, and login page.
     const skipAuth = req.method === 'OPTIONS'
-      || path.startsWith('/static/')
-      || path === '/login'
-      || path === GARDEN_PREFIX
-      || path.startsWith(GARDEN_PREFIX + '/');
+      || routedPath.startsWith('/static/')
+      || routedPath === '/login';
 
     if (!skipAuth && this.token && !this.checkAuth(req, res)) return;
 
-    if (this.tryServeStaticAsset(path, res)) {
+    if (!isLegacyPath && requestPath === '/') {
+      sendRedirect(res, `${GARDEN_PREFIX}${url.search}`);
       return;
     }
 
-    // Serve SvelteKit garden UI static files (no auth — SPA handles its own)
-    if ((path === GARDEN_PREFIX || path.startsWith(GARDEN_PREFIX + '/')) && this.gardenBuildDir) {
-      this.serveGardenAsset(path, res);
+    if (!isLegacyPath) {
+      const legacyRedirectPath = this.resolveLegacyRedirectPath(requestPath);
+      if (legacyRedirectPath) {
+        sendRedirect(res, `${legacyRedirectPath}${url.search}`);
+        return;
+      }
+    }
+
+    if (isLegacyPath) {
+      this.applyLegacyDeprecationHeaders(res);
+    }
+
+    if (this.tryServeStaticAsset(routedPath, res)) {
+      return;
+    }
+
+    // Serve SvelteKit garden UI static files.
+    if (routedPath === GARDEN_PREFIX || routedPath.startsWith(GARDEN_PREFIX + '/')) {
+      if (this.gardenBuildDir) {
+        this.serveGardenAsset(routedPath, res);
+      } else {
+        sendRedirect(res, LEGACY_PREFIX);
+      }
       return;
     }
 
     try {
-      this.route(req.method ?? 'GET', path, req, res);
+      this.route(req.method ?? 'GET', routedPath, req, res);
     } catch (err) {
-      log.error('Request error', { path, error: String(err) });
+      log.error('Request error', { path: routedPath, error: String(err) });
       sendText(res, 500, 'Internal Server Error');
+    }
+  }
+
+  private resolveLegacyRequestPath(path: string): { path: string; isLegacyPath: boolean } {
+    if (path === LEGACY_PREFIX || path === `${LEGACY_PREFIX}/`) {
+      return { path: '/', isLegacyPath: true };
+    }
+
+    if (path.startsWith(`${LEGACY_PREFIX}/`)) {
+      const stripped = path.slice(LEGACY_PREFIX.length);
+      return { path: stripped.length > 0 ? stripped : '/', isLegacyPath: true };
+    }
+
+    return { path, isLegacyPath: false };
+  }
+
+  private resolveLegacyRedirectPath(path: string): string | null {
+    if (
+      path.startsWith('/api/')
+      || path.startsWith('/static/')
+      || path === '/login'
+      || path === '/health'
+      || path === GARDEN_PREFIX
+      || path.startsWith(GARDEN_PREFIX + '/')
+      || path === LEGACY_PREFIX
+      || path.startsWith(`${LEGACY_PREFIX}/`)
+    ) {
+      return null;
+    }
+
+    if (LEGACY_REDIRECT_EXACT_PATHS.has(path)) {
+      return `${LEGACY_PREFIX}${path}`;
+    }
+
+    for (const prefix of LEGACY_REDIRECT_PREFIXES) {
+      if (path.startsWith(prefix)) {
+        return `${LEGACY_PREFIX}${path}`;
+      }
+    }
+
+    return null;
+  }
+
+  private applyLegacyDeprecationHeaders(res: ServerResponse): void {
+    for (const [name, value] of Object.entries(LEGACY_DEPRECATION_HEADERS)) {
+      res.setHeader(name, value);
     }
   }
 
@@ -803,7 +900,7 @@ export class AdminServer implements Lifecycle {
             const params = new URLSearchParams(body);
             const token = params.get('token') ?? '';
             if (token === this.token) {
-              sendRedirect(res, '/', 302, {
+              sendRedirect(res, GARDEN_PREFIX, 302, {
                 'Set-Cookie': `psfn_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
               });
             } else {

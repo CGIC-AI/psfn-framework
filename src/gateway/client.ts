@@ -363,7 +363,9 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     // Generate a unique per-request ID for routing streaming chunks
-    const requestId = `req-${++this.requestCounter}`;
+    const requestId = context.correlation?.requestId?.trim() || `req-${++this.requestCounter}`;
+    const callType = context.correlation?.callType ?? 'chat';
+    const purpose = context.correlation?.purpose?.trim() || 'chat';
 
     // Register chunk handler before sending the RPC so no chunks are missed
     if (callbacks?.onText) {
@@ -378,6 +380,11 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
         systemPrompt: context.systemPrompt,
         stream: !!callbacks?.onText,
         requestId,
+        ...(context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
+        ...(context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
+        ...(context.correlation?.toolName ? { toolName: context.correlation.toolName } : {}),
+        callType,
+        purpose,
         ...(context.tools?.length ? { tools: context.tools } : {}),
       }) as LLMChatResult;
 
@@ -414,6 +421,11 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         purpose,
+        ...(context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
+        ...(context.correlation?.requestId ? { requestId: context.correlation.requestId } : {}),
+        ...(context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
+        ...(context.correlation?.toolName ? { toolName: context.correlation.toolName } : {}),
+        ...(context.correlation?.callType ? { callType: context.correlation.callType } : {}),
       },
       options.signal,
     );

@@ -360,6 +360,50 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(order).toEqual(['end', 'usage']);
   });
 
+  it('emits stable correlation fields on turn lifecycle telemetry', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    const captured: Record<string, any> = {};
+    eventBus.on('agent.turn.start', (payload) => { captured.start = payload; });
+    eventBus.on('agent.turn.usage', (payload) => { captured.usage = payload; });
+    (eventBus as any).on('agent.turn.stage', (payload: any) => {
+      if (payload.stage === 'trust') captured.stage = payload;
+    });
+
+    await agent.handleMessage(makeMessage({
+      id: 'turn-telemetry-1',
+      channelId: 'internal:heartbeat',
+      channelType: 'terminal',
+      content: 'heartbeat run',
+    }));
+
+    expect(captured.start).toMatchObject({
+      turnId: 'turn-telemetry-1',
+      requestId: 'turn-telemetry-1',
+      channelId: 'internal:heartbeat',
+      callType: 'scheduled',
+      purpose: 'agent.turn.start',
+    });
+    expect(captured.usage).toMatchObject({
+      turnId: 'turn-telemetry-1',
+      requestId: 'turn-telemetry-1',
+      channelId: 'internal:heartbeat',
+      callType: 'scheduled',
+      purpose: 'agent.turn.usage',
+    });
+    expect(captured.stage).toMatchObject({
+      turnId: 'turn-telemetry-1',
+      requestId: 'turn-telemetry-1',
+      channelId: 'internal:heartbeat',
+      callType: 'scheduled',
+      purpose: 'agent.turn.stage.trust',
+    });
+  });
+
   it('emits inferred post-turn actions between turn end and usage telemetry', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

@@ -91,6 +91,26 @@ describe('AuditStore', () => {
     expect(params).toContain('300 chars');
   });
 
+  it('preserves correlation fields in stored audit summaries', () => {
+    store.log('llm.complete', 'ALLOW', {
+      turnId: 'turn-77',
+      requestId: 'req-77',
+      channelId: 'internal:heartbeat',
+      callType: 'scheduled',
+      toolName: 'heartbeat_run_template',
+      purpose: 'deliberation.aggregator',
+    });
+
+    const entries = store.getRecent(1);
+    const parsed = JSON.parse(entries[0].paramsJson ?? '{}') as Record<string, string>;
+    expect(parsed.turnId).toBe('turn-77');
+    expect(parsed.requestId).toBe('req-77');
+    expect(parsed.channelId).toBe('internal:heartbeat');
+    expect(parsed.callType).toBe('scheduled');
+    expect(parsed.toolName).toBe('heartbeat_run_template');
+    expect(parsed.purpose).toBe('deliberation.aggregator');
+  });
+
   it('prunes oldest rows when maxCount is exceeded', () => {
     store = new AuditStore(db, {
       maxCount: 2,

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseJsonBody, sendJson } from '../http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
+import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
 import { handleMultipartUpload, validateAndParseJsonFile } from './multipart.js';
 import type {
   AdminAdaptiveToolsService,
@@ -137,6 +138,44 @@ function toMemoryType(value: string | null): MemoryType | undefined {
     : undefined;
 }
 
+function toSensitivityLevel(value: string | null): SensitivityLevel | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return VALID_SENSITIVITY_LEVELS.includes(normalized as SensitivityLevel)
+    ? normalized as SensitivityLevel
+    : undefined;
+}
+
+function toDateFilter(value: string | null, boundary: 'start' | 'end'): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dateOnly) {
+    const year = Number.parseInt(dateOnly[1], 10);
+    const monthIndex = Number.parseInt(dateOnly[2], 10) - 1;
+    const day = Number.parseInt(dateOnly[3], 10);
+    const validatedDate = new Date(Date.UTC(year, monthIndex, day));
+    if (
+      validatedDate.getUTCFullYear() !== year
+      || validatedDate.getUTCMonth() !== monthIndex
+      || validatedDate.getUTCDate() !== day
+    ) {
+      return undefined;
+    }
+    if (boundary === 'start') {
+      return Date.UTC(year, monthIndex, day, 0, 0, 0, 0);
+    }
+    return Date.UTC(year, monthIndex, day, 23, 59, 59, 999);
+  }
+
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) return undefined;
+  return parsed;
+}
+
 export function buildAdminApiRoutes(options: {
   dashboardService: AdminDashboardService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
@@ -232,13 +271,28 @@ export function buildAdminApiRoutes(options: {
           sendJson(res, 400, { error: 'Invalid memory type filter' });
           return;
         }
+        const sensitivityFilter = toSensitivityLevel(url.searchParams.get('sensitivity'));
+        if (url.searchParams.get('sensitivity') && !sensitivityFilter) {
+          sendJson(res, 400, { error: 'Invalid memory sensitivity filter' });
+          return;
+        }
+        const startDate = toDateFilter(url.searchParams.get('startDate'), 'start');
+        if (url.searchParams.get('startDate') && startDate === undefined) {
+          sendJson(res, 400, { error: 'Invalid startDate filter' });
+          return;
+        }
+        const endDate = toDateFilter(url.searchParams.get('endDate'), 'end');
+        if (url.searchParams.get('endDate') && endDate === undefined) {
+          sendJson(res, 400, { error: 'Invalid endDate filter' });
+          return;
+        }
+        if (startDate !== undefined && endDate !== undefined && startDate > endDate) {
+          sendJson(res, 400, { error: 'startDate must be before or equal to endDate' });
+          return;
+        }
         const data = memoryService.listMemories(url.searchParams);
-        const memories = typeFilter
-          ? data.memories.filter(memory => memory.type === typeFilter)
-          : data.memories;
         sendJson(res, 200, {
           ...data,
-          memories,
           contactsById: Object.fromEntries(data.contactsById.entries()),
         });
       },

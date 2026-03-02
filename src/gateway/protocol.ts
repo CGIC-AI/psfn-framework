@@ -4,6 +4,7 @@
 import type {
   CompletionPurpose,
   ContextMessage,
+  ObservabilityCallType,
   SubstrateMessage,
   ToolSchema,
 } from '../types.js';
@@ -12,18 +13,26 @@ import type { JournalIntegrityVerificationResult } from '../session/journal-util
 
 // ── Request parameter types (agent → gateway) ──
 
-export interface LLMChatParams {
+export interface GatewayCorrelationParams {
+  turnId?: string;
+  requestId?: string;
+  channelId?: string;
+  callType?: ObservabilityCallType;
+  toolName?: string;
+  purpose?: string;
+}
+
+export interface LLMChatParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   messages: ContextMessage[];
   systemPrompt: string;
   stream?: boolean;
-  requestId?: string;
   maxTokens?: number;
   tools?: ToolSchema[];
 }
 
-export interface LLMCompleteParams {
+export interface LLMCompleteParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   messages: ContextMessage[];

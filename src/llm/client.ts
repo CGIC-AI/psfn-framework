@@ -7,8 +7,10 @@ import {
 } from '@mariozechner/pi-ai';
 import type {
   CompletionPurpose,
+  CorrelationMetadata,
   LLMContext,
   LLMResponse,
+  ObservabilityCallType,
   StreamCallbacks,
   SubstrateConfig,
   ToolCall,
@@ -44,6 +46,16 @@ export interface LLMCompletionOptions {
   signal?: AbortSignal;
   disableRetry?: boolean;
   modelHint?: LLMCompletionModelHint;
+  correlation?: Partial<CorrelationMetadata>;
+}
+
+interface ResolvedCorrelationMetadata {
+  turnId?: string;
+  requestId: string;
+  channelId?: string;
+  callType: ObservabilityCallType;
+  toolName?: string;
+  purpose: string;
 }
 
 export class SensitiveImportRoutePolicyError extends Error {
@@ -272,6 +284,7 @@ export class LLMClient {
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     const piContext = toPiContext(context);
+    const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
 
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
@@ -381,10 +394,12 @@ export class LLMClient {
                 maxRetries,
                 delayMs,
                 error: error.message,
+                ...correlation,
               });
             },
           });
         },
+        { correlation },
       );
 
       log.info('LLM stream completed', {
@@ -392,6 +407,7 @@ export class LLMClient {
         model: candidate.model,
         provider: candidate.provider,
         attempts,
+        ...correlation,
       });
 
       callbacks?.onDone?.(finalResponse);
@@ -410,6 +426,7 @@ export class LLMClient {
   ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
     const piContext = toPiContext(context);
+    const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
@@ -450,11 +467,12 @@ export class LLMClient {
               maxRetries,
               delayMs,
               error: error.message,
+              ...correlation,
             });
           },
         });
       },
-      { modelHint: options.modelHint },
+      { modelHint: options.modelHint, correlation },
     );
 
     log.info('LLM complete finished', {
@@ -464,6 +482,7 @@ export class LLMClient {
       provider: candidate.provider,
       attempts,
       requestedModelHint: options.modelHint?.model,
+      ...correlation,
     });
 
     const content = extractTextContent(response.content as unknown[]);
@@ -477,6 +496,35 @@ export class LLMClient {
       inputTokens: response.usage.input,
       outputTokens: response.usage.output,
       stopReason: response.stopReason,
+    };
+  }
+
+  private resolveCorrelation(
+    contextCorrelation: CorrelationMetadata | undefined,
+    optionCorrelation: Partial<CorrelationMetadata> | undefined,
+    purpose: CompletionPurpose | 'chat',
+  ): ResolvedCorrelationMetadata {
+    const merged: Partial<CorrelationMetadata> = {
+      ...(contextCorrelation ?? {}),
+      ...(optionCorrelation ?? {}),
+    };
+
+    const turnId = normalizeCorrelationValue(merged.turnId);
+    const channelId = normalizeCorrelationValue(merged.channelId);
+    const requestId = normalizeCorrelationValue(merged.requestId) ?? turnId ?? 'unknown';
+    const toolName = normalizeCorrelationValue(merged.toolName);
+    const resolvedPurpose = normalizeCorrelationValue(merged.purpose) ?? String(purpose);
+    const callType = isObservabilityCallType(merged.callType)
+      ? merged.callType
+      : inferCallType(purpose, channelId);
+
+    return {
+      ...(turnId ? { turnId } : {}),
+      requestId,
+      ...(channelId ? { channelId } : {}),
+      callType,
+      ...(toolName ? { toolName } : {}),
+      purpose: resolvedPurpose,
     };
   }
 
@@ -496,13 +544,13 @@ export class LLMClient {
   private async runWithFallback<T>(
     purpose: RoutingPurpose,
     execute: (candidate: RoutingCandidate, attempt: number) => Promise<T>,
-    options: { modelHint?: LLMCompletionModelHint } = {},
+    options: { modelHint?: LLMCompletionModelHint; correlation?: ResolvedCorrelationMetadata } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
     const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
       this.enforceImportRoutingPolicy(purpose, candidate);
       return execute(candidate, attempt);
-    });
+    }, options.correlation);
   }
 }
 
@@ -552,6 +600,50 @@ export function normalizeContent(content: string): string {
     break;
   }
   return result;
+}
+
+const OBSERVABILITY_CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
+  'chat',
+  'tool',
+  'memory',
+  'summary',
+  'background',
+  'scheduled',
+]);
+
+function isObservabilityCallType(value: unknown): value is ObservabilityCallType {
+  return typeof value === 'string' && OBSERVABILITY_CALL_TYPES.has(value as ObservabilityCallType);
+}
+
+function normalizeCorrelationValue(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function inferCallType(
+  purpose: CompletionPurpose | 'chat',
+  channelId?: string,
+): ObservabilityCallType {
+  const normalizedChannelId = normalizeCorrelationValue(channelId)?.toLowerCase();
+  if (normalizedChannelId?.startsWith('internal:')) {
+    return 'scheduled';
+  }
+
+  switch (purpose) {
+    case 'chat':
+      return 'chat';
+    case 'reasoning':
+      return 'tool';
+    case 'extraction':
+      return 'memory';
+    case 'summary':
+      return 'summary';
+    case 'background':
+    case 'import_processing':
+    default:
+      return 'background';
+  }
 }
 
 export { toPiTools } from './conversion.js';

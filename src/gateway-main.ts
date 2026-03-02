@@ -49,6 +49,12 @@ import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
+import {
+  startDiscordWithRetry,
+  DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
+  DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
+  DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
+} from './gateway/discord-startup.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -210,6 +216,18 @@ async function main(): Promise<void> {
   const shellExecMaxOutputChars = parsePositiveIntEnv(
     process.env.SHELL_EXEC_MAX_OUTPUT_CHARS,
     DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
+  );
+  const discordStartRetryBaseDelayMs = parsePositiveIntEnv(
+    process.env.DISCORD_START_RETRY_BASE_DELAY_MS,
+    DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
+  );
+  const discordStartRetryMaxDelayMs = parsePositiveIntEnv(
+    process.env.DISCORD_START_RETRY_MAX_DELAY_MS,
+    DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
+  );
+  const discordStartRetryMaxAttempts = parsePositiveIntEnv(
+    process.env.DISCORD_START_RETRY_MAX_ATTEMPTS,
+    DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
   );
   // ── Apply TLS config early, before any HTTPS connections ──
   applyGatewayTlsConfig({
@@ -476,7 +494,33 @@ async function main(): Promise<void> {
     await wyomingTcpServer.start();
     log.info(`Wyoming voice bridge listening on ${config.wyomingHost ?? '127.0.0.1'}:${config.wyomingPort ?? 10400}`);
   }
-  await discord.start();
+  let discordStartAttempts = 0;
+  await startDiscordWithRetry(
+    async () => {
+      discordStartAttempts += 1;
+      await discord.start();
+    },
+    {
+      baseDelayMs: discordStartRetryBaseDelayMs,
+      maxDelayMs: discordStartRetryMaxDelayMs,
+      maxAttempts: discordStartRetryMaxAttempts,
+      onRetry: ({ attempt, delayMs, maxAttempts, error }) => {
+        const code = typeof (error as { code?: unknown }).code === 'string'
+          ? (error as { code: string }).code
+          : undefined;
+        log.warn('Discord startup failed; retrying', {
+          attempt,
+          ...(maxAttempts > 0 ? { maxAttempts } : { maxAttempts: 'unbounded' }),
+          delayMs,
+          ...(code ? { code } : {}),
+          error: error.message,
+        });
+      },
+    },
+  );
+  if (discordStartAttempts > 1) {
+    log.info('Discord startup recovered after retries', { attempts: discordStartAttempts });
+  }
   if (telegram) {
     await telegram.start();
     log.info('Telegram gateway bridge enabled', {

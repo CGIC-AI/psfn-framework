@@ -48,6 +48,29 @@ function mockAssistantResponse(text: string): void {
   });
 }
 
+function mockAssistantErrorResponse(errorMessage: string): void {
+  promptSpy.mockImplementationOnce(async function (this: Agent) {
+    this.appendMessage({
+      role: 'assistant',
+      content: [],
+      api: '' as any,
+      provider: '' as any,
+      model: '',
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'error' as any,
+      errorMessage,
+      timestamp: Date.now(),
+    });
+  });
+}
+
 // ── Fixtures ──
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -1016,6 +1039,58 @@ describe('SubstrateAgent.handleMessage', () => {
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
       expect(promptInput.content).toBe('Hello, Purrsephone!');
       expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('recovers from empty vision replies by retrying on chat model with explicit image-failure guidance', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      mockAssistantErrorResponse(
+        '400 litellm.BadRequestError: no healthy deployments for vision-model',
+      );
+      mockAssistantResponse('I could not process that image this turn. Please resend it.');
+
+      const promptCallsBefore = promptSpy.mock.calls.length;
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.content).toBe('I could not process that image this turn. Please resend it.');
+      expect(response.metadata.model).toBe('chat-model');
+      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(2);
+      const recoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
+      expect(recoveryPrompt.content).toContain('previous vision reply produced no text');
+      expect(recoveryPrompt.content).toContain('ask for resend');
     } finally {
       (globalThis as any).fetch = originalFetch;
     }

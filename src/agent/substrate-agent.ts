@@ -1883,6 +1883,60 @@ export class SubstrateAgent {
 
         // Extract response from agent state (last assistant message)
         responseText = this.extractResponseText();
+        if (this.hasVisionAttachments(message) && responseText.trim().length === 0) {
+          const assistantMessage = this.getLatestAssistantMessage();
+          log.warn('Vision turn produced empty assistant text; attempting recovery reply', {
+            channelId: message.channelId,
+            model: this.agent.state.model?.id ?? null,
+            stopReason: assistantMessage?.stopReason ?? null,
+            errorMessage: assistantMessage?.errorMessage ?? null,
+          });
+
+          // Recovery always falls back to chat slot so the user gets a response
+          // even when the configured vision deployment is unavailable.
+          try {
+            const recoveryModel = resolveModel(this.config, 'chat');
+            this.agent.setModel(recoveryModel);
+            responseModel = recoveryModel.id;
+          } catch (error) {
+            log.warn('Vision recovery model resolution failed; keeping current model', {
+              channelId: message.channelId,
+              error: toErrorMessage(error),
+            });
+          }
+
+          const recoveryNote = assistantMessage?.errorMessage
+            ? `Runtime note: the previous vision reply produced no text (${assistantMessage.errorMessage}). Respond to the user's latest image turn now. If the image could not be processed, clearly say so and ask for resend.`
+            : 'Runtime note: the previous vision reply produced no text. Respond to the user\'s latest image turn now. If the image could not be processed, clearly say so and ask for resend.';
+
+          this.bridge.setChannel(message.channelId, {
+            turnId: message.id,
+            requestId: `${message.id}:vision-recovery`,
+            callType: turnCallType,
+            originType: turnCallType,
+            originStage: 'agent.turn.vision_recovery',
+            purpose: 'agent.turn.vision_recovery',
+          });
+          this.activeTurnCorrelation = turnCorrelationBase;
+          try {
+            await runWithRequestContext(
+              this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.vision_recovery'),
+              async () => this.agent.prompt({
+                role: 'user',
+                content: recoveryNote,
+                timestamp: Date.now(),
+              } satisfies UserMessage),
+            );
+          } finally {
+            this.bridge.clearChannel();
+            this.activeTurnCorrelation = null;
+          }
+
+          turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
+          turnUsage = this.accumulateTurnUsage(turnMessages);
+          responseModel = this.agent.state.model?.id ?? responseModel;
+          responseText = this.extractResponseText();
+        }
       }
       let safeResponseText = responseText;
       let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
@@ -2614,36 +2668,52 @@ export class SubstrateAgent {
     return `{${entries.join(',')}}`;
   }
 
-  /** Extract text from the last assistant message in Agent state */
-  private extractResponseText(): string {
+  private getLatestAssistantMessage(): AssistantMessage | null {
     const messages = this.agent.state.messages;
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if ((msg as unknown as { role: string }).role === 'assistant') {
-        const content = (msg as unknown as AssistantMessage).content;
-        if (typeof content === 'string') return content;
-        if (Array.isArray(content)) {
-          const textParts = content
-            .filter((b: any) => b.type === 'text')
-            .map((b: any) => b.text)
-            .join('');
-          if (!textParts) {
-            const thinkingParts = content.filter((b: any) => b.type === 'thinking');
-            if (thinkingParts.length) {
-              log.warn('Assistant produced thinking but no text content', {
-                thinkingBlocks: thinkingParts.length,
-                blockTypes: content.map((b: any) => b.type),
-              });
-            } else {
-              log.warn('Assistant message has no text content blocks', {
-                blockTypes: content.map((b: any) => b.type),
-              });
-            }
-          }
-          return textParts;
-        }
+        return msg as unknown as AssistantMessage;
       }
     }
+    return null;
+  }
+
+  /** Extract text from the last assistant message in Agent state */
+  private extractResponseText(): string {
+    const assistantMessage = this.getLatestAssistantMessage();
+    if (!assistantMessage) {
+      log.warn('No assistant message found in agent state after prompt');
+      return '';
+    }
+
+    const content = assistantMessage.content;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      const textParts = content
+        .filter((b: any) => b.type === 'text')
+        .map((b: any) => b.text)
+        .join('');
+      if (!textParts) {
+        const thinkingParts = content.filter((b: any) => b.type === 'thinking');
+        if (thinkingParts.length) {
+          log.warn('Assistant produced thinking but no text content', {
+            thinkingBlocks: thinkingParts.length,
+            blockTypes: content.map((b: any) => b.type),
+            stopReason: assistantMessage.stopReason,
+            errorMessage: assistantMessage.errorMessage ?? null,
+          });
+        } else {
+          log.warn('Assistant message has no text content blocks', {
+            blockTypes: content.map((b: any) => b.type),
+            stopReason: assistantMessage.stopReason,
+            errorMessage: assistantMessage.errorMessage ?? null,
+          });
+        }
+      }
+      return textParts;
+    }
+
     log.warn('No assistant message found in agent state after prompt');
     return '';
   }

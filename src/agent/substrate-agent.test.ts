@@ -934,6 +934,57 @@ describe('SubstrateAgent.handleMessage', () => {
     }
   });
 
+  it('accepts discordapp.net CDN host variants for Discord vision attachments', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/webp',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://images-ext-1.discordapp.net/external/foo/bar/cat.webp',
+          contentType: 'image/webp',
+          name: 'cat.webp',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toEqual([
+        { type: 'text', text: 'Hello, Purrsephone!' },
+        { type: 'image', data: 'AQID', mimeType: 'image/webp' },
+      ]);
+      expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
+        'https://images-ext-1.discordapp.net/external/foo/bar/cat.webp',
+        { lane: 'default', maxBytes: 8 * 1024 * 1024 },
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
   it('routes Telegram image turns through vision model slot even without fetchable image URLs', async () => {
     const config = makeConfig({
       modelRoster: {

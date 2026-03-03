@@ -16,6 +16,7 @@ certs/
 # Internal planning/audit artifacts (non-product docs)
 working_docs/
 history/
+workspace/
 
 # Beads transient lock/socket files (keep .beads/issues.jsonl tracked)
 .beads/*.lock

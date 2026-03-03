@@ -94,7 +94,8 @@ export function resolveModel(
   }
 
   if (litellmBaseUrl) {
-    const model = createModel(litellmBaseUrl, slot.model, slot.maxTokens);
+    const modelId = normalizeLiteLLMModelId(slot.provider, slot.model);
+    const model = createModel(litellmBaseUrl, modelId, slot.maxTokens);
     return ensurePurposeInputCapabilities(model, purpose);
   }
 
@@ -116,7 +117,8 @@ export function resolveExplicitModel(
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
 
   if (litellmBaseUrl) {
-    const model = createModel(litellmBaseUrl, selection.model, selection.maxTokens);
+    const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
+    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens);
     return ensurePurposeInputCapabilities(model, selection.purpose);
   }
 
@@ -155,4 +157,18 @@ function ensurePurposeInputCapabilities(
     ...model,
     input: nextInput,
   };
+}
+
+function normalizeLiteLLMModelId(provider: string, modelId: string): string {
+  const normalizedProvider = provider.trim().toLowerCase();
+  const normalizedModelId = modelId.trim();
+  if (!normalizedModelId) return normalizedModelId;
+  if (normalizedProvider !== 'openrouter') return normalizedModelId;
+  if (normalizedModelId.startsWith('openrouter/')) return normalizedModelId;
+
+  // OpenRouter model IDs are typically vendor-qualified (e.g. google/gemini-3-flash-preview).
+  // In LiteLLM mode we normalize these to the openrouter/* wildcard namespace.
+  return normalizedModelId.includes('/')
+    ? `openrouter/${normalizedModelId}`
+    : normalizedModelId;
 }

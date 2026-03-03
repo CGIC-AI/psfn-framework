@@ -493,6 +493,10 @@ export class DiscordAdapter implements ChannelAdapter {
         attachments.push(...inlineAttachments);
       }
     }
+    const content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    const resolvedContent = content === '(empty message)' && attachments.length > 0
+      ? '(image attachment)'
+      : content;
     return {
       id: msg.id,
       channelId: msg.channelId,
@@ -500,7 +504,7 @@ export class DiscordAdapter implements ChannelAdapter {
       isDirectMessage,
       authorId: msg.author.id,
       authorName: msg.author.displayName ?? msg.author.username,
-      content: this.sanitizeMessageContent(msg.content, runtimeBotId),
+      content: resolvedContent,
       ...(attachments.length > 0 ? { attachments } : {}),
       timestamp: msg.createdAt,
     };

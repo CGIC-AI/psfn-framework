@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -808,6 +808,49 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
     expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
+
+    const rosterPatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 16384, contextWindow: 128000 },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 8192, contextWindow: 128000 },
+          },
+          vision: {
+            model: 'moonshotai/kimi-k2.5',
+            provider: 'openrouter',
+            overrides: { maxTokens: 16384, contextWindow: 128000 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          background: 'extraction',
+          extraction: 'extraction',
+          summary: 'primary',
+          reasoning: 'primary',
+          longContext: 'primary',
+          import_processing: 'extraction',
+          vision: 'vision',
+        },
+      }),
+      authHeaders,
+    );
+    expect(rosterPatchRes.status).toBe(200);
+    const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
+      modelCatalog: Record<string, unknown>;
+      modelRoleAssignments: Record<string, string>;
+    };
+    expect(persistedModels.modelCatalog.vision).toBeDefined();
+    expect(persistedModels.modelRoleAssignments.vision).toBe('vision');
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);

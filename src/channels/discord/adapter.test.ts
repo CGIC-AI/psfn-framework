@@ -647,6 +647,54 @@ describe('DiscordAdapter DM routing', () => {
     }));
   });
 
+  it('uses image-attachment placeholder content for image-only messages', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-channel-image-only';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'image only received',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-image-only-1',
+        content: '',
+        attachments: [
+          {
+            id: 'att-image-only-1',
+            name: 'cat.png',
+            url: 'https://cdn.discordapp.com/attachments/a/b/cat.png',
+            contentType: 'image/png',
+            size: 42_000,
+          },
+        ],
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      channelId,
+      content: '(image attachment)',
+      attachments: [
+        {
+          url: 'https://cdn.discordapp.com/attachments/a/b/cat.png',
+          contentType: 'image/png',
+          name: 'cat.png',
+        },
+      ],
+    }));
+  });
+
   it('requires mentions in guild channels and strips bot mention text', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

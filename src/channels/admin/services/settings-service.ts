@@ -305,6 +305,16 @@ export class AdminSettingsDataService implements AdminSettingsService {
       };
       saveSettings(this.deps.config.dataDir, next);
       applySettings(this.deps.config, next);
+      if (this.deps.config.modelCatalog && this.deps.config.modelRoleAssignments) {
+        saveModelsConfig(
+          this.deps.config.dataDir,
+          {
+            modelCatalog: this.deps.config.modelCatalog,
+            modelRoleAssignments: this.deps.config.modelRoleAssignments,
+          },
+          { defaultContextWindow: this.deps.config.defaultContextWindow },
+        );
+      }
       return { ok: true, message: 'Settings updated' };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };

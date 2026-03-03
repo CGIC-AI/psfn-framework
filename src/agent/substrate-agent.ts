@@ -500,6 +500,14 @@ export class SubstrateAgent {
       this.agent.setModel(resolved);
       this.modelResolved = true;
       this.modelSignature = nextSignature;
+      if (purpose === 'vision' && !resolved.input.includes('image')) {
+        log.warn('Vision purpose resolved to model without image input capability', {
+          reason,
+          model: resolved.id,
+          provider: resolved.provider,
+          channelId: message?.channelId,
+        });
+      }
       log.info('Resolved runtime model', {
         reason,
         model: resolved.id,
@@ -1416,7 +1424,22 @@ export class SubstrateAgent {
     const resolved = await Promise.all(
       imageAttachments.map(attachment => this.resolveVisionAttachmentContent(message, attachment)),
     );
-    return resolved.filter((block): block is ImageContent => block !== null);
+    const blocks = resolved.filter((block): block is ImageContent => block !== null);
+    if (blocks.length === 0) {
+      log.warn('Vision image attachments present but none were resolved', {
+        channelId: message.channelId,
+        channelType: message.channelType,
+        attachmentCount: imageAttachments.length,
+        attachmentHosts: imageAttachments.map((attachment) => {
+          try {
+            return new URL(attachment.url).hostname;
+          } catch {
+            return 'invalid-url';
+          }
+        }),
+      });
+    }
+    return blocks;
   }
 
   private async resolveVisionAttachmentContent(
@@ -2624,7 +2647,6 @@ export class SubstrateAgent {
     log.warn('No assistant message found in agent state after prompt');
     return '';
   }
-
   private deriveCharacterName(systemPrompt: string): string {
     const firstLine = systemPrompt.split('\n')[0]?.trim() ?? '';
     const match = firstLine.match(/^You are\s+(.+?)\.?$/i);

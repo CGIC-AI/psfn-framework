@@ -883,6 +883,57 @@ describe('SubstrateAgent.handleMessage', () => {
     }
   });
 
+  it('uses gateway binary fetch for Discord image turns when available', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toEqual([
+        { type: 'text', text: 'Hello, Purrsephone!' },
+        { type: 'image', data: 'AQID', mimeType: 'image/png' },
+      ]);
+      expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
+        'https://cdn.discordapp.com/attachments/1/2/image.png',
+        { lane: 'default', maxBytes: 8 * 1024 * 1024 },
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
   it('routes Telegram image turns through vision model slot even without fetchable image URLs', async () => {
     const config = makeConfig({
       modelRoster: {

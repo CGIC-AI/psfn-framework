@@ -36,6 +36,10 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'https://example.com' } }, policyConfig)).toBe('ALLOW');
   });
 
+  it('allows web.fetch_binary with valid HTTPS URL', () => {
+    expect(evaluatePolicy({ method: 'web.fetch_binary', params: { url: 'https://example.com/image.png' } }, policyConfig)).toBe('ALLOW');
+  });
+
   it('allows web.fetch when no urlPolicy is configured', () => {
     expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'http://example.com' } }, policyConfig)).toBe('ALLOW');
   });
@@ -47,6 +51,17 @@ describe('evaluatePolicy', () => {
     };
     expect(evaluatePolicy(
       { method: 'web.fetch', params: { url: 'http://example.com' } },
+      configWithUrlPolicy,
+    )).toBe('DENY');
+  });
+
+  it('denies web.fetch_binary for HTTP URL when urlPolicy disallows HTTP', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: { allowHttp: false },
+    };
+    expect(evaluatePolicy(
+      { method: 'web.fetch_binary', params: { url: 'http://example.com/image.png' } },
       configWithUrlPolicy,
     )).toBe('DENY');
   });

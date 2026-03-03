@@ -23,7 +23,12 @@ export function getCookieValue(req: IncomingMessage, cookieName: string): string
     if (splitAt < 0) continue;
     const name = trimmed.slice(0, splitAt);
     if (name !== cookieName) continue;
-    return trimmed.slice(splitAt + 1);
+    const rawValue = trimmed.slice(splitAt + 1);
+    try {
+      return decodeURIComponent(rawValue);
+    } catch {
+      return rawValue;
+    }
   }
 
   return null;

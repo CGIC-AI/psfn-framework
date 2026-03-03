@@ -900,13 +900,28 @@ export class AdminServer implements Lifecycle {
             const params = new URLSearchParams(body);
             const token = params.get('token') ?? '';
             if (token === this.token) {
+              const encodedToken = encodeURIComponent(token);
               sendRedirect(res, GARDEN_PREFIX, 302, {
-                'Set-Cookie': `psfn_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+                'Set-Cookie': `psfn_token=${encodedToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
               });
             } else {
               this.sendHtml(res, this.handlers.loginPage('Invalid token'));
             }
           });
+        },
+      },
+      {
+        method: 'POST',
+        match: exactPath('/api/admin/logout'),
+        handle: (_req, res) => {
+          sendJson(
+            res,
+            200,
+            { ok: true },
+            {
+              'Set-Cookie': 'psfn_token=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
+            },
+          );
         },
       },
       { method: 'GET', match: exactPath('/'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.dashboard.dashboard()) },

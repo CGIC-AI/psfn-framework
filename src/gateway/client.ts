@@ -29,6 +29,7 @@ import type {
   LLMEmbedResult,
   DiscordSendResult,
   WebFetchResult,
+  WebFetchBinaryResult,
   ShellExecResult,
   FsReadResult,
   FsWriteResult,
@@ -518,6 +519,22 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       lane,
     }) as WebFetchResult;
     return result.content;
+  }
+
+  async webFetchBinary(
+    url: string,
+    options: {
+      lane?: 'default' | 'local_crawler';
+      maxBytes?: number;
+    } = {},
+  ): Promise<WebFetchBinaryResult> {
+    return await this.rpcInstance.request('web.fetch_binary', {
+      url,
+      lane: options.lane ?? 'default',
+      ...(typeof options.maxBytes === 'number' && Number.isFinite(options.maxBytes)
+        ? { maxBytes: Math.max(1, Math.floor(options.maxBytes)) }
+        : {}),
+    }) as WebFetchBinaryResult;
   }
 
   async shellExec(

@@ -63,6 +63,12 @@ export interface WebFetchParams {
   lane?: 'default' | 'local_crawler';
 }
 
+export interface WebFetchBinaryParams {
+  url: string;
+  lane?: 'default' | 'local_crawler';
+  maxBytes?: number;
+}
+
 export interface FsReadParams {
   path: string;
 }
@@ -211,6 +217,12 @@ export interface WebFetchResult {
   sanitized: boolean;
 }
 
+export interface WebFetchBinaryResult {
+  dataBase64: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
 export interface FsReadResult {
   content: string;
 }
@@ -298,6 +310,7 @@ export interface GatewayMethods {
   'discord.send': [DiscordSendParams, DiscordSendResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
+  'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];

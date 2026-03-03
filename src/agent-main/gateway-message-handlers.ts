@@ -149,7 +149,13 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     }
 
     trackSessionActivity(message);
-    log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
+    const attachments = message.attachments ?? [];
+    log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
+      channelId: message.channelId,
+      attachmentCount: attachments.length,
+      attachmentTypes: attachments.map((attachment) => attachment.contentType),
+      attachmentNames: attachments.map((attachment) => attachment.name),
+    });
 
     try {
       const response = await agentLoop.handleMessage(message);

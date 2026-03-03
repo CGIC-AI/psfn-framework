@@ -227,6 +227,13 @@ describe('registerGatewayMessageHandlers', () => {
       channelId: 'discord:general',
       channelType: 'discord',
       timestamp: '2026-03-02T02:00:00.000Z',
+      attachments: [
+        {
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        },
+      ],
       routing: undefined,
     });
 
@@ -234,6 +241,15 @@ describe('registerGatewayMessageHandlers', () => {
 
     expect(message.timestamp).toBeInstanceOf(Date);
     expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
+    expect(harness.log.info).toHaveBeenCalledWith(
+      'Message from User: hello from wyoming...',
+      {
+        channelId: 'discord:general',
+        attachmentCount: 1,
+        attachmentTypes: ['image/png'],
+        attachmentNames: ['image.png'],
+      },
+    );
     expect(harness.agentLoop.handleMessage).toHaveBeenCalledWith(message);
     expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'discord response');
   });

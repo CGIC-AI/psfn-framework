@@ -225,6 +225,20 @@ const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
   '.discordapp.com',
   '.discordapp.net',
 ];
+const VISION_ATTACHMENT_EXTENSION_TO_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+};
+const VISION_ATTACHMENT_FORMAT_QUERY_KEYS = ['format', 'fm'];
 const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
   autoload: 1,
   extended_loaded: 2,
@@ -409,10 +423,7 @@ export class SubstrateAgent {
 
   private hasVisionAttachments(message?: SubstrateMessage): boolean {
     if (!message?.attachments || message.attachments.length === 0) return false;
-    return message.attachments.some((attachment) => {
-      const contentType = attachment.contentType.trim().toLowerCase();
-      return contentType.startsWith('image/');
-    });
+    return message.attachments.some((attachment) => this.resolveAttachmentImageContentType(attachment) !== null);
   }
 
   private resolveTurnModelPurpose(message?: SubstrateMessage): ModelPurpose {
@@ -1414,15 +1425,20 @@ export class SubstrateAgent {
     if (attachments.length === 0) return [];
 
     const imageAttachments = attachments
-      .filter((attachment) => {
-        const contentType = attachment.contentType.trim().toLowerCase();
-        return contentType.startsWith('image/');
-      })
+      .map((attachment) => ({
+        attachment,
+        contentType: this.resolveAttachmentImageContentType(attachment),
+      }))
+      .filter((entry): entry is { attachment: Attachment; contentType: string } => entry.contentType !== null)
       .slice(0, VISION_ATTACHMENT_MAX_COUNT);
     if (imageAttachments.length === 0) return [];
 
     const resolved = await Promise.all(
-      imageAttachments.map(attachment => this.resolveVisionAttachmentContent(message, attachment)),
+      imageAttachments.map((entry) => this.resolveVisionAttachmentContent(
+        message,
+        entry.attachment,
+        entry.contentType,
+      )),
     );
     const blocks = resolved.filter((block): block is ImageContent => block !== null);
     if (blocks.length === 0) {
@@ -1430,9 +1446,9 @@ export class SubstrateAgent {
         channelId: message.channelId,
         channelType: message.channelType,
         attachmentCount: imageAttachments.length,
-        attachmentHosts: imageAttachments.map((attachment) => {
+        attachmentHosts: imageAttachments.map((entry) => {
           try {
-            return new URL(attachment.url).hostname;
+            return new URL(entry.attachment.url).hostname;
           } catch {
             return 'invalid-url';
           }
@@ -1445,6 +1461,7 @@ export class SubstrateAgent {
   private async resolveVisionAttachmentContent(
     message: SubstrateMessage,
     attachment: Attachment,
+    inferredContentType: string,
   ): Promise<ImageContent | null> {
     if (message.channelType !== 'discord') {
       return null;
@@ -1467,7 +1484,7 @@ export class SubstrateAgent {
           lane: 'default',
           maxBytes: VISION_ATTACHMENT_MAX_BYTES,
         });
-        const responseMimeType = (fetched.mimeType ?? attachment.contentType)
+        const responseMimeType = (fetched.mimeType ?? inferredContentType)
           .split(';')[0]
           .trim()
           .toLowerCase();
@@ -1483,11 +1500,12 @@ export class SubstrateAgent {
           mimeType: responseMimeType,
         };
       } catch (error) {
-        log.debug('Gateway binary fetch for Discord image attachment failed; falling back to direct fetch', {
+        log.warn('Gateway binary fetch for Discord image attachment failed', {
           channelId: message.channelId,
           url: attachmentUrl.toString(),
           error: toErrorMessage(error),
         });
+        return null;
       }
     }
 
@@ -1516,7 +1534,7 @@ export class SubstrateAgent {
         return null;
       }
 
-      const responseMimeType = (response.headers.get('content-type') ?? attachment.contentType)
+      const responseMimeType = (response.headers.get('content-type') ?? inferredContentType)
         .split(';')[0]
         .trim()
         .toLowerCase();
@@ -1551,6 +1569,24 @@ export class SubstrateAgent {
     if (!normalized) return false;
     if (DISCORD_VISION_ATTACHMENT_HOSTS.has(normalized)) return true;
     return DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+  }
+
+  private resolveAttachmentImageContentType(attachment: Attachment): string | null {
+    const normalizedContentType = attachment.contentType
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    if (normalizedContentType.startsWith('image/')) {
+      return normalizedContentType;
+    }
+
+    const candidates = [attachment.name, attachment.url];
+    for (const candidate of candidates) {
+      const inferred = inferImageMimeTypeFromAttachmentCandidate(candidate);
+      if (inferred) return inferred;
+    }
+
+    return null;
   }
 
   // ── Steering + follow-up + lifecycle ──
@@ -1909,33 +1945,70 @@ export class SubstrateAgent {
             ? `Runtime note: the previous vision reply produced no text (${assistantMessage.errorMessage}). Respond to the user's latest image turn now. If the image could not be processed, clearly say so and ask for resend.`
             : 'Runtime note: the previous vision reply produced no text. Respond to the user\'s latest image turn now. If the image could not be processed, clearly say so and ask for resend.';
 
-          this.bridge.setChannel(message.channelId, {
-            turnId: message.id,
-            requestId: `${message.id}:vision-recovery`,
-            callType: turnCallType,
-            originType: turnCallType,
-            originStage: 'agent.turn.vision_recovery',
-            purpose: 'agent.turn.vision_recovery',
-          });
-          this.activeTurnCorrelation = turnCorrelationBase;
-          try {
-            await runWithRequestContext(
-              this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.vision_recovery'),
-              async () => this.agent.prompt({
-                role: 'user',
-                content: recoveryNote,
-                timestamp: Date.now(),
-              } satisfies UserMessage),
-            );
-          } finally {
-            this.bridge.clearChannel();
-            this.activeTurnCorrelation = null;
-          }
+          const runVisionRecoveryPrompt = async (
+            content: string,
+            requestSuffix: string,
+            originStage: string,
+          ): Promise<void> => {
+            this.bridge.setChannel(message.channelId, {
+              turnId: message.id,
+              requestId: `${message.id}:${requestSuffix}`,
+              callType: turnCallType,
+              originType: turnCallType,
+              originStage,
+              purpose: originStage,
+            });
+            this.activeTurnCorrelation = turnCorrelationBase;
+            try {
+              await runWithRequestContext(
+                this.withCorrelationPurpose(turnCorrelationBase, originStage),
+                async () => this.agent.prompt({
+                  role: 'user',
+                  content,
+                  timestamp: Date.now(),
+                } satisfies UserMessage),
+              );
+            } finally {
+              this.bridge.clearChannel();
+              this.activeTurnCorrelation = null;
+            }
+          };
+
+          await runVisionRecoveryPrompt(
+            recoveryNote,
+            'vision-recovery',
+            'agent.turn.vision_recovery',
+          );
 
           turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
           turnUsage = this.accumulateTurnUsage(turnMessages);
           responseModel = this.agent.state.model?.id ?? responseModel;
           responseText = this.extractResponseText();
+
+          if (responseText.trim().length === 0) {
+            log.warn('Vision recovery reply was empty; attempting strict non-empty recovery reply', {
+              channelId: message.channelId,
+              model: this.agent.state.model?.id ?? null,
+            });
+
+            await runVisionRecoveryPrompt(
+              'Runtime note: the previous recovery reply was empty. Reply now with exactly one short sentence. If the image could not be processed, clearly say so and ask for resend.',
+              'vision-recovery-strict',
+              'agent.turn.vision_recovery_strict',
+            );
+
+            turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
+            turnUsage = this.accumulateTurnUsage(turnMessages);
+            responseModel = this.agent.state.model?.id ?? responseModel;
+            responseText = this.extractResponseText();
+          }
+
+          if (responseText.trim().length === 0) {
+            log.warn('Vision turn remained empty after recovery attempts', {
+              channelId: message.channelId,
+              model: this.agent.state.model?.id ?? null,
+            });
+          }
         }
       }
       let safeResponseText = responseText;
@@ -3059,4 +3132,41 @@ export class SubstrateAgent {
       };
     }
   }
+}
+
+function inferImageMimeTypeFromAttachmentCandidate(candidate: string | null | undefined): string | null {
+  if (!candidate) return null;
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+
+  let pathCandidate = trimmed;
+  try {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      const parsed = new URL(trimmed);
+      const fromQuery = inferImageMimeTypeFromQueryParams(parsed.searchParams);
+      if (fromQuery) return fromQuery;
+      pathCandidate = parsed.pathname;
+    }
+  } catch {
+    pathCandidate = trimmed;
+  }
+
+  const lowerPath = pathCandidate.toLowerCase();
+  for (const [extension, mimeType] of Object.entries(VISION_ATTACHMENT_EXTENSION_TO_MIME)) {
+    if (lowerPath.endsWith(extension)) {
+      return mimeType;
+    }
+  }
+  return null;
+}
+
+function inferImageMimeTypeFromQueryParams(searchParams: URLSearchParams): string | null {
+  for (const key of VISION_ATTACHMENT_FORMAT_QUERY_KEYS) {
+    const raw = searchParams.get(key)?.trim().toLowerCase();
+    if (!raw) continue;
+    const normalized = raw.startsWith('.') ? raw : `.${raw}`;
+    const mimeType = VISION_ATTACHMENT_EXTENSION_TO_MIME[normalized];
+    if (mimeType) return mimeType;
+  }
+  return null;
 }

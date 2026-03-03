@@ -1008,6 +1008,100 @@ describe('SubstrateAgent.handleMessage', () => {
     }
   });
 
+  it('routes Discord image turns through vision slot when attachment contentType is generic but URL format is image', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/webp',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://media.discordapp.net/attachments/1/2/image?format=webp&quality=lossless&width=1159&height=1640',
+          contentType: 'application/octet-stream',
+          name: 'image',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toEqual([
+        { type: 'text', text: 'Hello, Purrsephone!' },
+        { type: 'image', data: 'AQID', mimeType: 'image/webp' },
+      ]);
+      expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
+        'https://media.discordapp.net/attachments/1/2/image?format=webp&quality=lossless&width=1159&height=1640',
+        { lane: 'default', maxBytes: 8 * 1024 * 1024 },
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('does not fall back to direct fetch when gateway binary fetch exists but fails', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => {
+      throw new Error('gateway fetch denied');
+    });
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toBe('Hello, Purrsephone!');
+      expect(llmProvider.webFetchBinary).toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
   it('routes Telegram image turns through vision model slot even without fetchable image URLs', async () => {
     const config = makeConfig({
       modelRoster: {
@@ -1091,6 +1185,59 @@ describe('SubstrateAgent.handleMessage', () => {
       const recoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
       expect(recoveryPrompt.content).toContain('previous vision reply produced no text');
       expect(recoveryPrompt.content).toContain('ask for resend');
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('retries vision recovery with strict non-empty instruction when first recovery is empty', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      mockAssistantErrorResponse(
+        '400 litellm.BadRequestError: no healthy deployments for vision-model',
+      );
+      mockAssistantResponse('');
+      mockAssistantResponse('I still could not process that image. Please resend it.');
+
+      const promptCallsBefore = promptSpy.mock.calls.length;
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.content).toBe('I still could not process that image. Please resend it.');
+      expect(response.metadata.model).toBe('chat-model');
+      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(3);
+      const strictRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 2]?.[0] as { content: string };
+      expect(strictRecoveryPrompt.content).toContain('exactly one short sentence');
+      expect(strictRecoveryPrompt.content).toContain('ask for resend');
     } finally {
       (globalThis as any).fetch = originalFetch;
     }

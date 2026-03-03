@@ -62,7 +62,7 @@ export class GatewayNtfyNotifier {
       'Content-Type': 'text/plain; charset=utf-8',
     };
     if (title) {
-      headers.Title = title;
+      headers.Title = toHeaderByteString(title);
     }
     if (priority !== undefined) {
       headers.Priority = String(priority);
@@ -112,6 +112,15 @@ export class GatewayNtfyNotifier {
     this.recentAlerts.set(fingerprint, now);
     return previous !== undefined && now - previous < windowMs;
   }
+}
+
+function toHeaderByteString(value: string): string {
+  // Prevent header injection and keep undici ByteString constraints satisfied.
+  const normalized = value.replace(/[\r\n]+/g, ' ').trim();
+  if (!normalized) return '';
+  // Encode unicode as UTF-8 bytes and present them as latin1 code units so
+  // undici can send the raw bytes without throwing on surrogate code points.
+  return Buffer.from(normalized, 'utf8').toString('latin1');
 }
 
 export interface PendingActionNotificationOptions {

@@ -70,7 +70,7 @@ class HttpNtfyNotifier implements NtfyNotifier {
       'Content-Type': 'text/plain; charset=utf-8',
     };
     if (title) {
-      headers.Title = title;
+      headers.Title = toHeaderByteString(title);
     }
     if (priority !== undefined) {
       headers.Priority = String(priority);
@@ -117,6 +117,12 @@ class HttpNtfyNotifier implements NtfyNotifier {
     this.recentAlerts.set(fingerprint, now);
     return previous !== undefined && now - previous < this.debounceWindowMs;
   }
+}
+
+function toHeaderByteString(value: string): string {
+  const normalized = value.replace(/[\r\n]+/g, ' ').trim();
+  if (!normalized) return '';
+  return Buffer.from(normalized, 'utf8').toString('latin1');
 }
 
 export function createGatewayNtfyNotifier(

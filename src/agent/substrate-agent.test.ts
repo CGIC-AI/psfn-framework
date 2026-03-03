@@ -289,7 +289,7 @@ describe('SubstrateAgent construction', () => {
     expect(setModelSpy.mock.calls.length).toBeGreaterThan(callCountBeforeRefresh);
 
     const refreshedModel = setModelSpy.mock.calls.at(-1)?.[0] as { id: string };
-    expect(refreshedModel.id).toBe('moonshotai/kimi-k2.5');
+    expect(refreshedModel.id).toBe('openrouter/moonshotai/kimi-k2.5');
     setModelSpy.mockRestore();
   });
 });
@@ -853,7 +853,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(response.content).toBe('Mock response from PSFN');
     expect(response.channelId).toBe('test-channel');
-    expect(response.metadata.model).toBe('deepseek/deepseek-v3.2');
+    expect(response.metadata.model).toBe('openrouter/deepseek/deepseek-v3.2');
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
   });
 
@@ -2568,7 +2568,7 @@ describe('SubstrateAgent.handleMessage', () => {
     config.primaryMaxTokens = 4096;
 
     const response = await agent.handleMessage(makeMessage({ id: 'msg-2', content: 'turn two' }));
-    expect(response.metadata.model).toBe('moonshotai/kimi-k2.5');
+    expect(response.metadata.model).toBe('openrouter/moonshotai/kimi-k2.5');
   });
 });
 

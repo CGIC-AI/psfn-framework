@@ -63,7 +63,7 @@ describe('resolveModel', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
     const model = resolveModel(config, 'chat');
-    expect(model.id).toBe('deepseek/deepseek-v3.2');
+    expect(model.id).toBe('openrouter/deepseek/deepseek-v3.2');
     expect(model.api).toBe('openai-completions');
     expect(model.baseUrl).toBe('http://localhost:4000/v1');
   });
@@ -72,7 +72,7 @@ describe('resolveModel', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
     const model = resolveModel(config, 'background');
-    expect(model.id).toBe('deepseek/deepseek-v3.2');
+    expect(model.id).toBe('openrouter/deepseek/deepseek-v3.2');
   });
 
   it('resolves vision model from roster', () => {
@@ -94,7 +94,7 @@ describe('resolveModel', () => {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
     }});
     const model = resolveModel(config, 'reasoning');
-    expect(model.id).toBe('z-ai/glm-5');
+    expect(model.id).toBe('openrouter/z-ai/glm-5');
   });
 
   it('falls back to chat model when background purpose is unconfigured', () => {
@@ -103,7 +103,7 @@ describe('resolveModel', () => {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
     } });
     const model = resolveModel(config, 'background');
-    expect(model.id).toBe('z-ai/glm-5');
+    expect(model.id).toBe('openrouter/z-ai/glm-5');
   });
 
   it('falls back to chat model when vision purpose is unconfigured', () => {
@@ -112,8 +112,40 @@ describe('resolveModel', () => {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
     } });
     const model = resolveModel(config, 'vision');
-    expect(model.id).toBe('z-ai/glm-5');
+    expect(model.id).toBe('openrouter/z-ai/glm-5');
     expect(model.input).toContain('image');
+  });
+
+  it('normalizes OpenRouter vendor-qualified model IDs for LiteLLM wildcard routing', () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      modelRoster: {
+        chat: {
+          model: 'google/gemini-3-flash-preview',
+          provider: 'openrouter',
+          maxTokens: 16384,
+          contextWindow: 128_000,
+        },
+      },
+    });
+    const model = resolveModel(config, 'chat');
+    expect(model.id).toBe('openrouter/google/gemini-3-flash-preview');
+  });
+
+  it('keeps non vendor-qualified OpenRouter aliases unchanged in LiteLLM mode', () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      modelRoster: {
+        chat: {
+          model: 'vision-model',
+          provider: 'openrouter',
+          maxTokens: 16384,
+          contextWindow: 128_000,
+        },
+      },
+    });
+    const model = resolveModel(config, 'chat');
+    expect(model.id).toBe('vision-model');
   });
 
   it('throws when no model available for purpose', () => {
@@ -127,7 +159,7 @@ describe('resolveModel', () => {
     const model = resolveModel(config);
     const agent = new Agent({ streamFn: createSubstrateStreamFn(config) });
     agent.setModel(model);
-    expect(agent.state.model.id).toBe('deepseek/deepseek-v3.2');
+    expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
   });
 });
 
@@ -144,7 +176,7 @@ describe('Agent integration', () => {
     agent.setTools([]);
 
     expect(agent.state.systemPrompt).toContain('PSFN');
-    expect(agent.state.model.id).toBe('deepseek/deepseek-v3.2');
+    expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
     expect(agent.state.tools).toEqual([]);
     expect(agent.state.messages).toEqual([]);
     expect(agent.state.isStreaming).toBe(false);

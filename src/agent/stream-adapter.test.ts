@@ -85,6 +85,7 @@ describe('resolveModel', () => {
     });
     const model = resolveModel(config, 'vision');
     expect(model.id).toBe('vision-model');
+    expect(model.input).toContain('image');
   });
 
   it('falls back to chat model for unconfigured purposes', () => {
@@ -112,6 +113,7 @@ describe('resolveModel', () => {
     } });
     const model = resolveModel(config, 'vision');
     expect(model.id).toBe('z-ai/glm-5');
+    expect(model.input).toContain('image');
   });
 
   it('throws when no model available for purpose', () => {

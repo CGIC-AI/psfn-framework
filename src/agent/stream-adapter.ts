@@ -94,7 +94,8 @@ export function resolveModel(
   }
 
   if (litellmBaseUrl) {
-    return createModel(litellmBaseUrl, slot.model, slot.maxTokens);
+    const model = createModel(litellmBaseUrl, slot.model, slot.maxTokens);
+    return ensurePurposeInputCapabilities(model, purpose);
   }
 
   // Direct provider mode — use pi-ai's built-in registry.
@@ -106,7 +107,7 @@ export function resolveModel(
       `Set LITELLM_BASE_URL or check model roster config.`,
     );
   }
-  return model;
+  return ensurePurposeInputCapabilities(model, purpose);
 }
 
 export function resolveExplicitModel(
@@ -115,7 +116,8 @@ export function resolveExplicitModel(
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
 
   if (litellmBaseUrl) {
-    return createModel(litellmBaseUrl, selection.model, selection.maxTokens);
+    const model = createModel(litellmBaseUrl, selection.model, selection.maxTokens);
+    return ensurePurposeInputCapabilities(model, selection.purpose);
   }
 
   const registered = resolveRegisteredModel(selection.provider, selection.model);
@@ -126,9 +128,31 @@ export function resolveExplicitModel(
     );
   }
 
-  return {
+  const resolved = {
     ...registered,
     ...(selection.maxTokens !== undefined ? { maxTokens: selection.maxTokens } : {}),
     ...(selection.contextWindow !== undefined ? { contextWindow: selection.contextWindow } : {}),
+  };
+  return ensurePurposeInputCapabilities(resolved, selection.purpose);
+}
+
+function ensurePurposeInputCapabilities(
+  model: Model<any>,
+  purpose: ModelPurpose | undefined,
+): Model<any> {
+  if (purpose !== 'vision') {
+    return model;
+  }
+
+  const currentInput = Array.isArray(model.input)
+    ? model.input.filter((cap): cap is 'text' | 'image' => cap === 'text' || cap === 'image')
+    : [];
+  const nextInput: Array<'text' | 'image'> = [...currentInput];
+  if (!nextInput.includes('text')) nextInput.unshift('text');
+  if (!nextInput.includes('image')) nextInput.push('image');
+
+  return {
+    ...model,
+    input: nextInput,
   };
 }

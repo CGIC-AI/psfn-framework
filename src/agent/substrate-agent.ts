@@ -1477,10 +1477,10 @@ export class SubstrateAgent {
       return null;
     }
 
-    const gatewayFetchBinary = (this.llmClient as unknown as VisionAttachmentFetchCapabilities).webFetchBinary;
-    if (typeof gatewayFetchBinary === 'function') {
+    const visionFetchCapabilities = this.llmClient as unknown as VisionAttachmentFetchCapabilities;
+    if (typeof visionFetchCapabilities.webFetchBinary === 'function') {
       try {
-        const fetched = await gatewayFetchBinary(attachmentUrl.toString(), {
+        const fetched = await visionFetchCapabilities.webFetchBinary(attachmentUrl.toString(), {
           lane: 'default',
           maxBytes: VISION_ATTACHMENT_MAX_BYTES,
         });

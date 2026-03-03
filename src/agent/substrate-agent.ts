@@ -136,6 +136,20 @@ interface PromptSections {
   staticHash: string;
 }
 
+interface VisionAttachmentFetchCapabilities {
+  webFetchBinary?: (
+    url: string,
+    options?: {
+      lane?: 'default' | 'local_crawler';
+      maxBytes?: number;
+    },
+  ) => Promise<{
+    dataBase64: string;
+    mimeType: string;
+    sizeBytes: number;
+  }>;
+}
+
 interface FrozenPromptPrefix {
   renderedPrefix: string;
   staticHash: string;
@@ -1417,6 +1431,37 @@ export class SubstrateAgent {
     }
     if (attachmentUrl.protocol !== 'https:' || !this.isAllowedDiscordVisionAttachmentHost(attachmentUrl.hostname)) {
       return null;
+    }
+
+    const gatewayFetchBinary = (this.llmClient as unknown as VisionAttachmentFetchCapabilities).webFetchBinary;
+    if (typeof gatewayFetchBinary === 'function') {
+      try {
+        const fetched = await gatewayFetchBinary(attachmentUrl.toString(), {
+          lane: 'default',
+          maxBytes: VISION_ATTACHMENT_MAX_BYTES,
+        });
+        const responseMimeType = (fetched.mimeType ?? attachment.contentType)
+          .split(';')[0]
+          .trim()
+          .toLowerCase();
+        if (!responseMimeType.startsWith('image/')) {
+          return null;
+        }
+        if (fetched.sizeBytes <= 0 || fetched.sizeBytes > VISION_ATTACHMENT_MAX_BYTES) {
+          return null;
+        }
+        return {
+          type: 'image',
+          data: fetched.dataBase64,
+          mimeType: responseMimeType,
+        };
+      } catch (error) {
+        log.debug('Gateway binary fetch for Discord image attachment failed; falling back to direct fetch', {
+          channelId: message.channelId,
+          url: attachmentUrl.toString(),
+          error: toErrorMessage(error),
+        });
+      }
     }
 
     const abortController = new AbortController();

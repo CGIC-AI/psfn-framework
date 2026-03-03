@@ -3033,6 +3033,49 @@ describe('AdminServer with auth', () => {
     expect(res.body).toContain('Enter the Garden');
   });
 
+  it('shares auth cookie from /login across /garden and /legacy', async () => {
+    const body = new URLSearchParams({ token: 'test-admin-secret' }).toString();
+    const loginRes = await request(port, 'POST', '/login', body, {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+    expect(loginRes.status).toBe(302);
+    expect(loginRes.headers.location).toBe('/garden');
+
+    const setCookie = loginRes.headers['set-cookie'];
+    const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+    expect(cookie).toContain('psfn_token=');
+    const cookieHeader = cookie!.split(';')[0];
+
+    const gardenRes = await request(port, 'GET', '/garden', undefined, {
+      Cookie: cookieHeader,
+    });
+    const legacyRes = await request(port, 'GET', '/legacy', undefined, {
+      Cookie: cookieHeader,
+    });
+
+    expect(gardenRes.status).not.toBe(401);
+    expect(legacyRes.status).not.toBe(401);
+  });
+
+  it('clears auth cookie via /api/admin/logout', async () => {
+    const body = new URLSearchParams({ token: 'test-admin-secret' }).toString();
+    const loginRes = await request(port, 'POST', '/login', body, {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+    const loginSetCookie = loginRes.headers['set-cookie'];
+    const loginCookie = Array.isArray(loginSetCookie) ? loginSetCookie[0] : loginSetCookie;
+    const loginCookieHeader = loginCookie!.split(';')[0];
+
+    const logoutRes = await request(port, 'POST', '/api/admin/logout', undefined, {
+      Cookie: loginCookieHeader,
+    });
+    expect(logoutRes.status).toBe(200);
+    const logoutSetCookie = logoutRes.headers['set-cookie'];
+    const clearedCookie = Array.isArray(logoutSetCookie) ? logoutSetCookie[0] : logoutSetCookie;
+    expect(clearedCookie).toContain('psfn_token=');
+    expect(clearedCookie).toContain('Max-Age=0');
+  });
+
   it('allows core static assets and deprecates legacy chat assets without auth token', async () => {
     const htmx = await request(port, 'GET', '/static/htmx.min.js');
     expect(htmx.status).toBe(200);

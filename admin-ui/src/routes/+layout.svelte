@@ -5,7 +5,13 @@
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { navItems } from '$lib/nav';
-  import { isAuthenticated, clearToken } from '$lib/stores/auth.svelte';
+  import {
+    getToken,
+    isAuthenticated,
+    isAuthResolved,
+    ensureAuthResolved,
+    clearToken,
+  } from '$lib/stores/auth.svelte';
   import { getToasts, removeToast } from '$lib/stores/toast.svelte';
 
   let { children } = $props();
@@ -20,12 +26,30 @@
 
   // Redirect to login if not authenticated (except on login page itself)
   $effect(() => {
-    if (!isLoginPage && !isAuthenticated()) {
+    if (isLoginPage) return;
+    if (!isAuthResolved()) {
+      void ensureAuthResolved();
+      return;
+    }
+    if (!isAuthenticated()) {
       goto(`${base}/login`);
     }
   });
 
-  function handleLogout() {
+  async function handleLogout() {
+    const token = getToken();
+    const headers = token
+      ? { Authorization: `Bearer ${token}` }
+      : undefined;
+    try {
+      await fetch('/api/admin/logout', {
+        method: 'POST',
+        ...(headers ? { headers } : {}),
+        credentials: 'include',
+      });
+    } catch {
+      // Best-effort server-side cookie clear; client token clear still executes.
+    }
     clearToken();
     goto(`${base}/login`);
   }
@@ -76,6 +100,10 @@
   }
 
   onMount(() => {
+    if (!isLoginPage) {
+      void ensureAuthResolved();
+    }
+
     const mediaQuery = window.matchMedia('(min-width: 1024px)');
 
     const syncViewport = () => {

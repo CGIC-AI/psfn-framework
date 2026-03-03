@@ -221,6 +221,10 @@ const DISCORD_VISION_ATTACHMENT_HOSTS = new Set([
   'cdn.discordapp.com',
   'media.discordapp.net',
 ]);
+const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
+  '.discordapp.com',
+  '.discordapp.net',
+];
 const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
   autoload: 1,
   extended_loaded: 2,
@@ -1522,7 +1526,8 @@ export class SubstrateAgent {
   private isAllowedDiscordVisionAttachmentHost(hostname: string): boolean {
     const normalized = hostname.trim().toLowerCase();
     if (!normalized) return false;
-    return DISCORD_VISION_ATTACHMENT_HOSTS.has(normalized);
+    if (DISCORD_VISION_ATTACHMENT_HOSTS.has(normalized)) return true;
+    return DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
   }
 
   // ── Steering + follow-up + lifecycle ──

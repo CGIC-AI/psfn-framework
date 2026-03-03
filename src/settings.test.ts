@@ -220,6 +220,39 @@ describe('settings', () => {
         memoryRetrievalMinTokens: 900,
       });
     });
+
+    it('keeps a dedicated vision slot when vision assignment is omitted', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 6000, contextWindow: 128_000 },
+          },
+          vision: {
+            model: 'moonshotai/kimi-k2.5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 4096, contextWindow: 128_000 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          summary: 'primary',
+          reasoning: 'primary',
+          longContext: 'primary',
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelRoleAssignments?.vision).toBe('vision');
+      expect(normalized.modelRoster?.vision).toEqual({
+        model: 'moonshotai/kimi-k2.5',
+        provider: 'openrouter',
+        maxTokens: 4096,
+        contextWindow: 128_000,
+      });
+    });
   });
 
   describe('applySettings', () => {

@@ -831,6 +831,14 @@ export function normalizeEditableSettings(
     assignments.extraction ??= assignments.background;
     assignments.import_processing ??= assignments.background;
   }
+  if (!assignments.vision) {
+    const visionDefaultSlot = catalog.vision
+      ? 'vision'
+      : (catalog[PRIMARY_MODEL_SLOT_KEY] ? PRIMARY_MODEL_SLOT_KEY : undefined);
+    if (visionDefaultSlot) {
+      assignments.vision = visionDefaultSlot;
+    }
+  }
 
   for (const [purpose, slotKey] of Object.entries(assignments)) {
     if (!catalog[slotKey]) {
@@ -903,7 +911,7 @@ export function normalizeEditableSettings(
       contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
       contextBudget: chatSlot?.contextBudget,
     },
-    assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
+    assignments.vision ?? (catalog.vision ? 'vision' : (assignments.chat ?? PRIMARY_MODEL_SLOT_KEY)),
   );
 
   const nextRoster: Partial<Record<ModelPurpose, ModelSlot>> = {

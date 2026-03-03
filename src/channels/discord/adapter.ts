@@ -50,6 +50,24 @@ const DISCORD_LISTEN_WINDOW_MAX_MS = 600_000;
 const DISCORD_TRIGGER_OPT_OUT_PREFIX = '!i';
 const DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE = 4;
 const DISCORD_MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const DISCORD_INLINE_IMAGE_URL_PATTERN = /https?:\/\/[^\s<>()]+/gi;
+const DISCORD_IMAGE_LINK_HOST_SUFFIXES = [
+  '.discordapp.com',
+  '.discordapp.net',
+];
+const DISCORD_IMAGE_EXTENSION_TO_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.avif': 'image/avif',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+};
 const LONG_RUNNING_STATUS_INITIAL_DELAY_MS = 12_000;
 const LONG_RUNNING_STATUS_POLL_MS = 5_000;
 const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
@@ -467,6 +485,14 @@ export class DiscordAdapter implements ChannelAdapter {
     runtimeBotId?: string,
   ): SubstrateMessage {
     const attachments = this.extractAttachments(msg);
+    if (attachments.length < DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) {
+      const seenUrls = new Set(attachments.map((attachment) => attachment.url));
+      const remaining = DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE - attachments.length;
+      const inlineAttachments = this.extractInlineImageLinks(msg.content, seenUrls, remaining);
+      if (inlineAttachments.length > 0) {
+        attachments.push(...inlineAttachments);
+      }
+    }
     return {
       id: msg.id,
       channelId: msg.channelId,
@@ -488,8 +514,8 @@ export class DiscordAdapter implements ChannelAdapter {
     for (const raw of rawAttachments) {
       if (attachments.length >= DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) break;
 
-      const contentType = raw.contentType?.trim().toLowerCase();
-      if (!contentType || !contentType.startsWith('image/')) continue;
+      const contentType = this.resolveDiscordImageContentType(raw);
+      if (!contentType) continue;
 
       const size = typeof raw.size === 'number' && Number.isFinite(raw.size)
         ? Math.max(0, Math.trunc(raw.size))
@@ -515,6 +541,64 @@ export class DiscordAdapter implements ChannelAdapter {
     }
 
     return attachments;
+  }
+
+  private extractInlineImageLinks(
+    content: string,
+    seenUrls: Set<string>,
+    remaining: number,
+  ): NonNullable<SubstrateMessage['attachments']> {
+    if (!content || remaining <= 0) return [];
+    const attachments: NonNullable<SubstrateMessage['attachments']> = [];
+    const matches = content.matchAll(DISCORD_INLINE_IMAGE_URL_PATTERN);
+    for (const match of matches) {
+      if (attachments.length >= remaining) break;
+      const normalizedUrl = normalizeInlineUrl(match[0]);
+      if (!normalizedUrl || seenUrls.has(normalizedUrl)) continue;
+      if (!isDiscordHostedImageUrl(normalizedUrl)) continue;
+      const contentType = inferImageMimeTypeFromCandidate(normalizedUrl);
+      if (!contentType) continue;
+
+      attachments.push({
+        url: normalizedUrl,
+        contentType,
+        name: inferFileNameFromUrl(normalizedUrl) ?? `attachment-inline-${attachments.length + 1}`,
+      });
+      seenUrls.add(normalizedUrl);
+    }
+    return attachments;
+  }
+
+  private resolveDiscordImageContentType(raw: {
+    contentType?: string | null;
+    name?: string | null;
+    url?: string | null;
+    proxyURL?: string | null;
+    width?: number | null;
+    height?: number | null;
+  }): string | null {
+    const normalizedContentType = raw.contentType?.trim().toLowerCase();
+    if (normalizedContentType?.startsWith('image/')) {
+      return normalizedContentType;
+    }
+
+    const candidates = [raw.name, raw.proxyURL, raw.url];
+    for (const candidate of candidates) {
+      const inferred = inferImageMimeTypeFromCandidate(candidate);
+      if (inferred) return inferred;
+    }
+
+    const hasDimensions = typeof raw.width === 'number'
+      && Number.isFinite(raw.width)
+      && raw.width > 0
+      && typeof raw.height === 'number'
+      && Number.isFinite(raw.height)
+      && raw.height > 0;
+    if (hasDimensions) {
+      return 'image/png';
+    }
+
+    return null;
   }
 
   private sanitizeMessageContent(content: string, runtimeBotId?: string): string {
@@ -952,6 +1036,67 @@ export class DiscordAdapter implements ChannelAdapter {
       return DISCORD_CHANNEL_ID_PATTERN.test(value) ? value : null;
     }
     return DISCORD_CHANNEL_ID_PATTERN.test(sessionChannelId) ? sessionChannelId : null;
+  }
+
+}
+
+function inferImageMimeTypeFromCandidate(candidate: string | null | undefined): string | null {
+  if (!candidate) return null;
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+
+  let value = trimmed;
+  try {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      value = new URL(trimmed).pathname;
+    }
+  } catch {
+    value = trimmed;
+  }
+
+  const lower = value.toLowerCase();
+  for (const [extension, mimeType] of Object.entries(DISCORD_IMAGE_EXTENSION_TO_MIME)) {
+    if (lower.endsWith(extension)) {
+      return mimeType;
+    }
+  }
+  return null;
+}
+
+function normalizeInlineUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withoutTrailingPunctuation = trimmed.replace(/[),.!?:;]+$/g, '');
+  if (!withoutTrailingPunctuation) return null;
+  try {
+    const parsed = new URL(withoutTrailingPunctuation);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function isDiscordHostedImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return DISCORD_IMAGE_LINK_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+function inferFileNameFromUrl(url: string): string | null {
+  try {
+    const pathname = new URL(url).pathname;
+    const parts = pathname.split('/').filter(Boolean);
+    const fileName = parts.at(-1)?.trim();
+    return fileName && fileName.length > 0 ? fileName : null;
+  } catch {
+    return null;
   }
 }
 

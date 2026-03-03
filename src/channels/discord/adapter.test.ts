@@ -557,6 +557,96 @@ describe('DiscordAdapter DM routing', () => {
     }));
   });
 
+  it('infers image attachment type from extension when contentType is missing', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-channel-attachments-inferred';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'image inferred',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-image-inferred',
+        content: 'check this one too',
+        attachments: [
+          {
+            id: 'att-image-jpg',
+            name: 'cat.JPG',
+            url: 'https://cdn.discordapp.com/attachments/a/b/cat.JPG?quality=lossless',
+            size: 65_000,
+          },
+          {
+            id: 'att-doc-2',
+            name: 'notes.txt',
+            url: 'https://cdn.discordapp.com/attachments/a/b/notes.txt',
+            size: 1_024,
+          },
+        ],
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      channelId,
+      attachments: [
+        {
+          url: 'https://cdn.discordapp.com/attachments/a/b/cat.JPG?quality=lossless',
+          contentType: 'image/jpeg',
+          name: 'cat.JPG',
+        },
+      ],
+    }));
+  });
+
+  it('promotes Discord CDN image links in message content to vision attachments', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-channel-inline-webp';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'inline image noted',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-inline-link-1',
+        content: 'check this https://cdn.discordapp.com/attachments/a/b/cat.webp?width=1024',
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      channelId,
+      attachments: [
+        {
+          url: 'https://cdn.discordapp.com/attachments/a/b/cat.webp?width=1024',
+          contentType: 'image/webp',
+          name: 'cat.webp',
+        },
+      ],
+    }));
+  });
+
   it('requires mentions in guild channels and strips bot mention text', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

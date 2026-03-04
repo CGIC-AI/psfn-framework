@@ -295,7 +295,6 @@ export class AdminServer implements Lifecycle {
     });
     this.settingsService = new AdminSettingsDataService({
       config: config.config,
-      skillsRuntime: config.skillsRuntime,
     });
     this.identityService = new AdminIdentityDataService({
       characterCard: config.characterCard,
@@ -1282,30 +1281,6 @@ export class AdminServer implements Lifecycle {
               sendText(res, 200, '[]', { 'Content-Type': 'application/json' });
             },
           );
-        },
-      },
-      // ── JSON API: Settings (for SvelteKit Garden UI) ──
-      {
-        method: 'GET',
-        match: exactPath('/api/admin/settings'),
-        handle: (_req, res) => {
-          this.settingsService.getSettingsData().then(
-            (data) => sendText(res, 200, JSON.stringify(data), { 'Content-Type': 'application/json' }),
-            (err) => {
-              log.error('Settings data error', { error: String(err) });
-              sendText(res, 500, JSON.stringify({ error: 'Failed to load settings' }), { 'Content-Type': 'application/json' });
-            },
-          );
-        },
-      },
-      {
-        method: 'PATCH',
-        match: exactPath('/api/admin/settings'),
-        handle: (req, res) => {
-          this.withBody(req, res, (body) => {
-            const result = this.settingsService.updateSettings(body);
-            sendText(res, result.ok ? 200 : 400, JSON.stringify(result), { 'Content-Type': 'application/json' });
-          });
         },
       },
       { method: 'GET', match: exactPath('/prompts'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.prompts.promptsPage()) },

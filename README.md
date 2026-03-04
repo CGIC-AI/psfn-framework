@@ -233,7 +233,7 @@ LIFECYCLE_RESTART_COMMAND=npm run split
 ALLOW_HTTP_FETCH=false               # Gateway web fetch policy
 FETCH_DOMAIN_ALLOWLIST=example.com   # Optional gateway fetch domain restriction
 MODULE_REGISTRY_TRUSTED_READ=false   # Optional explicit allow for module registry reads
-MODULE_REGISTRY_PATH=purrsephone/modules/repl-registry.json
+MODULE_REGISTRY_PATH=companion/modules/repl-registry.json
 AUDIT_DB_PATH=./data/gateway-audit.db
 LOG_LEVEL=info
 ```

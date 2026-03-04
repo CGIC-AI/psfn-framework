@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
@@ -7,6 +7,20 @@ import type { SessionManager } from '../session/manager.js';
 import type { LLMResponse } from '../types.js';
 import { EventBus } from '../event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
+
+const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
+
+beforeAll(() => {
+  process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH ?? 'companion/modules/repl-registry.json';
+});
+
+afterAll(() => {
+  if (ORIGINAL_MODULE_REGISTRY_PATH === undefined) {
+    delete process.env.MODULE_REGISTRY_PATH;
+  } else {
+    process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH;
+  }
+});
 
 function mockLLM(content = 'llm response'): LLMProvider {
   return {

@@ -1149,7 +1149,9 @@ export class SubstrateRuntime implements Lifecycle {
     await this.runShutdownStep('stop admin server', () => this.adminServer?.stop());
     await this.runShutdownStep('shutdown modules', () => this.moduleLoader?.shutdown());
     await this.runShutdownStep('stop channel adapters', () => this.stopChannels());
-    await this.runShutdownStep('close database', () => this.db?.close());
+    await this.runShutdownStep('close database', () => {
+      this.db?.close();
+    });
     log.info('Stopped');
   }
 

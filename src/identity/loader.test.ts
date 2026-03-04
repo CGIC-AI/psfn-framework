@@ -5,6 +5,7 @@ import { afterEach, describe, it, expect } from 'vitest';
 import {
   loadCharacterCard,
   loadOrInitializeCharacterCard,
+  isBootstrapStarterCard,
   composeSystemPrompt,
 } from './loader.js';
 import type { CharacterCardV2 } from './types.js';
@@ -101,11 +102,13 @@ describe('loadOrInitializeCharacterCard', () => {
     const first = loadOrInitializeCharacterCard(path);
     expect(first.initialized).toBe(true);
     expect(existsSync(path)).toBe(true);
-    expect(first.card.data.name).toBe('PSFN');
+    expect(first.card.data.name).toBe('Companion');
     expect(first.card.data.personality.length).toBeGreaterThan(0);
+    expect(isBootstrapStarterCard(first.card)).toBe(true);
 
     const second = loadOrInitializeCharacterCard(path);
     expect(second.initialized).toBe(false);
-    expect(second.card.data.name).toBe('PSFN');
+    expect(second.card.data.name).toBe('Companion');
+    expect(isBootstrapStarterCard(second.card)).toBe(true);
   });
 });

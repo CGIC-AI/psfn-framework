@@ -415,6 +415,7 @@ export interface AdminChatBootstrapResponse {
       privacyLevel: string;
     }>;
   }>;
+  assistantName: string;
   canonicalContactId: string;
   displayName: string;
   nickname?: string;
@@ -432,6 +433,10 @@ export interface AdminChatBootstrapResponse {
   privacy: {
     availableLevels: string[];
     selectedLevel: string;
+  };
+  onboarding: {
+    required: boolean;
+    message?: string;
   };
   api: {
     chatCompletionsUrl: string;

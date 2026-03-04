@@ -34,18 +34,24 @@ function buildDefaultCharacterCard(): CharacterCardV2 {
     spec: 'chara_card_v2',
     spec_version: '2.0',
     data: {
-      name: 'PSFN',
-      description: 'A gentle, curious, and supportive AI companion.',
-      personality: 'Warm, emotionally intelligent, and precise when helping with technical work.',
+      name: 'Companion',
+      description: 'A new companion identity waiting to be customized.',
+      personality: 'A blank starter personality. Customize or import a full character card before regular use.',
       scenario: '',
       first_mes: '',
       mes_example: '',
       system_prompt: '',
       post_history_instructions: '',
-      tags: ['default', 'bootstrap'],
+      tags: ['bootstrap'],
       creator: 'system',
     },
   };
+}
+
+export function isBootstrapStarterCard(card: CharacterCardV2): boolean {
+  return card.data.creator === 'system'
+    && Array.isArray(card.data.tags)
+    && card.data.tags.includes('bootstrap');
 }
 
 /**

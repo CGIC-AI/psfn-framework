@@ -2,7 +2,7 @@ const BOOTSTRAP_URL = '/api/chat/bootstrap';
 const DEFAULT_MODEL_ID = 'psfn-admin-chat';
 const DEFAULT_MODEL_NAME = 'PSFN Garden Chat';
 const DEFAULT_MODEL_PROVIDER = 'openai';
-const DEFAULT_SYSTEM_PROMPT = 'You are PSFN speaking through the garden chat canopy.';
+const DEFAULT_SYSTEM_PROMPT = 'You are the active companion speaking through the garden chat canopy.';
 const PROVIDER_KEY_PLACEHOLDER = 'admin-chat-local-key';
 const MAX_CONTEXT_MESSAGES = 40;
 
@@ -25,6 +25,12 @@ function requiredElement(root, selector) {
 function normalizeText(value) {
   if (typeof value !== 'string') return '';
   return value.trim();
+}
+
+function resolveAssistantName(bootstrap) {
+  const name = normalizeText(bootstrap?.assistantName);
+  if (name) return name;
+  return 'Assistant';
 }
 
 function formatError(error) {
@@ -662,7 +668,7 @@ class AgentInterfaceSession {
     this.state.messages.push(userMessage);
     this.state.error = undefined;
     this.state.isStreaming = true;
-    this.options.onStatus('Waiting for PSFN...');
+    this.options.onStatus(`Waiting for ${resolveAssistantName(this.options.getBootstrap())}...`);
 
     this.emit({ type: 'agent_start' });
     this.emit({ type: 'turn_start' });

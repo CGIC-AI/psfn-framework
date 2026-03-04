@@ -878,6 +878,9 @@ describe('AdminServer', () => {
       expect(payload.defaultSessionId).toBe('api:admin-user');
       expect(payload.defaultAuthorName).toBe('Primary Contact');
       expect(payload.defaultAuthorId).toBe('admin-user');
+      expect(payload.assistantName).toBeTruthy();
+      expect(payload.assistantName).not.toBe('Assistant');
+      expect(payload.onboarding.required).toBe(false);
     });
 
     it('uses computed latest session when persisted metadata is stale', async () => {

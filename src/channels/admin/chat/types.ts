@@ -49,14 +49,21 @@ export interface AdminChatPrivacyMetadata {
   selectedLevel: ChannelPrivacyLevel;
 }
 
+export interface AdminChatOnboardingMetadata {
+  required: boolean;
+  message?: string;
+}
+
 export interface AdminChatBootstrapResponse {
   contactOptions: AdminChatContactOption[];
+  assistantName: string;
   canonicalContactId: string;
   displayName: string;
   nickname?: string;
   linkedChannels: AdminChatLinkedChannelOption[];
   selectedIdentity: AdminChatSelectedIdentity;
   privacy: AdminChatPrivacyMetadata;
+  onboarding: AdminChatOnboardingMetadata;
   api: AdminChatBootstrapApiConfig;
   runtime: AdminChatRuntimeConfig;
   defaultSessionId: string;

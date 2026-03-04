@@ -212,10 +212,19 @@ export function scheduleProfileRefresh(options: ProfileRefreshQueueOptions): voi
   );
   options.inFlightProfileRefreshes.add(promise);
   options.inFlightProfileByContact.set(options.canonicalContactId, promise);
-  promise.finally(() => {
-    options.inFlightProfileRefreshes.delete(promise);
-    if (options.inFlightProfileByContact.get(options.canonicalContactId!) === promise) {
-      options.inFlightProfileByContact.delete(options.canonicalContactId!);
-    }
-  });
+  void promise
+    .catch((error) => {
+      log.error('Profile refresh failed', {
+        channelId: options.channelId,
+        canonicalContactId: options.canonicalContactId,
+        triggerReason: options.triggerReason,
+        error: String(error),
+      });
+    })
+    .finally(() => {
+      options.inFlightProfileRefreshes.delete(promise);
+      if (options.inFlightProfileByContact.get(options.canonicalContactId!) === promise) {
+        options.inFlightProfileByContact.delete(options.canonicalContactId!);
+      }
+    });
 }

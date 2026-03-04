@@ -919,6 +919,77 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
   });
+
+  it('drains cleanly when fire-and-forget profile refresh rejects', async () => {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({ content: '<response></response>' })
+        .mockRejectedValueOnce(new Error('profile synthesis timeout')),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(6),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'Hey', authorName: 'Operator' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([
+        {
+          id: 'm1',
+          type: 'relational',
+          text: 'Operator is my primary partner.',
+          importance: 0.95,
+          confidence: 0.95,
+          salience: 0.92,
+        },
+        {
+          id: 'm2',
+          type: 'semantic',
+          text: 'Operator prefers direct technical communication.',
+          importance: 0.82,
+          confidence: 0.88,
+          salience: 0.8,
+        },
+      ]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+    );
+
+    await extractor.maybeExtract('api:profile-error-test', 'contact-canonical-1');
+
+    await expect(extractor.drain({ timeoutMs: 2_000 })).resolves.toBe(true);
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
 });
 
 describe('MemoryExtractor emotional state persistence', () => {

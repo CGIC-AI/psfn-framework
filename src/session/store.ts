@@ -436,10 +436,14 @@ export class SessionStore {
     const journal = buildExtractionMarkerJournalEntry(id, channelId, markerCoveredUpTo, timestamp);
     this.writeJournalEntry(cache, journal);
   }
-  markGracefulShutdownForActiveChannels(timestamp = Date.now()): string[] {
+  markGracefulShutdownForActiveChannels(
+    timestamp = Date.now(),
+    options: { skipChannels?: ReadonlySet<string> } = {},
+  ): string[] {
     return markGracefulShutdownForActiveChannels({
       channels: this.channels,
       timestamp,
+      skipChannels: options.skipChannels,
       writeJournalEntry: (cache, journal) => this.writeJournalEntry(cache, journal),
     });
   }

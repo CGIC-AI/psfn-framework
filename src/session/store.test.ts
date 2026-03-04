@@ -205,6 +205,29 @@ describe('SessionStore', () => {
     expect(reloaded.getUncleanShutdownChannels()).toEqual([]);
   });
 
+  it('skips graceful shutdown markers for channels flagged as unresolved', () => {
+    store.append({
+      channelId: 'ch1',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+    });
+    store.append({
+      channelId: 'ch2',
+      role: 'assistant',
+      content: 'world',
+      timestamp: 2_000,
+    });
+
+    const marked = store.markGracefulShutdownForActiveChannels(3_000, {
+      skipChannels: new Set(['ch2']),
+    });
+    expect(marked).toEqual(['ch1']);
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getUncleanShutdownChannels()).toEqual(['ch2']);
+  });
+
   it('detects unclean shutdown and reports un-extracted recovery entries', () => {
     const channelId = 'api:recover-extraction';
     store.append({

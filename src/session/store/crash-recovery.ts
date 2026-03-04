@@ -29,11 +29,13 @@ export function applyJournalState(cache: ChannelCache, entry: JournalEntry): voi
 export function markGracefulShutdownForActiveChannels(params: {
   channels: Map<string, ChannelCache>;
   timestamp: number;
+  skipChannels?: ReadonlySet<string>;
   writeJournalEntry: (cache: ChannelCache, journal: JournalEntry) => void;
 }): string[] {
   const marked: string[] = [];
 
   for (const [channelId, cache] of params.channels.entries()) {
+    if (params.skipChannels?.has(channelId)) continue;
     if (!cache.lastJournalEntry) continue;
     if (isGracefulShutdownEntry(cache.lastJournalEntry)) continue;
 

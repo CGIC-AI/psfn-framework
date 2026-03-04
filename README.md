@@ -169,8 +169,10 @@ Svelte 5 SPA served at `/garden` (build with `npm run garden:build` or dev with 
 **OpenAI-compatible API:**
 ```bash
 API_PORT=3000          # Activates /v1/chat/completions
-API_KEY=your-key       # Optional auth
 API_HOST=127.0.0.1
+API_KEY=your-key       # Required unless ALLOW_INSECURE_LOCAL_API=true
+ALLOW_INSECURE_LOCAL_API=false  # Explicitly allow keyless local-only mode
+API_CORS_ALLOWLIST=http://127.0.0.1:3001  # Comma-separated browser origin allowlist
 API_MODEL_NAME=purrsephone
 API_REQUEST_TIMEOUT_MS=90000
 ```
@@ -243,7 +245,7 @@ Prerequisites:
 - Admin server is running and reachable (for `/api/chat/bootstrap`)
 - API server is running and reachable (for `/v1/chat/completions`)
 - If admin auth is enabled, pass `ADMIN_TOKEN`
-- If API auth is enabled, ensure `API_KEY` is configured so bootstrap can expose `api.apiKey`
+- Ensure `API_KEY` is configured (or explicitly enable `ALLOW_INSECURE_LOCAL_API=true` on loopback-only dev runs)
 - For optional voice check, voice websocket runtime must be enabled
 
 Command:

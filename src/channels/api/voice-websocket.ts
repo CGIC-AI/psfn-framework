@@ -4,6 +4,13 @@ import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { createComponentLogger } from '../../logger.js';
 import type { WebSocketVoiceConnection } from '../../voice/transports/websocket/types.js';
+import {
+  getBearerToken,
+  isExpectedApiToken,
+  principalFromApiKeyToken,
+  INSECURE_LOCAL_API_PRINCIPAL,
+  type ApiAuthPrincipal,
+} from '../http/auth.js';
 
 const log = createComponentLogger('ApiVoiceWebSocket');
 
@@ -22,6 +29,7 @@ export interface WebSocketVoiceSession {
 
 export interface VoiceWebSocketRuntimeContext {
   request: IncomingMessage;
+  principal: ApiAuthPrincipal;
 }
 
 export interface VoiceWebSocketRuntime {
@@ -189,7 +197,7 @@ export class ApiVoiceWebSocketAdapter {
   private stopped = false;
 
   constructor(config: ApiVoiceWebSocketConfig = {}) {
-    this.apiKey = config.apiKey;
+    this.apiKey = config.apiKey?.trim() || undefined;
     this.path = config.path ?? DEFAULT_VOICE_WEBSOCKET_PATH;
     this.now = config.now ?? (() => Date.now());
     this.runtime = config.runtime ?? createHookVoiceWebSocketRuntime(config.runtimeHooks, this.now);
@@ -204,13 +212,14 @@ export class ApiVoiceWebSocketAdapter {
       return false;
     }
 
-    if (!this.checkAuth(req)) {
+    const principal = this.resolvePrincipal(req);
+    if (!principal) {
       sendUpgradeRejection(socket, 401);
       return true;
     }
 
     this.webSocketServer.handleUpgrade(req, socket, head, (ws) => {
-      this.attachSocket(ws, req);
+      this.attachSocket(ws, req, principal);
     });
 
     return true;
@@ -237,12 +246,14 @@ export class ApiVoiceWebSocketAdapter {
     });
   }
 
-  private checkAuth(req: IncomingMessage): boolean {
-    if (!this.apiKey) return true;
+  private resolvePrincipal(req: IncomingMessage): ApiAuthPrincipal | null {
+    if (!this.apiKey) {
+      return INSECURE_LOCAL_API_PRINCIPAL;
+    }
 
-    const auth = req.headers.authorization;
-    if (auth && auth.startsWith('Bearer ') && auth.slice(7) === this.apiKey) {
-      return true;
+    const bearerToken = getBearerToken(req);
+    if (isExpectedApiToken(bearerToken, this.apiKey)) {
+      return principalFromApiKeyToken(this.apiKey);
     }
 
     let token: string | null = null;
@@ -252,13 +263,13 @@ export class ApiVoiceWebSocketAdapter {
     } catch {
       token = null;
     }
-    if (!token) return false;
-    return token.trim() === this.apiKey;
+    if (!isExpectedApiToken(token, this.apiKey)) return null;
+    return principalFromApiKeyToken(this.apiKey);
   }
 
-  private attachSocket(ws: WebSocket, req: IncomingMessage): void {
+  private attachSocket(ws: WebSocket, req: IncomingMessage, principal: ApiAuthPrincipal): void {
     const connection = createVoiceConnection(`api-voice-${randomUUID()}`, ws);
-    const detachRuntime = this.runtime.attach(connection, { request: req });
+    const detachRuntime = this.runtime.attach(connection, { request: req, principal });
 
     let closed = false;
     let removeCloseListener = () => {};

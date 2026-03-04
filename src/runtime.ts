@@ -131,6 +131,19 @@ export {
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 
+function isExplicitTrue(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === 'true';
+}
+
+function parseCommaSeparatedEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  const entries = value
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+  return [...new Set(entries)];
+}
+
 export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;
   private eventBus: EventBus;
@@ -687,6 +700,8 @@ export class SubstrateRuntime implements Lifecycle {
     const apiHost = process.env.API_HOST || undefined;
     const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
     if (apiPort) {
+      const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
+      const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
       const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
         agentLoop: this.agentLoop,
         eventBus: this.eventBus,
@@ -704,6 +719,8 @@ export class SubstrateRuntime implements Lifecycle {
         sessionManager: this.sessionManager,
         contactStore,
         apiKey: process.env.API_KEY || undefined,
+        allowInsecureWithoutAuth,
+        corsAllowedOrigins,
         modelName: process.env.API_MODEL_NAME,
         healthChecks: {
           memory: () => {

@@ -113,6 +113,15 @@ function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
 }
 
+function parseCommaSeparatedEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  const entries = value
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+  return [...new Set(entries)];
+}
+
 function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
   const existingHooks = config.runtimeHooks ?? {};
   config.runtimeHooks = {
@@ -503,6 +512,8 @@ async function main(): Promise<void> {
   const apiHost = process.env.API_HOST || undefined;
   const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
   if (apiPort) {
+    const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
+    const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
     const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
     const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
     const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
@@ -514,6 +525,8 @@ async function main(): Promise<void> {
       sessionManager,
       contactStore,
       apiKey: process.env.API_KEY || undefined,
+      allowInsecureWithoutAuth,
+      corsAllowedOrigins,
       modelName: process.env.API_MODEL_NAME,
       requestTimeoutMs: parsePositiveIntEnv(
         process.env.API_REQUEST_TIMEOUT_MS,

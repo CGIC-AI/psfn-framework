@@ -4,10 +4,12 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendText } from '../http/primitives.js';
+import { parseImportedCharacterCard } from '../../identity/importer.js';
 
 const MAX_UPLOAD_SIZE = 2 * 1024 * 1024; // 2MB
 const CRLF = Buffer.from('\r\n');
 const DOUBLE_CRLF = Buffer.from('\r\n\r\n');
+const SUPPORTED_CARD_EXTENSIONS = new Set(['.json', '.png', '.charx']);
 
 export interface ParsedFile {
   fieldName: string;
@@ -241,30 +243,56 @@ export async function handleMultipartUpload(
   return parseMultipartBody(body, boundary);
 }
 
+function getFileExtension(filename: string): string | null {
+  const trimmed = filename.trim();
+  const dotIndex = trimmed.lastIndexOf('.');
+  if (dotIndex <= 0 || dotIndex === trimmed.length - 1) {
+    return null;
+  }
+  return trimmed.slice(dotIndex).toLowerCase();
+}
+
 /**
- * Validate that a parsed file is a JSON file and parse its contents.
+ * Validate and parse uploaded character-card files using character-foundry auto-detection.
+ * Supports JSON, PNG, and CharX containers.
  */
-export function validateAndParseJsonFile(
+export function validateAndParseCharacterCardFile(
   file: ParsedFile,
-): { ok: true; data: unknown; filename: string } | { ok: false; error: string } {
-  // Check filename extension
-  const lowerFilename = file.filename.toLowerCase();
-  if (!lowerFilename.endsWith('.json')) {
+): (
+  {
+    ok: true;
+    cardData: unknown;
+    filename: string;
+    containerFormat: string;
+    sourceFormat: string;
+    spec: string;
+    warnings: string[];
+  }
+  | { ok: false; error: string }
+) {
+  const extension = getFileExtension(file.filename);
+  if (!extension || !SUPPORTED_CARD_EXTENSIONS.has(extension)) {
     return {
       ok: false,
-      error: `File must be a .json file, got: ${file.filename}`,
+      error: `File must be .json, .png, or .charx, got: ${file.filename}`,
     };
   }
 
-  // Parse JSON content
-  const text = file.data.toString('utf-8');
   try {
-    const data: unknown = JSON.parse(text);
-    return { ok: true, data, filename: file.filename };
-  } catch {
+    const parsed = parseImportedCharacterCard(file.data);
+    return {
+      ok: true,
+      filename: file.filename,
+      cardData: parsed.card,
+      containerFormat: parsed.containerFormat,
+      sourceFormat: parsed.sourceFormat,
+      spec: parsed.spec,
+      warnings: parsed.warnings ?? [],
+    };
+  } catch (error) {
     return {
       ok: false,
-      error: 'File contains invalid JSON',
+      error: `File could not be parsed as a character card: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

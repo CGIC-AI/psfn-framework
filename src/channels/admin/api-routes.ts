@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseJsonBody, sendJson } from '../http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
-import { handleMultipartUpload, validateAndParseJsonFile } from './multipart.js';
+import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';
 import type {
   AdminAdaptiveToolsService,
   AdminContactsService,
@@ -702,24 +702,24 @@ export function buildAdminApiRoutes(options: {
               sendJson(res, uploadResult.status, { error: uploadResult.error });
               return;
             }
-            const jsonResult = validateAndParseJsonFile(uploadResult.file);
-            if (!jsonResult.ok) {
+            const cardResult = validateAndParseCharacterCardFile(uploadResult.file);
+            if (!cardResult.ok) {
               appendIdentityMutationAudit(
                 'denied',
-                `Operator identity upload via /api/admin/identity/upload failed: ${jsonResult.error}`,
+                `Operator identity upload via /api/admin/identity/upload failed: ${cardResult.error}`,
                 [`filename=${uploadResult.file.filename}`],
               );
-              sendJson(res, 400, { error: jsonResult.error });
+              sendJson(res, 400, { error: cardResult.error });
               return;
             }
             // Pass the parsed card data as a JSON string to the import service
-            identityService.importIdentityCard(JSON.stringify({ cardData: jsonResult.data })).then(
+            identityService.importIdentityCard(JSON.stringify({ cardData: cardResult.cardData })).then(
               result => {
                 if (!result.ok) {
                   appendIdentityMutationAudit(
                     'denied',
                     `Operator identity upload via /api/admin/identity/upload failed: ${result.message}`,
-                    [`filename=${jsonResult.filename}`],
+                    [`filename=${cardResult.filename}`],
                   );
                   sendJson(res, 400, { error: result.message });
                   return;
@@ -727,15 +727,28 @@ export function buildAdminApiRoutes(options: {
                 appendIdentityMutationAudit(
                   'allowed',
                   'Operator imported identity card via /api/admin/identity/upload.',
-                  [`filename=${jsonResult.filename}`, result.message || null],
+                  [
+                    `filename=${cardResult.filename}`,
+                    `container=${cardResult.containerFormat}`,
+                    `source=${cardResult.sourceFormat}`,
+                    `spec=${cardResult.spec}`,
+                    result.message || null,
+                  ],
                 );
-                sendJson(res, 201, { ...result, filename: jsonResult.filename });
+                sendJson(res, 201, {
+                  ...result,
+                  filename: cardResult.filename,
+                  containerFormat: cardResult.containerFormat,
+                  sourceFormat: cardResult.sourceFormat,
+                  spec: cardResult.spec,
+                  warnings: cardResult.warnings,
+                });
               },
               error => {
                 appendIdentityMutationAudit(
                   'denied',
                   `Operator identity upload via /api/admin/identity/upload failed: ${String(error)}`,
-                  [`filename=${jsonResult.filename}`],
+                  [`filename=${cardResult.filename}`],
                 );
                 sendJson(res, 500, { error: String(error) });
               },

@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { parseCard } from '@character-foundry/character-foundry/loader';
+import { exportCard } from '@character-foundry/character-foundry/exporter';
 import {
   extractBoundary,
   parseMultipartBody,
-  validateAndParseJsonFile,
+  validateAndParseCharacterCardFile,
   type ParsedFile,
 } from './multipart.js';
 
@@ -34,6 +36,32 @@ function buildMultipartBody(
   }
   chunks.push(Buffer.from(`--${boundary}--\r\n`));
   return Buffer.concat(chunks);
+}
+
+const TEST_CARD_V2 = {
+  spec: 'chara_card_v2',
+  spec_version: '2.0',
+  data: {
+    name: 'Multipart Test',
+    description: 'A card used for multipart parser tests.',
+    personality: 'Friendly and pragmatic.',
+    scenario: 'Test scenario.',
+    first_mes: 'Hello.',
+    mes_example: '{{user}}: hi\n{{char}}: hello',
+    system_prompt: 'Be concise.',
+    post_history_instructions: 'Preserve continuity.',
+    tags: ['tests'],
+    creator: 'multipart-test-suite',
+  },
+} as const;
+
+const ONE_BY_ONE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5P4T0AAAAASUVORK5CYII=',
+  'base64',
+);
+
+function toV3Card() {
+  return parseCard(Buffer.from(JSON.stringify(TEST_CARD_V2), 'utf-8')).card;
 }
 
 describe('extractBoundary', () => {
@@ -160,92 +188,105 @@ describe('parseMultipartBody', () => {
   });
 });
 
-describe('validateAndParseJsonFile', () => {
-  it('accepts valid JSON file', () => {
+describe('validateAndParseCharacterCardFile', () => {
+  it('accepts valid JSON character card files', () => {
     const file: ParsedFile = {
       fieldName: 'file',
       filename: 'card.json',
       contentType: 'application/json',
-      data: Buffer.from('{"name":"Test","personality":"Friendly"}'),
+      data: Buffer.from(JSON.stringify(TEST_CARD_V2), 'utf-8'),
     };
 
-    const result = validateAndParseJsonFile(file);
+    const result = validateAndParseCharacterCardFile(file);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.data).toEqual({ name: 'Test', personality: 'Friendly' });
+    const card = result.cardData as { data?: { name?: string } };
+    expect(card.data?.name).toBe('Multipart Test');
     expect(result.filename).toBe('card.json');
+    expect(result.containerFormat).toBe('json');
   });
 
-  it('rejects non-JSON filename extension', () => {
+  it('accepts PNG character card files', () => {
+    const pngResult = exportCard(
+      toV3Card(),
+      [{ name: 'icon-main', type: 'icon', ext: 'png', data: ONE_BY_ONE_PNG, isMain: true }],
+      { format: 'png' },
+    );
+
+    const file: ParsedFile = {
+      fieldName: 'file',
+      filename: 'card.png',
+      contentType: 'image/png',
+      data: pngResult.buffer,
+    };
+
+    const result = validateAndParseCharacterCardFile(file);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const card = result.cardData as { data?: { name?: string } };
+    expect(card.data?.name).toBe('Multipart Test');
+    expect(result.containerFormat).toBe('png');
+  });
+
+  it('accepts CharX character card files', () => {
+    const charxResult = exportCard(toV3Card(), [], { format: 'charx' });
+
+    const file: ParsedFile = {
+      fieldName: 'file',
+      filename: 'card.charx',
+      contentType: 'application/octet-stream',
+      data: charxResult.buffer,
+    };
+
+    const result = validateAndParseCharacterCardFile(file);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const card = result.cardData as { data?: { name?: string } };
+    expect(card.data?.name).toBe('Multipart Test');
+    expect(result.containerFormat).toBe('charx');
+  });
+
+  it('rejects unsupported filename extension', () => {
     const file: ParsedFile = {
       fieldName: 'file',
       filename: 'card.txt',
       contentType: 'text/plain',
-      data: Buffer.from('{"name":"Test"}'),
+      data: Buffer.from('not a card'),
     };
 
-    const result = validateAndParseJsonFile(file);
+    const result = validateAndParseCharacterCardFile(file);
     expect(result.ok).toBe(false);
     if (result.ok) return;
 
-    expect(result.error).toContain('.json');
+    expect(result.error).toContain('.json, .png, or .charx');
   });
 
-  it('rejects invalid JSON content', () => {
-    const file: ParsedFile = {
-      fieldName: 'file',
-      filename: 'card.json',
-      contentType: 'application/json',
-      data: Buffer.from('not valid json {{{'),
-    };
-
-    const result = validateAndParseJsonFile(file);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-
-    expect(result.error).toContain('invalid JSON');
-  });
-
-  it('is case-insensitive for .json extension', () => {
+  it('is case-insensitive for supported extension matching', () => {
     const file: ParsedFile = {
       fieldName: 'file',
       filename: 'CARD.JSON',
       contentType: 'application/json',
-      data: Buffer.from('{"name":"Test"}'),
+      data: Buffer.from(JSON.stringify(TEST_CARD_V2), 'utf-8'),
     };
 
-    const result = validateAndParseJsonFile(file);
+    const result = validateAndParseCharacterCardFile(file);
     expect(result.ok).toBe(true);
   });
 
-  it('handles empty JSON object', () => {
+  it('rejects malformed character card content', () => {
     const file: ParsedFile = {
       fieldName: 'file',
-      filename: 'empty.json',
+      filename: 'broken.json',
       contentType: 'application/json',
-      data: Buffer.from('{}'),
+      data: Buffer.from('not valid json {{{'),
     };
 
-    const result = validateAndParseJsonFile(file);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    expect(result.data).toEqual({});
-  });
-
-  it('handles JSON arrays', () => {
-    const file: ParsedFile = {
-      fieldName: 'file',
-      filename: 'memories.json',
-      contentType: 'application/json',
-      data: Buffer.from('[{"type":"semantic","text":"hello"}]'),
-    };
-
-    const result = validateAndParseJsonFile(file);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    expect(Array.isArray(result.data)).toBe(true);
+    const result = validateAndParseCharacterCardFile(file);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('could not be parsed');
   });
 });

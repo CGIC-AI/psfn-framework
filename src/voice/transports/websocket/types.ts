@@ -119,7 +119,7 @@ export interface VoiceRuntimeSecurityPolicy {
 }
 
 export interface VoiceRuntimeReliabilityPolicy {
-  runStage<T>(stage: VoiceRuntimeStage, task: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+  runStage<T>(stage: VoiceRuntimeStage, task: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 
 export interface WebSocketVoiceRuntimeAssistantRequest {

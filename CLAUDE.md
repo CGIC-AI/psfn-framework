@@ -222,6 +222,19 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 - **Admin UI (Svelte SPA)**: `admin-ui/` — SvelteKit 5, `npm run garden:dev` for dev, `npm run garden:build` for prod. Serves at `/garden` on admin port. API client at `admin-ui/src/lib/api/`.
 - **Not yet built**: module system (hot-load), capability tokens
 
+## Parallel Work Safety
+
+**NEVER delete, force-remove, or destroy branches, worktrees, stashes, or refs without explicit user confirmation.** Multiple agents may be working in parallel across different worktrees and branches. What looks "stale" or "unused" to you may be actively in use by another agent. This applies to:
+
+- `git branch -D` / `git branch -d`
+- `git worktree remove` (especially `--force`)
+- `git stash drop` / `git stash clear`
+- `git reflog expire` + `git gc --prune=now`
+- `git reset --hard`, `git checkout -- .`, `git clean -f`
+- Deleting directories that contain worktrees
+
+**Always ask first. No exceptions.**
+
 ## Guidelines
 
 - If a file exceeds 500 lines, split it.

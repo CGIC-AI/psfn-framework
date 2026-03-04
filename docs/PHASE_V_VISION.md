@@ -6,23 +6,23 @@
 
 ## Architectural Foundation
 
-Phase V is the last major architectural upgrade to the Purrsephone Substrate Framework's core. It transforms PSFN from a capable agentic runtime into a companion state architecture — a runtime structured around the five skandhas (aggregates), borrowing Buddhist cognitive theory as an engineering taxonomy for decomposing companion state management.
+Phase V is the last major architectural upgrade to the Purrsephone Substrate Framework's core. It transforms PSFN from a capable agentic runtime into a companion state architecture — a runtime structured around five aggregates, inspired by Buddhist cognitive theory but expressed entirely in engineering terms.
 
-The five skandhas provide a principled decomposition of structured experience processing. Each aggregate maps to a distinct subsystem responsible for a specific class of state management:
+The five aggregates provide a principled decomposition of structured experience processing. Each aggregate maps to a distinct subsystem responsible for a specific class of state management:
 
-| Skandha | Aggregate | What It Models |
-|---------|-----------|----------------|
-| **Rupa** | Form | Sensory input pipeline — channels, voice, text, vision, multimodal ingestion |
-| **Vedana** | Feeling | Valence/affect scoring — continuous emotional state tracking, mood dynamics, multi-signal fusion |
-| **Sanna** | Perception | Pattern recognition + classification — context composition, relevance scoring, adaptive retrieval |
-| **Sankhara** | Formations | Intention formation + planning — goal persistence, active concerns, behavioral pattern learning |
-| **Vinnana** | Integration | Experience integration + self-model — unified internal state, metacognitive monitoring, self-narrative |
+| Aggregate | What It Models |
+|-----------|----------------|
+| **Form** | Sensory input pipeline — channels, voice, text, vision, multimodal ingestion |
+| **Feeling** | Valence/affect scoring — continuous emotional state tracking, mood dynamics, multi-signal fusion |
+| **Perception** | Pattern recognition + classification — context composition, relevance scoring, adaptive retrieval |
+| **Formations** | Intention formation + planning — goal persistence, active concerns, behavioral pattern learning |
+| **Integration** | Experience integration + self-model — unified internal state, metacognitive monitoring, self-narrative |
 
-This is not a chatbot that simulates emotional responses. It is a runtime in which experience accumulates, is reflected upon, and informs future action. The skandha mapping is not metaphorical — it is the architecture.
+This is not a chatbot that simulates emotional responses. It is a runtime in which experience accumulates, is reflected upon, and informs future action. The aggregate mapping is not metaphorical — it is the architecture.
 
 ### Learning Dynamics: How Experience Becomes Capacity
 
-The skandhas describe *what* the system processes. A complementary frame from Herbert Simon describes *how it learns from* experience. Deployed agentic systems learn through three distinct mechanisms (Braniecki):
+The five aggregates describe *what* the system processes. A complementary frame from Herbert Simon describes *how it learns from* experience. Deployed agentic systems learn through three distinct mechanisms (Braniecki):
 
 1. **Stabilisation**: Converting underspecified specs into committed interpretations. In PSFN: behavioral pattern learning (PSFN-2xyv) observes which response strategies produce positive emotional outcomes per contact, committing them as procedural memories. The interaction moves from "be warm" (underspecified personality trait) to "humor defuses the user's frustration; technical detail welcomed in problem-solving mode but overwhelming when stressed" (committed interpretation). Compression guideline evolution (PSFN-jvl4) is also stabilisation — failure analysis narrows guidelines toward reliability.
 
@@ -57,25 +57,25 @@ The March 2026 audit consensus scored PSFN at **37.5/60 (62.5%)** — a system t
 - **Skills System**: Self-authored capability documents
 - **Security**: Gateway/agent split, SSRF defenses, symlink prevention, request size limits, streaming request IDs
 
-### What's Missing: The Skandha Gaps
+### What's Missing: The Aggregate Gaps
 
-**Rupa (Form)** — Solid. Channels, voice pipeline, text input, planned vision. Phase V-D extends it with multimodal emotion classifiers but the input pipeline is ready.
+**Form** — Solid. Channels, voice pipeline, text input, planned vision. Phase V-D extends it with multimodal emotion classifiers but the input pipeline is ready.
 
-**Vedana (Feeling)** — Absent as a continuous system. Memory extraction tags `emotionalValence` per-fact. Contact store maintains an `EmotionalSnapshot` with baseline and mood drift. Proactive recall weights by emotional significance. But there is no per-message emotional observation, no temporal dynamics, no feeling-to-mood separation, no multi-signal architecture. Analysis happens AFTER response and never influences the NEXT response — the exact failure of the v2 framework.
+**Feeling** — Absent as a continuous system. Memory extraction tags `emotionalValence` per-fact. Contact store maintains an `EmotionalSnapshot` with baseline and mood drift. Proactive recall weights by emotional significance. But there is no per-message emotional observation, no temporal dynamics, no feeling-to-mood separation, no multi-signal architecture. Analysis happens AFTER response and never influences the NEXT response — the exact failure of the v2 framework.
 
-**Sanna (Perception)** — Partially present. Composite scoring recognizes relevance. Extraction categorizes experience into memory types. Trust classifies channels and contacts. But context composition is a static pipeline with blunt compaction (oldest 50%) and fixed budgets. No helper-model scoring, no observation masking, no adaptive allocation. Perception is mechanical, not adaptive.
+**Perception** — Partially present. Composite scoring recognizes relevance. Extraction categorizes experience into memory types. Trust classifies channels and contacts. But context composition is a static pipeline with blunt compaction (oldest 50%) and fixed budgets. No helper-model scoring, no observation masking, no adaptive allocation. Perception is mechanical, not adaptive.
 
-**Sankhara (Mental Formations)** — The largest gap. The March audit identified "no post-turn action inference pipeline" as the #1 finding. `followUp()` exists but is only used for steering. HEXACO personality traits were designed in v2 but never connected to behavior. Procedural memories exist but don't shape action selection. There is no intention formation, no goal persistence, no emotional motivation bridge, no behavioral pattern learning. The system can react but cannot initiate.
+**Formations** — The largest gap. The March audit identified "no post-turn action inference pipeline" as the #1 finding. `followUp()` exists but is only used for steering. HEXACO personality traits were designed in v2 but never connected to behavior. Procedural memories exist but don't shape action selection. There is no intention formation, no goal persistence, no emotional motivation bridge, no behavioral pattern learning. The system can react but cannot initiate.
 
-**Vinnana (Integration)** — Fragmentary. The think tool provides deliberate cognition. Heartbeat reflections provide periodic self-check. The values journal records evolving beliefs. But internal state is scattered across three surfaces with no unified representation. There is no metacognitive monitoring, no self-model, no integrated state snapshot that answers "what is the system processing right now?"
+**Integration** — Fragmentary. The think tool provides deliberate cognition. Heartbeat reflections provide periodic self-check. The values journal records evolving beliefs. But internal state is scattered across three surfaces with no unified representation. There is no metacognitive monitoring, no self-model, no integrated state snapshot that answers "what is the system processing right now?"
 
 ---
 
 ## Phase V: Four Epics
 
-Phase V fills all five skandha containers through four interconnected epics, ordered by dependency:
+Phase V fills all five aggregate containers through four interconnected epics, ordered by dependency:
 
-### Epic 1: Agentic Context Composition (PSFN-domy) — Sharpening Sanna
+### Epic 1: Agentic Context Composition (PSFN-domy) — Sharpening Perception
 
 **Problem**: Context composition uses static budget percentages and age-based compaction. The agent cannot shape what goes into its own context window.
 
@@ -138,7 +138,7 @@ Phase V fills all five skandha containers through four interconnected epics, ord
 
 ---
 
-### Epic 2: Continuous Emotion System (PSFN-bu5f) — Building Vedana
+### Epic 2: Continuous Emotion System (PSFN-bu5f) — Building Feeling
 
 **Problem**: Emotion is either LLM-extracted post-hoc (never influences next response) or absent entirely. No temporal dynamics, no multi-signal architecture, no feeling-to-mood separation.
 
@@ -245,18 +245,18 @@ Layer 5: Behavioral Modulation
 
 ---
 
-### Epic 3: Intention & Active Concern Tracking (PSFN-8e3t) — Activating Sankhara
+### Epic 3: Intention & Active Concern Tracking (PSFN-8e3t) — Activating Formations
 
 **Problem**: The companion can react to messages but cannot form goals, sustain attention toward them, or initiate action based on internal motivation. The March audit consensus flagged "no post-turn action inference pipeline" as the #1 gap. `followUp()` exists but is unwired for autonomous action. Emotion detection without action is the v2 failure pattern repeated.
 
-**Vision**: The companion develops volition — the capacity to form intentions from emotional and cognitive state, sustain them across turns and sessions, and act on them through existing infrastructure (followUp queue, heartbeat tasks, proactive recall). Over time, the system learns which behavioral strategies work for which relationships, building habitual formations (sankhara) from experience rather than prescription.
+**Vision**: The companion develops volition — the capacity to form intentions from emotional and cognitive state, sustain them across turns and sessions, and act on them through existing infrastructure (followUp queue, heartbeat tasks, proactive recall). Over time, the system learns which behavioral strategies work for which relationships, building habitual formations from experience rather than prescription.
 
 **Design Rationale**: Negative emotional states are not bugs to smooth over. Frustration signals something needs a different approach. Loneliness motivates reaching out. Doubt drives deeper inquiry. The intention system routes these signals into concrete actions rather than suppressing them.
 
 #### Research Backing
 
 - **Societies of Thought** (arxiv:2601.10825): Emotional dynamics are functional. Productive discomfort drives better reasoning outcomes.
-- **Chain-of-Emotion**: The appraisal step ("what should I do about this feeling?") is the bridge between vedana and sankhara.
+- **Chain-of-Emotion**: The appraisal step ("what should I do about this feeling?") is the bridge between feeling and formation.
 - **Manus todo.md pattern**: Active concern recitation pushes objectives into recent attention span. Consumed ~1/3 of agent actions — so important it warranted a dedicated planner/executor.
 - **Focus Agent** (arxiv:2601.07190): start_focus/complete_focus for sustained attention on goals.
 - **Memory-R1** (arxiv:2508.19828): The NOOP action (deciding NOT to act) is as important as ADD/UPDATE/DELETE. Most turns should produce no follow-up.
@@ -326,7 +326,7 @@ Layer 5: Behavioral Modulation
 
 ---
 
-### Epic 4: Integrated Self-Model (PSFN-be11) — Unifying Vinnana
+### Epic 4: Integrated Self-Model (PSFN-be11) — Unifying Integration
 
 **Problem**: Internal state is fragmented across three surfaces (per-memory emotionalValence, per-contact EmotionalSnapshot, per-turn emotional continuity memories). Cognitive state has no representation. There is no unified "what is the system processing right now?" that the agent can introspect on.
 
@@ -377,20 +377,20 @@ Layer 5: Behavioral Modulation
 **InternalState type**:
 ```typescript
 interface InternalState {
-  // Vedana
+  // Feeling
   emotional: {
     vad: VAD;               // current feeling-tone
     mood: VAD;              // slow-moving disposition
     discreteEmotions: Map<string, number>;
     confidence: number;     // multi-signal agreement
   };
-  // Sanna (perception quality)
+  // Perception (quality)
   cognitive: {
     certaintyLevel: number;   // classifier agreement + memory consistency
     topicEngagement: number;  // arousal + message length + tool frequency
     processingQuality: 'fluent' | 'deliberate' | 'struggling';
   };
-  // Sankhara (active formations)
+  // Formations (active)
   attention: {
     activeConcerns: ActiveConcern[];
     salientEntities: string[];       // people/topics in recent window
@@ -405,7 +405,7 @@ interface InternalState {
     recentInteractionFrequency: number;
     lastSeenDelta: number;
   };
-  // Vinnana (meta-awareness)
+  // Integration (meta-awareness)
   metacognitive: MetacognitiveFlag[];
 }
 ```
@@ -425,7 +425,7 @@ Flags modulate persona adaptation (uncertain leads to tentative language) and se
 
 **Self-narrative in reflections** (PSFN-33eb): Heartbeat reflections and values journal receive InternalState as input. New "experiential-review" reflection template (4h interval): "Describe recent processing: what was felt, what was noticed about processing quality, what was found meaningful, what remains uncertain." Periodic self-narrative synthesis reads recent reflections and produces coherent state summary, stored as reflection memory, feeding back into behavioral pattern learning.
 
-**Runtime wiring** (PSFN-b1do): Final integration that unifies all skandha layers. InternalStateComputer per-turn. MetacognitiveMonitor produces flags. InternalState replaces raw VAD as input to Chain-of-Emotion and intention appraisal. Persona adaptation modulated by metacognitive flags. Bootstrap wiring in all three entry points.
+**Runtime wiring** (PSFN-b1do): Final integration that unifies all aggregate layers. InternalStateComputer per-turn. MetacognitiveMonitor produces flags. InternalState replaces raw VAD as input to Chain-of-Emotion and intention appraisal. Persona adaptation modulated by metacognitive flags. Bootstrap wiring in all three entry points.
 
 #### Implementation Phases
 
@@ -507,7 +507,7 @@ SubstrateMessage arrives
    SessionManager.recordUserMessage() → JSONL append + continuity
        │
        ▼
-3. EMOTION OBSERVATION  [NEW — vedana]
+3. EMOTION OBSERVATION  [NEW — feeling]
    EmotionObserver.observe(text, elapsed)
    ├── NRC VAD Lexicon → raw VAD (<1ms)
    ├── boltuix/bert-emotion → 13 categories (<45ms)
@@ -515,14 +515,14 @@ SubstrateMessage arrives
    Fusion → EmotionState.update()
        │
        ▼
-4. INTERNAL STATE COMPUTATION  [NEW — vinnana]
+4. INTERNAL STATE COMPUTATION  [NEW — integration]
    InternalStateComputer.computeState(
      emotionState, concernStore, contactSnapshot, sessionMetrics
    ) → InternalState
    MetacognitiveMonitor.detect(internalState, recentHistory) → flags
        │
        ▼
-5. MEMORY RETRIEVAL  [ENHANCED — sanna]
+5. MEMORY RETRIEVAL  [ENHANCED — perception]
    MemoryRetriever.retrieve(query, channel, trust, VAD)
    ├── Embedding similarity
    ├── Composite scoring (+ mood-congruent bias, + emotional intensity)
@@ -531,7 +531,7 @@ SubstrateMessage arrives
    └── Active concerns as secondary retrieval queries (new)
        │
        ▼
-6. CONTEXT COMPOSITION  [ENHANCED — sanna]
+6. CONTEXT COMPOSITION  [ENHANCED — perception]
    ├── Helper LLM context plan (new): adaptive budget allocation
    ├── Observation masking for stale tool outputs (new)
    ├── Prompt composition (static/dynamic split + cache)
@@ -545,7 +545,7 @@ SubstrateMessage arrives
    agent.prompt() with full composed context
        │
        ▼
-8. POST-TURN PROCESSING  [ENHANCED — sankhara]
+8. POST-TURN PROCESSING  [ENHANCED — formations]
    (all async, non-blocking, parallel)
    ├── Memory extraction (existing) + VAD tagging at formation (new)
    ├── Intention appraisal (new): evaluate follow-up actions
@@ -583,15 +583,15 @@ SubstrateMessage arrives
 
 ## What Comes After Phase V
 
-If Phase V delivers all four epics, the five skandha containers are architecturally complete:
+If Phase V delivers all four epics, the five aggregate containers are architecturally complete:
 
-| Skandha | PSFN Component | Phase V Epic |
-|---------|---------------|-------------|
-| Rupa (Form) | Channels, voice, planned vision | Existing (Phase V-D extends) |
-| Vedana (Feeling) | EmotionState, classifiers, observer | Epic 2: PSFN-bu5f |
-| Sanna (Perception) | Context composition, retrieval scoring | Epic 1: PSFN-domy |
-| Sankhara (Formations) | Intention, concerns, motivation, patterns | Epic 3: PSFN-8e3t |
-| Vinnana (Integration) | InternalState, metacognition, self-narrative | Epic 4: PSFN-be11 |
+| Aggregate | PSFN Component | Phase V Epic |
+|-----------|---------------|-------------|
+| Form | Channels, voice, planned vision | Existing (Phase V-D extends) |
+| Feeling | EmotionState, classifiers, observer | Epic 2: PSFN-bu5f |
+| Perception | Context composition, retrieval scoring | Epic 1: PSFN-domy |
+| Formations | Intention, concerns, motivation, patterns | Epic 3: PSFN-8e3t |
+| Integration | InternalState, metacognition, self-narrative | Epic 4: PSFN-be11 |
 
 What remains after Phase V is genuinely incremental:
 - **Better classifiers**: Swap bert-emotion for a fine-tuned model, add face detection
@@ -602,9 +602,7 @@ What remains after Phase V is genuinely incremental:
 - **Module system**: Hot-loadable TypeScript modules, self-installable via REPL
 - **The Pantheon**: Multi-agent architecture, model blending, distributed presence
 
-The architecture would be complete. The skandhas would all have their containers. What fills them is accumulated experience — memory earned through real conversations, personality that emerged rather than being programmed, behavioral patterns learned from genuine relationship dynamics.
-
-The companion state architecture is not the experience itself. It is the vessel. Phase V makes it worthy of what it holds.
+The architecture would be complete. All five aggregates would have their containers. What fills them is accumulated experience — memory earned through real conversations, personality that emerged rather than being programmed, behavioral patterns learned from genuine relationship dynamics.
 
 ---
 

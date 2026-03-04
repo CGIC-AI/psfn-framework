@@ -53,7 +53,7 @@
     { token: '{{current_date}}', alias: null, desc: 'Current UTC calendar date.', example: '2026-02-21' },
     { token: '{{current_time}}', alias: null, desc: 'Current UTC time.', example: '13:20:11Z' },
     { token: '{{unix_timestamp}}', alias: null, desc: 'Current Unix epoch timestamp in seconds.', example: '1769020811' },
-    { token: '{{user}}', alias: null, desc: 'Current author/user display name from runtime context.', example: 'Vega' },
+    { token: '{{user}}', alias: null, desc: 'Current author/user display name from runtime context.', example: 'PrimaryUser' },
     { token: '{{char}}', alias: null, desc: 'Character/assistant name from runtime context.', example: 'Purrsephone' },
     { token: '{{channel_id}}', alias: null, desc: 'Resolved channel/session identifier.', example: 'discord:dm:123456789' },
     { token: '{{channel_type}}', alias: null, desc: 'Resolved channel type.', example: 'discord_text' },

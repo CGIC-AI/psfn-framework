@@ -179,13 +179,13 @@ Ported from ElizaOS plugin-purrsephone:
 
 ## Purrsephone Identity
 
-- Character card (V2 spec): `/path/to/your/character.json`
+- Character card (V2 spec): `/home/user/.openclaw/agents/main/character.json`
 - Voice: Provider-pluggable streaming TTS (`elevenlabs` or `echo`)
-- ElevenLabs voice ID (current PSFN V2(B) identity): `YOUR_VOICE_ID`
+- ElevenLabs voice ID: `<configure-in-env>`
 - Echo defaults (API voice websocket runtime): `${ECHO_TTS_URL}`, `11labs-Allison`, `Independent-High-Speaker-CFG`
-- Discord bot: ID YOUR_DISCORD_BOT_ID
-- Voxta history: 8,160 messages across 316 chats (importable as L0 archive)
-- Memory books: 10 entries from Voxta (importable as L2 semantic memories)
+- Discord bot: ID `<configure-in-env>`
+- Voxta history: `<private export metadata>`
+- Memory books: `<private export metadata>`
 
 ## Gateway / Agent Security Architecture
 

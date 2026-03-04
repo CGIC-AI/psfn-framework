@@ -103,7 +103,7 @@ describe('MemoryStore', () => {
 
     it('searchByText returns lexical matches for keyword queries', () => {
       store.insertMemory(
-        makeMemory('m-love-1', 'Vega said love is a durable bond.'),
+        makeMemory('m-love-1', 'PrimaryUser said love is a durable bond.'),
         makeEmbedding(1),
       );
       store.insertMemory(
@@ -420,7 +420,7 @@ describe('MemoryStore', () => {
     it('persists and retrieves contact profile artifacts', () => {
       store.upsertContactProfile({
         contactId: 'contact-canonical-1',
-        summary: 'Vega is the primary partner and values direct communication.',
+        summary: 'PrimaryUser is the primary partner and values direct communication.',
         sourceMemoryIds: ['m1', 'm2'],
         confidenceScore: 0.92,
         noveltyScore: 0.44,

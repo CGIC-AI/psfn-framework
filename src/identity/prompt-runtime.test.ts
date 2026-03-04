@@ -39,13 +39,13 @@ describe('injectPromptRuntimeTokens', () => {
     const output = injectPromptRuntimeTokens(input, {
       now: fixedNow,
       variables: {
-        user: 'Vega',
+        user: 'PrimaryUser',
         char: 'Purrsephone',
-        channel_id: 'discord:dm:vega',
+        channel_id: 'discord:dm:primary-user',
       },
     });
 
-    expect(output).toBe('Hello Vega, you are speaking with Purrsephone in discord:dm:vega');
+    expect(output).toBe('Hello PrimaryUser, you are speaking with Purrsephone in discord:dm:primary-user');
   });
 
   it('supports dotted and snake-case aliases for variables', () => {

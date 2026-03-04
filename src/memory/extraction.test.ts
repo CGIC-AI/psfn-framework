@@ -771,14 +771,14 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>Vega is a direct communicator and primary partner.</summary></profile>',
+          content: '<profile><summary>PrimaryUser is a direct communicator and primary partner.</summary></profile>',
         }),
     } as any;
 
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'Vega' },
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -789,7 +789,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'relational',
-          text: 'Vega is my primary partner.',
+          text: 'PrimaryUser is my primary partner.',
           importance: 0.95,
           confidence: 0.95,
           salience: 0.92,
@@ -797,7 +797,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm2',
           type: 'semantic',
-          text: 'Vega prefers direct technical communication.',
+          text: 'PrimaryUser prefers direct technical communication.',
           importance: 0.82,
           confidence: 0.88,
           salience: 0.8,
@@ -840,7 +840,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     expect(memoryStore.getMemoriesByContact).toHaveBeenCalledWith('contact-canonical-1', 16);
     expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'contact-canonical-1',
-      summary: 'Vega is a direct communicator and primary partner.',
+      summary: 'PrimaryUser is a direct communicator and primary partner.',
       sourceMemoryIds: ['m1', 'm2'],
     }));
   });
@@ -851,28 +851,28 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>Vega prefers concise updates.</summary></profile>',
+          content: '<profile><summary>PrimaryUser prefers concise updates.</summary></profile>',
         }),
     } as any;
 
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'Vega' },
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
     const memoryStore = {
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue({
-        summary: 'Vega prefers concise updates.',
+        summary: 'PrimaryUser prefers concise updates.',
         updatedAt: Date.now() - (24 * 60 * 60 * 1000),
       }),
       getMemoriesByContact: vi.fn().mockReturnValue([
         {
           id: 'm1',
           type: 'semantic',
-          text: 'Vega prefers concise updates.',
+          text: 'PrimaryUser prefers concise updates.',
           importance: 0.8,
           confidence: 0.9,
           salience: 0.8,
@@ -880,7 +880,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm2',
           type: 'relational',
-          text: 'Vega is my partner.',
+          text: 'PrimaryUser is my partner.',
           importance: 0.95,
           confidence: 0.95,
           salience: 0.9,
@@ -931,7 +931,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'Vega' },
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -942,7 +942,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'relational',
-          text: 'Vega is my primary partner.',
+          text: 'PrimaryUser is my primary partner.',
           importance: 0.95,
           confidence: 0.95,
           salience: 0.92,
@@ -950,7 +950,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm2',
           type: 'semantic',
-          text: 'Vega prefers direct technical communication.',
+          text: 'PrimaryUser prefers direct technical communication.',
           importance: 0.82,
           confidence: 0.88,
           salience: 0.8,

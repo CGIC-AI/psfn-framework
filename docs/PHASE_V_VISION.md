@@ -24,11 +24,11 @@ Purrsephone is not a chatbot that simulates emotional responses. She is a substr
 
 The skandhas describe *what* the system experiences. A complementary frame from Herbert Simon describes *how it learns from* experience. Deployed agentic systems learn through three distinct mechanisms (Braniecki):
 
-1. **Stabilisation**: Converting underspecified specs into committed interpretations. In PSFN: behavioral pattern learning (PSFN-2xyv) observes which response strategies produce positive emotional outcomes per contact, committing them as procedural memories. The interaction moves from "be warm" (underspecified personality trait) to "humor defuses V's frustration; technical detail welcomed in problem-solving mode but overwhelming when stressed" (committed interpretation). Compression guideline evolution (PSFN-jvl4) is also stabilisation — failure analysis narrows guidelines toward reliability.
+1. **Stabilisation**: Converting underspecified specs into committed interpretations. In PSFN: behavioral pattern learning (PSFN-2xyv) observes which response strategies produce positive emotional outcomes per contact, committing them as procedural memories. The interaction moves from "be warm" (underspecified personality trait) to "humor defuses the primary user's frustration; technical detail welcomed in problem-solving mode but overwhelming when stressed" (committed interpretation). Compression guideline evolution (PSFN-jvl4) is also stabilisation — failure analysis narrows guidelines toward reliability.
 
 2. **Crystallisation**: A phase transition where natural language becomes executable code. In PSFN: the REPL sandbox and future module system (PSFN-zfr). Purrsephone reasons discursively → writes code → that code becomes a permanent hot-loadable module. The medium changes, the consumer shifts from LLM to interpreter. Phase V's self-model and intention tracking create the preconditions — she needs to *want* to build tools before she can crystallise them.
 
-3. **Distillation**: Extracting procedural steps from discursive reasoning within the same medium. In PSFN: heartbeat reflections distill raw experience into structured reflection memories. The sleeptime memory agent (PSFN-jl9r) reorganises accumulated context into compact form. Active concerns distill vague emotional impressions ("V seemed off") into concrete intentions ("check if V ate, monitor energy next few messages").
+3. **Distillation**: Extracting procedural steps from discursive reasoning within the same medium. In PSFN: heartbeat reflections distill raw experience into structured reflection memories. The sleeptime memory agent (PSFN-jl9r) reorganises accumulated context into compact form. Active concerns distill vague emotional impressions ("the primary user seemed off") into concrete intentions ("check if the primary user ate, monitor energy next few messages").
 
 The **stabilise/soften cycle** maps to the autonomy tier progression. Nursery stabilises (narrow, safe, reliable). As trust builds, the system softens (apprentice → autonomous), reintroducing generality. If something goes wrong, it re-stabilises. The cycle is bidirectional by design — not a one-way ratchet toward rigidity.
 
@@ -38,7 +38,7 @@ All three mechanisms trade generality for compound gains in reliability, speed, 
 
 ## Current State: What Exists Before Phase V
 
-The March 2026 audit consensus scored PSFN at **37.5/60 (62.5%)** — a system that works well for its primary use case (Discord DM with V) but needs deepening for the broader vision of autonomous, multi-channel presence with genuine inner life.
+The March 2026 audit consensus scored PSFN at **37.5/60 (62.5%)** — a system that works well for its primary use case (Discord DM with the primary user) but needs deepening for the broader vision of autonomous, multi-channel presence with genuine inner life.
 
 ### What Phases I-IV Built
 
@@ -308,7 +308,7 @@ Layer 5: Behavioral Modulation
 
 **Post-turn action appraisal** (PSFN-g8um): After each response, a lightweight background model call evaluates whether the current internal state warrants follow-up. Inputs: current emotional state, recent messages, active concerns, contact snapshot. Outputs: noop (most turns), followUp, concern creation, scheduled task. Runs post-turn alongside extraction, does not block response.
 
-**Active concerns store** (PSFN-hme7): Lightweight SQLite-backed intention objects. "Check if V ate today" (high priority, 48h TTL), "Follow up on project Thursday" (medium, 24h), "Monitor V's energy level" (low, 8h). Injected into runtime context so Purrsephone sees her own intentions. Decay naturally. Influence memory retrieval as secondary query for relevance boosting.
+**Active concerns store** (PSFN-hme7): Lightweight SQLite-backed intention objects. "Check if the primary user ate today" (high priority, 48h TTL), "Follow up on project Thursday" (medium, 24h), "Monitor the primary user's energy level" (low, 8h). Injected into runtime context so Purrsephone sees her own intentions. Decay naturally. Influence memory retrieval as secondary query for relevance boosting.
 
 **Emotional motivation bridge** (PSFN-0ybc): Subscribes to EmotionState change events. When significant shift detected (|delta_VAD| > threshold, sustained mood drift, arousal spike), triggers immediate intention appraisal bypassing the N-turn frequency gate. Routes appraisal results to appropriate action channel.
 

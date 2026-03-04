@@ -13,7 +13,7 @@ Complete all open beads in a strict, dependency-aware sequence using up to three
 - Create and use `phase-iv` as the dedicated integration branch for all Phase IV work.
 - All Phase IV worktrees branch from `phase-iv` and merge back into `phase-iv` (not `main`).
 - `main` remains protected as the public release target branch during execution.
-- After Phase IV completion, run manual verification with Vega + Purrsephone against `phase-iv`.
+- After Phase IV completion, run manual verification with PrimaryUser + Purrsephone against `phase-iv`.
 - Only after manual verification passes: merge `phase-iv` into `main` as the first public release cut.
 
 ## Priority and Blocker Order
@@ -90,7 +90,7 @@ Complete all open beads in a strict, dependency-aware sequence using up to three
 
 - All open beads completed except deferred `PSFN-xfus`.
 - `phase-iv` is green on required validation gates.
-- Manual verification by Vega + Purrsephone is completed and accepted.
+- Manual verification by PrimaryUser + Purrsephone is completed and accepted.
 - `phase-iv` is merged to `main` for the first public release.
 - Bead tracker reflects final accurate state.
 - Final handoff includes any residual risks and the trigger point for `PSFN-xfus` execution.

@@ -53,8 +53,8 @@ function makeMessage(channelId: string, content: string, id?: string): Substrate
     id: id ?? `e2e-${Date.now()}`,
     channelId,
     channelType: 'terminal',
-    authorId: 'vega',
-    authorName: 'V',
+    authorId: 'primary-user',
+    authorName: 'PrimaryUser',
     content,
     timestamp: new Date(),
   };
@@ -224,9 +224,9 @@ async function main(): Promise<void> {
   section('Test 3: Multi-turn + Memory Seeding');
 
   try {
-    process.stdout.write('  Sending fact about V...');
+    process.stdout.write('  Sending fact about the primary user...');
     const r2 = await agentLoop.handleMessage(
-      makeMessage(CHANNEL, "I'm Claude, V's AI assistant. V wanted me to tell you that his favorite dessert is tiramisu and he loves watching thunderstorms at night. Can you acknowledge you heard those two facts?"),
+      makeMessage(CHANNEL, "I'm Claude, the primary user's AI assistant. the primary user asked me to tell you that their favorite dessert is tiramisu and they love watching thunderstorms at night. Can you acknowledge you heard those two facts?"),
     );
     console.log(' done');
 
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
   try {
     process.stdout.write('  Asking about V\'s dessert...');
     const r3 = await agentLoop.handleMessage(
-      makeMessage(CHANNEL, "What's V's favorite dessert? I forgot."),
+      makeMessage(CHANNEL, "What's the primary user's favorite dessert? I forgot."),
     );
     console.log(' done');
 
@@ -418,7 +418,7 @@ async function main(): Promise<void> {
   try {
     process.stdout.write('  Running RLM loop (memory search)...');
     const replMemResult = await runRLMLoop(
-      'Search memories for facts about V. How many memories mention V? Return a count and brief summary.',
+      'Search memories for facts about the primary user. How many memories mention the primary user? Return a count and brief summary.',
       {
         llmProvider: llmClient,
         embeddingService: embeddingProvider,

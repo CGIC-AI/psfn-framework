@@ -748,6 +748,20 @@ export class ApiServer implements ChannelAdapter {
     }
 
     const parsed = parsedBody.value;
+    if (this.hasCallerProvidedPrimaryTrust(parsed)) {
+      log.warn('Rejected caller-provided primary trust field in API payload', {
+        path: req.url ?? '/v1/chat/completions',
+        remoteAddress: req.socket.remoteAddress,
+      });
+      this.sendError(
+        res,
+        400,
+        'invalid_request',
+        'Caller-provided primary trust level is not allowed',
+      );
+      return;
+    }
+
     if (!parsed.messages || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
       this.sendError(res, 400, 'invalid_request', 'messages field is required and must be a non-empty array');
       return;
@@ -758,6 +772,24 @@ export class ApiServer implements ChannelAdapter {
     } else {
       await this.handleNonStreaming(parsed, req, res, principal);
     }
+  }
+
+  private isPrimaryTrustLevelValue(value: unknown): boolean {
+    return typeof value === 'string' && value.trim().toLowerCase() === 'primary';
+  }
+
+  private hasCallerProvidedPrimaryTrust(payload: unknown): boolean {
+    if (!payload || typeof payload !== 'object') return false;
+    const record = payload as Record<string, unknown>;
+    if (this.isPrimaryTrustLevelValue(record.trustLevel) || this.isPrimaryTrustLevelValue(record.trust_level)) {
+      return true;
+    }
+
+    const contact = record.contact;
+    if (!contact || typeof contact !== 'object') return false;
+    const contactRecord = contact as Record<string, unknown>;
+    return this.isPrimaryTrustLevelValue(contactRecord.trustLevel)
+      || this.isPrimaryTrustLevelValue(contactRecord.trust_level);
   }
 
   private async handleTelemetryIngest(req: IncomingMessage, res: ServerResponse): Promise<void> {

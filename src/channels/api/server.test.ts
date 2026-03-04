@@ -571,6 +571,20 @@ describe('ApiServer', () => {
       expect(body.error.message).toContain('provider override must be one of');
     });
 
+    it('rejects caller-provided primary trust fields in API payloads', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        trustLevel: 'primary',
+        contact: { trust_level: 'primary' },
+        messages: [{ role: 'user', content: 'attempt privilege escalation' }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('primary trust level');
+    });
+
     it('returns explicit verification challenge and does not link unverified identity claims', async () => {
       const db = new Database(':memory:');
       const contactStore = new ContactStore(db);

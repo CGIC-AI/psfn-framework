@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type {
   Contact,
   ContactChannel,
+  ContactChannelIdentity,
   ContactIdentityLinkChallengeInput,
   ContactIdentityLinkChallengeResult,
   ContactIdentityLinkOptions,
@@ -30,6 +31,8 @@ import {
   verifyIdentityLinkChallenge,
 } from './store/identity-link-verification.js';
 import {
+  LEGACY_DISCORD_CHANNEL,
+  isPrimaryIdentity,
   isValidChannelPrivacyLevel,
 } from './store/identity-utils.js';
 import { mergeContacts as mergeContactsOperation } from './store/merge-operations.js';
@@ -56,6 +59,10 @@ import {
 } from './store/read-operations.js';
 import { initializeContactStoreSchema } from './store/schema.js';
 import {
+  collectUpsertIdentities,
+  findUpsertTarget,
+} from './store/upsert.js';
+import {
   linkChannelIdentity,
   resolveChannelIdentity,
   resolveUserId,
@@ -68,6 +75,17 @@ const log = createComponentLogger('ContactStore');
 interface ContactStoreOptions {
   exportDir?: string;
 }
+
+interface TrustMutationOptions {
+  allowPrimaryTrustAssignment?: boolean;
+}
+
+interface UpsertMutationOptions extends TrustMutationOptions {
+  actor?: string;
+}
+
+type PrimaryTrustMutationSource = 'upsert' | 'set_trust_level';
+type PrimaryTrustMutationOutcome = 'allowed' | 'denied';
 
 function sanitizeContactFileComponent(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -104,8 +122,115 @@ export class ContactStore {
     };
   }
 
-  upsert(partial: Partial<Contact> & { displayName: string }): Contact {
+  private resolveUpsertTarget(
+    partial: Partial<Contact>,
+    identities: ContactChannelIdentity[],
+  ): Contact | undefined {
+    return findUpsertTarget(partial, identities, {
+      getById: id => this.getById(id),
+      getByDiscordUserId: discordUserId => this.getByDiscordUserId(discordUserId),
+      getByChannelIdentity: (channel, userId) => this.getByChannelIdentity(channel, userId),
+    });
+  }
+
+  private isPrimaryTrustAssignmentAuthorized(
+    contact: Contact | undefined,
+    identities: ContactChannelIdentity[],
+    discordUserId: string | undefined,
+    options: TrustMutationOptions = {},
+  ): boolean {
+    if (options.allowPrimaryTrustAssignment === true) return true;
+
+    const configuredPrimaryUserId = this.primaryUserId?.trim();
+    if (!configuredPrimaryUserId) return false;
+
+    if (contact?.discordUserId?.trim() === configuredPrimaryUserId) return true;
+    if (discordUserId?.trim() === configuredPrimaryUserId) return true;
+
+    const candidates: ContactChannelIdentity[] = [
+      ...identities,
+      ...(Array.isArray(contact?.channelIdentities) ? contact.channelIdentities : []),
+      ...(contact?.discordUserId ? [{ channel: LEGACY_DISCORD_CHANNEL, userId: contact.discordUserId }] : []),
+      ...(discordUserId ? [{ channel: LEGACY_DISCORD_CHANNEL, userId: discordUserId }] : []),
+    ];
+
+    return candidates.some(identity => isPrimaryIdentity(identity, configuredPrimaryUserId));
+  }
+
+  private recordPrimaryTrustMutationAudit(params: {
+    contactId?: string;
+    previousTrustLevel: TrustLevel | null;
+    actor?: string;
+    source: PrimaryTrustMutationSource;
+    outcome: PrimaryTrustMutationOutcome;
+    details?: Record<string, unknown>;
+  }): void {
+    const baseActor = params.actor?.trim() || `system:contact_store:${params.source}`;
+    const auditActor = `${baseActor}:primary_${params.outcome}`;
+
+    if (params.contactId) {
+      appendMutationAuditEntry(
+        this.db,
+        params.contactId,
+        'trust_level',
+        params.previousTrustLevel,
+        'primary',
+        auditActor,
+      );
+    }
+
+    const message = params.outcome === 'allowed'
+      ? 'Allowed primary trust mutation'
+      : 'Denied primary trust mutation';
+    const payload = {
+      contactId: params.contactId,
+      previousTrustLevel: params.previousTrustLevel,
+      actor: baseActor,
+      source: params.source,
+      ...(params.details ?? {}),
+    };
+    if (params.outcome === 'allowed') {
+      log.info(message, payload);
+      return;
+    }
+    log.warn(message, payload);
+  }
+
+  upsert(
+    partial: Partial<Contact> & { displayName: string },
+    options: UpsertMutationOptions = {},
+  ): Contact {
+    const identities = collectUpsertIdentities(partial);
+    const target = this.resolveUpsertTarget(partial, identities);
+    if (
+      partial.trustLevel === 'primary'
+      && !this.isPrimaryTrustAssignmentAuthorized(target, identities, partial.discordUserId, options)
+    ) {
+      this.recordPrimaryTrustMutationAudit({
+        contactId: target?.id,
+        previousTrustLevel: target?.trustLevel ?? null,
+        actor: options.actor,
+        source: 'upsert',
+        outcome: 'denied',
+        details: {
+          requestedTrustLevel: partial.trustLevel,
+          hasConfiguredPrimaryUserId: Boolean(this.primaryUserId?.trim()),
+        },
+      });
+      throw new Error('Primary trust assignment denied: identity does not match configured owner mapping');
+    }
+
+    const previousTrustLevel = target?.trustLevel ?? null;
     const contact = upsertContact(this.buildUpsertResolveContext(), partial);
+    if (contact.trustLevel === 'primary' && previousTrustLevel !== 'primary') {
+      this.recordPrimaryTrustMutationAudit({
+        contactId: contact.id,
+        previousTrustLevel,
+        actor: options.actor,
+        source: 'upsert',
+        outcome: 'allowed',
+      });
+    }
     log.debug('Upserted contact', { id: contact.id, displayName: partial.displayName });
     this.syncContactExports();
     return contact;
@@ -127,19 +252,57 @@ export class ContactStore {
     return getContactsByTrustLevel(this.db, trustLevel);
   }
 
-  setTrustLevel(id: string, trustLevel: TrustLevel, actor?: string): boolean {
+  setTrustLevel(
+    id: string,
+    trustLevel: TrustLevel,
+    actor?: string,
+    options: TrustMutationOptions = {},
+  ): boolean {
     const contact = this.getById(id);
     if (!contact) return false;
+
+    if (contact.trustLevel === trustLevel) return true;
 
     if (contact.trustLevel === 'primary') {
       log.warn('Attempted to change primary user trust level', { id });
       return false;
     }
 
-    if (contact.trustLevel === trustLevel) return true;
+    if (trustLevel === 'primary') {
+      const authorized = this.isPrimaryTrustAssignmentAuthorized(
+        contact,
+        contact.channelIdentities ?? [],
+        contact.discordUserId,
+        options,
+      );
+      if (!authorized) {
+        this.recordPrimaryTrustMutationAudit({
+          contactId: contact.id,
+          previousTrustLevel: contact.trustLevel,
+          actor,
+          source: 'set_trust_level',
+          outcome: 'denied',
+          details: {
+            requestedTrustLevel: trustLevel,
+            hasConfiguredPrimaryUserId: Boolean(this.primaryUserId?.trim()),
+          },
+        });
+        return false;
+      }
+    }
 
     setContactTrustLevel(this.db, id, trustLevel);
-    appendMutationAuditEntry(this.db, id, 'trust_level', contact.trustLevel, trustLevel, actor);
+    if (trustLevel === 'primary') {
+      this.recordPrimaryTrustMutationAudit({
+        contactId: id,
+        previousTrustLevel: contact.trustLevel,
+        actor,
+        source: 'set_trust_level',
+        outcome: 'allowed',
+      });
+    } else {
+      appendMutationAuditEntry(this.db, id, 'trust_level', contact.trustLevel, trustLevel, actor);
+    }
     log.debug('Updated trust level', { id, trustLevel });
     this.syncContactExports();
     return true;

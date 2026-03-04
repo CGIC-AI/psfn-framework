@@ -107,7 +107,8 @@ OLLAMA_URL=http://localhost:11434
 
 # Data storage
 DATA_DIR=./data
-DATABASE_PATH=./data/purrsephone.db
+# DATABASE_BASENAME=companion        # Used when DATABASE_PATH is not set
+DATABASE_PATH=./data/companion.db
 ```
 
 For full configuration details, use `src/types.ts` as the parser/defaults source of truth and confirm runtime wiring in `src/runtime.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`. `.env.example` is a starter template and can lag newer voice keys (for example `ECHO_TTS_*`).

@@ -108,6 +108,8 @@ export interface SubstrateAgentCompositionOptions {
   sessionManager: SessionManager;
   systemPrompt: string;
   characterName?: string;
+  characterPromptVariables?: Record<string, string>;
+  characterPromptVariablesProvider?: () => Record<string, string>;
   config: SubstrateConfig;
 }
 
@@ -118,7 +120,13 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
     options.sessionManager,
     options.systemPrompt,
     options.config,
-    options.characterName ? { characterName: options.characterName } : undefined,
+    {
+      ...(options.characterName ? { characterName: options.characterName } : {}),
+      ...(options.characterPromptVariables ? { characterPromptVariables: options.characterPromptVariables } : {}),
+      ...(options.characterPromptVariablesProvider
+        ? { characterPromptVariablesProvider: options.characterPromptVariablesProvider }
+        : {}),
+    },
   );
 }
 

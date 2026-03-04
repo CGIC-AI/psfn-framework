@@ -132,4 +132,34 @@ describe('AdminChatBootstrapService', () => {
     expect(payload.onboarding.required).toBe(true);
     expect(payload.onboarding.message).toContain('Starter identity is active');
   });
+
+  it('prefers character card name over configured characterName', () => {
+    const root = makeTempDir();
+    const characterCardPath = join(root, 'character.json');
+    writeFileSync(characterCardPath, JSON.stringify({
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'Aimi',
+        description: '',
+        personality: 'Friendly and thoughtful.',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: [],
+        creator: 'operator',
+      },
+    }), 'utf-8');
+
+    const service = new AdminChatBootstrapService(null, {
+      config: makeRuntimeConfig(characterCardPath, 'Purrsephone'),
+      resolveGlobalDefaultSessionId: () => null,
+    });
+
+    const payload = service.buildBootstrap();
+
+    expect(payload.assistantName).toBe('Aimi');
+  });
 });

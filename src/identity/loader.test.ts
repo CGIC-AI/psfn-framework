@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect } from 'vitest';
 import {
+  buildCharacterPromptTemplateVariables,
+  composeSystemPromptTemplate,
   loadCharacterCard,
   loadOrInitializeCharacterCard,
   isBootstrapStarterCard,
@@ -74,6 +76,30 @@ describe('composeSystemPrompt', () => {
     const prompt = composeSystemPrompt(TEST_CARD);
     expect(prompt).toContain('Example dialogue style:');
     expect(prompt).toContain('Hey there!');
+  });
+});
+
+describe('composeSystemPromptTemplate', () => {
+  it('returns a macro-backed template', () => {
+    const template = composeSystemPromptTemplate();
+    expect(template).toContain('You are {{char}}.');
+    expect(template).toContain('{{description}}');
+    expect(template).toContain('{{personality}}');
+    expect(template).toContain('{{scenario}}');
+    expect(template).toContain('{{system_prompt}}');
+    expect(template).toContain('{{mes_example}}');
+    expect(template).toContain('{{post_history_instructions}}');
+  });
+});
+
+describe('buildCharacterPromptTemplateVariables', () => {
+  it('maps character fields into runtime macro variables', () => {
+    const variables = buildCharacterPromptTemplateVariables(TEST_CARD);
+    expect(variables.description).toContain('A test character');
+    expect(variables.personality).toContain('Friendly and helpful');
+    expect(variables.mes_example).toContain('Example dialogue style');
+    expect(variables['character.description']).toContain('A test character');
+    expect(variables['character.personality']).toContain('Friendly and helpful');
   });
 });
 

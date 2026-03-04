@@ -1,4 +1,4 @@
-import { composeSystemPrompt } from './loader.js';
+import { composeSystemPromptTemplate } from './loader.js';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { CharacterCardV2 } from './types.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -21,7 +21,7 @@ function resolveCharacterFoundationLayer(
 
 export function syncCharacterFoundationPromptFromCard(
   promptStore: PromptLayerStore | null | undefined,
-  card: CharacterCardV2,
+  _card: CharacterCardV2,
   updatedBy: string,
   reason = 'Sync Character Foundation prompt from imported character card',
 ): PromptSyncResult {
@@ -34,7 +34,7 @@ export function syncCharacterFoundationPromptFromCard(
     return { ok: true, updated: false };
   }
 
-  const nextPrompt = composeSystemPrompt(card);
+  const nextPrompt = composeSystemPromptTemplate();
   if (foundation.content === nextPrompt) {
     return { ok: true, updated: false };
   }
@@ -50,4 +50,3 @@ export function syncCharacterFoundationPromptFromCard(
     };
   }
 }
-

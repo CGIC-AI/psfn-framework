@@ -567,10 +567,10 @@ export class AdminChatBootstrapService {
   }
 
   private resolveAssistantName(): string {
-    const configuredName = normalizeTrimmed(this.runtimeConfig?.characterName);
-    if (configuredName) return configuredName;
     const cardName = normalizeTrimmed(this.loadCurrentCharacterCard()?.data.name);
     if (cardName) return cardName;
+    const configuredName = normalizeTrimmed(this.runtimeConfig?.characterName);
+    if (configuredName) return configuredName;
     return DEFAULT_ASSISTANT_NAME;
   }
 

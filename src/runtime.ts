@@ -296,9 +296,19 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('SQLite integrity check passed');
 
     // Load identity
-    const { card, systemPrompt, initializedCard } = composeIdentity(this.config);
+    const {
+      card,
+      systemPrompt,
+      initializedCard,
+      migratedLegacyBootstrap,
+    } = composeIdentity(this.config);
     if (initializedCard) {
       log.warn('Character card file was missing and has been initialized with defaults', {
+        characterCardPath: this.config.characterCardPath,
+      });
+    }
+    if (migratedLegacyBootstrap) {
+      log.warn('Legacy bootstrap character card was migrated to neutral starter defaults', {
         characterCardPath: this.config.characterCardPath,
       });
     }

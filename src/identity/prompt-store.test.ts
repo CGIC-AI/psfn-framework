@@ -341,6 +341,26 @@ describe('PromptLayerStore', () => {
       expect(store.getAll()[0].name).toBe('Existing');
     });
 
+    it('refreshes untouched system Character Foundation when current card prompt differs', () => {
+      const base = store.create({
+        type: 'base',
+        name: 'Character Foundation',
+        content: 'You are PSFN.',
+        updatedBy: 'system',
+      });
+
+      store.seedFromCharacterCard('You are Companion.');
+
+      const refreshed = store.getById(base.id)!;
+      expect(refreshed.content).toBe('You are Companion.');
+      expect(refreshed.updatedBy).toBe('system:seed-sync');
+      expect(refreshed.version).toBe(2);
+
+      const history = store.getLayerHistory(base.id);
+      expect(history).toHaveLength(1);
+      expect(history[0].reason).toBe('Refresh untouched Character Foundation from current character card');
+    });
+
     it('upgrades untouched legacy system seed with frozen User token', () => {
       store.create({
         type: 'base',

@@ -612,15 +612,19 @@ export class PromptLayerStore {
       touched = true;
     }
 
-    const looksLikeLegacySystemSeed = (
+    const looksLikeUntouchedSystemSeed = (
       base.name === 'Character Foundation'
       && base.updatedBy === 'system'
       && base.version === 1
-      && !base.content.includes('{{user}}')
-      && /\bUser\b/.test(base.content)
     );
+    const hasFrozenLegacyUserToken = !base.content.includes('{{user}}')
+      && /\bUser\b/.test(base.content);
 
-    if (looksLikeLegacySystemSeed && base.content !== systemPrompt) {
+    if (looksLikeUntouchedSystemSeed && base.content !== systemPrompt) {
+      const syncActor = hasFrozenLegacyUserToken ? 'system:migrate-user-token' : 'system:seed-sync';
+      const syncReason = hasFrozenLegacyUserToken
+        ? 'Upgrade Character Foundation to runtime {{user}} token template'
+        : 'Refresh untouched Character Foundation from current character card';
       this.appendHistory({
         layerId: base.id,
         layerName: base.name,
@@ -628,7 +632,8 @@ export class PromptLayerStore {
         previousChecksum: base.checksum,
         newContent: systemPrompt,
         newChecksum: contentChecksum(systemPrompt),
-        updatedBy: 'system:migrate-user-token',
+        updatedBy: syncActor,
+        reason: syncReason,
         timestamp: new Date().toISOString(),
         version: base.version,
       });
@@ -636,9 +641,11 @@ export class PromptLayerStore {
       base.checksum = contentChecksum(systemPrompt);
       base.version += 1;
       base.updatedAt = new Date().toISOString();
-      base.updatedBy = 'system:migrate-user-token';
+      base.updatedBy = syncActor;
       touched = true;
-      log.info('Upgraded base prompt seed to runtime {{user}} template');
+      log.info('Refreshed untouched Character Foundation seed from current character card', {
+        actor: syncActor,
+      });
     }
 
     if (touched) {

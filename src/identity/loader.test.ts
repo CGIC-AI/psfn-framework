@@ -101,6 +101,7 @@ describe('loadOrInitializeCharacterCard', () => {
 
     const first = loadOrInitializeCharacterCard(path);
     expect(first.initialized).toBe(true);
+    expect(first.migratedLegacyBootstrap).toBe(false);
     expect(existsSync(path)).toBe(true);
     expect(first.card.data.name).toBe('Companion');
     expect(first.card.data.personality.length).toBeGreaterThan(0);
@@ -108,7 +109,39 @@ describe('loadOrInitializeCharacterCard', () => {
 
     const second = loadOrInitializeCharacterCard(path);
     expect(second.initialized).toBe(false);
+    expect(second.migratedLegacyBootstrap).toBe(false);
     expect(second.card.data.name).toBe('Companion');
     expect(isBootstrapStarterCard(second.card)).toBe(true);
+  });
+
+  it('migrates legacy bootstrap default cards to neutral starter card', () => {
+    const root = makeTempDir();
+    const path = join(root, 'character.json');
+    writeFileSync(path, JSON.stringify({
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'PSFN',
+        description: 'A gentle, curious, and supportive AI companion.',
+        personality: 'Warm, emotionally intelligent, and precise when helping with technical work.',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: ['default', 'bootstrap'],
+        creator: 'system',
+      },
+    }), 'utf-8');
+
+    const migrated = loadOrInitializeCharacterCard(path);
+    expect(migrated.initialized).toBe(false);
+    expect(migrated.migratedLegacyBootstrap).toBe(true);
+    expect(migrated.card.data.name).toBe('Companion');
+    expect(migrated.card.data.tags).toEqual(['bootstrap']);
+
+    const fromDisk = loadCharacterCard(path);
+    expect(fromDisk.data.name).toBe('Companion');
+    expect(fromDisk.data.tags).toEqual(['bootstrap']);
   });
 });

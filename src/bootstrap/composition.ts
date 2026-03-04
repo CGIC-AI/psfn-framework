@@ -87,14 +87,18 @@ export interface IdentityComposition {
   card: CharacterCardV2;
   systemPrompt: string;
   initializedCard: boolean;
+  migratedLegacyBootstrap: boolean;
 }
 
 export function composeIdentity(config: SubstrateConfig): IdentityComposition {
-  const { card, initialized } = loadOrInitializeCharacterCard(config.characterCardPath);
+  const { card, initialized, migratedLegacyBootstrap } = loadOrInitializeCharacterCard(
+    config.characterCardPath,
+  );
   return {
     card,
     systemPrompt: composeSystemPrompt(card),
     initializedCard: initialized,
+    migratedLegacyBootstrap,
   };
 }
 

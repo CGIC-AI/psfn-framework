@@ -8,6 +8,9 @@ const PLACEHOLDER_PATTERNS = [
   /^post history$/i,
   /^post history instructions$/i,
 ];
+const LEGACY_BOOTSTRAP_NAME = 'PSFN';
+const LEGACY_BOOTSTRAP_DESCRIPTION = 'A gentle, curious, and supportive AI companion.';
+const LEGACY_BOOTSTRAP_PERSONALITY = 'Warm, emotionally intelligent, and precise when helping with technical work.';
 
 function isPlaceholder(value: string): boolean {
   const trimmed = value.trim();
@@ -54,21 +57,54 @@ export function isBootstrapStarterCard(card: CharacterCardV2): boolean {
     && card.data.tags.includes('bootstrap');
 }
 
+function isLegacyBootstrapDefaultCard(card: CharacterCardV2): boolean {
+  const tags = Array.isArray(card.data.tags) ? card.data.tags : [];
+  return card.data.creator === 'system'
+    && card.data.name === LEGACY_BOOTSTRAP_NAME
+    && card.data.description === LEGACY_BOOTSTRAP_DESCRIPTION
+    && card.data.personality === LEGACY_BOOTSTRAP_PERSONALITY
+    && tags.includes('bootstrap')
+    && tags.includes('default');
+}
+
+function writeCharacterCard(path: string, card: CharacterCardV2): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
+}
+
 /**
  * Load card from disk or initialize a default card when the target file is missing.
  */
 export function loadOrInitializeCharacterCard(path: string): {
   card: CharacterCardV2;
   initialized: boolean;
+  migratedLegacyBootstrap: boolean;
 } {
   if (existsSync(path)) {
-    return { card: loadCharacterCard(path), initialized: false };
+    const loadedCard = loadCharacterCard(path);
+    if (isLegacyBootstrapDefaultCard(loadedCard)) {
+      const migratedCard = buildDefaultCharacterCard();
+      writeCharacterCard(path, migratedCard);
+      return {
+        card: migratedCard,
+        initialized: false,
+        migratedLegacyBootstrap: true,
+      };
+    }
+    return {
+      card: loadedCard,
+      initialized: false,
+      migratedLegacyBootstrap: false,
+    };
   }
 
   const defaultCard = buildDefaultCharacterCard();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(defaultCard, null, 2)}\n`, 'utf-8');
-  return { card: defaultCard, initialized: true };
+  writeCharacterCard(path, defaultCard);
+  return {
+    card: defaultCard,
+    initialized: true,
+    migratedLegacyBootstrap: false,
+  };
 }
 
 export function assertValidCharacterCard(card: CharacterCardV2, pathHint = 'character card'): void {

@@ -253,6 +253,87 @@ describe('settings', () => {
         contextWindow: 128_000,
       });
     });
+
+    it('normalizes openrouter-prefixed model ids when provider is empty', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 16384, contextWindow: 128_000 },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 8192 },
+          },
+          vision: {
+            model: 'openrouter/google/gemini-3-flash-preview',
+            provider: '',
+            overrides: { maxTokens: 16384, contextWindow: 128_000 },
+          },
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelCatalog?.vision).toEqual({
+        model: 'google/gemini-3-flash-preview',
+        provider: 'openrouter',
+        overrides: { maxTokens: 16384, contextWindow: 128_000 },
+      });
+      expect(normalized.modelRoleAssignments?.vision).toBe('vision');
+      expect(normalized.modelRoster?.vision).toEqual({
+        model: 'google/gemini-3-flash-preview',
+        provider: 'openrouter',
+        maxTokens: 16384,
+        contextWindow: 128_000,
+      });
+    });
+
+    it('prefers explicit modelCatalog slots over stale modelRoster values', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 16384, contextWindow: 128_000 },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 8192 },
+          },
+          vision: {
+            model: 'google/gemini-3-flash-preview',
+            provider: 'openrouter',
+            overrides: { maxTokens: 16384, contextWindow: 128_000 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          background: 'extraction',
+          extraction: 'extraction',
+          summary: 'primary',
+          reasoning: 'primary',
+          longContext: 'primary',
+          vision: 'vision',
+        },
+        modelRoster: {
+          vision: {
+            model: 'moonshotai/kimi-k2.5',
+            provider: 'openrouter',
+            maxTokens: 16384,
+            contextWindow: 128_000,
+          },
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelCatalog?.vision?.model).toBe('google/gemini-3-flash-preview');
+      expect(normalized.modelRoster?.vision?.model).toBe('google/gemini-3-flash-preview');
+    });
   });
 
   describe('applySettings', () => {

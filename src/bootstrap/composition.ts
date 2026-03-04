@@ -26,7 +26,7 @@ import { createThinkTool } from '../repl/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { CapabilityTier } from '../types.js';
-import { loadCharacterCard, composeSystemPrompt } from '../identity/loader.js';
+import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../identity/loader.js';
 import type { CharacterCardV2 } from '../identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -86,13 +86,15 @@ export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {
 export interface IdentityComposition {
   card: CharacterCardV2;
   systemPrompt: string;
+  initializedCard: boolean;
 }
 
 export function composeIdentity(config: SubstrateConfig): IdentityComposition {
-  const card = loadCharacterCard(config.characterCardPath);
+  const { card, initialized } = loadOrInitializeCharacterCard(config.characterCardPath);
   return {
     card,
     systemPrompt: composeSystemPrompt(card),
+    initializedCard: initialized,
   };
 }
 

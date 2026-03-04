@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { loadCharacterCard, composeSystemPrompt } from './loader.js';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, it, expect } from 'vitest';
+import {
+  loadCharacterCard,
+  loadOrInitializeCharacterCard,
+  composeSystemPrompt,
+} from './loader.js';
 import type { CharacterCardV2 } from './types.js';
 
 const TEST_CARD: CharacterCardV2 = {
@@ -18,6 +25,20 @@ const TEST_CARD: CharacterCardV2 = {
     creator: 'test',
   },
 };
+
+let tempDir: string | null = null;
+
+function makeTempDir(): string {
+  tempDir = mkdtempSync(join(tmpdir(), 'psfn-loader-'));
+  return tempDir;
+}
+
+afterEach(() => {
+  if (tempDir) {
+    rmSync(tempDir, { recursive: true, force: true });
+    tempDir = null;
+  }
+});
 
 describe('composeSystemPrompt', () => {
   it('composes prompt with character name', () => {
@@ -56,13 +77,35 @@ describe('composeSystemPrompt', () => {
 });
 
 describe('loadCharacterCard', () => {
-  it('loads the real character card', () => {
-    const card = loadCharacterCard('/path/to/your/character.json');
-    expect(card.data.name).toBe('Purrsephone');
+  it('loads a character card from disk', () => {
+    const root = makeTempDir();
+    const path = join(root, 'character.json');
+    writeFileSync(path, `${JSON.stringify(TEST_CARD, null, 2)}\n`, 'utf-8');
+
+    const card = loadCharacterCard(path);
+    expect(card.data.name).toBe('TestChar');
     expect(card.spec).toBe('chara_card_v2');
   });
 
   it('throws on missing file', () => {
     expect(() => loadCharacterCard('/nonexistent/file.json')).toThrow();
+  });
+});
+
+describe('loadOrInitializeCharacterCard', () => {
+  it('creates a default card when the file is missing', () => {
+    const root = makeTempDir();
+    const path = join(root, 'nested', 'character.json');
+    expect(existsSync(path)).toBe(false);
+
+    const first = loadOrInitializeCharacterCard(path);
+    expect(first.initialized).toBe(true);
+    expect(existsSync(path)).toBe(true);
+    expect(first.card.data.name).toBe('Purrsephone');
+    expect(first.card.data.personality.length).toBeGreaterThan(0);
+
+    const second = loadOrInitializeCharacterCard(path);
+    expect(second.initialized).toBe(false);
+    expect(second.card.data.name).toBe('Purrsephone');
   });
 });

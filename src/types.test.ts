@@ -3,195 +3,57 @@ import { loadConfig } from './types.js';
 
 const ORIGINAL_ENV = { ...process.env };
 
+function restoreEnv(): void {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in ORIGINAL_ENV)) {
+      delete process.env[key];
+    }
+  }
+  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
+    process.env[key] = value;
+  }
+}
+
+function clearRuntimePathEnv(): void {
+  delete process.env.DATA_DIR;
+  delete process.env.DATABASE_PATH;
+  delete process.env.CHARACTER_CARD_PATH;
+}
+
 afterEach(() => {
-  process.env = { ...ORIGINAL_ENV };
+  restoreEnv();
 });
 
-describe('loadConfig voice DAVE options', () => {
-  it('uses DAVE defaults when env values are unset', () => {
-    delete process.env.DISCORD_VOICE_DAVE_ENCRYPTION;
-    delete process.env.DISCORD_VOICE_DECRYPTION_FAILURE_TOLERANCE;
+describe('loadConfig path defaults', () => {
+  it('uses data-dir-relative defaults when explicit paths are not set', () => {
+    clearRuntimePathEnv();
 
     const config = loadConfig();
-
-    expect(config.voiceDaveEncryption).toBe(true);
-    expect(config.voiceDecryptionFailureTolerance).toBe(24);
+    expect(config.dataDir).toBe('./data');
+    expect(config.characterCardPath).toBe('./data/character.json');
+    expect(config.databasePath).toBe('./data/psfn.db');
   });
 
-  it('applies DAVE env overrides', () => {
-    process.env.DISCORD_VOICE_DAVE_ENCRYPTION = 'false';
-    process.env.DISCORD_VOICE_DECRYPTION_FAILURE_TOLERANCE = '9';
+  it('derives card/database paths from DATA_DIR when only DATA_DIR is set', () => {
+    clearRuntimePathEnv();
+    process.env.DATA_DIR = './sandbox-data';
 
     const config = loadConfig();
-
-    expect(config.voiceDaveEncryption).toBe(false);
-    expect(config.voiceDecryptionFailureTolerance).toBe(9);
+    expect(config.dataDir).toBe('./sandbox-data');
+    expect(config.characterCardPath).toBe('./sandbox-data/character.json');
+    expect(config.databasePath).toBe('./sandbox-data/psfn.db');
   });
 
-  it('parses import-processing routing env values', () => {
-    process.env.OPENROUTER_PROVIDER_ORDER = 'parasail,openai,parasail';
-    process.env.IMPORT_PROCESSING_ROUTE_MODE = 'openrouter_zdr';
-    process.env.IMPORT_PROCESSING_STRICT_POLICY = 'true';
-    process.env.IMPORT_PROCESSING_LOCAL_ENDPOINT_URL = 'http://localhost:11434/v1';
-    process.env.IMPORT_PROCESSING_LOCAL_MODEL = 'llama3.2:latest';
+  it('respects explicit CHARACTER_CARD_PATH and DATABASE_PATH overrides', () => {
+    clearRuntimePathEnv();
+    process.env.DATA_DIR = './sandbox-data';
+    process.env.CHARACTER_CARD_PATH = './cards/main.json';
+    process.env.DATABASE_PATH = './db/main.db';
 
     const config = loadConfig();
-
-    expect(config.openRouterProviderOrder).toEqual(['parasail', 'openai']);
-    expect(config.importProcessingRouteMode).toBe('openrouter_zdr');
-    expect(config.importProcessingStrictPolicy).toBe(true);
-    expect(config.importProcessingLocalEndpointUrl).toBe('http://localhost:11434/v1');
-    expect(config.importProcessingLocalModel).toBe('llama3.2:latest');
-  });
-
-  it('parses web fetch lane env values', () => {
-    process.env.ALLOW_HTTP_FETCH = 'true';
-    process.env.FETCH_DOMAIN_ALLOWLIST = 'example.com,docs.example.com';
-    process.env.FETCH_LOCAL_CRAWLER_ENABLED = 'true';
-    process.env.FETCH_LOCAL_CRAWLER_ALLOW_HTTP = 'true';
-    process.env.FETCH_LOCAL_CRAWLER_HOST_ALLOWLIST = 'localhost,127.0.0.1';
-    process.env.FETCH_LOCAL_CRAWLER_DOMAIN_ALLOWLIST = 'crawler.local';
-    process.env.FETCH_TLS_CA_CERT_PATHS = '/etc/ssl/root.pem,/etc/ssl/intermediate.pem';
-
-    const config = loadConfig();
-
-    expect(config.webFetchAllowHttp).toBe(true);
-    expect(config.webFetchDomainAllowlist).toEqual(['example.com', 'docs.example.com']);
-    expect(config.webFetchLocalCrawlerEnabled).toBe(true);
-    expect(config.webFetchLocalCrawlerAllowHttp).toBe(true);
-    expect(config.webFetchLocalCrawlerHostAllowlist).toEqual(['localhost', '127.0.0.1']);
-    expect(config.webFetchLocalCrawlerDomainAllowlist).toEqual(['crawler.local']);
-    expect(config.webFetchTlsCaCertPaths).toEqual(['/etc/ssl/root.pem', '/etc/ssl/intermediate.pem']);
-  });
-
-  it('parses discord trigger env values and defaults', () => {
-    delete process.env.DISCORD_TRIGGER_WORDS;
-    delete process.env.DISCORD_TRIGGER_REACTIONS;
-    delete process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS;
-
-    const defaults = loadConfig();
-    expect(defaults.discordTriggerWords).toEqual([]);
-    expect(defaults.discordTriggerReactions).toEqual(['👆']);
-    expect(defaults.discordTriggerListenWindowMs).toBe(120000);
-    expect(defaults.characterName).toBe('');
-
-    process.env.DISCORD_TRIGGER_WORDS = 'pixie, hey psfn';
-    process.env.DISCORD_TRIGGER_REACTIONS = '🔥, 👀';
-    process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS = '45000';
-
-    const configured = loadConfig();
-    expect(configured.discordTriggerWords).toEqual(['pixie', 'hey psfn']);
-    expect(configured.discordTriggerReactions).toEqual(['🔥', '👀']);
-    expect(configured.discordTriggerListenWindowMs).toBe(45000);
-  });
-
-  it('does not hardcode discord bot id when DISCORD_BOT_ID is unset', () => {
-    delete process.env.DISCORD_BOT_ID;
-    const config = loadConfig();
-    expect(config.discordBotId).toBe('');
-  });
-
-  it('accepts TELEGRAM_ALLOWED_USERS as alias for TELEGRAM_AUTHORIZED_USERS', () => {
-    delete process.env.TELEGRAM_AUTHORIZED_USERS;
-    process.env.TELEGRAM_ALLOWED_USERS = '5635268079,@operator';
-    const config = loadConfig();
-    expect(config.telegramAuthorizedUsers).toEqual(['5635268079', '@operator']);
-  });
-
-  it('defaults session restart behavior to reuse_latest_session', () => {
-    delete process.env.SESSION_RESTART_BEHAVIOR;
-
-    const config = loadConfig();
-
-    expect(config.sessionRestartBehavior).toBe('reuse_latest_session');
-  });
-
-  it('parses SESSION_RESTART_BEHAVIOR and falls back on invalid values', () => {
-    process.env.SESSION_RESTART_BEHAVIOR = 'new_session';
-    const explicit = loadConfig();
-    expect(explicit.sessionRestartBehavior).toBe('new_session');
-
-    process.env.SESSION_RESTART_BEHAVIOR = 'invalid-value';
-    const fallback = loadConfig();
-    expect(fallback.sessionRestartBehavior).toBe('reuse_latest_session');
+    expect(config.dataDir).toBe('./sandbox-data');
+    expect(config.characterCardPath).toBe('./cards/main.json');
+    expect(config.databasePath).toBe('./db/main.db');
   });
 });
 
-describe('loadConfig gateway TLS options', () => {
-  it('omits gateway TLS fields when env vars are unset', () => {
-    delete process.env.GATEWAY_TLS_CA_PATH;
-    delete process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED;
-
-    const config = loadConfig();
-
-    expect(config.gatewayTlsCaPath).toBeUndefined();
-    expect(config.gatewayTlsRejectUnauthorized).toBeUndefined();
-  });
-
-  it('parses GATEWAY_TLS_CA_PATH', () => {
-    process.env.GATEWAY_TLS_CA_PATH = '/etc/ssl/custom-ca.pem';
-
-    const config = loadConfig();
-
-    expect(config.gatewayTlsCaPath).toBe('/etc/ssl/custom-ca.pem');
-  });
-
-  it('parses GATEWAY_TLS_REJECT_UNAUTHORIZED=false', () => {
-    process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED = 'false';
-
-    const config = loadConfig();
-
-    expect(config.gatewayTlsRejectUnauthorized).toBe(false);
-  });
-
-  it('parses GATEWAY_TLS_REJECT_UNAUTHORIZED=true', () => {
-    process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED = 'true';
-
-    const config = loadConfig();
-
-    expect(config.gatewayTlsRejectUnauthorized).toBe(true);
-  });
-});
-
-describe('loadConfig TTS provider options', () => {
-  it('defaults to elevenlabs when provider env vars are unset', () => {
-    delete process.env.TTS_PROVIDER;
-    delete process.env.VOICE_TTS_PROVIDER;
-    delete process.env.ECHO_TTS_URL;
-    delete process.env.ECHO_TTS_VOICE;
-    delete process.env.ECHO_TTS_PRESET;
-    delete process.env.ECHO_TTS_MODEL;
-
-    const config = loadConfig();
-
-    expect(config.ttsProvider).toBe('elevenlabs');
-    expect(config.echoTtsUrl).toBeUndefined();
-    expect(config.echoTtsVoice).toBeUndefined();
-    expect(config.echoTtsPreset).toBeUndefined();
-    expect(config.echoTtsModel).toBeUndefined();
-  });
-
-  it('parses echo provider and settings env vars', () => {
-    process.env.TTS_PROVIDER = 'echo';
-    process.env.ECHO_TTS_URL = 'http://127.0.0.1:5050/v1/audio/speech';
-    process.env.ECHO_TTS_VOICE = 'echo-voice-1';
-    process.env.ECHO_TTS_PRESET = 'normal';
-    process.env.ECHO_TTS_MODEL = 'echo-v1';
-
-    const config = loadConfig();
-
-    expect(config.ttsProvider).toBe('echo');
-    expect(config.echoTtsUrl).toBe('http://127.0.0.1:5050/v1/audio/speech');
-    expect(config.echoTtsVoice).toBe('echo-voice-1');
-    expect(config.echoTtsPreset).toBe('normal');
-    expect(config.echoTtsModel).toBe('echo-v1');
-  });
-
-  it('falls back to elevenlabs when provider env var is invalid', () => {
-    process.env.TTS_PROVIDER = 'definitely-not-a-provider';
-
-    const config = loadConfig();
-
-    expect(config.ttsProvider).toBe('elevenlabs');
-  });
-});

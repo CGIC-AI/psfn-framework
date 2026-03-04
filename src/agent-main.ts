@@ -239,7 +239,12 @@ async function main(): Promise<void> {
 
   // ── Load identity (mounted read-only in container) ──
 
-  const { card, systemPrompt } = composeIdentity(config);
+  const { card, systemPrompt, initializedCard } = composeIdentity(config);
+  if (initializedCard) {
+    log.warn('Character card file was missing and has been initialized with defaults', {
+      characterCardPath: config.characterCardPath,
+    });
+  }
   const cardVersionStore = new CharacterCardVersionStore(
     config.characterCardPath,
     join(config.dataDir, 'character-card-history.jsonl'),

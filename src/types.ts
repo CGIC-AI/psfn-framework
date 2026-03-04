@@ -534,6 +534,9 @@ export function loadConfig(): SubstrateConfig {
   const telegramAuthorizedUsers = parseStringListEnv(
     process.env.TELEGRAM_ALLOWED_USERS ?? process.env.TELEGRAM_AUTHORIZED_USERS,
   );
+  const dataDir = process.env.DATA_DIR ?? './data';
+  const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${dataDir}/character.json`;
+  const databasePath = process.env.DATABASE_PATH ?? `${dataDir}/psfn.db`;
 
   return {
     primaryModel,
@@ -544,9 +547,9 @@ export function loadConfig(): SubstrateConfig {
     extractionMaxTokens,
     discordToken: process.env.DISCORD_TOKEN ?? '',
     discordBotId: process.env.DISCORD_BOT_ID ?? '',
-    characterCardPath: process.env.CHARACTER_CARD_PATH ?? '/path/to/your/character.json',
-    dataDir: process.env.DATA_DIR ?? './data',
-    databasePath: process.env.DATABASE_PATH ?? './data/psfn.db',
+    characterCardPath,
+    dataDir,
+    databasePath,
     ...(sessionMessageLimit !== undefined ? { sessionMessageLimit } : {}),
     sessionRestartBehavior,
     ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),

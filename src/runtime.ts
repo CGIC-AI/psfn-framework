@@ -4,6 +4,10 @@ import type { SubstrateConfig, Lifecycle } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
+import {
+  buildCharacterPromptTemplateVariables,
+  composeSystemPromptTemplate,
+} from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
 import { SessionManager } from './session/manager.js';
@@ -478,6 +482,7 @@ export class SubstrateRuntime implements Lifecycle {
       sessionManager: this.sessionManager,
       systemPrompt,
       characterName: card.data.name,
+      characterPromptVariablesProvider: () => buildCharacterPromptTemplateVariables(card),
       config: this.config,
     });
     this.agentLoop.scratchpadProvider = this.memoryStore;
@@ -503,7 +508,7 @@ export class SubstrateRuntime implements Lifecycle {
     const promptStore = wirePromptRuntime(
       this.agentLoop,
       this.config.dataDir,
-      systemPrompt,
+      composeSystemPromptTemplate(),
       {
         identityCoolingOff,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),

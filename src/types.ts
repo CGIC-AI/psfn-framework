@@ -536,7 +536,8 @@ export function loadConfig(): SubstrateConfig {
   );
   const dataDir = process.env.DATA_DIR ?? './data';
   const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${dataDir}/character.json`;
-  const databasePath = process.env.DATABASE_PATH ?? `${dataDir}/psfn.db`;
+  const databaseBasename = sanitizeDatabaseBasename(process.env.DATABASE_BASENAME);
+  const databasePath = process.env.DATABASE_PATH ?? `${dataDir}/${databaseBasename}.db`;
 
   return {
     primaryModel,
@@ -864,6 +865,16 @@ function parseStringListEnv(value: string | undefined): string[] {
       .map(item => item.trim())
       .filter(Boolean),
   )];
+}
+
+function sanitizeDatabaseBasename(value: string | undefined): string {
+  if (typeof value !== 'string') return 'companion';
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized.length > 0 ? normalized : 'companion';
 }
 
 function parseBooleanMapEnv(value: string | undefined): Record<string, boolean> | undefined {

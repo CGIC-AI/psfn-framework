@@ -63,4 +63,18 @@ describe('injectPromptRuntimeTokens', () => {
 
     expect(output).toBe('Model=moonshotai/kimi-k2.5 Trust=primary Canonical=contact-123');
   });
+
+  it('resolves nested runtime tokens introduced by variable substitution', () => {
+    const input = '{{description}}';
+    const output = injectPromptRuntimeTokens(input, {
+      now: fixedNow,
+      variables: {
+        description: 'Hello {{user}}, this is {{char}}.',
+        user: 'Operator',
+        char: 'Companion',
+      },
+    });
+
+    expect(output).toBe('Hello Operator, this is Companion.');
+  });
 });

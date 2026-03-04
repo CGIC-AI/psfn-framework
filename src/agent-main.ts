@@ -93,6 +93,10 @@ import {
 } from './capabilities/safeguards.js';
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
+import {
+  buildCharacterPromptTemplateVariables,
+  composeSystemPromptTemplate,
+} from './identity/loader.js';
 import { ModuleLoader } from './modules/loader.js';
 import {
   ensureRegistryFile,
@@ -383,6 +387,7 @@ async function main(): Promise<void> {
     sessionManager,
     systemPrompt,
     characterName: card.data.name,
+    characterPromptVariablesProvider: () => buildCharacterPromptTemplateVariables(card),
     config,
   });
   agentLoop.scratchpadProvider = memoryStore;
@@ -405,7 +410,7 @@ async function main(): Promise<void> {
   });
 
   // Prompt stack — layered, editable system prompt
-  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, systemPrompt, {
+  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, composeSystemPromptTemplate(), {
     identityCoolingOff,
     getCapabilityTier: () => capabilityRuntime.getTier(),
   });

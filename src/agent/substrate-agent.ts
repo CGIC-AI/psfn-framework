@@ -274,6 +274,7 @@ export class SubstrateAgent {
   private sessionManager: SessionManager;
   private systemPrompt: string;
   private characterName: string;
+  private resolveCharacterPromptVariables: () => Record<string, string>;
   private config: SubstrateConfig;
   private coreTools: AgentTool<any>[] = [];
   private extendedTools: AgentTool<any>[] = [];
@@ -311,13 +312,21 @@ export class SubstrateAgent {
     sessionManager: SessionManager,
     systemPrompt: string,
     config: SubstrateConfig,
-    options?: { streamFn?: StreamFn; characterName?: string },
+    options?: {
+      streamFn?: StreamFn;
+      characterName?: string;
+      characterPromptVariables?: Record<string, string>;
+      characterPromptVariablesProvider?: () => Record<string, string>;
+    },
   ) {
     this.eventBus = eventBus;
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.systemPrompt = systemPrompt;
     this.characterName = options?.characterName?.trim() || this.deriveCharacterName(systemPrompt);
+    const fallbackPromptVariables = { ...(options?.characterPromptVariables ?? {}) };
+    this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
+      ?? (() => fallbackPromptVariables);
     this.config = config;
 
     this.agent = new Agent({
@@ -2810,8 +2819,10 @@ export class SubstrateAgent {
   ): Record<string, string> {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
     const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
+    const characterPromptVariables = this.resolveCharacterPromptVariables();
 
     return {
+      ...characterPromptVariables,
       user: resolvedUserName,
       user_name: resolvedUserName,
       user_id: message.authorId,

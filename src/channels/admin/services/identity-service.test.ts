@@ -67,7 +67,9 @@ describe('AdminIdentityDataService', () => {
 
     expect(result.ok).toBe(true);
     const foundation = promptStore.getByType('base')[0];
-    expect(foundation.content).toContain('You are Companion Prime.');
+    expect(foundation.content).toContain('You are {{char}}.');
+    expect(foundation.content).toContain('{{description}}');
+    expect(foundation.content).toContain('{{personality}}');
     expect(foundation.updatedBy).toBe('admin:api');
   });
 });

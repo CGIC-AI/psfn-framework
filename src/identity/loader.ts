@@ -11,6 +11,21 @@ const PLACEHOLDER_PATTERNS = [
 const LEGACY_BOOTSTRAP_NAME = 'PSFN';
 const LEGACY_BOOTSTRAP_DESCRIPTION = 'A gentle, curious, and supportive AI companion.';
 const LEGACY_BOOTSTRAP_PERSONALITY = 'Warm, emotionally intelligent, and precise when helping with technical work.';
+const SYSTEM_PROMPT_TEMPLATE = [
+  'You are {{char}}.',
+  '',
+  '{{description}}',
+  '',
+  '{{personality}}',
+  '',
+  '{{scenario}}',
+  '',
+  '{{system_prompt}}',
+  '',
+  '{{mes_example}}',
+  '',
+  '{{post_history_instructions}}',
+].join('\n');
 
 function isPlaceholder(value: string): boolean {
   const trimmed = value.trim();
@@ -70,6 +85,63 @@ function isLegacyBootstrapDefaultCard(card: CharacterCardV2): boolean {
 function writeCharacterCard(path: string, card: CharacterCardV2): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
+}
+
+function cleanField(value: string | undefined): string {
+  if (!value) return '';
+  return isPlaceholder(value) ? '' : value;
+}
+
+export function composeSystemPromptTemplate(): string {
+  return SYSTEM_PROMPT_TEMPLATE;
+}
+
+export function buildCharacterPromptTemplateVariables(card: CharacterCardV2): Record<string, string> {
+  const data = card.data;
+  const description = cleanField(data.description);
+  const personality = cleanField(data.personality);
+  const scenario = cleanField(data.scenario);
+  const systemPrompt = cleanField(data.system_prompt);
+  const messageExample = cleanField(data.mes_example);
+  const postHistoryInstructions = cleanField(data.post_history_instructions);
+  const firstMessage = cleanField(data.first_mes);
+  const creator = cleanField(data.creator);
+  const creatorNotes = cleanField(data.creator_notes);
+  const visualDescription = cleanField(data.extensions?.visual_description);
+  const tags = Array.isArray(data.tags) ? data.tags.filter(tag => typeof tag === 'string').join(', ') : '';
+  const alternateGreetings = Array.isArray(data.alternate_greetings)
+    ? data.alternate_greetings.filter(greeting => typeof greeting === 'string').join('\n')
+    : '';
+
+  return {
+    name: data.name,
+    description,
+    personality,
+    scenario,
+    system_prompt: systemPrompt,
+    post_history_instructions: postHistoryInstructions,
+    mes_example: messageExample ? `Example dialogue style:\n${messageExample}` : '',
+    first_mes: firstMessage,
+    creator,
+    creator_notes: creatorNotes,
+    tags,
+    alternate_greetings: alternateGreetings,
+    visual_description: visualDescription,
+    extensions_visual_description: visualDescription,
+    'character.name': data.name,
+    'character.description': description,
+    'character.personality': personality,
+    'character.scenario': scenario,
+    'character.system_prompt': systemPrompt,
+    'character.post_history_instructions': postHistoryInstructions,
+    'character.mes_example': messageExample,
+    'character.first_mes': firstMessage,
+    'character.creator': creator,
+    'character.creator_notes': creatorNotes,
+    'character.tags': tags,
+    'character.alternate_greetings': alternateGreetings,
+    'character.visual_description': visualDescription,
+  };
 }
 
 /**

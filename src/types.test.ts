@@ -17,6 +17,7 @@ function restoreEnv(): void {
 function clearRuntimePathEnv(): void {
   delete process.env.DATA_DIR;
   delete process.env.DATABASE_PATH;
+  delete process.env.DATABASE_BASENAME;
   delete process.env.CHARACTER_CARD_PATH;
 }
 
@@ -31,7 +32,7 @@ describe('loadConfig path defaults', () => {
     const config = loadConfig();
     expect(config.dataDir).toBe('./data');
     expect(config.characterCardPath).toBe('./data/character.json');
-    expect(config.databasePath).toBe('./data/psfn.db');
+    expect(config.databasePath).toBe('./data/companion.db');
   });
 
   it('derives card/database paths from DATA_DIR when only DATA_DIR is set', () => {
@@ -41,7 +42,7 @@ describe('loadConfig path defaults', () => {
     const config = loadConfig();
     expect(config.dataDir).toBe('./sandbox-data');
     expect(config.characterCardPath).toBe('./sandbox-data/character.json');
-    expect(config.databasePath).toBe('./sandbox-data/psfn.db');
+    expect(config.databasePath).toBe('./sandbox-data/companion.db');
   });
 
   it('respects explicit CHARACTER_CARD_PATH and DATABASE_PATH overrides', () => {
@@ -55,5 +56,13 @@ describe('loadConfig path defaults', () => {
     expect(config.characterCardPath).toBe('./cards/main.json');
     expect(config.databasePath).toBe('./db/main.db');
   });
-});
 
+  it('derives database path from DATABASE_BASENAME when DATABASE_PATH is not set', () => {
+    clearRuntimePathEnv();
+    process.env.DATA_DIR = './sandbox-data';
+    process.env.DATABASE_BASENAME = 'Companion Prime';
+
+    const config = loadConfig();
+    expect(config.databasePath).toBe('./sandbox-data/companion-prime.db');
+  });
+});

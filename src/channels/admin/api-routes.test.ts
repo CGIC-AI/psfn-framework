@@ -1165,8 +1165,10 @@ describe('AdminServer JSON API routes', () => {
       layer => layer.type === 'base' && layer.name === 'Character Foundation',
     );
     expect(foundationLayer).toBeDefined();
-    expect(foundationLayer?.content).toContain('You are Imported Identity.');
-    expect(foundationLayer?.content).toContain('New personality baseline');
+    expect(foundationLayer?.content).toContain('You are {{char}}.');
+    expect(foundationLayer?.content).toContain('{{description}}');
+    expect(foundationLayer?.content).toContain('{{personality}}');
+    expect(foundationLayer?.content).not.toContain('Imported Identity');
   });
 
   it('sanitizes identity upload responses for hostile filenames and card names', async () => {

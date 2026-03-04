@@ -383,8 +383,23 @@ describe('resolveChannelResponseStyle', () => {
     expect(resolveChannelResponseStyle('telegram:5635268079', {
       channelType: 'telegram',
     })).toBe('concise');
+    expect(resolveChannelResponseStyle('telegram:5635268079', {
+      channelType: 'telegram_dm',
+      meta: { isDirectMessage: true },
+    })).toBe('concise');
     expect(resolveChannelResponseStyle('internal:heartbeat', {
       channelType: 'internal',
+    })).toBe('concise');
+  });
+
+  it('resolves API voice channels as concise', () => {
+    expect(resolveChannelResponseStyle('api-voice:conn-1', {
+      channelType: 'api',
+      meta: { isDirectMessage: true },
+    })).toBe('concise');
+    expect(resolveChannelResponseStyle('api:voice-session', {
+      channelType: 'api_voice',
+      meta: { isDirectMessage: true },
     })).toBe('concise');
   });
 

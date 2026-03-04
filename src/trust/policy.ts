@@ -190,24 +190,31 @@ export function resolveChannelResponseStyle(
     if (byChannelType) return byChannelType;
   }
 
-  if (options.meta?.isDirectMessage) return 'expressive';
-
   const normalizedChannelType = channelType?.toLowerCase();
-  if (channelId.startsWith('discord-voice:') || normalizedChannelType === 'discord_voice') {
+  const normalizedChannelId = channelId.toLowerCase();
+  if (
+    normalizedChannelId.startsWith('discord-voice:')
+    || normalizedChannelType === 'discord_voice'
+    || normalizedChannelType === 'api_voice'
+    || normalizedChannelId.startsWith('api-voice:')
+  ) {
     return 'concise';
   }
   if (
     normalizedChannelType === 'telegram'
     || normalizedChannelType === 'telegram_group'
     || normalizedChannelType === 'telegram_dm'
-    || channelId.startsWith('telegram:')
+    || normalizedChannelId.startsWith('telegram:')
   ) {
     return 'concise';
   }
-  if (normalizedChannelType === 'internal' || channelId.startsWith('internal:')) {
+  if (normalizedChannelType === 'internal' || normalizedChannelId.startsWith('internal:')) {
     return 'concise';
   }
-  if (normalizedChannelType === 'api' || channelId.startsWith('api:')) {
+
+  if (options.meta?.isDirectMessage) return 'expressive';
+
+  if (normalizedChannelType === 'api' || normalizedChannelId.startsWith('api:')) {
     return 'expressive';
   }
   if (normalizedChannelType === 'discord' || normalizedChannelType === 'discord_text') {

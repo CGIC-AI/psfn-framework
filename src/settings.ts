@@ -483,6 +483,28 @@ function defaultSlotKeyForPurpose(purpose: string): string {
   return purpose;
 }
 
+function resolveVisionDefaultSlotKey(catalog: Record<string, ModelCatalogEntry>): string | undefined {
+  if (catalog.vision) return 'vision';
+
+  const slotKeys = Object.keys(catalog);
+  if (slotKeys.length === 0) return undefined;
+
+  const slotByKeyHint = slotKeys.find((slotKey) => {
+    const normalized = slotKey.trim().toLowerCase();
+    return normalized.includes('vision') || normalized.includes('image');
+  });
+  if (slotByKeyHint) return slotByKeyHint;
+
+  const slotByModelHint = slotKeys.find((slotKey) => {
+    const modelId = catalog[slotKey]?.model?.trim().toLowerCase() ?? '';
+    return modelId.includes('vision') || modelId.includes('gemini') || modelId.includes('vl');
+  });
+  if (slotByModelHint) return slotByModelHint;
+
+  if (catalog[PRIMARY_MODEL_SLOT_KEY]) return PRIMARY_MODEL_SLOT_KEY;
+  return slotKeys[0];
+}
+
 function resolveCatalogSlotKey(
   catalog: Record<string, ModelCatalogEntry>,
   assignments: ModelRoleAssignments,
@@ -832,9 +854,7 @@ export function normalizeEditableSettings(
     assignments.import_processing ??= assignments.background;
   }
   if (!assignments.vision) {
-    const visionDefaultSlot = catalog.vision
-      ? 'vision'
-      : (catalog[PRIMARY_MODEL_SLOT_KEY] ? PRIMARY_MODEL_SLOT_KEY : undefined);
+    const visionDefaultSlot = resolveVisionDefaultSlotKey(catalog);
     if (visionDefaultSlot) {
       assignments.vision = visionDefaultSlot;
     }

@@ -122,6 +122,43 @@ function parseCommaSeparatedEnv(value: string | undefined): string[] {
   return [...new Set(entries)];
 }
 
+async function runShutdownStep(
+  step: string,
+  action: () => void | Promise<void>,
+  maxAttempts = 2,
+): Promise<void> {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await action();
+      if (attempt > 1) {
+        log.info('Shutdown step recovered after retry', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+        });
+      }
+      return;
+    } catch (error) {
+      if (attempt < attempts) {
+        log.warn('Shutdown step failed; retrying', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+          error: String(error),
+        });
+        continue;
+      }
+      log.error('Shutdown step failed; continuing shutdown', {
+        step,
+        attempt,
+        maxAttempts: attempts,
+        error: String(error),
+      });
+    }
+  }
+}
+
 function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
   const existingHooks = config.runtimeHooks ?? {};
   config.runtimeHooks = {
@@ -226,6 +263,7 @@ async function main(): Promise<void> {
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
   log.info('Connected to gateway');
   let shuttingDown = false;
+  let stopPromise: Promise<void> | null = null;
   let stopFn: () => Promise<void> = async () => {};
   const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {
     if (shuttingDown) return;
@@ -747,25 +785,37 @@ async function main(): Promise<void> {
   });
 
   stopFn = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    unregisterGatewayDisconnect();
-    await eventBus.emit('system.shutdown', {});
-    stopDebugObserver();
-    scheduler.stop();
-    const timeoutMs = parsePositiveIntEnv(
-      process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
-      DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
-    );
-    const drained = await memoryExtractor.stop({ timeoutMs });
-    if (!drained) {
-      log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+    if (stopPromise) {
+      await stopPromise;
+      return;
     }
-    if (apiServer) await apiServer.stop();
-    if (adminServer) await adminServer.stop();
-    gateway.destroy();
-    db.close();
-    log.info('Stopped');
+
+    shuttingDown = true;
+    stopPromise = (async () => {
+      await runShutdownStep('unregister gateway disconnect hook', () => unregisterGatewayDisconnect());
+      await runShutdownStep('emit system.shutdown event', () => eventBus.emit('system.shutdown', {}));
+      await runShutdownStep('stop debug observer', () => stopDebugObserver());
+      await runShutdownStep('stop scheduler', () => scheduler.stop());
+
+      const timeoutMs = parsePositiveIntEnv(
+        process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
+        DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+      );
+      await runShutdownStep('drain memory extractor', async () => {
+        const drained = await memoryExtractor.stop({ timeoutMs });
+        if (!drained) {
+          log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+        }
+      });
+
+      await runShutdownStep('stop API server', () => apiServer?.stop());
+      await runShutdownStep('stop admin server', () => adminServer?.stop());
+      await runShutdownStep('destroy gateway client', () => gateway.destroy());
+      await runShutdownStep('close database', () => db.close());
+      log.info('Stopped');
+    })();
+
+    await stopPromise;
   };
 
   agentLoop.registerTool(createRestartTool(
@@ -862,14 +912,41 @@ async function main(): Promise<void> {
 
   // ── Graceful shutdown ──
 
+  let shutdownPromise: Promise<void> | null = null;
   const shutdown = async (signal: string) => {
-    log.info(`Received ${signal}, shutting down...`);
-    await stopFn();
-    process.exit(0);
+    if (shutdownPromise) {
+      log.warn('Shutdown already in progress; ignoring additional signal', { signal });
+      await shutdownPromise;
+      return;
+    }
+
+    shutdownPromise = (async () => {
+      log.info(`Received ${signal}, shutting down...`);
+      await stopFn();
+      process.exit(0);
+    })().catch((error) => {
+      log.error('Graceful shutdown failed; forcing exit', {
+        signal,
+        error: String(error),
+      });
+      process.exit(1);
+    });
+
+    await shutdownPromise;
   };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT').catch((error) => {
+      log.error('Unhandled SIGINT shutdown error', { error: String(error) });
+      process.exit(1);
+    });
+  });
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM').catch((error) => {
+      log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
+      process.exit(1);
+    });
+  });
 }
 
 main().catch((err) => {

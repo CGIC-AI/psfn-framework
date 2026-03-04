@@ -170,6 +170,7 @@ export class SubstrateRuntime implements Lifecycle {
   private crashRecoveryQueue: CrashRecoveryExtractionCandidate[] = [];
   private crashRecoveryRetryBacklog = new Map<string, CrashRecoveryExtractionCandidate>();
   private stopping = false;
+  private stopPromise: Promise<void> | null = null;
   private startTime: number;
 
   constructor(config: SubstrateConfig) {
@@ -1089,40 +1090,98 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   async stop(): Promise<void> {
+    if (this.stopPromise) {
+      await this.stopPromise;
+      return;
+    }
+
+    this.stopPromise = this.stopInternal();
+    await this.stopPromise;
+  }
+
+  private async stopInternal(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
 
     log.info('Shutting down...');
-    await this.eventBus.emit('system.shutdown', {});
-    this.stopVoiceObservers?.();
-    this.stopVoiceObservers = undefined;
-    this.stopDebugObserver?.();
-    this.stopDebugObserver = undefined;
-    this.scheduler?.stop();
+    await this.runShutdownStep('emit system.shutdown event', () => this.eventBus.emit('system.shutdown', {}));
+    await this.runShutdownStep('stop voice observers', () => {
+      this.stopVoiceObservers?.();
+      this.stopVoiceObservers = undefined;
+    });
+    await this.runShutdownStep('stop debug observer', () => {
+      this.stopDebugObserver?.();
+      this.stopDebugObserver = undefined;
+    });
+    await this.runShutdownStep('stop scheduler', () => this.scheduler?.stop());
+
     const timeoutMs = this.resolveExtractionDrainTimeoutMs();
-    const drained = await this.memoryExtractor?.stop({ timeoutMs });
-    if (drained === false) {
-      log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
-    }
+    await this.runShutdownStep('drain memory extractor', async () => {
+      const drained = await this.memoryExtractor?.stop({ timeoutMs });
+      if (drained === false) {
+        log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+      }
+    });
+
     const unresolvedCrashRecoveryChannels = this.resolveUnresolvedCrashRecoveryChannels();
     if (unresolvedCrashRecoveryChannels.size > 0) {
       log.warn('Skipping graceful markers for channels with unresolved extraction backlog', {
         channels: [...unresolvedCrashRecoveryChannels],
       });
     }
-    const markedChannels = this.sessionStore?.markGracefulShutdownForActiveChannels(
-      Date.now(),
-      { skipChannels: unresolvedCrashRecoveryChannels },
-    );
-    if ((markedChannels?.length ?? 0) > 0) {
-      log.info('Wrote graceful shutdown markers', { channels: markedChannels });
-    }
-    if (this.wyomingRuntime) await this.wyomingRuntime.stop();
-    if (this.wyomingTcpServer) await this.wyomingTcpServer.stop();
-    if (this.adminServer) await this.adminServer.stop();
-    await this.moduleLoader?.shutdown();
-    await this.stopChannels();
-    this.db?.close();
+
+    await this.runShutdownStep('write graceful shutdown markers', () => {
+      const markedChannels = this.sessionStore?.markGracefulShutdownForActiveChannels(
+        Date.now(),
+        { skipChannels: unresolvedCrashRecoveryChannels },
+      );
+      if ((markedChannels?.length ?? 0) > 0) {
+        log.info('Wrote graceful shutdown markers', { channels: markedChannels });
+      }
+    });
+    await this.runShutdownStep('stop Wyoming runtime', () => this.wyomingRuntime?.stop());
+    await this.runShutdownStep('stop Wyoming TCP server', () => this.wyomingTcpServer?.stop());
+    await this.runShutdownStep('stop admin server', () => this.adminServer?.stop());
+    await this.runShutdownStep('shutdown modules', () => this.moduleLoader?.shutdown());
+    await this.runShutdownStep('stop channel adapters', () => this.stopChannels());
+    await this.runShutdownStep('close database', () => this.db?.close());
     log.info('Stopped');
+  }
+
+  private async runShutdownStep(
+    step: string,
+    action: () => void | Promise<void>,
+    maxAttempts = 2,
+  ): Promise<void> {
+    const attempts = Math.max(1, Math.floor(maxAttempts));
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await action();
+        if (attempt > 1) {
+          log.info('Shutdown step recovered after retry', {
+            step,
+            attempt,
+            maxAttempts: attempts,
+          });
+        }
+        return;
+      } catch (error) {
+        if (attempt < attempts) {
+          log.warn('Shutdown step failed; retrying', {
+            step,
+            attempt,
+            maxAttempts: attempts,
+            error: String(error),
+          });
+          continue;
+        }
+        log.error('Shutdown step failed; continuing shutdown', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+          error: String(error),
+        });
+      }
+    }
   }
 }

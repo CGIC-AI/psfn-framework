@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -366,6 +366,34 @@ describe('SessionStore', () => {
     const store2 = new SessionStore(dir);
     const id3 = store2.append({ channelId: 'ch1', role: 'user', content: 'C', timestamp: 3000 });
     expect(id3).toBe(3);
+  });
+
+  it('rolls back in-memory append state when journal persistence fails', () => {
+    const channelId = 'api:append-rollback';
+    const journalRuntime = (store as unknown as { journalRuntime: { writeJournalEntry: (params: unknown) => void } }).journalRuntime;
+    vi.spyOn(journalRuntime, 'writeJournalEntry').mockImplementationOnce(() => {
+      throw new Error('simulated journal append failure');
+    });
+
+    expect(() => store.append({
+      channelId,
+      role: 'user',
+      content: 'will fail',
+      timestamp: 1_000,
+    })).toThrow('simulated journal append failure');
+
+    expect(store.count(channelId)).toBe(0);
+    expect(store.getRecent(channelId, 10)).toEqual([]);
+
+    const recoveredId = store.append({
+      channelId,
+      role: 'user',
+      content: 'after rollback',
+      timestamp: 2_000,
+    });
+    expect(recoveredId).toBe(1);
+    expect(store.count(channelId)).toBe(1);
+    expect(store.getRecent(channelId, 10).map(entry => entry.content)).toEqual(['after rollback']);
   });
 
   it('handles channelId with colons (api:session-1)', () => {

@@ -29,6 +29,7 @@ export class SessionJournalRuntime {
   private integritySignFailureLogged = false;
   private integrityVerifyFailureLogged = false;
   private searchIndexFailureLogged = false;
+  private channelIndexFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
 
   constructor(integrityProvider: SessionIntegrityProvider | null) {
@@ -202,11 +203,13 @@ export class SessionJournalRuntime {
     journal: JournalEntry;
     upsertChannelIndex: (channelId: string, entry: ChannelIndexEntry) => void;
   }): void {
+    const previousHmac = params.cache.lastHmac;
     let signed = params.journal;
+    let nextHmac = previousHmac;
     if (this.integrityProvider) {
       try {
-        signed = this.integrityProvider.sign(signed, params.cache.lastHmac);
-        params.cache.lastHmac = signed._hmac ?? params.cache.lastHmac;
+        signed = this.integrityProvider.sign(signed, previousHmac);
+        nextHmac = signed._hmac ?? previousHmac;
       } catch (error) {
         if (!this.integritySignFailureLogged) {
           this.integritySignFailureLogged = true;
@@ -219,7 +222,18 @@ export class SessionJournalRuntime {
 
     appendJournalEntry(params.cache.resolvedPath, signed);
     applyJournalState(params.cache, signed);
-    params.upsertChannelIndex(params.journal.channelId, snapshotIndexEntry(params.cache));
+    params.cache.lastHmac = nextHmac;
+    try {
+      params.upsertChannelIndex(params.journal.channelId, snapshotIndexEntry(params.cache));
+    } catch (error) {
+      if (!this.channelIndexFailureLogged) {
+        this.channelIndexFailureLogged = true;
+        log.warn('Session channel index write failed after journal append; continuing without interruption', {
+          channelId: params.journal.channelId,
+          error: toErrorMessage(error),
+        });
+      }
+    }
   }
 
   readRecentEntriesFromTail(channelId: string, filePath: string, limit: number): SessionEntry[] {

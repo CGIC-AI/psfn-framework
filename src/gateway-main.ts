@@ -150,6 +150,43 @@ function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
   return fallback;
 }
 
+async function runShutdownStep(
+  step: string,
+  action: () => void | Promise<void>,
+  maxAttempts = 2,
+): Promise<void> {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await action();
+      if (attempt > 1) {
+        log.info('Shutdown step recovered after retry', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+        });
+      }
+      return;
+    } catch (error) {
+      if (attempt < attempts) {
+        log.warn('Shutdown step failed; retrying', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+          error: String(error),
+        });
+        continue;
+      }
+      log.error('Shutdown step failed; continuing shutdown', {
+        step,
+        attempt,
+        maxAttempts: attempts,
+        error: String(error),
+      });
+    }
+  }
+}
+
 function buildGatewayChannelsConfigOverrides(
   config: SubstrateConfig,
   settings: EditableSettings,
@@ -537,21 +574,62 @@ async function main(): Promise<void> {
 
   // ── Graceful shutdown ──
 
-  const shutdown = async (signal: string) => {
-    log.info(`Received ${signal}, shutting down...`);
-    stopDebugObserver();
-    if (wyomingRuntime) await wyomingRuntime.stop();
-    if (wyomingTcpServer) await wyomingTcpServer.stop();
-    await voiceModuleHost.stopAll();
-    await gateway.stop();
-    if (telegram) await telegram.stop();
-    await discord.stop();
-    auditDb.close();
-    process.exit(0);
+  let stopPromise: Promise<void> | null = null;
+  const stop = async (): Promise<void> => {
+    if (stopPromise) {
+      await stopPromise;
+      return;
+    }
+
+    stopPromise = (async () => {
+      await runShutdownStep('stop debug observer', () => stopDebugObserver());
+      await runShutdownStep('stop Wyoming runtime', () => wyomingRuntime?.stop());
+      await runShutdownStep('stop Wyoming TCP server', () => wyomingTcpServer?.stop());
+      await runShutdownStep('stop voice modules', () => voiceModuleHost.stopAll());
+      await runShutdownStep('stop gateway server', () => gateway.stop());
+      await runShutdownStep('stop Telegram adapter', () => telegram?.stop());
+      await runShutdownStep('stop Discord adapter', () => discord.stop());
+      await runShutdownStep('close audit database', () => auditDb.close());
+    })();
+
+    await stopPromise;
   };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdown = async (signal: string) => {
+    if (shutdownPromise) {
+      log.warn('Shutdown already in progress; ignoring additional signal', { signal });
+      await shutdownPromise;
+      return;
+    }
+
+    shutdownPromise = (async () => {
+      log.info(`Received ${signal}, shutting down...`);
+      await stop();
+      process.exit(0);
+    })().catch((error) => {
+      log.error('Graceful shutdown failed; forcing exit', {
+        signal,
+        error: String(error),
+      });
+      process.exit(1);
+    });
+
+    await shutdownPromise;
+  };
+
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT').catch((error) => {
+      log.error('Unhandled SIGINT shutdown error', { error: String(error) });
+      process.exit(1);
+    });
+  });
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM').catch((error) => {
+      log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
+      process.exit(1);
+    });
+  });
 }
 
 // Serialize SubstrateMessage for JSON transport (Date → ISO string)

@@ -228,6 +228,96 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     expect(runtime.db.close).toHaveBeenCalledTimes(1);
   });
 
+  it('waits for scheduler drain before stopping extractor', async () => {
+    const runtime = makeRuntime() as any;
+    runtime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
+    let resolveSchedulerStop: (() => void) | undefined;
+    runtime.scheduler = {
+      stop: vi.fn().mockImplementation(() => new Promise<void>((resolve) => {
+        resolveSchedulerStop = resolve;
+      })),
+    };
+    runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
+    runtime.sessionStore = {
+      markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
+    };
+    runtime.stopVoiceObservers = vi.fn();
+    runtime.stopDebugObserver = vi.fn();
+    runtime.stopChannels = vi.fn().mockResolvedValue(undefined);
+    runtime.db = { close: vi.fn() };
+
+    const stopPromise = runtime.stop();
+    await vi.waitFor(() => {
+      expect(runtime.scheduler.stop).toHaveBeenCalledTimes(1);
+    });
+
+    expect(runtime.memoryExtractor.stop).not.toHaveBeenCalled();
+
+    resolveSchedulerStop?.();
+    await stopPromise;
+
+    expect(runtime.scheduler.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.memoryExtractor.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries transient shutdown failures and continues after persistent failures', async () => {
+    const runtime = makeRuntime() as any;
+    runtime.eventBus = {
+      emit: vi.fn()
+        .mockRejectedValueOnce(new Error('transient event bus failure'))
+        .mockResolvedValue(undefined),
+    };
+    runtime.scheduler = { stop: vi.fn().mockResolvedValue(undefined) };
+    runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
+    runtime.sessionStore = {
+      markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
+    };
+    runtime.stopVoiceObservers = vi.fn();
+    runtime.stopDebugObserver = vi.fn();
+    runtime.moduleLoader = { shutdown: vi.fn().mockRejectedValue(new Error('persistent module failure')) };
+    runtime.stopChannels = vi.fn().mockResolvedValue(undefined);
+    runtime.db = { close: vi.fn() };
+
+    await expect(runtime.stop()).resolves.toBeUndefined();
+
+    expect(runtime.eventBus.emit).toHaveBeenCalledTimes(2);
+    expect(runtime.moduleLoader.shutdown).toHaveBeenCalledTimes(2);
+    expect(runtime.db.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one stop promise for concurrent shutdown calls', async () => {
+    const runtime = makeRuntime() as any;
+    runtime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
+    let resolveSchedulerStop: (() => void) | undefined;
+    runtime.scheduler = {
+      stop: vi.fn().mockImplementation(() => new Promise<void>((resolve) => {
+        resolveSchedulerStop = resolve;
+      })),
+    };
+    runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
+    runtime.sessionStore = {
+      markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
+    };
+    runtime.stopVoiceObservers = vi.fn();
+    runtime.stopDebugObserver = vi.fn();
+    runtime.stopChannels = vi.fn().mockResolvedValue(undefined);
+    runtime.db = { close: vi.fn() };
+
+    const stopOne = runtime.stop();
+    const stopTwo = runtime.stop();
+    await vi.waitFor(() => {
+      expect(runtime.scheduler.stop).toHaveBeenCalledTimes(1);
+    });
+
+    expect(runtime.eventBus.emit).toHaveBeenCalledTimes(1);
+
+    resolveSchedulerStop?.();
+    await Promise.all([stopOne, stopTwo]);
+
+    expect(runtime.memoryExtractor.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.db.close).toHaveBeenCalledTimes(1);
+  });
+
   it('queues retroactive extraction for crash recovery candidates', () => {
     const runtime = makeRuntime() as any;
     const queueRetroactiveExtraction = vi.fn().mockResolvedValue(undefined);

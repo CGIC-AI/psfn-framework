@@ -1764,6 +1764,8 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         responseStyle,
         runtimeNow,
+        taskKind,
+        templateVariables,
       );
       let fullPrompt = '';
 
@@ -2851,6 +2853,8 @@ export class SubstrateAgent {
     canonicalContactKey?: string,
     responseStyle: ResponseStyle = 'concise',
     now: Date = new Date(),
+    taskKind?: string,
+    templateVariables?: Record<string, string>,
   ): string {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
     const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
@@ -2891,6 +2895,20 @@ export class SubstrateAgent {
       + ')'
       + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
     ];
+
+    const isScheduledTask = taskKind === 'heartbeat' || taskKind === 'reflection' || message.channelId.startsWith('internal:');
+    if (isScheduledTask) {
+      const promptVariables = templateVariables ?? this.resolveCharacterPromptVariables();
+      const appearance = (
+        promptVariables['character.visual_description']
+        || promptVariables.extensions_visual_description
+        || promptVariables.visual_description
+        || ''
+      ).trim();
+      if (appearance.length > 0) {
+        lines.push(`Appearance context: ${appearance}`);
+      }
+    }
 
     // Tool directory for extended tools
     if (extendedCount > 0) {

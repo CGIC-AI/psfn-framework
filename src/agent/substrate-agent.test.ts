@@ -1469,6 +1469,32 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
+  it('injects appearance context for scheduled internal heartbeat turns', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+      {
+        characterPromptVariables: {
+          'character.visual_description': 'Cat ears and tail with human hands.',
+        },
+      },
+    );
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'internal:reflection:whisper',
+      channelType: 'terminal',
+      content: 'scheduled reflection run',
+    }));
+
+    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    expect(prompt).toContain('Appearance context: Cat ears and tail with human hands.');
+  });
+
   it('prefers channel prompt adapter channelType from the runtime registry', async () => {
     const config = makeConfig();
     const agent = new SubstrateAgent(

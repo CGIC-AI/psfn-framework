@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, dirname, resolve } from 'node:path';
-import { MODULE_REGISTRY_PATH } from '../security/policy-constants.js';
+import { resolveRequiredModuleRegistryPath } from '../security/policy-constants.js';
 import { isRecord } from '../utils/types.js';
 import type { ModuleRecord } from './types.js';
 
@@ -29,7 +29,7 @@ export function resolveModuleRegistryPath(
   pathOverride?: string,
   cwd = process.cwd(),
 ): string {
-  const candidate = (pathOverride?.trim() || process.env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH);
+  const candidate = pathOverride?.trim() || resolveRequiredModuleRegistryPath();
   return isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
 }
 
@@ -37,7 +37,7 @@ export function resolveModuleRegistryPathFromWorkspace(
   workspaceRoot: string,
   pathOverride?: string,
 ): string {
-  const candidate = (pathOverride?.trim() || process.env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH);
+  const candidate = pathOverride?.trim() || resolveRequiredModuleRegistryPath();
   return isAbsolute(candidate) ? candidate : resolve(workspaceRoot, candidate);
 }
 

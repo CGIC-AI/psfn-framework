@@ -3,8 +3,6 @@
 
 export const REPO_ALLOWED_PATHS = ['src/', 'docs/', 'psfn/'] as const;
 
-export const MODULE_REGISTRY_PATH = 'psfn/modules/repl-registry.json';
-
 export const DEFAULT_GATEWAY_SOCKET_PATH = '/run/psfn/gateway.sock';
 
 export const WEB_FETCH_USER_AGENT = 'PurrsePhone-Substrate/0.1';
@@ -27,4 +25,16 @@ export function isAllowedRepoRelativePath(path: string): boolean {
     }
   }
   return false;
+}
+
+export function resolveRequiredModuleRegistryPath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const configured = env.MODULE_REGISTRY_PATH?.trim();
+  if (!configured) {
+    throw new Error(
+      'MODULE_REGISTRY_PATH must be set (for example: companion/modules/repl-registry.json)',
+    );
+  }
+  return configured;
 }

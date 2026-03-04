@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   REPO_ALLOWED_PATHS,
-  MODULE_REGISTRY_PATH,
   DEFAULT_GATEWAY_SOCKET_PATH,
   WEB_FETCH_USER_AGENT,
   WEB_FETCH_TIMEOUT_MS,
   isAllowedRepoRelativePath,
+  resolveRequiredModuleRegistryPath,
 } from './policy-constants.js';
 
 describe('policy constants', () => {
@@ -13,8 +13,11 @@ describe('policy constants', () => {
     expect(REPO_ALLOWED_PATHS).toEqual(['src/', 'docs/', 'psfn/']);
   });
 
-  it('exposes canonical module registry path', () => {
-    expect(MODULE_REGISTRY_PATH).toBe('psfn/modules/repl-registry.json');
+  it('requires explicit module registry path from env', () => {
+    expect(() => resolveRequiredModuleRegistryPath({})).toThrow('MODULE_REGISTRY_PATH must be set');
+    expect(resolveRequiredModuleRegistryPath({
+      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+    })).toBe('companion/modules/repl-registry.json');
   });
 
   it('exposes canonical gateway fetch defaults', () => {

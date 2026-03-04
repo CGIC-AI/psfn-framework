@@ -297,7 +297,7 @@ describe('evaluatePolicy', () => {
 
   it('requires approval for module registry path by default', () => {
     expect(evaluatePolicy(
-      { method: 'fs.read', params: { path: '/app/psfn/modules/repl-registry.json' } },
+      { method: 'fs.read', params: { path: '/app/companion/modules/repl-registry.json' } },
       policyConfig,
     )).toBe('NEEDS_APPROVAL');
   });
@@ -307,11 +307,11 @@ describe('evaluatePolicy', () => {
       ...policyConfig,
       allowedReadPaths: [
         ...(policyConfig.allowedReadPaths ?? []),
-        '/app/psfn/modules/repl-registry.json',
+        '/app/companion/modules/repl-registry.json',
       ],
     };
     expect(evaluatePolicy(
-      { method: 'fs.read', params: { path: '/app/psfn/modules/repl-registry.json' } },
+      { method: 'fs.read', params: { path: '/app/companion/modules/repl-registry.json' } },
       trustedConfig,
     )).toBe('ALLOW');
   });

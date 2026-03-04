@@ -1032,6 +1032,21 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('keeps /api/admin/settings PATCH reachable through the canonical JSON handler', async () => {
+    const malformedPatch = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      '{',
+      authHeaders,
+    );
+
+    expect(malformedPatch.status).toBe(400);
+    expect(JSON.parse(malformedPatch.body)).toEqual({
+      error: 'Invalid JSON payload',
+    });
+  });
+
   it('returns field-level validation details for invalid settings payloads', async () => {
     const res = await request(
       port,

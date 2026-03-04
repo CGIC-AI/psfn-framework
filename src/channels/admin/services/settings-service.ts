@@ -1,4 +1,3 @@
-import type { SkillsRuntime } from '../../../skills/runtime.js';
 import type { SubstrateConfig } from '../../../types.js';
 import {
   applySettings,
@@ -13,25 +12,18 @@ import {
 } from '../../../config/models-config.js';
 import {
   loadSkillsConfig,
-  saveSkillsConfig,
 } from '../../../config/skills-config.js';
 import {
   loadSchedulerConfig,
-  saveSchedulerConfig,
 } from '../../../config/scheduler-config.js';
 import {
   loadTrustPolicyConfig,
-  saveTrustPolicyConfig,
 } from '../../../config/trust-policy-config.js';
 import {
   loadCapabilityTierConfig,
-  saveCapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
-import { resolveRuntimeSchedulerConfig } from '../../../config/scheduler-runtime.js';
-import { setRuntimeTrustPolicy } from '../../../trust/runtime-policy.js';
 import {
   CAPABILITY_TIER_VALUES,
-  isCapabilityTier,
 } from '../../../capabilities/tiers.js';
 import { toErrorMessage } from '../../../utils/errors.js';
 import type {
@@ -72,7 +64,6 @@ const STRING_ARRAY_SETTINGS_FIELDS = new Set([
 export class AdminSettingsDataService implements AdminSettingsService {
   constructor(private readonly deps: {
     config: SubstrateConfig;
-    skillsRuntime?: SkillsRuntime | null;
   }) {}
 
   private getEnvInfo() {
@@ -98,13 +89,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
       trustPolicy: loadTrustPolicyConfig(this.deps.config.dataDir),
       capabilities: loadCapabilityTierConfig(this.deps.config.dataDir),
     };
-  }
-
-  private parseConfigJsonBody(body: string): unknown {
-    if (!body.trim()) {
-      throw new Error('Configuration payload is empty');
-    }
-    return JSON.parse(body);
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {
@@ -316,72 +300,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
         );
       }
       return { ok: true, message: 'Settings updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateModelsConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveModelsConfig(this.deps.config.dataDir, parsed);
-      return { ok: true, message: 'models.json updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateSkillsConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveSkillsConfig(this.deps.config.dataDir, parsed);
-      this.deps.skillsRuntime?.invalidateCache();
-      return { ok: true, message: 'skills.json updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateSchedulerConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveSchedulerConfig(this.deps.config.dataDir, parsed);
-      const runtimeScheduler = resolveRuntimeSchedulerConfig(this.deps.config.dataDir, this.deps.config);
-      this.deps.config.maintenanceIntervalMs = runtimeScheduler.maintenanceIntervalMs;
-      this.deps.config.extractionInterval = runtimeScheduler.extractionIntervalMinutes;
-      return { ok: true, message: 'scheduler.json updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateTrustPolicyConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveTrustPolicyConfig(this.deps.config.dataDir, parsed);
-      const runtimeTrustPolicy = loadTrustPolicyConfig(this.deps.config.dataDir);
-      setRuntimeTrustPolicy(runtimeTrustPolicy);
-      return { ok: true, message: 'trust-policy.json updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateCapabilitiesConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveCapabilityTierConfig(this.deps.config.dataDir, parsed);
-      const runtimeCapabilities = loadCapabilityTierConfig(this.deps.config.dataDir);
-      const tier = runtimeCapabilities.tier;
-      if (!isCapabilityTier(tier)) {
-        return {
-          ok: false,
-          message: `tier must be one of ${CAPABILITY_TIER_VALUES.join(', ')}`,
-        };
-      }
-      this.deps.config.capabilityTier = tier;
-      this.deps.config.runtimeHooks?.refreshCapabilities?.();
-      return { ok: true, message: 'capability-tier.json updated' };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };
     }

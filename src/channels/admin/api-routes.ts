@@ -192,6 +192,8 @@ function toDateFilter(value: string | null, boundary: 'start' | 'end'): number |
   return parsed;
 }
 
+const ADMIN_SETTINGS_API_PATH = '/api/admin/settings';
+
 export function buildAdminApiRoutes(options: {
   dashboardService: AdminDashboardService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
@@ -618,7 +620,7 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'GET',
-      match: exactPath('/api/admin/settings'),
+      match: exactPath(ADMIN_SETTINGS_API_PATH),
       handle: (_req, res) => {
         settingsService.getSettingsData().then(
           data => sendJson(res, 200, data),
@@ -628,7 +630,7 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'PATCH',
-      match: exactPath('/api/admin/settings'),
+      match: exactPath(ADMIN_SETTINGS_API_PATH),
       handle: (req, res) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);

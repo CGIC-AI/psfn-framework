@@ -130,8 +130,8 @@ describe('SessionStore', () => {
       channelId: 'api:e2e-internal',
       role: 'user',
       content: 'hello',
-      authorId: 'operator',
-      authorName: 'V',
+      authorId: 'primary-user',
+      authorName: 'PrimaryUser',
       timestamp: 1739443200000,
     });
 

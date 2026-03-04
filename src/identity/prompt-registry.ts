@@ -47,7 +47,7 @@ For each fact, provide:
   - procedural: Behavioral patterns ("User prefers code examples over explanations")
   - boundary: Prior refusals and safety boundaries that should persist across sessions ("I declined helping bypass a paywall")
   - reflection: Meta-observations ("User has been sharing more personal details lately")
-  - relational: Facts about people and relationships (who someone is, their role, preferences, relationship dynamics). Examples: "V's sister is named Alex", "Bob likes jazz music", "V and Sam work together on the framework"
+  - relational: Facts about people and relationships (who someone is, their role, preferences, relationship dynamics). Examples: "the primary user's sister is named Alex", "Bob likes jazz music", "the primary user and Sam work together on the framework"
 - importance: 0-1 how significant this is for understanding the user (0.8+ for core identity facts, 0.3-0.5 for casual mentions)
 - emotional_valence: -1 to 1 (-1 very negative, 0 neutral, 1 very positive)
 - confidence: 0-1 how confident you are this fact is correct

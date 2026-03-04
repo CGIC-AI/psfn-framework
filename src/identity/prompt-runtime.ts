@@ -58,7 +58,7 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   {
     token: '{{user}}',
     description: 'Current author/user display name from runtime context.',
-    example: 'Operator',
+    example: 'PrimaryUser',
   },
   {
     token: '{{char}}',

@@ -549,15 +549,15 @@ describe('ContactStore', () => {
         discordUserId: 'YOUR_DISCORD_USER_ID',
       });
       const source = store.upsert({
-        displayName: 'Operator',
-        channelIdentities: [{ channel: 'discord', userId: 'operator' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'primary-user' }],
       });
 
       const merged = store.mergeContacts(source.id, target.id);
       expect(merged).toBe(true);
 
       const updated = store.getById(target.id);
-      expect(updated?.displayName).toBe('Operator');
+      expect(updated?.displayName).toBe('PrimaryUser');
       expect(updated?.discordUserId).toBe('YOUR_DISCORD_USER_ID');
     });
   });
@@ -726,16 +726,16 @@ describe('ContactStore', () => {
   describe('identity link verification challenges', () => {
     it('issues a challenge, verifies it, and commits the target link', () => {
       const contact = store.upsert({
-        displayName: 'Operator',
-        channelIdentities: [{ channel: 'discord', userId: 'operator-discord' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
       const challenge = store.createIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
-        sourceUserId: 'operator-discord',
+        sourceUserId: 'user-discord',
         targetChannel: 'api',
-        targetUserId: 'operator-api',
+        targetUserId: 'user-api',
       });
 
       expect(challenge.status).toBe('challenge_created');
@@ -744,16 +744,16 @@ describe('ContactStore', () => {
       const verified = store.verifyIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
-        sourceUserId: 'operator-discord',
+        sourceUserId: 'user-discord',
         targetChannel: 'api',
-        targetUserId: 'operator-api',
+        targetUserId: 'user-api',
         nonce: challenge.verification.nonce,
         expiresAt: challenge.verification.expiresAt,
         signature: challenge.verification.signature,
       });
 
       expect(verified.status).toBe('linked');
-      expect(store.getByChannelIdentity('api', 'operator-api')?.id).toBe(contact.id);
+      expect(store.getByChannelIdentity('api', 'user-api')?.id).toBe(contact.id);
       expect(store.listIdentityLinkVerifications(5)[0]?.status).toBe('verified');
     });
 

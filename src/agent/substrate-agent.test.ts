@@ -1663,11 +1663,11 @@ describe('SubstrateAgent.handleMessage', () => {
       { characterName: 'PSFN' },
     );
 
-    await agent.handleMessage(makeMessage({ authorName: 'Operator' }));
+    await agent.handleMessage(makeMessage({ authorName: 'PrimaryUser' }));
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[1]).toContain('You are PSFN.');
-    expect(buildCall[1]).toContain('Address Operator by name.');
+    expect(buildCall[1]).toContain('Address PrimaryUser by name.');
     expect(buildCall[1]).not.toContain('{{char}}');
     expect(buildCall[1]).not.toContain('{{user}}');
   });
@@ -1677,11 +1677,11 @@ describe('SubstrateAgent.handleMessage', () => {
     const sessionManager = makeMockSessionManager();
     const sharedContact = {
       id: 'contact-primary',
-      displayName: 'Operator',
+      displayName: 'PrimaryUser',
       nickname: 'V',
       trustLevel: 'primary',
       channelIdentities: [
-        { channel: 'discord', userId: 'discord-operator' },
+        { channel: 'discord', userId: 'discord-user' },
         { channel: 'telegram', userId: '5635268079' },
       ],
     };
@@ -1702,8 +1702,8 @@ describe('SubstrateAgent.handleMessage', () => {
       id: 'msg-nick-discord',
       channelId: 'discord-chan',
       channelType: 'discord',
-      authorId: 'discord-operator',
-      authorName: 'discord-operator',
+      authorId: 'discord-user',
+      authorName: 'discord-user',
     }));
     await agent.handleMessage(makeMessage({
       id: 'msg-nick-telegram',
@@ -1719,7 +1719,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(secondPrompt).toContain('Address V by name.');
     expect(firstPrompt).toContain('Speaking with: V');
     expect(secondPrompt).toContain('Speaking with: V');
-    expect(firstPrompt).not.toContain('Address discord-operator by name.');
+    expect(firstPrompt).not.toContain('Address discord-user by name.');
     expect(secondPrompt).not.toContain('Address 5635268079 by name.');
   });
 
@@ -2225,19 +2225,19 @@ describe('SubstrateAgent.handleMessage', () => {
       agent.promptComposer = { composeSplit } as any;
 
       vi.setSystemTime(new Date('2026-02-26T00:00:00.000Z'));
-      await agent.handleMessage(makeMessage({ id: 'msg-static-1', authorName: 'Operator' }));
+      await agent.handleMessage(makeMessage({ id: 'msg-static-1', authorName: 'PrimaryUser' }));
 
       vi.setSystemTime(new Date('2026-02-26T00:10:00.000Z'));
-      await agent.handleMessage(makeMessage({ id: 'msg-static-2', authorName: 'Operator' }));
+      await agent.handleMessage(makeMessage({ id: 'msg-static-2', authorName: 'PrimaryUser' }));
 
       const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
       const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
 
-      expect(firstPrompt).toContain('[STATIC] Operator @ 2026-02-26T00:00:00.000Z');
+      expect(firstPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-26T00:00:00.000Z');
       expect(firstPrompt).toContain('[DYNAMIC] 2026-02-26T00:00:00.000Z');
-      expect(secondPrompt).toContain('[STATIC] Operator @ 2026-02-26T00:00:00.000Z');
+      expect(secondPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-26T00:00:00.000Z');
       expect(secondPrompt).toContain('[DYNAMIC] 2026-02-26T00:10:00.000Z');
-      expect(secondPrompt).not.toContain('[STATIC] Operator @ 2026-02-26T00:10:00.000Z');
+      expect(secondPrompt).not.toContain('[STATIC] PrimaryUser @ 2026-02-26T00:10:00.000Z');
     } finally {
       vi.useRealTimers();
     }
@@ -2322,7 +2322,7 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage({
       id: 'msg-settings-1',
       authorId: 'same-user',
-      authorName: 'Operator',
+      authorName: 'PrimaryUser',
     }));
     await agent.handleMessage(makeMessage({
       id: 'msg-settings-2',
@@ -2332,7 +2332,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-    expect(firstPrompt).toContain('[STATIC] Operator');
+    expect(firstPrompt).toContain('[STATIC] PrimaryUser');
     expect(secondPrompt).toContain('[STATIC] Nyx');
   });
 

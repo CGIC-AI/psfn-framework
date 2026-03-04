@@ -1768,7 +1768,7 @@
               </div>
               <div>
                 <label class={LABEL_CLS}>Domain Allowlist</label>
-                <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains (e.g. local.operator.nyc, internal.corp)" />
+                <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains (e.g. example.local, internal.corp)" />
               </div>
               <div>
                 <label class={LABEL_CLS}>TLS CA Cert Paths</label>

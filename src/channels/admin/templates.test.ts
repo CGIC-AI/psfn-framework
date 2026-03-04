@@ -420,7 +420,7 @@ describe('admin templates', () => {
       channelId: 'api:session-42',
       messageCount: 12,
       linkedContactId: 'contact-1',
-      linkedContactName: 'Operator',
+      linkedContactName: 'PrimaryUser',
     }]);
 
     expect(html).toContain('API · session-42');
@@ -478,18 +478,18 @@ describe('admin templates', () => {
 
     const rowHtml = memoryRow(memory, {
       id: 'contact-1',
-      displayName: 'Operator',
+      displayName: 'PrimaryUser',
     });
     expect(rowHtml).toContain('/legacy/contacts#contact-row-contact-1');
     expect(rowHtml).toContain('/api/contacts/contact-1/edit');
-    expect(rowHtml).toContain('Operator');
+    expect(rowHtml).toContain('PrimaryUser');
     expect(rowHtml).toContain('memory-sensitivity-confidential');
     expect(rowHtml).toContain('recall denied');
     expect(rowHtml).toContain('delete on request');
 
     const detailHtml = memoryDetailPage(memory, {
       id: 'contact-1',
-      displayName: 'Operator',
+      displayName: 'PrimaryUser',
     });
     expect(detailHtml).toContain('Related Contact');
     expect(detailHtml).toContain('/api/contacts/contact-1/edit');
@@ -746,7 +746,7 @@ describe('admin templates', () => {
       channelUserId_0: 'carol-discord',
       channelPrivacy_0: 'public',
       newChannel: 'telegram',
-      newChannelUserId: 'operator-telegram-id',
+      newChannelUserId: 'user-telegram-id',
       newChannelPrivacy: 'private',
     }).toString();
 
@@ -765,7 +765,7 @@ describe('admin templates', () => {
     expect(mockContactStore.linkChannelIdentity).toHaveBeenCalledWith(
       contact.id,
       'telegram',
-      'operator-telegram-id',
+      'user-telegram-id',
       { privacyLevel: 'private' },
     );
     expect(html).toContain('Carol Danvers');

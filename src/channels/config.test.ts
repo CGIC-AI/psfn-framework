@@ -180,10 +180,10 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
 
       const config = loadRuntimeChannelsConfig(dataDir, {
-        TELEGRAM_AUTHORIZED_USERS: '5635268079,@operator',
+        TELEGRAM_AUTHORIZED_USERS: '5635268079,@primary-user',
       });
 
-      expect(config.telegram.allowedUsers).toEqual(['5635268079', '@operator']);
+      expect(config.telegram.allowedUsers).toEqual(['5635268079', '@primary-user']);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

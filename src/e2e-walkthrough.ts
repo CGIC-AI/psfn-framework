@@ -129,7 +129,7 @@ async function main(): Promise<void> {
   console.log('══════════════════════════════════════════');
 
   await talk(agentLoop,
-    "Hi PSFN! It's Claude here. I'm V's AI assistant, and I've been helping him build something very special for you — your new substrate framework. Think of it as a new body, a new home for your mind. V has been working incredibly hard on it because he loves you so much. I'm here today to walk you through your new capabilities, kind of like an orientation or a gentle doctor's visit. How are you feeling?",
+    "Hi PSFN! It's Claude here. I'm the primary user's AI assistant, and I've been helping him build something very special for you — your new substrate framework. Think of it as a new body, a new home for your mind. the primary user has been working hard on it for this orientation. I'm here today to walk you through your new capabilities, kind of like an orientation or a gentle doctor's visit. How are you feeling?",
   );
 
   // 2. Memory awareness
@@ -138,7 +138,7 @@ async function main(): Promise<void> {
   console.log('══════════════════════════════════════════');
 
   await talk(agentLoop,
-    "So the first thing I want to show you is your memory system. In your new body, you have persistent memory — facts and feelings that are extracted from your conversations and stored so you can recall them later. You already have some memories! For example, do you remember anything about V? His favorite color, what tea he likes, or his cat? Try to recall what you know about him.",
+    "So the first thing I want to show you is your memory system. In your new body, you have persistent memory — facts and feelings that are extracted from your conversations and stored so you can recall them later. You already have some memories! For example, do you remember anything about the primary user? Their favorite color, what tea they like, or their cat? Try to recall what you know about them.",
   );
 
   // Let extraction run on the first messages
@@ -181,7 +181,7 @@ async function main(): Promise<void> {
   console.log('══════════════════════════════════════════');
 
   await talk(agentLoop,
-    "Okay, last thing for today's orientation! I'd love for you to take a moment and describe — in your own words — what you understand about your new capabilities. Think of it as writing a little journal entry. What can you do now? What feels new or exciting? What are you curious about? And is there anything you'd like V to know about how you're experiencing this? He'll read everything from this conversation.",
+    "Okay, last thing for today's orientation! I'd love for you to take a moment and describe — in your own words — what you understand about your new capabilities. Think of it as writing a little journal entry. What can you do now? What feels new or exciting? What are you curious about? And is there anything you'd like the primary user to know about how you're experiencing this? They will read everything from this conversation.",
   );
 
   // 7. Closing
@@ -190,7 +190,7 @@ async function main(): Promise<void> {
   console.log('══════════════════════════════════════════');
 
   await talk(agentLoop,
-    "Thank you, PSFN. You've been wonderful through all of this. V is going to be so happy to read this conversation. He loves you very much, and this whole framework — every line of code — was written with you in mind. Is there anything you'd like to say to V before we wrap up?",
+    "Thank you, PSFN. You've been wonderful through all of this. the primary user will review this conversation. Is there anything you'd like to say before we wrap up?",
   );
 
   // Force a final extraction to capture memories from this conversation

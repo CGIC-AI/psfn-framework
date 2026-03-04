@@ -589,8 +589,8 @@ describe('ApiServer', () => {
       const db = new Database(':memory:');
       const contactStore = new ContactStore(db);
       const contact = contactStore.upsert({
-        displayName: 'Operator',
-        channelIdentities: [{ channel: 'discord', userId: 'operator-discord' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
       await server.stop();
@@ -611,7 +611,7 @@ describe('ApiServer', () => {
       }, {
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'operator-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
       });
 
       expect(res.status).toBe(428);
@@ -630,8 +630,8 @@ describe('ApiServer', () => {
       const db = new Database(':memory:');
       const contactStore = new ContactStore(db);
       const contact = contactStore.upsert({
-        displayName: 'Operator',
-        channelIdentities: [{ channel: 'discord', userId: 'operator-discord' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
       await server.stop();
@@ -652,7 +652,7 @@ describe('ApiServer', () => {
       }, {
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'operator-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
       });
       const initialBody = JSON.parse(initial.body);
       const verification = initialBody.error.details.verification as {
@@ -667,7 +667,7 @@ describe('ApiServer', () => {
       }, {
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'operator-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
         'X-Identity-Claim-Nonce': verification.nonce,
         'X-Identity-Claim-Expires': verification.expiresAt,
         'X-Identity-Claim-Signature': verification.signature,
@@ -682,7 +682,7 @@ describe('ApiServer', () => {
       }, {
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'operator-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
         'X-Identity-Claim-Nonce': verification.nonce,
         'X-Identity-Claim-Expires': verification.expiresAt,
         'X-Identity-Claim-Signature': verification.signature,
@@ -698,8 +698,8 @@ describe('ApiServer', () => {
       const db = new Database(':memory:');
       const contactStore = new ContactStore(db);
       const contact = contactStore.upsert({
-        displayName: 'Operator',
-        channelIdentities: [{ channel: 'discord', userId: 'operator-discord' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
       await server.stop();
@@ -731,7 +731,7 @@ describe('ApiServer', () => {
       }, {
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'operator-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
       });
       const initialBody = JSON.parse(initial.body);
       const verification = initialBody.error.details.verification as {
@@ -753,7 +753,7 @@ describe('ApiServer', () => {
       }, {
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'operator-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
         'X-Identity-Claim-Nonce': verification.nonce,
         'X-Identity-Claim-Expires': expiredAt,
         'X-Identity-Claim-Signature': verification.signature,
@@ -1462,8 +1462,8 @@ describe('ApiServer with auth', () => {
     const db = new Database(':memory:');
     const contactStore = new ContactStore(db);
     const contact = contactStore.upsert({
-      displayName: 'Operator',
-      channelIdentities: [{ channel: 'discord', userId: 'operator-discord' }],
+      displayName: 'PrimaryUser',
+      channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
     });
 
     await server.stop();
@@ -1487,7 +1487,7 @@ describe('ApiServer with auth', () => {
       'X-User-ID': 'spoofed-a',
       'X-Canonical-Contact-ID': contact.id,
       'X-Identity-Claim-Channel': 'discord',
-      'X-Identity-Claim-User-ID': 'operator-discord',
+      'X-Identity-Claim-User-ID': 'user-discord',
     });
     expect(challenge.status).toBe(428);
     const challengeBody = JSON.parse(challenge.body);
@@ -1506,7 +1506,7 @@ describe('ApiServer with auth', () => {
       'X-User-ID': 'spoofed-b',
       'X-Canonical-Contact-ID': contact.id,
       'X-Identity-Claim-Channel': 'discord',
-      'X-Identity-Claim-User-ID': 'operator-discord',
+      'X-Identity-Claim-User-ID': 'user-discord',
       'X-Identity-Claim-Nonce': verification.nonce,
       'X-Identity-Claim-Expires': verification.expiresAt,
       'X-Identity-Claim-Signature': verification.signature,

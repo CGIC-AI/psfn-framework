@@ -52,6 +52,47 @@ describe('voice reliability policy', () => {
     ).rejects.toBeInstanceOf(VoiceStageTimeoutError);
   });
 
+  it('aborts timed-out attempts before retrying the stage', async () => {
+    const lifecycle: string[] = [];
+    const sleep = vi.fn(async () => {});
+    const budgets = resolveVoiceReliabilityBudgets({
+      stt: {
+        timeoutMs: 5,
+        maxRetries: 1,
+        baseDelayMs: 0,
+      },
+    });
+
+    const task = vi.fn((signal: AbortSignal) => {
+      const attempt = task.mock.calls.length;
+      lifecycle.push(`start-${attempt}`);
+
+      if (attempt === 1) {
+        return new Promise<string>((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            lifecycle.push('abort-1');
+            reject(new Error('attempt 1 aborted'));
+          }, { once: true });
+        });
+      }
+
+      lifecycle.push('resolve-2');
+      return Promise.resolve('ok');
+    });
+
+    const result = await runWithVoiceStageBudget({
+      stage: 'stt',
+      budgets,
+      task,
+      retryOptions: { sleep },
+    });
+
+    expect(result).toBe('ok');
+    expect(task).toHaveBeenCalledTimes(2);
+    expect(lifecycle).toContain('abort-1');
+    expect(lifecycle.indexOf('abort-1')).toBeLessThan(lifecycle.indexOf('start-2'));
+  });
+
   it('selects preferred fallback candidate when available', () => {
     const selected = selectFallbackCandidate('primary', [
       { id: 'backup', value: 1 },

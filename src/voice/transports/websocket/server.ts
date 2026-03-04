@@ -1,6 +1,7 @@
 import { createComponentLogger } from '../../../logger.js';
 import { VoiceWireDecodeError, parseInboundVoiceWireFrame } from './serializer.js';
 import type {
+  VoiceWireInboundFrame,
   WebSocketVoiceConnection,
   WebSocketVoiceServerHooks,
   WebSocketVoiceServerOptions,
@@ -11,10 +12,15 @@ const log = createComponentLogger('VoiceWebSocketServer');
 
 const DEFAULT_MAX_FRAME_BYTES = 256 * 1024;
 const DEFAULT_SESSION_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_PENDING_FRAMES = 32;
 const CLOSE_CODE_MESSAGE_TOO_BIG = 1009;
 const CLOSE_CODE_POLICY_VIOLATION = 1008;
 const CLOSE_CODE_SESSION_TIMEOUT = 4000;
 const CLOSE_CODE_SERVER_SHUTDOWN = 1012;
+
+type WebSocketVoiceServerRuntimeOptions = Partial<WebSocketVoiceServerOptions> & {
+  maxPendingFrames?: number;
+};
 
 interface SessionState {
   connection: WebSocketVoiceConnection;
@@ -22,22 +28,26 @@ interface SessionState {
   timeout: NodeJS.Timeout;
   disposeMessageListener: () => void;
   disposeCloseListener: () => void;
+  frameQueue: VoiceWireInboundFrame[];
+  processingFrames: boolean;
   closed: boolean;
 }
 
 export class WebSocketVoiceServer {
   private readonly maxFrameBytes: number;
   private readonly sessionTimeoutMs: number;
+  private readonly maxPendingFrames: number;
   private readonly now: () => number;
   private readonly hooks: WebSocketVoiceServerHooks;
   private readonly sessions = new Map<string, SessionState>();
 
   constructor(
-    options: Partial<WebSocketVoiceServerOptions> = {},
+    options: WebSocketVoiceServerRuntimeOptions = {},
     hooks: WebSocketVoiceServerHooks = {},
   ) {
     this.maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
     this.sessionTimeoutMs = options.sessionTimeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
+    this.maxPendingFrames = Math.max(1, Math.floor(options.maxPendingFrames ?? DEFAULT_MAX_PENDING_FRAMES));
     this.now = options.now ?? (() => Date.now());
     this.hooks = hooks;
   }
@@ -64,7 +74,18 @@ export class WebSocketVoiceServer {
 
       try {
         const frame = parseInboundVoiceWireFrame(raw, this.maxFrameBytes);
-        this.fireHook('onFrame', state.session, frame);
+        if (state.frameQueue.length >= this.maxPendingFrames) {
+          log.warn('Voice websocket frame queue overflow', {
+            connectionId: connection.id,
+            pendingFrames: state.frameQueue.length,
+            maxPendingFrames: this.maxPendingFrames,
+          });
+          this.closeSession(connection.id, 'decode_error', CLOSE_CODE_POLICY_VIOLATION, 'frame queue overflow');
+          return;
+        }
+
+        state.frameQueue.push(frame);
+        this.drainFrameQueue(state);
       } catch (error) {
         if (error instanceof VoiceWireDecodeError && error.code === 'FRAME_TOO_LARGE') {
           log.warn('WebSocket frame rejected: too large', { connectionId: connection.id, error: error.message });
@@ -93,10 +114,12 @@ export class WebSocketVoiceServer {
       timeout,
       disposeMessageListener,
       disposeCloseListener,
+      frameQueue: [],
+      processingFrames: false,
       closed: false,
     });
 
-    this.fireHook('onSessionOpen', session);
+    void this.fireHook('onSessionOpen', session);
 
     return () => {
       this.closeSession(connection.id, 'shutdown', CLOSE_CODE_SERVER_SHUTDOWN, 'server detach');
@@ -129,38 +152,65 @@ export class WebSocketVoiceServer {
     clearTimeout(state.timeout);
     state.disposeMessageListener();
     state.disposeCloseListener();
+    state.frameQueue.length = 0;
     this.sessions.delete(connectionId);
 
     if (reason !== 'client_disconnect' && (code !== undefined || message !== undefined)) {
       state.connection.close(code, message);
     }
 
-    this.fireHook('onSessionClose', state.session, reason);
+    void this.fireHook('onSessionClose', state.session, reason);
+  }
+
+  private drainFrameQueue(state: SessionState): void {
+    if (state.closed || state.processingFrames) {
+      return;
+    }
+
+    state.processingFrames = true;
+    void (async () => {
+      try {
+        while (!state.closed) {
+          const frame = state.frameQueue.shift();
+          if (!frame) {
+            return;
+          }
+
+          await this.fireHook('onFrame', state.session, frame);
+        }
+      } finally {
+        state.processingFrames = false;
+
+        if (!state.closed && state.frameQueue.length > 0) {
+          this.drainFrameQueue(state);
+        }
+      }
+    })();
   }
 
   private fireHook(
     hook: 'onSessionOpen',
     session: WebSocketVoiceSession,
-  ): void;
+  ): Promise<void>;
   private fireHook(
     hook: 'onSessionClose',
     session: WebSocketVoiceSession,
     reason: 'timeout' | 'client_disconnect' | 'decode_error' | 'shutdown',
-  ): void;
+  ): Promise<void>;
   private fireHook(
     hook: 'onFrame',
     session: WebSocketVoiceSession,
     frame: Parameters<NonNullable<WebSocketVoiceServerHooks['onFrame']>>[1],
-  ): void;
+  ): Promise<void>;
   private fireHook(
     hook: keyof WebSocketVoiceServerHooks,
     session: WebSocketVoiceSession,
     value?: unknown,
-  ): void {
+  ): Promise<void> {
     const fn = this.hooks[hook];
-    if (!fn) return;
+    if (!fn) return Promise.resolve();
 
-    Promise.resolve(
+    return Promise.resolve(
       hook === 'onSessionOpen'
         ? (fn as NonNullable<WebSocketVoiceServerHooks['onSessionOpen']>)(session)
         : hook === 'onSessionClose'

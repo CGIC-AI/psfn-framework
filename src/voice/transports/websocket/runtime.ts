@@ -13,6 +13,9 @@ import {
 const log = createComponentLogger('VoiceWebSocketRuntime');
 
 const DEFAULT_MAX_AUDIO_CHUNK_BYTES = 256 * 1024;
+const DEFAULT_MAX_FINAL_TRANSCRIPTS = 128;
+const FINAL_TRANSCRIPT_OVERFLOW_POLICY = 'drop_oldest' as const;
+const NEVER_ABORT_SIGNAL = new AbortController().signal;
 
 type RuntimeErrorCode =
   | 'SESSION_NOT_FOUND'
@@ -32,11 +35,19 @@ interface RuntimeSessionState {
   transcriptPump: Promise<void>;
   transcriptPumpError: Error | null;
   finalTranscripts: string[];
+  droppedFinalTranscriptCount: number;
   lastPartialTranscript: string;
   abortController: AbortController;
   ttsSession: TtsSynthesisSession | null;
   ending: boolean;
   interrupted: boolean;
+}
+
+interface SessionStartInFlight {
+  key: string;
+  transportSession: WebSocketVoiceSession;
+  abortController: AbortController;
+  promise: Promise<RuntimeSessionState>;
 }
 
 class WebSocketVoiceRuntimeError extends Error {
@@ -70,6 +81,7 @@ function canonicalBase64(input: string): string {
 
 export class WebSocketVoiceRuntime {
   private readonly sessions = new Map<string, RuntimeSessionState>();
+  private readonly startsInFlight = new Map<string, SessionStartInFlight>();
   private readonly maxAudioChunkBytes: number;
   private readonly now: () => number;
   private readonly stt: WebSocketVoiceRuntimeOptions['stt'];
@@ -124,6 +136,8 @@ export class WebSocketVoiceRuntime {
   }
 
   async stop(): Promise<void> {
+    await this.abortPendingStarts(() => true, 'runtime.stop');
+
     const states = [...this.sessions.values()];
     await Promise.all(states.map(async (state) => {
       await this.cancelInFlight(state, 'runtime.stop');
@@ -132,6 +146,11 @@ export class WebSocketVoiceRuntime {
   }
 
   async closeConnection(connectionId: string, reason = 'transport.closed'): Promise<void> {
+    await this.abortPendingStarts(
+      (pending) => pending.transportSession.connectionId === connectionId,
+      reason,
+    );
+
     const states = [...this.sessions.values()].filter(
       (state) => state.transportSession.connectionId === connectionId,
     );
@@ -147,15 +166,55 @@ export class WebSocketVoiceRuntime {
     const key = toSessionKey(transportSession, frameSessionId);
     const existing = this.sessions.get(key);
     if (existing) {
-      existing.interrupted = true;
-      await this.cancelInFlight(existing, 'session.restart');
-      this.releaseState(existing);
+      await this.emitOutbound(transportSession, frameSessionId, {
+        type: 'ack',
+        ackType: 'session.start',
+      });
+      return;
+    }
+
+    const pendingStart = this.startsInFlight.get(key);
+    if (pendingStart) {
+      await pendingStart.promise;
+      await this.emitOutbound(transportSession, frameSessionId, {
+        type: 'ack',
+        ackType: 'session.start',
+      });
+      return;
     }
 
     const abortController = new AbortController();
+    const pending: SessionStartInFlight = {
+      key,
+      transportSession,
+      abortController,
+      promise: this.startSessionState(key, transportSession, frameSessionId, abortController),
+    };
+    this.startsInFlight.set(key, pending);
+
+    try {
+      await pending.promise;
+      await this.emitOutbound(transportSession, frameSessionId, {
+        type: 'ack',
+        ackType: 'session.start',
+      });
+    } finally {
+      const current = this.startsInFlight.get(key);
+      if (current === pending) {
+        this.startsInFlight.delete(key);
+      }
+    }
+  }
+
+  private async startSessionState(
+    key: string,
+    transportSession: WebSocketVoiceSession,
+    frameSessionId: string,
+    abortController: AbortController,
+  ): Promise<RuntimeSessionState> {
     const sttSession = await this.runStage(
       'stt',
-      () => this.stt.startStream(this.sttConfig, abortController.signal),
+      (stageSignal) => this.stt.startStream(this.sttConfig, stageSignal),
       abortController.signal,
     );
 
@@ -167,6 +226,7 @@ export class WebSocketVoiceRuntime {
       transcriptPump: Promise.resolve(),
       transcriptPumpError: null,
       finalTranscripts: [],
+      droppedFinalTranscriptCount: 0,
       lastPartialTranscript: '',
       abortController,
       ttsSession: null,
@@ -174,13 +234,16 @@ export class WebSocketVoiceRuntime {
       interrupted: false,
     };
 
+    const existing = this.sessions.get(key);
+    if (existing) {
+      await Promise.allSettled([sttSession.cancel('session.start.idempotent')]);
+      return existing;
+    }
+
     this.sessions.set(key, state);
     state.transcriptPump = this.pumpTranscripts(state);
 
-    await this.emitOutbound(transportSession, frameSessionId, {
-      type: 'ack',
-      ackType: 'session.start',
-    });
+    return state;
   }
 
   private async handleAudioChunk(
@@ -239,11 +302,11 @@ export class WebSocketVoiceRuntime {
       const assistantText = this.security.validateTtsInputText(
         await this.runStage(
           'llm',
-          () => this.onAssistantTurn({
+          (stageSignal) => this.onAssistantTurn({
             transportSession,
             sessionId: frameSessionId,
             transcript,
-            signal: state.abortController.signal,
+            signal: stageSignal,
           }),
           state.abortController.signal,
         ),
@@ -308,6 +371,16 @@ export class WebSocketVoiceRuntime {
     if (current === state) {
       this.sessions.delete(state.key);
     }
+
+    if (state.droppedFinalTranscriptCount > 0) {
+      log.warn('Voice runtime transcript queue applied overflow policy', {
+        connectionId: state.transportSession.connectionId,
+        sessionId: state.frameSessionId,
+        droppedFinalTranscripts: state.droppedFinalTranscriptCount,
+        maxFinalTranscripts: DEFAULT_MAX_FINAL_TRANSCRIPTS,
+        overflowPolicy: FINAL_TRANSCRIPT_OVERFLOW_POLICY,
+      });
+    }
   }
 
   private async pumpTranscripts(state: RuntimeSessionState): Promise<void> {
@@ -323,7 +396,7 @@ export class WebSocketVoiceRuntime {
         }
 
         if (chunk.type === 'final') {
-          state.finalTranscripts.push(text);
+          this.pushFinalTranscript(state, text);
         } else {
           state.lastPartialTranscript = text;
         }
@@ -347,6 +420,20 @@ export class WebSocketVoiceRuntime {
     }
   }
 
+  private pushFinalTranscript(state: RuntimeSessionState, text: string): void {
+    if (state.finalTranscripts.length < DEFAULT_MAX_FINAL_TRANSCRIPTS) {
+      state.finalTranscripts.push(text);
+      return;
+    }
+
+    state.droppedFinalTranscriptCount += 1;
+    if (FINAL_TRANSCRIPT_OVERFLOW_POLICY === 'drop_oldest') {
+      state.finalTranscripts.shift();
+      state.finalTranscripts.push(text);
+      return;
+    }
+  }
+
   private collectTranscript(state: RuntimeSessionState): string {
     const finalText = state.finalTranscripts.join(' ').trim();
     const partialText = state.lastPartialTranscript.trim();
@@ -363,7 +450,7 @@ export class WebSocketVoiceRuntime {
   private async streamPlayback(state: RuntimeSessionState, assistantText: string): Promise<void> {
     const ttsSession = await this.runStage(
       'tts',
-      () => this.tts.synthesizeStream({ ...this.ttsRequest, text: assistantText }, state.abortController.signal),
+      (stageSignal) => this.tts.synthesizeStream({ ...this.ttsRequest, text: assistantText }, stageSignal),
       state.abortController.signal,
     );
     state.ttsSession = ttsSession;
@@ -435,6 +522,24 @@ export class WebSocketVoiceRuntime {
     await state.transcriptPump.catch(() => undefined);
   }
 
+  private async abortPendingStarts(
+    matcher: (pending: SessionStartInFlight) => boolean,
+    reason: string,
+  ): Promise<void> {
+    const pendingStarts = [...this.startsInFlight.values()].filter(matcher);
+    if (pendingStarts.length === 0) {
+      return;
+    }
+
+    for (const pending of pendingStarts) {
+      if (!pending.abortController.signal.aborted) {
+        pending.abortController.abort(reason);
+      }
+    }
+
+    await Promise.allSettled(pendingStarts.map((pending) => pending.promise));
+  }
+
   private throwIfInterrupted(state: RuntimeSessionState): void {
     if (state.abortController.signal.aborted) {
       throw new WebSocketVoiceRuntimeError('INTERRUPTED', 'Voice session was interrupted');
@@ -443,18 +548,20 @@ export class WebSocketVoiceRuntime {
 
   private async runStage<T>(
     stage: VoiceRuntimeStage,
-    task: () => Promise<T>,
+    task: (signal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
     if (signal?.aborted) {
       throw new WebSocketVoiceRuntimeError('INTERRUPTED', 'Voice session was interrupted');
     }
 
+    const stageSignal = signal ?? NEVER_ABORT_SIGNAL;
+
     if (!this.reliability) {
-      return task();
+      return task(stageSignal);
     }
 
-    return this.reliability.runStage(stage, task, signal);
+    return this.reliability.runStage(stage, task, stageSignal);
   }
 
   private async emitOutbound(

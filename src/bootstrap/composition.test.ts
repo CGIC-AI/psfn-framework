@@ -401,7 +401,7 @@ describe('agent-main split wiring', () => {
 
   it('uses durable split shutdown sequence with module + marker teardown', () => {
     const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
-    expect(source).toContain("runStep('shutdown module loader'");
+    expect(source).toContain("runShutdownStep('shutdown module loader'");
     expect(source).toContain('moduleLoader.shutdown()');
     expect(source).toContain('sessionStore.markGracefulShutdownForActiveChannels()');
   });
@@ -444,9 +444,9 @@ describe('runtime composition wiring', () => {
 
   it('uses durable gateway shutdown sequencing in split mode', () => {
     const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
-    expect(source).toContain('let shuttingDown = false;');
-    expect(source).toContain('Gateway shutdown step failed');
-    expect(source).toContain('Gateway shutdown completed with errors');
+    expect(source).toContain('let stopPromise: Promise<void> | null = null;');
+    expect(source).toContain("runShutdownStep('stop gateway server'");
+    expect(source).toContain('Shutdown step failed; continuing shutdown');
   });
 
   it('avoids duplicating composition-owned constructor wiring', () => {

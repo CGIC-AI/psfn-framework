@@ -4,6 +4,7 @@
 import type {
   CompletionPurpose,
   ContextMessage,
+  ObservabilityCallType,
   SubstrateMessage,
   ToolSchema,
 } from '../types.js';
@@ -12,18 +13,29 @@ import type { JournalIntegrityVerificationResult } from '../session/journal-util
 
 // ── Request parameter types (agent → gateway) ──
 
-export interface LLMChatParams {
+export interface GatewayCorrelationParams {
+  turnId?: string;
+  requestId?: string;
+  channelId?: string;
+  callType?: ObservabilityCallType;
+  originType?: ObservabilityCallType;
+  originStage?: string;
+  toolName?: string;
+  toolCallId?: string;
+  purpose?: string;
+}
+
+export interface LLMChatParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   messages: ContextMessage[];
   systemPrompt: string;
   stream?: boolean;
-  requestId?: string;
   maxTokens?: number;
   tools?: ToolSchema[];
 }
 
-export interface LLMCompleteParams {
+export interface LLMCompleteParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   messages: ContextMessage[];
@@ -49,6 +61,12 @@ export interface WebFetchParams {
   url: string;
   prompt?: string;
   lane?: 'default' | 'local_crawler';
+}
+
+export interface WebFetchBinaryParams {
+  url: string;
+  lane?: 'default' | 'local_crawler';
+  maxBytes?: number;
 }
 
 export interface FsReadParams {
@@ -199,6 +217,12 @@ export interface WebFetchResult {
   sanitized: boolean;
 }
 
+export interface WebFetchBinaryResult {
+  dataBase64: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
 export interface FsReadResult {
   content: string;
 }
@@ -286,6 +310,7 @@ export interface GatewayMethods {
   'discord.send': [DiscordSendParams, DiscordSendResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
+  'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];

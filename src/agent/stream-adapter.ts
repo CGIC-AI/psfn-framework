@@ -15,6 +15,8 @@ import { createModel, resolveRegisteredModel } from '../llm/models.js';
 import { withRetry } from '../llm/retry.js';
 import { llmRetryConfig } from '../llm/retry-config.js';
 import { createComponentLogger } from '../logger.js';
+import { getRequestContext } from '../llm/request-context.js';
+import { toCorrelationLogFields } from '../llm/correlation.js';
 
 const log = createComponentLogger('StreamAdapter');
 
@@ -31,6 +33,7 @@ export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
 
   return (model, context, options) => {
+    const correlationFields = toCorrelationLogFields(getRequestContext());
     const modelProvider = resolveModelProvider(model);
     // Resolve API key: prefer caller's, then LiteLLM key, then provider env key
     const apiKey = options?.apiKey
@@ -53,6 +56,7 @@ export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
             maxRetries,
             delayMs,
             error: error.message,
+            ...correlationFields,
           });
         },
       },
@@ -90,7 +94,9 @@ export function resolveModel(
   }
 
   if (litellmBaseUrl) {
-    return createModel(litellmBaseUrl, slot.model, slot.maxTokens);
+    const modelId = normalizeLiteLLMModelId(slot.provider, slot.model);
+    const model = createModel(litellmBaseUrl, modelId, slot.maxTokens);
+    return ensurePurposeInputCapabilities(model, purpose);
   }
 
   // Direct provider mode — use pi-ai's built-in registry.
@@ -102,7 +108,7 @@ export function resolveModel(
       `Set LITELLM_BASE_URL or check model roster config.`,
     );
   }
-  return model;
+  return ensurePurposeInputCapabilities(model, purpose);
 }
 
 export function resolveExplicitModel(
@@ -111,7 +117,9 @@ export function resolveExplicitModel(
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
 
   if (litellmBaseUrl) {
-    return createModel(litellmBaseUrl, selection.model, selection.maxTokens);
+    const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
+    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens);
+    return ensurePurposeInputCapabilities(model, selection.purpose);
   }
 
   const registered = resolveRegisteredModel(selection.provider, selection.model);
@@ -122,9 +130,45 @@ export function resolveExplicitModel(
     );
   }
 
-  return {
+  const resolved = {
     ...registered,
     ...(selection.maxTokens !== undefined ? { maxTokens: selection.maxTokens } : {}),
     ...(selection.contextWindow !== undefined ? { contextWindow: selection.contextWindow } : {}),
   };
+  return ensurePurposeInputCapabilities(resolved, selection.purpose);
+}
+
+function ensurePurposeInputCapabilities(
+  model: Model<any>,
+  purpose: ModelPurpose | undefined,
+): Model<any> {
+  if (purpose !== 'vision') {
+    return model;
+  }
+
+  const currentInput = Array.isArray(model.input)
+    ? model.input.filter((cap): cap is 'text' | 'image' => cap === 'text' || cap === 'image')
+    : [];
+  const nextInput: Array<'text' | 'image'> = [...currentInput];
+  if (!nextInput.includes('text')) nextInput.unshift('text');
+  if (!nextInput.includes('image')) nextInput.push('image');
+
+  return {
+    ...model,
+    input: nextInput,
+  };
+}
+
+function normalizeLiteLLMModelId(provider: string, modelId: string): string {
+  const normalizedProvider = provider.trim().toLowerCase();
+  const normalizedModelId = modelId.trim();
+  if (!normalizedModelId) return normalizedModelId;
+  if (normalizedProvider !== 'openrouter') return normalizedModelId;
+  if (normalizedModelId.startsWith('openrouter/')) return normalizedModelId;
+
+  // OpenRouter model IDs are typically vendor-qualified (e.g. google/gemini-3-flash-preview).
+  // In LiteLLM mode we normalize these to the openrouter/* wildcard namespace.
+  return normalizedModelId.includes('/')
+    ? `openrouter/${normalizedModelId}`
+    : normalizedModelId;
 }

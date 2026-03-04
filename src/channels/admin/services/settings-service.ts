@@ -4,6 +4,7 @@ import {
   applySettings,
   loadSettings,
   normalizeEditableSettings,
+  SETTINGS_VALIDATION,
   saveSettings,
 } from '../../../settings.js';
 import {
@@ -37,8 +38,36 @@ import type {
   AdminSettingsData,
   AdminSettingsService,
   ConfigUpdateResult,
+  SettingsValidationError,
   SettingsConfigEditors,
 } from './types.js';
+
+const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local_endpoint']);
+const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
+const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
+const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
+
+const BOOLEAN_SETTINGS_FIELDS = new Set([
+  'importProcessingStrictPolicy',
+  'webFetchAllowHttp',
+  'webFetchAllowInternalNetwork',
+  'webFetchLocalCrawlerEnabled',
+  'webFetchLocalCrawlerAllowHttp',
+  'discordEnabled',
+  'telegramEnabled',
+  'obsidianAutoPublish',
+  'moaEnabled',
+]);
+
+const STRING_ARRAY_SETTINGS_FIELDS = new Set([
+  'openRouterProviderOrder',
+  'webFetchDomainAllowlist',
+  'webFetchLocalCrawlerHostAllowlist',
+  'webFetchLocalCrawlerDomainAllowlist',
+  'webFetchTlsCaCertPaths',
+  'promotedExtendedTools',
+  'moaReferenceModels',
+]);
 
 export class AdminSettingsDataService implements AdminSettingsService {
   constructor(private readonly deps: {
@@ -78,31 +107,214 @@ export class AdminSettingsDataService implements AdminSettingsService {
     return JSON.parse(body);
   }
 
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  private buildValidationResult(errors: SettingsValidationError[]): ConfigUpdateResult {
+    return {
+      ok: false,
+      message: errors.map(error => error.message).join('; '),
+      validationErrors: errors,
+    };
+  }
+
+  private pushFieldError(
+    errors: SettingsValidationError[],
+    field: string,
+    message: string,
+    code: string,
+  ): void {
+    errors.push({ field, message, code });
+  }
+
+  private validateBooleanField(
+    payload: Record<string, unknown>,
+    field: string,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!(field in payload)) return;
+    if (typeof payload[field] !== 'boolean') {
+      this.pushFieldError(errors, field, `${field} must be true or false`, 'invalid_type');
+    }
+  }
+
+  private validateEnumField(
+    payload: Record<string, unknown>,
+    field: string,
+    allowedValues: Set<string>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!(field in payload)) return;
+    const value = payload[field];
+    if (typeof value !== 'string' || !allowedValues.has(value)) {
+      this.pushFieldError(
+        errors,
+        field,
+        `${field} must be one of: ${Array.from(allowedValues).join(', ')}`,
+        'invalid_enum',
+      );
+    }
+  }
+
+  private validateStringArrayField(
+    payload: Record<string, unknown>,
+    field: string,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!(field in payload)) return;
+    const value = payload[field];
+    const isValidArray = Array.isArray(value)
+      && value.every(entry => typeof entry === 'string');
+    if (!isValidArray) {
+      this.pushFieldError(errors, field, `${field} must be an array of strings`, 'invalid_type');
+    }
+  }
+
+  private validateHttpUrlField(
+    payload: Record<string, unknown>,
+    field: string,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!(field in payload)) return;
+    const value = payload[field];
+    if (typeof value !== 'string') {
+      this.pushFieldError(errors, field, `${field} must be a string`, 'invalid_type');
+      return;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        this.pushFieldError(errors, field, `${field} must use http or https`, 'invalid_url');
+      }
+    } catch {
+      this.pushFieldError(errors, field, `${field} must be a valid URL`, 'invalid_url');
+    }
+  }
+
+  private validateSettingsPayload(
+    payload: Record<string, unknown>,
+    current: Partial<SubstrateConfig>,
+  ): SettingsValidationError[] {
+    const errors: SettingsValidationError[] = [];
+
+    for (const [field, range] of Object.entries(SETTINGS_VALIDATION)) {
+      if (!(field in payload)) continue;
+      const value = payload[field];
+      if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
+        this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'invalid_number');
+        continue;
+      }
+      if (value < range.min || value > range.max) {
+        this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'out_of_range');
+      }
+    }
+
+    for (const field of BOOLEAN_SETTINGS_FIELDS) {
+      this.validateBooleanField(payload, field, errors);
+    }
+
+    this.validateEnumField(payload, 'importProcessingRouteMode', IMPORT_ROUTE_MODE_VALUES, errors);
+    this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES, errors);
+    this.validateEnumField(payload, 'capabilityTier', new Set(CAPABILITY_TIER_VALUES), errors);
+    this.validateEnumField(payload, 'ttsProvider', TTS_PROVIDER_VALUES, errors);
+    this.validateEnumField(payload, 'sttProvider', STT_PROVIDER_VALUES, errors);
+
+    for (const field of STRING_ARRAY_SETTINGS_FIELDS) {
+      this.validateStringArrayField(payload, field, errors);
+    }
+
+    this.validateHttpUrlField(payload, 'importProcessingLocalEndpointUrl', errors);
+    this.validateHttpUrlField(payload, 'chatApiBaseUrl', errors);
+
+    const effectiveRouteMode = typeof payload.importProcessingRouteMode === 'string'
+      ? payload.importProcessingRouteMode
+      : current.importProcessingRouteMode ?? 'background';
+    const effectiveLocalEndpointUrl = typeof payload.importProcessingLocalEndpointUrl === 'string'
+      ? payload.importProcessingLocalEndpointUrl
+      : current.importProcessingLocalEndpointUrl ?? '';
+    const effectiveLocalModel = typeof payload.importProcessingLocalModel === 'string'
+      ? payload.importProcessingLocalModel
+      : current.importProcessingLocalModel ?? '';
+    if (effectiveRouteMode === 'local_endpoint') {
+      if (!effectiveLocalEndpointUrl.trim()) {
+        this.pushFieldError(
+          errors,
+          'importProcessingLocalEndpointUrl',
+          'importProcessingLocalEndpointUrl is required when importProcessingRouteMode=local_endpoint',
+          'required',
+        );
+      }
+      if (!effectiveLocalModel.trim()) {
+        this.pushFieldError(
+          errors,
+          'importProcessingLocalModel',
+          'importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint',
+          'required',
+        );
+      }
+    }
+
+    return errors;
+  }
+
   async getSettingsData(): Promise<AdminSettingsData> {
     await loadSettings(this.deps.config.dataDir);
+    const normalizedConfig = normalizeEditableSettings(this.deps.config);
+    normalizedConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     return {
-      config: normalizeEditableSettings(this.deps.config),
+      config: normalizedConfig as SubstrateConfig,
       env: this.getEnvInfo(),
       editors: this.loadSettingsConfigEditors(),
     };
   }
 
   updateSettings(body: string): ConfigUpdateResult {
-    let payload: Partial<SubstrateConfig>;
+    let parsed: unknown;
     try {
-      payload = JSON.parse(body) as Partial<SubstrateConfig>;
+      parsed = JSON.parse(body);
     } catch {
-      return { ok: false, message: 'Request body must be valid JSON' };
+      return {
+        ok: false,
+        message: 'Request body must be valid JSON',
+        validationErrors: [{ field: '$root', message: 'Request body must be valid JSON', code: 'invalid_json' }],
+      };
+    }
+
+    if (!this.isRecord(parsed)) {
+      return {
+        ok: false,
+        message: 'Settings payload must be a JSON object',
+        validationErrors: [{ field: '$root', message: 'Settings payload must be a JSON object', code: 'invalid_payload' }],
+      };
     }
 
     try {
       const current = loadSettings(this.deps.config.dataDir);
+      const validationErrors = this.validateSettingsPayload(parsed, current as Partial<SubstrateConfig>);
+      if (validationErrors.length > 0) {
+        return this.buildValidationResult(validationErrors);
+      }
+
+      const payload = parsed as Partial<SubstrateConfig>;
       const next = {
         ...current,
         ...payload,
       };
       saveSettings(this.deps.config.dataDir, next);
       applySettings(this.deps.config, next);
+      if (this.deps.config.modelCatalog && this.deps.config.modelRoleAssignments) {
+        saveModelsConfig(
+          this.deps.config.dataDir,
+          {
+            modelCatalog: this.deps.config.modelCatalog,
+            modelRoleAssignments: this.deps.config.modelRoleAssignments,
+          },
+          { defaultContextWindow: this.deps.config.defaultContextWindow },
+        );
+      }
       return { ok: true, message: 'Settings updated' };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };

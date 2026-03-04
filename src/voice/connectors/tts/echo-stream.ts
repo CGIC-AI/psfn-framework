@@ -6,7 +6,7 @@ import type {
   StreamingTtsConnector,
 } from './types.js';
 
-const DEFAULT_BASE_URL = 'http://220.158.196.150:8001';
+const DEFAULT_BASE_URL = 'http://localhost:8001';
 const DEFAULT_VOICE = '11labs-Allison';
 const ECHO_SPEECH_PATH = '/v1/audio/speech';
 

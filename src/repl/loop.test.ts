@@ -70,6 +70,36 @@ describe('runRLMLoop', () => {
     expect(calls[0][1]).toBe('reasoning');
   });
 
+  it('propagates structured origin metadata into think iteration calls', async () => {
+    const llm = sequentialLLM(['FINAL("done")']);
+    await runRLMLoop(
+      'Metadata route test',
+      makeDeps(llm),
+      {
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        channelId: 'discord:123',
+        toolName: 'think',
+        toolCallId: 'tool-1',
+        originType: 'tool',
+        originStage: 'repl.think.tool',
+      },
+    );
+
+    const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0].correlation).toMatchObject({
+      turnId: 'turn-1',
+      requestId: 'req-1:iteration-1',
+      channelId: 'discord:123',
+      toolName: 'think',
+      toolCallId: 'tool-1',
+      callType: 'tool',
+      originType: 'tool',
+      originStage: 'repl.think.iteration',
+      purpose: 'repl.think.iteration',
+    });
+  });
+
   it('handles multi-iteration with code execution', async () => {
     const llm = sequentialLLM([
       '```repl\nvar x = 21;\nprint(x * 2);\n```',
@@ -258,6 +288,41 @@ describe('runRLMLoop', () => {
 
     expect(result.budgetStatus.subQueries).toBe(1);
     expect(result.budgetStatus.exceeded).toBeNull();
+  });
+
+  it('propagates structured origin metadata into sandbox llm_query calls', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar r = await llm_query("q1"); print(r);\n```',
+      'sub-result',
+      'FINAL("done")',
+    ]);
+
+    await runRLMLoop(
+      'Sandbox metadata route test',
+      makeDeps(llm),
+      {
+        turnId: 'turn-2',
+        requestId: 'req-2',
+        channelId: 'discord:456',
+        toolName: 'think',
+        toolCallId: 'tool-2',
+        originType: 'tool',
+        originStage: 'repl.think.tool',
+      },
+    );
+
+    const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[1][0].correlation).toMatchObject({
+      turnId: 'turn-2',
+      requestId: 'req-2:sandbox-subquery:1',
+      channelId: 'discord:456',
+      toolName: 'llm_query',
+      toolCallId: 'tool-2',
+      callType: 'tool',
+      originType: 'tool',
+      originStage: 'repl.sandbox.llm_query',
+      purpose: 'repl.sandbox.llm_query',
+    });
   });
 
   it('enforces max tool-call budget across sandbox helper calls', async () => {

@@ -1,6 +1,8 @@
 import { createComponentLogger } from '../logger.js';
+import type { CorrelationMetadata } from '../types.js';
 import { classifyLLMError } from './error-classify.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
+import { toCorrelationLogFields } from './correlation.js';
 
 const log = createComponentLogger('ModelFallback');
 
@@ -82,12 +84,14 @@ export class FallbackRunner {
     purpose: RoutingPurpose,
     candidates: RoutingCandidate[],
     execute: (candidate: RoutingCandidate, attempt: number) => Promise<T>,
+    correlation?: Partial<CorrelationMetadata>,
   ): Promise<FallbackRunResult<T>> {
     if (candidates.length === 0) {
       throw new Error(`No model candidates resolved for purpose "${purpose}"`);
     }
 
     const orderedCandidates = this.orderCandidates(candidates);
+    const correlationFields = buildFallbackCorrelation(correlation, purpose);
     let lastError: Error | null = null;
 
     for (let index = 0; index < orderedCandidates.length; index += 1) {
@@ -107,6 +111,7 @@ export class FallbackRunner {
           model: candidate.model,
           provider: candidate.provider,
           cooldownRemainingMs,
+          ...correlationFields,
         });
       } else {
         log.info('Selected model candidate', {
@@ -115,6 +120,7 @@ export class FallbackRunner {
           model: candidate.model,
           provider: candidate.provider,
           slotKey: candidate.slotKey,
+          ...correlationFields,
         });
       }
 
@@ -127,6 +133,7 @@ export class FallbackRunner {
             attempts: attempt,
             model: candidate.model,
             provider: candidate.provider,
+            ...correlationFields,
           });
         }
         return { result, candidate, attempts: attempt };
@@ -145,6 +152,7 @@ export class FallbackRunner {
             cooldownMs: this.cooldownMs,
             cooldownUntil: new Date(nextCooldownUntil).toISOString(),
             attempt,
+            ...correlationFields,
           });
         }
 
@@ -156,6 +164,7 @@ export class FallbackRunner {
             provider: candidate.provider,
             attempt,
             error: err.message,
+            ...correlationFields,
           });
           throw err;
         }
@@ -166,6 +175,7 @@ export class FallbackRunner {
             attempts: attempt,
             lastCategory: classification.category,
             lastError: err.message,
+            ...correlationFields,
           });
           throw err;
         }
@@ -179,10 +189,29 @@ export class FallbackRunner {
           nextModel: orderedCandidates[attempt]?.model,
           nextProvider: orderedCandidates[attempt]?.provider,
           error: err.message,
+          ...correlationFields,
         });
       }
     }
 
     throw lastError ?? new Error(`Fallback runner failed for purpose "${purpose}"`);
   }
+}
+
+function buildFallbackCorrelation(
+  correlation: Partial<CorrelationMetadata> | undefined,
+  purpose: RoutingPurpose,
+): Partial<CorrelationMetadata> {
+  const normalized = toCorrelationLogFields(correlation);
+  return {
+    ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
+    requestId: normalized.requestId,
+    ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+    ...(correlation?.callType ? { callType: correlation.callType } : {}),
+    ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
+    ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+    purpose: correlation?.purpose ?? purpose,
+    originType: normalized.originType,
+    originStage: normalized.originStage,
+  };
 }

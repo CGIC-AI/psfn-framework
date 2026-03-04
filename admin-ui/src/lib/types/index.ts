@@ -272,6 +272,11 @@ export interface AdminSettingsData {
 export interface ConfigUpdateResult {
   ok: boolean;
   message: string;
+  validationErrors?: Array<{
+    field: string;
+    message: string;
+    code?: string;
+  }>;
 }
 
 // Identity

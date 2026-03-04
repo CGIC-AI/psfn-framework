@@ -1085,5 +1085,36 @@ describe('GatewayServer', () => {
       expect(response.error.code).toBe(-32003);
       expect(response.error.message).toContain('ntfy request failed: 500');
     });
+
+    it('accepts unicode title text without header ByteString crashes', async () => {
+      fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        ntfy: {
+          baseUrl: 'https://ntfy.local',
+          defaultTopic: 'ops',
+          timeoutMs: 1_000,
+          debounceWindowMs: 60_000,
+        },
+      });
+
+      const response = await invokeRpc(conn, 5, 'notify.ntfy', {
+        message: 'unicode title test',
+        title: '😺 Alert',
+      });
+
+      expect(response.result).toEqual({
+        status: 'sent',
+        topic: 'ops',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      const fetchArgs = fetchMock.mock.calls[0]?.[1] as { headers?: Record<string, string> };
+      const encodedTitle = fetchArgs.headers?.Title;
+      expect(typeof encodedTitle).toBe('string');
+      expect(encodedTitle).toBeDefined();
+      expect(encodedTitle).not.toContain('😺');
+      expect(Buffer.from(encodedTitle!, 'latin1').toString('utf8')).toBe('😺 Alert');
+    });
   });
 });

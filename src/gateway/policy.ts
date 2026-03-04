@@ -84,7 +84,8 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
     case 'notify.ntfy':
       return 'ALLOW';
 
-    case 'web.fetch': {
+    case 'web.fetch':
+    case 'web.fetch_binary': {
       // Synchronous URL policy check so the audit log reflects the real decision
       const url = (params as Record<string, unknown>).url as string | undefined;
       const laneValue = (params as Record<string, unknown>).lane;

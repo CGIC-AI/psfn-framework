@@ -11,7 +11,7 @@ import {
   type UrlPolicyConfig,
   type UrlPolicyLane,
 } from '../url-policy.js';
-import { GatewayErrors, type WebFetchParams } from '../protocol.js';
+import { GatewayErrors, type WebFetchBinaryParams, type WebFetchParams } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { createComponentLogger } from '../../logger.js';
 import {
@@ -22,6 +22,7 @@ import { registerGatedDescriptors } from './register.js';
 
 const log = createComponentLogger('GatewayWeb');
 const tlsBundleCache = new Map<string, string>();
+const WEB_FETCH_BINARY_MAX_BYTES_DEFAULT = 8 * 1024 * 1024;
 
 interface ResponseLike {
   status: number;
@@ -31,6 +32,7 @@ interface ResponseLike {
     get(name: string): string | null;
   };
   text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
 }
 
 function getErrorMessage(err: unknown): string {
@@ -88,6 +90,13 @@ function toLane(value: unknown): UrlPolicyLane {
   return value === 'local_crawler'
     ? 'local_crawler'
     : 'default';
+}
+
+function normalizeBinaryMaxBytes(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return WEB_FETCH_BINARY_MAX_BYTES_DEFAULT;
+  }
+  return Math.max(1, Math.floor(value));
 }
 
 function resolveUrlPolicyConfig(runtime: GatewayMethodRuntime): UrlPolicyConfig {
@@ -181,7 +190,7 @@ async function requestText(
         });
         res.on('error', rejectResponse);
         res.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf8');
+          const body = Buffer.concat(chunks);
           const status = res.statusCode ?? 0;
           const headers = new Map<string, string>();
           for (const [name, value] of Object.entries(res.headers)) {
@@ -202,7 +211,10 @@ async function requestText(
               },
             },
             async text() {
-              return body;
+              return body.toString('utf8');
+            },
+            async arrayBuffer() {
+              return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
             },
           });
         });
@@ -333,6 +345,87 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     summary: (p: WebFetchParams) => ({ url: p.url, lane: toLane(p.lane) }),
     approvalAction: 'fetch',
     approvalScope: (p: WebFetchParams) => `${toLane(p.lane)}:${p.url}`,
+  },
+  {
+    name: 'web.fetch_binary',
+    handler: async (params: WebFetchBinaryParams, runtime) => {
+      const lane = toLane(params.lane);
+      const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
+      const maxBytes = normalizeBinaryMaxBytes(params.maxBytes);
+
+      let tlsCaBundle: string | undefined;
+      try {
+        tlsCaBundle = loadTlsBundle(resolveTlsCertPaths(runtime));
+      } catch (err) {
+        throw new JSONRPCErrorException(
+          `Fetch TLS setup failed: ${formatFetchFailureDetails(err)}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      let fetchUrl = params.url;
+      let response = await fetchWithPolicyChecks(
+        fetchUrl,
+        lane,
+        urlPolicyConfig,
+        tlsCaBundle,
+      );
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) {
+          throw new JSONRPCErrorException('Redirect with no Location header', GatewayErrors.PROVIDER_ERROR);
+        }
+        fetchUrl = new URL(location, params.url).href;
+        response = await fetchWithPolicyChecks(
+          fetchUrl,
+          lane,
+          urlPolicyConfig,
+          tlsCaBundle,
+        );
+      }
+
+      if (!response.ok) {
+        throw new JSONRPCErrorException(
+          `Fetch failed: ${response.status} ${response.statusText}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+      if (Number.isFinite(reportedLength) && reportedLength > maxBytes) {
+        throw new JSONRPCErrorException(
+          `Fetch binary payload too large: ${reportedLength} bytes exceeds ${maxBytes}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length > maxBytes) {
+        throw new JSONRPCErrorException(
+          `Fetch binary payload too large: ${bytes.length} bytes exceeds ${maxBytes}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+
+      return {
+        dataBase64: bytes.toString('base64'),
+        mimeType: mimeType || 'application/octet-stream',
+        sizeBytes: bytes.length,
+      };
+    },
+    summary: (p: WebFetchBinaryParams) => ({
+      url: p.url,
+      lane: toLane(p.lane),
+      maxBytes: normalizeBinaryMaxBytes(p.maxBytes),
+    }),
+    approvalAction: 'fetch',
+    approvalScope: (p: WebFetchBinaryParams) => `${toLane(p.lane)}:${p.url}`,
   },
 ];
 

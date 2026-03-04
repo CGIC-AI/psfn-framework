@@ -36,7 +36,7 @@ export interface ApiEmbeddingConfig {
 }
 
 export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
-  ollamaUrl: 'http://your-ollama-host:11434',
+  ollamaUrl: 'http://localhost:11434',
   model: 'snowflake-arctic-embed2',
   dims: 1024,
 };
@@ -284,7 +284,9 @@ export class TransformersEmbeddingProvider implements EmbeddingRuntimeProvider {
 
     const results: Float32Array[] = [];
     for (let i = 0; i < count; i++) {
-      results.push(new Float32Array(tensorData.buffer, tensorData.byteOffset + i * embeddingDim * 4, embeddingDim));
+      const start = i * embeddingDim;
+      // Copy each row so callers do not receive shared subarray-backed views.
+      results.push(tensorData.slice(start, start + embeddingDim));
     }
     return results;
   }

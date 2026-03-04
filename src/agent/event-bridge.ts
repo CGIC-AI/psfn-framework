@@ -5,13 +5,20 @@
 import type { Agent, AgentEvent } from '@mariozechner/pi-agent-core';
 import type { ToolCall } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
+import type { CorrelationMetadata, ObservabilityCallType } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 
 const log = createComponentLogger('EventBridge');
 
 export interface EventBridge {
   /** Set the active channel before calling agent.prompt() */
-  setChannel(channelId: string): void;
+  setChannel(
+    channelId: string,
+    correlation?: Partial<Pick<
+      CorrelationMetadata,
+      'turnId' | 'requestId' | 'callType' | 'purpose' | 'originType' | 'originStage'
+    >>,
+  ): void;
   /** Clear the active channel after prompt completes */
   clearChannel(): void;
   /** Unsubscribe from Agent events */
@@ -33,12 +40,41 @@ export interface EventBridge {
  * Events are only emitted when a channel is active (between setChannel/clearChannel).
  */
 export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge {
-  let currentChannelId: string | null = null;
+  let currentContext: {
+    channelId: string;
+    turnId?: string;
+    requestId?: string;
+    callType?: ObservabilityCallType;
+    purpose?: string;
+    originType?: ObservabilityCallType;
+    originStage?: string;
+  } | null = null;
 
   const unsub = agent.subscribe((event: AgentEvent) => {
-    if (!currentChannelId) return;
-    const channelId = currentChannelId;
+    if (!currentContext) return;
+    const {
+      channelId,
+      turnId,
+      requestId,
+      callType,
+      purpose,
+      originType,
+      originStage,
+    } = currentContext;
     const shardId = resolveShardId(channelId);
+    const withCorrelation = (
+      type: 'chat' | 'tool',
+      eventPurpose: string,
+      toolName?: string,
+    ) => ({
+      ...(turnId ? { turnId } : {}),
+      ...(requestId ? { requestId } : {}),
+      callType: type === 'chat' ? (callType ?? 'chat') : 'tool',
+      toolName: toolName ?? undefined,
+      purpose: purpose ?? eventPurpose,
+      originType: type === 'chat' ? (originType ?? callType ?? 'chat') : 'tool',
+      originStage: originStage ?? purpose ?? eventPurpose,
+    });
 
     switch (event.type) {
       case 'message_update': {
@@ -47,11 +83,13 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
           eventBus.emit('agent.stream.delta', {
             channelId,
             text: delta.delta,
+            ...withCorrelation('chat', 'stream_text_delta'),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
         } else if (delta.type === 'thinking_delta') {
           eventBus.emit('agent.stream.thinking', {
             channelId,
             text: delta.delta,
+            ...withCorrelation('chat', 'stream_thinking_delta'),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.thinking', error: String(err) }));
         } else if (delta.type === 'toolcall_start') {
           const toolCall = getToolCallFromPartial(delta.partial, delta.contentIndex);
@@ -61,6 +99,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
             ...(toolCall?.id ? { toolCallId: toolCall.id } : {}),
             ...(toolCall?.name ? { toolName: toolCall.name } : {}),
             ...(shardId ? { shardId } : {}),
+            ...withCorrelation('tool', 'tool_call_stream', toolCall?.name),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.start', error: String(err) }));
         } else if (delta.type === 'toolcall_delta') {
           const toolCall = getToolCallFromPartial(delta.partial, delta.contentIndex);
@@ -71,6 +110,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
             ...(toolCall?.id ? { toolCallId: toolCall.id } : {}),
             ...(toolCall?.name ? { toolName: toolCall.name } : {}),
             ...(shardId ? { shardId } : {}),
+            ...withCorrelation('tool', 'tool_call_stream', toolCall?.name),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.delta', error: String(err) }));
         } else if (delta.type === 'toolcall_end') {
           eventBus.emit('agent.toolcall.end', {
@@ -80,6 +120,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
             toolName: delta.toolCall.name,
             arguments: delta.toolCall.arguments as Record<string, unknown>,
             ...(shardId ? { shardId } : {}),
+            ...withCorrelation('tool', 'tool_call_stream', delta.toolCall.name),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.end', error: String(err) }));
         }
         break;
@@ -90,6 +131,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           ...(shardId ? { shardId } : {}),
+          ...withCorrelation('tool', 'tool_execution', event.toolName),
         }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.start', error: String(err) }));
         break;
       case 'tool_execution_end':
@@ -99,14 +141,31 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
           toolName: event.toolName,
           isError: event.isError,
           ...(shardId ? { shardId } : {}),
+          ...withCorrelation('tool', 'tool_execution', event.toolName),
         }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.end', error: String(err) }));
         break;
     }
   });
 
   return {
-    setChannel(channelId: string) { currentChannelId = channelId; },
-    clearChannel() { currentChannelId = null; },
+    setChannel(
+      channelId: string,
+      correlation?: Partial<Pick<
+        CorrelationMetadata,
+        'turnId' | 'requestId' | 'callType' | 'purpose' | 'originType' | 'originStage'
+      >>,
+    ) {
+      currentContext = {
+        channelId,
+        ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
+        ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
+        ...(correlation?.callType ? { callType: correlation.callType } : {}),
+        ...(correlation?.purpose ? { purpose: correlation.purpose } : {}),
+        ...(correlation?.originType ? { originType: correlation.originType } : {}),
+        ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
+      };
+    },
+    clearChannel() { currentContext = null; },
     destroy() { unsub(); },
   };
 }

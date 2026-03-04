@@ -2,14 +2,37 @@
 // Common primitives used by both single-process runtime and gateway agent mode.
 
 import { join } from 'node:path';
-import type { SubstrateConfig } from '../types.js';
+import type {
+  PostTurnActionCandidate,
+  SubstrateConfig,
+  SubstrateMessage,
+} from '../types.js';
+import type { EventBus } from '../event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
 import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
+import {
+  createDefaultExtendedToolAutoloadPolicy,
+  type ExtendedToolAutoloadPolicy,
+} from '../agent/extended-tool-autoload-policy.js';
+import type {
+  ExtendedToolActivationOptions,
+  ExtendedToolActivationResult,
+  PostTurnActionInferer,
+} from '../agent/substrate-agent.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import { createSettingsGetTool } from '../settings-tools.js';
+import {
+  createPromotedToolsAddTool,
+  createPromotedToolsListTool,
+  createPromotedToolsRemoveTool,
+  createPromotedToolsSwapTool,
+  createSettingsGetTool,
+  type PromotedExtendedToolsManager,
+} from '../settings-tools.js';
+import type { SessionManager } from '../session/manager.js';
+import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -37,30 +60,62 @@ import {
   createScheduleTaskTool,
 } from '../scheduler/heartbeat-tools.js';
 import type { ReflectionTemplate } from '../scheduler/heartbeat-policy.js';
-import type { SessionManager } from '../session/manager.js';
 import type { MemoryWriter } from '../memory/writer.js';
 import { ValuesJournalStore } from '../values/store.js';
 import type { ValuesDeliberationMetadata } from '../values/store.js';
+import {
+  resolveLegacyValuesJournalPath,
+  resolveReflectionJournalPath,
+  resolveValuesJournalPath,
+} from '../persistence/layout.js';
+import { ReflectionJournalStore } from '../notes/reflection-journal.js';
+import type { PostTurnActionRuntime } from './post-turn-actions.js';
+import { isBusyTurnError } from '../lifecycle/turn-contention.js';
+import {
+  buildDeferredToolHandoffMessage,
+  DEFERRED_TOOL_HANDOFF_ACTION_KIND,
+  normalizeDeferredToolHandoffPayload,
+  type DeferredToolHandoffPayload,
+} from '../agent/deferred-tool-handoff.js';
+import { inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages } from './deferred-post-turn-inference.js';
 
 const log = createComponentLogger('SharedWiring');
+const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
 interface HeartbeatAgent {
-  handleMessage(message: {
-    id: string;
-    channelId: string;
-    channelType: 'terminal';
-    authorId: string;
-    authorName: string;
-    content: string;
-    timestamp: Date;
-  }): Promise<{ content: string }>;
+  handleMessage(message: SubstrateMessage): Promise<{ content: string }>;
+  activateExtendedTools?(
+    toolNames: readonly string[],
+    options?: ExtendedToolActivationOptions,
+  ): ExtendedToolActivationResult;
   waitForIdle?(): Promise<void>;
+  registerPostTurnActionInferer?(inferer: PostTurnActionInferer): () => void;
 }
 
 interface HeartbeatRuntimeOptions {
+  eventBus?: EventBus;
   llmProvider?: LLMProvider;
-  sessionManager?: Pick<SessionManager, 'recordAssistantMessage' | 'appendSystemNote'>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
+  postTurnActions?: PostTurnActionRuntime;
+  vaultAutoPublisher?: { publishReflection(input: {
+    templateId: string;
+    templateName: string;
+    reflection: string;
+    mode: 'agent' | 'deliberation';
+    createdAt: Date;
+  }): Promise<void> };
+}
+
+function hasPromotedToolsManager(
+  target: ToolRegistrarTarget,
+): target is ToolRegistrarTarget & PromotedExtendedToolsManager {
+  return (
+    typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedToolsLimit === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedTools === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).addPromotedExtendedTool === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).removePromotedExtendedTool === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).swapPromotedExtendedTools === 'function'
+  );
 }
 
 export interface PromptRuntimeTarget extends ToolRegistrarTarget {
@@ -68,6 +123,17 @@ export interface PromptRuntimeTarget extends ToolRegistrarTarget {
 }
 
 export type CharacterCardRuntimeTarget = ToolRegistrarTarget;
+
+export interface ExtendedToolAutoloadRuntimeTarget {
+  setExtendedToolAutoloadPolicy: (policy: ExtendedToolAutoloadPolicy | null) => void;
+}
+
+export function wireExtendedToolAutoloadPolicy(
+  target: ExtendedToolAutoloadRuntimeTarget,
+  policy: ExtendedToolAutoloadPolicy = createDefaultExtendedToolAutoloadPolicy(),
+): void {
+  target.setExtendedToolAutoloadPolicy(policy);
+}
 
 /**
  * Wire prompt stack storage, composition, and tools.
@@ -144,6 +210,32 @@ export function wireSettingsRuntime(
   config: SubstrateConfig,
 ): void {
   target.registerTool(createSettingsGetTool(config), 'extended');
+  if (!hasPromotedToolsManager(target)) {
+    return;
+  }
+  target.registerTool(createPromotedToolsListTool(target), 'extended');
+  target.registerTool(createPromotedToolsAddTool(target), 'extended');
+  target.registerTool(createPromotedToolsRemoveTool(target), 'extended');
+  target.registerTool(createPromotedToolsSwapTool(target), 'extended');
+}
+
+export function wireSessionToolsRuntime(
+  target: ToolRegistrarTarget,
+  sessionManager: SessionManager,
+  dataDir: string,
+): void {
+  target.registerTool(createSessionNewTool({
+    dataDir,
+    setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
+    seedSession: (sessionId) => {
+      sessionManager.appendSystemNote(
+        sessionId,
+        'Session initialized via session_new.',
+      );
+    },
+  }), 'extended');
+  target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'extended');
+  target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
 }
 
 /**
@@ -162,16 +254,75 @@ export function wireHeartbeatRuntime(
   const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
   const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
   const store = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
-  const valuesJournal = new ValuesJournalStore(join(dataDir, 'values.jsonl'));
+  const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
+    legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
+  });
+  const reflectionJournal = new ReflectionJournalStore(resolveReflectionJournalPath(dataDir));
   const policy = store.load();
   const pendingDeferredTemplates = new Set<string>();
   const lastScheduledRunAt = new Map<string, number>();
+  const deferredToolHandoffPayloads = new Map<string, DeferredToolHandoffPayload>();
+  const deferredToolHandoffExecutionState = new Map<string, { activated: boolean; executed: boolean }>();
+  const telemetryEventBus = runtimeOptions.eventBus;
 
-  const isBusyReflectionError = (error: unknown): boolean => {
-    const text = String(error ?? '').toLowerCase();
-    return text.includes('already processing')
-      || text.includes('agent_busy')
-      || text.includes('channel_busy');
+  const emitDeferredToolHandoffTelemetry = (
+    payload: {
+      actionId: string;
+      dedupeKey: string;
+      channelId: string;
+      sourceMessageId: string;
+      toolNames: string[];
+      intendedAction: string;
+      phase: 'queued' | 'activated' | 'executed' | 'failed';
+      attempt?: number;
+      maxAttempts?: number;
+      error?: string;
+    },
+  ): void => {
+    if (!telemetryEventBus) return;
+    telemetryEventBus.emit('agent.tool_handoff.telemetry', {
+      ...payload,
+      timestamp: Date.now(),
+    }).catch((error) => {
+      log.warn('Deferred tool-handoff telemetry emit failed', {
+        actionId: payload.actionId,
+        phase: payload.phase,
+        error: String(error),
+      });
+    });
+    const adaptiveDecision = payload.phase === 'queued'
+      ? 'queued'
+      : payload.phase === 'executed'
+        ? 'executed'
+        : payload.phase === 'failed'
+          ? 'failed'
+          : null;
+    if (!adaptiveDecision) return;
+    for (const toolName of payload.toolNames) {
+      telemetryEventBus.emit('agent.tools.adaptive.decision', {
+        turnId: payload.sourceMessageId || payload.actionId,
+        requestId: payload.actionId,
+        channelId: payload.channelId,
+        callType: 'tool',
+        purpose: 'agent.tools.adaptive.decision',
+        timestamp: Date.now(),
+        toolName,
+        source: 'deferred',
+        decision: adaptiveDecision,
+        reason: payload.phase === 'failed'
+          ? 'deferred_tool_handoff_failed'
+          : 'deferred_tool_handoff',
+        taskKind: 'deferred_tool_handoff',
+        intent: 'deferred_tool_handoff',
+      }).catch((error) => {
+        log.warn('Deferred adaptive tool telemetry emit failed', {
+          actionId: payload.actionId,
+          toolName,
+          phase: payload.phase,
+          error: String(error),
+        });
+      });
+    }
   };
 
   const toDeliberationMetadata = (
@@ -186,29 +337,6 @@ export function wireHeartbeatRuntime(
     estimatedCostUsd: result.estimatedCostUsd,
     durationMs: result.durationMs,
   });
-
-  const persistDeliberationJournalEntry = (
-    reflectionChannelId: string,
-    reflection: string,
-    metadata: ValuesDeliberationMetadata,
-  ): void => {
-    if (!runtimeOptions.sessionManager) return;
-    runtimeOptions.sessionManager.recordAssistantMessage(
-      reflectionChannelId,
-      reflection,
-      undefined,
-      false,
-      undefined,
-      {
-        trustLevel: 'trusted',
-        mirror: false,
-      },
-    );
-    runtimeOptions.sessionManager.appendSystemNote(
-      reflectionChannelId,
-      `[Deliberation metadata] ${JSON.stringify(metadata)}`,
-    );
-  };
 
   const persistDeliberationMemory = async (
     template: ReflectionTemplate,
@@ -287,22 +415,13 @@ export function wireHeartbeatRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
+    let reflectionMode: 'agent' | 'deliberation' = 'agent';
 
     if (shouldUseDeliberation(template)) {
       const deliberationResult = await runTemplateDeliberation(template);
       reflectionText = deliberationResult.reflection;
       deliberationMetadata = deliberationResult.metadata;
-      try {
-        persistDeliberationJournalEntry(
-          reflectionChannelId,
-          reflectionText,
-          deliberationMetadata,
-        );
-      } catch (error) {
-        log.warn(`Reflection "${template.id}" journal persistence skipped`, {
-          error: String(error),
-        });
-      }
+      reflectionMode = 'deliberation';
       try {
         await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
       } catch (error) {
@@ -333,6 +452,37 @@ export function wireHeartbeatRuntime(
       });
     }
 
+    try {
+      reflectionJournal.append({
+        templateId: template.id,
+        templateName: template.name,
+        prompt: template.prompt,
+        reflection: reflectionText,
+        channelId: reflectionChannelId,
+        mode: reflectionMode,
+        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+      });
+    } catch (error) {
+      log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
+        error: String(error),
+      });
+    }
+
+    // Auto-publish to Obsidian vault
+    if (runtimeOptions.vaultAutoPublisher) {
+      try {
+        await runtimeOptions.vaultAutoPublisher.publishReflection({
+          templateId: template.id,
+          templateName: template.name,
+          reflection: reflectionText,
+          mode: reflectionMode,
+          createdAt: new Date(),
+        });
+      } catch (error) {
+        log.warn(`Reflection "${template.id}" vault publish skipped`, { error: String(error) });
+      }
+    }
+
     const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
     if (shouldSendToDiscord && heartbeatChannelId) {
       await sender.send(heartbeatChannelId, reflectionText);
@@ -356,8 +506,38 @@ export function wireHeartbeatRuntime(
       return;
     }
     lastScheduledRunAt.set(template.id, now);
-    await executeTemplate(template);
+    try {
+      await executeTemplate(template);
+    } catch (error) {
+      if (!isBusyTurnError(error)) {
+        throw error;
+      }
+      const deferred = queueDeferredTemplateRun(template.id);
+      log.info('Deferred scheduled reflection template execution', {
+        templateId: template.id,
+        queuedNow: deferred.queuedNow,
+      });
+    }
   };
+
+  const buildDeferredHeartbeatAction = (
+    template: ReflectionTemplate,
+    options: { sendToDiscordOverride?: boolean } = {},
+  ): PostTurnActionCandidate => ({
+    kind: DEFERRED_HEARTBEAT_ACTION_KIND,
+    payload: {
+      templateId: template.id,
+      ...(options.sendToDiscordOverride !== undefined
+        ? { sendToDiscordOverride: options.sendToDiscordOverride }
+        : {}),
+    },
+    dedupeKey: (
+      options.sendToDiscordOverride === undefined
+        ? `${DEFERRED_HEARTBEAT_ACTION_KIND}:${template.id}`
+        : `${DEFERRED_HEARTBEAT_ACTION_KIND}:${template.id}:discord:${String(options.sendToDiscordOverride)}`
+    ),
+    maxRetries: 2,
+  });
 
   const queueDeferredTemplateRun = (
     templateId: string,
@@ -412,7 +592,13 @@ export function wireHeartbeatRuntime(
   const runTemplateNow = async (
     templateId: string,
     options: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean } = {},
-  ): Promise<{ templateId: string; templateName: string; reflection: string; queued?: boolean }> => {
+  ): Promise<{
+      templateId: string;
+      templateName: string;
+      reflection: string;
+      queued?: boolean;
+      deferredAction?: PostTurnActionCandidate;
+    }> => {
     const current = store.load();
     const template = current.templates.find(candidate => candidate.id === templateId);
     if (!template) {
@@ -421,9 +607,24 @@ export function wireHeartbeatRuntime(
     try {
       return await executeTemplate(template, options);
     } catch (error) {
-      if (options.deferIfBusy === false || !isBusyReflectionError(error)) {
+      if (options.deferIfBusy === false || !isBusyTurnError(error)) {
         throw error;
       }
+      if (runtimeOptions.postTurnActions) {
+        const deferredAction = buildDeferredHeartbeatAction(template, options);
+        log.info('Inferred deferred heartbeat action from busy template execution', {
+          templateId: template.id,
+          dedupeKey: deferredAction.dedupeKey,
+        });
+        return {
+          templateId: template.id,
+          templateName: template.name,
+          reflection: '',
+          queued: true,
+          deferredAction,
+        };
+      }
+
       const deferred = queueDeferredTemplateRun(template.id, {
         sendToDiscordOverride: options.sendToDiscordOverride,
       });
@@ -436,9 +637,165 @@ export function wireHeartbeatRuntime(
         templateName: deferred.templateName,
         reflection: '',
         queued: true,
+        deferredAction: buildDeferredHeartbeatAction(template, options),
       };
     }
   };
+
+  if (runtimeOptions.postTurnActions) {
+    telemetryEventBus?.on('agent.post_turn.action.telemetry', (telemetry) => {
+      if (telemetry.actionKind !== DEFERRED_TOOL_HANDOFF_ACTION_KIND) {
+        return;
+      }
+
+      const payload = deferredToolHandoffPayloads.get(telemetry.dedupeKey);
+      if (!payload) {
+        return;
+      }
+
+      if (telemetry.phase === 'queued') {
+        emitDeferredToolHandoffTelemetry({
+          actionId: telemetry.actionId,
+          dedupeKey: telemetry.dedupeKey,
+          channelId: telemetry.channelId,
+          sourceMessageId: telemetry.sourceMessageId,
+          toolNames: payload.toolNames,
+          intendedAction: payload.intendedAction,
+          phase: 'queued',
+          attempt: telemetry.attempt,
+          maxAttempts: telemetry.maxAttempts,
+        });
+      } else if (telemetry.phase === 'failed') {
+        emitDeferredToolHandoffTelemetry({
+          actionId: telemetry.actionId,
+          dedupeKey: telemetry.dedupeKey,
+          channelId: telemetry.channelId,
+          sourceMessageId: telemetry.sourceMessageId,
+          toolNames: payload.toolNames,
+          intendedAction: payload.intendedAction,
+          phase: 'failed',
+          attempt: telemetry.attempt,
+          maxAttempts: telemetry.maxAttempts,
+          ...(telemetry.error ? { error: telemetry.error } : {}),
+        });
+        deferredToolHandoffExecutionState.delete(telemetry.dedupeKey);
+        deferredToolHandoffPayloads.delete(telemetry.dedupeKey);
+      } else if (telemetry.phase === 'succeeded') {
+        deferredToolHandoffExecutionState.delete(telemetry.dedupeKey);
+        deferredToolHandoffPayloads.delete(telemetry.dedupeKey);
+      }
+    });
+
+    runtimeOptions.postTurnActions.registerHandler(
+      DEFERRED_TOOL_HANDOFF_ACTION_KIND,
+      async (action) => {
+        const payload = normalizeDeferredToolHandoffPayload(action.payload);
+        if (!payload) {
+          throw new Error(`Deferred tool handoff action "${action.id}" is missing required payload fields`);
+        }
+        deferredToolHandoffPayloads.set(action.dedupeKey, payload);
+
+        const executionState = deferredToolHandoffExecutionState.get(action.dedupeKey) ?? {
+          activated: false,
+          executed: false,
+        };
+
+        if (!executionState.activated) {
+          const activation = agentLoop.activateExtendedTools?.(payload.toolNames, {
+            source: 'deferred',
+            correlation: {
+              turnId: action.sourceMessageId || action.id,
+              requestId: action.id,
+              channelId: action.channelId,
+              callType: 'tool',
+              purpose: 'agent.tools.adaptive.decision',
+            },
+            taskKind: 'deferred_tool_handoff',
+            intent: 'deferred_tool_handoff',
+          });
+          if (!activation) {
+            throw new Error('Agent loop does not support deferred tool activation');
+          }
+          if (activation.activatedTools.length === 0) {
+            throw new Error(
+              `Deferred tool handoff action "${action.id}" could not activate tools: ${payload.toolNames.join(', ')}`,
+            );
+          }
+          executionState.activated = true;
+          emitDeferredToolHandoffTelemetry({
+            actionId: action.id,
+            dedupeKey: action.dedupeKey,
+            channelId: action.channelId,
+            sourceMessageId: action.sourceMessageId,
+            toolNames: payload.toolNames,
+            intendedAction: payload.intendedAction,
+            phase: 'activated',
+          });
+          deferredToolHandoffExecutionState.set(action.dedupeKey, executionState);
+        }
+
+        if (executionState.executed) {
+          return;
+        }
+
+        const response = await agentLoop.handleMessage(buildDeferredToolHandoffMessage(action.id, payload));
+        const responseText = response.content.trim();
+        if (responseText && !payload.turn.channelId.startsWith('internal:')) {
+          await sender.send(payload.turn.channelId, responseText);
+        }
+
+        executionState.executed = true;
+        deferredToolHandoffExecutionState.set(action.dedupeKey, executionState);
+        emitDeferredToolHandoffTelemetry({
+          actionId: action.id,
+          dedupeKey: action.dedupeKey,
+          channelId: action.channelId,
+          sourceMessageId: action.sourceMessageId,
+          toolNames: payload.toolNames,
+          intendedAction: payload.intendedAction,
+          phase: 'executed',
+        });
+      },
+    );
+
+    runtimeOptions.postTurnActions.registerHandler(
+      DEFERRED_HEARTBEAT_ACTION_KIND,
+      async (action) => {
+        const templateIdRaw = action.payload.templateId;
+        if (typeof templateIdRaw !== 'string' || !templateIdRaw.trim()) {
+          throw new Error(`Deferred heartbeat action "${action.id}" is missing payload.templateId`);
+        }
+        const templateId = templateIdRaw.trim();
+        const current = store.load();
+        const template = current.templates.find(candidate => candidate.id === templateId);
+        if (!template) {
+          throw new Error(`Template "${templateId}" not found`);
+        }
+        const sendToDiscordOverride = typeof action.payload.sendToDiscordOverride === 'boolean'
+          ? action.payload.sendToDiscordOverride
+          : undefined;
+        await executeTemplate(template, {
+          ...(sendToDiscordOverride !== undefined ? { sendToDiscordOverride } : {}),
+        });
+      },
+    );
+
+    if (agentLoop.registerPostTurnActionInferer) {
+      const inferDeferredPostTurnActions: PostTurnActionInferer = ({ message, turnMessages }) => (
+        inferDeferredPostTurnActionsFromMessages({
+          message,
+          turnMessages,
+          deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
+          onDeferredToolHandoffPayload: (dedupeKey, payload) => {
+            deferredToolHandoffPayloads.set(dedupeKey, payload);
+          },
+        })
+      );
+      agentLoop.registerPostTurnActionInferer(inferDeferredPostTurnActions);
+    } else {
+      log.warn('Post-turn action runtime enabled but inferer registration is unavailable');
+    }
+  }
 
   // Create sync function that re-registers all reflection tasks
   const syncReflectionTasks = (): void => {

@@ -509,9 +509,8 @@ async function main(): Promise<void> {
       maxDelayMs: discordStartRetryMaxDelayMs,
       maxAttempts: discordStartRetryMaxAttempts,
       onRetry: ({ attempt, delayMs, maxAttempts, error }) => {
-        const code = typeof (error as { code?: unknown }).code === 'string'
-          ? (error as { code: string }).code
-          : undefined;
+        const rawCode = (error as Error & { code?: unknown }).code;
+        const code = typeof rawCode === 'string' ? rawCode : undefined;
         log.warn('Discord startup failed; retrying', {
           attempt,
           ...(maxAttempts > 0 ? { maxAttempts } : { maxAttempts: 'unbounded' }),

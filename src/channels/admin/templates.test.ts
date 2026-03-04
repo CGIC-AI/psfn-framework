@@ -39,9 +39,9 @@ describe('admin templates', () => {
     expect(html).toContain('<link rel="stylesheet" href="/static/admin.css">');
     expect(html).toContain('<script src="/static/htmx.min.js"></script>');
     expect(html).toContain('<script src="/static/sse.js"></script>');
-    expect(html).toContain('href="/skills"');
-    expect(html).toContain('href="/confirmations"');
-    expect(html).toContain('href="/values"');
+    expect(html).toContain('href="/legacy/skills"');
+    expect(html).toContain('href="/legacy/confirmations"');
+    expect(html).toContain('href="/legacy/values"');
   });
 
   it('renders settings provider guidance and gateway web fetch controls', () => {
@@ -154,6 +154,7 @@ describe('admin templates', () => {
     expect(html).toContain('name="webFetchAllowHttp"');
     expect(html).toContain('name="webFetchLocalCrawlerEnabled"');
     expect(html).toContain('name="webFetchTlsCaCertPaths"');
+    expect(html).toContain('data-purpose value="vision"');
     expect(html).toContain('&quot;providerHints&quot;:[&quot;openrouter&quot;,&quot;z-ai&quot;]');
     expect(html).toContain('&quot;pricing&quot;:{&quot;prompt&quot;:&quot;0.001&quot;,&quot;completion&quot;:&quot;0.002&quot;}');
   });
@@ -375,7 +376,7 @@ describe('admin templates', () => {
 
     const html = memoryRow(memory);
     expect(html).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;');
-    expect(html).toContain('/memory/id%20with%20spaces%2Fand%2Fslash');
+    expect(html).toContain('/legacy/memory/id%20with%20spaces%2Fand%2Fslash');
     expect(html).toContain('/api/memory/id%20with%20spaces%2Fand%2Fslash/supersede');
   });
 
@@ -389,7 +390,7 @@ describe('admin templates', () => {
 
     expect(html).toContain('API · session-42');
     expect(html).toContain('Contact:');
-    expect(html).toContain('/contacts#contact-row-contact-1');
+    expect(html).toContain('/legacy/contacts#contact-row-contact-1');
     expect(html).toContain('/api/contacts/contact-1/edit');
   });
 
@@ -444,7 +445,7 @@ describe('admin templates', () => {
       id: 'contact-1',
       displayName: 'Operator',
     });
-    expect(rowHtml).toContain('/contacts#contact-row-contact-1');
+    expect(rowHtml).toContain('/legacy/contacts#contact-row-contact-1');
     expect(rowHtml).toContain('/api/contacts/contact-1/edit');
     expect(rowHtml).toContain('Operator');
     expect(rowHtml).toContain('memory-sensitivity-confidential');
@@ -506,9 +507,9 @@ describe('admin templates', () => {
     };
 
     const html = promptLayersFragment([runtimeLayer, operatorLayer, baseLayer]);
-    const basePos = html.indexOf('/prompts/base-1');
-    const operatorPos = html.indexOf('/prompts/operator-1');
-    const runtimePos = html.indexOf('/prompts/runtime-1');
+    const basePos = html.indexOf('/legacy/prompts/base-1');
+    const operatorPos = html.indexOf('/legacy/prompts/operator-1');
+    const runtimePos = html.indexOf('/legacy/prompts/runtime-1');
 
     expect(basePos).toBeGreaterThanOrEqual(0);
     expect(operatorPos).toBeGreaterThan(basePos);
@@ -969,6 +970,6 @@ describe('admin templates', () => {
     expect(html).toContain('API · session-1');
     expect(html).toContain('Contact:');
     expect(html).toContain('Operator One');
-    expect(html).toContain('/contacts#contact-row-contact-operator');
+    expect(html).toContain('/legacy/contacts#contact-row-contact-operator');
   });
 });

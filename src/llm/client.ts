@@ -2,11 +2,13 @@ import {
   streamSimple,
   completeSimple,
   getEnvApiKey,
+  type Context as PiContext,
   type Model,
   type SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
 import type {
   CompletionPurpose,
+  CorrelationMetadata,
   LLMContext,
   LLMResponse,
   StreamCallbacks,
@@ -19,13 +21,19 @@ import { llmRetryConfig } from './retry-config.js';
 import {
   extractReasoningContent,
   extractTextContent,
-  toPiContext,
+  toPiTools,
 } from './conversion.js';
+import { contextMessagesToPiMessages } from './message-conversion.js';
 import { createComponentLogger } from '../logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
 import { resolveRegisteredModel } from './models.js';
+import {
+  type ResolvedCorrelationMetadata,
+  inferCallType as inferCorrelationCallType,
+  resolveCorrelationMetadata,
+} from './correlation.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -44,6 +52,7 @@ export interface LLMCompletionOptions {
   signal?: AbortSignal;
   disableRetry?: boolean;
   modelHint?: LLMCompletionModelHint;
+  correlation?: Partial<CorrelationMetadata>;
 }
 
 export class SensitiveImportRoutePolicyError extends Error {
@@ -270,8 +279,17 @@ export class LLMClient {
     return this.dedupeCandidates([hintedCandidate, ...candidates]);
   }
 
+  private buildPiContext(context: LLMContext): PiContext {
+    return {
+      systemPrompt: context.systemPrompt,
+      messages: contextMessagesToPiMessages(context.messages),
+      ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
+    };
+  }
+
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
-    const piContext = toPiContext(context);
+    const piContext = this.buildPiContext(context);
+    const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
 
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
@@ -381,10 +399,12 @@ export class LLMClient {
                 maxRetries,
                 delayMs,
                 error: error.message,
+                ...correlation,
               });
             },
           });
         },
+        { correlation },
       );
 
       log.info('LLM stream completed', {
@@ -392,6 +412,7 @@ export class LLMClient {
         model: candidate.model,
         provider: candidate.provider,
         attempts,
+        ...correlation,
       });
 
       callbacks?.onDone?.(finalResponse);
@@ -409,7 +430,8 @@ export class LLMClient {
     options: LLMCompletionOptions = {},
   ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
-    const piContext = toPiContext(context);
+    const piContext = this.buildPiContext(context);
+    const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
@@ -450,11 +472,12 @@ export class LLMClient {
               maxRetries,
               delayMs,
               error: error.message,
+              ...correlation,
             });
           },
         });
       },
-      { modelHint: options.modelHint },
+      { modelHint: options.modelHint, correlation },
     );
 
     log.info('LLM complete finished', {
@@ -464,6 +487,7 @@ export class LLMClient {
       provider: candidate.provider,
       attempts,
       requestedModelHint: options.modelHint?.model,
+      ...correlation,
     });
 
     const content = extractTextContent(response.content as unknown[]);
@@ -478,6 +502,14 @@ export class LLMClient {
       outputTokens: response.usage.output,
       stopReason: response.stopReason,
     };
+  }
+
+  private resolveCorrelation(
+    contextCorrelation: CorrelationMetadata | undefined,
+    optionCorrelation: Partial<CorrelationMetadata> | undefined,
+    purpose: CompletionPurpose | 'chat',
+  ): ResolvedCorrelationMetadata {
+    return resolveCorrelationMetadata(contextCorrelation, optionCorrelation, purpose);
   }
 
   private toRoutingPurpose(purpose: CompletionPurpose): RoutingPurpose {
@@ -496,13 +528,13 @@ export class LLMClient {
   private async runWithFallback<T>(
     purpose: RoutingPurpose,
     execute: (candidate: RoutingCandidate, attempt: number) => Promise<T>,
-    options: { modelHint?: LLMCompletionModelHint } = {},
+    options: { modelHint?: LLMCompletionModelHint; correlation?: ResolvedCorrelationMetadata } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
     const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
       this.enforceImportRoutingPolicy(purpose, candidate);
       return execute(candidate, attempt);
-    });
+    }, options.correlation);
   }
 }
 
@@ -552,6 +584,13 @@ export function normalizeContent(content: string): string {
     break;
   }
   return result;
+}
+
+export function inferCallType(
+  purpose: CompletionPurpose | 'chat',
+  channelId?: string,
+) {
+  return inferCorrelationCallType(purpose, channelId);
 }
 
 export { toPiTools } from './conversion.js';

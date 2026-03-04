@@ -285,7 +285,7 @@ describe('evaluateUrlPolicy', () => {
     });
 
     it('allows internal domain names when internal network enabled', () => {
-      const result = evaluateUrlPolicy('https://your-ollama-host:11434/', internalConfig);
+      const result = evaluateUrlPolicy('https://ollama.local.example.com:11434/', internalConfig);
       expect(result.allowed).toBe(true);
     });
 
@@ -322,10 +322,10 @@ describe('evaluateUrlPolicy', () => {
       const config = {
         allowInternalNetwork: true,
         allowHttp: true,
-        domainAllowlist: ['local.operator.nyc'],
+        domainAllowlist: ['local.example.com'],
       };
       // Allowlisted domain on internal network should work
-      expect(evaluateUrlPolicy('http://your-ollama-host:11434/', config).allowed).toBe(true);
+      expect(evaluateUrlPolicy('http://ollama.local.example.com:11434/', config).allowed).toBe(true);
       // Non-allowlisted domain should be blocked
       expect(evaluateUrlPolicy('http://evil.com/', config).allowed).toBe(false);
     });

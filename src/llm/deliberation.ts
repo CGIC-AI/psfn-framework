@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { LLMProvider } from '../agent/contracts.js';
-import type { CompletionPurpose, ContextMessage } from '../types.js';
+import type {
+  CompletionPurpose,
+  ContextMessage,
+  CorrelationMetadata,
+  ObservabilityCallType,
+} from '../types.js';
 import type { LLMCompletionOptions } from './client.js';
 
 type DeliberationPurpose = Extract<CompletionPurpose, 'background' | 'reasoning'>;
@@ -96,6 +101,7 @@ export interface DeliberationOptions {
   referenceModels?: string[];
   aggregatorModel?: string;
   aggregatorPurpose?: DeliberationPurpose;
+  correlation?: Partial<CorrelationMetadata>;
   caps?: Partial<DeliberationCaps>;
   fatigue?: Partial<DeliberationFatigueConfig>;
   cost?: Partial<DeliberationCostConfig>;
@@ -112,6 +118,7 @@ interface ResolvedDeliberationConfig {
   voices: DeliberationVoiceConfig[];
   aggregatorModel?: string;
   aggregatorPurpose: DeliberationPurpose;
+  correlation?: Partial<CorrelationMetadata>;
   caps: DeliberationCaps;
   fatigue: DeliberationFatigueConfig;
   cost: DeliberationCostConfig;
@@ -244,6 +251,7 @@ function resolveDeliberationConfig(options: DeliberationOptions = {}): ResolvedD
     aggregatorPurpose: options.aggregatorPurpose === 'background'
       ? 'background'
       : DEFAULT_AGGREGATOR_PURPOSE,
+    ...(options.correlation ? { correlation: options.correlation } : {}),
     caps,
     fatigue,
     cost,
@@ -343,13 +351,37 @@ async function completeForDeliberation(
 function buildCompletionOptions(
   requestedModel: string | undefined,
   maxTokens: number | undefined,
+  correlation?: CorrelationMetadata,
 ): LLMCompletionOptions | undefined {
-  if (!requestedModel && maxTokens === undefined) return undefined;
+  if (!requestedModel && maxTokens === undefined && !correlation) return undefined;
   return {
-    modelHint: {
-      ...(requestedModel ? { model: requestedModel } : {}),
-      ...(maxTokens !== undefined ? { maxTokens } : {}),
-    },
+    ...(requestedModel || maxTokens !== undefined
+      ? {
+        modelHint: {
+          ...(requestedModel ? { model: requestedModel } : {}),
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+        },
+      }
+      : {}),
+    ...(correlation ? { correlation } : {}),
+  };
+}
+
+function buildDeliberationCorrelation(
+  baseCorrelation: Partial<CorrelationMetadata> | undefined,
+  originStage: string,
+  fallbackOriginType: ObservabilityCallType,
+): CorrelationMetadata {
+  return {
+    ...(baseCorrelation?.turnId ? { turnId: baseCorrelation.turnId } : {}),
+    ...(baseCorrelation?.requestId ? { requestId: baseCorrelation.requestId } : {}),
+    ...(baseCorrelation?.channelId ? { channelId: baseCorrelation.channelId } : {}),
+    callType: baseCorrelation?.callType ?? baseCorrelation?.originType ?? fallbackOriginType,
+    ...(baseCorrelation?.toolName ? { toolName: baseCorrelation.toolName } : {}),
+    ...(baseCorrelation?.toolCallId ? { toolCallId: baseCorrelation.toolCallId } : {}),
+    purpose: originStage,
+    originType: baseCorrelation?.originType ?? baseCorrelation?.callType ?? fallbackOriginType,
+    originStage,
   };
 }
 
@@ -404,7 +436,15 @@ export async function runDeliberation(
           messages: buildVoiceMessages(prompt, previousSynthesis, roundIndex),
         },
         voice.purpose,
-        buildCompletionOptions(voice.requestedModel, roundRemainingTokens),
+          buildCompletionOptions(
+            voice.requestedModel,
+            roundRemainingTokens,
+            buildDeliberationCorrelation(
+              config.correlation,
+              `deliberation.voice.${voice.purpose}`,
+              voice.purpose === 'background' ? 'background' : 'tool',
+            ),
+          ),
       );
 
       totalInputTokens += response.inputTokens;
@@ -461,7 +501,15 @@ export async function runDeliberation(
             messages: buildAggregatorMessages(prompt, voices, previousSynthesis),
           },
           config.aggregatorPurpose,
-          buildCompletionOptions(config.aggregatorModel, roundRemainingTokens),
+          buildCompletionOptions(
+            config.aggregatorModel,
+            roundRemainingTokens,
+            buildDeliberationCorrelation(
+              config.correlation,
+              'deliberation.aggregator',
+              'summary',
+            ),
+          ),
         );
         synthesis = synthesisResponse.content.trim();
         aggregatorModel = synthesisResponse.model;

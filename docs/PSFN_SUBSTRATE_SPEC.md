@@ -79,7 +79,7 @@ Echo streaming connector:
 
 For API websocket voice runtime (`src/channels/api/voice-websocket-runtime.ts`), Echo defaults are:
 
-- API URL default example: `http://220.158.196.150:8001`
+- API URL default example: `${ECHO_TTS_URL}` (configure via environment variable)
 - Voice default: `11labs-Allison`
 - Preset default: `Independent-High-Speaker-CFG`
 

@@ -24,6 +24,7 @@ export interface ContactRuntimeIdentityLink {
 
 export interface ContactRuntimeOptions {
   bootstrapPrimaryIdentityLinks?: ContactRuntimeIdentityLink[];
+  exportDir?: string;
 }
 
 export function wireContactRuntime(
@@ -32,7 +33,9 @@ export function wireContactRuntime(
   primaryUserId?: string,
   options: ContactRuntimeOptions = {},
 ): ContactStore {
-  const contactStore = new ContactStore(db, primaryUserId);
+  const contactStore = new ContactStore(db, primaryUserId, {
+    exportDir: options.exportDir,
+  });
   target.contactStore = contactStore;
 
   const trimmedPrimaryUserId = primaryUserId?.trim();

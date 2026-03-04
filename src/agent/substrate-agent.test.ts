@@ -48,6 +48,29 @@ function mockAssistantResponse(text: string): void {
   });
 }
 
+function mockAssistantErrorResponse(errorMessage: string): void {
+  promptSpy.mockImplementationOnce(async function (this: Agent) {
+    this.appendMessage({
+      role: 'assistant',
+      content: [],
+      api: '' as any,
+      provider: '' as any,
+      model: '',
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'error' as any,
+      errorMessage,
+      timestamp: Date.now(),
+    });
+  });
+}
+
 // ── Fixtures ──
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -173,6 +196,19 @@ function makeScriptedMoaProvider(steps: ScriptedCompletionStep[]): {
   };
 }
 
+function makeExtendedProbeTool(name: string): any {
+  return {
+    name,
+    label: name,
+    description: `${name} test probe`,
+    parameters: {} as any,
+    execute: vi.fn(async () => ({
+      role: 'tool',
+      content: [{ type: 'text', text: 'ok' }],
+    })),
+  };
+}
+
 // ── Tests ──
 
 describe('SubstrateAgent construction', () => {
@@ -253,7 +289,7 @@ describe('SubstrateAgent construction', () => {
     expect(setModelSpy.mock.calls.length).toBeGreaterThan(callCountBeforeRefresh);
 
     const refreshedModel = setModelSpy.mock.calls.at(-1)?.[0] as { id: string };
-    expect(refreshedModel.id).toBe('moonshotai/kimi-k2.5');
+    expect(refreshedModel.id).toBe('openrouter/moonshotai/kimi-k2.5');
     setModelSpy.mockRestore();
   });
 });
@@ -358,6 +394,132 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage());
 
     expect(order).toEqual(['end', 'usage']);
+  });
+
+  it('emits stable correlation fields on turn lifecycle telemetry', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    const captured: Record<string, any> = {};
+    eventBus.on('agent.turn.start', (payload) => { captured.start = payload; });
+    eventBus.on('agent.turn.usage', (payload) => { captured.usage = payload; });
+    (eventBus as any).on('agent.turn.stage', (payload: any) => {
+      if (payload.stage === 'trust') captured.stage = payload;
+    });
+
+    await agent.handleMessage(makeMessage({
+      id: 'turn-telemetry-1',
+      channelId: 'internal:heartbeat',
+      channelType: 'terminal',
+      content: 'heartbeat run',
+    }));
+
+    expect(captured.start).toMatchObject({
+      turnId: 'turn-telemetry-1',
+      requestId: 'turn-telemetry-1',
+      channelId: 'internal:heartbeat',
+      callType: 'scheduled',
+      purpose: 'agent.turn.start',
+    });
+    expect(captured.usage).toMatchObject({
+      turnId: 'turn-telemetry-1',
+      requestId: 'turn-telemetry-1',
+      channelId: 'internal:heartbeat',
+      callType: 'scheduled',
+      purpose: 'agent.turn.usage',
+    });
+    expect(captured.stage).toMatchObject({
+      turnId: 'turn-telemetry-1',
+      requestId: 'turn-telemetry-1',
+      channelId: 'internal:heartbeat',
+      callType: 'scheduled',
+      purpose: 'agent.turn.stage.trust',
+    });
+  });
+
+  it('emits inferred post-turn actions between turn end and usage telemetry', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+    agent.registerPostTurnActionInferer(() => ([
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'whisper' },
+        dedupeKey: 'heartbeat.run_template:whisper',
+      },
+    ]));
+
+    const order: string[] = [];
+    const inferredActions: Array<{ kind: string; dedupeKey: string }> = [];
+    eventBus.on('agent.turn.end', () => { order.push('end'); });
+    eventBus.on('agent.post_turn.actions.inferred', ({ actions }) => {
+      order.push('inferred');
+      inferredActions.push(...actions.map(action => ({
+        kind: action.kind,
+        dedupeKey: action.dedupeKey,
+      })));
+    });
+    eventBus.on('agent.turn.usage', () => { order.push('usage'); });
+
+    await agent.handleMessage(makeMessage());
+
+    expect(order).toEqual(['end', 'inferred', 'usage']);
+    expect(inferredActions).toEqual([
+      {
+        kind: 'heartbeat.run_template',
+        dedupeKey: 'heartbeat.run_template:whisper',
+      },
+    ]);
+  });
+
+  it('deduplicates inferred post-turn actions by dedupe key across inferers', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    agent.registerPostTurnActionInferer(() => ([
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'whisper' },
+        dedupeKey: 'heartbeat.run_template:shared',
+      },
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'whisper' },
+        dedupeKey: 'heartbeat.run_template:shared',
+      },
+    ]));
+    agent.registerPostTurnActionInferer(() => ([
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'values-reflection' },
+        dedupeKey: 'heartbeat.run_template:shared',
+      },
+      {
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'daily-integration' },
+        dedupeKey: 'heartbeat.run_template:daily',
+      },
+    ]));
+
+    const inferredEventPayloads: Array<{ dedupeKey: string }> = [];
+    eventBus.on('agent.post_turn.actions.inferred', ({ actions }) => {
+      inferredEventPayloads.push(...actions.map(action => ({ dedupeKey: action.dedupeKey })));
+    });
+
+    await agent.handleMessage(makeMessage());
+
+    expect(inferredEventPayloads.map(action => action.dedupeKey)).toEqual([
+      'heartbeat.run_template:shared',
+      'heartbeat.run_template:daily',
+    ]);
   });
 
   it('emits stage telemetry for trust, memory, context, prompt, first-token, and end', async () => {
@@ -691,8 +853,444 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(response.content).toBe('Mock response from PSFN');
     expect(response.channelId).toBe('test-channel');
-    expect(response.metadata.model).toBe('deepseek/deepseek-v3.2');
+    expect(response.metadata.model).toBe('openrouter/deepseek/deepseek-v3.2');
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('routes Discord image turns through vision model slot and forwards image blocks', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (name: string) => {
+          if (name === 'content-type') return 'image/png';
+          if (name === 'content-length') return '3';
+          return null;
+        },
+      },
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
+    }));
+    (globalThis as any).fetch = fetchMock;
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toEqual([
+        { type: 'text', text: 'Hello, PSFN!' },
+        { type: 'image', data: 'AQID', mimeType: 'image/png' },
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('uses gateway binary fetch for Discord image turns when available', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toEqual([
+        { type: 'text', text: 'Hello, PSFN!' },
+        { type: 'image', data: 'AQID', mimeType: 'image/png' },
+      ]);
+      expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
+        'https://cdn.discordapp.com/attachments/1/2/image.png',
+        { lane: 'default', maxBytes: 8 * 1024 * 1024 },
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('invokes gateway binary fetch with provider instance binding', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      marker: boolean;
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.marker = true;
+    llmProvider.webFetchBinary = vi.fn(async function (this: { marker?: boolean }) {
+      if (this.marker !== true) {
+        throw new Error('unbound webFetchBinary');
+      }
+      return {
+        dataBase64: 'AQID',
+        mimeType: 'image/png',
+        sizeBytes: 3,
+      };
+    });
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      expect(llmProvider.webFetchBinary).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('accepts discordapp.net CDN host variants for Discord vision attachments', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/webp',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://images-ext-1.discordapp.net/external/foo/bar/cat.webp',
+          contentType: 'image/webp',
+          name: 'cat.webp',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toEqual([
+        { type: 'text', text: 'Hello, PSFN!' },
+        { type: 'image', data: 'AQID', mimeType: 'image/webp' },
+      ]);
+      expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
+        'https://images-ext-1.discordapp.net/external/foo/bar/cat.webp',
+        { lane: 'default', maxBytes: 8 * 1024 * 1024 },
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('routes Discord image turns through vision slot when attachment contentType is generic but URL format is image', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/webp',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://media.discordapp.net/attachments/1/2/image?format=webp&quality=lossless&width=1159&height=1640',
+          contentType: 'application/octet-stream',
+          name: 'image',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toEqual([
+        { type: 'text', text: 'Hello, PSFN!' },
+        { type: 'image', data: 'AQID', mimeType: 'image/webp' },
+      ]);
+      expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
+        'https://media.discordapp.net/attachments/1/2/image?format=webp&quality=lossless&width=1159&height=1640',
+        { lane: 'default', maxBytes: 8 * 1024 * 1024 },
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('does not fall back to direct fetch when gateway binary fetch exists but fails', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => {
+      throw new Error('gateway fetch denied');
+    });
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toBe('Hello, PSFN!');
+      expect(llmProvider.webFetchBinary).toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('routes Telegram image turns through vision model slot even without fetchable image URLs', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'telegram',
+        channelId: 'telegram:5635268079',
+        attachments: [{
+          url: 'telegram://file/abc123',
+          contentType: 'image/jpeg',
+          name: 'photo.jpg',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toBe('Hello, PSFN!');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('recovers from empty vision replies by retrying on chat model with explicit image-failure guidance', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      mockAssistantErrorResponse(
+        '400 litellm.BadRequestError: no healthy deployments for vision-model',
+      );
+      mockAssistantResponse('I could not process that image this turn. Please resend it.');
+
+      const promptCallsBefore = promptSpy.mock.calls.length;
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.content).toBe('I could not process that image this turn. Please resend it.');
+      expect(response.metadata.model).toBe('chat-model');
+      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(2);
+      const recoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
+      expect(recoveryPrompt.content).toContain('previous vision reply produced no text');
+      expect(recoveryPrompt.content).toContain('ask for resend');
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('retries vision recovery with strict non-empty instruction when first recovery is empty', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      mockAssistantErrorResponse(
+        '400 litellm.BadRequestError: no healthy deployments for vision-model',
+      );
+      mockAssistantResponse('');
+      mockAssistantResponse('I still could not process that image. Please resend it.');
+
+      const promptCallsBefore = promptSpy.mock.calls.length;
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.content).toBe('I still could not process that image. Please resend it.');
+      expect(response.metadata.model).toBe('chat-model');
+      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(3);
+      const strictRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 2]?.[0] as { content: string };
+      expect(strictRecoveryPrompt.content).toContain('exactly one short sentence');
+      expect(strictRecoveryPrompt.content).toContain('ask for resend');
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
   });
 
   it('routes normal response turns through MoA deliberation when enabled', async () => {
@@ -913,6 +1511,104 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).toContain('honne');
   });
 
+  it('injects expressive style guidance for API turns', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'api:session-1',
+      channelType: 'api',
+    }));
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const prompt = buildCall[1] as string;
+    expect(prompt).toContain('[Response Style Guidance]');
+    expect(prompt).toContain('Response style preference: expressive');
+    expect(prompt).toContain('Prefer expressive responses');
+  });
+
+  it('injects concise style guidance for Discord guild/voice and Telegram turns', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'style-discord-guild',
+      channelId: '1234567890',
+      channelType: 'discord',
+      isDirectMessage: false,
+    }));
+    await agent.handleMessage(makeMessage({
+      id: 'style-discord-voice',
+      channelId: 'discord-voice:guild:user',
+      channelType: 'terminal',
+    }));
+    await agent.handleMessage(makeMessage({
+      id: 'style-telegram',
+      channelId: 'telegram:5635268079',
+      channelType: 'telegram',
+    }));
+
+    const guildPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const voicePrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    const telegramPrompt = (sessionManager.buildContext as any).mock.calls[2][1] as string;
+
+    expect(guildPrompt).toContain('Response style preference: concise');
+    expect(voicePrompt).toContain('Response style preference: concise');
+    expect(telegramPrompt).toContain('Response style preference: concise');
+    expect(guildPrompt).toContain('Prefer concise responses');
+  });
+
+  it('honors routing responseStyle overrides ahead of channel defaults', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'style-routing-override',
+      channelId: 'api:session-2',
+      channelType: 'api',
+      routing: {
+        source: 'api',
+        responseStyle: 'concise',
+      },
+    }));
+
+    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    expect(prompt).toContain('Response style preference: concise');
+    expect(prompt).toContain('Prefer concise responses');
+  });
+
+  it('honors config responseStyleOverrides for channelType defaults', async () => {
+    const config = makeConfig({
+      responseStyleOverrides: {
+        channelType: {
+          api: 'concise',
+        },
+      },
+    });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'style-config-override',
+      channelId: 'api:session-3',
+      channelType: 'api',
+    }));
+
+    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    expect(prompt).toContain('Response style preference: concise');
+  });
+
   it('interpolates {{user}} and {{char}} variables per turn before context build', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
@@ -1021,6 +1717,442 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(setToolNamesByCall.length).toBeGreaterThanOrEqual(2);
     expect(setToolNamesByCall[0]).toContain('extended_probe_tool');
     expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
+  });
+
+  it('captures deferred tool-handoff intent details from load_tools', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    const extendedProbeTool = {
+      name: 'extended_probe_tool',
+      label: 'extended_probe_tool',
+      description: 'test-only probe tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({
+        role: 'tool',
+        content: [{ type: 'text', text: 'ok' }],
+      })),
+    } as any;
+    agent.registerTool(extendedProbeTool, 'extended');
+
+    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
+    expect(loadTools).toBeDefined();
+
+    const result = await (loadTools as any).execute('load-intent-1', {
+      tools: ['extended_probe_tool'],
+      intendedAction: 'Use extended_probe_tool to gather diagnostics for this request.',
+      deferUntilTurnBoundary: true,
+      maxRetries: 1,
+    });
+    const details = result.details as {
+      deferredToolHandoff?: {
+        toolNames: string[];
+        intendedAction: string;
+        maxRetries?: number;
+      };
+    };
+    expect(details.deferredToolHandoff).toEqual({
+      toolNames: ['extended_probe_tool'],
+      intendedAction: 'Use extended_probe_tool to gather diagnostics for this request.',
+      maxRetries: 1,
+    });
+  });
+
+  it('activates promoted extended tools each turn without load_tools calls', async () => {
+    const config = makeConfig({
+      promotedExtendedTools: ['extended_probe_tool'],
+    });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    const extendedProbeTool = {
+      name: 'extended_probe_tool',
+      label: 'extended_probe_tool',
+      description: 'test-only probe tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({
+        role: 'tool',
+        content: [{ type: 'text', text: 'ok' }],
+      })),
+    } as any;
+    agent.registerTool(extendedProbeTool, 'extended');
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    await agent.handleMessage(makeMessage({ id: 'msg-promoted-1' }));
+    await agent.handleMessage(makeMessage({ id: 'msg-promoted-2' }));
+
+    const setToolNamesByCall = setToolsSpy.mock.calls.map(
+      (call) => (call[0] as Array<{ name: string }>).map((tool) => tool.name),
+    );
+    expect(setToolNamesByCall.length).toBeGreaterThanOrEqual(2);
+    expect(setToolNamesByCall[0]).toContain('extended_probe_tool');
+    expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
+  });
+
+  it('autoloads bounded dev tools before prompt in deterministic candidate order', async () => {
+    const config = makeConfig({ capabilityTier: 'autonomous' });
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-autoload-order',
+      channelType: 'terminal',
+      content: 'Please inspect repo diff and patch the bug',
+    }));
+
+    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    const toolNames = configuredTools.map(tool => tool.name);
+    expect(toolNames).toContain('repo_status');
+    expect(toolNames).toContain('repo_diff');
+    expect(toolNames).toContain('repo_apply_patch');
+    expect(toolNames).not.toContain('repo_commit');
+
+    const statusIndex = toolNames.indexOf('repo_status');
+    const diffIndex = toolNames.indexOf('repo_diff');
+    const patchIndex = toolNames.indexOf('repo_apply_patch');
+    expect(statusIndex).toBeGreaterThanOrEqual(0);
+    expect(diffIndex).toBeGreaterThan(statusIndex);
+    expect(patchIndex).toBeGreaterThan(diffIndex);
+  });
+
+  it('skips capability-denied autoload candidates and emits skip telemetry', async () => {
+    const config = makeConfig({ capabilityTier: 'nursery' });
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
+
+    const autoloadSummaries: any[] = [];
+    const autoloadSkips: any[] = [];
+    (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
+    (eventBus as any).on('agent.tools.autoload.skipped', (payload: any) => { autoloadSkips.push(payload); });
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-autoload-denied',
+      channelType: 'terminal',
+      content: 'repo diff this branch and apply patch',
+    }));
+
+    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    const toolNames = configuredTools.map(tool => tool.name);
+    expect(toolNames).toContain('repo_status');
+    expect(toolNames).toContain('repo_diff');
+    expect(toolNames).not.toContain('repo_apply_patch');
+
+    const summary = autoloadSummaries.at(-1);
+    expect(summary?.intent).toBe('dev');
+    expect(summary?.skippedDenied).toEqual([
+      {
+        toolName: 'repo_apply_patch',
+        missingTokens: ['git.write'],
+      },
+    ]);
+
+    expect(autoloadSkips).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: 'capability_denied',
+          toolName: 'repo_apply_patch',
+        }),
+      ]),
+    );
+  });
+
+  it('falls back cleanly when autoload candidates are unavailable', async () => {
+    const config = makeConfig({ capabilityTier: 'autonomous' });
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+    agent.registerTool(makeExtendedProbeTool('prompt_layer_list'), 'extended');
+
+    const autoloadSummaries: any[] = [];
+    (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-autoload-fallback',
+      channelType: 'terminal',
+      content: 'Please check repo status for me',
+    }));
+
+    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    const toolNames = configuredTools.map(tool => tool.name);
+    expect(toolNames).toEqual(['load_tools']);
+
+    const summary = autoloadSummaries.at(-1);
+    expect(summary?.intent).toBe('dev');
+    expect(summary?.activated).toEqual([]);
+    expect(summary?.unavailable).toEqual(['repo_status', 'repo_diff', 'repo_apply_patch']);
+  });
+
+  it('emits adaptive decision telemetry and per-turn active-set snapshots with source labels', async () => {
+    const config = makeConfig({
+      capabilityTier: 'nursery',
+      promotedExtendedTools: ['repo_status', 'repo_commit', 'ghost_tool'],
+    });
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('manual_probe'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('deferred_probe'), 'extended');
+
+    const adaptiveDecisions: any[] = [];
+    const adaptiveSnapshots: any[] = [];
+    (eventBus as any).on('agent.tools.adaptive.decision', (payload: any) => { adaptiveDecisions.push(payload); });
+    (eventBus as any).on('agent.tools.adaptive.snapshot', (payload: any) => { adaptiveSnapshots.push(payload); });
+
+    agent.activateExtendedTools(['manual_probe']);
+    agent.activateExtendedTools(['deferred_probe'], {
+      source: 'deferred',
+      correlation: {
+        turnId: 'deferred-turn',
+        requestId: 'deferred-request',
+        channelId: 'test-channel',
+        callType: 'tool',
+        purpose: 'deferred_tool_handoff',
+      },
+      taskKind: 'deferred_tool_handoff',
+      intent: 'deferred_tool_handoff',
+    });
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-adaptive-telemetry',
+      channelType: 'terminal',
+      content: 'Please inspect repo diff and apply patch',
+    }));
+
+    const snapshot = adaptiveSnapshots.at(-1);
+    expect(snapshot).toMatchObject({
+      turnId: 'msg-adaptive-telemetry',
+      requestId: 'msg-adaptive-telemetry',
+      channelId: 'test-channel',
+      callType: 'chat',
+      purpose: 'agent.tools.adaptive.snapshot',
+      taskKind: null,
+    });
+    expect(snapshot?.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'load_tools', source: 'core' }),
+      expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
+      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
+      expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded' }),
+      expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred' }),
+    ]));
+    expect(snapshot?.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'ghost_tool', source: 'promoted', reason: 'not_registered' }),
+      expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', reason: 'capability_denied' }),
+    ]));
+    expect(snapshot?.counts).toMatchObject({
+      core: 1,
+      promoted: 1,
+      autoload: 1,
+      extendedLoaded: 1,
+      deferred: 1,
+      total: 5,
+    });
+
+    expect(adaptiveDecisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded', decision: 'activated' }),
+      expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred', decision: 'activated' }),
+      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload', decision: 'activated' }),
+      expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'load_tools', source: 'core', decision: 'active', reason: 'turn_active_set' }),
+      expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),
+    ]));
+  });
+
+  it('deduplicates active tool registration when a promoted tool is also manually loaded', async () => {
+    const config = makeConfig({
+      promotedExtendedTools: ['extended_probe_tool'],
+    });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    const extendedProbeTool = {
+      name: 'extended_probe_tool',
+      label: 'extended_probe_tool',
+      description: 'test-only probe tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({
+        role: 'tool',
+        content: [{ type: 'text', text: 'ok' }],
+      })),
+    } as any;
+    agent.registerTool(extendedProbeTool, 'extended');
+
+    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
+    expect(loadTools).toBeDefined();
+    await (loadTools as any).execute('load-promoted-dedupe', { tools: ['extended_probe_tool'] });
+
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    await agent.handleMessage(makeMessage({ id: 'msg-promoted-dedupe' }));
+
+    for (const call of setToolsSpy.mock.calls) {
+      const toolNames = (call[0] as Array<{ name: string }>).map((tool) => tool.name);
+      expect(toolNames.filter(name => name === 'extended_probe_tool')).toHaveLength(1);
+    }
+  });
+
+  it('supports promoted-tool add/remove/swap mutations with bounds and persistence hooks', () => {
+    const persistPromotedExtendedTools = vi.fn();
+    const config = makeConfig({
+      runtimeHooks: {
+        persistPromotedExtendedTools,
+      },
+    });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    for (const name of ['tool_one', 'tool_two', 'tool_three', 'tool_four', 'tool_five']) {
+      agent.registerTool({
+        name,
+        label: name,
+        description: `${name} test tool`,
+        parameters: {} as any,
+        execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
+      } as any, 'extended');
+    }
+
+    expect(agent.addPromotedExtendedTool('tool_one').ok).toBe(true);
+    expect(agent.addPromotedExtendedTool('tool_one').changed).toBe(false);
+    expect(agent.addPromotedExtendedTool('tool_two').ok).toBe(true);
+    expect(agent.addPromotedExtendedTool('tool_three').ok).toBe(true);
+    expect(agent.addPromotedExtendedTool('tool_four').ok).toBe(true);
+
+    const overLimit = agent.addPromotedExtendedTool('tool_five');
+    expect(overLimit.ok).toBe(false);
+    expect(overLimit.errorCode).toBe('max_slots');
+    expect(agent.getPromotedExtendedTools()).toEqual(['tool_one', 'tool_two', 'tool_three', 'tool_four']);
+
+    const swapped = agent.swapPromotedExtendedTools(1, 2);
+    expect(swapped.ok).toBe(true);
+    expect(swapped.promotedTools).toEqual(['tool_two', 'tool_one', 'tool_three', 'tool_four']);
+
+    const removed = agent.removePromotedExtendedTool('tool_one');
+    expect(removed.ok).toBe(true);
+    expect(removed.promotedTools).toEqual(['tool_two', 'tool_three', 'tool_four']);
+    expect(persistPromotedExtendedTools).toHaveBeenCalled();
+  });
+
+  it('rejects invalid or capability-denied promoted tools', () => {
+    const config = makeConfig({ capabilityTier: 'custom' });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    const invalidName = agent.addPromotedExtendedTool('not_registered');
+    expect(invalidName.ok).toBe(false);
+    expect(invalidName.errorCode).toBe('tool_not_extended');
+
+    const deniedTool = {
+      name: 'repo_commit',
+      label: 'repo_commit',
+      description: 'commit test tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
+    } as any;
+    agent.registerTool(deniedTool, 'extended');
+
+    const denied = agent.addPromotedExtendedTool('repo_commit');
+    expect(denied.ok).toBe(false);
+    expect(denied.errorCode).toBe('capability_denied');
+    expect(denied.missingTokens).toContain('git.write');
+  });
+
+  it('keeps runtime state unchanged when promoted-tool persistence fails', () => {
+    const config = makeConfig({
+      runtimeHooks: {
+        persistPromotedExtendedTools: vi.fn(() => {
+          throw new Error('disk failure');
+        }),
+      },
+    });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool({
+      name: 'tool_one',
+      label: 'tool_one',
+      description: 'tool one',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
+    } as any, 'extended');
+
+    const result = agent.addPromotedExtendedTool('tool_one');
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('persist_failed');
+    expect(agent.getPromotedExtendedTools()).toEqual([]);
   });
 
   it('freezes static prompt prefix per session while dynamic suffix updates each turn', async () => {
@@ -1436,7 +2568,7 @@ describe('SubstrateAgent.handleMessage', () => {
     config.primaryMaxTokens = 4096;
 
     const response = await agent.handleMessage(makeMessage({ id: 'msg-2', content: 'turn two' }));
-    expect(response.metadata.model).toBe('moonshotai/kimi-k2.5');
+    expect(response.metadata.model).toBe('openrouter/moonshotai/kimi-k2.5');
   });
 });
 

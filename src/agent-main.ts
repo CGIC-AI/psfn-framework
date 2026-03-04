@@ -8,7 +8,6 @@ import { loadConfig } from './types.js';
 import type {
   SubstrateConfig,
   SubstrateMessage,
-  WyomingRoutingMetadata,
 } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
@@ -25,7 +24,7 @@ import {
 } from './channels/api/active-health-probe.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, applySettings } from './settings.js';
+import { loadSettings, saveSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
@@ -54,10 +53,15 @@ import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
 import {
   DiscordLifecycleNotifier,
-  restoreLastActiveSession,
   writeLastActiveSession,
 } from './lifecycle/notifications.js';
 import type { MessageSender } from './lifecycle/notifications.js';
+import {
+  RUNTIME_MODE,
+  resolveRuntimeModeContract,
+  toRuntimeStatusMetadata,
+} from './lifecycle/runtime-mode.js';
+import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
@@ -74,9 +78,11 @@ import {
   wireCharacterCardRuntime,
   wireStaticPromptRegistry,
   wireSettingsRuntime,
+  wireSessionToolsRuntime,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
+import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createSafeguardAuditTrail,
@@ -88,7 +94,13 @@ import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
-import { toErrorMessage } from './utils/errors.js';
+import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
+import {
+  resolveContactsDir,
+  resolveNotesDir,
+  resolveScratchpadMirrorPath,
+  resolveSessionsDir,
+} from './persistence/layout.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -97,73 +109,21 @@ const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
 
-interface WyomingDelegationDecision {
-  isWyoming: boolean;
-  delegate: boolean;
-  reason: string;
-  routing?: WyomingRoutingMetadata;
-}
-
 function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
 }
 
-function resolveWyomingRoutingMetadata(message: SubstrateMessage): WyomingRoutingMetadata | undefined {
-  const routing = message.routing?.wyoming;
-  if (routing) {
-    return routing;
-  }
-  if (message.channelType !== 'api' || !message.channelId.startsWith('api:wyoming:')) {
-    return undefined;
-  }
-
-  const parts = message.channelId.split(':');
-  if (parts.length < 4) {
-    return undefined;
-  }
-
-  return {
-    siteId: parts[2],
-    satelliteId: parts.slice(3).join(':'),
-  };
-}
-
-function evaluateWyomingDelegation(
-  message: SubstrateMessage,
-  config: SubstrateConfig,
-): WyomingDelegationDecision {
-  const routing = resolveWyomingRoutingMetadata(message);
-  if (!routing) {
-    return {
-      isWyoming: false,
-      delegate: false,
-      reason: 'not_wyoming',
-    };
-  }
-
-  if (!config.wyomingShardRouting?.enabled) {
-    return {
-      isWyoming: true,
-      delegate: false,
-      reason: 'agent_policy_disabled',
-      routing,
-    };
-  }
-
-  if (routing.shardDelegation?.eligible !== true) {
-    return {
-      isWyoming: true,
-      delegate: false,
-      reason: routing.shardDelegation?.reason ?? 'gateway_policy_denied',
-      routing,
-    };
-  }
-
-  return {
-    isWyoming: true,
-    delegate: true,
-    reason: 'delegation_enabled',
-    routing,
+function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
+  const existingHooks = config.runtimeHooks ?? {};
+  config.runtimeHooks = {
+    ...existingHooks,
+    persistPromotedExtendedTools: (toolNames) => {
+      const current = loadSettings(config.dataDir);
+      saveSettings(config.dataDir, {
+        ...current,
+        promotedExtendedTools: [...toolNames],
+      });
+    },
   };
 }
 
@@ -204,6 +164,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const savedSettings = loadSettings(config.dataDir);
   applySettings(config, savedSettings);
+  installPromotedToolsPersistenceHook(config);
   const modelsConfig = loadModelsConfig(config.dataDir, {
     defaultContextWindow: config.defaultContextWindow,
   });
@@ -234,11 +195,18 @@ async function main(): Promise<void> {
     envTier: config.capabilityTier,
   });
   config.capabilityTier = capabilityRuntime.getTier();
+  const lifecycleRuntimeContract = resolveRuntimeModeContract({
+    entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
+    runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
+    restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
+  });
+  const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
 
   log.info('Initializing...');
+  log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
   await enforceNetworkIsolationOnStartup();
 
   // ── Connect to gateway ──
@@ -280,11 +248,12 @@ async function main(): Promise<void> {
     idFactory: () => `card-${randomUUID()}`,
   });
   log.info(`Loaded character: ${card.data.name}`);
+  config.characterName = card.data.name;
   const promptRegistry = wireStaticPromptRegistry(config.dataDir);
 
   // ── Initialize local components ──
 
-  const sessionsDir = join(config.dataDir, 'sessions');
+  const sessionsDir = resolveSessionsDir(config.dataDir);
   const sessionComposition = composeSessionRuntime({
     config,
     eventBus,
@@ -295,20 +264,29 @@ async function main(): Promise<void> {
   });
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
-  const restoredLatestSession = restoreLastActiveSession({
-    dataDir: config.dataDir,
-    computedLatestSession: sessionStore.getLatestSessionByTimestamp(),
-    isSessionValid: (sessionId) => sessionStore.count(sessionId) > 0,
-  });
-  if (restoredLatestSession) {
-    log.info('Restored latest session metadata', {
-      sessionId: restoredLatestSession.sessionId,
-      channelType: restoredLatestSession.channelType ?? 'unknown',
-      timestamp: restoredLatestSession.timestamp,
-    });
+  const restartBehavior = config.sessionRestartBehavior ?? 'reuse_latest_session';
+  const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
+  if (startupSession) {
+    writeLastActiveSession(config.dataDir, startupSession);
+    if (restartBehavior === 'new_session') {
+      log.info('Initialized fresh startup session metadata', {
+        sessionId: startupSession.sessionId,
+        channelType: startupSession.channelType ?? 'unknown',
+        timestamp: startupSession.timestamp,
+      });
+    } else {
+      log.info('Restored latest session metadata', {
+        sessionId: startupSession.sessionId,
+        channelType: startupSession.channelType ?? 'unknown',
+        timestamp: startupSession.timestamp,
+      });
+    }
   }
 
-  const memoryStore = new MemoryStore(db, gateway.dims);
+  const memoryStore = new MemoryStore(db, gateway.dims, {
+    notesDir: resolveNotesDir(config.dataDir),
+    scratchpadMirrorPath: resolveScratchpadMirrorPath(config.dataDir),
+  });
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
   const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
     embeddingDimensionCheck,
@@ -360,6 +338,7 @@ async function main(): Promise<void> {
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config);
+  wireSessionToolsRuntime(agentLoop, sessionManager, config.dataDir);
 
   // Contact store + tools — trust-gated privacy system
   const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
@@ -372,15 +351,18 @@ async function main(): Promise<void> {
     agentLoop,
     db,
     primaryUserId,
-    primaryTelegramUserId
-      ? {
-        bootstrapPrimaryIdentityLinks: [{
-          channel: 'telegram',
-          userId: primaryTelegramUserId,
-          privacyLevel: 'private',
-        }],
-      }
-      : {},
+    {
+      exportDir: resolveContactsDir(config.dataDir),
+      ...(primaryTelegramUserId
+        ? {
+          bootstrapPrimaryIdentityLinks: [{
+            channel: 'telegram',
+            userId: primaryTelegramUserId,
+            privacyLevel: 'private',
+          }],
+        }
+        : {}),
+    },
   );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
@@ -426,6 +408,11 @@ async function main(): Promise<void> {
     const now = Date.now();
     await eventBus.emit('schedule.heartbeat', { timestamp: now, taskCount: scheduler.taskCount });
   });
+  const postTurnActions = wirePostTurnActionRuntime({
+    eventBus,
+    scheduler,
+    agentLoop,
+  });
   scheduler.start();
   log.info(`Memory system enabled (${gateway.dims}d embeddings via gateway)`);
 
@@ -469,13 +456,27 @@ async function main(): Promise<void> {
   registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });
   log.info('Git self-modification tools enabled');
 
+  // Vault tools — Obsidian note read/write via gateway shell.exec
+  if (config.obsidianVaultName) {
+    const { GatewayVaultOps } = await import('./vault/gateway-ops.js');
+    const { registerVaultTools } = await import('./vault/runtime-wiring.js');
+    const vaultOps = new GatewayVaultOps(gateway, {
+      vaultName: config.obsidianVaultName,
+      cliPath: config.obsidianCliPath,
+      timeoutMs: config.obsidianTimeoutMs,
+    });
+    registerVaultTools(agentLoop, vaultOps, { gatewayMode: true });
+    log.info('Obsidian vault tools enabled', { vault: config.obsidianVaultName });
+  }
+
   // Validate tool wiring — catch misconfigured tools before they crash at invocation
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
   const moduleSummary = await moduleLoader.loadEnabledModules();
   log.info('Runtime modules initialized', moduleSummary);
   log.info('Re-validating tool wiring after module load', {
-    mode: 'gateway',
+    mode: lifecycleRuntimeContract.mode,
+    wiringMode: 'gateway',
     loadedModules: moduleSummary.loaded,
     failedModules: moduleSummary.failed,
   });
@@ -511,6 +512,7 @@ async function main(): Promise<void> {
             meta: {
               total: stats.total,
               avgSalience: Number(stats.avgSalience.toFixed(4)),
+              ...runtimeStatusMeta,
             },
           };
         },
@@ -520,6 +522,7 @@ async function main(): Promise<void> {
             provider: config.primaryProvider ?? null,
             model: config.primaryModel ?? null,
             ...toActiveProbeMeta(activeProbeConfig),
+            ...runtimeStatusMeta,
           };
 
           if (!configured) {
@@ -568,11 +571,13 @@ async function main(): Promise<void> {
         discord: () => ({
           status: 'degraded',
           detail: 'Discord transport runs outside the agent container',
+          meta: runtimeStatusMeta,
         }),
         embeddings: async () => {
           const baseMeta = {
             dims: gateway.dims,
             ...toActiveProbeMeta(activeProbeConfig),
+            ...runtimeStatusMeta,
           };
           if (!Number.isFinite(gateway.dims) || gateway.dims <= 0) {
             return {
@@ -622,12 +627,12 @@ async function main(): Promise<void> {
             return {
               status: 'degraded',
               detail: 'Heartbeat task is not registered',
-              meta: { taskCount },
+              meta: { taskCount, ...runtimeStatusMeta },
             };
           }
           return {
             status: 'healthy',
-            meta: { taskCount },
+            meta: { taskCount, ...runtimeStatusMeta },
           };
         },
       },
@@ -692,6 +697,7 @@ async function main(): Promise<void> {
       skillsRuntime,
       confirmationQueueApi,
       cardVersionStore,
+      adaptiveToolsStateProvider: agentLoop,
     });
     await adminServer.init();
     await adminServer.start();
@@ -702,9 +708,6 @@ async function main(): Promise<void> {
 
   const startTime = Date.now();
   const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
-  const lifecycleRuntimeMode = process.env.PSFN_RUNTIME_MODE?.trim() || 'gateway-agent';
-  const lifecycleRestartCommand = process.env.LIFECYCLE_RESTART_COMMAND?.trim()
-    || (lifecycleRuntimeMode === 'split' ? 'npm run split' : undefined);
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
   };
@@ -743,8 +746,8 @@ async function main(): Promise<void> {
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRestartCommand,
-      runtimeMode: lifecycleRuntimeMode,
+      restartCommand: lifecycleRuntimeContract.restart.command,
+      runtimeMode: lifecycleRuntimeContract.mode,
     },
   ));
   agentLoop.registerTool(createRebuildTool(
@@ -753,8 +756,8 @@ async function main(): Promise<void> {
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRestartCommand,
-      runtimeMode: lifecycleRuntimeMode,
+      restartCommand: lifecycleRuntimeContract.restart.command,
+      runtimeMode: lifecycleRuntimeContract.mode,
     },
   ));
   agentLoop.registerTool(createNotifyOperatorTool(
@@ -765,6 +768,20 @@ async function main(): Promise<void> {
     },
   ));
 
+  // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
+  let vaultAutoPublisher: import('./vault/auto-publish.js').VaultAutoPublisher | undefined;
+  if (config.obsidianAutoPublish && config.obsidianVaultName) {
+    const { GatewayVaultOps } = await import('./vault/gateway-ops.js');
+    const { VaultAutoPublisher } = await import('./vault/auto-publish.js');
+    const vaultOps = new GatewayVaultOps(gateway, {
+      vaultName: config.obsidianVaultName,
+      cliPath: config.obsidianCliPath,
+      timeoutMs: config.obsidianTimeoutMs,
+    });
+    vaultAutoPublisher = new VaultAutoPublisher(vaultOps);
+    log.info('Vault auto-publish enabled for reflections');
+  }
+
   // Heartbeat reflections — policy-driven multi-template reflection system
   wireHeartbeatRuntime(
     agentLoop,
@@ -774,129 +791,35 @@ async function main(): Promise<void> {
     config.dataDir,
     heartbeatChannelId,
     {
+      eventBus,
       llmProvider: gateway,
-      sessionManager,
       memoryWriter,
+      postTurnActions,
+      ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
     },
   );
 
-  // ── Register reverse RPC handler for voice messages from gateway ──
+  const trackSessionActivity = (message: SubstrateMessage): void => {
+    const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
+    writeLastActiveSession(config.dataDir, {
+      sessionId,
+      channelType: inferSessionChannelType(sessionId) ?? message.channelType,
+      timestamp: message.timestamp instanceof Date
+        ? message.timestamp.getTime()
+        : Date.now(),
+    });
+  };
+
+  // ── Register gateway inbound message handlers ──
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
-
-  gateway.onHandleMessage(async (message: SubstrateMessage) => {
-    writeLastActiveSession(config.dataDir, {
-      sessionId: message.channelId,
-      channelType: message.channelType,
-      timestamp: message.timestamp instanceof Date
-        ? message.timestamp.getTime()
-        : Date.now(),
-    });
-    log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
-    const routingDecision = evaluateWyomingDelegation(message, config);
-    if (routingDecision.isWyoming) {
-      safeguardAuditTrail.append('wyoming.routing.decision', {
-        channelId: message.channelId,
-        messageId: message.id,
-        delegated: routingDecision.delegate,
-        reason: routingDecision.reason,
-        connectionId: routingDecision.routing?.connectionId,
-        sessionId: routingDecision.routing?.sessionId,
-        turnId: routingDecision.routing?.turnId,
-        siteId: routingDecision.routing?.siteId,
-        satelliteId: routingDecision.routing?.satelliteId,
-      });
-    }
-
-    if (routingDecision.delegate) {
-      try {
-        const delegated = await shardManager.delegateWyomingSession({
-          message,
-          routing: routingDecision.routing,
-        });
-        safeguardAuditTrail.append('wyoming.routing.delegated', {
-          channelId: message.channelId,
-          messageId: message.id,
-          shardId: delegated.shardId,
-          connectionId: routingDecision.routing?.connectionId,
-          sessionId: routingDecision.routing?.sessionId,
-          turnId: routingDecision.routing?.turnId,
-          siteId: routingDecision.routing?.siteId,
-          satelliteId: routingDecision.routing?.satelliteId,
-        });
-        return {
-          content: delegated.content,
-          channelId: message.channelId,
-          metadata: {
-            model: delegated.model,
-            inputTokens: delegated.inputTokens,
-            outputTokens: delegated.outputTokens,
-            durationMs: delegated.durationMs,
-          },
-        };
-      } catch (error) {
-        const delegationError = toErrorMessage(error);
-        safeguardAuditTrail.append('wyoming.routing.fallback', {
-          channelId: message.channelId,
-          messageId: message.id,
-          reason: 'delegation_error',
-          error: delegationError,
-          connectionId: routingDecision.routing?.connectionId,
-          sessionId: routingDecision.routing?.sessionId,
-          turnId: routingDecision.routing?.turnId,
-        });
-        log.warn('Wyoming delegation failed; falling back to primary path', {
-          channelId: message.channelId,
-          error: delegationError,
-        });
-      }
-    }
-
-    if (routingDecision.isWyoming) {
-      safeguardAuditTrail.append('wyoming.routing.primary', {
-        channelId: message.channelId,
-        messageId: message.id,
-        reason: routingDecision.reason,
-        connectionId: routingDecision.routing?.connectionId,
-        sessionId: routingDecision.routing?.sessionId,
-        turnId: routingDecision.routing?.turnId,
-        siteId: routingDecision.routing?.siteId,
-        satelliteId: routingDecision.routing?.satelliteId,
-      });
-    }
-    return agentLoop.handleMessage(message);
-    // Note: no discord.send() — gateway voice runtime handles TTS directly
-  });
-
-  // ── Listen for Discord messages from gateway ──
-
-  gateway.onDiscordMessage(async (message: SubstrateMessage) => {
-    // Deserialize Date if it came as string
-    if (typeof message.timestamp === 'string') {
-      message.timestamp = new Date(message.timestamp);
-    }
-
-    // Track last-active channel for lifecycle notifications
-    writeLastActiveSession(config.dataDir, {
-      sessionId: message.channelId,
-      channelType: message.channelType,
-      timestamp: message.timestamp instanceof Date
-        ? message.timestamp.getTime()
-        : Date.now(),
-    });
-
-    log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
-
-    try {
-      const response = await agentLoop.handleMessage(message);
-
-      // Send response back through gateway → Discord
-      await gateway.discordSend(message.channelId, response.content);
-    } catch (err) {
-      log.error('Error handling message', { error: String(err) });
-      try {
-        await gateway.discordSend(message.channelId, 'Something went wrong. Please try again.');
-      } catch { /* ignore send errors */ }
-    }
+  registerGatewayMessageHandlers({
+    gateway,
+    agentLoop,
+    shardManager,
+    safeguardAuditTrail,
+    config,
+    log,
+    trackSessionActivity,
   });
 
   await eventBus.emit('system.init', {});

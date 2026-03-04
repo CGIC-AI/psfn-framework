@@ -35,7 +35,7 @@ const log = createComponentLogger('ApiVoiceRuntime');
 
 const DEFAULT_CHANNEL_PREFIX = 'api-voice';
 const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
-const DEFAULT_ECHO_TTS_URL = 'http://220.158.196.150:8001';
+const DEFAULT_ECHO_TTS_URL = 'http://localhost:8001';
 const DEFAULT_ECHO_TTS_VOICE = '11labs-Allison';
 const DEFAULT_ECHO_TTS_PRESET = 'Independent-High-Speaker-CFG';
 type RuntimeVoiceSttProvider = 'deepgram' | 'disabled';

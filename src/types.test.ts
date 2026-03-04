@@ -64,14 +64,25 @@ describe('loadConfig voice DAVE options', () => {
     expect(config.webFetchTlsCaCertPaths).toEqual(['/etc/ssl/root.pem', '/etc/ssl/intermediate.pem']);
   });
 
-  it('parses DISCORD_RESPOND_ALL toggle', () => {
-    process.env.DISCORD_RESPOND_ALL = 'true';
-    const enabled = loadConfig();
-    expect(enabled.discordRespondAll).toBe(true);
+  it('parses discord trigger env values and defaults', () => {
+    delete process.env.DISCORD_TRIGGER_WORDS;
+    delete process.env.DISCORD_TRIGGER_REACTIONS;
+    delete process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS;
 
-    process.env.DISCORD_RESPOND_ALL = 'false';
-    const disabled = loadConfig();
-    expect(disabled.discordRespondAll).toBe(false);
+    const defaults = loadConfig();
+    expect(defaults.discordTriggerWords).toEqual([]);
+    expect(defaults.discordTriggerReactions).toEqual(['👆']);
+    expect(defaults.discordTriggerListenWindowMs).toBe(120000);
+    expect(defaults.characterName).toBe('');
+
+    process.env.DISCORD_TRIGGER_WORDS = 'pixie, hey psfn';
+    process.env.DISCORD_TRIGGER_REACTIONS = '🔥, 👀';
+    process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS = '45000';
+
+    const configured = loadConfig();
+    expect(configured.discordTriggerWords).toEqual(['pixie', 'hey psfn']);
+    expect(configured.discordTriggerReactions).toEqual(['🔥', '👀']);
+    expect(configured.discordTriggerListenWindowMs).toBe(45000);
   });
 
   it('does not hardcode discord bot id when DISCORD_BOT_ID is unset', () => {
@@ -85,6 +96,24 @@ describe('loadConfig voice DAVE options', () => {
     process.env.TELEGRAM_ALLOWED_USERS = '5635268079,@operator';
     const config = loadConfig();
     expect(config.telegramAuthorizedUsers).toEqual(['5635268079', '@operator']);
+  });
+
+  it('defaults session restart behavior to reuse_latest_session', () => {
+    delete process.env.SESSION_RESTART_BEHAVIOR;
+
+    const config = loadConfig();
+
+    expect(config.sessionRestartBehavior).toBe('reuse_latest_session');
+  });
+
+  it('parses SESSION_RESTART_BEHAVIOR and falls back on invalid values', () => {
+    process.env.SESSION_RESTART_BEHAVIOR = 'new_session';
+    const explicit = loadConfig();
+    expect(explicit.sessionRestartBehavior).toBe('new_session');
+
+    process.env.SESSION_RESTART_BEHAVIOR = 'invalid-value';
+    const fallback = loadConfig();
+    expect(fallback.sessionRestartBehavior).toBe('reuse_latest_session');
   });
 });
 

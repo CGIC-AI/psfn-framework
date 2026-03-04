@@ -40,6 +40,7 @@ const DEFAULT_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   summary: 'primary',
   reasoning: 'primary',
   longContext: 'primary',
+  vision: 'primary',
   import_processing: 'extraction',
 };
 
@@ -168,8 +169,10 @@ function buildCatalogRows(config: SubstrateConfig): CatalogRowView[] {
 
 function buildRoleAssignments(config: SubstrateConfig): ModelRoleAssignments {
   const assignments = config.modelRoleAssignments ?? {};
+  const visionDefault = config.modelCatalog?.vision ? 'vision' : 'primary';
   return {
     ...DEFAULT_ROLE_ASSIGNMENTS,
+    vision: visionDefault,
     ...assignments,
   };
 }

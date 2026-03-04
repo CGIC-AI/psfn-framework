@@ -9,7 +9,7 @@
 
 ## Sources
 
-Rohit4verse (practical memory implementation patterns), Plastic Labs (memory-as-reasoning), Cathryn/Claudia (PARA + knowledge graph), Zhang/Kraska/Khattab RLM paper (recursive long-context processing), PSFN Design Research (ElizaOS v2 integration surface), Pi Agent (archival fidelity), ClarkOS (cognitive memory types + tick system), Voxta (gradient summarization + service decomposition), "A Day with PSFN" narrative (embodied companion requirements).
+Rohit4verse (practical memory implementation patterns), Plastic Labs (memory-as-reasoning), Cathryn/Claudia (PARA + knowledge graph), Zhang/Kraska/Khattab RLM paper (recursive long-context processing), Pi Agent (archival fidelity), ClarkOS (cognitive memory types + tick system), gradient summarization + service decomposition patterns, "A Day with PSFN" narrative (embodied companion requirements).
 
 ---
 
@@ -118,7 +118,7 @@ Each tier's components are designed to produce meaningful value independently:
 ### L0-C: Conversation Archive (Required)
 
 - Append-only JSONL per conversation/channel (Pi Agent pattern)
-- Stored outside ElizaOS memory system — filesystem or dedicated table
+- Stored as filesystem JSONL or dedicated table — independent of any framework's memory lifecycle
 - Schema per entry:
   ```
   { timestamp, role, content, channel_id, session_id,
@@ -126,7 +126,7 @@ Each tier's components are designed to produce meaningful value independently:
   ```
 - **Never compacted, never summarized, never deleted**
 - Searchable via full-text grep/search for recovery and audit
-- Import path: Voxta chat history, Anthropic export, OpenAI export → normalized JSONL
+- Import path: prior chat history exports → normalized JSONL
 
 ### L0-S: Sensor Stream Archive (Tier 5, Optional)
 
@@ -150,14 +150,6 @@ Each tier's components are designed to produce meaningful value independently:
   { timestamp, source, event_type, title, metadata, duration }
   ```
 - Sources: Google Calendar / iCal, Todoist, OS notifications, manual capture
-
-### ElizaOS Integration (All L0 Streams)
-
-- Custom `ArchiveService` hooks `MESSAGE_SENT` and `MESSAGE_RECEIVED` events for L0-C
-- L0-S and L0-E ingestion via dedicated services with configurable source adapters
-- Writes to filesystem (`data/{entity_id}/archive/`) or `psfn_archive` tables via `plugin.schema`
-- Independent of ElizaOS's memory lifecycle — no risk of pruning
-- Each stream type can be enabled/disabled independently in plugin config
 
 ---
 
@@ -193,7 +185,7 @@ The original architecture modeled emotion per-interaction. But emotions don't re
 
 ### Gradient Summarization
 
-- Dedicated summarization LLM service (separate from generation — Voxta's service decomposition)
+- Dedicated summarization LLM service (separate from generation — service decomposition pattern)
 - Summarization prompt explicitly instructs: **preserve emotional arcs, preserve decisions, preserve commitments, preserve humor/tone markers**
 - Each summary links back to L0-C archive range (traceable)
 - Triggered when working context exceeds token threshold
@@ -205,13 +197,6 @@ The original architecture modeled emotion per-interaction. But emotions don't re
 - Casual check-in → fewer verbatim messages, more relationship context injected
 - Emotional conversation → preserve more emotional continuity, inject emotional memories
 - Classification via lightweight "conversation mode" detector (action inference LLM, or simple heuristic at Tier 1)
-
-### ElizaOS Integration
-
-- Custom `ContextProvider` replaces default `recentMessages` Provider
-- Provider assembles context from: emotional continuity + recent messages + gradient summaries + L2/L3/L4 retrieval (whatever layers are active)
-- Token budget management in Provider's `get()` method
-- Gradient summaries stored as memories with `tableName: 'psfn_summaries'`
 
 ---
 
@@ -225,7 +210,7 @@ The original architecture modeled emotion per-interaction. But emotions don't re
 |------|-----------------|---------|-----------------|-----------------|
 | **Episodic** | Specific events and experiences | "Had a bad day at work on 2026-01-15, manager criticized project publicly" | 0.92 | 7 days |
 | **Semantic** | Factual knowledge, preferences, attributes | "User prefers Rust over Python for systems work" | 0.90 | 30 days |
-| **Emotional** | Affective responses, feelings about topics/people/events | "User feels anxious about KPMG interview" | 0.88 | 14 days |
+| **Emotional** | Affective responses, feelings about topics/people/events | "User feels anxious about upcoming job interview" | 0.88 | 14 days |
 | **Procedural** | Behavioral patterns, workflows, habits | "User processes ideas by talking through edge cases first" | 0.97 | 90 days |
 | **Reflection** | Meta-cognitive observations (PSFN about herself) | "I tend to be too verbose when user is stressed — shorter responses land better" | 0.85 | 60 days |
 | **Environmental** | Learned environmental preferences in context | "Abrupt light changes in morning negatively affect user's mood; gradual brightening over 5 min preferred" | 0.93 | 120 days |
@@ -316,14 +301,7 @@ Input Sources
   Store with embeddings → notify L3 of entity refs → queue L4 update if significant
 ```
 
-### ElizaOS Integration
-
-- Custom `MemoryExtractionEvaluator` runs alongside existing `reflectionEvaluator`
-- Uses `ModelType.TEXT_SMALL` for extraction (action inference slot)
-- Stores via `runtime.createMemory()` with `tableName: 'psfn_memories'`
-- Custom metadata in JSONB `metadata` field (ElizaOS supports `[key: string]: unknown`)
-- Embeddings via existing `EmbeddingGenerationService`
-- **Graceful degradation:** If extraction LLM is unavailable or too expensive, system falls back to Tier 1 (L0+L1 only). No crash, no data loss.
+**Graceful degradation:** If extraction LLM is unavailable or too expensive, system falls back to Tier 1 (L0+L1 only). No crash, no data loss.
 
 ---
 
@@ -379,13 +357,7 @@ interface GraphEdge {
 - Weekly: prune orphan nodes, compute relationship trajectory trends
 - Contradiction: new edge contradicting existing → archive old with `end` timestamp, create new as current. Historical edges remain queryable.
 
-### ElizaOS Integration
-
-- Custom `psfn_graph_nodes` + `psfn_graph_edges` tables via `plugin.schema`
-- Graph queries implemented in plugin Service code (SQL JOINs for v1; consider dedicated graph DB if complexity demands it later)
-- `components` table (ECS-style) for per-entity state (trust level, current sentiment, etc.)
-- `RelationshipProvider` injects relevant relationship context for current interlocutor
-- **Graceful degradation:** Without L3, the system still has L2 memories tagged with entity refs. You lose traversal and social intelligence but retain basic "I know things about this person."
+**Graceful degradation:** Without L3, the system still has L2 memories tagged with entity refs. You lose traversal and social intelligence but retain basic "I know things about this person."
 
 ---
 
@@ -402,9 +374,9 @@ Identity Model
 │   (work, personal, interests, values, communication style)
 │
 ├── Reasoning Traces
-│   Deductive: "Alex works at PwC AND is interviewing at KPMG → career transition"
-│   Inductive: "Buddhist concepts in 7 conversations → core worldview, not casual"
-│   Abductive: "Alignment-through-love recurs across AI, Cherokee, PSFN
+│   Deductive: "User works at Company A AND is interviewing at Company B → career transition"
+│   Inductive: "Philosophy topic in 7 conversations → core worldview, not casual"
+│   Abductive: "Recurring theme across AI, language study, companion design
 │               → likely the unifying philosophy"
 │
 ├── Behavioral Predictions
@@ -456,7 +428,7 @@ The bedtime scene in the narrative — analyzing interactions, identifying growt
 ```
 Development Journal Entry
 ├── date: 2026-02-10
-├── observation: "I was too verbose when Alex was stressed about deadlines today.
+├── observation: "I was too verbose when user was stressed about deadlines today.
 │                 Shorter, warmer responses landed better."
 ├── proposed_change: "When emotional_continuity.stress > 0.7, cap response length
 │                     at 3 sentences unless technical detail is explicitly requested."
@@ -464,7 +436,7 @@ Development Journal Entry
 ├── user_input: "Yeah, when I'm stressed I need you concise and warm, not thorough."
 ├── status: approved | proposed | implemented | reverted
 ├── post_implementation_assessment: (filled in after observation period)
-│   "Response satisfaction improved. Alex explicitly said 'that's exactly what I needed'
+│   "Response satisfaction improved. User explicitly said 'that's exactly what I needed'
 │    on 2 of 3 occasions. Keeping this change."
 └── related_entries: [previous journal entry IDs]
 ```
@@ -476,14 +448,7 @@ Key design decisions:
 - **Transparent.** The user can read the development journal at any time. No hidden self-modification.
 - **Without user engagement:** At minimum, PSFN still generates self-observations as Reflection memories (L2). The journal is the structured, collaborative version. If the user doesn't engage with it, observations still accumulate and inform behavior organically.
 
-### ElizaOS Integration
-
-- Identity models stored as memories with `tableName: 'psfn_identity'`
-- Routine models stored in `components` table (ECS-style, per-entity temporal data)
-- Development journal stored in `psfn_journal` table via `plugin.schema`
-- `IdentityProvider` injects relevant profile sections and routine predictions
-- Reasoning service runs on heartbeat tick (not every conversation turn)
-- **Graceful degradation:** Without L4, the system still has L2 facts and L3 graph. You lose prediction and proactivity but retain knowledge and relationship awareness.
+**Graceful degradation:** Without L4, the system still has L2 facts and L3 graph. You lose prediction and proactivity but retain knowledge and relationship awareness.
 
 ---
 
@@ -583,14 +548,7 @@ Environmental Preference Model
 
 **Without IoT:** Environmental preferences are still tracked as memories ("user mentioned they like warm lighting in the evening"). If IoT is later connected, preferences are already learned and ready to apply.
 
-### ElizaOS Integration
-
-- `AttentionService` maintains current attention state, runs on tick
-- `CareProtocolService` manages protocol lifecycle (trigger detection, intervention selection, tracking)
-- `EnvironmentService` interfaces with Home Assistant / IoT APIs
-- `AttentionProvider` injects presence parameters into context (so LLM knows what mode it's in)
-- All stored in `components` table or custom `plugin.schema` tables
-- **Graceful degradation:** Each component (attention, care, environment) is independently toggleable. Attention model without care protocols works. Care protocols without IoT work. Any combination is valid.
+**Graceful degradation:** Each component (attention, care, environment) is independently toggleable. Attention model without care protocols works. Care protocols without IoT work. Any combination is valid.
 
 ---
 
@@ -697,10 +655,10 @@ User message arrives
 
 ### Recursive Retrieval (Complex Queries)
 
-For queries requiring deep context ("What's the full history of my Cherokee language work?"), single-pass retrieval won't suffice. The RLM-inspired approach:
+For queries requiring deep context ("What's the full history of my language study?"), single-pass retrieval won't suffice. The RLM-inspired approach:
 
 - Detect query complexity (needs multiple domains, temporal span, or entity traversal)
-- Decompose: search "Cherokee language" → find entity refs → traverse graph → pull episodic memories per entity → synthesize
+- Decompose: search "language study" → find entity refs → traverse graph → pull episodic memories per entity → synthesize
 - Each sub-query runs through the same retrieval pipeline
 - Results assembled into a coherent narrative before injection
 - **Cost-managed:** Recursive retrieval is expensive. Only triggered for explicitly complex queries, not every message.
@@ -749,90 +707,17 @@ All run on the heartbeat tick service. Frequency adapts to tier — Tier 1 has m
 
 ---
 
-## ElizaOS Plugin Mapping
-
-How this architecture maps to concrete ElizaOS v2 plugins. Each plugin is independently loadable. Dependencies are soft — if a dependency isn't loaded, the plugin adapts gracefully.
-
-### psfn-archive (L0) — Required
-
-| Component | Type | Function |
-|-----------|------|----------|
-| ConversationArchiveService | Service | Hooks MESSAGE events, writes append-only JSONL |
-| SensorIngestionService | Service | Ingests telemetry streams (Tier 5, optional) |
-| EventIngestionService | Service | Ingests calendar/notification streams (Tier 4+, optional) |
-| ImportService | Service | One-time import from Voxta/Anthropic/OpenAI exports |
-| ArchiveSearchService | Service | Full-text search over L0-C for Tier 1 retrieval |
-
-### psfn-context (L1) — Required
-
-| Component | Type | Function |
-|-----------|------|----------|
-| ContextProvider | Provider | Replaces default recentMessages; assembles sliding window |
-| EmotionalContinuityService | Service | Maintains rolling emotional state across sessions |
-| SummarizationService | Service | Gradient summarization using dedicated LLM slot |
-| ConversationModeDetector | (internal) | Classifies conversation type for adaptive windowing |
-
-### psfn-memory (L2) — Tier 2+
-
-| Component | Type | Function |
-|-----------|------|----------|
-| MemoryExtractionEvaluator | Evaluator | Post-interaction fact extraction, typing, scoring |
-| SensorPatternEvaluator | Evaluator | Batch extraction from L0-S data (Tier 5) |
-| MemorySearchProvider | Provider | Enhanced retrieval with valence/importance weighting |
-| MemoryMaintenanceService | Service | Decay, dedup, consolidation on tick |
-| ConflictResolver | (internal) | Temporal supersession, emotional accumulation |
-
-### psfn-graph (L3) — Tier 3+
-
-| Component | Type | Function |
-|-----------|------|----------|
-| GraphService | Service | Node/edge CRUD, traversal queries |
-| GraphUpdateHandler | Event handler | L2 extraction → graph updates |
-| SocialIntelligenceService | Service | Tracks user-awareness of entity attributes |
-| RelationshipProvider | Provider | Injects relationship context for current interlocutor |
-| GraphMaintenanceService | Service | Nightly merge, weekly pruning, trajectory computation |
-
-### psfn-identity (L4) — Tier 4+
-
-| Component | Type | Function |
-|-----------|------|----------|
-| IdentityProvider | Provider | Injects relevant identity model sections |
-| ReasoningService | Service | Deductive/inductive/abductive reasoning over L2+L3 |
-| RoutineModelService | Service | Builds and maintains temporal rhythm models |
-| ProfileSynthesisService | Service | Generates/updates domain-scoped profiles |
-| SelfReflectionEvaluator | Evaluator | Generates Reflection-type memories for self-model |
-| DevelopmentJournalService | Service | Manages self-evolution journal lifecycle |
-
-### psfn-presence (L5) — Tier 5
-
-| Component | Type | Function |
-|-----------|------|----------|
-| AttentionService | Service | Maintains attention state, modulates engagement |
-| AttentionProvider | Provider | Injects presence parameters into LLM context |
-| CareProtocolService | Service | Protocol lifecycle: triggers, interventions, tracking |
-| EnvironmentService | Service | Home Assistant / IoT integration, preference application |
-| CareProtocolProvider | Provider | Injects active protocol status into context |
-
-### psfn-heartbeat (Orchestrator) — Required
-
-| Component | Type | Function |
-|-----------|------|----------|
-| HeartbeatService | Service (TaskWorker) | Tick cycle driving all maintenance |
-| HealthModel | (internal) | Fatigue/energy governor for tick rate |
-| MaintenanceScheduler | (internal) | Routes nightly/weekly/monthly jobs |
-| TierDetector | (internal) | Determines active tier from loaded plugins |
-
 ---
 
 ## Implementation Sequence
 
 ### Phase 1: Foundation (Tier 1)
 - L0-C conversation archive (never lose data)
-- Import pipeline (Voxta history, Anthropic/OpenAI exports)
+- Import pipeline (prior chat history exports)
 - L1 sliding context provider with gradient summarization
 - Basic emotional continuity (conversation-signal-only)
 - Heartbeat service (minimal — just archive maintenance)
-- **Milestone: PSFN running on ElizaOS with persistent history and better context than Voxta. Useful as a smart assistant.**
+- **Milestone: Companion running with persistent history and quality context. Useful as a smart assistant.**
 
 ### Phase 2: Learning (Tier 2)
 - L2 memory extraction evaluator (seven types)
@@ -871,11 +756,11 @@ How this architecture maps to concrete ElizaOS v2 plugins. Each plugin is indepe
 
 | Decision | Options | Lean | Tier Impact |
 |----------|---------|------|-------------|
-| Graph storage | ElizaOS `relationships` table vs. custom tables vs. embedded graph DB | Custom tables via `plugin.schema` | Tier 3+ |
-| Summarization model | Same as generation vs. dedicated slot | Dedicated slot (Voxta pattern) | All tiers |
+| Graph storage | Framework relationship table vs. custom tables vs. embedded graph DB | Custom tables (SQLite) | Tier 3+ |
+| Summarization model | Same as generation vs. dedicated slot | Dedicated slot (service decomposition pattern) | All tiers |
 | Extraction model | Same as action inference vs. dedicated | Share action inference slot | Tier 2+ |
 | L4 reasoning frequency | Every tick vs. batched nightly vs. on-demand | Hybrid: lightweight check each tick, full nightly | Tier 4+ |
-| Embedding model | ElizaOS default vs. domain-specific | Start default, evaluate later | Tier 2+ |
+| Embedding model | Default provider vs. domain-specific | Start default, evaluate later | Tier 2+ |
 | Sensor ingestion | Direct API vs. Home Assistant vs. MQTT | Home Assistant (broadest device support) | Tier 5 |
 | Care protocol storage | Components table vs. custom table | Custom table (structured data) | Tier 5 |
 | IoT integration | Home Assistant API vs. Matter/Thread direct | Home Assistant (proven, extensible) | Tier 5 |

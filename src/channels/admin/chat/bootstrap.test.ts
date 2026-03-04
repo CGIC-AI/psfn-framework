@@ -85,6 +85,22 @@ describe('AdminChatBootstrapService', () => {
     expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('api:operator-7');
   });
 
+  it('does not expose raw api keys in bootstrap payloads', () => {
+    const service = new AdminChatBootstrapService(null, {
+      apiKey: 'bootstrap-test-secret',
+      resolveGlobalDefaultSessionId: () => null,
+    });
+
+    const payload = service.buildBootstrap();
+    const modelRoomPayload = service.buildModelRoomBootstrap(makeRuntimeConfig('/tmp/unused-card.json'));
+
+    expect(payload.api.apiKey).toBeUndefined();
+    expect(payload.runtime.apiKey).toBeUndefined();
+    expect(modelRoomPayload.api.apiKey).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain('bootstrap-test-secret');
+    expect(JSON.stringify(modelRoomPayload)).not.toContain('bootstrap-test-secret');
+  });
+
   it('reports onboarding required when starter bootstrap card is active', () => {
     const root = makeTempDir();
     const characterCardPath = join(root, 'character.json');

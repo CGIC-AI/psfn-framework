@@ -131,14 +131,10 @@ function buildTransportHeaders(bootstrap) {
   };
 }
 
-function readBootstrapApiKey(bootstrap) {
-  const key = normalizeText(bootstrap?.api?.apiKey);
+function normalizeProviderApiKey(value) {
+  const key = normalizeText(value);
   if (!key || PLACEHOLDER_TOKENS.has(key)) return '';
   return key;
-}
-
-function resolveClientApiKey(bootstrap) {
-  return readBootstrapApiKey(bootstrap) || PROVIDER_KEY_PLACEHOLDER;
 }
 
 function createBootstrapSelectionFromControls(dom) {
@@ -426,17 +422,25 @@ function parseSseLine(line) {
  * Stream a chat completion request via SSE. Calls onDelta for each text chunk
  * and returns the final usage payload (if any) when the stream completes.
  */
-async function streamChatCompletion({ bootstrap, modelId, history, systemPrompt, signal, onDelta }) {
+async function streamChatCompletion({
+  bootstrap,
+  modelId,
+  history,
+  systemPrompt,
+  signal,
+  onDelta,
+  apiKey,
+}) {
   const endpointUrl = new URL(bootstrap.api.chatCompletionsUrl, window.location.origin);
-  const apiKey = resolveClientApiKey(bootstrap);
   const headers = {
     Accept: 'text/event-stream',
     'Content-Type': 'application/json',
     ...buildTransportHeaders(bootstrap),
   };
 
-  if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
+  const normalizedApiKey = normalizeProviderApiKey(apiKey);
+  if (normalizedApiKey) {
+    headers.Authorization = `Bearer ${normalizedApiKey}`;
   }
 
   const response = await fetch(endpointUrl, {
@@ -453,7 +457,9 @@ async function streamChatCompletion({ bootstrap, modelId, history, systemPrompt,
   if (!response.ok) {
     const body = await readJsonBody(response).catch(() => ({}));
     const reason = body?.error?.message || body?.error?.type || `status ${response.status}`;
-    throw new Error(`Completion request failed: ${reason}`);
+    const error = new Error(`Completion request failed: ${reason}`);
+    error.status = response.status;
+    throw error;
   }
 
   const reader = response.body.getReader();
@@ -507,7 +513,6 @@ class AgentInterfaceSession {
     this.abortController = null;
     this.streamFn = null;
     this.debugEventSource = null;
-    this.getApiKey = async (provider) => this.options.providerKeys.get(provider);
     const bootstrapModel = modelFromBootstrap(this.options.getBootstrap());
     this.state = {
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -640,7 +645,6 @@ class AgentInterfaceSession {
   setModel(model) {
     if (!model || typeof model !== 'object') return;
     this.state.model = model;
-    void this.options.seedProviderKey(model.provider);
     this.options.onModelChange(model);
     this.emitViewRefresh();
   }
@@ -653,6 +657,11 @@ class AgentInterfaceSession {
   abort() {
     if (!this.abortController) return;
     this.abortController.abort();
+  }
+
+  async resolveRequestApiKey(provider) {
+    const normalizedProvider = normalizeText(provider) || 'openai';
+    return normalizeProviderApiKey(await this.options.providerKeys.get(normalizedProvider));
   }
 
   async prompt(input) {
@@ -684,12 +693,14 @@ class AgentInterfaceSession {
       const streamingMessage = createAssistantMessage('', null, this.state.model);
       this.state.streamMessage = streamingMessage;
       this.emit({ type: 'message_start', message: streamingMessage });
-
-      const usage = await streamChatCompletion({
+      const provider = normalizeText(this.state.model?.provider) || 'openai';
+      let requestApiKey = await this.resolveRequestApiKey(provider);
+      const streamRequest = () => streamChatCompletion({
         bootstrap: this.options.getBootstrap(),
         modelId: this.state.model?.id || DEFAULT_MODEL_ID,
         history: this.state.messages,
         systemPrompt: this.state.systemPrompt,
+        apiKey: requestApiKey,
         signal: this.abortController.signal,
         onDelta: (delta) => {
           accumulatedText += delta;
@@ -707,6 +718,25 @@ class AgentInterfaceSession {
           });
         },
       });
+
+      let usage;
+      try {
+        usage = await streamRequest();
+      } catch (error) {
+        const unauthorized = typeof error === 'object'
+          && error !== null
+          && 'status' in error
+          && error.status === 401;
+        if (!unauthorized || requestApiKey || typeof this.options.requestApiKey !== 'function') {
+          throw error;
+        }
+        const accepted = await this.options.requestApiKey(provider);
+        if (!accepted) {
+          throw error;
+        }
+        requestApiKey = await this.resolveRequestApiKey(provider);
+        usage = await streamRequest();
+      }
 
       if (!accumulatedText) {
         throw new Error('Completion stream did not produce any text');
@@ -886,13 +916,8 @@ function createLocalStorageSessions() {
   };
 }
 
-function createRuntimeStores(initialApiKey) {
-  const normalizedApiKey = normalizeText(initialApiKey);
-  const providerEntries = normalizedApiKey
-    ? [['openai', normalizedApiKey]]
-    : [['openai', PROVIDER_KEY_PLACEHOLDER]];
-
-  const providerKeys = createMemoryStore(providerEntries);
+function createRuntimeStores() {
+  const providerKeys = createMemoryStore([['openai', PROVIDER_KEY_PLACEHOLDER]]);
   const settings = createMemoryStore([
     ['proxy.enabled', false],
     ['proxy.url', ''],
@@ -1013,10 +1038,6 @@ async function persistControlChanges(context, changedField) {
     }
     updateViewFromBootstrap(context);
 
-    if (context.seedProviderKey) {
-      await context.seedProviderKey(context.session?.state?.model?.provider || 'openai');
-    }
-
     setStatus(context.dom, 'Garden chat is ready.');
   } catch (error) {
     setStatus(context.dom, `Unable to update garden chat settings: ${formatError(error)}`, true);
@@ -1038,18 +1059,20 @@ async function mountAgentInterface(context) {
   const module = await loadPiWebUiModule(assets.moduleUrl);
   await ensurePiWebUiStylesheet(assets.stylesheetUrl);
 
-  const stores = createRuntimeStores(resolveClientApiKey(context.bootstrap));
+  const stores = createRuntimeStores();
   module.setAppStorage(stores.appStorage);
 
-  context.seedProviderKey = async (provider) => {
+  const requestApiKey = async (provider) => {
     const normalizedProvider = normalizeText(provider) || 'openai';
-    const bootstrapKey = resolveClientApiKey(context.bootstrap);
-    if (!bootstrapKey) return;
+    const currentKey = normalizeProviderApiKey(await stores.providerKeys.get(normalizedProvider));
+    if (currentKey) return true;
 
-    const currentKey = normalizeText(await stores.providerKeys.get(normalizedProvider));
-    if (!currentKey || PLACEHOLDER_TOKENS.has(currentKey)) {
-      await stores.providerKeys.set(normalizedProvider, bootstrapKey);
-    }
+    const entered = window.prompt(`Enter API key for ${normalizedProvider}`);
+    const normalized = normalizeProviderApiKey(entered || '');
+    if (!normalized) return false;
+
+    await stores.providerKeys.set(normalizedProvider, normalized);
+    return true;
   };
 
   const session = new AgentInterfaceSession({
@@ -1057,14 +1080,13 @@ async function mountAgentInterface(context) {
     getBootstrap: () => context.bootstrap,
     onStatus: (message, isError = false) => setStatus(context.dom, message, isError),
     onModelChange: () => updateViewFromBootstrap(context),
-    seedProviderKey: context.seedProviderKey,
+    requestApiKey,
   });
   context.session = session;
 
   // Connect to debug SSE stream for thinking/tool events
   session.connectDebugStream();
 
-  await context.seedProviderKey(session.state.model.provider);
   updateViewFromBootstrap(context);
 
   const agentInterface = document.createElement('agent-interface');
@@ -1072,17 +1094,7 @@ async function mountAgentInterface(context) {
   agentInterface.enableModelSelector = true;
   agentInterface.enableThinkingSelector = true;
   agentInterface.showThemeToggle = false;
-  agentInterface.onApiKeyRequired = async (provider) => {
-    const existing = normalizeText(await stores.providerKeys.get(provider));
-    if (existing && !PLACEHOLDER_TOKENS.has(existing)) return true;
-
-    const entered = window.prompt(`Enter API key for ${provider}`);
-    const normalized = normalizeText(entered || '');
-    if (!normalized) return false;
-
-    await stores.providerKeys.set(provider, normalized);
-    return true;
-  };
+  agentInterface.onApiKeyRequired = requestApiKey;
   agentInterface.session = session;
 
   context.dom.agentHost.replaceChildren(agentInterface);
@@ -1104,7 +1116,6 @@ async function initializeGardenChat() {
       session: null,
       isUpdating: false,
       pendingField: '',
-      seedProviderKey: null,
     };
 
     updateViewFromBootstrap(context);

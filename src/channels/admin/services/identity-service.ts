@@ -19,21 +19,12 @@ import type {
   RollbackResult,
 } from './types.js';
 
-function decodeHtmlEntities(input: string): string {
-  return input
-    .replaceAll('&amp;', '&')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'");
-}
-
 function extractSettingsResultMessage(html: string): ImportResult {
   const successMatch = html.match(/<span class="form-success">([\s\S]*?)<\/span>/i);
   if (successMatch) {
     return {
       ok: true,
-      message: decodeHtmlEntities(successMatch[1].trim()),
+      message: successMatch[1].trim(),
     };
   }
 
@@ -41,7 +32,7 @@ function extractSettingsResultMessage(html: string): ImportResult {
   if (errorMatch) {
     return {
       ok: false,
-      message: decodeHtmlEntities(errorMatch[1].trim()),
+      message: errorMatch[1].trim(),
     };
   }
 

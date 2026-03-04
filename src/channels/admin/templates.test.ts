@@ -284,6 +284,41 @@ describe('admin templates', () => {
     expect(html).toContain('Merge into existing-memory');
   });
 
+  it('renders identity upload status updates without dynamic innerHTML injection', () => {
+    const card: CharacterCardV2 = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'Template Bot',
+        description: 'Template description',
+        personality: 'Template personality',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: ['template'],
+        creator: 'tester',
+      },
+    };
+    const config = {
+      primaryModel: 'main-model',
+      extractionModel: 'extract-model',
+      discordBotId: '1234',
+      dataDir: '/tmp/test',
+      characterCardPath: '/tmp/test/card.json',
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+      sessionMessageLimit: 30,
+      memoryRetrievalLimit: 15,
+    } as SubstrateConfig;
+
+    const html = identityPage(card, config);
+    expect(html).toContain('messageNode.textContent = message;');
+    expect(html).not.toContain("resultSpan.innerHTML = '<span class=\"form-error\">' + data.error + '</span>'");
+    expect(html).not.toContain("resultSpan.innerHTML = '<span class=\"form-success\">' + (data.message || 'Upload successful') + '</span>'");
+  });
+
   it('renders audit timeline page with filters and narrative entries', () => {
     const html = auditTimelinePage({
       entries: [

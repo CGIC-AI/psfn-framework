@@ -45,7 +45,10 @@ import {
   type ChannelMeta,
 } from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
-import type { PromptComposer } from '../identity/prompt-composer.js';
+import {
+  enforceUntrustedCompactionGuard,
+  type PromptComposer,
+} from '../identity/prompt-composer.js';
 import type { ComposeContext, ComposeSplitResult } from '../identity/prompt-types.js';
 import {
   createSubstrateStreamFn,
@@ -1843,7 +1846,7 @@ export class SubstrateAgent {
       } else {
         // Configure pi-agent-core Agent for this turn
         this.ensureModel(message);
-        this.agent.setSystemPrompt(context.systemPrompt);
+        this.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
         const autoloadOutcome = this.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
         this.applyActiveToolsToAgentForTurn(
           message,

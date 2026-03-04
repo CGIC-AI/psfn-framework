@@ -30,6 +30,7 @@ import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
 } from './voice-websocket.js';
+import type { ApiAuthPrincipal } from '../http/auth.js';
 
 const log = createComponentLogger('ApiVoiceRuntime');
 
@@ -97,26 +98,18 @@ function readHeaderOrQuery(
   return clampHeader(readQueryParam(request, queryNames), maxLength);
 }
 
-function deriveActor(request: IncomingMessage): VoiceActor {
-  const authorId = readHeaderOrQuery(
-    request,
-    'x-user-id',
-    ['user_id', 'x_user_id', 'x-user-id'],
-    128,
-  ) ?? 'api-voice-user';
-  const authorName = readHeaderOrQuery(
-    request,
-    'x-user-name',
-    ['user_name', 'x_user_name', 'x-user-name'],
-    80,
-  ) ?? 'Voice User';
-  return { authorId, authorName };
+function deriveActor(principal: ApiAuthPrincipal): VoiceActor {
+  return {
+    authorId: principal.id,
+    authorName: principal.mode === 'api_key' ? 'API Voice Principal' : 'Local Voice Principal',
+  };
 }
 
 function deriveChannelId(
   request: IncomingMessage,
   connectionId: string,
   channelPrefix: string,
+  principal: ApiAuthPrincipal,
 ): string {
   const sessionId = readHeaderOrQuery(
     request,
@@ -125,10 +118,10 @@ function deriveChannelId(
     128,
   );
   if (sessionId) {
-    return `api:${sessionId}`;
+    return `api:${principal.id}:${sessionId}`;
   }
 
-  return `${channelPrefix}:${connectionId}`;
+  return `${channelPrefix}:${principal.id}:${connectionId}`;
 }
 
 function hasVoiceConnectorConfig(config: SubstrateConfig): boolean {
@@ -209,6 +202,7 @@ async function runAssistantTurn(params: {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   request: IncomingMessage;
+  principal: ApiAuthPrincipal;
   transportSession: WebSocketVoiceSession;
   sessionId: string;
   transcript: string;
@@ -219,6 +213,7 @@ async function runAssistantTurn(params: {
     agentLoop,
     eventBus,
     request,
+    principal,
     transportSession,
     sessionId,
     transcript,
@@ -226,8 +221,8 @@ async function runAssistantTurn(params: {
     channelPrefix,
   } = params;
 
-  const actor = deriveActor(request);
-  const channelId = deriveChannelId(request, transportSession.connectionId, channelPrefix);
+  const actor = deriveActor(principal);
+  const channelId = deriveChannelId(request, transportSession.connectionId, channelPrefix, principal);
   const turnId = `api-voice-${transportSession.connectionId}-${sessionId}-${Date.now()}`;
 
   const message: SubstrateMessage = {
@@ -398,6 +393,7 @@ export function createApiVoiceWebSocketRuntime(
         agentLoop: options.agentLoop,
         eventBus: options.eventBus,
         request: context.request,
+        principal: context.principal,
         transportSession,
         sessionId,
         transcript,

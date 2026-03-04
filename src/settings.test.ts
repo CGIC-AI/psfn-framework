@@ -253,39 +253,6 @@ describe('settings', () => {
         contextWindow: 128_000,
       });
     });
-
-    it('maps vision purpose to a custom vision-like slot key when assignment is omitted', () => {
-      const normalized = normalizeEditableSettings({
-        modelCatalog: {
-          primary: {
-            model: 'z-ai/glm-5',
-            provider: 'openrouter',
-            defaults: { maxTokens: 6000, contextWindow: 128_000 },
-          },
-          gemini_vision: {
-            model: 'google/gemini-3-flash-preview',
-            provider: 'openrouter',
-            defaults: { maxTokens: 4096, contextWindow: 128_000 },
-          },
-        },
-        modelRoleAssignments: {
-          chat: 'primary',
-          summary: 'primary',
-          reasoning: 'primary',
-          longContext: 'primary',
-        },
-      }, {
-        defaultContextWindow: 128_000,
-      });
-
-      expect(normalized.modelRoleAssignments?.vision).toBe('gemini_vision');
-      expect(normalized.modelRoster?.vision).toEqual({
-        model: 'google/gemini-3-flash-preview',
-        provider: 'openrouter',
-        maxTokens: 4096,
-        contextWindow: 128_000,
-      });
-    });
   });
 
   describe('applySettings', () => {

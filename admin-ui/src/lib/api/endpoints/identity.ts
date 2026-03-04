@@ -20,6 +20,10 @@ export interface UploadIdentityResponse {
   filename?: string;
   version?: number;
   name?: string;
+  containerFormat?: string;
+  sourceFormat?: string;
+  spec?: string;
+  warnings?: string[];
 }
 
 export function uploadIdentity(file: File): Promise<UploadIdentityResponse> {

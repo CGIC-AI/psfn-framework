@@ -618,7 +618,7 @@
         <!-- Import card -->
         <div class="card-garden p-5">
           <h3 class="text-sm font-serif font-semibold text-shadow-800 mb-3">Import Character Card</h3>
-          <p class="text-sm text-shadow-600 mb-3">Import from JSON, PNG, or CharX using a local filesystem path, or upload a JSON card file.</p>
+          <p class="text-sm text-shadow-600 mb-3">Import from JSON, PNG, or CharX using a local filesystem path, or upload a JSON/PNG/CharX card file.</p>
           <form onsubmit={(e) => { e.preventDefault(); openImportConfirmation(); }} class="flex gap-2">
             <input
               type="text"
@@ -654,7 +654,7 @@
               <input
                 bind:this={uploadInput}
                 type="file"
-                accept=".json,application/json"
+                accept=".json,.png,.charx,application/json,image/png"
                 onchange={onUploadFileChange}
                 class="block w-full text-sm text-shadow-700 file:mr-3 file:rounded-lg file:border file:border-bark-300 file:bg-bark-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-shadow-800 hover:file:bg-bark-200"
               />

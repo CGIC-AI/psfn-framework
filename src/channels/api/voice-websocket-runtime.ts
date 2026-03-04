@@ -238,6 +238,10 @@ async function runAssistantTurn(params: {
     authorName: actor.authorName,
     content: transcript,
     isDirectMessage: true,
+    routing: {
+      source: 'api',
+      responseStyle: 'concise',
+    },
     timestamp: new Date(),
   };
 

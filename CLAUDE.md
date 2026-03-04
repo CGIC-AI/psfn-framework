@@ -177,16 +177,6 @@ Ported from ElizaOS plugin-purrsephone:
 - **Decay**: Exponential salience — episodic 7d, semantic 30d, emotional 14d, procedural 90d, reflection 60d, relational 60d
 - **Retrieval**: Composite score = similarity * recency * emotionalWeight * importance * salience
 
-## Purrsephone Identity
-
-- Character card (V2 spec): `/home/user/.openclaw/agents/main/character.json`
-- Voice: Provider-pluggable streaming TTS (`elevenlabs` or `echo`)
-- ElevenLabs voice ID: `<configure-in-env>`
-- Echo defaults (API voice websocket runtime): `${ECHO_TTS_URL}`, `11labs-Allison`, `Independent-High-Speaker-CFG`
-- Discord bot: ID `<configure-in-env>`
-- Voxta history: `<private export metadata>`
-- Memory books: `<private export metadata>`
-
 ## Gateway / Agent Security Architecture
 
 The runtime splits into two processes for defense-in-depth:
@@ -213,7 +203,7 @@ Additional hardening:
 - **Default localhost binding**: API and admin servers bind to `127.0.0.1` by default (not `0.0.0.0`)
 - **Content block normalization**: `normalizeContent()` in LLM/gateway clients unwraps stringified `[{'type': 'text', 'text': '...'}]` content blocks that LiteLLM streaming can produce
 - **Bidirectional gateway RPC**: `JSONRPCServerAndClient` per connection enables voice turns to await agent responses via reverse RPC (`discord.handleMessage`), while text messages remain fire-and-forget notifications
-- **Git path allowlisting**: `GitOps.validatePath()` restricts self-modification to `src/`, `docs/`, `purrsephone/` with protected branch blocking on `main`/`master`
+- **Git path allowlisting**: `GitOps.validatePath()` restricts self-modification to `src/`, `docs/` with protected branch blocking on `main`/`master`
 - **Reasoning support**: `thinkingFormat` in model compat (`'qwen'` for kimi-k2.5, `'zai'` for glm-5), `thinking_delta` events bridged to `agent.stream.thinking`, `ThinkingContent` extracted alongside `TextContent` in LLMClient and SubstrateAgent. `LLMResponse.reasoning` propagated through gateway protocol
 - **Runtime context injection**: `buildRuntimeContext()` in SubstrateAgent injects current time, channel/visibility, user/trust, model, tool counts into system prompt every turn — eliminates confabulation of model identity and temporal awareness
 - **Lazy tool loading**: Tools split into `coreTools` (9: think, spawn_shard, memory_write, memory_import_batch, contact_lookup, contact_list, self_restart, self_rebuild, load_tools) and `extendedTools` (15: git, prompt, heartbeat, contact_set_trust, contact_note). `load_tools` meta-tool hot-swaps active set via `agent.setTools()`. Per-turn reset in `handleMessage()`
@@ -229,7 +219,6 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 - **Deps**: `@mariozechner/pi-ai`, `@mariozechner/pi-agent-core`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `@discordjs/voice`, `json-rpc-2.0`, `winston`, `js-tiktoken`, `ws`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5 — reasoning models supported via `thinkingFormat` compat)
 - **Embeddings**: Local Ollama (snowflake-arctic-embed2, 1024d)
-- **Purrsephone still runs on OpenClaw/BotMaker** until substrate is live-tested
 - **Admin UI (Svelte SPA)**: `admin-ui/` — SvelteKit 5, `npm run garden:dev` for dev, `npm run garden:build` for prod. Serves at `/garden` on admin port. API client at `admin-ui/src/lib/api/`.
 - **Not yet built**: module system (hot-load), capability tokens
 

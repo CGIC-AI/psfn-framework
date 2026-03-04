@@ -70,11 +70,11 @@ describe('injectPromptRuntimeTokens', () => {
       now: fixedNow,
       variables: {
         description: 'Hello {{user}}, this is {{char}}.',
-        user: 'Vega',
+        user: 'Anon',
         char: 'Companion',
       },
     });
 
-    expect(output).toBe('Hello Vega, this is Companion.');
+    expect(output).toBe('Hello Anon, this is Companion.');
   });
 });

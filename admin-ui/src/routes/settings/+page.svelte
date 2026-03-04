@@ -1818,7 +1818,7 @@
               </div>
               <div>
                 <label class={LABEL_CLS}>ElevenLabs Voice ID</label>
-                <input type="text" bind:value={voiceId} class={INPUT_CLS} placeholder="YOUR_VOICE_ID" />
+                <input type="text" bind:value={voiceId} class={INPUT_CLS} placeholder="your-voice-id" />
                 <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted voice override.</p>
               </div>
               <div>

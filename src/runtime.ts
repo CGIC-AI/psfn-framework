@@ -1030,10 +1030,10 @@ export class SubstrateRuntime implements Lifecycle {
             preset: this.config.echoTtsPreset ?? 'normal',
             ...(this.config.echoTtsModel ? { model: this.config.echoTtsModel } : {}),
           });
-        } else if (wyomingTtsProvider === 'elevenlabs' && this.config.elevenLabsApiKey) {
+        } else if (wyomingTtsProvider === 'elevenlabs' && this.config.elevenLabsApiKey && this.config.elevenLabsVoiceId) {
           ttsConnector = createStreamingTtsConnector('elevenlabs', {
             apiKey: this.config.elevenLabsApiKey,
-            voiceId: this.config.elevenLabsVoiceId ?? 'YOUR_VOICE_ID',
+            voiceId: this.config.elevenLabsVoiceId,
             modelId: this.config.elevenLabsModelId,
           });
         }

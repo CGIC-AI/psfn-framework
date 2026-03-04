@@ -188,7 +188,7 @@ TTS_PROVIDER=elevenlabs           # or: echo
 
 # ElevenLabs path
 ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=YOUR_VOICE_ID
+ELEVENLABS_VOICE_ID=your-voice-id-here
 ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
 
 # Echo path (provider-pluggable streaming TTS)

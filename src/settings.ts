@@ -384,8 +384,24 @@ function sanitizeModelCatalog(value: unknown): Record<string, ModelCatalogEntry>
     const slotKey = rawSlotKey.trim();
     if (!slotKey || !MODEL_SLOT_KEY_PATTERN.test(slotKey) || !isRecord(rawEntry)) continue;
 
-    const model = toNonEmptyString(rawEntry.model);
-    const provider = toNonEmptyString(rawEntry.provider);
+    let model = toNonEmptyString(rawEntry.model);
+    let provider = toNonEmptyString(rawEntry.provider);
+
+    // Accept "openrouter/<model-id>" shorthand and normalize to canonical
+    // provider + model fields so settings PATCH round-trips do not drift.
+    if (model && (!provider || provider.length === 0) && model.toLowerCase().startsWith('openrouter/')) {
+      const normalizedModel = model.slice('openrouter/'.length).trim();
+      if (normalizedModel) {
+        model = normalizedModel;
+        provider = 'openrouter';
+      }
+    } else if (model && provider?.toLowerCase() === 'openrouter' && model.toLowerCase().startsWith('openrouter/')) {
+      const normalizedModel = model.slice('openrouter/'.length).trim();
+      if (normalizedModel) {
+        model = normalizedModel;
+      }
+    }
+
     if (!model || !provider) continue;
 
     const defaults = sanitizeModelSlotDefaults(rawEntry.defaults);
@@ -791,7 +807,8 @@ export function normalizeEditableSettings(
   }
 
   const normalized: EditableSettings = { ...normalizedInput };
-  const catalog = sanitizeModelCatalog(normalizedInput.modelCatalog);
+  const explicitCatalog = sanitizeModelCatalog(normalizedInput.modelCatalog);
+  const catalog: Record<string, ModelCatalogEntry> = { ...explicitCatalog };
   const assignments = sanitizeModelRoleAssignments(normalizedInput.modelRoleAssignments);
   const roster = sanitizeModelRoster(normalizedInput.modelRoster);
 
@@ -819,6 +836,28 @@ export function normalizeEditableSettings(
     provider: normalizedInput.extractionProvider,
     maxTokens: normalizedInput.extractionMaxTokens,
   });
+
+  // Explicit modelCatalog payload must win over inferred/legacy/roster merges.
+  // This prevents stale modelRoster entries from rewriting operator-selected slots.
+  const hasPrimaryLegacyOverride = normalizedInput.primaryModel !== undefined
+    || normalizedInput.primaryProvider !== undefined
+    || normalizedInput.primaryMaxTokens !== undefined;
+  const hasExtractionLegacyOverride = normalizedInput.extractionModel !== undefined
+    || normalizedInput.extractionProvider !== undefined
+    || normalizedInput.extractionMaxTokens !== undefined;
+  for (const [slotKey, explicitEntry] of Object.entries(explicitCatalog)) {
+    if (slotKey === PRIMARY_MODEL_SLOT_KEY && hasPrimaryLegacyOverride) continue;
+    if (slotKey === EXTRACTION_MODEL_SLOT_KEY && hasExtractionLegacyOverride) continue;
+
+    const existing = catalog[slotKey];
+    catalog[slotKey] = {
+      ...(existing ?? {}),
+      model: explicitEntry.model,
+      provider: explicitEntry.provider,
+      ...(explicitEntry.defaults ? { defaults: explicitEntry.defaults } : {}),
+      ...(explicitEntry.overrides ? { overrides: explicitEntry.overrides } : {}),
+    };
+  }
 
   if (catalog[PRIMARY_MODEL_SLOT_KEY]) {
     assignments.chat ??= PRIMARY_MODEL_SLOT_KEY;

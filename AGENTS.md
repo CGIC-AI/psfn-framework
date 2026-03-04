@@ -176,6 +176,20 @@ history/
 Run `bd <command> --help` to see all available flags for any command.
 For example: `bd create --help` shows `--parent`, `--deps`, `--assignee`, etc.
 
+### Parallel Work Safety
+
+**NEVER delete branches, worktrees, stashes, or refs without explicit user confirmation.** Multiple agents work in parallel across worktrees and branches. What looks stale to one agent may be actively used by another.
+
+Forbidden without user approval:
+- `git branch -D` / `git branch -d`
+- `git worktree remove` (especially `--force`)
+- `git stash drop` / `git stash clear`
+- `git reflog expire` + `git gc --prune=now`
+- `git reset --hard`, `git checkout -- .`, `git clean -f`
+- Removing directories that may contain worktrees
+
+**Always ask first. No exceptions.**
+
 ### Important Rules
 
 - ✅ Use bd for ALL task tracking

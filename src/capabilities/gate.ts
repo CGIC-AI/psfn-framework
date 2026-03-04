@@ -12,6 +12,26 @@ export interface CapabilityAccess {
 
 export type CapabilityAccessProvider = () => CapabilityAccess;
 
+export interface ToolCapabilityEligibility {
+  allowed: boolean;
+  requiredTokens: CapabilityToken[];
+  missingTokens: CapabilityToken[];
+}
+
+export function evaluateToolCapabilityEligibility(
+  tool: AgentTool<any>,
+  params: unknown,
+  access: CapabilityAccess,
+): ToolCapabilityEligibility {
+  const requiredTokens = resolveToolRequiredCapabilities(tool, params);
+  const missingTokens = requiredTokens.filter(token => !access.has(token));
+  return {
+    allowed: missingTokens.length === 0,
+    requiredTokens,
+    missingTokens,
+  };
+}
+
 function toTextResult(
   text: string,
   details: Record<string, unknown>,
@@ -53,17 +73,14 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
       signal?: AbortSignal,
     ): Promise<AgentToolResult<any>> => {
       const access = getAccess();
-      const requiredTokens = resolveToolRequiredCapabilities(tool, params);
-      if (requiredTokens.length > 0) {
-        const missing = requiredTokens.filter(token => !access.has(token));
-        if (missing.length > 0) {
-          return deniedResult(
-            tool.name,
-            access.getTier(),
-            missing,
-            access.getGrantedTokens(),
-          );
-        }
+      const eligibility = evaluateToolCapabilityEligibility(tool, params, access);
+      if (!eligibility.allowed) {
+        return deniedResult(
+          tool.name,
+          access.getTier(),
+          eligibility.missingTokens,
+          access.getGrantedTokens(),
+        );
       }
 
       // params is unknown from the gated wrapper; tool.execute expects Static<TSchema>

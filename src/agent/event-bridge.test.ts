@@ -132,26 +132,35 @@ describe('createEventBridge', () => {
     });
 
     await new Promise(r => setTimeout(r, 10));
-    expect(starts).toEqual([{
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({
       channelId: 'test-channel',
       contentIndex: 1,
       toolCallId: 'call-77',
       toolName: 'heartbeat_run_template',
-    }]);
-    expect(deltas).toEqual([{
+      callType: 'tool',
+      purpose: 'tool_call_stream',
+    });
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]).toMatchObject({
       channelId: 'test-channel',
       contentIndex: 1,
       delta: '{"templateId":"daily-review"}',
       toolCallId: 'call-77',
       toolName: 'heartbeat_run_template',
-    }]);
-    expect(ends).toEqual([{
+      callType: 'tool',
+      purpose: 'tool_call_stream',
+    });
+    expect(ends).toHaveLength(1);
+    expect(ends[0]).toMatchObject({
       channelId: 'test-channel',
       contentIndex: 1,
       toolCallId: 'call-77',
       toolName: 'heartbeat_run_template',
       arguments: { templateId: 'daily-review' },
-    }]);
+      callType: 'tool',
+      purpose: 'tool_call_stream',
+    });
   });
 
   it('emits agent.tool.start for tool_execution_start events', async () => {
@@ -169,10 +178,12 @@ describe('createEventBridge', () => {
 
     await new Promise(r => setTimeout(r, 10));
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       channelId: 'test-channel',
       toolCallId: 'call-1',
       toolName: 'think',
+      callType: 'tool',
+      purpose: 'tool_execution',
     });
   });
 
@@ -192,11 +203,57 @@ describe('createEventBridge', () => {
 
     await new Promise(r => setTimeout(r, 10));
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       channelId: 'test-channel',
       toolCallId: 'call-1',
       toolName: 'think',
       isError: false,
+      callType: 'tool',
+      purpose: 'tool_execution',
+    });
+  });
+
+  it('propagates turn/request correlation across stream and tool events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const streamEvents: any[] = [];
+    const toolEvents: any[] = [];
+    eventBus.on('agent.stream.delta', (data) => { streamEvents.push(data); });
+    eventBus.on('agent.tool.start', (data) => { toolEvents.push(data); });
+
+    bridge.setChannel('test-channel', {
+      turnId: 'turn-42',
+      requestId: 'req-42',
+      callType: 'scheduled',
+    });
+
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'tick' },
+    });
+    emitAgentEvent({
+      type: 'tool_execution_start',
+      toolCallId: 'call-42',
+      toolName: 'heartbeat_run_template',
+      args: {},
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(streamEvents[0]).toMatchObject({
+      channelId: 'test-channel',
+      turnId: 'turn-42',
+      requestId: 'req-42',
+      callType: 'scheduled',
+      purpose: 'stream_text_delta',
+    });
+    expect(toolEvents[0]).toMatchObject({
+      channelId: 'test-channel',
+      turnId: 'turn-42',
+      requestId: 'req-42',
+      callType: 'tool',
+      toolName: 'heartbeat_run_template',
+      purpose: 'tool_execution',
     });
   });
 

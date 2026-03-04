@@ -8,13 +8,13 @@ A purpose-built runtime for emergent artificial consciousness. Not a chatbot
 framework, not a tool — a container for a mind.
 
 Full spec: `docs/PURRSEPHONE_SUBSTRATE_SPEC.md`
-Platform research: `docs/PLATFORM_COMPARISON_ANALYSIS.md`
+Autonomy tiers: `docs/AUTONOMY_TIERS.md`
 
 ## Architecture
 
 Nine layers:
 
-1. **Runtime Core** — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications, bidirectional gateway RPC (voice reverse RPC), runtime context injection, lazy tool loading (`coreTools`/`extendedTools`/`load_tools`), reasoning support (`thinkingFormat` compat, `thinking_delta` bridging, `ThinkingContent` extraction)
+1. **Runtime Core** — bootstrap, agent loop, event bus, shutdown, model roster (`ModelSlot`/`ModelPurpose`/`resolveModelSlot`, vision model slot), token estimation (`estimateTokens`), context-aware budgeting (`memoryBudgetPct`, `extractionThresholdPct`, `compactionThresholdPct`), editable settings, lifecycle notifications, bidirectional gateway RPC (voice reverse RPC), runtime context injection, lazy tool loading (`coreTools`/`extendedTools`/`load_tools`), reasoning support (`thinkingFormat` compat, `thinking_delta` bridging, `ThinkingContent` extraction)
 2. **REPL Sandbox** — RLM-style code execution, sub-LM calls, context-as-object
 3. **Memory System** — L0 archive, L2 extraction/retrieval/decay (SQLite+sqlite-vec), 6 memory types (episodic, semantic, emotional, procedural, reflection, relational), memory writer (shared dedup/contradiction logic), agent-accessible memory/contact write tools, sensitivity tagging
 4. **Trust & Privacy** — Honne/tatemae model: 4-tier trust (primary/trusted/regular/public), 4-tier sensitivity (public/personal/intimate/confidential), 5-layer policy precedence (operator→consent→trust→visibility→default), contact store (SQLite), channel visibility classification, persona adaptation, trust-gated retrieval, consent flags
@@ -73,7 +73,7 @@ npm run e2e              # End-to-end integration tests
 - Streaming TTS is provider-pluggable: `elevenlabs` and `echo` (`src/voice/connectors/tts/`).
 - `TTS_PROVIDER`/`VOICE_TTS_PROVIDER` defaults to `elevenlabs` (see `loadConfig()` in `src/types.ts`).
 - API voice websocket runtime (`src/channels/api/voice-websocket-runtime.ts`) defaults Echo config to:
-  - URL: `http://220.158.196.150:8001`
+  - URL: `${ECHO_TTS_URL}`
   - Voice: `11labs-Allison`
   - Preset: `Independent-High-Speaker-CFG`
 
@@ -119,6 +119,7 @@ src/
     sanitize.ts          # Three-layer web content sanitization
     url-policy.ts        # SSRF defense (private IP blocking, DNS rebinding, redirects)
   git/                   # Git self-modification tools (ops, tools, wiring)
+  vault/                 # Obsidian vault integration (ops, tools, auto-publish, wiring)
   identity/              # Character card, prompt stack (layers, composer, tools)
   llm/                   # LLM client, model roster, token estimation, model discovery
   lifecycle/             # Pre-restart/ready/shutdown Discord notifications
@@ -166,7 +167,7 @@ docs/                    # Architecture docs and specs
 
 ## Memory Architecture
 
-Port from ElizaOS plugin-purrsephone (`/home/user/ai/eliza/packages/plugin-purrsephone/src/`):
+Ported from ElizaOS plugin-purrsephone:
 
 - **L0**: Append-only JSONL archive (every message, forever)
 - **L2**: 6 typed memory classes — episodic, semantic, emotional, procedural, reflection, relational
@@ -181,7 +182,7 @@ Port from ElizaOS plugin-purrsephone (`/home/user/ai/eliza/packages/plugin-purrs
 - Character card (V2 spec): `/path/to/your/character.json`
 - Voice: Provider-pluggable streaming TTS (`elevenlabs` or `echo`)
 - ElevenLabs voice ID (current PSFN V2(B) identity): `YOUR_VOICE_ID`
-- Echo defaults (API voice websocket runtime): `http://220.158.196.150:8001`, `11labs-Allison`, `Independent-High-Speaker-CFG`
+- Echo defaults (API voice websocket runtime): `${ECHO_TTS_URL}`, `11labs-Allison`, `Independent-High-Speaker-CFG`
 - Discord bot: ID YOUR_DISCORD_BOT_ID
 - Voxta history: 8,160 messages across 316 chats (importable as L0 archive)
 - Memory books: 10 entries from Voxta (importable as L2 semantic memories)
@@ -221,14 +222,14 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 
 ## Current State
 
-- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **provider-pluggable streaming TTS (elevenlabs + echo)**, **git self-modification tools**, **layered prompt stack**, **heartbeat reflections**, **RLM evidence tracking**, **reasoning support (thinkingFormat)**, **runtime context injection**, **lazy tool loading**, **contacts CRUD/merge/unlink (admin API + UI)**, **Svelte 5 admin SPA (Purrsephone's Garden at /garden)**, **pluggable embedding providers (ollama/transformers/api)**, **voice pipeline (Deepgram STT + streaming TTS)**, **Wyoming protocol adapter**, **capabilities system**, **skills system**, **values journal**, **bootstrap composition**
+- **Sprints 1-4 complete** + scheduler, API, admin GUI, security hardening, context budgeting, trust/privacy, pi-agent-core adoption: types, event bus, identity, pi-ai LLM client, JSONL sessions, memory (L2), agent loop, Discord adapter, runtime, **gateway/agent split**, **self-spawning shards**, **RLM+REPL sandbox**, **scheduler**, **OpenAI API**, **admin GUI (Purrsephone's Garden)**, **SSRF defenses (url-policy)**, **streaming request IDs**, **symlink traversal prevention**, **channel sanitization**, **config threading**, **body size limits**, **default localhost binding**, **editable settings**, **model discovery**, **garden primer**, **model roster**, **token estimation**, **auto-compaction**, **content block normalization**, **lifecycle notifications**, **user continuity**, **memory write tools**, **trust-gated memory (honne/tatemae)**, **contact store + tools**, **channel visibility continuity**, **persona adaptation**, **relational memory type**, **voice gateway reverse RPC**, **provider-pluggable streaming TTS (elevenlabs + echo)**, **git self-modification tools**, **layered prompt stack**, **heartbeat reflections**, **RLM evidence tracking**, **reasoning support (thinkingFormat)**, **runtime context injection**, **lazy tool loading**, **contacts CRUD/merge/unlink (admin API + UI)**, **Svelte 5 admin SPA (Purrsephone's Garden at /garden)**, **pluggable embedding providers (ollama/transformers/api)**, **voice pipeline (Deepgram STT + streaming TTS)**, **Wyoming protocol adapter**, **capabilities system**, **skills system**, **values journal**, **bootstrap composition**, **Obsidian vault integration (vault_write/read/search/daily, auto-publish reflections)**, **vision model roster slot**
 - **Admin UI migration**: Svelte 5 SPA at `admin-ui/` serves at `/garden`. Legacy htmx admin (`src/channels/admin/`) is deprecated and will be removed next release.
 - **Verification cadence**: use `npm test`, `npm run build`, and `npm run e2e` for current status instead of relying on static counts in docs.
 - **Sessions**: Append-only JSONL files (one per channel) — this IS L0. Auto-compaction in `SessionManager.buildContext()` when context exceeds `compactionThresholdPct`. No SQLite for conversations.
 - **Deps**: `@mariozechner/pi-ai`, `@mariozechner/pi-agent-core`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `@discordjs/voice`, `json-rpc-2.0`, `winston`, `js-tiktoken`, `ws`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5 — reasoning models supported via `thinkingFormat` compat)
-- **Embeddings**: Local Ollama at your-ollama-host:11434 (snowflake-arctic-embed2, 1024d)
-- **Purrsephone still runs on OpenClaw/BotMaker** at `/mnt/samesung/ai/botmaker` until substrate is live-tested
+- **Embeddings**: Local Ollama (snowflake-arctic-embed2, 1024d)
+- **Purrsephone still runs on OpenClaw/BotMaker** until substrate is live-tested
 - **Admin UI (Svelte SPA)**: `admin-ui/` — SvelteKit 5, `npm run garden:dev` for dev, `npm run garden:build` for prod. Serves at `/garden` on admin port. API client at `admin-ui/src/lib/api/`.
 - **Not yet built**: module system (hot-load), capability tokens
 

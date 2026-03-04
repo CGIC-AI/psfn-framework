@@ -3,17 +3,19 @@
 // Persisted to data/settings.json. Loaded at startup, merged over env defaults.
 
 import { join } from 'node:path';
-import type {
-  CapabilityTier,
-  ImportProcessingRouteMode,
-  ModelCatalogEntry,
-  ModelContextBudgetConfig,
-  ModelPurpose,
-  ModelRoleAssignments,
-  ModelSlot,
-  ModelSlotDefaults,
-  ModelSlotOverrides,
-  SubstrateConfig,
+import {
+  PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
+  type CapabilityTier,
+  type ImportProcessingRouteMode,
+  type ModelCatalogEntry,
+  type ModelContextBudgetConfig,
+  type ModelPurpose,
+  type ModelRoleAssignments,
+  type SessionRestartBehavior,
+  type ModelSlot,
+  type ModelSlotDefaults,
+  type ModelSlotOverrides,
+  type SubstrateConfig,
 } from './types.js';
 import { createComponentLogger } from './logger.js';
 import {
@@ -32,11 +34,15 @@ const SETTINGS_FILE = 'settings.json';
 const SETTINGS_SEED_FILE = 'settings.seed.json';
 const PRIMARY_MODEL_SLOT_KEY = 'primary';
 const EXTRACTION_MODEL_SLOT_KEY = 'extraction';
-const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'reasoning', 'longContext'];
+const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'reasoning', 'longContext', 'vision'];
 const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
   'background',
   'openrouter_zdr',
   'local_endpoint',
+]);
+const SESSION_RESTART_BEHAVIOR_VALUES = new Set<SessionRestartBehavior>([
+  'reuse_latest_session',
+  'new_session',
 ]);
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -48,6 +54,7 @@ export const DEFAULT_MODEL_ROLE_ASSIGNMENTS: Readonly<ModelRoleAssignments> = {
   summary: PRIMARY_MODEL_SLOT_KEY,
   reasoning: PRIMARY_MODEL_SLOT_KEY,
   longContext: PRIMARY_MODEL_SLOT_KEY,
+  vision: PRIMARY_MODEL_SLOT_KEY,
   import_processing: EXTRACTION_MODEL_SLOT_KEY,
 };
 
@@ -64,6 +71,7 @@ export interface EditableSettings {
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
   sessionMessageLimit?: number;
+  sessionRestartBehavior?: SessionRestartBehavior;
   memoryRetrievalLimit?: number;
   extractionInterval?: number;
   maintenanceIntervalMs?: number;
@@ -110,6 +118,7 @@ export interface EditableSettings {
   webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   capabilityTier?: CapabilityTier;
+  promotedExtendedTools?: string[];
   /** Override the base URL used by Garden Chat to reach the OpenAI-compatible API.
    *  When set, this takes priority over the `API_BASE_URL` env var and the
    *  auto-resolved URL derived from `API_HOST`/`API_PORT`. Useful when the
@@ -128,8 +137,17 @@ export interface EditableSettings {
   // Channel configuration (non-secret — bot tokens stay in .env)
   discordEnabled?: boolean;
   discordHeartbeatChannel?: string;
+  discordTriggerWords?: string;
+  discordTriggerReactions?: string;
+  discordTriggerListenWindowMs?: number;
   telegramEnabled?: boolean;
   telegramAuthorizedUsers?: string;
+
+  // Obsidian vault
+  obsidianVaultName?: string;
+  obsidianCliPath?: string;
+  obsidianAutoPublish?: boolean;
+  obsidianTimeoutMs?: number;
 
   // MoA (Mixture of Agents) configuration
   moaEnabled?: boolean;
@@ -150,6 +168,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'sessionHistoryBudgetPct',
   'memoryRetrievalBudgetPct',
   'sessionMessageLimit',
+  'sessionRestartBehavior',
   'memoryRetrievalLimit',
   'extractionInterval',
   'maintenanceIntervalMs',
@@ -177,6 +196,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'webFetchLocalCrawlerDomainAllowlist',
   'webFetchTlsCaCertPaths',
   'capabilityTier',
+  'promotedExtendedTools',
   'chatApiBaseUrl',
   // Voice / TTS
   'ttsProvider',
@@ -189,8 +209,16 @@ export const RUNTIME_SETTINGS_KEYS = [
   // Channels
   'discordEnabled',
   'discordHeartbeatChannel',
+  'discordTriggerWords',
+  'discordTriggerReactions',
+  'discordTriggerListenWindowMs',
   'telegramEnabled',
   'telegramAuthorizedUsers',
+  // Obsidian vault
+  'obsidianVaultName',
+  'obsidianCliPath',
+  'obsidianAutoPublish',
+  'obsidianTimeoutMs',
   // MoA (Mixture of Agents)
   'moaEnabled',
   'moaReferenceModels',
@@ -246,6 +274,10 @@ function toStringList(value: unknown): string[] | undefined {
   return cleaned;
 }
 
+function toPromotedToolList(value: unknown): string[] {
+  return (toStringList(value) ?? []).slice(0, PROMOTED_EXTENDED_TOOL_SLOTS_MAX);
+}
+
 function toBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
   if (typeof value !== 'string') return undefined;
@@ -291,6 +323,13 @@ function toImportProcessingRouteMode(value: unknown): ImportProcessingRouteMode 
   const trimmed = value.trim().toLowerCase();
   if (!IMPORT_PROCESSING_ROUTE_MODE_VALUES.has(trimmed as ImportProcessingRouteMode)) return undefined;
   return trimmed as ImportProcessingRouteMode;
+}
+
+function toSessionRestartBehavior(value: unknown): SessionRestartBehavior | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!SESSION_RESTART_BEHAVIOR_VALUES.has(trimmed as SessionRestartBehavior)) return undefined;
+  return trimmed as SessionRestartBehavior;
 }
 
 function sanitizeModelContextBudget(value: unknown): ModelContextBudgetConfig | undefined {
@@ -627,6 +666,19 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     }
   }
 
+  if ('promotedExtendedTools' in settings) {
+    normalized.promotedExtendedTools = toPromotedToolList(settings.promotedExtendedTools);
+  }
+
+  if ('sessionRestartBehavior' in settings) {
+    const behavior = toSessionRestartBehavior(settings.sessionRestartBehavior);
+    if (behavior) {
+      normalized.sessionRestartBehavior = behavior;
+    } else {
+      delete normalized.sessionRestartBehavior;
+    }
+  }
+
   if ('chatApiBaseUrl' in settings) {
     normalized.chatApiBaseUrl = typeof settings.chatApiBaseUrl === 'string'
       ? settings.chatApiBaseUrl.trim()
@@ -664,12 +716,41 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     const trimmed = typeof settings.discordHeartbeatChannel === 'string' ? settings.discordHeartbeatChannel.trim() : '';
     normalized.discordHeartbeatChannel = trimmed || undefined;
   }
+  if ('discordTriggerWords' in settings) {
+    const trimmed = typeof settings.discordTriggerWords === 'string' ? settings.discordTriggerWords.trim() : '';
+    normalized.discordTriggerWords = trimmed || undefined;
+  }
+  if ('discordTriggerReactions' in settings) {
+    const trimmed = typeof settings.discordTriggerReactions === 'string' ? settings.discordTriggerReactions.trim() : '';
+    normalized.discordTriggerReactions = trimmed || undefined;
+  }
+  if ('discordTriggerListenWindowMs' in settings) {
+    normalized.discordTriggerListenWindowMs = toIntegerInRange(
+      settings.discordTriggerListenWindowMs,
+      10_000,
+      600_000,
+    );
+  }
   if ('telegramEnabled' in settings) {
     normalized.telegramEnabled = toBoolean(settings.telegramEnabled) ?? false;
   }
   if ('telegramAuthorizedUsers' in settings) {
     const trimmed = typeof settings.telegramAuthorizedUsers === 'string' ? settings.telegramAuthorizedUsers.trim() : '';
     normalized.telegramAuthorizedUsers = trimmed || undefined;
+  }
+
+  // Obsidian vault
+  if ('obsidianVaultName' in settings) {
+    normalized.obsidianVaultName = toNonEmptyString(settings.obsidianVaultName);
+  }
+  if ('obsidianCliPath' in settings) {
+    normalized.obsidianCliPath = toNonEmptyString(settings.obsidianCliPath) ?? 'obsidian';
+  }
+  if ('obsidianAutoPublish' in settings) {
+    normalized.obsidianAutoPublish = toBoolean(settings.obsidianAutoPublish) ?? false;
+  }
+  if ('obsidianTimeoutMs' in settings) {
+    normalized.obsidianTimeoutMs = toIntegerInRange(settings.obsidianTimeoutMs, 1000, 30000);
   }
 
   // MoA (Mixture of Agents)
@@ -750,6 +831,14 @@ export function normalizeEditableSettings(
     assignments.extraction ??= assignments.background;
     assignments.import_processing ??= assignments.background;
   }
+  if (!assignments.vision) {
+    const visionDefaultSlot = catalog.vision
+      ? 'vision'
+      : (catalog[PRIMARY_MODEL_SLOT_KEY] ? PRIMARY_MODEL_SLOT_KEY : undefined);
+    if (visionDefaultSlot) {
+      assignments.vision = visionDefaultSlot;
+    }
+  }
 
   for (const [purpose, slotKey] of Object.entries(assignments)) {
     if (!catalog[slotKey]) {
@@ -813,6 +902,18 @@ export function normalizeEditableSettings(
     assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
   );
 
+  const visionSlot = resolvePurposeSlot(
+    catalog,
+    assignments,
+    'vision',
+    {
+      maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
+      contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
+      contextBudget: chatSlot?.contextBudget,
+    },
+    assignments.vision ?? (catalog.vision ? 'vision' : (assignments.chat ?? PRIMARY_MODEL_SLOT_KEY)),
+  );
+
   const nextRoster: Partial<Record<ModelPurpose, ModelSlot>> = {
     ...roster,
   };
@@ -820,6 +921,7 @@ export function normalizeEditableSettings(
   if (backgroundSlot) nextRoster.background = backgroundSlot;
   if (reasoningSlot) nextRoster.reasoning = reasoningSlot;
   if (longContextSlot) nextRoster.longContext = longContextSlot;
+  if (visionSlot) nextRoster.vision = visionSlot;
 
   if (chatSlot) {
     normalized.primaryModel = chatSlot.model;
@@ -881,6 +983,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     sessionHistoryBudgetPct: sessionBudgetPct,
     memoryRetrievalBudgetPct: retrievalBudgetPct,
     sessionMessageLimit: config.sessionMessageLimit ?? null,
+    sessionRestartBehavior: config.sessionRestartBehavior ?? 'reuse_latest_session',
     memoryRetrievalLimit: config.memoryRetrievalLimit ?? null,
     extractionInterval: config.extractionInterval,
     maintenanceIntervalMs: config.maintenanceIntervalMs,
@@ -910,6 +1013,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     webFetchLocalCrawlerDomainAllowlist: config.webFetchLocalCrawlerDomainAllowlist ?? [],
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
     capabilityTier: config.capabilityTier ?? 'nursery',
+    promotedExtendedTools: config.promotedExtendedTools ?? [],
     chatApiBaseUrl: (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl ?? null,
     // Voice / TTS
     ttsProvider: resolveRuntimeTtsProvider(config),
@@ -922,8 +1026,16 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     // Channels
     discordEnabled: Boolean(config.discordToken),
     discordHeartbeatChannel: null,
+    discordTriggerWords: config.discordTriggerWords?.join(', ') ?? null,
+    discordTriggerReactions: config.discordTriggerReactions?.join(', ') ?? '👆',
+    discordTriggerListenWindowMs: config.discordTriggerListenWindowMs ?? 120_000,
     telegramEnabled: config.telegramEnabled ?? false,
     telegramAuthorizedUsers: config.telegramAuthorizedUsers?.join(', ') ?? null,
+    // Obsidian vault
+    obsidianVaultName: config.obsidianVaultName ?? null,
+    obsidianCliPath: config.obsidianCliPath ?? 'obsidian',
+    obsidianAutoPublish: config.obsidianAutoPublish ?? false,
+    obsidianTimeoutMs: config.obsidianTimeoutMs ?? 10000,
     // MoA (Mixture of Agents)
     moaEnabled: config.moaEnabled ?? false,
     moaReferenceModels: config.moaReferenceModels ?? [],
@@ -975,6 +1087,10 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     config.memoryRetrievalBudgetPct = settings.memoryRetrievalBudgetPct;
   }
   if (settings.sessionMessageLimit !== undefined) config.sessionMessageLimit = settings.sessionMessageLimit;
+  if ('sessionRestartBehavior' in settings) {
+    const behavior = settings.sessionRestartBehavior;
+    config.sessionRestartBehavior = behavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
+  }
   if (settings.memoryRetrievalLimit !== undefined) config.memoryRetrievalLimit = settings.memoryRetrievalLimit;
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
   if (settings.compactionEmotionalSalienceThresholdPct !== undefined) {
@@ -1042,6 +1158,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (settings.capabilityTier !== undefined && isCapabilityTier(settings.capabilityTier)) {
     config.capabilityTier = settings.capabilityTier;
   }
+  if ('promotedExtendedTools' in settings) {
+    config.promotedExtendedTools = toPromotedToolList(settings.promotedExtendedTools);
+  }
   if ('chatApiBaseUrl' in settings) {
     const trimmed = settings.chatApiBaseUrl?.trim() ?? '';
     (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl = trimmed || undefined;
@@ -1088,6 +1207,22 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
 
   // Channels
+  if ('discordTriggerWords' in settings) {
+    const csv = settings.discordTriggerWords?.trim() ?? '';
+    config.discordTriggerWords = csv
+      ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
+      : [];
+  }
+  if ('discordTriggerReactions' in settings) {
+    const csv = settings.discordTriggerReactions?.trim() ?? '';
+    const reactions = csv
+      ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
+      : [];
+    config.discordTriggerReactions = reactions.length > 0 ? reactions : ['👆'];
+  }
+  if ('discordTriggerListenWindowMs' in settings) {
+    config.discordTriggerListenWindowMs = settings.discordTriggerListenWindowMs ?? 120_000;
+  }
   if ('telegramEnabled' in settings) {
     config.telegramEnabled = settings.telegramEnabled ?? false;
   }
@@ -1096,6 +1231,20 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     config.telegramAuthorizedUsers = csv
       ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
       : undefined;
+  }
+
+  // Obsidian vault
+  if ('obsidianVaultName' in settings) {
+    config.obsidianVaultName = settings.obsidianVaultName?.trim() || undefined;
+  }
+  if ('obsidianCliPath' in settings) {
+    config.obsidianCliPath = settings.obsidianCliPath?.trim() || undefined;
+  }
+  if ('obsidianAutoPublish' in settings) {
+    config.obsidianAutoPublish = settings.obsidianAutoPublish ?? false;
+  }
+  if ('obsidianTimeoutMs' in settings) {
+    config.obsidianTimeoutMs = settings.obsidianTimeoutMs;
   }
 
   // MoA (Mixture of Agents)
@@ -1162,6 +1311,8 @@ export const SETTINGS_VALIDATION = {
   thinkMaxSubQueries: { min: 1, max: 100 },
   retryMaxAttempts: { min: 0, max: 10 },
   retryBaseDelayMs: { min: 500, max: 30000 },
+  discordTriggerListenWindowMs: { min: 10_000, max: 600_000 },
+  obsidianTimeoutMs: { min: 1000, max: 30000 },
   moaMaxRounds: { min: 1, max: 10 },
   moaMaxTokensPerRound: { min: 256, max: 1_000_000 },
   moaTimeoutMs: { min: 5000, max: 600_000 },
@@ -1323,6 +1474,22 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     }
   }
 
+  const promotedExtendedToolsRaw = params.get('promotedExtendedTools');
+  if (promotedExtendedToolsRaw !== null) {
+    settings.promotedExtendedTools = parseCsvList(promotedExtendedToolsRaw)
+      .slice(0, PROMOTED_EXTENDED_TOOL_SLOTS_MAX);
+  }
+
+  const sessionRestartBehaviorRaw = params.get('sessionRestartBehavior');
+  if (sessionRestartBehaviorRaw !== null) {
+    const behavior = toSessionRestartBehavior(sessionRestartBehaviorRaw);
+    if (!behavior) {
+      errors.push('sessionRestartBehavior must be one of: reuse_latest_session, new_session');
+    } else {
+      settings.sessionRestartBehavior = behavior;
+    }
+  }
+
   // Voice / TTS
   const ttsProviderRaw = params.get('ttsProvider');
   if (ttsProviderRaw !== null) {
@@ -1385,6 +1552,16 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     settings.discordHeartbeatChannel = discordHeartbeatChannelRaw.trim();
   }
 
+  const discordTriggerWordsRaw = params.get('discordTriggerWords');
+  if (discordTriggerWordsRaw !== null) {
+    settings.discordTriggerWords = discordTriggerWordsRaw.trim();
+  }
+
+  const discordTriggerReactionsRaw = params.get('discordTriggerReactions');
+  if (discordTriggerReactionsRaw !== null) {
+    settings.discordTriggerReactions = discordTriggerReactionsRaw.trim();
+  }
+
   const telegramEnabledRaw = params.get('telegramEnabled');
   if (telegramEnabledRaw !== null) {
     const enabled = toBoolean(telegramEnabledRaw);
@@ -1399,6 +1576,29 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   if (telegramAuthorizedUsersRaw !== null) {
     settings.telegramAuthorizedUsers = telegramAuthorizedUsersRaw.trim();
   }
+
+  // Obsidian vault
+  const obsidianVaultNameRaw = params.get('obsidianVaultName');
+  if (obsidianVaultNameRaw !== null) {
+    settings.obsidianVaultName = obsidianVaultNameRaw.trim() || undefined;
+  }
+
+  const obsidianCliPathRaw = params.get('obsidianCliPath');
+  if (obsidianCliPathRaw !== null) {
+    settings.obsidianCliPath = obsidianCliPathRaw.trim() || 'obsidian';
+  }
+
+  const obsidianAutoPublishRaw = params.get('obsidianAutoPublish');
+  if (obsidianAutoPublishRaw !== null) {
+    const enabled = toBoolean(obsidianAutoPublishRaw);
+    if (enabled === undefined) {
+      errors.push('obsidianAutoPublish must be true or false');
+    } else {
+      settings.obsidianAutoPublish = enabled;
+    }
+  }
+
+  // obsidianTimeoutMs is handled by SETTINGS_VALIDATION numeric loop
 
   // MoA (Mixture of Agents)
   const moaEnabledRaw = params.get('moaEnabled');

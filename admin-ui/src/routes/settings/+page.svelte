@@ -8,7 +8,7 @@
     listModels,
     refreshModels,
   } from '$lib/api/endpoints/settings';
-  import type { AdminSettingsData, DiscoveredModel } from '$lib/types';
+  import type { AdminSettingsData, ConfigUpdateResult, DiscoveredModel } from '$lib/types';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -37,6 +37,10 @@
     { value: 'background', label: 'Background Routing (default)' },
     { value: 'openrouter_zdr', label: 'OpenRouter ZDR-only' },
     { value: 'local_endpoint', label: 'Local Endpoint Only' },
+  ] as const;
+  const SESSION_RESTART_BEHAVIORS = [
+    { value: 'reuse_latest_session', label: 'Reuse latest session' },
+    { value: 'new_session', label: 'Always start a new session' },
   ] as const;
 
   // ── Budget constants (from context-budget.ts) ──
@@ -69,6 +73,7 @@
     return JSON.stringify({
       primaryModel, extractionModel, memoryBudgetPct,
       memoryRetrievalLimit, sessionMessageLimit,
+      sessionRestartBehavior,
       sessionHistoryBudgetPct, memoryRetrievalBudgetPct,
       extractionThresholdPct, compactionThresholdPct,
       maxResponseTokens, retryMaxAttempts, retryBaseDelayMs,
@@ -96,8 +101,12 @@
       // Voice / TTS
       ttsProvider, voiceId, echoTtsUrl, echoTtsVoice, echoTtsPreset,
       sttProvider, deepgramModel,
+      // Obsidian Vault
+      obsidianVaultName, obsidianCliPath, obsidianAutoPublish, obsidianTimeoutMs,
       // Channels
       discordEnabled, discordHeartbeatChannel,
+      discordTriggerWords, discordTriggerReactions,
+      discordTriggerListenWindowSeconds,
       telegramEnabled, telegramAuthorizedUsers,
     });
   }
@@ -120,6 +129,7 @@
   let memoryBudgetPct = $state(20);
   let memoryRetrievalLimit = $state<number | null>(null);
   let sessionMessageLimit = $state<number | null>(null);
+  let sessionRestartBehavior = $state<'reuse_latest_session' | 'new_session'>('reuse_latest_session');
   let sessionHistoryBudgetPct = $state(6);
   let memoryRetrievalBudgetPct = $state(2);
   let extractionThresholdPct = $state(30);
@@ -153,9 +163,18 @@
   let sttProvider = $state<'deepgram' | 'disabled'>('disabled');
   let deepgramModel = $state('nova-3');
 
+  // ── Obsidian Vault ──
+  let obsidianVaultName = $state('');
+  let obsidianCliPath = $state('obsidian');
+  let obsidianAutoPublish = $state(false);
+  let obsidianTimeoutMs = $state(10000);
+
   // ── Channels ──
   let discordEnabled = $state(false);
   let discordHeartbeatChannel = $state('');
+  let discordTriggerWords = $state('');
+  let discordTriggerReactions = $state('👆');
+  let discordTriggerListenWindowSeconds = $state(120);
   let telegramEnabled = $state(false);
   let telegramAuthorizedUsers = $state('');
 
@@ -201,7 +220,9 @@
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
   let capabilitiesJson = $state('');
+  let settingsJson = $state('');
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
+  let validationErrorsByField = $state<Record<string, string[]>>({});
 
   // ── Collapsible sections ──
   let openSections = $state(new Set<string>(['models']));
@@ -247,8 +268,12 @@
     },
     {
       id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
-      keys: ['compactionThresholdPct', 'maintenanceIntervalMs'],
-      summary: () => `Compaction at ${compactionThresholdPct}%, Maintenance ${Math.round(maintenanceIntervalMs / 1000)}s`,
+      keys: ['compactionThresholdPct', 'maintenanceIntervalMs', 'sessionRestartBehavior'],
+      summary: () => (
+        `Compaction at ${compactionThresholdPct}%, ` +
+        `Maintenance ${Math.round(maintenanceIntervalMs / 1000)}s, ` +
+        `Restart ${sessionRestartBehavior === 'new_session' ? 'new session' : 'reuse latest'}`
+      ),
     },
     {
       id: 'extraction-tuning', title: 'Memory Extraction Tuning', icon: 'X',
@@ -316,15 +341,30 @@
       summary: () => `TTS: ${ttsProvider}, STT: ${sttProvider}`,
     },
     {
+      id: 'obsidian', title: 'Obsidian Vault', icon: 'O',
+      keys: ['obsidianVaultName', 'obsidianCliPath', 'obsidianAutoPublish', 'obsidianTimeoutMs'],
+      summary: () => obsidianVaultName ? `Vault: ${obsidianVaultName}${obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
+    },
+    {
       id: 'channels', title: 'Channels', icon: 'C',
       keys: [
         'discordEnabled', 'discordHeartbeatChannel',
+        'discordTriggerWords', 'discordTriggerReactions',
+        'discordTriggerListenWindowMs',
         'telegramEnabled', 'telegramAuthorizedUsers',
       ],
-      summary: () => [
-        discordEnabled ? 'Discord on' : 'Discord off',
-        telegramEnabled ? 'Telegram on' : 'Telegram off',
-      ].join(', '),
+      summary: () => {
+        const wordsCount = splitCsv(discordTriggerWords).length;
+        const reactionsCount = splitCsv(discordTriggerReactions).length;
+        const windowSeconds = normalizeDiscordListenWindowSeconds(discordTriggerListenWindowSeconds);
+        return [
+          discordEnabled ? 'Discord on' : 'Discord off',
+          telegramEnabled ? 'Telegram on' : 'Telegram off',
+          `${wordsCount} word trigger${wordsCount === 1 ? '' : 's'}`,
+          `${reactionsCount} reaction trigger${reactionsCount === 1 ? '' : 's'}`,
+          `${windowSeconds}s listen window`,
+        ].join(', ');
+      },
     },
   ];
 
@@ -335,6 +375,46 @@
     { key: 'trust-policy', label: 'trust-policy.json' },
     { key: 'capabilities', label: 'capabilities.json' },
   ] as const;
+
+  function fieldErrors(field: string): string[] {
+    return validationErrorsByField[field] ?? [];
+  }
+
+  function hasFieldErrors(field: string): boolean {
+    return fieldErrors(field).length > 0;
+  }
+
+  function applyValidationErrors(result: ConfigUpdateResult): number {
+    const next: Record<string, string[]> = {};
+    for (const entry of result.validationErrors ?? []) {
+      const field = entry.field?.trim();
+      const message = entry.message?.trim();
+      if (!field || !message) continue;
+      const existing = next[field] ?? [];
+      if (!existing.includes(message)) {
+        existing.push(message);
+      }
+      next[field] = existing;
+    }
+    validationErrorsByField = next;
+
+    const invalidFields = new Set(Object.keys(next).filter((field) => field !== '$root'));
+    if (invalidFields.size > 0) {
+      const nextOpenSections = new Set(openSections);
+      for (const section of SECTIONS) {
+        if (section.keys.some((key) => invalidFields.has(key))) {
+          nextOpenSections.add(section.id);
+        }
+      }
+      const categorizedKeys = new Set(SECTIONS.flatMap((section) => section.keys));
+      if (Array.from(invalidFields).some((field) => !categorizedKeys.has(field))) {
+        nextOpenSections.add('other');
+      }
+      openSections = nextOpenSections;
+    }
+
+    return invalidFields.size;
+  }
 
   // ── Source attribution ──
   type SettingSource = 'default' | 'settings.json' | 'env var';
@@ -427,6 +507,7 @@
     memoryBudgetPct = Number(config.memoryBudgetPct ?? 20);
     memoryRetrievalLimit = config.memoryRetrievalLimit != null ? Number(config.memoryRetrievalLimit) : null;
     sessionMessageLimit = config.sessionMessageLimit != null ? Number(config.sessionMessageLimit) : null;
+    sessionRestartBehavior = config.sessionRestartBehavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
     sessionHistoryBudgetPct = Number(config.sessionHistoryBudgetPct ?? 6);
     memoryRetrievalBudgetPct = Number(config.memoryRetrievalBudgetPct ?? 2);
     extractionThresholdPct = Number(config.extractionThresholdPct ?? 30);
@@ -486,9 +567,20 @@
     sttProvider = rawStt === 'deepgram' ? 'deepgram' : 'disabled';
     deepgramModel = String(config.deepgramModel ?? 'nova-3');
 
+    // Obsidian Vault
+    obsidianVaultName = String(config.obsidianVaultName ?? '');
+    obsidianCliPath = String(config.obsidianCliPath ?? 'obsidian');
+    obsidianAutoPublish = Boolean(config.obsidianAutoPublish);
+    obsidianTimeoutMs = Number(config.obsidianTimeoutMs ?? 10000);
+
     // Channels
     discordEnabled = Boolean(config.discordEnabled);
     discordHeartbeatChannel = String(config.discordHeartbeatChannel ?? '');
+    discordTriggerWords = String(config.discordTriggerWords ?? '');
+    discordTriggerReactions = String(config.discordTriggerReactions ?? '👆');
+    discordTriggerListenWindowSeconds = normalizeDiscordListenWindowSeconds(
+      Number(config.discordTriggerListenWindowMs ?? 120000) / 1000,
+    );
     telegramEnabled = Boolean(config.telegramEnabled);
     telegramAuthorizedUsers = String(config.telegramAuthorizedUsers ?? '');
 
@@ -651,78 +743,104 @@
     return str.split(',').map(s => s.trim()).filter(Boolean);
   }
 
+  function normalizeDiscordListenWindowSeconds(value: number): number {
+    if (!Number.isFinite(value)) return 120;
+    return clamp(Math.round(value), 10, 600);
+  }
+
+  function collectSimplePayload(catalogPayload: Record<string, unknown>): Record<string, unknown> {
+    const discordTriggerListenWindowMs = normalizeDiscordListenWindowSeconds(
+      discordTriggerListenWindowSeconds,
+    ) * 1000;
+
+    return {
+      primaryModel,
+      extractionModel,
+      memoryBudgetPct,
+      ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
+      ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
+      sessionRestartBehavior,
+      sessionHistoryBudgetPct,
+      memoryRetrievalBudgetPct,
+      extractionThresholdPct,
+      compactionThresholdPct,
+      primaryMaxTokens: maxResponseTokens,
+      retryMaxAttempts,
+      retryBaseDelayMs,
+      importProcessingRouteMode: importRouteMode,
+      importProcessingStrictPolicy: importStrictPolicy,
+      importProcessingLocalEndpointUrl: importLocalEndpointUrl,
+      importProcessingLocalModel: importLocalModel,
+      openRouterProviderOrder: splitCsv(openRouterProviderOrder),
+      webFetchAllowHttp,
+      webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
+      webFetchAllowInternalNetwork,
+      webFetchTlsCaCertPaths: splitCsv(webFetchTlsCaCertPaths),
+      capabilityTier,
+      // Memory & Extraction
+      extractionInterval,
+      compactionEmotionalSalienceThresholdPct,
+      defaultContextWindow,
+      maintenanceIntervalMs,
+      // Memory Extraction Tuning
+      memoryExtractionMinImportance,
+      memoryExtractionMinConfidence,
+      memoryExtractionMinNovelty,
+      memoryExtractionMaxWrites,
+      memoryExtractionTelemetryEnabled,
+      memoryRetrievalTelemetryEnabled,
+      // Profile Synthesis
+      profileSynthesisEnabled,
+      profileSynthesisRefreshIntervalMs,
+      profileSynthesisCooldownMs,
+      profileSynthesisMinWrites,
+      profileSynthesisMinImportance,
+      profileSynthesisMinConfidence,
+      profileSynthesisMinNovelty,
+      profileSynthesisSourceMemoryLimit,
+      profileSynthesisMinSourceMemories,
+      // Think Tool
+      thinkMaxTokens,
+      thinkMaxWallTimeMs,
+      thinkMaxSubQueries,
+      // Voice / TTS
+      ttsProvider,
+      voiceId,
+      echoTtsUrl,
+      echoTtsVoice,
+      echoTtsPreset,
+      sttProvider,
+      deepgramModel,
+      // Obsidian Vault
+      obsidianVaultName: obsidianVaultName || undefined,
+      obsidianCliPath: obsidianCliPath || 'obsidian',
+      obsidianAutoPublish,
+      obsidianTimeoutMs,
+      // Channels
+      discordEnabled,
+      discordHeartbeatChannel,
+      discordTriggerWords,
+      discordTriggerReactions,
+      discordTriggerListenWindowMs,
+      telegramEnabled,
+      telegramAuthorizedUsers,
+      ...catalogPayload,
+    };
+  }
+
   async function saveSimple() {
     saving = true;
     try {
       const catalogPayload = buildCatalogPayload();
-      const result = await updateSettings({
-        primaryModel,
-        extractionModel,
-        memoryBudgetPct,
-        ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
-        ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
-        sessionHistoryBudgetPct,
-        memoryRetrievalBudgetPct,
-        extractionThresholdPct,
-        compactionThresholdPct,
-        primaryMaxTokens: maxResponseTokens,
-        retryMaxAttempts,
-        retryBaseDelayMs,
-        importProcessingRouteMode: importRouteMode,
-        importProcessingStrictPolicy: importStrictPolicy,
-        importProcessingLocalEndpointUrl: importLocalEndpointUrl,
-        importProcessingLocalModel: importLocalModel,
-        openRouterProviderOrder: splitCsv(openRouterProviderOrder),
-        webFetchAllowHttp,
-        webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
-        webFetchAllowInternalNetwork,
-        webFetchTlsCaCertPaths: splitCsv(webFetchTlsCaCertPaths),
-        capabilityTier,
-        // Memory & Extraction
-        extractionInterval,
-        compactionEmotionalSalienceThresholdPct,
-        defaultContextWindow,
-        maintenanceIntervalMs,
-        // Memory Extraction Tuning
-        memoryExtractionMinImportance,
-        memoryExtractionMinConfidence,
-        memoryExtractionMinNovelty,
-        memoryExtractionMaxWrites,
-        memoryExtractionTelemetryEnabled,
-        memoryRetrievalTelemetryEnabled,
-        // Profile Synthesis
-        profileSynthesisEnabled,
-        profileSynthesisRefreshIntervalMs,
-        profileSynthesisCooldownMs,
-        profileSynthesisMinWrites,
-        profileSynthesisMinImportance,
-        profileSynthesisMinConfidence,
-        profileSynthesisMinNovelty,
-        profileSynthesisSourceMemoryLimit,
-        profileSynthesisMinSourceMemories,
-        // Think Tool
-        thinkMaxTokens,
-        thinkMaxWallTimeMs,
-        thinkMaxSubQueries,
-        // Voice / TTS
-        ttsProvider,
-        voiceId,
-        echoTtsUrl,
-        echoTtsVoice,
-        echoTtsPreset,
-        sttProvider,
-        deepgramModel,
-        // Channels
-        discordEnabled,
-        discordHeartbeatChannel,
-        telegramEnabled,
-        telegramAuthorizedUsers,
-        ...catalogPayload,
-      });
+      const result = await updateSettings(collectSimplePayload(catalogPayload));
+      const invalidFieldCount = applyValidationErrors(result);
       flash(result.ok, result.message || 'Settings saved');
       if (result.ok) {
         data = await getSettings();
         populateSimpleFields(data.config as Record<string, unknown>);
+        settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
+      } else if (invalidFieldCount > 0) {
+        mode = 'advanced';
       }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
@@ -736,10 +854,49 @@
     saving = true;
     try {
       const result = await updateSettings(data.config as Record<string, unknown>);
+      const invalidFieldCount = applyValidationErrors(result);
       flash(result.ok, result.message || 'Settings saved');
-      if (result.ok) { data = await getSettings(); }
+      if (result.ok) {
+        data = await getSettings();
+        populateSimpleFields(data.config as Record<string, unknown>);
+        settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
+      } else if (invalidFieldCount > 0) {
+        mode = 'advanced';
+      }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function saveRawSettings() {
+    saving = true;
+    try {
+      const parsed = JSON.parse(settingsJson);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        applyValidationErrors({
+          ok: false,
+          message: 'settings.json must be a JSON object',
+          validationErrors: [{ field: '$root', message: 'settings.json must be a JSON object', code: 'invalid_payload' }],
+        });
+        flashRaw('settings', false, 'settings.json must be a JSON object');
+        return;
+      }
+
+      const result = await updateSettings(parsed as Record<string, unknown>);
+      applyValidationErrors(result);
+      if (!result.ok) {
+        flashRaw('settings', false, result.message || 'Failed to save settings.json');
+        return;
+      }
+
+      flashRaw('settings', true, result.message || 'settings.json saved');
+      data = await getSettings();
+      populateSimpleFields(data.config as Record<string, unknown>);
+      settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
+    } catch (e) {
+      flashRaw('settings', false, e instanceof Error ? e.message : 'Failed to save settings.json');
     } finally {
       saving = false;
     }
@@ -751,6 +908,7 @@
       const json = getRawJson(key);
       JSON.parse(json);
       await saveSubConfig(key, json);
+      applyValidationErrors({ ok: true, message: '' });
       flashRaw(key, true, `${label} saved`);
     } catch (e) {
       flashRaw(key, false, e instanceof Error ? e.message : `Failed to save ${label}`);
@@ -783,6 +941,7 @@
       data = settingsData;
       discoveredModels = models;
       populateSimpleFields(data.config as Record<string, unknown>);
+      settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
       const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([
         getSubConfig('models').catch(() => '{}'),
@@ -1140,6 +1299,15 @@
             <label class={LABEL_CLS}>Maintenance Interval (ms)</label>
             <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
+          </div>
+          <div>
+            <label class={LABEL_CLS}>Restart Behavior</label>
+            <select bind:value={sessionRestartBehavior} class={INPUT_CLS}>
+              {#each SESSION_RESTART_BEHAVIORS as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+            <p class="text-sm text-shadow-500 mt-1">Choose whether startup resumes the latest session or seeds a fresh one.</p>
           </div>
         </div>
       </div>
@@ -1690,7 +1858,49 @@
         {/if}
       </div>
 
-      <!-- Channels (informational) -->
+      <!-- Obsidian Vault -->
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('obsidian')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">O</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Obsidian Vault</h2>
+          </div>
+          <div class="flex items-center gap-3">
+            {#if !openSections.has('obsidian')}
+              <span class="text-xs text-shadow-600">{obsidianVaultName ? `Vault: ${obsidianVaultName}` : 'Disabled'}</span>
+            {/if}
+            <span class="text-shadow-500">{openSections.has('obsidian') ? '−' : '+'}</span>
+          </div>
+        </button>
+        {#if openSections.has('obsidian')}
+          <div class="px-5 py-4 space-y-4 border-t border-bark-200">
+            <div>
+              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianVaultName">Vault Name</label>
+              <input type="text" id="obsidianVaultName" class="input-garden w-full" bind:value={obsidianVaultName} placeholder="e.g. Purrsephone" />
+              <p class="text-xs text-shadow-500 mt-0.5">Leave empty to disable vault tools. Must match the name in Obsidian.</p>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianCliPath">CLI Path</label>
+              <input type="text" id="obsidianCliPath" class="input-garden w-full" bind:value={obsidianCliPath} placeholder="obsidian" />
+              <p class="text-xs text-shadow-500 mt-0.5">Path to the Obsidian CLI binary. Default: obsidian</p>
+            </div>
+            <div class="flex items-center gap-3">
+              <input type="checkbox" id="obsidianAutoPublish" class="rounded border-bark-400" bind:checked={obsidianAutoPublish} />
+              <label class="text-xs font-semibold text-shadow-700" for="obsidianAutoPublish">Auto-publish reflections to vault</label>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianTimeoutMs">CLI Timeout (ms)</label>
+              <input type="number" id="obsidianTimeoutMs" class="input-garden w-28" bind:value={obsidianTimeoutMs} min={1000} max={30000} step={1000} />
+              <p class="text-xs text-shadow-500 mt-0.5">Timeout for CLI commands (1000-30000ms)</p>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Channels -->
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('channels')}
@@ -1702,22 +1912,84 @@
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('channels')}
-              <span class="text-sm text-shadow-500">Requires server restart to change</span>
+              <span class="text-sm text-shadow-500">
+                {discordEnabled ? 'Discord on' : 'Discord off'}, {discordTriggerListenWindowSeconds}s listen window
+              </span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('channels') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
         </button>
         {#if openSections.has('channels')}
-          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4 space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Discord Enabled</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={discordEnabled} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Enable Discord channel bridge</span>
+                </label>
+                <p class="text-sm text-shadow-500 mt-1">Requires a valid <span class="font-mono">DISCORD_TOKEN</span> at runtime.</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Discord Heartbeat Channel</label>
+                <input type="text" bind:value={discordHeartbeatChannel} class={INPUT_CLS} placeholder="channel-id" />
+                <p class="text-sm text-shadow-500 mt-1">Optional channel ID used for heartbeat/status pings.</p>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Discord Trigger Words</label>
+                <input type="text" bind:value={discordTriggerWords} class={INPUT_CLS} placeholder="pixie, hey purrsephone" />
+                <p class="text-sm text-shadow-500 mt-1">
+                  Comma-separated words or phrases that trigger replies in guild channels.
+                </p>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Discord Trigger Reactions</label>
+                <input type="text" bind:value={discordTriggerReactions} class={INPUT_CLS} placeholder="👆, 🔥, 👀" />
+                <p class="text-sm text-shadow-500 mt-1">
+                  Comma-separated emoji reactions that open a Discord follow-up window.
+                </p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Discord Listen Window (seconds)</label>
+                <input
+                  type="number"
+                  min="10"
+                  max="600"
+                  step="1"
+                  value={discordTriggerListenWindowSeconds}
+                  onchange={(e) => {
+                    discordTriggerListenWindowSeconds = normalizeDiscordListenWindowSeconds(
+                      Number((e.target as HTMLInputElement).value),
+                    );
+                  }}
+                  class={INPUT_CLS}
+                />
+                <p class="text-sm text-shadow-500 mt-1">
+                  After a trigger, accept follow-up Discord messages for this long (10-600s). Saved as milliseconds.
+                </p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Telegram Enabled</label>
+                <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" bind:checked={telegramEnabled} class={TOGGLE_CLS} />
+                  <span class="text-sm text-shadow-700">Enable Telegram channel bridge</span>
+                </label>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Telegram Authorized Users</label>
+                <input type="text" bind:value={telegramAuthorizedUsers} class={INPUT_CLS} placeholder="12345678, 87654321" />
+                <p class="text-sm text-shadow-500 mt-1">Comma-separated Telegram user IDs allowed to interact.</p>
+              </div>
+            </div>
             <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">
               <p class="text-sm text-shadow-700">
                 Channel bindings (ports, tokens, host addresses) are security-sensitive settings configured at the server level.
-                These settings are set at startup and require a server restart to change.
+                Trigger behavior is saved here, while host/token bindings are set at startup and may require restart to change.
               </p>
               <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div class="text-sm">
                   <span class="font-medium text-shadow-800">Discord:</span>
-                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_HEARTBEAT_CHANNEL</span>
+                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_HEARTBEAT_CHANNEL, DISCORD_TRIGGER_* (optional)</span>
                 </div>
                 <div class="text-sm">
                   <span class="font-medium text-shadow-800">OpenAI API:</span>
@@ -1872,6 +2144,13 @@
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
                     {/if}
                   </div>
+                  {#if hasFieldErrors(key)}
+                    <div class="sm:pl-60 space-y-1">
+                      {#each fieldErrors(key) as fieldError}
+                        <p class="text-sm text-wilt-600">{fieldError}</p>
+                      {/each}
+                    </div>
+                  {/if}
                 {/each}
               </div>
             {/if}
@@ -1948,6 +2227,13 @@
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
                     {/if}
                   </div>
+                  {#if hasFieldErrors(key)}
+                    <div class="sm:pl-60 space-y-1">
+                      {#each fieldErrors(key) as fieldError}
+                        <p class="text-sm text-wilt-600">{fieldError}</p>
+                      {/each}
+                    </div>
+                  {/if}
                 {/each}
               </div>
             {/if}
@@ -1978,6 +2264,46 @@
           </button>
         </div>
       {/if}
+
+      <div class="card-garden overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-bark-300">
+          <h3 class="text-sm font-serif font-semibold text-shadow-800">settings.json (full runtime object)</h3>
+          <div class="flex items-center gap-3">
+            {#if rawSaveStatus['settings']}
+              <span class="text-sm font-medium {rawSaveStatus['settings'].ok ? 'text-moss-600' : 'text-wilt-600'}">
+                {rawSaveStatus['settings'].msg}
+              </span>
+            {/if}
+            <button
+              onclick={saveRawSettings}
+              disabled={saving}
+              class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium
+                     hover:bg-gold-700 disabled:opacity-50 transition-colors"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+        <textarea
+          bind:value={settingsJson}
+          rows="18"
+          class="w-full font-mono text-sm text-shadow-800 bg-white p-4
+                 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
+                 resize-y border-0"
+          spellcheck="false"
+        ></textarea>
+        {#if Object.keys(validationErrorsByField).length > 0}
+          <div class="px-5 pb-4 border-t border-bark-300 space-y-1">
+            {#each Object.entries(validationErrorsByField) as [field, messages]}
+              {#each messages as message}
+                <p class="text-sm text-wilt-600">
+                  <span class="font-mono">{field}</span>: {message}
+                </p>
+              {/each}
+            {/each}
+          </div>
+        {/if}
+      </div>
 
       {#each RAW_EDITORS as editor}
         {@const status = rawSaveStatus[editor.key]}

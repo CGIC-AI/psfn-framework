@@ -15,6 +15,7 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
   system_prompt_mode?: 'default' | 'none' | 'custom';
   system_prompt?: string;
+  response_style?: 'concise' | 'expressive';
   // Accept-and-ignore for compatibility
   top_p?: number;
   n?: number;

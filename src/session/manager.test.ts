@@ -102,6 +102,64 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Memory block');
   });
 
+  it('does not persist internal reflection channels to session journals', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const reflectionChannel = 'internal:reflection:whisper';
+
+    mgr.recordUserMessage(reflectionChannel, 'Reflect on today', 'scheduler', 'Scheduler');
+    mgr.recordAssistantMessage(reflectionChannel, 'Reflection output');
+    mgr.appendSystemNote(reflectionChannel, 'Deliberation metadata');
+
+    expect(store.count(reflectionChannel)).toBe(0);
+    expect(store.listChannels().some(channel => channel.channelId === reflectionChannel)).toBe(false);
+  });
+
+  it('resolves startup metadata from latest session when reusing latest', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('discord:chan-1', 'hello', 'u1', 'User');
+
+    const resolved = mgr.resolveStartupSessionMetadata('reuse_latest_session');
+    expect(resolved).not.toBeNull();
+    expect(resolved?.sessionId).toBe('discord:chan-1');
+    expect(resolved?.channelType).toBe('discord');
+    expect(typeof resolved?.timestamp).toBe('number');
+  });
+
+  it('creates fresh startup metadata when restart behavior is new_session', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_701_234_567_890);
+    try {
+      const resolved = mgr.resolveStartupSessionMetadata('new_session');
+      expect(resolved).not.toBeNull();
+      expect(resolved?.channelType).toBe('api');
+      expect(resolved?.timestamp).toBe(1_701_234_567_890);
+      expect(resolved?.sessionId.startsWith('api:restart-')).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('routes API session operations through active context overrides', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordAssistantMessage('api:resume-target', 'older context');
+    mgr.setActiveContextSession('api:resume-target');
+
+    mgr.recordUserMessage('api:transient-request', 'continued user turn', 'u1', 'User');
+    mgr.recordAssistantMessage('api:transient-request', 'continued assistant turn');
+
+    expect(store.count('api:transient-request')).toBe(0);
+    expect(store.count('api:resume-target')).toBe(3);
+    expect(store.getLastEntry('api:resume-target')?.content).toBe('continued assistant turn');
+
+    const context = await mgr.buildContext('api:transient-request', 'System', '');
+    expect(context.messages.some(message => message.content.includes('continued user turn'))).toBe(true);
+    expect(context.messages.some(message => message.content.includes('continued assistant turn'))).toBe(true);
+  });
+
   it('loads verified session history without unverified tags', async () => {
     const config = makeConfig();
     const keyring = {
@@ -515,8 +573,16 @@ describe('SessionManager', () => {
     });
     mgr.setPreCompactionExtractionHandler(preCompactionFlush as any);
 
-    const complete = vi.fn<LLMProvider['complete']>().mockImplementation(async (_context, purpose) => {
+    const complete = vi.fn<LLMProvider['complete']>().mockImplementation(async (context, purpose) => {
       expect(purpose).toBe('background');
+      expect(context.correlation).toMatchObject({
+        requestId: expect.stringContaining('compaction:'),
+        channelId: 'ch1',
+        callType: 'summary',
+        purpose: 'session.compaction.summary',
+        originType: 'summary',
+        originStage: 'session.compaction.summary',
+      });
       callOrder.push('summary');
       return {
         content: 'Summary of old messages.',

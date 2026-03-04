@@ -61,6 +61,36 @@ describe('MemoryStore', () => {
       expect(results[0].similarity).toBeGreaterThan(0.99);
     });
 
+    it('serializes insert embeddings using the typed-array byte range', () => {
+      const target = makeEmbedding(7);
+      const backing = new Float32Array(EMBEDDING_DIMS * 2);
+      backing.set(target, EMBEDDING_DIMS);
+      const offsetView = backing.subarray(EMBEDDING_DIMS);
+
+      store.insertMemory(
+        makeMemory('m-offset-insert', 'Offset insert memory'),
+        offsetView,
+      );
+
+      const results = store.searchByEmbedding(target, 0.5, 10);
+      expect(results.map(result => result.id)).toContain('m-offset-insert');
+    });
+
+    it('serializes query embeddings using the typed-array byte range', () => {
+      const target = makeEmbedding(8);
+      store.insertMemory(
+        makeMemory('m-offset-query', 'Offset query memory'),
+        target,
+      );
+
+      const backing = new Float32Array(EMBEDDING_DIMS * 2);
+      backing.set(target, EMBEDDING_DIMS);
+      const offsetQuery = backing.subarray(EMBEDDING_DIMS);
+
+      const results = store.searchByEmbedding(offsetQuery, 0.5, 10);
+      expect(results.map(result => result.id)).toContain('m-offset-query');
+    });
+
     it('filters by similarity threshold', () => {
       const emb1 = makeEmbedding(1);
       const emb2 = makeEmbedding(100); // Very different

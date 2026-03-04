@@ -11,6 +11,7 @@ import type {
   MessageModelOverride,
   MessagePromptOverride,
   MessageRoutingMetadata,
+  ResponseStyle,
   SubstrateMessage,
 } from '../../types.js';
 import type { ContactStore } from '../../contacts/store.js';
@@ -51,6 +52,12 @@ import {
   sendEmpty,
   sendJson,
 } from '../http/primitives.js';
+import {
+  type FifoChannelLease,
+  FifoChannelLock,
+  emitTurnContentionTelemetry,
+  isBusyTurnError,
+} from '../../lifecycle/turn-contention.js';
 
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
@@ -100,7 +107,7 @@ type AgentTurnResult = Awaited<ReturnType<SubstrateAgent['handleMessage']>>;
 
 interface PendingTurn {
   channelId: string;
-  claimToken: symbol;
+  releaseChannel: () => void;
   substrateMsg: SubstrateMessage;
 }
 
@@ -112,6 +119,7 @@ interface PreparedTurn {
 interface TurnRoutingOverrides {
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
+  responseStyle?: ResponseStyle;
 }
 
 interface IdentityClaimHeaders {
@@ -170,7 +178,8 @@ export class ApiServer implements ChannelAdapter {
   private modelName: string;
   private requestTimeoutMs: number;
   private seenTelemetryNonces = new Map<string, number>();
-  private inFlightByChannel = new Map<string, symbol>();
+  private channelTurnLock = new FifoChannelLock();
+  private processingChannels = new Set<string>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
 
@@ -254,44 +263,125 @@ export class ApiServer implements ChannelAdapter {
     return Math.floor(value);
   }
 
-  private claimChannel(channelId: string): symbol | null {
-    if (this.inFlightByChannel.has(channelId)) return null;
-    const token = Symbol(channelId);
-    this.inFlightByChannel.set(channelId, token);
-    return token;
-  }
-
-  private releaseChannel(channelId: string, token: symbol): void {
-    if (this.inFlightByChannel.get(channelId) === token) {
-      this.inFlightByChannel.delete(channelId);
-    }
-  }
-
   private attachTurnCleanup(
-    channelId: string,
-    token: symbol,
+    releaseChannel: () => void,
     turnPromise: Promise<unknown>,
   ): void {
     turnPromise
       .catch(() => {})
       .finally(() => {
-        this.releaseChannel(channelId, token);
+        releaseChannel();
       });
   }
 
-  private sendBusyError(res: ServerResponse, channelId: string): void {
-    res.setHeader('Retry-After', '1');
-    this.sendError(
-      res,
-      429,
-      'channel_busy',
-      `A turn is already in progress for ${channelId}. Retry shortly.`,
-    );
+  private emitQueueTelemetry(
+    channelId: string,
+    phase: 'acquired' | 'contended' | 'released',
+    details: { queueDepth: number; waitMs: number; reason?: string },
+  ): void {
+    emitTurnContentionTelemetry(this.eventBus, {
+      channelId,
+      phase,
+      policy: 'queue',
+      source: 'api',
+      queueDepth: details.queueDepth,
+      waitMs: details.waitMs,
+      processingChannels: this.processingChannels.size,
+      ...(details.reason ? { reason: details.reason } : {}),
+    });
+  }
+
+  private async waitForQueueLeaseOrInterrupt<T>(
+    req: IncomingMessage,
+    res: ServerResponse,
+    leasePromise: Promise<T>,
+  ): Promise<T> {
+    let settled = false;
+    let cleanup: () => void = () => {};
+
+    const interruptionPromise = new Promise<never>((_, reject) => {
+      const fail = (reason: LifecycleInterrupt) => {
+        if (settled) return;
+        settled = true;
+        reject(new RequestLifecycleError(reason));
+      };
+
+      const onAborted = () => fail('client_disconnected');
+      const onClose = () => {
+        if (res.writableEnded) return;
+        fail('client_disconnected');
+      };
+
+      req.once('aborted', onAborted);
+      res.once('close', onClose);
+      const timer = setTimeout(() => fail('timeout'), this.requestTimeoutMs);
+      cleanup = () => {
+        req.off('aborted', onAborted);
+        res.off('close', onClose);
+        clearTimeout(timer);
+      };
+    });
+
+    try {
+      const lease = await Promise.race([leasePromise, interruptionPromise]);
+      settled = true;
+      return lease;
+    } finally {
+      settled = true;
+      cleanup();
+    }
+  }
+
+  private async acquireChannel(
+    channelId: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<(() => void) | null> {
+    const queued = this.channelTurnLock.acquire(channelId);
+    if (queued.contended) {
+      this.emitQueueTelemetry(channelId, 'contended', {
+        queueDepth: queued.queueDepth,
+        waitMs: 0,
+        reason: 'active_turn',
+      });
+    }
+
+    let lease: FifoChannelLease;
+    try {
+      lease = await this.waitForQueueLeaseOrInterrupt(req, res, queued.lease);
+    } catch (err) {
+      queued.lease.then((lateLease) => {
+        lateLease.release();
+      }).catch(() => undefined);
+
+      if (err instanceof RequestLifecycleError && err.reason === 'timeout' && this.canWriteResponse(res)) {
+        this.sendError(res, 504, 'request_timeout', 'Request timed out before turn started');
+      }
+      return null;
+    }
+
+    const lockStartMs = Date.now();
+    this.processingChannels.add(channelId);
+    this.emitQueueTelemetry(channelId, 'acquired', {
+      queueDepth: Math.max(0, this.channelTurnLock.pending(channelId) - 1),
+      waitMs: lease.waitMs,
+    });
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      lease.release();
+      this.processingChannels.delete(channelId);
+      this.emitQueueTelemetry(channelId, 'released', {
+        queueDepth: this.channelTurnLock.pending(channelId),
+        waitMs: Math.max(0, Date.now() - lockStartMs),
+      });
+    };
   }
 
   private isAgentBusyError(err: unknown): boolean {
-    if (!(err instanceof Error)) return false;
-    return err.message.toLowerCase().includes('already processing');
+    return isBusyTurnError(err);
   }
 
   private abortActiveTurn(channelId: string, reason: LifecycleInterrupt): void {
@@ -674,8 +764,9 @@ export class ApiServer implements ChannelAdapter {
         : {}),
       ...(overrides.modelOverride ? { modelOverride: overrides.modelOverride } : {}),
       ...(overrides.promptOverride ? { promptOverride: overrides.promptOverride } : {}),
+      ...(overrides.responseStyle ? { responseStyle: overrides.responseStyle } : {}),
     };
-    const hasRouting = routing.broadcast || routing.modelOverride || routing.promptOverride;
+    const hasRouting = routing.broadcast || routing.modelOverride || routing.promptOverride || routing.responseStyle;
 
     return {
       id: `api-${randomUUID()}`,
@@ -814,11 +905,26 @@ export class ApiServer implements ChannelAdapter {
       }
     }
 
+    const responseStyleRaw = typeof request.response_style === 'string'
+      ? request.response_style.trim().toLowerCase()
+      : '';
+    let responseStyle: ResponseStyle | undefined;
+    if (responseStyleRaw) {
+      if (responseStyleRaw !== 'concise' && responseStyleRaw !== 'expressive') {
+        return {
+          ok: false,
+          error: 'response_style must be one of: concise, expressive',
+        };
+      }
+      responseStyle = responseStyleRaw;
+    }
+
     return {
       ok: true,
       value: {
         ...(modelOverride ? { modelOverride } : {}),
         ...(promptOverride ? { promptOverride } : {}),
+        ...(responseStyle ? { responseStyle } : {}),
       },
     };
   }
@@ -1053,11 +1159,11 @@ export class ApiServer implements ChannelAdapter {
     }
   }
 
-  private prepareTurn(
+  private async prepareTurn(
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
-  ): PendingTurn | null {
+  ): Promise<PendingTurn | null> {
     const routingOverrides = this.parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {
       this.sendError(res, 400, 'invalid_request', routingOverrides.error);
@@ -1065,15 +1171,8 @@ export class ApiServer implements ChannelAdapter {
     }
 
     const channelId = this.deriveChannelId(req);
-    const claimToken = this.claimChannel(channelId);
-    if (!claimToken) {
-      this.sendBusyError(res, channelId);
-      return null;
-    }
-
     const { authorId, authorName } = this.deriveAuthor(req);
     if (!this.enforceIdentityClaim(req, res, authorId)) {
-      this.releaseChannel(channelId, claimToken);
       return null;
     }
     this.seedSession(channelId, request.messages, authorId, authorName);
@@ -1087,24 +1186,28 @@ export class ApiServer implements ChannelAdapter {
       req,
       routingOverrides.value,
     );
-    return { channelId, claimToken, substrateMsg };
+
+    const releaseChannel = await this.acquireChannel(channelId, req, res);
+    if (!releaseChannel) return null;
+
+    return { channelId, releaseChannel, substrateMsg };
   }
 
   private beginPreparedTurn(turn: PendingTurn): PreparedTurn {
     const turnPromise = this.agentLoop.handleMessage(turn.substrateMsg);
-    this.attachTurnCleanup(turn.channelId, turn.claimToken, turnPromise);
+    this.attachTurnCleanup(turn.releaseChannel, turnPromise);
     return {
       channelId: turn.channelId,
       turnPromise,
     };
   }
 
-  private startTurn(
+  private async startTurn(
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
-  ): PreparedTurn | null {
-    const pending = this.prepareTurn(request, req, res);
+  ): Promise<PreparedTurn | null> {
+    const pending = await this.prepareTurn(request, req, res);
     if (!pending) return null;
     return this.beginPreparedTurn(pending);
   }
@@ -1192,7 +1295,7 @@ export class ApiServer implements ChannelAdapter {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const turn = this.startTurn(request, req, res);
+    const turn = await this.startTurn(request, req, res);
     if (!turn) return;
 
     try {
@@ -1232,7 +1335,7 @@ export class ApiServer implements ChannelAdapter {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const pendingTurn = this.prepareTurn(request, req, res);
+    const pendingTurn = await this.prepareTurn(request, req, res);
     if (!pendingTurn) return;
 
     const completionId = `chatcmpl-${randomUUID()}`;

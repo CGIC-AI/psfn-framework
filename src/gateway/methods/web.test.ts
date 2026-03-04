@@ -7,6 +7,7 @@ import { GatewayErrors } from '../protocol.js';
 
 interface RuntimeHarness {
   invoke(params: Record<string, unknown>): Promise<any>;
+  invokeBinary(params: Record<string, unknown>): Promise<any>;
 }
 
 function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
@@ -38,19 +39,23 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
   };
 
   registerWebMethods(runtime);
-  const method = methods.get('web.fetch');
-  if (!method) {
-    throw new Error('web.fetch method was not registered');
+  const fetchMethod = methods.get('web.fetch');
+  const binaryMethod = methods.get('web.fetch_binary');
+  if (!fetchMethod || !binaryMethod) {
+    throw new Error('web.fetch methods were not registered');
   }
   return {
     invoke(params: Record<string, unknown>) {
-      return method(params);
+      return fetchMethod(params);
+    },
+    invokeBinary(params: Record<string, unknown>) {
+      return binaryMethod(params);
     },
   };
 }
 
 async function listenHttp(
-  handler: (reqUrl: string) => { status?: number; body: string; contentType?: string },
+  handler: (reqUrl: string) => { status?: number; body: string | Buffer; contentType?: string },
 ): Promise<{ server: Server; url: string }> {
   const server = createServer((req, res) => {
     const result = handler(req.url ?? '/');
@@ -152,6 +157,65 @@ describe('registerWebMethods', () => {
     })).rejects.toMatchObject({
       code: GatewayErrors.PROVIDER_ERROR,
       message: expect.stringContaining('TLS setup failed'),
+    });
+  });
+
+  it('fetches binary payloads for web.fetch_binary', async () => {
+    const { server, url } = await listenHttp(() => ({
+      body: Buffer.from([1, 2, 3]),
+      contentType: 'image/png',
+    }));
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+
+    const result = await harness.invokeBinary({
+      url: `${url}/image`,
+      lane: 'local_crawler',
+      maxBytes: 16,
+    });
+
+    expect(result).toMatchObject({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    });
+  });
+
+  it('enforces maxBytes for web.fetch_binary', async () => {
+    const { server, url } = await listenHttp(() => ({
+      body: Buffer.from([1, 2, 3]),
+      contentType: 'image/png',
+    }));
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+
+    await expect(harness.invokeBinary({
+      url: `${url}/image`,
+      lane: 'local_crawler',
+      maxBytes: 2,
+    })).rejects.toMatchObject({
+      code: GatewayErrors.PROVIDER_ERROR,
+      message: expect.stringContaining('too large'),
     });
   });
 });

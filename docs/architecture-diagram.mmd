@@ -204,13 +204,17 @@ graph TB
     DISCORD["DiscordAdapter<br/><i>discord.js — voice, steering,<br/>typing, backfill</i>"]
     TELEGRAM["TelegramAdapter<br/><i>long-poll or webhook,<br/>media sends, allowlist</i>"]
     API["ApiServer<br/><i>OpenAI-compatible REST<br/>SSE streaming, voice WS</i>"]
-    ADMIN["AdminServer<br/><i>htmx — Garden theme<br/>11 pages, SSE pulse</i>"]
+    GARDEN["Garden SPA<br/><i>Svelte 5 at /garden<br/>primary admin UI</i>"]
+    ADMIN["AdminServer (legacy)<br/><i>htmx at /legacy<br/>deprecated — removal pending</i>"]
   end
 
   DISCORD --> EB
   TELEGRAM --> EB
   API --> EB
   API --> SA
+  GARDEN --> MSTORE
+  GARDEN --> SSTORE
+  GARDEN --> CONTACT
   ADMIN --> MSTORE
   ADMIN --> SSTORE
   ADMIN --> CONTACT
@@ -301,6 +305,6 @@ graph TB
   class MSTORE,MRET,MEXT,MWRITE,DECAY,EMBED memory
   class TPOLICY,CONTACT,CHANVIS,PERSONA trust
   class CARD,PLSTORE,PCOMPOSE,PREG identity
-  class DISCORD,TELEGRAM,API,ADMIN channel
+  class DISCORD,TELEGRAM,API,GARDEN,ADMIN channel
   class LITELLM,OLLAMA,DISCORDAPI,TELEGRAMAPI,SQLITE,JSONL external
   class CORE_TOOLS,EXT_TOOLS tools

@@ -1,10 +1,13 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import * as sqliteVec from 'sqlite-vec';
 import {
   hasColumn,
   runInTransaction as runSqliteTransaction,
 } from '../persistence/sqlite-utils.js';
+import { writeJsonAtomic } from '../utils/fs.js';
+import { createComponentLogger } from '../logger.js';
 import {
   normalizeConsentFlags,
   type PurrMemory,
@@ -47,6 +50,11 @@ const LEXICAL_STOPWORDS = new Set([
   'you',
   'your',
 ]);
+const log = createComponentLogger('MemoryStore');
+
+function embeddingToBuffer(embedding: Float32Array): Buffer {
+  return Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+}
 
 interface MemoryRow {
   id: string;
@@ -162,6 +170,11 @@ export interface ScratchpadEntry {
 export interface ScratchpadAddResult {
   entry: ScratchpadEntry;
   evictedIds: string[];
+}
+
+interface MemoryStoreOptions {
+  notesDir?: string;
+  scratchpadMirrorPath?: string;
 }
 
 function mapMemoryDeleteVersionRow(row: MemoryDeleteVersionRow): MemoryDeleteVersion {
@@ -346,13 +359,30 @@ function lexicalScoreToSimilarity(score: number): number {
 export class MemoryStore {
   private db: Database.Database;
   private embeddingDims: number;
+  private scratchpadMirrorPath: string | null;
 
-  constructor(db: Database.Database, embeddingDims: number = 1024) {
+  constructor(
+    db: Database.Database,
+    embeddingDims: number = 1024,
+    options: MemoryStoreOptions = {},
+  ) {
     this.db = db;
     this.embeddingDims = embeddingDims;
+    this.scratchpadMirrorPath = this.resolveScratchpadMirrorPath(options);
     this.loadExtensions();
     this.createTables();
     this.migrateSchema();
+    this.syncScratchpadMirror();
+  }
+
+  private resolveScratchpadMirrorPath(options: MemoryStoreOptions): string | null {
+    if (typeof options.scratchpadMirrorPath === 'string' && options.scratchpadMirrorPath.trim().length > 0) {
+      return options.scratchpadMirrorPath.trim();
+    }
+    if (typeof options.notesDir === 'string' && options.notesDir.trim().length > 0) {
+      return join(options.notesDir.trim(), 'scratchpad.json');
+    }
+    return null;
   }
 
   private loadExtensions(): void {
@@ -572,7 +602,7 @@ export class MemoryStore {
         memory.deletedBy ?? null,
         memory.deleteReason ?? null,
       );
-      insertVec.run(memory.id, Buffer.from(embedding.buffer));
+      insertVec.run(memory.id, embeddingToBuffer(embedding));
     });
 
     transaction();
@@ -600,7 +630,7 @@ export class MemoryStore {
       ORDER BY v.distance ASC
     `);
 
-    const rows = stmt.all(Buffer.from(embedding.buffer), limit * 2) as Array<MemoryRow & {
+    const rows = stmt.all(embeddingToBuffer(embedding), limit * 2) as Array<MemoryRow & {
       distance: number;
     }>;
 
@@ -1288,6 +1318,7 @@ export class MemoryStore {
     if (!entry) {
       throw new Error(`Failed to load scratchpad entry after insert: ${id}`);
     }
+    this.syncScratchpadMirror();
 
     return { entry, evictedIds };
   }
@@ -1311,6 +1342,7 @@ export class MemoryStore {
     `).run(normalizedContent, now, normalizedId);
 
     if (result.changes === 0) return null;
+    this.syncScratchpadMirror();
     return this.getScratchpadEntry(normalizedId) ?? null;
   }
 
@@ -1318,6 +1350,9 @@ export class MemoryStore {
     const normalizedId = id.trim();
     if (!normalizedId) return false;
     const result = this.db.prepare(`DELETE FROM scratchpad_entries WHERE id = ?`).run(normalizedId);
+    if (result.changes > 0) {
+      this.syncScratchpadMirror();
+    }
     return result.changes > 0;
   }
 
@@ -1375,5 +1410,22 @@ export class MemoryStore {
   private normalizeListOffset(offset: number): number {
     if (!Number.isFinite(offset)) return 0;
     return Math.max(0, Math.floor(offset));
+  }
+
+  private syncScratchpadMirror(): void {
+    if (!this.scratchpadMirrorPath) return;
+    try {
+      const entries = this.listScratchpadEntries(SCRATCHPAD_MAX_ENTRIES);
+      writeJsonAtomic(this.scratchpadMirrorPath, {
+        updatedAt: new Date().toISOString(),
+        count: entries.length,
+        entries,
+      });
+    } catch (error) {
+      log.warn('Failed to sync scratchpad mirror', {
+        path: this.scratchpadMirrorPath,
+        error: String(error),
+      });
+    }
   }
 }

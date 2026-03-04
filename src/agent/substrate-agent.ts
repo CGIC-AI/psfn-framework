@@ -12,25 +12,38 @@ import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
 import { createHash } from 'node:crypto';
-import type { AssistantMessage, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, ImageContent, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type {
+  Attachment,
   AgentResponse,
   CapabilityTier,
+  CorrelationMetadata,
   ContextMessage,
+  InferredPostTurnAction,
   LLMContext,
   MessageModelOverride,
   MessagePromptOverride,
+  ResponseStyle,
+  ObservabilityCallType,
+  PostTurnActionCandidate,
   SubstrateConfig,
   SubstrateMessage,
   TurnUsage,
+  ModelPurpose,
 } from '../types.js';
+import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { Contact } from '../contacts/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
-import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
+import {
+  classifyChannel,
+  getResponseStylePromptGuidance,
+  resolveChannelResponseStyle,
+  type ChannelMeta,
+} from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
 import type { ComposeContext, ComposeSplitResult } from '../identity/prompt-types.js';
@@ -46,12 +59,17 @@ import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
 import { ReflectionNudgeTracker, type TurnToolSummary } from '../skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';
-import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
+import {
+  evaluateToolCapabilityEligibility,
+  gateToolWithCapabilities,
+  type CapabilityAccess,
+} from '../capabilities/gate.js';
+import { resolveToolRequiredCapabilities } from '../capabilities/requirements.js';
 import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { tagToolWithReversibility } from '../capabilities/safeguards.js';
-import { textResult, textResultWithError } from '../tools/results.js';
+import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import {
   validateAndLogToolWiring,
@@ -65,6 +83,26 @@ import {
   resolveBroadcastVisibilityScope,
 } from '../broadcast/safety.js';
 import { runDeliberation } from '../llm/deliberation.js';
+import { runWithRequestContext } from '../llm/request-context.js';
+import {
+  normalizeDeferredToolHandoffIntent,
+  normalizeToolNameList,
+  type DeferredToolHandoffIntent,
+} from './deferred-tool-handoff.js';
+import {
+  createDefaultExtendedToolAutoloadPolicy,
+  type ExtendedToolAutoloadPolicy,
+} from './extended-tool-autoload-policy.js';
+import type {
+  AdaptiveLoadedExtendedToolState,
+  AdaptiveToolActivationSource,
+  AdaptiveToolDecisionTelemetry,
+  AdaptiveToolRuntimeState,
+  AdaptiveToolSnapshotSkip,
+  AdaptiveToolSnapshotTelemetry,
+  AdaptiveToolSnapshotTool,
+} from './adaptive-tools-telemetry.js';
+import { contextMessagesToPiMessages } from '../llm/message-conversion.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -98,6 +136,20 @@ interface PromptSections {
   staticHash: string;
 }
 
+interface VisionAttachmentFetchCapabilities {
+  webFetchBinary?: (
+    url: string,
+    options?: {
+      lane?: 'default' | 'local_crawler';
+      maxBytes?: number;
+    },
+  ) => Promise<{
+    dataBase64: string;
+    mimeType: string;
+    sizeBytes: number;
+  }>;
+}
+
 interface FrozenPromptPrefix {
   renderedPrefix: string;
   staticHash: string;
@@ -112,12 +164,103 @@ interface ResolvedMoaSettings {
   aggregatorModel?: string;
 }
 
+interface PostTurnInferenceContext {
+  message: SubstrateMessage;
+  response: AgentResponse;
+  turnMessages: AgentMessage[];
+}
+
+export type PostTurnActionInferer = (
+  context: PostTurnInferenceContext,
+) => PostTurnActionCandidate[] | Promise<PostTurnActionCandidate[]>;
+
+export interface ExtendedToolActivationResult {
+  requestedTools: string[];
+  activatedTools: string[];
+  alreadyActiveTools: string[];
+  missingTools: string[];
+}
+
+export interface ExtendedToolActivationOptions {
+  source?: Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>;
+  correlation?: CorrelationMetadata;
+  taskKind?: string | null;
+  intent?: string | null;
+}
+
+export type PromotedToolMutationErrorCode =
+  | 'invalid_name'
+  | 'tool_not_extended'
+  | 'duplicate'
+  | 'max_slots'
+  | 'capability_denied'
+  | 'not_found'
+  | 'invalid_slot'
+  | 'persist_failed';
+
+export interface PromotedToolMutationResult {
+  ok: boolean;
+  changed: boolean;
+  promotedTools: string[];
+  message: string;
+  errorCode?: PromotedToolMutationErrorCode;
+  requiredTokens?: CapabilityToken[];
+  missingTokens?: CapabilityToken[];
+}
+
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
 const SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS = 240;
 const SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS = 1_600;
 const PROMPT_HASH_LENGTH = 16;
+const VISION_ATTACHMENT_MAX_COUNT = 4;
+const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+const VISION_ATTACHMENT_FETCH_TIMEOUT_MS = 12_000;
+const DISCORD_VISION_ATTACHMENT_HOSTS = new Set([
+  'cdn.discordapp.com',
+  'media.discordapp.net',
+]);
+const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
+  '.discordapp.com',
+  '.discordapp.net',
+];
+const VISION_ATTACHMENT_EXTENSION_TO_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+};
+const VISION_ATTACHMENT_FORMAT_QUERY_KEYS = ['format', 'fm'];
+const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
+  autoload: 1,
+  extended_loaded: 2,
+  deferred: 3,
+};
+
+interface ActiveToolResolution {
+  tools: AgentTool<any>[];
+  snapshotTools: AdaptiveToolSnapshotTool[];
+  promotedSkipped: AdaptiveToolSnapshotSkip[];
+  counts: AdaptiveToolSnapshotTelemetry['counts'];
+}
+
+interface PromotedToolResolution {
+  activeNames: Set<string>;
+  skipped: AdaptiveToolSnapshotSkip[];
+}
+
+interface AutoloadTurnOutcome {
+  intent: string | null;
+  skipped: AdaptiveToolSnapshotSkip[];
+}
 
 // ── SubstrateAgent ──
 
@@ -131,15 +274,19 @@ export class SubstrateAgent {
   private config: SubstrateConfig;
   private coreTools: AgentTool<any>[] = [];
   private extendedTools: AgentTool<any>[] = [];
-  private loadedExtended = new Set<string>();
+  private loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>();
   private modelResolved = false;
   private modelSignature: string | null = null;
   private bridge: EventBridge;
   private channelRegistry = new Map<string, ChannelPromptDock>();
   private capabilityRuntime: CapabilityRuntime | null = null;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
+  private extendedToolAutoloadPolicy: ExtendedToolAutoloadPolicy | null = createDefaultExtendedToolAutoloadPolicy();
   private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
   private reflectionNudge = new ReflectionNudgeTracker();
+  private postTurnActionInferers: PostTurnActionInferer[] = [];
+  private activeTurnCorrelation: CorrelationMetadata | null = null;
+  private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -264,13 +411,23 @@ export class SubstrateAgent {
     });
   }
 
-  private getChatModelSignature(): string {
-    const chatSlot = this.config.modelRoster.chat;
-    const model = chatSlot?.model ?? this.config.primaryModel;
-    const provider = chatSlot?.provider ?? this.config.primaryProvider;
-    const maxTokens = chatSlot?.maxTokens ?? this.config.primaryMaxTokens;
-    const contextWindow = chatSlot?.contextWindow ?? this.config.defaultContextWindow;
-    return `${provider}::${model}::${maxTokens}::${contextWindow}`;
+  private getModelSignatureForPurpose(purpose: ModelPurpose): string {
+    const slot = this.config.modelRoster[purpose]
+      ?? (purpose !== 'chat' ? this.config.modelRoster.chat : undefined);
+    const model = slot?.model ?? this.config.primaryModel;
+    const provider = slot?.provider ?? this.config.primaryProvider;
+    const maxTokens = slot?.maxTokens ?? this.config.primaryMaxTokens;
+    const contextWindow = slot?.contextWindow ?? this.config.defaultContextWindow;
+    return `${purpose}::${provider}::${model}::${maxTokens}::${contextWindow}`;
+  }
+
+  private hasVisionAttachments(message?: SubstrateMessage): boolean {
+    if (!message?.attachments || message.attachments.length === 0) return false;
+    return message.attachments.some((attachment) => this.resolveAttachmentImageContentType(attachment) !== null);
+  }
+
+  private resolveTurnModelPurpose(message?: SubstrateMessage): ModelPurpose {
+    return this.hasVisionAttachments(message) ? 'vision' : 'chat';
   }
 
   private normalizeTurnModelOverride(message?: SubstrateMessage): MessageModelOverride | null {
@@ -305,9 +462,34 @@ export class SubstrateAgent {
     return { mode: 'default' };
   }
 
+  private normalizeTurnResponseStyleOverride(message: SubstrateMessage): ResponseStyle | null {
+    const raw = message.routing?.responseStyle;
+    return raw === 'concise' || raw === 'expressive'
+      ? raw
+      : null;
+  }
+
+  private resolveResponseStyle(
+    message: SubstrateMessage,
+    channelType: string | undefined,
+    channelMeta: ChannelMeta,
+  ): ResponseStyle {
+    const turnOverride = this.normalizeTurnResponseStyleOverride(message);
+    if (turnOverride) return turnOverride;
+
+    return resolveChannelResponseStyle(message.channelId, {
+      channelType,
+      meta: channelMeta,
+      overrides: this.config.responseStyleOverrides,
+    });
+  }
+
   private getTurnModelSignature(message?: SubstrateMessage): string {
     const override = this.normalizeTurnModelOverride(message);
-    if (!override) return this.getChatModelSignature();
+    if (!override) {
+      const purpose = this.resolveTurnModelPurpose(message);
+      return this.getModelSignatureForPurpose(purpose);
+    }
     return `override::${override.provider}::${override.model}::${override.maxTokens ?? ''}::${override.contextWindow ?? ''}`;
   }
 
@@ -316,6 +498,7 @@ export class SubstrateAgent {
     message?: SubstrateMessage,
   ): void {
     const override = this.normalizeTurnModelOverride(message);
+    const purpose = override ? null : this.resolveTurnModelPurpose(message);
     const nextSignature = this.getTurnModelSignature(message);
     if (this.modelResolved && this.modelSignature === nextSignature && this.agent.state.model) {
       return;
@@ -324,14 +507,23 @@ export class SubstrateAgent {
     try {
       const resolved = override
         ? resolveExplicitModel(override)
-        : resolveModel(this.config);
+        : resolveModel(this.config, purpose ?? 'chat');
       this.agent.setModel(resolved);
       this.modelResolved = true;
       this.modelSignature = nextSignature;
-      log.info('Resolved runtime chat model', {
+      if (purpose === 'vision' && !resolved.input.includes('image')) {
+        log.warn('Vision purpose resolved to model without image input capability', {
+          reason,
+          model: resolved.id,
+          provider: resolved.provider,
+          channelId: message?.channelId,
+        });
+      }
+      log.info('Resolved runtime model', {
         reason,
         model: resolved.id,
         override: Boolean(override),
+        ...(purpose ? { purpose } : {}),
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -360,10 +552,552 @@ export class SubstrateAgent {
     }
   }
 
+  private normalizePromotedExtendedToolNames(raw: readonly string[] | undefined): string[] {
+    if (!Array.isArray(raw)) return [];
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of raw) {
+      if (typeof entry !== 'string') continue;
+      const name = entry.trim();
+      if (!name || seen.has(name)) continue;
+      normalized.push(name);
+      seen.add(name);
+      if (normalized.length >= PROMOTED_EXTENDED_TOOL_SLOTS_MAX) break;
+    }
+    return normalized;
+  }
+
+  private toolNameListsEqual(a: readonly string[], b: readonly string[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
+
+  private getPromotedExtendedToolNamesInternal(): string[] {
+    const current = this.normalizePromotedExtendedToolNames(this.config.promotedExtendedTools);
+    const configured = this.config.promotedExtendedTools ?? [];
+    if (!this.toolNameListsEqual(current, configured)) {
+      this.config.promotedExtendedTools = current;
+    }
+    return current;
+  }
+
+  private setPromotedExtendedToolNamesInternal(next: readonly string[]): string[] {
+    const normalized = this.normalizePromotedExtendedToolNames(next);
+    this.config.promotedExtendedTools = normalized;
+    return normalized;
+  }
+
+  private persistPromotedExtendedToolNames(next: readonly string[]): string | null {
+    const persist = this.config.runtimeHooks?.persistPromotedExtendedTools;
+    if (!persist) return null;
+    try {
+      persist([...next]);
+      return null;
+    } catch (error) {
+      return toErrorMessage(error);
+    }
+  }
+
+  private getExtendedToolByName(name: string): AgentTool<any> | null {
+    return this.extendedTools.find(tool => tool.name === name) ?? null;
+  }
+
+  private resolvePromotedToolActivation(): PromotedToolResolution {
+    const promoted = this.getPromotedExtendedToolNamesInternal();
+    const access = this.resolveCapabilityAccess();
+    const activeNames = new Set<string>();
+    const skipped: AdaptiveToolSnapshotSkip[] = [];
+    for (const toolName of promoted) {
+      const tool = this.getExtendedToolByName(toolName);
+      if (!tool) {
+        skipped.push({
+          toolName,
+          source: 'promoted',
+          reason: 'not_registered',
+        });
+        continue;
+      }
+      const eligibility = evaluateToolCapabilityEligibility(tool, {}, access);
+      if (!eligibility.allowed) {
+        skipped.push({
+          toolName: tool.name,
+          source: 'promoted',
+          reason: 'capability_denied',
+          ...(eligibility.missingTokens.length > 0 ? { missingTokens: eligibility.missingTokens } : {}),
+        });
+        continue;
+      }
+      activeNames.add(tool.name);
+    }
+    return {
+      activeNames,
+      skipped,
+    };
+  }
+
+  private getCapabilityEligiblePromotedToolNames(): Set<string> {
+    return this.resolvePromotedToolActivation().activeNames;
+  }
+
+  private trackLoadedExtendedTool(
+    toolName: string,
+    source: Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>,
+  ): 'activated' | 'already_active' {
+    const now = Date.now();
+    const existing = this.loadedExtended.get(toolName);
+    if (!existing) {
+      this.loadedExtended.set(toolName, {
+        toolName,
+        source,
+        activatedAt: now,
+        lastActivatedAt: now,
+      });
+      return 'activated';
+    }
+
+    const shouldPromoteSource = LOADED_TOOL_SOURCE_PRIORITY[source] > LOADED_TOOL_SOURCE_PRIORITY[existing.source];
+    this.loadedExtended.set(toolName, {
+      ...existing,
+      source: shouldPromoteSource ? source : existing.source,
+      lastActivatedAt: now,
+    });
+    return 'already_active';
+  }
+
+  private mergeAdaptiveSkips(...groups: AdaptiveToolSnapshotSkip[][]): AdaptiveToolSnapshotSkip[] {
+    const deduped = new Map<string, AdaptiveToolSnapshotSkip>();
+    for (const group of groups) {
+      for (const entry of group) {
+        const missingTokensKey = (entry.missingTokens ?? []).join(',');
+        const key = `${entry.source}:${entry.toolName}:${entry.reason}:${missingTokensKey}`;
+        if (deduped.has(key)) continue;
+        deduped.set(key, {
+          ...entry,
+          ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
+        });
+      }
+    }
+    return [...deduped.values()];
+  }
+
+  private resolveActiveTools(
+    additionalSkipped: AdaptiveToolSnapshotSkip[] = [],
+  ): ActiveToolResolution {
+    const activeByName = new Map<string, { tool: AgentTool<any>; source: AdaptiveToolActivationSource }>();
+    for (const tool of this.coreTools) {
+      if (!activeByName.has(tool.name)) {
+        activeByName.set(tool.name, {
+          tool,
+          source: 'core',
+        });
+      }
+    }
+
+    const promotedResolution = this.resolvePromotedToolActivation();
+    for (const tool of this.extendedTools) {
+      const loaded = this.loadedExtended.get(tool.name);
+      const source: AdaptiveToolActivationSource | null = promotedResolution.activeNames.has(tool.name)
+        ? 'promoted'
+        : (loaded?.source ?? null);
+      if (!source) {
+        continue;
+      }
+      if (!activeByName.has(tool.name)) {
+        activeByName.set(tool.name, {
+          tool,
+          source,
+        });
+      }
+    }
+
+    const snapshotTools: AdaptiveToolSnapshotTool[] = [...activeByName.values()]
+      .map((entry) => ({
+        toolName: entry.tool.name,
+        source: entry.source,
+      }));
+
+    const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
+      core: 0,
+      promoted: 0,
+      extendedLoaded: 0,
+      autoload: 0,
+      deferred: 0,
+      total: snapshotTools.length,
+    };
+    for (const entry of snapshotTools) {
+      if (entry.source === 'core') counts.core += 1;
+      else if (entry.source === 'promoted') counts.promoted += 1;
+      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
+      else if (entry.source === 'autoload') counts.autoload += 1;
+      else if (entry.source === 'deferred') counts.deferred += 1;
+    }
+
+    return {
+      tools: [...activeByName.values()].map(entry => entry.tool),
+      snapshotTools,
+      promotedSkipped: this.mergeAdaptiveSkips(promotedResolution.skipped, additionalSkipped),
+      counts,
+    };
+  }
+
+  private applyActiveToolsToAgent(): void {
+    const resolution = this.resolveActiveTools();
+    this.agent.setTools(this.withCapabilityGates(resolution.tools));
+  }
+
+  private applyActiveToolsToAgentForTurn(
+    message: SubstrateMessage,
+    taskKind: string | undefined,
+    callType: ObservabilityCallType,
+    correlation: CorrelationMetadata,
+    autoloadOutcome: AutoloadTurnOutcome,
+  ): void {
+    const resolution = this.resolveActiveTools(autoloadOutcome.skipped);
+    this.agent.setTools(this.withCapabilityGates(resolution.tools));
+
+    const snapshot: AdaptiveToolSnapshotTelemetry = {
+      ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.snapshot'),
+      turnId: message.id,
+      requestId: message.id,
+      channelId: message.channelId,
+      callType,
+      timestamp: Date.now(),
+      tools: resolution.snapshotTools.map(tool => ({ ...tool })),
+      skipped: resolution.promotedSkipped.map(skip => ({
+        ...skip,
+        ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
+      })),
+      counts: { ...resolution.counts },
+      taskKind: taskKind ?? null,
+      intent: autoloadOutcome.intent,
+    };
+    this.lastAdaptiveToolSnapshot = snapshot;
+    this.emitTelemetry('agent.tools.adaptive.snapshot', snapshot);
+
+    for (const tool of snapshot.tools) {
+      this.emitAdaptiveToolDecision({
+        ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
+        toolName: tool.toolName,
+        source: tool.source,
+        decision: 'active',
+        reason: 'turn_active_set',
+        taskKind: snapshot.taskKind ?? null,
+        intent: snapshot.intent ?? null,
+      });
+    }
+
+    for (const skip of snapshot.skipped) {
+      if (skip.source !== 'promoted') continue;
+      this.emitAdaptiveToolDecision({
+        ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
+        toolName: skip.toolName,
+        source: skip.source,
+        decision: 'skipped',
+        reason: skip.reason,
+        ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
+        taskKind: snapshot.taskKind ?? null,
+        intent: snapshot.intent ?? null,
+      });
+    }
+  }
+
+  getPromotedExtendedToolsLimit(): number {
+    return PROMOTED_EXTENDED_TOOL_SLOTS_MAX;
+  }
+
+  getPromotedExtendedTools(): readonly string[] {
+    return [...this.getPromotedExtendedToolNamesInternal()];
+  }
+
+  addPromotedExtendedTool(toolName: string): PromotedToolMutationResult {
+    const normalizedName = toolName.trim();
+    if (!normalizedName) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: this.getPromotedExtendedToolNamesInternal(),
+        message: 'Tool name cannot be empty.',
+        errorCode: 'invalid_name',
+      };
+    }
+
+    const current = this.getPromotedExtendedToolNamesInternal();
+    if (current.includes(normalizedName)) {
+      return {
+        ok: true,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is already promoted.`,
+        errorCode: 'duplicate',
+      };
+    }
+
+    if (current.length >= PROMOTED_EXTENDED_TOOL_SLOTS_MAX) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Promoted tool slots are full (max ${PROMOTED_EXTENDED_TOOL_SLOTS_MAX}).`,
+        errorCode: 'max_slots',
+      };
+    }
+
+    const tool = this.getExtendedToolByName(normalizedName);
+    if (!tool) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is not available in the extended catalog.`,
+        errorCode: 'tool_not_extended',
+      };
+    }
+
+    const access = this.resolveCapabilityAccess();
+    const eligibility = evaluateToolCapabilityEligibility(tool, {}, access);
+    if (!eligibility.allowed) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is not allowed for capability tier "${access.getTier()}".`,
+        errorCode: 'capability_denied',
+        requiredTokens: eligibility.requiredTokens,
+        missingTokens: eligibility.missingTokens,
+      };
+    }
+
+    const next = [...current, normalizedName];
+    const persistError = this.persistPromotedExtendedToolNames(next);
+    if (persistError) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Failed to persist promoted tools: ${persistError}`,
+        errorCode: 'persist_failed',
+      };
+    }
+
+    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
+    this.applyActiveToolsToAgent();
+    return {
+      ok: true,
+      changed: true,
+      promotedTools,
+      message: `Promoted tool "${normalizedName}".`,
+    };
+  }
+
+  removePromotedExtendedTool(toolName: string): PromotedToolMutationResult {
+    const normalizedName = toolName.trim();
+    if (!normalizedName) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: this.getPromotedExtendedToolNamesInternal(),
+        message: 'Tool name cannot be empty.',
+        errorCode: 'invalid_name',
+      };
+    }
+
+    const current = this.getPromotedExtendedToolNamesInternal();
+    if (!current.includes(normalizedName)) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is not currently promoted.`,
+        errorCode: 'not_found',
+      };
+    }
+
+    const next = current.filter(name => name !== normalizedName);
+    const persistError = this.persistPromotedExtendedToolNames(next);
+    if (persistError) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Failed to persist promoted tools: ${persistError}`,
+        errorCode: 'persist_failed',
+      };
+    }
+
+    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
+    this.applyActiveToolsToAgent();
+    return {
+      ok: true,
+      changed: true,
+      promotedTools,
+      message: `Removed promoted tool "${normalizedName}".`,
+    };
+  }
+
+  swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult {
+    const current = this.getPromotedExtendedToolNamesInternal();
+    if (
+      !Number.isInteger(fromSlot)
+      || !Number.isInteger(toSlot)
+      || fromSlot < 1
+      || toSlot < 1
+      || fromSlot > current.length
+      || toSlot > current.length
+    ) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Slots must be integers between 1 and ${current.length}.`,
+        errorCode: 'invalid_slot',
+      };
+    }
+
+    if (fromSlot === toSlot) {
+      return {
+        ok: true,
+        changed: false,
+        promotedTools: current,
+        message: 'Swap slots are identical; no change made.',
+      };
+    }
+
+    const fromIndex = fromSlot - 1;
+    const toIndex = toSlot - 1;
+    const next = [...current];
+    const fromTool = next[fromIndex];
+    const toTool = next[toIndex];
+    if (!fromTool || !toTool) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Slots must be integers between 1 and ${current.length}.`,
+        errorCode: 'invalid_slot',
+      };
+    }
+    next[fromIndex] = toTool;
+    next[toIndex] = fromTool;
+
+    const persistError = this.persistPromotedExtendedToolNames(next);
+    if (persistError) {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Failed to persist promoted tools: ${persistError}`,
+        errorCode: 'persist_failed',
+      };
+    }
+
+    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
+    this.applyActiveToolsToAgent();
+    return {
+      ok: true,
+      changed: true,
+      promotedTools,
+      message: `Swapped promoted tool slots ${fromSlot} and ${toSlot}.`,
+    };
+  }
+
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
     return {
       core: [...this.coreTools],
       extended: [...this.extendedTools],
+    };
+  }
+
+  getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
+    const promotedResolution = this.resolvePromotedToolActivation();
+    const activeResolution = this.resolveActiveTools();
+
+    return {
+      generatedAt: Date.now(),
+      coreTools: this.coreTools.map(tool => tool.name),
+      extendedTools: this.extendedTools.map(tool => tool.name),
+      promotedToolsConfigured: this.getPromotedExtendedToolNamesInternal(),
+      promotedToolsActive: [...promotedResolution.activeNames],
+      promotedToolsSkipped: promotedResolution.skipped.map(entry => ({
+        ...entry,
+        ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
+      })),
+      loadedExtendedTools: [...this.loadedExtended.values()].map(entry => ({
+        ...entry,
+      })),
+      activeTools: activeResolution.snapshotTools.map(entry => ({
+        ...entry,
+      })),
+      lastSnapshot: this.lastAdaptiveToolSnapshot
+        ? {
+          ...this.lastAdaptiveToolSnapshot,
+          tools: this.lastAdaptiveToolSnapshot.tools.map(tool => ({ ...tool })),
+          skipped: this.lastAdaptiveToolSnapshot.skipped.map(skip => ({
+            ...skip,
+            ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
+          })),
+          counts: { ...this.lastAdaptiveToolSnapshot.counts },
+        }
+        : null,
+    };
+  }
+
+  activateExtendedTools(
+    toolNames: readonly string[],
+    options: ExtendedToolActivationOptions = {},
+  ): ExtendedToolActivationResult {
+    const requestedTools = normalizeToolNameList(toolNames);
+    const byName = new Set(this.extendedTools.map(tool => tool.name));
+    const activatedTools: string[] = [];
+    const alreadyActiveTools: string[] = [];
+    const missingTools: string[] = [];
+    const source = options.source ?? 'extended_loaded';
+    const telemetryCorrelation = options.correlation;
+    const taskKind = options.taskKind ?? null;
+    const intent = options.intent ?? null;
+
+    for (const name of requestedTools) {
+      if (!byName.has(name)) {
+        missingTools.push(name);
+        this.emitAdaptiveToolDecision({
+          ...this.withAdaptiveCorrelation(telemetryCorrelation, 'agent.tools.adaptive.decision'),
+          toolName: name,
+          source,
+          decision: 'skipped',
+          reason: 'not_registered',
+          taskKind,
+          intent,
+        });
+        continue;
+      }
+      const status = this.trackLoadedExtendedTool(name, source);
+      if (status === 'activated') {
+        activatedTools.push(name);
+      } else {
+        alreadyActiveTools.push(name);
+      }
+      this.emitAdaptiveToolDecision({
+        ...this.withAdaptiveCorrelation(telemetryCorrelation, 'agent.tools.adaptive.decision'),
+        toolName: name,
+        source,
+        decision: status,
+        reason: status === 'activated' ? 'explicit_activation' : 'already_loaded',
+        taskKind,
+        intent,
+      });
+    }
+
+    if (activatedTools.length > 0) {
+      this.applyActiveToolsToAgent();
+    }
+
+    return {
+      requestedTools,
+      activatedTools,
+      alreadyActiveTools,
+      missingTools,
     };
   }
 
@@ -403,6 +1137,10 @@ export class SubstrateAgent {
     for (const disabledName of disabledSet) {
       this.loadedExtended.delete(disabledName);
     }
+    const filteredPromoted = this
+      .getPromotedExtendedToolNamesInternal()
+      .filter(name => !disabledSet.has(name));
+    this.setPromotedExtendedToolNamesInternal(filteredPromoted);
   }
 
   setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {
@@ -416,6 +1154,10 @@ export class SubstrateAgent {
     this.refreshCapabilityRuntime();
   }
 
+  setExtendedToolAutoloadPolicy(policy: ExtendedToolAutoloadPolicy | null): void {
+    this.extendedToolAutoloadPolicy = policy;
+  }
+
   private createLoadToolsTool(): AgentTool<any> {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
@@ -425,20 +1167,97 @@ export class SubstrateAgent {
       description: 'Load extended tool schemas by name. Call with tool names from the tool directory in your runtime context.',
       parameters: Type.Object({
         tools: Type.Array(Type.String(), { description: 'Names of extended tools to load' }),
+        intendedAction: Type.Optional(
+          Type.String({
+            description:
+              'Optional follow-up action to execute after this reply when tools were discovered late.',
+          }),
+        ),
+        deferUntilTurnBoundary: Type.Optional(
+          Type.Boolean({
+            description:
+              'Set true when this tool load was discovered late and the intended action should continue post-reply.',
+          }),
+        ),
+        maxRetries: Type.Optional(
+          Type.Number({
+            description: 'Optional retry cap for deferred continuation (default: 2, max: 4).',
+            minimum: 0,
+            maximum: 4,
+          }),
+        ),
       }),
       execute: async (
         _toolCallId: string,
-        params: { tools: string[] },
-      ): Promise<AgentToolResult<any>> => {
-        const matched = self.extendedTools.filter(t => params.tools.includes(t.name));
-        for (const t of matched) self.loadedExtended.add(t.name);
-        const active = [
-          ...self.coreTools,
-          ...self.extendedTools.filter(t => self.loadedExtended.has(t.name)),
-        ];
-        self.agent.setTools(self.withCapabilityGates(active));
-        if (matched.length) {
-          return textResult(`Loaded ${matched.length} tools: ${matched.map(t => t.name).join(', ')}`);
+        params: {
+          tools: string[];
+          intendedAction?: string;
+          deferUntilTurnBoundary?: boolean;
+          maxRetries?: number;
+        },
+      ): Promise<AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }>> => {
+        const activation = self.activateExtendedTools(params.tools, {
+          source: 'extended_loaded',
+          correlation: self.activeTurnCorrelation ?? undefined,
+        });
+        if (activation.activatedTools.length > 0 || activation.alreadyActiveTools.length > 0) {
+          const details: { deferredToolHandoff?: DeferredToolHandoffIntent } = {};
+          const contentLines: string[] = [];
+          if (activation.activatedTools.length > 0) {
+            contentLines.push(
+              `Loaded ${activation.activatedTools.length} tools: ${activation.activatedTools.join(', ')}`,
+            );
+          }
+          if (activation.alreadyActiveTools.length > 0) {
+            contentLines.push(
+              `Already active: ${activation.alreadyActiveTools.join(', ')}`,
+            );
+          }
+
+          if (activation.missingTools.length > 0) {
+            contentLines.push(`Missing tools: ${activation.missingTools.join(', ')}`);
+          }
+
+          const handoffTools = [...new Set([
+            ...activation.activatedTools,
+            ...activation.alreadyActiveTools,
+          ])];
+          const deferredToolHandoff = params.deferUntilTurnBoundary
+            ? normalizeDeferredToolHandoffIntent({
+              toolNames: handoffTools,
+              intendedAction: params.intendedAction,
+              maxRetries: params.maxRetries,
+            })
+            : null;
+          if (deferredToolHandoff) {
+            details.deferredToolHandoff = deferredToolHandoff;
+            contentLines.push('Queued deferred continuation intent for post-turn execution.');
+            for (const toolName of deferredToolHandoff.toolNames) {
+              self.emitAdaptiveToolDecision({
+                ...self.withAdaptiveCorrelation(undefined, 'agent.tools.adaptive.decision'),
+                toolName,
+                source: 'deferred',
+                decision: 'queued',
+                reason: 'defer_until_turn_boundary',
+              });
+            }
+          } else if (params.deferUntilTurnBoundary) {
+            contentLines.push('Deferred continuation skipped: provide a non-empty intendedAction.');
+            for (const toolName of handoffTools) {
+              self.emitAdaptiveToolDecision({
+                ...self.withAdaptiveCorrelation(undefined, 'agent.tools.adaptive.decision'),
+                toolName,
+                source: 'deferred',
+                decision: 'skipped',
+                reason: 'missing_intended_action',
+              });
+            }
+          }
+
+          return {
+            content: [{ type: 'text', text: contentLines.join('\n') }],
+            details,
+          };
         }
         return textResultWithError(
           `No matching tools found. Available: ${self.extendedTools.map(t => t.name).join(', ')}`,
@@ -446,6 +1265,328 @@ export class SubstrateAgent {
         );
       },
     };
+  }
+
+  private preloadExtendedToolsForTurn(
+    message: SubstrateMessage,
+    taskKind: string | undefined,
+    correlation: CorrelationMetadata,
+  ): AutoloadTurnOutcome {
+    const policy = this.extendedToolAutoloadPolicy;
+    if (!policy || this.extendedTools.length === 0) {
+      return {
+        intent: null,
+        skipped: [],
+      };
+    }
+
+    const boundedMax = Number.isFinite(policy.maxPreloadCount)
+      ? Math.max(0, Math.floor(policy.maxPreloadCount))
+      : 0;
+    const intent = policy.classifyIntent(message, taskKind);
+    const candidateNames = policy.getCandidatesForIntent(intent).slice(0, boundedMax);
+    if (candidateNames.length === 0) {
+      this.emitTelemetry('agent.tools.autoload', {
+        channelId: message.channelId,
+        intent,
+        taskKind: taskKind ?? null,
+        boundedMax,
+        candidates: [],
+        activated: [],
+        alreadyActive: [],
+        skippedDenied: [],
+        unavailable: [],
+        ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload'),
+      });
+      return {
+        intent,
+        skipped: [],
+      };
+    }
+
+    const access = this.resolveCapabilityAccess();
+    const catalog = new Map(this.extendedTools.map(tool => [tool.name, tool]));
+    const activated: string[] = [];
+    const alreadyActive: string[] = [];
+    const unavailable: string[] = [];
+    const skippedDenied: Array<{ toolName: string; missingTokens: CapabilityToken[] }> = [];
+    const skipped: AdaptiveToolSnapshotSkip[] = [];
+
+    for (const toolName of candidateNames) {
+      const tool = catalog.get(toolName);
+      if (!tool) {
+        unavailable.push(toolName);
+        skipped.push({
+          toolName,
+          source: 'autoload',
+          reason: 'not_registered',
+        });
+        this.emitTelemetry('agent.tools.autoload.skipped', {
+          channelId: message.channelId,
+          intent,
+          taskKind: taskKind ?? null,
+          toolName,
+          reason: 'not_registered',
+          ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
+        });
+        this.emitAdaptiveToolDecision({
+          ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
+          toolName,
+          source: 'autoload',
+          decision: 'skipped',
+          reason: 'not_registered',
+          taskKind: taskKind ?? null,
+          intent,
+        });
+        continue;
+      }
+
+      const missingTokens = resolveToolRequiredCapabilities(tool, {})
+        .filter(token => !access.has(token));
+      if (missingTokens.length > 0) {
+        skippedDenied.push({ toolName, missingTokens });
+        skipped.push({
+          toolName,
+          source: 'autoload',
+          reason: 'capability_denied',
+          missingTokens,
+        });
+        this.emitTelemetry('agent.tools.autoload.skipped', {
+          channelId: message.channelId,
+          intent,
+          taskKind: taskKind ?? null,
+          toolName,
+          reason: 'capability_denied',
+          missingTokens,
+          tier: access.getTier(),
+          ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
+        });
+        this.emitAdaptiveToolDecision({
+          ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
+          toolName,
+          source: 'autoload',
+          decision: 'skipped',
+          reason: 'capability_denied',
+          missingTokens,
+          taskKind: taskKind ?? null,
+          intent,
+        });
+        continue;
+      }
+
+      const activationState = this.trackLoadedExtendedTool(tool.name, 'autoload');
+      if (activationState === 'already_active') {
+        alreadyActive.push(tool.name);
+      } else {
+        activated.push(tool.name);
+      }
+      this.emitAdaptiveToolDecision({
+        ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
+        toolName: tool.name,
+        source: 'autoload',
+        decision: activationState,
+        reason: activationState === 'activated' ? 'autoload_candidate' : 'autoload_candidate_already_active',
+        taskKind: taskKind ?? null,
+        intent,
+      });
+    }
+
+    this.emitTelemetry('agent.tools.autoload', {
+      channelId: message.channelId,
+      intent,
+      taskKind: taskKind ?? null,
+      boundedMax,
+      candidates: candidateNames,
+      activated,
+      alreadyActive,
+      skippedDenied,
+      unavailable,
+      ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload'),
+    });
+
+    return {
+      intent,
+      skipped,
+    };
+  }
+
+  private async buildTurnUserContent(message: SubstrateMessage): Promise<UserMessage['content']> {
+    const imageBlocks = await this.resolveVisionImageContentBlocks(message);
+    if (imageBlocks.length === 0) return message.content;
+
+    return [
+      { type: 'text', text: message.content },
+      ...imageBlocks,
+    ];
+  }
+
+  private async resolveVisionImageContentBlocks(message: SubstrateMessage): Promise<ImageContent[]> {
+    const attachments = message.attachments ?? [];
+    if (attachments.length === 0) return [];
+
+    const imageAttachments = attachments
+      .map((attachment) => ({
+        attachment,
+        contentType: this.resolveAttachmentImageContentType(attachment),
+      }))
+      .filter((entry): entry is { attachment: Attachment; contentType: string } => entry.contentType !== null)
+      .slice(0, VISION_ATTACHMENT_MAX_COUNT);
+    if (imageAttachments.length === 0) return [];
+
+    const resolved = await Promise.all(
+      imageAttachments.map((entry) => this.resolveVisionAttachmentContent(
+        message,
+        entry.attachment,
+        entry.contentType,
+      )),
+    );
+    const blocks = resolved.filter((block): block is ImageContent => block !== null);
+    if (blocks.length === 0) {
+      log.warn('Vision image attachments present but none were resolved', {
+        channelId: message.channelId,
+        channelType: message.channelType,
+        attachmentCount: imageAttachments.length,
+        attachmentHosts: imageAttachments.map((entry) => {
+          try {
+            return new URL(entry.attachment.url).hostname;
+          } catch {
+            return 'invalid-url';
+          }
+        }),
+      });
+    }
+    return blocks;
+  }
+
+  private async resolveVisionAttachmentContent(
+    message: SubstrateMessage,
+    attachment: Attachment,
+    inferredContentType: string,
+  ): Promise<ImageContent | null> {
+    if (message.channelType !== 'discord') {
+      return null;
+    }
+
+    let attachmentUrl: URL;
+    try {
+      attachmentUrl = new URL(attachment.url);
+    } catch {
+      return null;
+    }
+    if (attachmentUrl.protocol !== 'https:' || !this.isAllowedDiscordVisionAttachmentHost(attachmentUrl.hostname)) {
+      return null;
+    }
+
+    const visionFetchCapabilities = this.llmClient as unknown as VisionAttachmentFetchCapabilities;
+    if (typeof visionFetchCapabilities.webFetchBinary === 'function') {
+      try {
+        const fetched = await visionFetchCapabilities.webFetchBinary(attachmentUrl.toString(), {
+          lane: 'default',
+          maxBytes: VISION_ATTACHMENT_MAX_BYTES,
+        });
+        const responseMimeType = (fetched.mimeType ?? inferredContentType)
+          .split(';')[0]
+          .trim()
+          .toLowerCase();
+        if (!responseMimeType.startsWith('image/')) {
+          return null;
+        }
+        if (fetched.sizeBytes <= 0 || fetched.sizeBytes > VISION_ATTACHMENT_MAX_BYTES) {
+          return null;
+        }
+        return {
+          type: 'image',
+          data: fetched.dataBase64,
+          mimeType: responseMimeType,
+        };
+      } catch (error) {
+        log.warn('Gateway binary fetch for Discord image attachment failed', {
+          channelId: message.channelId,
+          url: attachmentUrl.toString(),
+          error: toErrorMessage(error),
+        });
+        return null;
+      }
+    }
+
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), VISION_ATTACHMENT_FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(attachmentUrl.toString(), {
+        signal: abortController.signal,
+      });
+      if (!response.ok) {
+        log.debug('Skipping Discord image attachment due to fetch failure', {
+          channelId: message.channelId,
+          status: response.status,
+          url: attachmentUrl.toString(),
+        });
+        return null;
+      }
+
+      const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+      if (Number.isFinite(reportedLength) && reportedLength > VISION_ATTACHMENT_MAX_BYTES) {
+        log.debug('Skipping Discord image attachment over byte budget', {
+          channelId: message.channelId,
+          size: reportedLength,
+          url: attachmentUrl.toString(),
+        });
+        return null;
+      }
+
+      const responseMimeType = (response.headers.get('content-type') ?? inferredContentType)
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      if (!responseMimeType.startsWith('image/')) {
+        return null;
+      }
+
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length === 0 || bytes.length > VISION_ATTACHMENT_MAX_BYTES) {
+        return null;
+      }
+
+      return {
+        type: 'image',
+        data: bytes.toString('base64'),
+        mimeType: responseMimeType,
+      };
+    } catch (error) {
+      log.debug('Skipping Discord image attachment due to retrieval error', {
+        channelId: message.channelId,
+        url: attachmentUrl.toString(),
+        error: toErrorMessage(error),
+      });
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private isAllowedDiscordVisionAttachmentHost(hostname: string): boolean {
+    const normalized = hostname.trim().toLowerCase();
+    if (!normalized) return false;
+    if (DISCORD_VISION_ATTACHMENT_HOSTS.has(normalized)) return true;
+    return DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+  }
+
+  private resolveAttachmentImageContentType(attachment: Attachment): string | null {
+    const normalizedContentType = attachment.contentType
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    if (normalizedContentType.startsWith('image/')) {
+      return normalizedContentType;
+    }
+
+    const candidates = [attachment.name, attachment.url];
+    for (const candidate of candidates) {
+      const inferred = inferImageMimeTypeFromAttachmentCandidate(candidate);
+      if (inferred) return inferred;
+    }
+
+    return null;
   }
 
   // ── Steering + follow-up + lifecycle ──
@@ -492,6 +1633,16 @@ export class SubstrateAgent {
     return this.agent.waitForIdle();
   }
 
+  registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
+    this.postTurnActionInferers.push(inferer);
+    return () => {
+      const index = this.postTurnActionInferers.indexOf(inferer);
+      if (index !== -1) {
+        this.postTurnActionInferers.splice(index, 1);
+      }
+    };
+  }
+
   /** Abort the current prompt, cancelling streaming and tool execution */
   abort(): void {
     this.agent.abort();
@@ -499,6 +1650,9 @@ export class SubstrateAgent {
 
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
     const startTime = Date.now();
+    const taskKind = this.resolveTaskKind(message);
+    const turnCallType = this.resolveTurnCallType(message, taskKind);
+    const turnCorrelationBase = this.buildTurnCorrelation(message, turnCallType);
     const channelMeta: ChannelMeta = {
       ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
       ...(message.routing?.broadcast?.approvalToken
@@ -515,11 +1669,14 @@ export class SubstrateAgent {
       retrievalProvenanceRefs = [...new Set(refs.map(ref => ref.trim()).filter(Boolean))];
     });
 
-    await this.eventBus.emit('agent.turn.start', { message });
+    await this.eventBus.emit('agent.turn.start', {
+      message,
+      ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
+    });
 
     const trustStageStart = Date.now();
     const authorContext = this.resolveAuthorContext(message);
-    this.emitTurnStage(message, startTime, 'trust', {
+    this.emitTurnStage(message, startTime, 'trust', turnCallType, {
       durationMs: Date.now() - trustStageStart,
       trustLevel: authorContext.trustLevel,
       canonicalContactKey: authorContext.canonicalContactKey ?? null,
@@ -564,7 +1721,7 @@ export class SubstrateAgent {
         .filter(section => section.length > 0)
         .join('\n\n');
       const scratchpadBlock = this.buildScratchpadContextBlock();
-      this.emitTurnStage(message, startTime, 'memory', {
+      this.emitTurnStage(message, startTime, 'memory', turnCallType, {
         durationMs: Date.now() - memoryStageStart,
         hasMemoryProvider: memoryProvider != null,
         memoryChars: memoryContextBlock.length,
@@ -576,9 +1733,9 @@ export class SubstrateAgent {
 
       // Compose prompt context (default system prompt pipeline or per-turn override).
       const channelType = this.resolveChannelType(message);
-      const taskKind = this.resolveTaskKind(message);
       const runtimeNow = new Date();
       const promptOverride = this.normalizeTurnPromptOverride(message);
+      const responseStyle = this.resolveResponseStyle(message, channelType, channelMeta);
       const templateVariables = this.buildPromptTemplateVariables(
         message,
         authorContext.resolvedUserName,
@@ -593,6 +1750,7 @@ export class SubstrateAgent {
         trustLevel,
         channelType,
         authorContext.canonicalContactKey,
+        responseStyle,
         runtimeNow,
       );
       let fullPrompt = '';
@@ -638,16 +1796,19 @@ export class SubstrateAgent {
 
       // Build context (with auto-compaction + cross-channel continuity)
       const contextStageStart = Date.now();
-      const context = await this.sessionManager.buildContext(
-        message.channelId,
-        fullPrompt,
-        memoryContextBlock,
-        this.llmClient,
-        authorContext.canonicalContactKey ?? message.authorId,
-        channelMeta,
-        authorContext.continuityFallbackKeys,
+      const context = await runWithRequestContext(
+        this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.context'),
+        async () => this.sessionManager.buildContext(
+          message.channelId,
+          fullPrompt,
+          memoryContextBlock,
+          this.llmClient,
+          authorContext.canonicalContactKey ?? message.authorId,
+          channelMeta,
+          authorContext.continuityFallbackKeys,
+        ),
       );
-      this.emitTurnStage(message, startTime, 'context', {
+      this.emitTurnStage(message, startTime, 'context', turnCallType, {
         durationMs: Date.now() - contextStageStart,
         contextMessages: context.messages.length,
         systemPromptChars: context.systemPrompt.length,
@@ -665,11 +1826,11 @@ export class SubstrateAgent {
       if (moaSettings) {
         const moaResult = await this.runMoaTurn(context, message, moaSettings);
         firstTokenAt = Date.now();
-        this.emitTurnStage(message, startTime, 'first-token', {
+        this.emitTurnStage(message, startTime, 'first-token', turnCallType, {
           ttftMs: firstTokenAt - startTime,
           source: 'fallback',
         });
-        this.emitTurnStage(message, startTime, 'prompt', {
+        this.emitTurnStage(message, startTime, 'prompt', turnCallType, {
           durationMs: Date.now() - promptStageStart,
           ttftMs: firstTokenAt - startTime,
           mode: 'moa',
@@ -683,16 +1844,19 @@ export class SubstrateAgent {
         // Configure pi-agent-core Agent for this turn
         this.ensureModel(message);
         this.agent.setSystemPrompt(context.systemPrompt);
-        const activeTools = [
-          ...this.coreTools,
-          ...this.extendedTools.filter((tool) => this.loadedExtended.has(tool.name)),
-        ];
-        this.agent.setTools(this.withCapabilityGates(activeTools));
+        const autoloadOutcome = this.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
+        this.applyActiveToolsToAgentForTurn(
+          message,
+          taskKind,
+          turnCallType,
+          turnCorrelationBase,
+          autoloadOutcome,
+        );
 
         // Convert ContextMessage[] to AgentMessage[] for the Agent.
         // Exclude the last message (the user message we just recorded) —
         // agent.prompt() will re-add it, avoiding duplication.
-        const agentMessages = this.contextToAgentMessages(context.messages);
+        const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
         const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
         this.agent.replaceMessages(historyMessages);
         const turnStartMessageIndex = this.agent.state.messages.length;
@@ -704,33 +1868,46 @@ export class SubstrateAgent {
         const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
           if (channelId !== message.channelId || streamFirstTokenAt != null) return;
           streamFirstTokenAt = Date.now();
-          this.emitTurnStage(message, startTime, 'first-token', {
+          this.emitTurnStage(message, startTime, 'first-token', turnCallType, {
             ttftMs: streamFirstTokenAt - startTime,
             source: 'stream',
           });
         });
 
         // Activate event bridge for this channel (streams deltas + tool events to EventBus)
-        this.bridge.setChannel(message.channelId);
+        this.bridge.setChannel(message.channelId, {
+          turnId: message.id,
+          requestId: message.id,
+          callType: turnCallType,
+          originType: turnCallType,
+          originStage: 'agent.turn.prompt',
+          purpose: 'agent.turn.prompt',
+        });
+        this.activeTurnCorrelation = turnCorrelationBase;
+        const turnUserContent = await this.buildTurnUserContent(message);
         try {
           // Run the agent — pi-agent-core handles tool loop internally
-          await this.agent.prompt({
-            role: 'user',
-            content: message.content,
-            timestamp: Date.now(),
-          } satisfies UserMessage);
+          await runWithRequestContext(
+            this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
+            async () => this.agent.prompt({
+              role: 'user',
+              content: turnUserContent,
+              timestamp: Date.now(),
+            } satisfies UserMessage),
+          );
         } finally {
           unsubscribeFirstToken();
           this.bridge.clearChannel();
+          this.activeTurnCorrelation = null;
         }
         if (streamFirstTokenAt == null) {
           streamFirstTokenAt = Date.now();
-          this.emitTurnStage(message, startTime, 'first-token', {
+          this.emitTurnStage(message, startTime, 'first-token', turnCallType, {
             ttftMs: streamFirstTokenAt - startTime,
             source: 'fallback',
           });
         }
-        this.emitTurnStage(message, startTime, 'prompt', {
+        this.emitTurnStage(message, startTime, 'prompt', turnCallType, {
           durationMs: Date.now() - promptStageStart,
           ttftMs: streamFirstTokenAt - startTime,
         });
@@ -742,6 +1919,97 @@ export class SubstrateAgent {
 
         // Extract response from agent state (last assistant message)
         responseText = this.extractResponseText();
+        if (this.hasVisionAttachments(message) && responseText.trim().length === 0) {
+          const assistantMessage = this.getLatestAssistantMessage();
+          log.warn('Vision turn produced empty assistant text; attempting recovery reply', {
+            channelId: message.channelId,
+            model: this.agent.state.model?.id ?? null,
+            stopReason: assistantMessage?.stopReason ?? null,
+            errorMessage: assistantMessage?.errorMessage ?? null,
+          });
+
+          // Recovery always falls back to chat slot so the user gets a response
+          // even when the configured vision deployment is unavailable.
+          try {
+            const recoveryModel = resolveModel(this.config, 'chat');
+            this.agent.setModel(recoveryModel);
+            responseModel = recoveryModel.id;
+          } catch (error) {
+            log.warn('Vision recovery model resolution failed; keeping current model', {
+              channelId: message.channelId,
+              error: toErrorMessage(error),
+            });
+          }
+
+          const recoveryNote = assistantMessage?.errorMessage
+            ? `Runtime note: the previous vision reply produced no text (${assistantMessage.errorMessage}). Respond to the user's latest image turn now. If the image could not be processed, clearly say so and ask for resend.`
+            : 'Runtime note: the previous vision reply produced no text. Respond to the user\'s latest image turn now. If the image could not be processed, clearly say so and ask for resend.';
+
+          const runVisionRecoveryPrompt = async (
+            content: string,
+            requestSuffix: string,
+            originStage: string,
+          ): Promise<void> => {
+            this.bridge.setChannel(message.channelId, {
+              turnId: message.id,
+              requestId: `${message.id}:${requestSuffix}`,
+              callType: turnCallType,
+              originType: turnCallType,
+              originStage,
+              purpose: originStage,
+            });
+            this.activeTurnCorrelation = turnCorrelationBase;
+            try {
+              await runWithRequestContext(
+                this.withCorrelationPurpose(turnCorrelationBase, originStage),
+                async () => this.agent.prompt({
+                  role: 'user',
+                  content,
+                  timestamp: Date.now(),
+                } satisfies UserMessage),
+              );
+            } finally {
+              this.bridge.clearChannel();
+              this.activeTurnCorrelation = null;
+            }
+          };
+
+          await runVisionRecoveryPrompt(
+            recoveryNote,
+            'vision-recovery',
+            'agent.turn.vision_recovery',
+          );
+
+          turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
+          turnUsage = this.accumulateTurnUsage(turnMessages);
+          responseModel = this.agent.state.model?.id ?? responseModel;
+          responseText = this.extractResponseText();
+
+          if (responseText.trim().length === 0) {
+            log.warn('Vision recovery reply was empty; attempting strict non-empty recovery reply', {
+              channelId: message.channelId,
+              model: this.agent.state.model?.id ?? null,
+            });
+
+            await runVisionRecoveryPrompt(
+              'Runtime note: the previous recovery reply was empty. Reply now with exactly one short sentence. If the image could not be processed, clearly say so and ask for resend.',
+              'vision-recovery-strict',
+              'agent.turn.vision_recovery_strict',
+            );
+
+            turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
+            turnUsage = this.accumulateTurnUsage(turnMessages);
+            responseModel = this.agent.state.model?.id ?? responseModel;
+            responseText = this.extractResponseText();
+          }
+
+          if (responseText.trim().length === 0) {
+            log.warn('Vision turn remained empty after recovery attempts', {
+              channelId: message.channelId,
+              model: this.agent.state.model?.id ?? null,
+            });
+          }
+        }
       }
       let safeResponseText = responseText;
       let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
@@ -767,6 +2035,7 @@ export class SubstrateAgent {
           risky: classification.risky,
           signals: classification.signals,
           visibilityScope,
+          ...this.withCorrelationPurpose(turnCorrelationBase, 'broadcast.pre_send.classified'),
         });
 
         if (approvalRequired) {
@@ -775,6 +2044,7 @@ export class SubstrateAgent {
             signals: classification.signals,
             visibilityScope,
             draftLength: responseText.length,
+            ...this.withCorrelationPurpose(turnCorrelationBase, 'broadcast.approval.required'),
           });
           this.sessionManager.appendSystemNote(
             message.channelId,
@@ -792,6 +2062,7 @@ export class SubstrateAgent {
           provenanceRefs,
           contextMessageCount: context.messages.length,
           memoryContextChars: memoryContextBlock.length,
+          ...this.withCorrelationPurpose(turnCorrelationBase, 'broadcast.provenance'),
         };
         this.emitTelemetry('broadcast.provenance', provenancePayload);
         log.info('Broadcast provenance', provenancePayload);
@@ -827,10 +2098,31 @@ export class SubstrateAgent {
           ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         },
       };
+      const inferredPostTurnActions = await this.inferPostTurnActions({
+        message,
+        response: agentResponse,
+        turnMessages,
+      });
 
-      await this.eventBus.emit('agent.turn.end', { message, response: agentResponse });
-      await this.eventBus.emit('agent.turn.usage', { message, usage: turnUsage });
-      this.emitTurnStage(message, startTime, 'end', {
+      await this.eventBus.emit('agent.turn.end', {
+        message,
+        response: agentResponse,
+        ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
+      });
+      if (inferredPostTurnActions.length > 0) {
+        await this.eventBus.emit('agent.post_turn.actions.inferred', {
+          message,
+          response: agentResponse,
+          actions: inferredPostTurnActions,
+          ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.post_turn.actions.inferred'),
+        });
+      }
+      await this.eventBus.emit('agent.turn.usage', {
+        message,
+        usage: turnUsage,
+        ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
+      });
+      this.emitTurnStage(message, startTime, 'end', turnCallType, {
         durationMs: Date.now() - startTime,
         ttftMs: firstTokenAt - startTime,
         inputTokens: turnUsage.inputTokens,
@@ -848,7 +2140,11 @@ export class SubstrateAgent {
       return agentResponse;
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      await this.eventBus.emit('agent.error', { message, error: err });
+      await this.eventBus.emit('agent.error', {
+        message,
+        error: err,
+        ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.error'),
+      });
       throw err;
     } finally {
       unsubscribeRetrieval();
@@ -945,6 +2241,15 @@ export class SubstrateAgent {
       this.llmClient,
       this.buildMoaPrompt(context),
       {
+        correlation: {
+          turnId: message.id,
+          requestId: message.id,
+          channelId: message.channelId,
+          callType: this.resolveTurnCallType(message, this.resolveTaskKind(message)),
+          originType: this.resolveTurnCallType(message, this.resolveTaskKind(message)),
+          originStage: 'agent.moa.turn',
+          purpose: 'agent.moa.turn',
+        },
         ...(settings.referenceModels.length > 0 ? { referenceModels: settings.referenceModels } : {}),
         ...(settings.aggregatorModel ? { aggregatorModel: settings.aggregatorModel } : {}),
         caps,
@@ -979,9 +2284,13 @@ export class SubstrateAgent {
       ...(deliberation.estimatedCostUsd > 0 ? { estimatedCostUsd: deliberation.estimatedCostUsd } : {}),
     };
 
+    const moaCallType = this.resolveTurnCallType(message, this.resolveTaskKind(message));
     this.emitTelemetry('agent.moa.turn', {
       turnId: message.id,
+      requestId: message.id,
       channelId: message.channelId,
+      callType: moaCallType,
+      purpose: 'agent.moa.turn',
       rounds: deliberation.rounds.length,
       stopReason: deliberation.stopReason,
       llmCalls,
@@ -1008,17 +2317,82 @@ export class SubstrateAgent {
     message: SubstrateMessage,
     turnStartMs: number,
     stage: TurnStageName,
+    callType: ObservabilityCallType,
     payload: Record<string, unknown>,
   ): void {
     const telemetry = {
       turnId: message.id,
+      requestId: message.id,
       channelId: message.channelId,
+      callType,
+      purpose: `agent.turn.stage.${stage}`,
       stage,
       elapsedMs: Math.max(0, Date.now() - turnStartMs),
       ...payload,
     };
     log.debug('Turn stage telemetry', telemetry);
     this.emitTelemetry('agent.turn.stage', telemetry);
+  }
+
+  private resolveTurnCallType(
+    message: SubstrateMessage,
+    taskKind: string | undefined,
+  ): ObservabilityCallType {
+    if (taskKind === 'heartbeat' || taskKind === 'reflection') {
+      return 'scheduled';
+    }
+    if (message.channelId.startsWith('internal:')) {
+      return 'scheduled';
+    }
+    return 'chat';
+  }
+
+  private buildTurnCorrelation(
+    message: SubstrateMessage,
+    callType: ObservabilityCallType,
+  ): CorrelationMetadata {
+    return {
+      turnId: message.id,
+      requestId: message.id,
+      channelId: message.channelId,
+      callType,
+      purpose: 'agent.turn',
+      originType: callType,
+      originStage: 'agent.turn',
+    };
+  }
+
+  private withCorrelationPurpose(
+    correlation: CorrelationMetadata,
+    purpose: string,
+  ): CorrelationMetadata {
+    return {
+      ...correlation,
+      purpose,
+      originStage: purpose,
+    };
+  }
+
+  private withAdaptiveCorrelation(
+    correlation: CorrelationMetadata | undefined,
+    purpose: string,
+  ): Partial<CorrelationMetadata> {
+    if (correlation) {
+      return this.withCorrelationPurpose(correlation, purpose);
+    }
+    if (this.activeTurnCorrelation) {
+      return this.withCorrelationPurpose(this.activeTurnCorrelation, purpose);
+    }
+    return { purpose };
+  }
+
+  private emitAdaptiveToolDecision(
+    payload: Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>,
+  ): void {
+    this.emitTelemetry('agent.tools.adaptive.decision', {
+      ...payload,
+      timestamp: Date.now(),
+    });
   }
 
   private emitTelemetry(event: string, payload: Record<string, unknown>): void {
@@ -1175,35 +2549,6 @@ export class SubstrateAgent {
     );
   }
 
-  /** Convert ContextMessage[] (from buildContext) to AgentMessage[] for pi-agent-core */
-  private contextToAgentMessages(messages: ContextMessage[]): AgentMessage[] {
-    return messages.map(m => {
-      if (m.role === 'user') {
-        return {
-          role: 'user',
-          content: m.content,
-          timestamp: Date.now(),
-        } satisfies UserMessage;
-      }
-      // assistant — pi-ai expects content as ContentPart[]
-      return {
-        role: 'assistant',
-        content: [{ type: 'text', text: m.content }],
-        api: '',
-        provider: '',
-        model: '',
-        usage: {
-          input: 0, output: 0,
-          cacheRead: 0, cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: 'stop',
-        timestamp: Date.now(),
-      } satisfies AssistantMessage;
-    });
-  }
-
   /** Aggregate usage stats for a single turn across all tool loop iterations. */
   private accumulateTurnUsage(messages: AgentMessage[]): TurnUsage {
     let inputTokens = 0;
@@ -1281,40 +2626,170 @@ export class SubstrateAgent {
     return { toolCalls, usedThinkTool };
   }
 
-  /** Extract text from the last assistant message in Agent state */
-  private extractResponseText(): string {
+  private async inferPostTurnActions(
+    context: PostTurnInferenceContext,
+  ): Promise<InferredPostTurnAction[]> {
+    if (this.postTurnActionInferers.length === 0) {
+      return [];
+    }
+
+    const inferred: InferredPostTurnAction[] = [];
+    const seenDedupeKeys = new Set<string>();
+
+    for (const inferer of this.postTurnActionInferers) {
+      let candidates: PostTurnActionCandidate[] = [];
+      try {
+        candidates = await inferer(context);
+      } catch (error) {
+        log.warn('Post-turn action inferer failed', {
+          channelId: context.message.channelId,
+          messageId: context.message.id,
+          error: toErrorMessage(error),
+        });
+        continue;
+      }
+
+      for (const candidate of candidates) {
+        const normalized = this.normalizePostTurnActionCandidate(
+          candidate,
+          context.message,
+          inferred.length,
+        );
+        if (!normalized) continue;
+        if (seenDedupeKeys.has(normalized.dedupeKey)) continue;
+        seenDedupeKeys.add(normalized.dedupeKey);
+        inferred.push(normalized);
+      }
+    }
+
+    return inferred;
+  }
+
+  private normalizePostTurnActionCandidate(
+    candidate: PostTurnActionCandidate | null | undefined,
+    message: SubstrateMessage,
+    ordinal: number,
+  ): InferredPostTurnAction | null {
+    if (!candidate || typeof candidate.kind !== 'string') {
+      return null;
+    }
+
+    const kind = candidate.kind.trim();
+    if (!kind) {
+      return null;
+    }
+
+    const payload = this.normalizePostTurnPayload(candidate.payload);
+    const explicitDedupeKey = typeof candidate.dedupeKey === 'string' ? candidate.dedupeKey.trim() : '';
+    const dedupeKey = explicitDedupeKey || `${kind}:${message.channelId}:${this.hashPostTurnPayload(payload)}`;
+    const inferredAt = Date.now();
+    const id = createHash('sha256')
+      .update(`${message.id}:${kind}:${dedupeKey}:${ordinal}`)
+      .digest('hex')
+      .slice(0, 24);
+
+    const normalizedMaxRetries = (
+      typeof candidate.maxRetries === 'number'
+      && Number.isFinite(candidate.maxRetries)
+      && candidate.maxRetries >= 0
+    )
+      ? Math.floor(candidate.maxRetries)
+      : undefined;
+
+    return {
+      id,
+      kind,
+      payload,
+      dedupeKey,
+      channelId: message.channelId,
+      sourceMessageId: message.id,
+      inferredAt,
+      ...(normalizedMaxRetries !== undefined ? { maxRetries: normalizedMaxRetries } : {}),
+    };
+  }
+
+  private normalizePostTurnPayload(
+    payload: PostTurnActionCandidate['payload'],
+  ): Record<string, unknown> {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return {};
+    }
+    return payload;
+  }
+
+  private hashPostTurnPayload(payload: Record<string, unknown>): string {
+    const serialized = this.stableStringify(payload);
+    return createHash('sha256').update(serialized).digest('hex').slice(0, 16);
+  }
+
+  private stableStringify(value: unknown): string {
+    if (value === null) return 'null';
+    if (value instanceof Date) return JSON.stringify(value.toISOString());
+    if (typeof value === 'bigint') return JSON.stringify(value.toString());
+    if (typeof value !== 'object') {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+      return `[${value.map(item => this.stableStringify(item)).join(',')}]`;
+    }
+
+    const objectValue = value as Record<string, unknown>;
+    const entries = Object.entries(objectValue)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${this.stableStringify(entryValue)}`);
+    return `{${entries.join(',')}}`;
+  }
+
+  private getLatestAssistantMessage(): AssistantMessage | null {
     const messages = this.agent.state.messages;
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if ((msg as unknown as { role: string }).role === 'assistant') {
-        const content = (msg as unknown as AssistantMessage).content;
-        if (typeof content === 'string') return content;
-        if (Array.isArray(content)) {
-          const textParts = content
-            .filter((b: any) => b.type === 'text')
-            .map((b: any) => b.text)
-            .join('');
-          if (!textParts) {
-            const thinkingParts = content.filter((b: any) => b.type === 'thinking');
-            if (thinkingParts.length) {
-              log.warn('Assistant produced thinking but no text content', {
-                thinkingBlocks: thinkingParts.length,
-                blockTypes: content.map((b: any) => b.type),
-              });
-            } else {
-              log.warn('Assistant message has no text content blocks', {
-                blockTypes: content.map((b: any) => b.type),
-              });
-            }
-          }
-          return textParts;
-        }
+        return msg as unknown as AssistantMessage;
       }
     }
+    return null;
+  }
+
+  /** Extract text from the last assistant message in Agent state */
+  private extractResponseText(): string {
+    const assistantMessage = this.getLatestAssistantMessage();
+    if (!assistantMessage) {
+      log.warn('No assistant message found in agent state after prompt');
+      return '';
+    }
+
+    const content = assistantMessage.content;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      const textParts = content
+        .filter((b: any) => b.type === 'text')
+        .map((b: any) => b.text)
+        .join('');
+      if (!textParts) {
+        const thinkingParts = content.filter((b: any) => b.type === 'thinking');
+        if (thinkingParts.length) {
+          log.warn('Assistant produced thinking but no text content', {
+            thinkingBlocks: thinkingParts.length,
+            blockTypes: content.map((b: any) => b.type),
+            stopReason: assistantMessage.stopReason,
+            errorMessage: assistantMessage.errorMessage ?? null,
+          });
+        } else {
+          log.warn('Assistant message has no text content blocks', {
+            blockTypes: content.map((b: any) => b.type),
+            stopReason: assistantMessage.stopReason,
+            errorMessage: assistantMessage.errorMessage ?? null,
+          });
+        }
+      }
+      return textParts;
+    }
+
     log.warn('No assistant message found in agent state after prompt');
     return '';
   }
-
   private deriveCharacterName(systemPrompt: string): string {
     const firstLine = systemPrompt.split('\n')[0]?.trim() ?? '';
     const match = firstLine.match(/^You are\s+(.+?)\.?$/i);
@@ -1360,16 +2835,31 @@ export class SubstrateAgent {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey?: string,
+    responseStyle: ResponseStyle = 'concise',
     now: Date = new Date(),
   ): string {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
     const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
     const contextWindow = this.resolveContextWindow();
-    const coreCount = this.coreTools.length;
     const extendedCount = this.extendedTools.length;
+    const activeResolution = this.resolveActiveTools();
+    const {
+      core: coreCount,
+      promoted: promotedCount,
+      extendedLoaded: extendedLoadedCount,
+      autoload: autoloadCount,
+      deferred: deferredCount,
+      total: activeCount,
+    } = activeResolution.counts;
     const capabilityAccess = this.resolveCapabilityAccess();
     const capabilityTier = capabilityAccess.getTier();
     const skillsContext = this.skillsRuntime?.getPromptXml() ?? '';
+    const responseStyleGuidance = getResponseStylePromptGuidance(responseStyle);
+    const extendedBreakdown = [
+      extendedLoadedCount > 0 ? `${extendedLoadedCount} loaded` : null,
+      autoloadCount > 0 ? `${autoloadCount} autoload` : null,
+      deferredCount > 0 ? `${deferredCount} deferred` : null,
+    ].filter(Boolean).join(' + ');
 
     const lines = [
       '[Runtime Context]',
@@ -1377,19 +2867,41 @@ export class SubstrateAgent {
       `Channel: ${message.channelId} (type: ${channelType ?? 'unknown'}, visibility: ${visibility})`,
       `Speaking with: ${resolvedUserName} (userId: ${message.authorId}, canonicalId: ${canonicalContactKey ?? message.authorId}, trust: ${trustLevel})`,
       `Model: ${modelId}`,
+      `Response style preference: ${responseStyle}`,
       `Capability tier: ${capabilityTier}`,
       `Context window: ${contextWindow} tokens`,
-      `Tools: ${coreCount} active` + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
+      `Tools: ${activeCount} active`
+      + ` (${coreCount} core`
+      + (promotedCount > 0 ? ` + ${promotedCount} promoted` : '')
+      + (extendedBreakdown ? ` + ${extendedBreakdown}` : '')
+      + ')'
+      + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
     ];
 
     // Tool directory for extended tools
     if (extendedCount > 0) {
+      const promotedNames = this.getCapabilityEligiblePromotedToolNames();
       lines.push('');
-      lines.push('Available extended tools (use load_tools to activate):');
+      lines.push('Available extended tools:');
       for (const t of this.extendedTools) {
-        lines.push(`- ${t.name}: ${t.description.split('.')[0]}`);
+        const loaded = this.loadedExtended.get(t.name);
+        let suffix = ' (use load_tools to activate)';
+        if (promotedNames.has(t.name)) {
+          suffix = ' (promoted, always active)';
+        } else if (loaded?.source === 'autoload') {
+          suffix = ' (autoload active)';
+        } else if (loaded?.source === 'deferred') {
+          suffix = ' (deferred active)';
+        } else if (loaded?.source === 'extended_loaded') {
+          suffix = ' (loaded active)';
+        }
+        lines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
       }
     }
+
+    lines.push('');
+    lines.push('[Response Style Guidance]');
+    lines.push(responseStyleGuidance);
 
     if (skillsContext) {
       lines.push('');
@@ -1620,4 +3132,41 @@ export class SubstrateAgent {
       };
     }
   }
+}
+
+function inferImageMimeTypeFromAttachmentCandidate(candidate: string | null | undefined): string | null {
+  if (!candidate) return null;
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+
+  let pathCandidate = trimmed;
+  try {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      const parsed = new URL(trimmed);
+      const fromQuery = inferImageMimeTypeFromQueryParams(parsed.searchParams);
+      if (fromQuery) return fromQuery;
+      pathCandidate = parsed.pathname;
+    }
+  } catch {
+    pathCandidate = trimmed;
+  }
+
+  const lowerPath = pathCandidate.toLowerCase();
+  for (const [extension, mimeType] of Object.entries(VISION_ATTACHMENT_EXTENSION_TO_MIME)) {
+    if (lowerPath.endsWith(extension)) {
+      return mimeType;
+    }
+  }
+  return null;
+}
+
+function inferImageMimeTypeFromQueryParams(searchParams: URLSearchParams): string | null {
+  for (const key of VISION_ATTACHMENT_FORMAT_QUERY_KEYS) {
+    const raw = searchParams.get(key)?.trim().toLowerCase();
+    if (!raw) continue;
+    const normalized = raw.startsWith('.') ? raw : `.${raw}`;
+    const mimeType = VISION_ATTACHMENT_EXTENSION_TO_MIME[normalized];
+    if (mimeType) return mimeType;
+  }
+  return null;
 }

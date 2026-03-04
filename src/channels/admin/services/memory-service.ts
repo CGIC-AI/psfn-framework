@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { EmbeddingService } from '../../../agent/contracts.js';
 import type { ContactStore } from '../../../contacts/store.js';
 import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
-import { VALID_MEMORY_TYPES, type MemoryType } from '../../../memory/types.js';
+import { VALID_MEMORY_TYPES, type MemoryType, type PurrMemory } from '../../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../trust/types.js';
 import type {
   AdminBulkMutationResult,
@@ -16,6 +16,58 @@ import type {
 
 const DEFAULT_MEMORY_LIST_LIMIT = 50;
 const MAX_MEMORY_LIST_LIMIT = 200;
+const MAX_MEMORY_FILTER_SCAN = 100_000;
+
+function parseMemoryTypeFilter(value: string | null | undefined): MemoryType | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return VALID_MEMORY_TYPES.includes(normalized as MemoryType)
+    ? normalized as MemoryType
+    : undefined;
+}
+
+function parseSensitivityFilter(value: string | null | undefined): SensitivityLevel | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return VALID_SENSITIVITY_LEVELS.includes(normalized as SensitivityLevel)
+    ? normalized as SensitivityLevel
+    : undefined;
+}
+
+function parseDateFilter(value: string | null | undefined, boundary: 'start' | 'end'): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dateOnly) {
+    const year = Number.parseInt(dateOnly[1], 10);
+    const monthIndex = Number.parseInt(dateOnly[2], 10) - 1;
+    const day = Number.parseInt(dateOnly[3], 10);
+    const validatedDate = new Date(Date.UTC(year, monthIndex, day));
+    if (
+      validatedDate.getUTCFullYear() !== year
+      || validatedDate.getUTCMonth() !== monthIndex
+      || validatedDate.getUTCDate() !== day
+    ) {
+      return undefined;
+    }
+    if (boundary === 'start') {
+      return Date.UTC(year, monthIndex, day, 0, 0, 0, 0);
+    }
+    return Date.UTC(year, monthIndex, day, 23, 59, 59, 999);
+  }
+
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) return undefined;
+  return parsed;
+}
+
+function memoryTimestamp(memory: { extractedAt?: number; createdAt?: number }): number {
+  return memory.extractedAt ?? memory.createdAt ?? 0;
+}
 
 function parsePositiveInteger(
   value: string | null | undefined,
@@ -59,8 +111,29 @@ export class AdminMemoryDataService implements AdminMemoryService {
       MAX_MEMORY_LIST_LIMIT,
     );
     const offset = parsePositiveInteger(params?.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
-    const memories = this.deps.memoryStore.listActiveMemories({ limit, offset });
-    const total = this.deps.memoryStore.countActiveMemories();
+    const typeFilter = parseMemoryTypeFilter(params?.get('type'));
+    const sensitivityFilter = parseSensitivityFilter(params?.get('sensitivity'));
+    const startDate = parseDateFilter(params?.get('startDate'), 'start');
+    const endDate = parseDateFilter(params?.get('endDate'), 'end');
+
+    const filtered = this.deps.memoryStore
+      .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN)
+      .filter((memory) => {
+        if (typeFilter && memory.type !== typeFilter) return false;
+        if (sensitivityFilter && memory.sensitivity !== sensitivityFilter) return false;
+        const createdAt = memoryTimestamp(memory);
+        if (startDate !== undefined && createdAt < startDate) return false;
+        if (endDate !== undefined && createdAt > endDate) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const timestampDelta = memoryTimestamp(b) - memoryTimestamp(a);
+        if (timestampDelta !== 0) return timestampDelta;
+        return b.id.localeCompare(a.id);
+      });
+
+    const total = filtered.length;
+    const memories = filtered.slice(offset, offset + limit);
     return {
       memories,
       contactsById: this.buildContactSummaryMap(),

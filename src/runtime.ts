@@ -27,7 +27,7 @@ import type { ChannelAdapter } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, applySettings, type EditableSettings } from './settings.js';
+import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
@@ -35,7 +35,6 @@ import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
 import { registerScheduledBackupTask } from './backup/service.js';
 import {
-  createEmbeddingDimensionMismatchWarning,
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
@@ -43,10 +42,15 @@ import { initDatabase } from './persistence/sqlite-utils.js';
 import { parseOptionalPositiveIntEnv } from './utils/env.js';
 import {
   DiscordLifecycleNotifier,
-  restoreLastActiveSession,
   writeLastActiveSession,
 } from './lifecycle/notifications.js';
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
+import {
+  RUNTIME_MODE,
+  resolveRuntimeModeContract,
+  toRuntimeStatusMetadata,
+} from './lifecycle/runtime-mode.js';
+import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
 import { MemoryWriter } from './memory/writer.js';
@@ -75,11 +79,14 @@ import {
   wirePromptRuntime,
   wireCharacterCardRuntime,
   wireStaticPromptRegistry,
+  wireSettingsRuntime,
+  wireSessionToolsRuntime,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
+import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { attachVoiceObservers } from './voice/observers/index.js';
-import { loadRuntimeChannelsConfig, type RuntimeChannelsConfigOverrides } from './channels/config.js';
+import { loadRuntimeChannelsConfig } from './channels/config.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
 import { createWyomingServiceRegistry } from './channels/wyoming/services/index.js';
@@ -87,10 +94,7 @@ import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/h
 import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
 import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
-import {
-  createStreamingTtsConnector,
-  type StreamingTtsProvider,
-} from './voice/connectors/tts/index.js';
+import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
@@ -101,47 +105,31 @@ import {
 } from './capabilities/safeguards.js';
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { ModuleLoader } from './modules/loader.js';
+import {
+  resolveContactsDir,
+  resolveNotesDir,
+  resolveScratchpadMirrorPath,
+  resolveSessionsDir,
+} from './persistence/layout.js';
+import {
+  buildRuntimeChannelsConfigOverrides,
+  createEmbeddingDimensionMismatchFatalMessage,
+  installPromotedToolsPersistenceHook,
+  resolveRuntimeVoiceSttProvider,
+  resolveRuntimeVoiceTtsProvider,
+} from './runtime/bootstrap-helpers.js';
+import {
+  registerChannelAdapter as registerRuntimeChannelAdapter,
+  startChannelAdapters,
+  stopChannelAdapters,
+} from './runtime/channel-lifecycle.js';
+export {
+  buildRuntimeChannelsConfigOverrides,
+  createEmbeddingDimensionMismatchFatalMessage,
+};
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
-type RuntimeVoiceSttProvider = 'deepgram' | 'disabled';
-type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
-
-function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
-  const configured = (config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider }).sttProvider;
-  if (configured === 'deepgram' || configured === 'disabled') return configured;
-  return config.deepgramApiKey ? 'deepgram' : 'disabled';
-}
-
-function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
-  const configured = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
-  if (configured === 'elevenlabs' || configured === 'echo' || configured === 'disabled') return configured;
-  return 'elevenlabs';
-}
-
-export function buildRuntimeChannelsConfigOverrides(
-  config: SubstrateConfig,
-  settings: EditableSettings,
-): RuntimeChannelsConfigOverrides {
-  const telegramOverride: RuntimeChannelsConfigOverrides['telegram'] = {};
-
-  if (Object.hasOwn(settings, 'telegramEnabled')) {
-    telegramOverride.enabled = config.telegramEnabled ?? false;
-  }
-  if (Object.hasOwn(settings, 'telegramAuthorizedUsers')) {
-    telegramOverride.allowedUsers = config.telegramAuthorizedUsers
-      ? [...config.telegramAuthorizedUsers]
-      : [];
-  }
-
-  if (telegramOverride.enabled === undefined && telegramOverride.allowedUsers === undefined) {
-    return {};
-  }
-
-  return {
-    telegram: telegramOverride,
-  };
-}
 
 export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;
@@ -179,53 +167,23 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   private registerChannelAdapter(adapter: ChannelAdapter): void {
-    this.channelRegistry.set(adapter.id, adapter);
-    this.agentLoop.setChannelRegistry(this.channelRegistry);
+    registerRuntimeChannelAdapter(
+      this.channelRegistry,
+      adapter,
+      registry => this.agentLoop.setChannelRegistry(registry),
+    );
   }
 
   private async startChannels(): Promise<void> {
-    const adapters = [...this.channelRegistry.values()];
-    if (adapters.length === 0) return;
-
-    const results = await Promise.allSettled(
-      adapters.map(adapter => adapter.gateway.start()),
+    await startChannelAdapters(
+      this.channelRegistry,
+      registry => this.agentLoop.setChannelRegistry(registry),
+      log,
     );
-
-    const failedAdapterIds: string[] = [];
-    for (const [index, result] of results.entries()) {
-      if (result.status === 'fulfilled') continue;
-      const adapterId = adapters[index]?.id ?? `unknown-${index}`;
-      failedAdapterIds.push(adapterId);
-      log.error('Channel adapter failed to start', {
-        adapterId,
-        error: String(result.reason),
-      });
-    }
-
-    if (failedAdapterIds.length === 0) return;
-
-    for (const adapterId of failedAdapterIds) {
-      this.channelRegistry.delete(adapterId);
-    }
-    this.agentLoop.setChannelRegistry(this.channelRegistry);
-
-    const startedCount = adapters.length - failedAdapterIds.length;
-    log.warn('Continuing startup with partially available channel adapters', {
-      startedCount,
-      failedCount: failedAdapterIds.length,
-      failedAdapterIds,
-    });
-
-    if (startedCount === 0) {
-      throw new Error('No channel adapters started successfully');
-    }
   }
 
   private async stopChannels(): Promise<void> {
-    const adapters = [...this.channelRegistry.values()].reverse();
-    for (const adapter of adapters) {
-      await adapter.gateway.stop();
-    }
+    await stopChannelAdapters(this.channelRegistry);
   }
 
   private resolveExtractionDrainTimeoutMs(): number {
@@ -266,12 +224,19 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   private restoreLatestSessionMetadata(): void {
-    const resolved = restoreLastActiveSession({
-      dataDir: this.config.dataDir,
-      computedLatestSession: this.sessionStore.getLatestSessionByTimestamp(),
-      isSessionValid: (sessionId) => this.sessionStore.count(sessionId) > 0,
-    });
+    const behavior = this.config.sessionRestartBehavior ?? 'reuse_latest_session';
+    const resolved = this.sessionManager.resolveStartupSessionMetadata(behavior);
     if (!resolved) return;
+
+    writeLastActiveSession(this.config.dataDir, resolved);
+    if (behavior === 'new_session') {
+      log.info('Initialized fresh startup session metadata', {
+        sessionId: resolved.sessionId,
+        channelType: resolved.channelType ?? 'unknown',
+        timestamp: resolved.timestamp,
+      });
+      return;
+    }
 
     log.info('Restored latest session metadata', {
       sessionId: resolved.sessionId,
@@ -286,6 +251,7 @@ export class SubstrateRuntime implements Lifecycle {
     // Load persisted settings and apply over env defaults
     const savedSettings = loadSettings(this.config.dataDir);
     applySettings(this.config, savedSettings);
+    installPromotedToolsPersistenceHook(this.config);
     const modelsConfig = loadModelsConfig(this.config.dataDir, {
       defaultContextWindow: this.config.defaultContextWindow,
     });
@@ -316,6 +282,13 @@ export class SubstrateRuntime implements Lifecycle {
       envTier: this.config.capabilityTier,
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
+    const lifecycleRuntimeContract = resolveRuntimeModeContract({
+      entrypoint: RUNTIME_MODE.SINGLE,
+      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
+      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
+    });
+    const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
+    log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
 
     // Open database
     this.db = initDatabase(this.config.databasePath);
@@ -329,12 +302,13 @@ export class SubstrateRuntime implements Lifecycle {
       join(this.config.dataDir, 'character-card-history.jsonl'),
     );
     log.info(`Loaded character: ${card.data.name}`);
+    this.config.characterName = card.data.name;
     const promptRegistry = wireStaticPromptRegistry(this.config.dataDir);
     const cardProposalQueue = new ConfirmationQueue();
 
     // Initialize core components
     this.llmClient = new LLMClient(this.config);
-    const sessionsDir = join(this.config.dataDir, 'sessions');
+    const sessionsDir = resolveSessionsDir(this.config.dataDir);
     const sessionHmacKeyring = buildSessionHmacKeyring({
       serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
       singleKey: process.env.GATEWAY_SESSION_HMAC_KEY,
@@ -376,20 +350,26 @@ export class SubstrateRuntime implements Lifecycle {
       dims: embeddingProvider.dims,
     });
 
-    this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims);
+    const notesDir = resolveNotesDir(this.config.dataDir);
+    this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims, {
+      notesDir,
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(this.config.dataDir),
+    });
     const embeddingDimensionCheck = validateEmbeddingDimensions(
       this.db,
       embeddingProvider.dims,
     );
-    const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
+    const embeddingDimensionFatalMessage = createEmbeddingDimensionMismatchFatalMessage(
       embeddingDimensionCheck,
     );
-    if (embeddingDimensionWarning) {
-      log.warn(embeddingDimensionWarning.message, {
-        configuredDims: embeddingDimensionWarning.configuredDims,
-        storedDims: embeddingDimensionWarning.storedDims,
-        recommendation: embeddingDimensionWarning.recommendation,
+    if (embeddingDimensionFatalMessage) {
+      log.error('Fatal startup guard: embedding dimension mismatch', {
+        configuredDims: embeddingDimensionCheck.configuredDims,
+        storedDims: embeddingDimensionCheck.storedDims,
+        action: 'startup_aborted',
+        message: embeddingDimensionFatalMessage,
       });
+      throw new Error(embeddingDimensionFatalMessage);
     }
 
     // Agent loop
@@ -434,6 +414,8 @@ export class SubstrateRuntime implements Lifecycle {
       getCapabilityTier: () => this.capabilityRuntime.getTier(),
       confirmationQueue: cardProposalQueue,
     });
+    wireSettingsRuntime(this.agentLoop, this.config);
+    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, this.config.dataDir);
 
     // Contact store + tools — trust-gated privacy system
     const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
@@ -446,15 +428,18 @@ export class SubstrateRuntime implements Lifecycle {
       this.agentLoop,
       this.db,
       primaryUserId,
-      primaryTelegramUserId
-        ? {
-          bootstrapPrimaryIdentityLinks: [{
-            channel: 'telegram',
-            userId: primaryTelegramUserId,
-            privacyLevel: 'private',
-          }],
-        }
-        : {},
+      {
+        exportDir: resolveContactsDir(this.config.dataDir),
+        ...(primaryTelegramUserId
+          ? {
+            bootstrapPrimaryIdentityLinks: [{
+              channel: 'telegram',
+              userId: primaryTelegramUserId,
+              privacyLevel: 'private',
+            }],
+          }
+          : {}),
+      },
     );
 
     this.memoryExtractor = wireMemoryRuntime({
@@ -501,6 +486,11 @@ export class SubstrateRuntime implements Lifecycle {
       const now = Date.now();
       const taskCount = this.scheduler.taskCount;
       await this.eventBus.emit('schedule.heartbeat', { timestamp: now, taskCount });
+    });
+    const postTurnActions = wirePostTurnActionRuntime({
+      eventBus: this.eventBus,
+      scheduler: this.scheduler,
+      agentLoop: this.agentLoop,
     });
 
     log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via ${embeddingProvider.kind})`);
@@ -549,13 +539,24 @@ export class SubstrateRuntime implements Lifecycle {
     });
     log.info('Git self-modification tools enabled');
 
+    // Vault tools — Obsidian note read/write (conditional on vault name)
+    if (this.config.obsidianVaultName) {
+      const { wireVaultRuntime } = await import('./vault/runtime-wiring.js');
+      wireVaultRuntime(this.agentLoop, {
+        vaultName: this.config.obsidianVaultName,
+        cliPath: this.config.obsidianCliPath,
+        timeoutMs: this.config.obsidianTimeoutMs,
+      });
+      log.info('Obsidian vault tools enabled', { vault: this.config.obsidianVaultName });
+    }
+
     // Validate tool wiring — catch misconfigured tools before they crash at invocation
     this.agentLoop.validateToolWiring('single');
 
     const moduleSummary = await this.moduleLoader.loadEnabledModules();
     log.info('Runtime modules initialized', moduleSummary);
     log.info('Re-validating tool wiring after module load', {
-      mode: 'single',
+      mode: lifecycleRuntimeContract.mode,
       loadedModules: moduleSummary.loaded,
       failedModules: moduleSummary.failed,
     });
@@ -588,8 +589,6 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
     const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
-    const lifecycleRuntimeMode = process.env.PSFN_RUNTIME_MODE?.trim() || 'single';
-    const lifecycleRestartCommand = process.env.LIFECYCLE_RESTART_COMMAND?.trim() || undefined;
     this.lifecycleNotifier = new DiscordLifecycleNotifier({
       sender: this.discord,
       heartbeatChannelId,
@@ -599,9 +598,10 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Track last-active channel on every incoming message
     this.eventBus.on('message.received', ({ message }) => {
+      const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
       writeLastActiveSession(this.config.dataDir, {
-        sessionId: message.channelId,
-        channelType: message.channelType,
+        sessionId,
+        channelType: inferSessionChannelType(sessionId) ?? message.channelType,
         timestamp: message.timestamp instanceof Date
           ? message.timestamp.getTime()
           : Date.now(),
@@ -615,8 +615,8 @@ export class SubstrateRuntime implements Lifecycle {
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
-        restartCommand: lifecycleRestartCommand,
-        runtimeMode: lifecycleRuntimeMode,
+        restartCommand: lifecycleRuntimeContract.restart.command,
+        runtimeMode: lifecycleRuntimeContract.mode,
       },
     ));
     this.agentLoop.registerTool(createRebuildTool(
@@ -625,8 +625,8 @@ export class SubstrateRuntime implements Lifecycle {
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
-        restartCommand: lifecycleRestartCommand,
-        runtimeMode: lifecycleRuntimeMode,
+        restartCommand: lifecycleRuntimeContract.restart.command,
+        runtimeMode: lifecycleRuntimeContract.mode,
       },
     ));
     this.agentLoop.registerTool(createNotifyOperatorTool(
@@ -637,6 +637,20 @@ export class SubstrateRuntime implements Lifecycle {
       },
     ));
 
+    // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
+    let vaultAutoPublisher: import('./vault/auto-publish.js').VaultAutoPublisher | undefined;
+    if (this.config.obsidianAutoPublish && this.config.obsidianVaultName) {
+      const { VaultOps } = await import('./vault/ops.js');
+      const { VaultAutoPublisher } = await import('./vault/auto-publish.js');
+      const vaultOps = new VaultOps({
+        vaultName: this.config.obsidianVaultName,
+        cliPath: this.config.obsidianCliPath,
+        timeoutMs: this.config.obsidianTimeoutMs,
+      });
+      vaultAutoPublisher = new VaultAutoPublisher(vaultOps);
+      log.info('Vault auto-publish enabled for reflections');
+    }
+
     // Heartbeat reflections — policy-driven multi-template reflection system
     wireHeartbeatRuntime(
       this.agentLoop,
@@ -646,9 +660,11 @@ export class SubstrateRuntime implements Lifecycle {
       this.config.dataDir,
       heartbeatChannelId,
       {
+        eventBus: this.eventBus,
         llmProvider: this.llmClient,
-        sessionManager: this.sessionManager,
         memoryWriter,
+        postTurnActions,
+        ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
       },
     );
 
@@ -682,6 +698,7 @@ export class SubstrateRuntime implements Lifecycle {
               meta: {
                 total: stats.total,
                 avgSalience: Number(stats.avgSalience.toFixed(4)),
+                ...runtimeStatusMeta,
               },
             };
           },
@@ -691,6 +708,7 @@ export class SubstrateRuntime implements Lifecycle {
               provider: this.config.primaryProvider ?? null,
               model: this.config.primaryModel ?? null,
               ...toActiveProbeMeta(activeProbeConfig),
+              ...runtimeStatusMeta,
             };
 
             if (!configured) {
@@ -741,18 +759,21 @@ export class SubstrateRuntime implements Lifecycle {
               return {
                 status: 'degraded',
                 detail: 'Discord adapter is disabled',
+                meta: runtimeStatusMeta,
               };
             }
             if (!this.discord.isConnected()) {
               return {
                 status: 'degraded',
                 detail: 'Discord client is not connected',
+                meta: runtimeStatusMeta,
               };
             }
             return {
               status: 'healthy',
               meta: {
                 accountId: this.discord.config.accountId ?? null,
+                ...runtimeStatusMeta,
               },
             };
           },
@@ -760,6 +781,7 @@ export class SubstrateRuntime implements Lifecycle {
             const baseMeta = {
               dims: embeddingProvider.dims,
               ...toActiveProbeMeta(activeProbeConfig),
+              ...runtimeStatusMeta,
             };
             if (!Number.isFinite(embeddingProvider.dims) || embeddingProvider.dims <= 0) {
               return {
@@ -808,12 +830,12 @@ export class SubstrateRuntime implements Lifecycle {
               return {
                 status: 'degraded',
                 detail: 'Heartbeat task is not registered',
-                meta: { taskCount },
+                meta: { taskCount, ...runtimeStatusMeta },
               };
             }
             return {
               status: 'healthy',
-              meta: { taskCount },
+              meta: { taskCount, ...runtimeStatusMeta },
             };
           },
         },
@@ -855,6 +877,7 @@ export class SubstrateRuntime implements Lifecycle {
         promptRegistry,
         skillsRuntime,
         cardVersionStore,
+        adaptiveToolsStateProvider: this.agentLoop,
         confirmationQueueApi: {
           listConfirmationQueue: async () => ({ entries: cardProposalQueue.listPending() }),
           resolveConfirmationQueue: (params) => cardProposalQueue.resolve(params),

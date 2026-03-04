@@ -46,12 +46,45 @@ export interface MessagePromptOverride {
   systemPrompt?: string;
 }
 
+export type ResponseStyle = 'concise' | 'expressive';
+
+export interface ResponseStyleOverrides {
+  exact?: Record<string, ResponseStyle>;
+  prefix?: Record<string, ResponseStyle>;
+  channelType?: Record<string, ResponseStyle>;
+  defaultStyle?: ResponseStyle;
+}
+
+export type ObservabilityCallType =
+  | 'chat'
+  | 'tool'
+  | 'memory'
+  | 'summary'
+  | 'background'
+  | 'scheduled';
+
+export interface LLMRequestMetadata {
+  turnId?: string;
+  requestId?: string;
+  channelId?: string;
+  toolName?: string;
+  toolCallId?: string;
+  originType?: ObservabilityCallType;
+  originStage?: string;
+}
+
+export interface CorrelationMetadata extends LLMRequestMetadata {
+  callType: ObservabilityCallType;
+  purpose: string;
+}
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'unknown';
   wyoming?: WyomingRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
+  responseStyle?: ResponseStyle;
 }
 
 export interface SubstrateMessage {
@@ -79,6 +112,24 @@ export interface AgentResponse {
   content: string;
   channelId: string;
   metadata: ResponseMetadata;
+}
+
+export interface PostTurnActionCandidate {
+  kind: string;
+  payload?: Record<string, unknown>;
+  dedupeKey?: string;
+  maxRetries?: number;
+}
+
+export interface InferredPostTurnAction {
+  id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  dedupeKey: string;
+  channelId: string;
+  sourceMessageId: string;
+  inferredAt: number;
+  maxRetries?: number;
 }
 
 export interface ResponseMetadata {
@@ -128,6 +179,7 @@ export interface LLMContext {
   systemPrompt: string;
   messages: ContextMessage[];
   tools?: ToolSchema[];
+  correlation?: CorrelationMetadata;
 }
 
 export interface StreamCallbacks {
@@ -187,7 +239,7 @@ export interface ModelCatalogEntry {
 
 export type ModelRoleAssignments = Record<string, string>;
 
-export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext';
+export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext' | 'vision';
 export type CompletionPurpose = 'background' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
 
@@ -201,12 +253,15 @@ export interface RuntimeConfigHooks {
   refreshModels?: () => void;
   refreshCapabilities?: () => void;
   invalidatePromptPrefixCache?: () => void;
+  persistPromotedExtendedTools?: (toolNames: readonly string[]) => void;
 }
 
 // ── Configuration ──
 
 export type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous' | 'custom';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
+export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
+export const PROMOTED_EXTENDED_TOOL_SLOTS_MAX = 4;
 
 export interface WyomingShardRoutingConfig {
   enabled: boolean;
@@ -227,6 +282,7 @@ export interface SubstrateConfig {
   dataDir: string;
   databasePath: string;
   sessionMessageLimit?: number;
+  sessionRestartBehavior?: SessionRestartBehavior;
   continuityMessageLimit?: number;
   memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;
@@ -260,12 +316,17 @@ export interface SubstrateConfig {
   modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
+  responseStyleOverrides?: ResponseStyleOverrides;
   runtimeHooks?: RuntimeConfigHooks;
+  promotedExtendedTools?: string[];
   capabilityTier?: CapabilityTier;
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
-  discordRespondAll?: boolean;
+  discordTriggerWords?: string[];
+  discordTriggerReactions?: string[];
+  discordTriggerListenWindowMs?: number;
+  characterName?: string;
   voiceTargetGuildId?: string;
   voiceTargetUserId?: string;
   voiceReadyCueText?: string;
@@ -316,6 +377,12 @@ export interface SubstrateConfig {
   telegramEnabled?: boolean;
   telegramAuthorizedUsers?: string[];
 
+  // ── Obsidian vault ──
+  obsidianVaultName?: string;
+  obsidianCliPath?: string;
+  obsidianAutoPublish?: boolean;
+  obsidianTimeoutMs?: number;
+
   // ── MoA (Mixture of Agents) ──
   moaEnabled?: boolean;
   moaReferenceModels?: string[];
@@ -363,6 +430,7 @@ export function loadConfig(): SubstrateConfig {
     summary: 'primary',
     reasoning: 'primary',
     longContext: 'primary',
+    vision: 'primary',
     import_processing: 'extraction',
   };
   const memoryExtractionMinImportance = parseNumberEnv(
@@ -402,6 +470,7 @@ export function loadConfig(): SubstrateConfig {
   const retryMaxAttempts = parseInt(process.env.RETRY_MAX_ATTEMPTS ?? '3', 10);
   const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
   const openRouterProviderOrder = parseStringListEnv(process.env.OPENROUTER_PROVIDER_ORDER);
+  const responseStyleOverrides = parseResponseStyleOverridesEnv(process.env.RESPONSE_STYLE_OVERRIDES);
   const importProcessingRouteMode = parseImportProcessingRouteMode(
     process.env.IMPORT_PROCESSING_ROUTE_MODE,
     'background',
@@ -430,6 +499,10 @@ export function loadConfig(): SubstrateConfig {
   const sessionMirrorActiveWindowMs = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS, 1_000);
   const sessionMirrorChannelOverrides = parseBooleanMapEnv(process.env.SESSION_MIRROR_CHANNEL_OVERRIDES);
   const sessionMessageLimit = parseOptionalIntegerEnv(process.env.SESSION_MESSAGE_LIMIT, 1);
+  const sessionRestartBehavior = parseSessionRestartBehaviorEnv(
+    process.env.SESSION_RESTART_BEHAVIOR,
+    'reuse_latest_session',
+  );
   const continuityMessageLimit = parseOptionalIntegerEnv(process.env.CONTINUITY_MESSAGE_LIMIT, 1);
   const memoryRetrievalLimit = parseOptionalIntegerEnv(process.env.MEMORY_RETRIEVAL_LIMIT, 1);
   const sessionHistoryBudgetPct = parseBoundedIntegerEnv(
@@ -475,6 +548,7 @@ export function loadConfig(): SubstrateConfig {
     dataDir: process.env.DATA_DIR ?? './data',
     databasePath: process.env.DATABASE_PATH ?? './data/purrsephone.db',
     ...(sessionMessageLimit !== undefined ? { sessionMessageLimit } : {}),
+    sessionRestartBehavior,
     ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
     ...(memoryRetrievalLimit !== undefined ? { memoryRetrievalLimit } : {}),
     sessionHistoryBudgetPct,
@@ -518,7 +592,18 @@ export function loadConfig(): SubstrateConfig {
     },
     voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
     discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
-    discordRespondAll: parseOptionalBooleanEnv(process.env.DISCORD_RESPOND_ALL) ?? false,
+    discordTriggerWords: parseStringListEnv(process.env.DISCORD_TRIGGER_WORDS),
+    discordTriggerReactions: (() => {
+      const configured = parseStringListEnv(process.env.DISCORD_TRIGGER_REACTIONS);
+      return configured.length > 0 ? configured : ['👆'];
+    })(),
+    discordTriggerListenWindowMs: parseBoundedIntegerEnv(
+      process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS,
+      120_000,
+      10_000,
+      600_000,
+    ),
+    characterName: '',
     voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
     voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
@@ -537,6 +622,7 @@ export function loadConfig(): SubstrateConfig {
     retryMaxAttempts,
     retryBaseDelayMs,
     ...(openRouterProviderOrder.length > 0 ? { openRouterProviderOrder } : {}),
+    ...(responseStyleOverrides ? { responseStyleOverrides } : {}),
     importProcessingRouteMode,
     importProcessingStrictPolicy,
     ...(importProcessingLocalEndpointUrl ? { importProcessingLocalEndpointUrl } : {}),
@@ -561,6 +647,19 @@ export function loadConfig(): SubstrateConfig {
       : {}),
     capabilityTier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
+    // Obsidian vault
+    ...(parseOptionalStringEnv(process.env.OBSIDIAN_VAULT_NAME)
+      ? { obsidianVaultName: parseOptionalStringEnv(process.env.OBSIDIAN_VAULT_NAME) }
+      : {}),
+    ...(parseOptionalStringEnv(process.env.OBSIDIAN_CLI_PATH)
+      ? { obsidianCliPath: parseOptionalStringEnv(process.env.OBSIDIAN_CLI_PATH) }
+      : {}),
+    ...(parseOptionalBooleanEnv(process.env.OBSIDIAN_AUTO_PUBLISH) !== undefined
+      ? { obsidianAutoPublish: parseOptionalBooleanEnv(process.env.OBSIDIAN_AUTO_PUBLISH) }
+      : {}),
+    ...(parseOptionalIntegerEnv(process.env.OBSIDIAN_TIMEOUT_MS, 1000) !== undefined
+      ? { obsidianTimeoutMs: parseOptionalIntegerEnv(process.env.OBSIDIAN_TIMEOUT_MS, 1000) }
+      : {}),
   };
 }
 
@@ -612,6 +711,18 @@ function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined
     return false;
   }
   return undefined;
+}
+
+function parseSessionRestartBehaviorEnv(
+  value: string | undefined,
+  fallback: SessionRestartBehavior,
+): SessionRestartBehavior {
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'reuse_latest_session' || normalized === 'new_session') {
+    return normalized;
+  }
+  return fallback;
 }
 
 function parseBoundedIntegerEnv(
@@ -690,6 +801,56 @@ function parseShardToolsetEnv(
     }
   }
   return result;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseResponseStyle(value: unknown): ResponseStyle | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'concise' || normalized === 'expressive') {
+    return normalized;
+  }
+  return undefined;
+}
+
+function parseResponseStyleMap(value: unknown): Record<string, ResponseStyle> | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const parsed: Record<string, ResponseStyle> = {};
+  for (const [rawKey, rawStyle] of Object.entries(value)) {
+    const key = rawKey.trim();
+    const style = parseResponseStyle(rawStyle);
+    if (!key || !style) continue;
+    parsed[key] = style;
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function parseResponseStyleOverridesEnv(value: string | undefined): ResponseStyleOverrides | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!isPlainRecord(parsed)) return undefined;
+    const exact = parseResponseStyleMap(parsed.exact);
+    const prefix = parseResponseStyleMap(parsed.prefix);
+    const channelType = parseResponseStyleMap(parsed.channelType);
+    const defaultStyle = parseResponseStyle(parsed.defaultStyle);
+
+    if (!exact && !prefix && !channelType && !defaultStyle) return undefined;
+    return {
+      ...(exact ? { exact } : {}),
+      ...(prefix ? { prefix } : {}),
+      ...(channelType ? { channelType } : {}),
+      ...(defaultStyle ? { defaultStyle } : {}),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseStringListEnv(value: string | undefined): string[] {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ValuesJournalStore } from './store.js';
@@ -112,5 +112,24 @@ describe('ValuesJournalStore', () => {
       estimatedCostUsd: 0.00123,
       durationMs: 4567,
     });
+  });
+
+  it('migrates legacy values.jsonl into notes/values.jsonl on first access', () => {
+    const legacyPath = join(tempDir, 'values.jsonl');
+    const notesPath = join(tempDir, 'notes', 'values.jsonl');
+    writeFileSync(
+      legacyPath,
+      '{"id":"values-1","version":1,"templateId":"values-reflection","templateName":"Values Reflection","prompt":"P","reflection":"R","createdAt":"2026-02-26T00:00:00.000Z"}\n',
+      'utf-8',
+    );
+
+    const migrated = new ValuesJournalStore(notesPath, {
+      legacyFilePaths: [legacyPath],
+    });
+
+    const entries = migrated.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe('values-1');
+    expect(existsSync(notesPath)).toBe(true);
   });
 });

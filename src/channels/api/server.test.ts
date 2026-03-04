@@ -456,7 +456,7 @@ describe('ApiServer', () => {
       expect(call.authorName).toBe('V');
     });
 
-    it('passes direct-provider model override and prompt mode to substrate messages', async () => {
+    it('passes direct-provider, prompt, and style overrides to substrate messages', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
       server = new ApiServer({
@@ -472,6 +472,7 @@ describe('ApiServer', () => {
         model: 'claude-opus-4',
         provider: 'anthropic',
         system_prompt_mode: 'none',
+        response_style: 'concise',
         messages: [{ role: 'user', content: 'Talk with Purrsephone.' }],
       });
       expect(res.status).toBe(200);
@@ -484,6 +485,20 @@ describe('ApiServer', () => {
       expect(call.routing?.promptOverride).toEqual({
         mode: 'none',
       });
+      expect(call.routing?.responseStyle).toBe('concise');
+    });
+
+    it('rejects invalid response_style overrides', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        response_style: 'verbose',
+        messages: [{ role: 'user', content: 'test' }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('response_style must be one of');
     });
 
     it('rejects provider overrides outside the direct-provider allowlist', async () => {
@@ -718,10 +733,17 @@ describe('ApiServer', () => {
       expect(body.error.type).toBe('invalid_json');
     });
 
-    it('returns 429 for same-session in-flight contention', async () => {
+    it('queues same-session in-flight contention and runs requests in order', async () => {
       const deferred = createDeferred<AgentResponse>();
       const mockAgent = {
-        handleMessage: vi.fn(async () => deferred.promise),
+        handleMessage: vi
+          .fn()
+          .mockImplementationOnce(async () => deferred.promise)
+          .mockImplementationOnce(async () => ({
+            content: 'Second done',
+            channelId: 'api:same-session',
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          })),
       } as unknown as SubstrateAgent;
 
       await server.stop();
@@ -741,13 +763,13 @@ describe('ApiServer', () => {
 
       await new Promise(resolve => setTimeout(resolve, 20));
 
-      const second = await request(port, 'POST', '/v1/chat/completions', {
+      const secondRequest = request(port, 'POST', '/v1/chat/completions', {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'Second' }],
       }, { 'X-Session-ID': 'same-session' });
 
-      expect(second.status).toBe(429);
-      expect(JSON.parse(second.body).error.type).toBe('channel_busy');
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
 
       deferred.resolve({
         content: 'First done',
@@ -756,7 +778,78 @@ describe('ApiServer', () => {
       });
 
       const first = await firstRequest;
+      const second = await secondRequest;
       expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(second.body).choices[0].message.content).toBe('Second done');
+    });
+
+    it('emits queue telemetry for queued API contention', async () => {
+      const deferred = createDeferred<AgentResponse>();
+      const queueEvents: Array<Record<string, unknown>> = [];
+      eventBus.on('channel.queue.telemetry', (event) => {
+        queueEvents.push(event as unknown as Record<string, unknown>);
+      });
+      const mockAgent = {
+        handleMessage: vi
+          .fn()
+          .mockImplementationOnce(async () => deferred.promise)
+          .mockImplementationOnce(async () => ({
+            content: 'Second telemetry turn',
+            channelId: 'api:queue-telemetry',
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          })),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+      });
+      await server.init();
+      await server.start();
+
+      const firstRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'First telemetry turn' }],
+      }, { 'X-Session-ID': 'queue-telemetry' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const secondRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        messages: [{ role: 'user', content: 'Second telemetry turn' }],
+      }, { 'X-Session-ID': 'queue-telemetry' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+      deferred.resolve({
+        content: 'First telemetry done',
+        channelId: 'api:queue-telemetry',
+        metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+      });
+
+      await firstRequest;
+      await secondRequest;
+
+      expect(queueEvents.some(event =>
+        event.phase === 'contended'
+        && event.policy === 'queue'
+        && event.source === 'api'
+        && event.channelId === 'api:queue-telemetry'
+      )).toBe(true);
+      expect(queueEvents.some(event =>
+        event.phase === 'acquired'
+        && event.policy === 'queue'
+        && event.source === 'api'
+      )).toBe(true);
+      expect(queueEvents.some(event =>
+        event.phase === 'released'
+        && event.policy === 'queue'
+        && event.source === 'api'
+      )).toBe(true);
     });
 
     it('returns timeout error and recovers after in-flight settles', async () => {
@@ -794,11 +887,13 @@ describe('ApiServer', () => {
       expect(JSON.parse(timedOut.body).error.type).toBe('request_timeout');
       expect(abortSpy).toHaveBeenCalledTimes(1);
 
-      const busy = await request(port, 'POST', '/v1/chat/completions', {
+      const queuedTimeout = await request(port, 'POST', '/v1/chat/completions', {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'Retry too soon' }],
       }, { 'X-Session-ID': 'timeout-session' });
-      expect(busy.status).toBe(429);
+      expect(queuedTimeout.status).toBe(504);
+      expect(JSON.parse(queuedTimeout.body).error.type).toBe('request_timeout');
+      expect(abortSpy).toHaveBeenCalledTimes(1);
 
       deferred.resolve({
         content: 'Recovered from first',
@@ -900,19 +995,22 @@ describe('ApiServer', () => {
         setTimeout(finish, 200);
       });
 
-      const busy = await request(port, 'POST', '/v1/chat/completions', {
+      const queuedRecovery = request(port, 'POST', '/v1/chat/completions', {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'still running' }],
       }, { 'X-Session-ID': 'disconnect-session' });
-      expect(busy.status).toBe(429);
-      expect(abortSpy).toHaveBeenCalledTimes(1);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
 
       deferred.resolve({
         content: 'disconnected done',
         channelId: 'api:disconnect-session',
         metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
       });
-      await new Promise(resolve => setTimeout(resolve, 10));
+      const queued = await queuedRecovery;
+      expect(queued.status).toBe(200);
+      expect(JSON.parse(queued.body).choices[0].message.content).toBe('After disconnect');
+      expect(abortSpy).toHaveBeenCalledTimes(1);
 
       const recovered = await request(port, 'POST', '/v1/chat/completions', {
         model: 'purrsephone',

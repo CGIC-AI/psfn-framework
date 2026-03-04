@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import type { LLMContext, SubstrateConfig } from '../types.js';
+import type { SessionRestartBehavior } from '../types.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type {
   SessionStore,
+  SessionActivitySummary,
   LegacyChatImportRequest,
   LegacyChatImportResult,
   LegacyChatImportRange,
@@ -40,6 +43,12 @@ export type {
   PreCompactionExtractionHandler,
 };
 
+const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
+
+function shouldPersistSessionChannel(channelId: string): boolean {
+  return !channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
+}
+
 export interface LegacyChatImportRunRequest extends LegacyChatImportRequest {
   canonicalContactId?: string;
   bootstrap?: boolean;
@@ -51,12 +60,19 @@ export interface LegacyChatImportRunResult {
   bootstrapResult: ImportedHistoryBootstrapResult | null;
 }
 
+export interface StartupSessionMetadata {
+  sessionId: string;
+  channelType?: string;
+  timestamp: number;
+}
+
 export class SessionManager {
   private store: SessionStore;
   private config: SubstrateConfig;
   private eventBus: EventBus | null;
   private promptRegistry: PromptRegistryStore | null;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
+  private activeContextSessionId: string | null = null;
   continuityStore: UserContinuityStore | null = null;
   /** Character name from identity card (e.g. 'Purrsephone'). Used for display labels in context. */
   characterName: string | undefined;
@@ -74,6 +90,36 @@ export class SessionManager {
     this.preCompactionExtractionHandler = null;
   }
 
+  private shouldOverrideSessionContext(channelId: string): boolean {
+    return channelId.startsWith('api:') || channelId.startsWith('terminal:');
+  }
+
+  resolveSessionChannelId(channelId: string): string {
+    if (!this.activeContextSessionId) return channelId;
+    if (!this.shouldOverrideSessionContext(channelId)) return channelId;
+    return this.activeContextSessionId;
+  }
+
+  setActiveContextSession(sessionId: string | null): void {
+    const normalized = sessionId?.trim();
+    this.activeContextSessionId = normalized ? normalized : null;
+  }
+
+  getActiveContextSession(): string | null {
+    return this.activeContextSessionId;
+  }
+
+  listRecentSessions(limit?: number): SessionActivitySummary[] {
+    if (limit === undefined) {
+      return this.store.listSessionsByRecentActivity();
+    }
+    return this.store.listSessionsByRecentActivity(limit);
+  }
+
+  getSessionActivity(sessionId: string): SessionActivitySummary | null {
+    return this.store.getSessionActivity(sessionId);
+  }
+
   recordUserMessage(
     channelId: string,
     content: string,
@@ -83,11 +129,13 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): void {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return;
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
-    const channelVisibility = classifyChannel(channelId, meta);
+    const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     this.store.append({
-      channelId,
+      channelId: resolvedChannelId,
       role: 'user',
       content,
       authorId,
@@ -99,20 +147,20 @@ export class SessionManager {
     const continuityKey = continuityUserId ?? authorId;
     if (this.continuityStore && continuityKey) {
       this.continuityStore.append(continuityKey, {
-        channelId,
+        channelId: resolvedChannelId,
         role: 'user',
         content,
         authorId,
         authorName,
         timestamp,
-        originChannelId: channelId,
+        originChannelId: resolvedChannelId,
         channelVisibility,
       });
     }
 
     this.mirrorMessageToActiveSessions({
       continuityKey,
-      sourceChannelId: channelId,
+      sourceChannelId: resolvedChannelId,
       sourceVisibility: channelVisibility,
       sourceRole: 'user',
       sourceAuthorName: authorName,
@@ -131,11 +179,13 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): void {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return;
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
-    const channelVisibility = classifyChannel(channelId, meta);
+    const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     this.store.append({
-      channelId,
+      channelId: resolvedChannelId,
       role: 'assistant',
       content,
       timestamp,
@@ -145,18 +195,18 @@ export class SessionManager {
     const continuityKey = continuityUserId ?? forUserId;
     if (this.continuityStore && continuityKey) {
       this.continuityStore.append(continuityKey, {
-        channelId,
+        channelId: resolvedChannelId,
         role: 'assistant',
         content,
         timestamp,
-        originChannelId: channelId,
+        originChannelId: resolvedChannelId,
         channelVisibility,
       });
     }
 
     this.mirrorMessageToActiveSessions({
       continuityKey,
-      sourceChannelId: channelId,
+      sourceChannelId: resolvedChannelId,
       sourceVisibility: channelVisibility,
       sourceRole: 'assistant',
       content,
@@ -195,8 +245,9 @@ export class SessionManager {
     channelMeta?: ChannelMeta,
     continuityFallbackUserIds: string[] = [],
   ): Promise<LLMContext> {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return buildSessionContext({
-      channelId,
+      channelId: resolvedChannelId,
       systemPrompt,
       memoriesBlock,
       llmProvider,
@@ -215,8 +266,10 @@ export class SessionManager {
 
   /** Append a system note to a session. Visible in subsequent context builds. */
   appendSystemNote(channelId: string, note: string): void {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return;
     this.store.append({
-      channelId,
+      channelId: resolvedChannelId,
       role: 'system',
       content: note,
       authorId: 'system',
@@ -269,12 +322,13 @@ export class SessionManager {
   }
 
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (limit !== undefined) {
-      return this.store.getRecent(channelId, limit);
+      return this.store.getRecent(resolvedChannelId, limit);
     }
 
     const historyBudget = resolveSessionHistoryBudget(this.config);
-    const recent = this.store.getRecent(channelId, historyBudget.estimatedCount);
+    const recent = this.store.getRecent(resolvedChannelId, historyBudget.estimatedCount);
     if (historyBudget.mode === 'hard_limit') {
       return recent;
     }
@@ -282,10 +336,32 @@ export class SessionManager {
   }
 
   getMessageCount(channelId: string): number {
-    return this.store.count(channelId);
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return this.store.count(resolvedChannelId);
   }
 
   searchTranscripts(query: string, limit?: number): SessionSearchHit[] {
     return this.store.searchByKeywords(query, limit);
+  }
+
+  resolveStartupSessionMetadata(
+    behavior: SessionRestartBehavior = 'reuse_latest_session',
+  ): StartupSessionMetadata | null {
+    if (behavior === 'new_session') {
+      const timestamp = Date.now();
+      return {
+        sessionId: `api:restart-${timestamp.toString(36)}-${randomUUID().slice(0, 8)}`,
+        channelType: 'api',
+        timestamp,
+      };
+    }
+
+    const latest = this.store.getLatestSessionByTimestamp();
+    if (!latest || this.store.count(latest.sessionId) <= 0) return null;
+    return {
+      sessionId: latest.sessionId,
+      channelType: latest.channelType,
+      timestamp: latest.timestamp,
+    };
   }
 }

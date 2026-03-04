@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { ContactStore } from './store.js';
 import type { Contact } from './types.js';
 
@@ -170,6 +173,34 @@ describe('ContactStore', () => {
       });
       expect(updated.notes).toBe('Old notes');
       expect(updated.emotionalBaseline).toEqual({ warmth: 0.5 });
+    });
+
+    it('exports contact snapshots to configured contacts directory', () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'psfn-contacts-export-'));
+      const exportDir = join(tempDir, 'contacts');
+      const exportStore = new ContactStore(db, PRIMARY_USER_ID, { exportDir });
+
+      const created = exportStore.upsert({
+        displayName: 'Exported',
+        discordUserId: 'discord-export',
+        notes: 'first note',
+      });
+      exportStore.updateNotes(created.id, 'updated note');
+
+      const index = JSON.parse(readFileSync(join(exportDir, 'index.json'), 'utf-8')) as {
+        count: number;
+        contacts: Array<{ id: string; displayName: string }>;
+      };
+      expect(index.count).toBeGreaterThanOrEqual(1);
+      expect(index.contacts.some(contact => contact.id === created.id)).toBe(true);
+
+      const contactFile = JSON.parse(
+        readFileSync(join(exportDir, `contact-${created.id}.json`), 'utf-8'),
+      ) as { id: string; notes?: string };
+      expect(contactFile.id).toBe(created.id);
+      expect(contactFile.notes).toBe('updated note');
+
+      rmSync(tempDir, { recursive: true, force: true });
     });
   });
 

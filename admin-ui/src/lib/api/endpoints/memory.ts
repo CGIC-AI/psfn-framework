@@ -10,6 +10,9 @@ import type {
 
 export interface MemoryListParams {
   type?: string;
+  sensitivity?: string;
+  startDate?: string;
+  endDate?: string;
   limit?: number;
   offset?: number;
 }
@@ -19,6 +22,9 @@ export function listMemories(
 ): Promise<AdminMemoryListData> {
   const search = new URLSearchParams();
   if (params?.type) search.set('type', params.type);
+  if (params?.sensitivity) search.set('sensitivity', params.sensitivity);
+  if (params?.startDate) search.set('startDate', params.startDate);
+  if (params?.endDate) search.set('endDate', params.endDate);
   if (params?.limit !== undefined) search.set('limit', String(params.limit));
   if (params?.offset !== undefined) search.set('offset', String(params.offset));
   const qs = search.toString();

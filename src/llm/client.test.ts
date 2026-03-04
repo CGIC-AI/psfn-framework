@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubstrateConfig } from '../types.js';
+import { FallbackRunner } from './fallback.js';
 
 const mocks = vi.hoisted(() => ({
   getModel: vi.fn(),
@@ -19,7 +20,7 @@ vi.mock('@mariozechner/pi-ai', () => ({
   getEnvApiKey: mocks.getEnvApiKey,
 }));
 
-import { LLMClient, SensitiveImportRoutePolicyError } from './client.js';
+import { inferCallType, LLMClient, SensitiveImportRoutePolicyError } from './client.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -228,5 +229,83 @@ describe('LLMClient completion model hints', () => {
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(77);
+  });
+});
+
+describe('LLMClient correlation metadata', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: `${provider}:${modelId}`,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('infers stable call types from purpose and channel', () => {
+    expect(inferCallType('chat')).toBe('chat');
+    expect(inferCallType('reasoning')).toBe('tool');
+    expect(inferCallType('summary')).toBe('summary');
+    expect(inferCallType('extraction')).toBe('memory');
+    expect(inferCallType('background', 'internal:heartbeat')).toBe('scheduled');
+    expect(inferCallType('background', 'discord:general')).toBe('background');
+  });
+
+  it('passes normalized correlation metadata to fallback execution', async () => {
+    const runSpy = vi.spyOn(FallbackRunner.prototype, 'run');
+    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      model: 'z-ai/glm-5',
+      usage: { input: 2, output: 1 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+        correlation: {
+          turnId: 'turn-1',
+          requestId: 'req-1',
+          channelId: 'internal:heartbeat',
+          callType: 'scheduled',
+          originType: 'scheduled',
+          originStage: 'health.check',
+          toolCallId: 'tool-call-1',
+          purpose: 'health.check',
+        },
+      },
+      'background',
+      { disableRetry: true },
+    );
+
+    const correlation = runSpy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(correlation).toMatchObject({
+      turnId: 'turn-1',
+      requestId: 'req-1',
+      channelId: 'internal:heartbeat',
+      callType: 'scheduled',
+      originType: 'scheduled',
+      originStage: 'health.check',
+      toolCallId: 'tool-call-1',
+      purpose: 'health.check',
+    });
+
+    runSpy.mockRestore();
   });
 });

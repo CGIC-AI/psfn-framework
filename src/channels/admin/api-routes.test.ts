@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -261,6 +261,37 @@ describe('AdminServer JSON API routes', () => {
       config: testConfig,
       parentSystemPrompt: '',
     });
+    const adaptiveToolsStateProvider = {
+      getAdaptiveToolRuntimeState: () => ({
+        generatedAt: 1_701_234_567_890,
+        coreTools: ['load_tools'],
+        extendedTools: ['repo_status', 'repo_diff', 'repo_apply_patch'],
+        promotedToolsConfigured: ['repo_status'],
+        promotedToolsActive: ['repo_status'],
+        promotedToolsSkipped: [
+          {
+            toolName: 'repo_apply_patch',
+            source: 'promoted',
+            reason: 'capability_denied',
+            missingTokens: ['git.write'],
+          },
+        ],
+        loadedExtendedTools: [
+          {
+            toolName: 'repo_diff',
+            source: 'autoload',
+            activatedAt: 1_701_234_560_000,
+            lastActivatedAt: 1_701_234_567_000,
+          },
+        ],
+        activeTools: [
+          { toolName: 'load_tools', source: 'core' },
+          { toolName: 'repo_status', source: 'promoted' },
+          { toolName: 'repo_diff', source: 'autoload' },
+        ],
+        lastSnapshot: null,
+      }),
+    };
 
     port = await allocatePort();
     server = new AdminServer({
@@ -279,6 +310,7 @@ describe('AdminServer JSON API routes', () => {
       promptStore,
       promptRegistry,
       cardVersionStore,
+      adaptiveToolsStateProvider,
       skillsRuntime: {
         getSnapshot: () => null,
         invalidate: () => {},
@@ -306,7 +338,98 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
   });
 
-  it('supports memory list/detail/search/supersede endpoints', async () => {
+  it('returns adaptive tool runtime state and recent adaptive telemetry', async () => {
+    await eventBus.emit('agent.tools.adaptive.decision', {
+      turnId: 'turn-adaptive-1',
+      requestId: 'turn-adaptive-1',
+      channelId: 'api-session',
+      callType: 'chat',
+      purpose: 'agent.tools.adaptive.decision',
+      timestamp: Date.now(),
+      toolName: 'repo_diff',
+      source: 'autoload',
+      decision: 'activated',
+      reason: 'autoload_candidate',
+      taskKind: null,
+      intent: 'dev',
+    });
+    await eventBus.emit('agent.tools.adaptive.snapshot', {
+      turnId: 'turn-adaptive-1',
+      requestId: 'turn-adaptive-1',
+      channelId: 'api-session',
+      callType: 'chat',
+      purpose: 'agent.tools.adaptive.snapshot',
+      timestamp: Date.now(),
+      taskKind: null,
+      intent: 'dev',
+      tools: [
+        { toolName: 'load_tools', source: 'core' },
+        { toolName: 'repo_status', source: 'promoted' },
+        { toolName: 'repo_diff', source: 'autoload' },
+      ],
+      skipped: [
+        {
+          toolName: 'repo_apply_patch',
+          source: 'autoload',
+          reason: 'capability_denied',
+          missingTokens: ['git.write'],
+        },
+      ],
+      counts: {
+        core: 1,
+        promoted: 1,
+        extendedLoaded: 0,
+        autoload: 1,
+        deferred: 0,
+        total: 3,
+      },
+    });
+
+    const adaptiveRes = await request(port, 'GET', '/api/admin/tools/adaptive', undefined, authHeaders);
+    expect(adaptiveRes.status).toBe(200);
+    const adaptivePayload = JSON.parse(adaptiveRes.body) as {
+      state: {
+        coreTools: string[];
+        activeTools: Array<{ toolName: string; source: string }>;
+      } | null;
+      recentTelemetry: Array<{
+        type: 'decision' | 'snapshot';
+        payload: Record<string, unknown>;
+      }>;
+    };
+
+    expect(adaptivePayload.state).not.toBeNull();
+    expect(adaptivePayload.state?.coreTools).toContain('load_tools');
+    expect(adaptivePayload.state?.activeTools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
+      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
+    ]));
+    expect(adaptivePayload.recentTelemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'decision',
+        payload: expect.objectContaining({
+          toolName: 'repo_diff',
+          source: 'autoload',
+          decision: 'activated',
+        }),
+      }),
+      expect.objectContaining({
+        type: 'snapshot',
+        payload: expect.objectContaining({
+          tools: expect.arrayContaining([
+            expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
+          ]),
+          skipped: expect.arrayContaining([
+            expect.objectContaining({ toolName: 'repo_apply_patch', reason: 'capability_denied' }),
+          ]),
+        }),
+      }),
+    ]));
+  });
+
+  it('supports memory list filters and detail fetch path for modal', async () => {
+    const semanticTimestamp = Date.UTC(2026, 0, 10, 12, 0, 0);
+    const episodicTimestamp = Date.UTC(2026, 1, 22, 9, 30, 0);
     memoryStore.insertMemory({
       id: 'api-mem-1',
       text: 'API semantic memory one',
@@ -316,8 +439,8 @@ describe('AdminServer JSON API routes', () => {
       emotionalValence: 0.1,
       salience: 0.5,
       sourceRef: 'api:test:1',
-      extractedAt: Date.now(),
-      lastAccessed: Date.now(),
+      extractedAt: semanticTimestamp,
+      lastAccessed: semanticTimestamp,
       accessCount: 0,
       tags: ['api'],
       sensitivity: 'personal',
@@ -331,11 +454,11 @@ describe('AdminServer JSON API routes', () => {
       emotionalValence: 0,
       salience: 0.6,
       sourceRef: 'api:test:2',
-      extractedAt: Date.now(),
-      lastAccessed: Date.now(),
+      extractedAt: episodicTimestamp,
+      lastAccessed: episodicTimestamp,
       accessCount: 0,
       tags: ['api'],
-      sensitivity: 'personal',
+      sensitivity: 'confidential',
     }, new Float32Array([0.2, 0.3, 0.4]));
 
     const listRes = await request(port, 'GET', '/api/admin/memory?limit=1&offset=1', undefined, authHeaders);
@@ -347,6 +470,36 @@ describe('AdminServer JSON API routes', () => {
     expect(filteredRes.status).toBe(200);
     const filteredPayload = JSON.parse(filteredRes.body) as { memories: Array<{ type: string }> };
     expect(filteredPayload.memories.every(memory => memory.type === 'semantic')).toBe(true);
+
+    const sensitivityRes = await request(port, 'GET', '/api/admin/memory?sensitivity=confidential', undefined, authHeaders);
+    expect(sensitivityRes.status).toBe(200);
+    const sensitivityPayload = JSON.parse(sensitivityRes.body) as { memories: Array<{ sensitivity: string }> };
+    expect(sensitivityPayload.memories).toHaveLength(1);
+    expect(sensitivityPayload.memories[0]?.sensitivity).toBe('confidential');
+
+    const dateRangeRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory?startDate=2026-01-01&endDate=2026-01-31',
+      undefined,
+      authHeaders,
+    );
+    expect(dateRangeRes.status).toBe(200);
+    const dateRangePayload = JSON.parse(dateRangeRes.body) as { memories: Array<{ id: string }> };
+    expect(dateRangePayload.memories).toHaveLength(1);
+    expect(dateRangePayload.memories[0]?.id).toBe('api-mem-1');
+
+    const combinedFilterRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory?type=episodic&sensitivity=confidential&startDate=2026-02-01&endDate=2026-02-28',
+      undefined,
+      authHeaders,
+    );
+    expect(combinedFilterRes.status).toBe(200);
+    const combinedFilterPayload = JSON.parse(combinedFilterRes.body) as { memories: Array<{ id: string }> };
+    expect(combinedFilterPayload.memories).toHaveLength(1);
+    expect(combinedFilterPayload.memories[0]?.id).toBe('api-mem-2');
 
     const detailRes = await request(port, 'GET', '/api/admin/memory/api-mem-1', undefined, authHeaders);
     expect(detailRes.status).toBe(200);
@@ -367,6 +520,21 @@ describe('AdminServer JSON API routes', () => {
 
     const badType = await request(port, 'GET', '/api/admin/memory?type=not-a-type', undefined, authHeaders);
     expect(badType.status).toBe(400);
+
+    const badSensitivity = await request(port, 'GET', '/api/admin/memory?sensitivity=top-secret', undefined, authHeaders);
+    expect(badSensitivity.status).toBe(400);
+
+    const badStartDate = await request(port, 'GET', '/api/admin/memory?startDate=2026-02-30', undefined, authHeaders);
+    expect(badStartDate.status).toBe(400);
+
+    const badRange = await request(
+      port,
+      'GET',
+      '/api/admin/memory?startDate=2026-02-10&endDate=2026-02-01',
+      undefined,
+      authHeaders,
+    );
+    expect(badRange.status).toBe(400);
   });
 
   it('supports memory bulk update/delete and link/unlink endpoints', async () => {
@@ -509,7 +677,7 @@ describe('AdminServer JSON API routes', () => {
     const pageRes = await request(
       port,
       'GET',
-      '/memory',
+      '/legacy/memory',
       undefined,
       { Authorization: `Bearer ${token}` },
     );
@@ -619,17 +787,70 @@ describe('AdminServer JSON API routes', () => {
   it('supports settings, identity, and prompts endpoints', async () => {
     const settingsRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsRes.status).toBe(200);
-    const settingsPayload = JSON.parse(settingsRes.body) as { config: { sessionMessageLimit: number } };
+    const settingsPayload = JSON.parse(settingsRes.body) as {
+      config: { sessionMessageLimit: number; sessionRestartBehavior: string };
+    };
     expect(settingsPayload.config.sessionMessageLimit).toBe(testConfig.sessionMessageLimit);
+    expect(settingsPayload.config.sessionRestartBehavior).toBe('reuse_latest_session');
 
     const settingsPatchRes = await request(
       port,
       'PATCH',
       '/api/admin/settings',
-      JSON.stringify({ sessionMessageLimit: 55 }),
+      JSON.stringify({ sessionMessageLimit: 55, sessionRestartBehavior: 'new_session' }),
       authHeaders,
     );
     expect(settingsPatchRes.status).toBe(200);
+    const settingsAfterPatchRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
+    expect(settingsAfterPatchRes.status).toBe(200);
+    const settingsAfterPatch = JSON.parse(settingsAfterPatchRes.body) as {
+      config: { sessionMessageLimit: number; sessionRestartBehavior: string };
+    };
+    expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
+    expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
+
+    const rosterPatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 16384, contextWindow: 128000 },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 8192, contextWindow: 128000 },
+          },
+          vision: {
+            model: 'moonshotai/kimi-k2.5',
+            provider: 'openrouter',
+            overrides: { maxTokens: 16384, contextWindow: 128000 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          background: 'extraction',
+          extraction: 'extraction',
+          summary: 'primary',
+          reasoning: 'primary',
+          longContext: 'primary',
+          import_processing: 'extraction',
+          vision: 'vision',
+        },
+      }),
+      authHeaders,
+    );
+    expect(rosterPatchRes.status).toBe(200);
+    const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
+      modelCatalog: Record<string, unknown>;
+      modelRoleAssignments: Record<string, string>;
+    };
+    expect(persistedModels.modelCatalog.vision).toBeDefined();
+    expect(persistedModels.modelRoleAssignments.vision).toBe('vision');
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);
@@ -776,6 +997,44 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('returns field-level validation details for invalid settings payloads', async () => {
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        sessionMessageLimit: 0,
+        importProcessingRouteMode: 'local_endpoint',
+        importProcessingLocalEndpointUrl: '',
+        importProcessingLocalModel: '',
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as {
+      ok: boolean;
+      message: string;
+      validationErrors?: Array<{ field: string; message: string; code?: string }>;
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain('sessionMessageLimit must be 5-200');
+    expect(payload.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'sessionMessageLimit',
+        message: 'sessionMessageLimit must be 5-200',
+      }),
+      expect.objectContaining({
+        field: 'importProcessingLocalEndpointUrl',
+        message: 'importProcessingLocalEndpointUrl is required when importProcessingRouteMode=local_endpoint',
+      }),
+      expect.objectContaining({
+        field: 'importProcessingLocalModel',
+        message: 'importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint',
+      }),
+    ]));
+  });
+
   it('records operator-attributed audit entries for /api/admin/identity mutation routes and renders actor labels', async () => {
     const fieldPatchRes = await request(
       port,
@@ -813,7 +1072,7 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(uploadDeniedRes.status).toBeGreaterThanOrEqual(400);
 
-    const eventsRes = await request(port, 'GET', '/events?timeRange=all', undefined, authHeaders);
+    const eventsRes = await request(port, 'GET', '/legacy/events?timeRange=all', undefined, authHeaders);
     expect(eventsRes.status).toBe(200);
     expect(eventsRes.body).toContain('Actor: Operator');
     expect(eventsRes.body).toContain('/api/admin/identity/fields');

@@ -4,7 +4,11 @@ import {
   GatewayIntentBits,
   Partials,
   type Message,
+  type MessageReaction,
+  type PartialMessageReaction,
+  type PartialUser,
   type TextChannel,
+  type User,
 } from 'discord.js';
 import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
 import type {
@@ -25,6 +29,12 @@ import type { EventBus } from '../../event-bus.js';
 import type { SessionStore } from '../../session/store.js';
 import { createComponentLogger } from '../../logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
+import {
+  DeferredLatestByChannel,
+  emitTurnContentionTelemetry,
+  type TurnContentionPhase,
+  type TurnContentionPolicy,
+} from '../../lifecycle/turn-contention.js';
 
 const log = createComponentLogger('Discord');
 
@@ -33,11 +43,54 @@ const MAX_DISCORD_LENGTH = 2000;
 const STARTUP_BACKFILL_LIMIT = 100;
 const BACKFILL_DEDUP_WINDOW = 500;
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
-type StatusKind = 'compaction' | 'retry';
-type QueueTelemetryPhase = 'acquired' | 'contended' | 'released';
+const DISCORD_TRIGGER_REACTION_DEFAULT = '👆';
+const DISCORD_LISTEN_WINDOW_DEFAULT_MS = 120_000;
+const DISCORD_LISTEN_WINDOW_MIN_MS = 10_000;
+const DISCORD_LISTEN_WINDOW_MAX_MS = 600_000;
+const DISCORD_TRIGGER_OPT_OUT_PREFIX = '!i';
+const DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE = 4;
+const DISCORD_MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const DISCORD_INLINE_IMAGE_URL_PATTERN = /https?:\/\/[^\s<>()]+/gi;
+const DISCORD_IMAGE_LINK_HOST_SUFFIXES = [
+  '.discordapp.com',
+  '.discordapp.net',
+];
+const DISCORD_IMAGE_EXTENSION_TO_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.avif': 'image/avif',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+};
+const LONG_RUNNING_STATUS_INITIAL_DELAY_MS = 12_000;
+const LONG_RUNNING_STATUS_POLL_MS = 5_000;
+const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
+type StatusKind = 'compaction' | 'retry' | 'long-running';
 
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
+}
+
+interface LongRunningToolState {
+  channelId: string;
+  toolName: string;
+  startedAt: number;
+  timer: ReturnType<typeof setInterval>;
+  lastStatusAt: number;
+  statusSent: boolean;
+  inFlight: boolean;
+}
+
+interface PendingDiscordTurn {
+  msg: Message;
+  substrateMsg: SubstrateMessage;
+  replyToOriginal: boolean;
 }
 
 export class DiscordAdapter implements ChannelAdapter {
@@ -71,12 +124,15 @@ export class DiscordAdapter implements ChannelAdapter {
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
-  private pendingByChannel = new Map<string, Message>();
+  private pendingByChannel = new DeferredLatestByChannel<PendingDiscordTurn>();
   private lockStartedAt = new Map<string, number>();
   private lockContention = new Map<string, number>();
+  private lockPolicy = new Map<string, TurnContentionPolicy>();
+  private listeningWindows = new Map<string, number>();
   private voice: DiscordVoiceRuntime;
   private statusMessages = new Map<string, Message>();
   private statusUnsubscribers: Array<() => void> = [];
+  private longRunningTools = new Map<string, LongRunningToolState>();
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
@@ -96,7 +152,7 @@ export class DiscordAdapter implements ChannelAdapter {
     this.gateway = this;
     this.security = {
       supportsDirectMessages: true,
-      requiresMentionForChannelMessages: this.runtimeConfig.discordRespondAll !== true,
+      requiresMentionForChannelMessages: true,
     };
     this.streaming = {
       typingIntervalMs: TYPING_INTERVAL_MS,
@@ -125,8 +181,9 @@ export class DiscordAdapter implements ChannelAdapter {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessageReactions,
       ],
-      partials: [Partials.Channel],
+      partials: [Partials.Channel, Partials.Message, Partials.Reaction],
     });
 
     this.voice = new DiscordVoiceRuntime({
@@ -158,6 +215,11 @@ export class DiscordAdapter implements ChannelAdapter {
         log.error('Message handling error', { error: String(err) });
       });
     });
+    this.client.on(Events.MessageReactionAdd, (reaction, user) => {
+      this.onReactionAdd(reaction, user).catch(err => {
+        log.error('Reaction handling error', { error: String(err) });
+      });
+    });
 
     this.client.once(Events.ClientReady, (c) => {
       log.info(`Logged in as ${c.user.tag}`);
@@ -180,7 +242,9 @@ export class DiscordAdapter implements ChannelAdapter {
   async stop(): Promise<void> {
     for (const unsub of this.statusUnsubscribers) unsub();
     this.statusUnsubscribers = [];
+    this.clearAllLongRunningTools();
     await this.clearAllStatusMessages();
+    this.listeningWindows.clear();
     await this.voice.stop();
     this.client.destroy();
   }
@@ -206,58 +270,143 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   private async onDiscordMessage(msg: Message): Promise<void> {
-    const liveBotId = this.client.user?.id;
-    const configuredBotId = this.runtimeConfig.discordBotId.trim();
-    const runtimeBotId = liveBotId ?? (configuredBotId.length > 0 ? configuredBotId : undefined);
+    const runtimeBotId = this.resolveRuntimeBotId();
 
-    // Ignore self
-    if (liveBotId && msg.author.id === liveBotId) return;
+    // Ignore self + bots
+    if (runtimeBotId && msg.author.id === runtimeBotId) return;
     if (msg.author.bot) return;
     if (!this.handler) return;
 
-    // Respond to DMs always, guild messages only when mentioned
+    // Respond to DMs always, guild messages by mention/trigger/listening window.
     const isDM = !msg.guild;
-    const isMentioned = runtimeBotId ? msg.mentions.has(runtimeBotId) : false;
-    const respondAllGuildMessages = this.runtimeConfig.discordRespondAll === true;
-    if (!isDM && !respondAllGuildMessages && !isMentioned) return;
-
     const channelId = msg.channelId;
+    if (!isDM) {
+      if (msg.content.trimStart().startsWith(DISCORD_TRIGGER_OPT_OUT_PREFIX)) return;
 
-    // Strip bot mention from content
-    let content = msg.content;
-    if (runtimeBotId) {
-      content = content.replace(new RegExp(`<@!?${runtimeBotId}>`, 'g'), '');
+      const isMentioned = runtimeBotId ? msg.mentions.has(runtimeBotId) : false;
+      const isTriggered = this.matchesTriggerWord(msg.content);
+      const listenKey = this.listeningWindowKey(channelId, msg.author.id);
+      const isListening = this.isInListeningWindow(listenKey);
+
+      if (!isMentioned && !isTriggered && !isListening) return;
+
+      this.openListeningWindow(listenKey);
+
+      if (isTriggered && !isMentioned) {
+        log.debug('Discord trigger word matched', { channelId, authorId: msg.author.id });
+      } else if (isListening && !isMentioned) {
+        log.debug('Discord listening window accepted follow-up', { channelId, authorId: msg.author.id });
+      }
     }
-    content = content.trim();
-    if (!content) content = '(empty message)';
 
-    const substrateMsg: SubstrateMessage = {
-      id: msg.id,
+    const substrateMsg = this.buildSubstrateMessage(msg, isDM, runtimeBotId);
+    await this.processMessage({
+      msg,
+      substrateMsg,
+      replyToOriginal: false,
+    });
+  }
+
+  private async onReactionAdd(
+    reaction: MessageReaction | PartialMessageReaction,
+    user: User | PartialUser,
+  ): Promise<void> {
+    const runtimeBotId = this.resolveRuntimeBotId();
+    if (runtimeBotId && user.id === runtimeBotId) return;
+    if (user.bot) return;
+
+    const emojiName = reaction.emoji.name ?? '';
+    const isDeleteReaction = emojiName === '❌';
+
+    if (!isDeleteReaction) {
+      if (!this.handler) return;
+      if (!this.matchesTriggerReaction(emojiName, reaction.emoji.id)) return;
+    }
+
+    const fullReaction = reaction.partial ? await reaction.fetch() : reaction;
+    const targetMessage = fullReaction.message.partial
+      ? await fullReaction.message.fetch()
+      : fullReaction.message;
+
+    if (isDeleteReaction) {
+      if (runtimeBotId && targetMessage.author.id === runtimeBotId) {
+        log.info('Discord delete reaction received for bot message', {
+          messageId: targetMessage.id,
+          channelId: targetMessage.channelId,
+          reactorId: user.id,
+        });
+        await targetMessage.delete().catch((error) => {
+          log.warn('Failed to delete Discord bot message from reaction', {
+            messageId: targetMessage.id,
+            channelId: targetMessage.channelId,
+            error: String(error),
+          });
+        });
+      }
+      return;
+    }
+
+    if (targetMessage.author.bot) return;
+    if (runtimeBotId && targetMessage.author.id === runtimeBotId) return;
+
+    const channelId = targetMessage.channelId;
+    log.debug('Discord reaction trigger matched', {
       channelId,
-      channelType: 'discord',
-      isDirectMessage: isDM,
-      authorId: msg.author.id,
-      authorName: msg.author.displayName ?? msg.author.username,
-      content,
-      timestamp: msg.createdAt,
-    };
+      messageId: targetMessage.id,
+      emoji: emojiName,
+      reactorId: user.id,
+    });
 
-    // If already processing this channel, steer (interrupt) instead of dropping
+    const authorListenKey = this.listeningWindowKey(channelId, targetMessage.author.id);
+    this.openListeningWindow(authorListenKey);
+    const reactorListenKey = this.listeningWindowKey(channelId, user.id);
+    if (reactorListenKey !== authorListenKey) {
+      this.openListeningWindow(reactorListenKey);
+    }
+
+    fullReaction.remove().catch(() => undefined);
+
+    const substrateMsg = this.buildSubstrateMessage(
+      targetMessage as Message,
+      !targetMessage.guild,
+      runtimeBotId,
+    );
+    await this.processMessage({
+      msg: targetMessage as Message,
+      substrateMsg,
+      replyToOriginal: true,
+    });
+  }
+
+  private async processMessage(turn: PendingDiscordTurn): Promise<void> {
+    const { msg, substrateMsg, replyToOriginal } = turn;
+    const channelId = substrateMsg.channelId;
+
+    if (!this.handler) return;
+
+    // If already processing this channel, steer (interrupt) instead of dropping.
     if (this.processing.has(channelId)) {
       const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
       const queueDepth = (this.lockContention.get(channelId) ?? 0) + 1;
       this.lockContention.set(channelId, queueDepth);
-      this.emitQueueTelemetry(channelId, 'contended', {
-        queueDepth,
-        waitMs: Math.max(0, Date.now() - lockStartMs),
-      });
-      if (this.agent) {
+      const lockPolicy = this.lockPolicy.get(channelId) ?? (this.agent ? 'steer' : 'defer-latest');
+      const waitMs = Math.max(0, Date.now() - lockStartMs);
+      if (lockPolicy === 'steer' && this.agent) {
+        this.emitQueueTelemetry(channelId, 'contended', lockPolicy, {
+          queueDepth,
+          waitMs,
+        });
         log.debug('Steering message into active stream', { channelId });
         this.agent.steer(substrateMsg);
       } else {
         // Gateway mode has no direct agent instance, so keep latest message queued
         // instead of dropping it during lock contention.
-        this.pendingByChannel.set(channelId, msg);
+        const deferred = this.pendingByChannel.set(channelId, turn);
+        this.emitQueueTelemetry(channelId, 'contended', 'defer-latest', {
+          queueDepth: deferred.queueDepth,
+          waitMs,
+          superseded: deferred.replaced,
+        });
         log.debug('Queueing contended Discord message for deferred processing', { channelId });
       }
       return;
@@ -267,7 +416,9 @@ export class DiscordAdapter implements ChannelAdapter {
     const lockStartMs = Date.now();
     this.lockStartedAt.set(channelId, lockStartMs);
     this.lockContention.set(channelId, 0);
-    this.emitQueueTelemetry(channelId, 'acquired', {
+    const lockPolicy: TurnContentionPolicy = this.agent ? 'steer' : 'defer-latest';
+    this.lockPolicy.set(channelId, lockPolicy);
+    this.emitQueueTelemetry(channelId, 'acquired', lockPolicy, {
       queueDepth: 0,
       waitMs: 0,
     });
@@ -276,14 +427,20 @@ export class DiscordAdapter implements ChannelAdapter {
     const typingInterval = this.startTyping(msg);
     this.clearStatus(channelId, 'compaction').catch(() => undefined);
     this.clearStatus(channelId, 'retry').catch(() => undefined);
+    this.clearStatus(channelId, 'long-running').catch(() => undefined);
 
     try {
       await this.eventBus.emit('message.received', { message: substrateMsg });
 
       const response = await this.handler(substrateMsg);
-      const hasText = response.content.trim().length > 0;
+      const trimmedResponse = response.content.trim();
+      const hasText = trimmedResponse.length > 0;
       if (hasText) {
-        await this.outbound.sendText({ channelId }, response.content);
+        if (replyToOriginal) {
+          await this.sendReply(msg, trimmedResponse);
+        } else {
+          await this.outbound.sendText({ channelId }, response.content);
+        }
         await this.eventBus.emit('message.sent', { response });
       } else {
         log.debug('Suppressing empty handler response for Discord channel', { channelId });
@@ -293,28 +450,262 @@ export class DiscordAdapter implements ChannelAdapter {
       log.error('Error processing message', { error: String(error) });
       try {
         await msg.reply('Something went wrong. Please try again.');
-      } catch { /* ignore reply errors */ }
+      } catch {
+        // Ignore reply errors.
+      }
     } finally {
       clearInterval(typingInterval);
       this.processing.delete(channelId);
       const lockHeldMs = Math.max(0, Date.now() - lockStartMs);
-      this.emitQueueTelemetry(channelId, 'released', {
+      const releasePolicy = this.lockPolicy.get(channelId) ?? lockPolicy;
+      this.emitQueueTelemetry(channelId, 'released', releasePolicy, {
         queueDepth: this.lockContention.get(channelId) ?? 0,
         waitMs: lockHeldMs,
       });
       this.lockStartedAt.delete(channelId);
       this.lockContention.delete(channelId);
+      this.lockPolicy.delete(channelId);
+      this.clearLongRunningToolsForChannel(channelId);
       await this.clearStatus(channelId, 'compaction');
-      const pending = this.pendingByChannel.get(channelId);
+      await this.clearStatus(channelId, 'long-running');
+      const pending = this.pendingByChannel.take(channelId);
       if (pending) {
-        this.pendingByChannel.delete(channelId);
         queueMicrotask(() => {
-          this.onDiscordMessage(pending).catch((error) => {
+          this.processMessage(pending).catch((error) => {
             log.error('Deferred Discord message handling error', { channelId, error: String(error) });
           });
         });
       }
     }
+  }
+
+  private buildSubstrateMessage(
+    msg: Message,
+    isDirectMessage: boolean,
+    runtimeBotId?: string,
+  ): SubstrateMessage {
+    const attachments = this.extractAttachments(msg);
+    if (attachments.length < DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) {
+      const seenUrls = new Set(attachments.map((attachment) => attachment.url));
+      const remaining = DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE - attachments.length;
+      const inlineAttachments = this.extractInlineImageLinks(msg.content, seenUrls, remaining);
+      if (inlineAttachments.length > 0) {
+        attachments.push(...inlineAttachments);
+      }
+    }
+    const content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    const resolvedContent = content === '(empty message)' && attachments.length > 0
+      ? '(image attachment)'
+      : content;
+    return {
+      id: msg.id,
+      channelId: msg.channelId,
+      channelType: 'discord',
+      isDirectMessage,
+      authorId: msg.author.id,
+      authorName: msg.author.displayName ?? msg.author.username,
+      content: resolvedContent,
+      ...(attachments.length > 0 ? { attachments } : {}),
+      timestamp: msg.createdAt,
+    };
+  }
+
+  private extractAttachments(msg: Message): SubstrateMessage['attachments'] {
+    const rawAttachments = msg.attachments?.values();
+    if (!rawAttachments) return [];
+
+    const attachments: NonNullable<SubstrateMessage['attachments']> = [];
+    for (const raw of rawAttachments) {
+      if (attachments.length >= DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) break;
+
+      const contentType = this.resolveDiscordImageContentType(raw);
+      if (!contentType) continue;
+
+      const size = typeof raw.size === 'number' && Number.isFinite(raw.size)
+        ? Math.max(0, Math.trunc(raw.size))
+        : 0;
+      if (size > DISCORD_MAX_IMAGE_ATTACHMENT_BYTES) {
+        log.debug('Skipping oversized Discord image attachment', {
+          channelId: msg.channelId,
+          messageId: msg.id,
+          name: raw.name ?? raw.id,
+          size,
+        });
+        continue;
+      }
+
+      const url = (raw.proxyURL ?? raw.url ?? '').trim();
+      if (!url) continue;
+
+      attachments.push({
+        url,
+        contentType,
+        name: raw.name ?? `attachment-${raw.id ?? attachments.length + 1}`,
+      });
+    }
+
+    return attachments;
+  }
+
+  private extractInlineImageLinks(
+    content: string,
+    seenUrls: Set<string>,
+    remaining: number,
+  ): NonNullable<SubstrateMessage['attachments']> {
+    if (!content || remaining <= 0) return [];
+    const attachments: NonNullable<SubstrateMessage['attachments']> = [];
+    const matches = content.matchAll(DISCORD_INLINE_IMAGE_URL_PATTERN);
+    for (const match of matches) {
+      if (attachments.length >= remaining) break;
+      const normalizedUrl = normalizeInlineUrl(match[0]);
+      if (!normalizedUrl || seenUrls.has(normalizedUrl)) continue;
+      if (!isDiscordHostedImageUrl(normalizedUrl)) continue;
+      const contentType = inferImageMimeTypeFromCandidate(normalizedUrl);
+      if (!contentType) continue;
+
+      attachments.push({
+        url: normalizedUrl,
+        contentType,
+        name: inferFileNameFromUrl(normalizedUrl) ?? `attachment-inline-${attachments.length + 1}`,
+      });
+      seenUrls.add(normalizedUrl);
+    }
+    return attachments;
+  }
+
+  private resolveDiscordImageContentType(raw: {
+    contentType?: string | null;
+    name?: string | null;
+    url?: string | null;
+    proxyURL?: string | null;
+    width?: number | null;
+    height?: number | null;
+  }): string | null {
+    const normalizedContentType = raw.contentType?.trim().toLowerCase();
+    if (normalizedContentType?.startsWith('image/')) {
+      return normalizedContentType;
+    }
+
+    const candidates = [raw.name, raw.proxyURL, raw.url];
+    for (const candidate of candidates) {
+      const inferred = inferImageMimeTypeFromCandidate(candidate);
+      if (inferred) return inferred;
+    }
+
+    const hasDimensions = typeof raw.width === 'number'
+      && Number.isFinite(raw.width)
+      && raw.width > 0
+      && typeof raw.height === 'number'
+      && Number.isFinite(raw.height)
+      && raw.height > 0;
+    if (hasDimensions) {
+      return 'image/png';
+    }
+
+    return null;
+  }
+
+  private sanitizeMessageContent(content: string, runtimeBotId?: string): string {
+    let normalized = content;
+    if (runtimeBotId) {
+      normalized = normalized.replace(new RegExp(`<@!?${runtimeBotId}>`, 'g'), '');
+    }
+    normalized = normalized.trim();
+    return normalized.length > 0 ? normalized : '(empty message)';
+  }
+
+  private async sendReply(msg: Message, content: string): Promise<void> {
+    const chunks = splitMessage(content);
+    if (chunks.length === 0) return;
+
+    await msg.reply(chunks[0]);
+    for (let i = 1; i < chunks.length; i++) {
+      await (msg.channel as TextChannel).send(chunks[i]);
+    }
+  }
+
+  private resolveRuntimeBotId(): string | undefined {
+    const liveBotId = this.client.user?.id;
+    if (liveBotId) return liveBotId;
+    const configuredBotId = this.runtimeConfig.discordBotId.trim();
+    return configuredBotId.length > 0 ? configuredBotId : undefined;
+  }
+
+  private listeningWindowKey(channelId: string, userId: string): string {
+    return `${channelId}:${userId}`;
+  }
+
+  private isInListeningWindow(key: string): boolean {
+    const expiry = this.listeningWindows.get(key);
+    if (expiry === undefined) return false;
+    if (Date.now() > expiry) {
+      this.listeningWindows.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  private openListeningWindow(key: string): void {
+    const windowMs = this.resolveListeningWindowMs();
+    this.listeningWindows.set(key, Date.now() + windowMs);
+    log.debug('Discord listening window opened/extended', { key, windowMs });
+  }
+
+  private resolveListeningWindowMs(): number {
+    const configured = this.runtimeConfig.discordTriggerListenWindowMs;
+    if (typeof configured !== 'number' || Number.isNaN(configured)) {
+      return DISCORD_LISTEN_WINDOW_DEFAULT_MS;
+    }
+    return Math.min(
+      DISCORD_LISTEN_WINDOW_MAX_MS,
+      Math.max(DISCORD_LISTEN_WINDOW_MIN_MS, Math.floor(configured)),
+    );
+  }
+
+  private matchesTriggerWord(content: string): boolean {
+    const lower = content.toLowerCase();
+    if (!lower) return false;
+
+    const characterName = this.runtimeConfig.characterName?.trim();
+    if (characterName && lower.includes(characterName.toLowerCase())) {
+      return true;
+    }
+
+    const configuredWords = this.runtimeConfig.discordTriggerWords ?? [];
+    for (const configured of configuredWords) {
+      const candidate = configured.trim().toLowerCase();
+      if (candidate && lower.includes(candidate)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private matchesTriggerReaction(emojiName: string, emojiId: string | null): boolean {
+    const normalizedEmoji = emojiName.trim();
+    if (!normalizedEmoji) return false;
+
+    const candidates = new Set<string>([normalizedEmoji]);
+    if (emojiId) {
+      candidates.add(`<:${normalizedEmoji}:${emojiId}>`);
+      candidates.add(`<a:${normalizedEmoji}:${emojiId}>`);
+    }
+
+    for (const reaction of this.getTriggerReactions()) {
+      if (candidates.has(reaction)) return true;
+    }
+    return false;
+  }
+
+  private getTriggerReactions(): string[] {
+    const configured = (this.runtimeConfig.discordTriggerReactions ?? [])
+      .map((reaction) => reaction.trim())
+      .filter((reaction) => reaction.length > 0);
+
+    return configured.length > 0
+      ? configured
+      : [DISCORD_TRIGGER_REACTION_DEFAULT];
   }
 
   private startTyping(msg: Message): ReturnType<typeof setInterval> {
@@ -331,22 +722,22 @@ export class DiscordAdapter implements ChannelAdapter {
 
   private emitQueueTelemetry(
     channelId: string,
-    phase: QueueTelemetryPhase,
-    details: { queueDepth: number; waitMs: number },
+    phase: TurnContentionPhase,
+    policy: TurnContentionPolicy,
+    details: { queueDepth: number; waitMs: number; superseded?: boolean },
   ): void {
     const telemetry = {
       channelId,
       phase,
+      policy,
+      source: 'discord',
       queueDepth: details.queueDepth,
       waitMs: details.waitMs,
       processingChannels: this.processing.size,
-      timestamp: Date.now(),
+      ...(details.superseded !== undefined ? { superseded: details.superseded } : {}),
     };
     log.debug('Queue lock telemetry', telemetry);
-    const telemetryBus = this.eventBus as unknown as {
-      emit: (event: string, payload: Record<string, unknown>) => Promise<void>;
-    };
-    telemetryBus.emit('channel.queue.telemetry', telemetry).catch(() => undefined);
+    emitTurnContentionTelemetry(this.eventBus, telemetry);
   }
 
   private registerStatusListeners(): void {
@@ -412,6 +803,115 @@ export class DiscordAdapter implements ChannelAdapter {
         );
       }
     }));
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.tool.start', async ({
+      channelId,
+      toolCallId,
+      toolName,
+    }) => {
+      if (!this.processing.has(channelId)) return;
+      if (!this.isLongRunningTool(toolName)) return;
+      this.startLongRunningToolStatus(toolCallId, channelId, toolName);
+    }));
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.tool.end', async ({
+      channelId,
+      toolCallId,
+      toolName,
+    }) => {
+      if (!this.isLongRunningTool(toolName)) return;
+      await this.stopLongRunningToolStatus(toolCallId, channelId);
+    }));
+  }
+
+  private isLongRunningTool(toolName: string): boolean {
+    return toolName === 'think';
+  }
+
+  private buildLongRunningStatusText(toolName: string, elapsedMs: number): string {
+    const elapsedSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
+    if (toolName === 'think') {
+      return `Still thinking deeply (${elapsedSeconds}s elapsed)...`;
+    }
+    return `Still running ${toolName} (${elapsedSeconds}s elapsed)...`;
+  }
+
+  private startLongRunningToolStatus(toolCallId: string, channelId: string, toolName: string): void {
+    if (this.longRunningTools.has(toolCallId)) return;
+    const state: LongRunningToolState = {
+      channelId,
+      toolName,
+      startedAt: Date.now(),
+      timer: setInterval(() => {
+        this.tickLongRunningToolStatus(toolCallId).catch(() => undefined);
+      }, LONG_RUNNING_STATUS_POLL_MS),
+      lastStatusAt: 0,
+      statusSent: false,
+      inFlight: false,
+    };
+    this.longRunningTools.set(toolCallId, state);
+  }
+
+  private async tickLongRunningToolStatus(toolCallId: string): Promise<void> {
+    const state = this.longRunningTools.get(toolCallId);
+    if (!state) return;
+    if (state.inFlight) return;
+    if (!this.processing.has(state.channelId)) return;
+
+    const now = Date.now();
+    const elapsedMs = now - state.startedAt;
+    if (!state.statusSent && elapsedMs < LONG_RUNNING_STATUS_INITIAL_DELAY_MS) {
+      return;
+    }
+    if (state.statusSent && (now - state.lastStatusAt) < LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS) {
+      return;
+    }
+
+    state.inFlight = true;
+    try {
+      await this.sendTypingToChannel(state.channelId);
+      await this.setStatus(
+        state.channelId,
+        'long-running',
+        this.buildLongRunningStatusText(state.toolName, elapsedMs),
+      );
+      state.statusSent = true;
+      state.lastStatusAt = now;
+    } finally {
+      state.inFlight = false;
+    }
+  }
+
+  private async stopLongRunningToolStatus(toolCallId: string, channelId: string): Promise<void> {
+    const state = this.longRunningTools.get(toolCallId);
+    if (state) {
+      clearInterval(state.timer);
+      this.longRunningTools.delete(toolCallId);
+    }
+    if (this.hasActiveLongRunningToolForChannel(channelId)) return;
+    await this.clearStatus(channelId, 'long-running');
+  }
+
+  private hasActiveLongRunningToolForChannel(channelId: string): boolean {
+    for (const state of this.longRunningTools.values()) {
+      if (state.channelId === channelId) return true;
+    }
+    return false;
+  }
+
+  private clearLongRunningToolsForChannel(channelId: string): void {
+    for (const [toolCallId, state] of this.longRunningTools.entries()) {
+      if (state.channelId !== channelId) continue;
+      clearInterval(state.timer);
+      this.longRunningTools.delete(toolCallId);
+    }
+  }
+
+  private clearAllLongRunningTools(): void {
+    for (const state of this.longRunningTools.values()) {
+      clearInterval(state.timer);
+    }
+    this.longRunningTools.clear();
   }
 
   private async sendTypingToChannel(channelId: string): Promise<void> {
@@ -540,6 +1040,67 @@ export class DiscordAdapter implements ChannelAdapter {
       return DISCORD_CHANNEL_ID_PATTERN.test(value) ? value : null;
     }
     return DISCORD_CHANNEL_ID_PATTERN.test(sessionChannelId) ? sessionChannelId : null;
+  }
+
+}
+
+function inferImageMimeTypeFromCandidate(candidate: string | null | undefined): string | null {
+  if (!candidate) return null;
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+
+  let value = trimmed;
+  try {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      value = new URL(trimmed).pathname;
+    }
+  } catch {
+    value = trimmed;
+  }
+
+  const lower = value.toLowerCase();
+  for (const [extension, mimeType] of Object.entries(DISCORD_IMAGE_EXTENSION_TO_MIME)) {
+    if (lower.endsWith(extension)) {
+      return mimeType;
+    }
+  }
+  return null;
+}
+
+function normalizeInlineUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withoutTrailingPunctuation = trimmed.replace(/[),.!?:;]+$/g, '');
+  if (!withoutTrailingPunctuation) return null;
+  try {
+    const parsed = new URL(withoutTrailingPunctuation);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function isDiscordHostedImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return DISCORD_IMAGE_LINK_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+function inferFileNameFromUrl(url: string): string | null {
+  try {
+    const pathname = new URL(url).pathname;
+    const parts = pathname.split('/').filter(Boolean);
+    const fileName = parts.at(-1)?.trim();
+    return fileName && fileName.length > 0 ? fileName : null;
+  } catch {
+    return null;
   }
 }
 

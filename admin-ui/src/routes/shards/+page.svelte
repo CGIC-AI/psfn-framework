@@ -21,6 +21,7 @@
   // ── Dashboard state ──
   let dashboardShardCount = $state<number | null>(null);
   let dashboardLoading = $state(true);
+  let dashboardError = $state('');
 
   // ── Elapsed time ticker ──
   let now = $state(Date.now());
@@ -110,8 +111,10 @@
     try {
       const data = await getDashboard();
       dashboardShardCount = data.stats.activeShards;
-    } catch {
-      // Dashboard may be unavailable
+    } catch (e) {
+      dashboardError = e instanceof Error
+        ? `Dashboard unavailable: ${e.message}`
+        : 'Dashboard unavailable: using telemetry-only shard counts.';
     } finally {
       dashboardLoading = false;
     }
@@ -214,6 +217,20 @@
       <p class="text-sm text-shadow-600 mt-3">{shardEvents.length} shard events captured from telemetry</p>
     </div>
   </div>
+
+  {#if dashboardError}
+    <div class="card-garden p-4 border-l-4 border-l-wilt-300 flex items-start justify-between gap-3">
+      <p class="text-sm text-shadow-700">{dashboardError}</p>
+      <button
+        data-esc-close
+        onclick={() => dashboardError = ''}
+        class="text-shadow-500 hover:text-shadow-700 leading-none text-lg"
+        aria-label="Dismiss dashboard warning"
+      >
+        &times;
+      </button>
+    </div>
+  {/if}
 
   <!-- No connection notice -->
   {#if !isConnected() && shards.length === 0}

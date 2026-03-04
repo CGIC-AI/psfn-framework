@@ -23,7 +23,7 @@ vi.mock('../../voice/connectors/tts/index.js', () => ({
 
 import { createApiVoiceWebSocketRuntime } from './voice-websocket-runtime.js';
 
-const DEFAULT_ECHO_TTS_URL = 'http://220.158.196.150:8001';
+const DEFAULT_ECHO_TTS_URL = 'http://localhost:8001';
 const DEFAULT_ECHO_TTS_VOICE = '11labs-Allison';
 const DEFAULT_ECHO_TTS_PRESET = 'Independent-High-Speaker-CFG';
 

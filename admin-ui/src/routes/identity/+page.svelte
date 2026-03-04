@@ -2,7 +2,17 @@
   import { onMount } from 'svelte';
   import { getIdentity, importIdentity, rollbackIdentity, previewDiff, updateIdentityField } from '$lib/api/endpoints/identity';
   import type { DiffPreviewResponse } from '$lib/api/endpoints/identity';
+  import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
+  import {
+    cancelIdentityConfirmation,
+    confirmIdentityConfirmation,
+    getIdentityConfirmationContent,
+    initialIdentityConfirmationState,
+    requestIdentityImportConfirmation,
+    requestIdentityRollbackConfirmation,
+  } from '$lib/components/identity-confirmation-flow';
   import type { AdminIdentityData, CharacterCardV2, CharacterCardHistoryEntry } from '$lib/types';
+  import { pushToast } from '$lib/stores/toast.svelte';
 
   let data = $state<AdminIdentityData | null>(null);
   let loading = $state(true);
@@ -18,6 +28,13 @@
   // Rollback
   let rollingBack = $state<number | null>(null);
   let rollbackMessage = $state('');
+
+  // Confirmation modal
+  let confirmationState = $state(initialIdentityConfirmationState());
+  let pendingConfirmation = $derived(confirmationState.pendingAction);
+  let confirmationContent = $derived(
+    pendingConfirmation ? getIdentityConfirmationContent(pendingConfirmation) : null
+  );
 
   // Diff
   let diffVersion = $state<number | null>(null);
@@ -58,38 +75,65 @@
     }
   });
 
-  async function handleImport() {
-    if (!importPath.trim()) return;
+  async function runImport(path: string) {
     importing = true;
     importMessage = '';
     importSuccess = false;
     try {
-      const result = await importIdentity({ path: importPath.trim() });
+      const result = await importIdentity({ path });
       importMessage = result.message || 'Import successful';
       importSuccess = result.ok !== false;
+      pushToast(importMessage, importSuccess ? 'success' : 'error');
       data = await getIdentity();
       importPath = '';
     } catch (e) {
       importMessage = e instanceof Error ? e.message : 'Import failed';
       importSuccess = false;
+      pushToast(importMessage, 'error');
     } finally {
       importing = false;
     }
   }
 
-  async function handleRollback(version: number) {
-    if (!confirm(`Roll back to version ${version}? This will replace the current identity card.`)) return;
+  async function runRollback(version: number) {
     rollingBack = version;
     rollbackMessage = '';
     try {
       const result = await rollbackIdentity({ version });
       rollbackMessage = result.message || 'Rollback successful';
+      pushToast(rollbackMessage, 'success');
       data = await getIdentity();
     } catch (e) {
       rollbackMessage = e instanceof Error ? e.message : 'Rollback failed';
+      pushToast(rollbackMessage, 'error');
     } finally {
       rollingBack = null;
     }
+  }
+
+  function openImportConfirmation() {
+    confirmationState = requestIdentityImportConfirmation(confirmationState, importPath);
+  }
+
+  function openRollbackConfirmation(version: number) {
+    confirmationState = requestIdentityRollbackConfirmation(confirmationState, version);
+  }
+
+  function cancelConfirmation() {
+    confirmationState = cancelIdentityConfirmation(confirmationState);
+  }
+
+  async function confirmPendingAction() {
+    const { action, nextState } = confirmIdentityConfirmation(confirmationState);
+    confirmationState = nextState;
+    if (!action) return;
+
+    if (action.type === 'import') {
+      await runImport(action.path);
+      return;
+    }
+
+    await runRollback(action.version);
   }
 
   async function handleShowDiff(version: number) {
@@ -176,11 +220,14 @@
         data = await getIdentity();
         editingField = null;
         editFieldValue = '';
+        pushToast('Field saved', 'success');
       } else {
         error = result.message || 'Failed to save field';
+        pushToast(error, 'error');
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to save field';
+      pushToast(error, 'error');
     } finally {
       savingField = false;
     }
@@ -213,11 +260,14 @@
       if (result.ok) {
         data = await getIdentity();
         cancelGreetingEdit();
+        pushToast('Greeting updated', 'success');
       } else {
         error = result.message || 'Failed to save greeting';
+        pushToast(error, 'error');
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to save greeting';
+      pushToast(error, 'error');
     } finally {
       savingGreeting = false;
     }
@@ -239,11 +289,14 @@
         if (editingGreetingIndex === index) {
           cancelGreetingEdit();
         }
+        pushToast('Greeting removed', 'success');
       } else {
         error = result.message || 'Failed to remove greeting';
+        pushToast(error, 'error');
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to remove greeting';
+      pushToast(error, 'error');
     } finally {
       savingGreeting = false;
     }
@@ -272,11 +325,14 @@
       if (result.ok) {
         data = await getIdentity();
         cancelAppearanceEdit();
+        pushToast('Appearance saved', 'success');
       } else {
         error = result.message || 'Failed to save appearance';
+        pushToast(error, 'error');
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to save appearance';
+      pushToast(error, 'error');
     } finally {
       savingAppearance = false;
     }
@@ -520,7 +576,7 @@
         <div class="card-garden p-5">
           <h3 class="text-sm font-serif font-semibold text-shadow-800 mb-3">Import Character Card</h3>
           <p class="text-sm text-shadow-600 mb-3">Import from JSON, PNG, or CharX using a local filesystem path.</p>
-          <form onsubmit={(e) => { e.preventDefault(); handleImport(); }} class="flex gap-2">
+          <form onsubmit={(e) => { e.preventDefault(); openImportConfirmation(); }} class="flex gap-2">
             <input
               type="text"
               bind:value={importPath}
@@ -557,6 +613,7 @@
                 </button>
                 <button
                   onclick={cancelAppearanceEdit}
+                  data-esc-close
                   disabled={savingAppearance}
                   class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 disabled:opacity-50 transition-colors border border-bark-300"
                 >
@@ -599,6 +656,7 @@
                     {savingField ? 'Saving...' : 'Save'}
                   </button>
                   <button onclick={cancelFieldEdit}
+                    data-esc-close
                     disabled={savingField}
                     class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 disabled:opacity-50 transition-colors border border-bark-300">
                     Cancel
@@ -695,6 +753,7 @@
                           {savingGreeting ? 'Saving...' : 'Save'}
                         </button>
                         <button onclick={cancelGreetingEdit}
+                          data-esc-close
                           disabled={savingGreeting}
                           class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 transition-colors border border-bark-300">
                           Cancel
@@ -723,6 +782,7 @@
                         {savingGreeting ? 'Saving...' : 'Save'}
                       </button>
                       <button onclick={cancelGreetingEdit}
+                        data-esc-close
                         disabled={savingGreeting}
                         class="px-2.5 py-1 text-sm font-medium rounded text-shadow-700 hover:bg-bark-200 transition-colors border border-bark-300">
                         Cancel
@@ -854,7 +914,7 @@
                               {diffVersion === entry.version ? 'Hide' : 'Diff'}
                             </button>
                             <button
-                              onclick={() => handleRollback(entry.version)}
+                              onclick={() => openRollbackConfirmation(entry.version)}
                               disabled={rollingBack === entry.version}
                               class="px-2.5 py-1 text-sm font-medium rounded border border-wilt-200 text-wilt-600 hover:bg-wilt-50 transition-colors disabled:opacity-50"
                             >
@@ -933,5 +993,19 @@
         {/if}
       </div>
     {/if}
+  {/if}
+
+  {#if pendingConfirmation && confirmationContent}
+    <ConfirmationModal
+      open={true}
+      title={confirmationContent.title}
+      body={confirmationContent.body}
+      context={confirmationContent.context}
+      confirmLabel={confirmationContent.confirmLabel}
+      cancelLabel={confirmationContent.cancelLabel}
+      tone={confirmationContent.tone}
+      onCancel={cancelConfirmation}
+      onConfirm={() => { void confirmPendingAction(); }}
+    />
   {/if}
 </div>

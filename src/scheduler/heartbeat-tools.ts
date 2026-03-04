@@ -13,8 +13,10 @@ import type {
 import type { Scheduler } from './scheduler.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
+import type { PostTurnActionCandidate } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { isBusyTurnError } from '../lifecycle/turn-contention.js';
 
 // ── Helpers ──
 
@@ -64,6 +66,7 @@ interface HeartbeatRunTemplateResult {
   templateName: string;
   reflection: string;
   queued?: boolean;
+  deferredAction?: PostTurnActionCandidate;
 }
 
 // ── Tool 1: heartbeat_get_policy ──
@@ -308,7 +311,7 @@ export function createHeartbeatRunTemplateTool(
     execute: async (
       _toolCallId: string,
       params: { templateId: string; sendToDiscord?: boolean; deferIfBusy?: boolean },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<{ isError?: boolean; deferredAction?: PostTurnActionCandidate }>> => {
       const templateId = params.templateId.trim();
       if (!templateId) {
         return textResultWithError('templateId is required', true);
@@ -327,10 +330,17 @@ export function createHeartbeatRunTemplateTool(
           deferIfBusy: params.deferIfBusy ?? true,
         });
         if (result.queued) {
-          return textResult(
-            `Queued reflection template "${result.templateName}" (${result.templateId}) `
-            + 'for post-reply execution.',
-          );
+          return {
+            content: [{
+              type: 'text',
+              text:
+                `Queued reflection template "${result.templateName}" (${result.templateId}) `
+                + 'for post-reply execution.',
+            }],
+            details: {
+              ...(result.deferredAction ? { deferredAction: result.deferredAction } : {}),
+            },
+          };
         }
         const reflection = result.reflection.trim();
         return textResult(
@@ -396,7 +406,7 @@ export function createScheduleTaskTool(
           intervalMs: 0,
           runAt,
           handler: async () => {
-            try {
+            const runPlannedPrompt = async (): Promise<void> => {
               const response = await agentLoop.handleMessage({
                 id: `planned-${Date.now()}`,
                 channelId: `internal:planned:${taskId}`,
@@ -411,8 +421,16 @@ export function createScheduleTaskTool(
               if (sender && heartbeatChannelId) {
                 await sender.send(heartbeatChannelId, response.content);
               }
+            };
+
+            try {
+              await runPlannedPrompt();
             } catch (err) {
-              // Logged by scheduler's own error handling
+              if (!isBusyTurnError(err)) {
+                throw err;
+              }
+              await agentLoop.waitForIdle?.();
+              await runPlannedPrompt();
             }
           },
           state: 'idle',

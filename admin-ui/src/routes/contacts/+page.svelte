@@ -613,6 +613,7 @@
               {saving ? 'Creating...' : 'Create'}
             </button>
             <button onclick={() => showCreateForm = false}
+              data-esc-close
               class="px-4 py-2 text-sm font-medium rounded-lg text-shadow-700
                      hover:bg-bark-200 transition-colors border border-bark-300">
               Cancel
@@ -957,7 +958,7 @@
                 </button>
                 {#if showAddChannel}
                   <div class="mt-2 p-3 border border-bark-300 rounded-lg bg-bark-50 space-y-2">
-                    <div class="grid grid-cols-3 gap-2">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <div>
                         <label for="new-ch-name" class="text-sm text-shadow-700">Channel</label>
                         <select id="new-ch-name"
@@ -1052,6 +1053,7 @@
                   {saving ? 'Saving...' : 'Save Changes'}
                 </button>
                 <button onclick={cancelEdit}
+                  data-esc-close
                   class="px-4 py-2 text-sm font-medium rounded-lg text-shadow-700
                          hover:bg-bark-200 transition-colors border border-bark-300">
                   Cancel

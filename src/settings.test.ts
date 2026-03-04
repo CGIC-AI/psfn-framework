@@ -220,6 +220,39 @@ describe('settings', () => {
         memoryRetrievalMinTokens: 900,
       });
     });
+
+    it('keeps a dedicated vision slot when vision assignment is omitted', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 6000, contextWindow: 128_000 },
+          },
+          vision: {
+            model: 'moonshotai/kimi-k2.5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 4096, contextWindow: 128_000 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          summary: 'primary',
+          reasoning: 'primary',
+          longContext: 'primary',
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelRoleAssignments?.vision).toBe('vision');
+      expect(normalized.modelRoster?.vision).toEqual({
+        model: 'moonshotai/kimi-k2.5',
+        provider: 'openrouter',
+        maxTokens: 4096,
+        contextWindow: 128_000,
+      });
+    });
   });
 
   describe('applySettings', () => {
@@ -254,6 +287,7 @@ describe('settings', () => {
         sessionHistoryBudgetPct: 8,
         memoryRetrievalBudgetPct: 3,
         sessionMessageLimit: 50,
+        sessionRestartBehavior: 'new_session',
         memoryRetrievalLimit: 25,
         extractionInterval: 10,
         compactionEmotionalSalienceThresholdPct: 55,
@@ -263,11 +297,33 @@ describe('settings', () => {
       expect(config.sessionHistoryBudgetPct).toBe(8);
       expect(config.memoryRetrievalBudgetPct).toBe(3);
       expect(config.sessionMessageLimit).toBe(50);
+      expect(config.sessionRestartBehavior).toBe('new_session');
       expect(config.memoryRetrievalLimit).toBe(25);
       expect(config.extractionInterval).toBe(10);
       expect(config.compactionEmotionalSalienceThresholdPct).toBe(55);
       expect(config.retryMaxAttempts).toBe(5);
       expect(config.retryBaseDelayMs).toBe(4000);
+    });
+
+    it('normalizes promotedExtendedTools with de-duplication and max slot bound', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        promotedExtendedTools: [
+          'repo_status',
+          'session_list',
+          'repo_status',
+          'prompt_layer_list',
+          'settings_get',
+          'contact_lookup',
+        ],
+      });
+
+      expect(config.promotedExtendedTools).toEqual([
+        'repo_status',
+        'session_list',
+        'prompt_layer_list',
+        'settings_get',
+      ]);
     });
 
     it('applies import-processing routing controls', () => {
@@ -756,6 +812,7 @@ describe('settings', () => {
       expect(snapshot.thinkMaxTokens).toBeNull();
       expect(snapshot.thinkMaxWallTimeMs).toBeNull();
       expect(snapshot.thinkMaxSubQueries).toBeNull();
+      expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
       expect(snapshot.openRouterProviderOrder).toEqual([]);
       expect(snapshot.importProcessingRouteMode).toBe('background');
@@ -769,6 +826,7 @@ describe('settings', () => {
       expect(snapshot.webFetchLocalCrawlerHostAllowlist).toEqual([]);
       expect(snapshot.webFetchLocalCrawlerDomainAllowlist).toEqual([]);
       expect(snapshot.webFetchTlsCaCertPaths).toEqual([]);
+      expect(snapshot.promotedExtendedTools).toEqual([]);
     });
 
     it('resolves budget percentages and nullable hard overrides', () => {
@@ -787,7 +845,16 @@ describe('settings', () => {
 
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('thinkMaxSubQueries')).toBe(true);
+      expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);
+      expect(isRuntimeSettingKey('promotedExtendedTools')).toBe(true);
       expect(isRuntimeSettingKey('discordToken')).toBe(false);
+    });
+
+    it('includes promotedExtendedTools in snapshot when configured', () => {
+      const config = makeConfig();
+      config.promotedExtendedTools = ['repo_status', 'session_list'];
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.promotedExtendedTools).toEqual(['repo_status', 'session_list']);
     });
 
     it('honors explicit sttProvider override before api-key fallback in snapshot', () => {
@@ -959,6 +1026,19 @@ describe('settings', () => {
       expect(config.capabilityTier).toBe('autonomous');
     });
 
+    it('round-trip save -> load -> apply preserves sessionRestartBehavior', () => {
+      saveSettings(tempDir, {
+        sessionRestartBehavior: 'new_session',
+      });
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.sessionRestartBehavior).toBe('new_session');
+
+      const config = makeConfig();
+      applySettings(config, loaded);
+      expect(config.sessionRestartBehavior).toBe('new_session');
+    });
+
     it('round-trip save -> load -> apply handles custom capabilityTier', () => {
       saveSettings(tempDir, {
         capabilityTier: 'custom',
@@ -1042,6 +1122,79 @@ describe('settings', () => {
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.telegramEnabled).toBe(true);
       expect(snapshot.telegramAuthorizedUsers).toBe('111, 222');
+    });
+
+    it('parseSettingsForm bounds promotedExtendedTools to four slots', () => {
+      const params = new URLSearchParams({
+        promotedExtendedTools: 'repo_status, session_list, prompt_layer_list, settings_get, contact_lookup',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.promotedExtendedTools).toEqual([
+        'repo_status',
+        'session_list',
+        'prompt_layer_list',
+        'settings_get',
+      ]);
+    });
+
+    it('parseSettingsForm parses discord trigger form fields', () => {
+      const params = new URLSearchParams({
+        discordTriggerWords: 'pixie, hey purrsephone',
+        discordTriggerReactions: '👆, 🔥',
+        discordTriggerListenWindowMs: '45000',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.discordTriggerWords).toBe('pixie, hey purrsephone');
+      expect(settings.discordTriggerReactions).toBe('👆, 🔥');
+      expect(settings.discordTriggerListenWindowMs).toBe(45000);
+    });
+
+    it('parseSettingsForm validates discordTriggerListenWindowMs range', () => {
+      const params = new URLSearchParams({
+        discordTriggerListenWindowMs: '9999',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+      expect(errors.some(err => err.includes('discordTriggerListenWindowMs'))).toBe(true);
+    });
+
+    it('applySettings updates discord trigger config and keeps default reaction when cleared', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        discordTriggerWords: 'pixie, hey purrsephone',
+        discordTriggerReactions: '🔥, 👀',
+        discordTriggerListenWindowMs: 45000,
+      });
+
+      expect(config.discordTriggerWords).toEqual(['pixie', 'hey purrsephone']);
+      expect(config.discordTriggerReactions).toEqual(['🔥', '👀']);
+      expect(config.discordTriggerListenWindowMs).toBe(45000);
+
+      applySettings(config, { discordTriggerReactions: '' });
+      expect(config.discordTriggerReactions).toEqual(['👆']);
+    });
+
+    it('getRuntimeSettingsSnapshot reflects discord trigger config values', () => {
+      const config = makeConfig();
+      config.discordTriggerWords = ['pixie', 'hey purrsephone'];
+      config.discordTriggerReactions = ['🔥', '👀'];
+      config.discordTriggerListenWindowMs = 45000;
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.discordTriggerWords).toBe('pixie, hey purrsephone');
+      expect(snapshot.discordTriggerReactions).toBe('🔥, 👀');
+      expect(snapshot.discordTriggerListenWindowMs).toBe(45000);
+    });
+
+    it('getRuntimeSettingsSnapshot uses discord trigger defaults when unset', () => {
+      const snapshot = getRuntimeSettingsSnapshot(makeConfig());
+      expect(snapshot.discordTriggerWords).toBeNull();
+      expect(snapshot.discordTriggerReactions).toBe('👆');
+      expect(snapshot.discordTriggerListenWindowMs).toBe(120000);
     });
   });
 });

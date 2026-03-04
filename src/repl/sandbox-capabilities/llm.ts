@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProvider, LLMRequestMetadata } from '../../agent/contracts.js';
 import type { ThinkEvidence } from '../types.js';
 import type { SandboxBudgetRef } from './contracts.js';
 import { addEvidence, BUDGET_EXCEEDED_MESSAGE } from './common.js';
@@ -13,9 +13,15 @@ interface CreateLLMCapabilitiesOptions {
   llmProvider: LLMProvider;
   budgetRef?: SandboxBudgetRef;
   pushEvidence: (entry: ThinkEvidence) => void;
+  requestMetadata?: Partial<LLMRequestMetadata>;
 }
 
 export function createLLMCapabilities(options: CreateLLMCapabilitiesOptions): LLMCapabilities {
+  const baseRequestId = options.requestMetadata?.requestId?.trim();
+  const baseTurnId = options.requestMetadata?.turnId?.trim();
+  const baseChannelId = options.requestMetadata?.channelId?.trim();
+  const baseToolCallId = options.requestMetadata?.toolCallId?.trim();
+
   const runSubQuery = async (prompt: string, evidenceQuery: string, attempt?: number): Promise<string> => {
     if (options.budgetRef && options.budgetRef.subQueries >= options.budgetRef.maxSubQueries) {
       return BUDGET_EXCEEDED_MESSAGE;
@@ -28,6 +34,19 @@ export function createLLMCapabilities(options: CreateLLMCapabilitiesOptions): LL
       {
         systemPrompt: 'You are a helpful assistant. Answer concisely.',
         messages: [{ role: 'user', content: prompt }],
+        correlation: {
+          ...(baseTurnId ? { turnId: baseTurnId } : {}),
+          requestId: baseRequestId
+            ? `${baseRequestId}:sandbox-subquery:${attempt ?? 1}`
+            : `repl-llm-query-${Date.now()}-${attempt ?? 1}`,
+          ...(baseChannelId ? { channelId: baseChannelId } : {}),
+          callType: 'tool',
+          toolName: 'llm_query',
+          ...(baseToolCallId ? { toolCallId: baseToolCallId } : {}),
+          purpose: attempt ? 'repl.sandbox.llm_query.retry' : 'repl.sandbox.llm_query',
+          originType: 'tool',
+          originStage: attempt ? 'repl.sandbox.llm_query.retry' : 'repl.sandbox.llm_query',
+        },
       },
       'reasoning',
     );

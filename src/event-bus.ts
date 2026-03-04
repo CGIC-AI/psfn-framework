@@ -1,4 +1,14 @@
-import type { SubstrateMessage, AgentResponse, TurnUsage } from './types.js';
+import type {
+  SubstrateMessage,
+  AgentResponse,
+  TurnUsage,
+  InferredPostTurnAction,
+  CorrelationMetadata,
+} from './types.js';
+import type {
+  AdaptiveToolDecisionTelemetry,
+  AdaptiveToolSnapshotTelemetry,
+} from './agent/adaptive-tools-telemetry.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -17,11 +27,74 @@ export interface ExternalTelemetryEvent {
   scope?: string;
 }
 
+type EventCorrelationFields = Partial<CorrelationMetadata>;
+
 export interface EventMap {
-  'message.received': { message: SubstrateMessage };
-  'message.sent': { response: AgentResponse };
-  'agent.turn.start': { message: SubstrateMessage };
-  'agent.turn.end': { message: SubstrateMessage; response: AgentResponse };
+  'message.received': { message: SubstrateMessage } & EventCorrelationFields;
+  'message.sent': { response: AgentResponse } & EventCorrelationFields;
+  'agent.turn.start': { message: SubstrateMessage } & EventCorrelationFields;
+  'agent.turn.end': { message: SubstrateMessage; response: AgentResponse } & EventCorrelationFields;
+  'agent.post_turn.actions.inferred': {
+    message: SubstrateMessage;
+    response: AgentResponse;
+    actions: InferredPostTurnAction[];
+  } & EventCorrelationFields;
+  'agent.post_turn.action.telemetry': {
+    actionId: string;
+    actionKind: string;
+    channelId: string;
+    sourceMessageId: string;
+    dedupeKey: string;
+    phase:
+      | 'queued'
+      | 'deduplicated'
+      | 'started'
+      | 'succeeded'
+      | 'retry_scheduled'
+      | 'failed';
+    attempt: number;
+    maxAttempts: number;
+    queueDepth: number;
+    timestamp: number;
+    nextRetryAt?: number;
+    delayMs?: number;
+    error?: string;
+  };
+  'agent.tool_handoff.telemetry': {
+    actionId: string;
+    dedupeKey: string;
+    channelId: string;
+    sourceMessageId: string;
+    toolNames: string[];
+    intendedAction: string;
+    phase: 'queued' | 'activated' | 'executed' | 'failed';
+    attempt?: number;
+    maxAttempts?: number;
+    timestamp: number;
+    error?: string;
+  };
+  'agent.tools.autoload': {
+    channelId: string;
+    intent: string;
+    taskKind: string | null;
+    boundedMax: number;
+    candidates: string[];
+    activated: string[];
+    alreadyActive: string[];
+    skippedDenied: Array<{ toolName: string; missingTokens: string[] }>;
+    unavailable: string[];
+  } & EventCorrelationFields;
+  'agent.tools.autoload.skipped': {
+    channelId: string;
+    intent: string;
+    taskKind: string | null;
+    toolName: string;
+    reason: 'not_registered' | 'capability_denied';
+    missingTokens?: string[];
+    tier?: string;
+  } & EventCorrelationFields;
+  'agent.tools.adaptive.decision': AdaptiveToolDecisionTelemetry & EventCorrelationFields;
+  'agent.tools.adaptive.snapshot': AdaptiveToolSnapshotTelemetry & EventCorrelationFields;
   'agent.turn.stage': {
     turnId: string;
     channelId: string;
@@ -29,16 +102,16 @@ export interface EventMap {
     elapsedMs: number;
     [key: string]: unknown;
   };
-  'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage };
-  'agent.stream.delta': { channelId: string; text: string };
-  'agent.stream.thinking': { channelId: string; text: string };
+  'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage } & EventCorrelationFields;
+  'agent.stream.delta': { channelId: string; text: string } & EventCorrelationFields;
+  'agent.stream.thinking': { channelId: string; text: string } & EventCorrelationFields;
   'agent.toolcall.start': {
     channelId: string;
     contentIndex: number;
     toolCallId?: string;
     toolName?: string;
     shardId?: string;
-  };
+  } & EventCorrelationFields;
   'agent.toolcall.delta': {
     channelId: string;
     contentIndex: number;
@@ -46,7 +119,7 @@ export interface EventMap {
     toolCallId?: string;
     toolName?: string;
     shardId?: string;
-  };
+  } & EventCorrelationFields;
   'agent.toolcall.end': {
     channelId: string;
     contentIndex: number;
@@ -54,9 +127,9 @@ export interface EventMap {
     toolName: string;
     arguments: Record<string, unknown>;
     shardId?: string;
-  };
-  'agent.tool.start': { channelId: string; toolCallId: string; toolName: string; shardId?: string };
-  'agent.tool.end': { channelId: string; toolCallId: string; toolName: string; isError: boolean; shardId?: string };
+  } & EventCorrelationFields;
+  'agent.tool.start': { channelId: string; toolCallId: string; toolName: string; shardId?: string } & EventCorrelationFields;
+  'agent.tool.end': { channelId: string; toolCallId: string; toolName: string; isError: boolean; shardId?: string } & EventCorrelationFields;
   'agent.compaction.start': {
     channelId: string;
     reason: 'threshold' | 'overflow';
@@ -96,8 +169,8 @@ export interface EventMap {
       }>;
     };
   };
-  'agent.error': { message: SubstrateMessage; error: Error };
-  'memory.extraction.start': { channelId: string; triggerReason?: string };
+  'agent.error': { message: SubstrateMessage; error: Error } & EventCorrelationFields;
+  'memory.extraction.start': { channelId: string; triggerReason?: string } & EventCorrelationFields;
   'memory.extraction.end': {
     channelId: string;
     count: number;
@@ -110,7 +183,7 @@ export interface EventMap {
     deduplicatedCount?: number;
     supersededCount?: number;
     rejectionBreakdown?: Record<string, number>;
-  };
+  } & EventCorrelationFields;
   'memory.retrieval': {
     channelId: string;
     count: number;
@@ -128,13 +201,13 @@ export interface EventMap {
     risky: boolean;
     signals: Array<'sensitive' | 'private' | 'off_brand'>;
     visibilityScope: 'public_only' | 'approved_private_context';
-  };
+  } & EventCorrelationFields;
   'broadcast.approval.required': {
     channelId: string;
     signals: Array<'sensitive' | 'private' | 'off_brand'>;
     visibilityScope: 'public_only' | 'approved_private_context';
     draftLength: number;
-  };
+  } & EventCorrelationFields;
   'broadcast.provenance': {
     channelId: string;
     visibilityScope: 'public_only' | 'approved_private_context';
@@ -144,19 +217,23 @@ export interface EventMap {
     provenanceRefs: string[];
     contextMessageCount: number;
     memoryContextChars: number;
-  };
+  } & EventCorrelationFields;
   'channel.queue.telemetry': {
     channelId: string;
     phase: 'acquired' | 'contended' | 'released';
+    policy?: 'drop' | 'defer-latest' | 'queue' | 'steer';
+    source?: string;
     queueDepth: number;
     waitMs: number;
     processingChannels: number;
+    reason?: string;
+    superseded?: boolean;
     timestamp: number;
   };
   'session.created': { channelId: string };
   'session.compacted': { channelId: string; before: number; after: number };
   'schedule.tick': { timestamp: number };
-  'schedule.task.run': { taskId: string; taskName: string; type: string };
+  'schedule.task.run': { taskId: string; taskName: string; type: string } & EventCorrelationFields;
   'schedule.heartbeat': { timestamp: number; taskCount: number };
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };
@@ -355,7 +432,7 @@ export interface EventMap {
     error?: string;
     timestampMs: number;
   };
-  'external.telemetry.ingested': { event: ExternalTelemetryEvent };
+  'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
   'module.install': {
     id: string;
     name: string;

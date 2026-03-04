@@ -4,6 +4,7 @@ import type { GatewayMethodRuntime } from './types.js';
 import type { PolicyConfig } from '../policy.js';
 import { registerWebMethods } from './web.js';
 import { GatewayErrors } from '../protocol.js';
+import type { DnsResolver } from '../url-policy.js';
 
 interface RuntimeHarness {
   invoke(params: Record<string, unknown>): Promise<any>;
@@ -217,5 +218,66 @@ describe('registerWebMethods', () => {
       code: GatewayErrors.PROVIDER_ERROR,
       message: expect.stringContaining('too large'),
     });
+  });
+
+  it('blocks metadata IP resolved by DNS even in local crawler lane', async () => {
+    const dnsResolver: DnsResolver = vi.fn(async () => ({ address: '169.254.169.254', family: 4 }));
+    const policyConfig = {
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['crawler.allowed.test'],
+        },
+      },
+      webFetchDnsResolver: dnsResolver,
+    } as PolicyConfig & { webFetchDnsResolver: DnsResolver };
+
+    const harness = createRuntimeHarness(policyConfig);
+    await expect(harness.invoke({
+      url: 'http://crawler.allowed.test/resource',
+      lane: 'local_crawler',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('cloud metadata'),
+    });
+  });
+
+  it('pins outbound connection to validated DNS address to avoid TOCTOU rebind', async () => {
+    const { server, url } = await listenHttp(() => ({
+      body: 'pinned ok',
+      contentType: 'text/plain; charset=utf-8',
+    }));
+    servers.push(server);
+
+    const parsed = new URL(url);
+    const dnsResolver: DnsResolver = vi.fn(async (hostname: string) => {
+      if (hostname !== 'crawler.allowed.test') {
+        throw new Error(`unexpected hostname ${hostname}`);
+      }
+      return { address: '127.0.0.1', family: 4 };
+    });
+    const policyConfig = {
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        allowHttp: false,
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['crawler.allowed.test'],
+        },
+      },
+      webFetchDnsResolver: dnsResolver,
+    } as PolicyConfig & { webFetchDnsResolver: DnsResolver };
+
+    const harness = createRuntimeHarness(policyConfig);
+    const result = await harness.invoke({
+      url: `http://crawler.allowed.test:${parsed.port}/resource`,
+      lane: 'local_crawler',
+    });
+
+    expect(result.content).toContain('pinned ok');
+    expect(dnsResolver).toHaveBeenCalledWith('crawler.allowed.test');
   });
 });

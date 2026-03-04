@@ -1,6 +1,7 @@
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { isAbsolute, resolve } from 'node:path';
 import { rootCertificates } from 'node:tls';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
@@ -8,6 +9,7 @@ import { sanitizeWebContent } from '../sanitize.js';
 import {
   evaluateUrlPolicy,
   checkResolvedIP,
+  type DnsResolver,
   type UrlPolicyConfig,
   type UrlPolicyLane,
 } from '../url-policy.js';
@@ -33,6 +35,10 @@ interface ResponseLike {
   };
   text(): Promise<string>;
   arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+interface WebPolicyTestHooks {
+  webFetchDnsResolver?: DnsResolver;
 }
 
 function getErrorMessage(err: unknown): string {
@@ -115,6 +121,10 @@ function resolveUrlPolicyConfig(runtime: GatewayMethodRuntime): UrlPolicyConfig 
   return fallback;
 }
 
+function resolveDnsResolver(runtime: GatewayMethodRuntime): DnsResolver | undefined {
+  return (runtime.policyConfig as WebPolicyTestHooks).webFetchDnsResolver;
+}
+
 function parseCsvEnv(value: string | undefined): string[] | undefined {
   if (typeof value !== 'string') return undefined;
   const parsed = [...new Set(
@@ -158,25 +168,40 @@ function loadTlsBundle(paths: readonly string[]): string | undefined {
 
 async function requestText(
   url: string,
-  options: { tlsCaBundle?: string },
+  options: { tlsCaBundle?: string; connectAddress?: string },
 ): Promise<ResponseLike> {
   const parsed = new URL(url);
   const isHttps = parsed.protocol === 'https:';
   const requestImpl = isHttps ? httpsRequest : httpRequest;
+  const originalHostname = parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']')
+    ? parsed.hostname.slice(1, -1)
+    : parsed.hostname;
+  const shouldSetServername = isHttps
+    && typeof options.connectAddress === 'string'
+    && options.connectAddress.length > 0
+    && isIP(originalHostname) === 0;
+  const headers: Record<string, string> = {
+    'User-Agent': WEB_FETCH_USER_AGENT,
+  };
+  if (options.connectAddress) {
+    headers.Host = parsed.host;
+  }
 
   return await new Promise<ResponseLike>((resolveResponse, rejectResponse) => {
     const req = requestImpl(
       {
         protocol: parsed.protocol,
-        hostname: parsed.hostname,
+        hostname: options.connectAddress ?? parsed.hostname,
+        family: options.connectAddress ? isIP(options.connectAddress) : undefined,
         port: parsed.port ? Number.parseInt(parsed.port, 10) : undefined,
         path: `${parsed.pathname}${parsed.search}`,
         method: 'GET',
-        headers: {
-          'User-Agent': WEB_FETCH_USER_AGENT,
-        },
+        headers,
         ...(isHttps && options.tlsCaBundle ? {
           ca: [...rootCertificates, options.tlsCaBundle],
+        } : {}),
+        ...(shouldSetServername ? {
+          servername: originalHostname,
         } : {}),
       },
       (res) => {
@@ -243,6 +268,7 @@ async function fetchWithPolicyChecks(
   lane: UrlPolicyLane,
   urlPolicyConfig: UrlPolicyConfig,
   tlsCaBundle: string | undefined,
+  dnsResolver?: DnsResolver,
 ): Promise<ResponseLike> {
   const urlCheck = evaluateUrlPolicy(url, urlPolicyConfig, lane);
   if (!urlCheck.allowed) {
@@ -254,7 +280,7 @@ async function fetchWithPolicyChecks(
   }
 
   const parsed = new URL(url);
-  const dnsCheck = await checkResolvedIP(parsed.hostname, undefined, {
+  const dnsCheck = await checkResolvedIP(parsed.hostname, dnsResolver, {
     allowPrivateResolvedIp: lane === 'local_crawler' || urlPolicyConfig.allowInternalNetwork === true,
   });
   if (!dnsCheck.allowed) {
@@ -265,9 +291,18 @@ async function fetchWithPolicyChecks(
     );
   }
 
+  const connectAddress = dnsCheck.address;
+  if (!connectAddress) {
+    throw new JSONRPCErrorException(
+      'URL blocked: DNS resolution did not return a usable address',
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+
   try {
     return await requestText(url, {
       tlsCaBundle,
+      connectAddress,
     });
   } catch (err) {
     throw new JSONRPCErrorException(
@@ -283,6 +318,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: WebFetchParams, runtime) => {
       const lane = toLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
+      const dnsResolver = resolveDnsResolver(runtime);
 
       let tlsCaBundle: string | undefined;
       try {
@@ -299,6 +335,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         lane,
         urlPolicyConfig,
         tlsCaBundle,
+        dnsResolver,
       );
 
       if (response.status >= 300 && response.status < 400) {
@@ -313,6 +350,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           lane,
           urlPolicyConfig,
           tlsCaBundle,
+          dnsResolver,
         );
         if (!redirectResponse.ok) {
           throw new JSONRPCErrorException(
@@ -352,6 +390,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       const lane = toLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const maxBytes = normalizeBinaryMaxBytes(params.maxBytes);
+      const dnsResolver = resolveDnsResolver(runtime);
 
       let tlsCaBundle: string | undefined;
       try {
@@ -369,6 +408,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         lane,
         urlPolicyConfig,
         tlsCaBundle,
+        dnsResolver,
       );
 
       if (response.status >= 300 && response.status < 400) {
@@ -382,6 +422,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           lane,
           urlPolicyConfig,
           tlsCaBundle,
+          dnsResolver,
         );
       }
 

@@ -854,7 +854,9 @@ async function main(): Promise<void> {
       await runShutdownStep('stop API server', () => apiServer?.stop());
       await runShutdownStep('stop admin server', () => adminServer?.stop());
       await runShutdownStep('destroy gateway client', () => gateway.destroy());
-      await runShutdownStep('close database', () => db.close());
+      await runShutdownStep('close database', () => {
+        db.close();
+      });
       log.info('Stopped');
     })();
 

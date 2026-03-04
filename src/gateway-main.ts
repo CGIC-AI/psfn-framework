@@ -635,7 +635,9 @@ async function main(): Promise<void> {
       await runShutdownStep('stop gateway server', () => gateway.stop());
       await runShutdownStep('stop Telegram adapter', () => telegram?.stop());
       await runShutdownStep('stop Discord adapter', () => discord.stop());
-      await runShutdownStep('close audit database', () => auditDb.close());
+      await runShutdownStep('close audit database', () => {
+        auditDb.close();
+      });
     })();
 
     await stopPromise;

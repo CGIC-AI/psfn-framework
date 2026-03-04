@@ -26,8 +26,6 @@ const log = createComponentLogger('SessionStore');
 
 export class SessionJournalRuntime {
   private integrityProvider: SessionIntegrityProvider | null;
-  private integritySignFailureLogged = false;
-  private integrityVerifyFailureLogged = false;
   private searchIndexFailureLogged = false;
   private channelIndexFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
@@ -48,13 +46,9 @@ export class SessionJournalRuntime {
     try {
       verification = this.integrityProvider.verify(entry, previousHmac);
     } catch (error) {
-      if (!this.integrityVerifyFailureLogged) {
-        this.integrityVerifyFailureLogged = true;
-        log.warn('Session integrity verification unavailable; loading entry without verification', {
-          error: toErrorMessage(error),
-        });
-      }
-      return entry;
+      throw new Error(
+        `Session integrity verification failed: ${toErrorMessage(error)}`,
+      );
     }
 
     if (verification.verified) {
@@ -211,12 +205,9 @@ export class SessionJournalRuntime {
         signed = this.integrityProvider.sign(signed, previousHmac);
         nextHmac = signed._hmac ?? previousHmac;
       } catch (error) {
-        if (!this.integritySignFailureLogged) {
-          this.integritySignFailureLogged = true;
-          log.warn('Session integrity signing unavailable; writing unsigned journal entry', {
-            error: toErrorMessage(error),
-          });
-        }
+        throw new Error(
+          `Session integrity signing failed: ${toErrorMessage(error)}`,
+        );
       }
     }
 

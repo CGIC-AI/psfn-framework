@@ -319,7 +319,19 @@ export class AdminIdentityDataService implements AdminIdentityService {
       // Also update the in-memory character card reference
       const current = snapshot.card;
       Object.assign(this.deps.characterCard, current);
-      return { ok: true, message: `Updated "${field}" to v${snapshot.version}` };
+      const promptSync = syncCharacterFoundationPromptFromCard(
+        this.deps.promptStore,
+        current,
+        'admin:api',
+        `Sync Character Foundation prompt after field update: ${field}`,
+      );
+      const promptWarning = !promptSync.ok
+        ? ` (Character Foundation sync warning: ${promptSync.error})`
+        : '';
+      return {
+        ok: true,
+        message: `Updated "${field}" to v${snapshot.version}${promptWarning}`,
+      };
     } catch (error) {
       return { ok: false, message: String(error) };
     }

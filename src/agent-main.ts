@@ -17,6 +17,7 @@ import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from './security/policy-constants.js';
 import { ApiServer } from './channels/api/server.js';
+import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import {
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
@@ -93,8 +94,13 @@ import {
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
+import {
+  ensureRegistryFile,
+  resolveModuleRegistryPathFromWorkspace,
+} from './modules/registry.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
+import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
   resolveContactsDir,
   resolveNotesDir,
@@ -106,6 +112,7 @@ const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
+const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
 
@@ -248,6 +255,13 @@ async function main(): Promise<void> {
   });
   const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
+  const workspacePath = process.env.WORKSPACE_PATH ?? './workspace';
+  const workspaceRoot = resolveWorkspaceRoot(workspacePath);
+  const moduleRegistryPath = resolveModuleRegistryPathFromWorkspace(
+    workspaceRoot,
+    process.env.MODULE_REGISTRY_PATH,
+  );
+  ensureRegistryFile(moduleRegistryPath);
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
 
@@ -432,11 +446,13 @@ async function main(): Promise<void> {
     agentLoop,
     llmProvider: gateway,
     sessionManager,
+    sessionStore,
     memoryStore,
     embeddingService: gateway,
     eventBus,
     config,
     promptRegistry,
+    contactStore,
   });
 
   const salienceDecay = new SalienceDecay(memoryStore);
@@ -481,7 +497,9 @@ async function main(): Promise<void> {
   const moduleLoader = new ModuleLoader({
     eventBus,
     registerTool: (tool, category) => agentLoop.registerTool(tool, category),
+    registryPath: moduleRegistryPath,
   });
+  log.info('Split module registry path resolved', { moduleRegistryPath });
 
   const replConfig = buildReplConfig(config);
   const shardManager = wireShardAndThinkRuntime({
@@ -552,6 +570,17 @@ async function main(): Promise<void> {
   if (apiPort) {
     const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
     const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
+    const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
+      agentLoop,
+      eventBus,
+      config,
+    });
+    const voiceWebSocketPath = voiceWebSocketRuntime
+      ? undefined
+      : DISABLED_VOICE_WEBSOCKET_PATH;
+    if (!voiceWebSocketRuntime) {
+      log.info('API voice websocket runtime gated off: STT/TTS runtime is not fully wired');
+    }
     const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
     const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
     const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
@@ -570,6 +599,8 @@ async function main(): Promise<void> {
         process.env.API_REQUEST_TIMEOUT_MS,
         DEFAULT_API_REQUEST_TIMEOUT_MS,
       ),
+      voiceWebSocketPath,
+      voiceWebSocketRuntime,
       healthChecks: {
         memory: () => {
           const stats = memoryStore.getStats();
@@ -808,6 +839,13 @@ async function main(): Promise<void> {
         }
       });
 
+      await runShutdownStep('write graceful shutdown markers', () => {
+        const markedChannels = sessionStore.markGracefulShutdownForActiveChannels();
+        if (markedChannels.length > 0) {
+          log.info('Wrote graceful shutdown markers', { channels: markedChannels });
+        }
+      });
+      await runShutdownStep('shutdown module loader', () => moduleLoader.shutdown());
       await runShutdownStep('stop API server', () => apiServer?.stop());
       await runShutdownStep('stop admin server', () => adminServer?.stop());
       await runShutdownStep('destroy gateway client', () => gateway.destroy());

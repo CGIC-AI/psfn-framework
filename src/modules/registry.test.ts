@@ -8,6 +8,7 @@ import {
   parseModuleRegistry,
   readModuleRegistry,
   resolveModuleRegistryPath,
+  resolveModuleRegistryPathFromWorkspace,
   writeModuleRegistry,
 } from './registry.js';
 
@@ -142,5 +143,17 @@ describe('resolveModuleRegistryPath', () => {
   it('resolves relative paths against cwd', () => {
     const result = resolveModuleRegistryPath('rel/path.json', '/home/test');
     expect(result).toBe('/home/test/rel/path.json');
+  });
+});
+
+describe('resolveModuleRegistryPathFromWorkspace', () => {
+  it('resolves relative paths against workspace root', () => {
+    const result = resolveModuleRegistryPathFromWorkspace('/workspace/root', 'rel/path.json');
+    expect(result).toBe('/workspace/root/rel/path.json');
+  });
+
+  it('returns absolute paths unchanged', () => {
+    const result = resolveModuleRegistryPathFromWorkspace('/workspace/root', '/abs/modules.json');
+    expect(result).toBe('/abs/modules.json');
   });
 });

@@ -23,8 +23,10 @@ import {
   resolveFullCodebaseReadRootFromEnv,
   resolveTrustedModuleRegistryPathFromEnv,
 } from './gateway/policy-config.js';
-import { MODULE_REGISTRY_PATH } from './security/policy-constants.js';
-import { ensureRegistryFile } from './modules/registry.js';
+import {
+  ensureRegistryFile,
+  resolveModuleRegistryPathFromWorkspace,
+} from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
@@ -34,10 +36,7 @@ import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/h
 import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
 import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
-import {
-  createStreamingTtsConnector,
-  type StreamingTtsProvider,
-} from './voice/connectors/tts/index.js';
+import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import { GitOps } from './git/ops.js';
@@ -46,6 +45,7 @@ import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parsePositiveIntEnv } from './utils/env.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
+import { resolveRuntimeVoiceProviderGate } from './runtime/bootstrap-helpers.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
@@ -296,9 +296,9 @@ async function main(): Promise<void> {
 
   // Ensure the module registry file exists regardless of policy — prevents
   // ENOENT when the REPL sandbox or ModuleLoader reads it for the first time.
-  const moduleRegistryAbsolute = resolve(
+  const moduleRegistryAbsolute = resolveModuleRegistryPathFromWorkspace(
     workspaceRoot,
-    process.env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH,
+    process.env.MODULE_REGISTRY_PATH,
   );
   ensureRegistryFile(moduleRegistryAbsolute);
   const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(process.env, workspaceRoot);
@@ -433,39 +433,53 @@ async function main(): Promise<void> {
     });
 
     const wyomingAdapters = [handleAdapter];
+    const voiceProviderGate = resolveRuntimeVoiceProviderGate(config);
+    const wyomingSttProvider = voiceProviderGate.sttProvider;
+    const wyomingTtsProvider = voiceProviderGate.ttsProvider;
 
-    // ASR adapter — wired to Deepgram STT when API key is available
-    const wyomingDeepgramKey = config.deepgramApiKey;
-    if (wyomingDeepgramKey) {
+    // ASR adapter — wired to Deepgram STT only when provider + credentials are enabled
+    if (voiceProviderGate.sttEnabled && wyomingSttProvider === 'deepgram') {
       const sttConnector = createStreamingSttConnector('deepgram', {
-        apiKey: wyomingDeepgramKey,
+        apiKey: config.deepgramApiKey!,
         model: config.deepgramModel,
       });
       wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
       log.info('Wyoming ASR adapter enabled (deepgram)');
+    } else {
+      log.info('Wyoming ASR adapter disabled', {
+        provider: wyomingSttProvider,
+        hasDeepgramApiKey: Boolean(config.deepgramApiKey),
+      });
     }
 
-    // TTS adapter — wired to the configured TTS provider (elevenlabs or echo)
-    const wyomingTtsProvider: StreamingTtsProvider = config.ttsProvider ?? 'elevenlabs';
+    // TTS adapter — wired only when provider + credentials/config are enabled
     try {
       let ttsConnector;
-      if (wyomingTtsProvider === 'echo' && config.echoTtsUrl && config.echoTtsVoice) {
-        ttsConnector = createStreamingTtsConnector('echo', {
-          url: config.echoTtsUrl,
-          voice: config.echoTtsVoice,
-          preset: config.echoTtsPreset ?? 'normal',
-          ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
-        });
-      } else if (config.elevenLabsApiKey) {
-        ttsConnector = createStreamingTtsConnector('elevenlabs', {
-          apiKey: config.elevenLabsApiKey,
-          voiceId: config.elevenLabsVoiceId ?? 'YOUR_VOICE_ID',
-          modelId: config.elevenLabsModelId,
-        });
+      if (voiceProviderGate.ttsEnabled) {
+        if (wyomingTtsProvider === 'echo') {
+          ttsConnector = createStreamingTtsConnector('echo', {
+            url: config.echoTtsUrl!,
+            voice: config.echoTtsVoice!,
+            preset: config.echoTtsPreset ?? 'normal',
+            ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
+          });
+        } else if (wyomingTtsProvider === 'elevenlabs') {
+          ttsConnector = createStreamingTtsConnector('elevenlabs', {
+            apiKey: config.elevenLabsApiKey!,
+            voiceId: config.elevenLabsVoiceId ?? 'YOUR_VOICE_ID',
+            modelId: config.elevenLabsModelId,
+          });
+        }
       }
       if (ttsConnector) {
         wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: ttsConnector }));
         log.info('Wyoming TTS adapter enabled', { provider: wyomingTtsProvider });
+      } else {
+        log.info('Wyoming TTS adapter disabled', {
+          provider: wyomingTtsProvider,
+          hasElevenLabsApiKey: Boolean(config.elevenLabsApiKey),
+          hasEchoConfig: Boolean(config.echoTtsUrl && config.echoTtsVoice),
+        });
       }
     } catch (error) {
       log.warn('Wyoming TTS adapter could not be created', { error: String(error) });

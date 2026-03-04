@@ -33,6 +33,14 @@ export function resolveModuleRegistryPath(
   return isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
 }
 
+export function resolveModuleRegistryPathFromWorkspace(
+  workspaceRoot: string,
+  pathOverride?: string,
+): string {
+  const candidate = (pathOverride?.trim() || process.env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH);
+  return isAbsolute(candidate) ? candidate : resolve(workspaceRoot, candidate);
+}
+
 export function parseModuleRegistry(raw: string): ModuleRecord[] {
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed)) {

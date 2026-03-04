@@ -463,10 +463,10 @@ async function main(): Promise<void> {
             preset: config.echoTtsPreset ?? 'normal',
             ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
           });
-        } else if (wyomingTtsProvider === 'elevenlabs') {
+        } else if (wyomingTtsProvider === 'elevenlabs' && config.elevenLabsVoiceId) {
           ttsConnector = createStreamingTtsConnector('elevenlabs', {
             apiKey: config.elevenLabsApiKey!,
-            voiceId: config.elevenLabsVoiceId ?? 'YOUR_VOICE_ID',
+            voiceId: config.elevenLabsVoiceId,
             modelId: config.elevenLabsModelId,
           });
         }

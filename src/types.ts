@@ -617,7 +617,7 @@ export function loadConfig(): SubstrateConfig {
     deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
     deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? '',
-    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID ?? 'YOUR_VOICE_ID',
+    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID ?? '',
     elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
     ...(echoTtsUrl ? { echoTtsUrl } : {}),
     ...(echoTtsVoice ? { echoTtsVoice } : {}),

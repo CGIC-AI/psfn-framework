@@ -160,8 +160,6 @@ export function voicePreflight(config: SubstrateConfig): VoicePreflightResult {
   };
 }
 
-/** Default ElevenLabs voice ID used when no explicit voice ID is configured. */
-export const DISCORD_VOICE_DEFAULT_VOICE_ID = 'YOUR_VOICE_ID';
 
 type VoiceTurnErrorStage = 'ingest' | 'stt' | 'llm' | 'tts' | 'unknown';
 type VoiceTurnObservationKind = 'silence' | 'empty-transcript' | 'empty-response' | 'playback-error';
@@ -360,21 +358,15 @@ export class DiscordVoiceRuntime {
       );
     }
 
-    // Apply default ElevenLabs voice ID when none is explicitly configured
-    const configWithDefaults: SubstrateConfig = {
-      ...config,
-      elevenLabsVoiceId: config.elevenLabsVoiceId || DISCORD_VOICE_DEFAULT_VOICE_ID,
-    };
-
-    const ttsConnectors = buildConfiguredTtsConnectors(configWithDefaults, this.preferredTtsProviderId);
+    const ttsConnectors = buildConfiguredTtsConnectors(config, this.preferredTtsProviderId);
     if (ttsConnectors.length === 0) {
       this.enabled = false;
       this.ttsConnectors = [];
       log.warn('Voice enabled but no TTS connectors could be created, disabling voice runtime', {
         ttsProvider: this.preferredTtsProviderId,
-        hasSelectedTtsConfig: hasTtsProviderConfig(this.preferredTtsProviderId, configWithDefaults),
-        hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', configWithDefaults),
-        hasEchoConfig: hasTtsProviderConfig('echo', configWithDefaults),
+        hasSelectedTtsConfig: hasTtsProviderConfig(this.preferredTtsProviderId, config),
+        hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', config),
+        hasEchoConfig: hasTtsProviderConfig('echo', config),
       });
       return;
     }

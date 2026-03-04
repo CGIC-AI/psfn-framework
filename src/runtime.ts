@@ -168,6 +168,7 @@ export class SubstrateRuntime implements Lifecycle {
   private stopVoiceObservers?: () => void;
   private stopDebugObserver?: () => void;
   private crashRecoveryQueue: CrashRecoveryExtractionCandidate[] = [];
+  private crashRecoveryRetryBacklog = new Map<string, CrashRecoveryExtractionCandidate>();
   private stopping = false;
   private startTime: number;
 
@@ -209,6 +210,52 @@ export class SubstrateRuntime implements Lifecycle {
     return parsed;
   }
 
+  private seedCrashRecoveryRetryBacklog(candidates: CrashRecoveryExtractionCandidate[]): void {
+    this.crashRecoveryRetryBacklog.clear();
+    for (const candidate of candidates) {
+      this.crashRecoveryRetryBacklog.set(candidate.channelId, candidate);
+    }
+  }
+
+  private refreshCrashRecoveryRetryBacklog(channelId: string): boolean {
+    const sessionStore = this.sessionStore;
+    if (!sessionStore) {
+      return this.crashRecoveryRetryBacklog.has(channelId);
+    }
+
+    const candidate = sessionStore
+      .getCrashRecoveryExtractionCandidates()
+      .find(item => item.channelId === channelId);
+    if (candidate) {
+      this.crashRecoveryRetryBacklog.set(channelId, candidate);
+      return true;
+    }
+
+    this.crashRecoveryRetryBacklog.delete(channelId);
+    return false;
+  }
+
+  private resolveUnresolvedCrashRecoveryChannels(): Set<string> {
+    const sessionStore = this.sessionStore;
+    if (!sessionStore) {
+      return new Set(this.crashRecoveryRetryBacklog.keys());
+    }
+
+    const unresolvedCandidates = sessionStore.getCrashRecoveryExtractionCandidates();
+    const unresolvedChannelIds = new Set(unresolvedCandidates.map(candidate => candidate.channelId));
+
+    for (const candidate of unresolvedCandidates) {
+      this.crashRecoveryRetryBacklog.set(candidate.channelId, candidate);
+    }
+    for (const channelId of [...this.crashRecoveryRetryBacklog.keys()]) {
+      if (!unresolvedChannelIds.has(channelId)) {
+        this.crashRecoveryRetryBacklog.delete(channelId);
+      }
+    }
+
+    return unresolvedChannelIds;
+  }
+
   private queueCrashRecoveryExtractions(): void {
     if (this.crashRecoveryQueue.length === 0) return;
 
@@ -224,15 +271,37 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     for (const candidate of queued) {
-      this.memoryExtractor.queueRetroactiveExtraction(
+      this.crashRecoveryRetryBacklog.set(candidate.channelId, candidate);
+      void this.memoryExtractor.queueRetroactiveExtraction(
         candidate.channelId,
         candidate.unextractedEntries,
-      ).catch((error) => {
-        log.error('Crash recovery extraction queue failed', {
-          channelId: candidate.channelId,
-          error: String(error),
+      )
+        .catch((error) => {
+          log.error('Crash recovery extraction queue failed', {
+            channelId: candidate.channelId,
+            error: String(error),
+          });
+        })
+        .finally(() => {
+          let unresolved = false;
+          try {
+            unresolved = this.refreshCrashRecoveryRetryBacklog(candidate.channelId);
+          } catch (error) {
+            log.error('Crash recovery retry bookkeeping failed', {
+              channelId: candidate.channelId,
+              error: String(error),
+            });
+            return;
+          }
+          if (!unresolved) return;
+
+          const pending = this.crashRecoveryRetryBacklog.get(candidate.channelId);
+          log.warn('Crash recovery extraction remains unresolved; retry deferred to next startup', {
+            channelId: candidate.channelId,
+            pendingEntryCount: pending?.unextractedEntries.length
+              ?? candidate.unextractedEntries.length,
+          });
         });
-      });
     }
   }
 
@@ -369,6 +438,7 @@ export class SubstrateRuntime implements Lifecycle {
       });
     }
     this.crashRecoveryQueue = this.sessionStore.getCrashRecoveryExtractionCandidates();
+    this.seedCrashRecoveryRetryBacklog(this.crashRecoveryQueue);
     this.restoreLatestSessionMetadata();
 
     // Embedding provider (selected by EMBEDDING_PROVIDER)
@@ -1034,7 +1104,16 @@ export class SubstrateRuntime implements Lifecycle {
     if (drained === false) {
       log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
     }
-    const markedChannels = this.sessionStore?.markGracefulShutdownForActiveChannels();
+    const unresolvedCrashRecoveryChannels = this.resolveUnresolvedCrashRecoveryChannels();
+    if (unresolvedCrashRecoveryChannels.size > 0) {
+      log.warn('Skipping graceful markers for channels with unresolved extraction backlog', {
+        channels: [...unresolvedCrashRecoveryChannels],
+      });
+    }
+    const markedChannels = this.sessionStore?.markGracefulShutdownForActiveChannels(
+      Date.now(),
+      { skipChannels: unresolvedCrashRecoveryChannels },
+    );
     if ((markedChannels?.length ?? 0) > 0) {
       log.info('Wrote graceful shutdown markers', { channels: markedChannels });
     }

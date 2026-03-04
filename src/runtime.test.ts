@@ -147,6 +147,7 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     runtime.scheduler = { stop: vi.fn() };
     runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
     runtime.sessionStore = {
+      getCrashRecoveryExtractionCandidates: vi.fn().mockReturnValue([]),
       markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue(['api:test']),
     };
     runtime.stopVoiceObservers = vi.fn();
@@ -168,6 +169,7 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     runtime.scheduler = { stop: vi.fn() };
     runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
     runtime.sessionStore = {
+      getCrashRecoveryExtractionCandidates: vi.fn().mockReturnValue([]),
       markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
     };
     runtime.stopVoiceObservers = vi.fn();
@@ -186,6 +188,7 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     runtime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
     runtime.scheduler = { stop: vi.fn() };
     runtime.sessionStore = {
+      getCrashRecoveryExtractionCandidates: vi.fn().mockReturnValue([]),
       markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
     };
     runtime.stopVoiceObservers = vi.fn();
@@ -229,6 +232,9 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     const runtime = makeRuntime() as any;
     const queueRetroactiveExtraction = vi.fn().mockResolvedValue(undefined);
     runtime.memoryExtractor = { queueRetroactiveExtraction };
+    runtime.sessionStore = {
+      getCrashRecoveryExtractionCandidates: vi.fn().mockReturnValue([]),
+    };
     const pendingQueue = [
       {
         channelId: 'api:recover-1',
@@ -249,6 +255,94 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     expect(queueRetroactiveExtraction).toHaveBeenNthCalledWith(1, 'api:recover-1', pendingQueue[0].unextractedEntries);
     expect(queueRetroactiveExtraction).toHaveBeenNthCalledWith(2, 'api:recover-2', pendingQueue[1].unextractedEntries);
     expect(runtime.crashRecoveryQueue).toEqual([]);
+  });
+
+  it('retries unresolved crash-recovery backlog after graceful shutdown + restart', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-crash-retry-'));
+    try {
+      const channelId = 'api:restart-recovery';
+      const firstStore = new SessionStore(sessionsDir);
+      firstStore.append({
+        channelId,
+        role: 'user',
+        content: 'Message 1',
+        timestamp: 1_000,
+      });
+      firstStore.insertExtractionMarker(channelId, 1, 1_500);
+      firstStore.append({
+        channelId,
+        role: 'assistant',
+        content: 'Message 2',
+        timestamp: 2_000,
+      });
+
+      const firstRuntime = makeRuntime() as any;
+      const firstRecoveryRuns: Promise<void>[] = [];
+      firstRuntime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
+      firstRuntime.scheduler = { stop: vi.fn() };
+      firstRuntime.memoryExtractor = {
+        queueRetroactiveExtraction: vi.fn().mockImplementation(() => {
+          const run = Promise.resolve();
+          firstRecoveryRuns.push(run);
+          return run;
+        }),
+        stop: vi.fn().mockImplementation(async () => {
+          await Promise.all(firstRecoveryRuns);
+          return true;
+        }),
+      };
+      firstRuntime.sessionStore = firstStore;
+      firstRuntime.stopVoiceObservers = vi.fn();
+      firstRuntime.stopDebugObserver = vi.fn();
+      firstRuntime.stopChannels = vi.fn().mockResolvedValue(undefined);
+      firstRuntime.db = { close: vi.fn() };
+      firstRuntime.crashRecoveryQueue = firstStore.getCrashRecoveryExtractionCandidates();
+      firstRuntime.seedCrashRecoveryRetryBacklog(firstRuntime.crashRecoveryQueue);
+
+      firstRuntime.queueCrashRecoveryExtractions();
+      await Promise.resolve();
+      await firstRuntime.stop();
+
+      const restartedStore = new SessionStore(sessionsDir);
+      const pendingAfterFirstRun = restartedStore.getCrashRecoveryExtractionCandidates();
+      expect(pendingAfterFirstRun).toHaveLength(1);
+      expect(pendingAfterFirstRun[0].channelId).toBe(channelId);
+
+      const secondRuntime = makeRuntime() as any;
+      const secondRecoveryRuns: Promise<void>[] = [];
+      secondRuntime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
+      secondRuntime.scheduler = { stop: vi.fn() };
+      secondRuntime.memoryExtractor = {
+        queueRetroactiveExtraction: vi.fn().mockImplementation(async (queuedChannelId: string, entries: any[]) => {
+          const run = (async () => {
+            const coveredUpTo = entries[entries.length - 1]?.id ?? 0;
+            restartedStore.insertExtractionMarker(queuedChannelId, coveredUpTo, 3_000);
+          })();
+          secondRecoveryRuns.push(run);
+          return run;
+        }),
+        stop: vi.fn().mockImplementation(async () => {
+          await Promise.all(secondRecoveryRuns);
+          return true;
+        }),
+      };
+      secondRuntime.sessionStore = restartedStore;
+      secondRuntime.stopVoiceObservers = vi.fn();
+      secondRuntime.stopDebugObserver = vi.fn();
+      secondRuntime.stopChannels = vi.fn().mockResolvedValue(undefined);
+      secondRuntime.db = { close: vi.fn() };
+      secondRuntime.crashRecoveryQueue = restartedStore.getCrashRecoveryExtractionCandidates();
+      secondRuntime.seedCrashRecoveryRetryBacklog(secondRuntime.crashRecoveryQueue);
+
+      secondRuntime.queueCrashRecoveryExtractions();
+      await secondRuntime.stop();
+
+      const cleanStore = new SessionStore(sessionsDir);
+      expect(cleanStore.getCrashRecoveryExtractionCandidates()).toEqual([]);
+      expect(cleanStore.getUncleanShutdownChannels()).toEqual([]);
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
   });
 
   it('starts channel adapters in parallel and keeps healthy adapters when one fails', async () => {

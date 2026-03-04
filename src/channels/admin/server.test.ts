@@ -124,6 +124,102 @@ function captureSseBody(
   });
 }
 
+function openWebSocket(
+  port: number,
+  path: string,
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers });
+    const cleanup = () => {
+      ws.removeAllListeners('open');
+      ws.removeAllListeners('error');
+      ws.removeAllListeners('unexpected-response');
+    };
+
+    ws.once('open', () => {
+      cleanup();
+      resolve(ws);
+    });
+
+    ws.once('unexpected-response', (_request, response) => {
+      cleanup();
+      const status = response.statusCode ?? 0;
+      response.resume();
+      reject(new Error(`Unexpected websocket response: ${status}`));
+    });
+
+    ws.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
+function openWebSocketExpectStatus(
+  port: number,
+  path: string,
+  headers?: Record<string, string>,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    let settled = false;
+    let responseBuffer = '';
+
+    const resolveStatus = (status: number): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(status);
+    };
+
+    const rejectWith = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      reject(error);
+    };
+
+    const maybeResolveFromBuffer = (): boolean => {
+      const match = /^HTTP\/1\.1 (\d{3})/m.exec(responseBuffer);
+      if (!match) return false;
+      resolveStatus(Number(match[1]));
+      return true;
+    };
+
+    socket.once('connect', () => {
+      const requestHeaders = [
+        `GET ${path} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        'Sec-WebSocket-Version: 13',
+        `Sec-WebSocket-Key: ${Buffer.from('0123456789abcdef').toString('base64')}`,
+      ];
+      for (const [name, value] of Object.entries(headers ?? {})) {
+        requestHeaders.push(`${name}: ${value}`);
+      }
+      requestHeaders.push('\r\n');
+      socket.write(requestHeaders.join('\r\n'));
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      responseBuffer += chunk.toString('utf8');
+      maybeResolveFromBuffer();
+    });
+
+    socket.once('end', () => {
+      if (maybeResolveFromBuffer()) return;
+      rejectWith(new Error('Expected websocket upgrade to fail with status'));
+    });
+
+    socket.once('error', (error) => {
+      if (maybeResolveFromBuffer()) return;
+      rejectWith(error as Error);
+    });
+  });
+}
+
 function allocatePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -2993,6 +3089,24 @@ describe('AdminServer with auth', () => {
     expect(legacy.body).toContain('Dashboard');
   });
 
+  it('rejects admin telemetry websocket upgrade with query token auth', async () => {
+    for (const path of [
+      '/api/admin/events?token=test-admin-secret',
+      '/api/admin/events?api_key=test-admin-secret',
+    ]) {
+      const status = await openWebSocketExpectStatus(port, path);
+      expect(status).toBe(401);
+    }
+  });
+
+  it('accepts admin telemetry websocket upgrade with bearer auth', async () => {
+    const ws = await openWebSocket(port, '/api/admin/events', {
+      Authorization: 'Bearer test-admin-secret',
+    });
+    ws.close();
+    await new Promise<void>((resolve) => ws.once('close', () => resolve()));
+  });
+
   it('applies token auth middleware consistently for /garden and /legacy', async () => {
     const unauthorizedGarden = await request(port, 'GET', '/garden');
     const unauthorizedLegacy = await request(port, 'GET', '/legacy');
@@ -3062,6 +3176,25 @@ describe('AdminServer with auth', () => {
 
     expect(gardenRes.status).not.toBe(401);
     expect(legacyRes.status).not.toBe(401);
+  });
+
+  it('accepts admin telemetry websocket upgrade with auth cookie', async () => {
+    const body = new URLSearchParams({ token: 'test-admin-secret' }).toString();
+    const loginRes = await request(port, 'POST', '/login', body, {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+    expect(loginRes.status).toBe(302);
+
+    const setCookie = loginRes.headers['set-cookie'];
+    const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+    expect(cookie).toContain('psfn_token=');
+    const cookieHeader = cookie!.split(';')[0];
+
+    const ws = await openWebSocket(port, '/api/admin/events', {
+      Cookie: cookieHeader,
+    });
+    ws.close();
+    await new Promise<void>((resolve) => ws.once('close', () => resolve()));
   });
 
   it('clears auth cookie via /api/admin/logout', async () => {

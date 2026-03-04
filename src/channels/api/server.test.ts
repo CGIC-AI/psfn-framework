@@ -142,6 +142,39 @@ function openWebSocket(
   });
 }
 
+function openWebSocketWithProtocols(
+  port: number,
+  path: string,
+  protocols: string[],
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, protocols, { headers });
+    const cleanup = () => {
+      ws.removeAllListeners('open');
+      ws.removeAllListeners('error');
+      ws.removeAllListeners('unexpected-response');
+    };
+
+    ws.once('open', () => {
+      cleanup();
+      resolve(ws);
+    });
+
+    ws.once('unexpected-response', (_request, response) => {
+      cleanup();
+      const status = response.statusCode ?? 0;
+      response.resume();
+      reject(new Error(`Unexpected websocket response: ${status}`));
+    });
+
+    ws.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
 function openWebSocketExpectStatus(
   port: number,
   path: string,
@@ -193,6 +226,15 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function toAuthSubprotocol(apiToken: string): string {
+  const encoded = Buffer.from(apiToken, 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+  return `auth.b64.${encoded}`;
 }
 
 // ── Mocks ──
@@ -1480,14 +1522,14 @@ describe('ApiServer with auth', () => {
     expect(status).toBe(401);
   });
 
-  it('accepts websocket upgrades with api_key query token', async () => {
-    const ws = await openWebSocket(port, '/v1/voice/ws?api_key=test-secret-key');
-    ws.close();
+  it('rejects websocket upgrades with api_key query token', async () => {
+    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?api_key=test-secret-key');
+    expect(status).toBe(401);
   });
 
-  it('accepts websocket upgrades with token query token', async () => {
-    const ws = await openWebSocket(port, '/v1/voice/ws?token=test-secret-key');
-    ws.close();
+  it('rejects websocket upgrades with token query token', async () => {
+    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?token=test-secret-key');
+    expect(status).toBe(401);
   });
 
   it('rejects websocket upgrades with wrong query token', async () => {
@@ -1499,6 +1541,15 @@ describe('ApiServer with auth', () => {
     const ws = await openWebSocket(port, '/v1/voice/ws', {
       Authorization: 'Bearer test-secret-key',
     });
+    ws.close();
+  });
+
+  it('accepts websocket upgrades with secure auth subprotocol token', async () => {
+    const ws = await openWebSocketWithProtocols(
+      port,
+      '/v1/voice/ws',
+      ['voice-wire-v1', toAuthSubprotocol('test-secret-key')],
+    );
     ws.close();
   });
 

@@ -789,7 +789,7 @@ export class AdminServer implements Lifecycle {
       return;
     }
 
-    if (!this.checkUpgradeAuth(req, url)) {
+    if (!this.checkUpgradeAuth(req)) {
       socket.write('HTTP/1.1 401 Unauthorized\\r\\n\\r\\n');
       socket.destroy();
       return;
@@ -800,11 +800,9 @@ export class AdminServer implements Lifecycle {
     });
   }
 
-  private checkUpgradeAuth(req: IncomingMessage, url: URL): boolean {
+  private checkUpgradeAuth(req: IncomingMessage): boolean {
     if (!this.token) return true;
-    if (this.hasRequestAuthCredentials(req)) return true;
-    const queryToken = url.searchParams.get('token') ?? url.searchParams.get('api_key');
-    return queryToken === this.token;
+    return this.hasRequestAuthCredentials(req);
   }
 
   private attachTelemetryWebSocket(ws: WebSocket): void {

@@ -5,6 +5,7 @@ import { createComponentLogger } from '../logger.js';
 import {
   buildExtractionMarkerJournalEntry,
   buildCompactionJournalEntry,
+  buildGracefulShutdownMarkerJournalEntry,
   buildMessageJournalEntry,
 } from './journal-utils.js';
 import { SessionSearchIndex, type SessionSearchHit } from './search-index.js';
@@ -31,7 +32,7 @@ import { inferSessionChannelType } from './session-id.js';
 import {
   getCrashRecoveryExtractionCandidates,
   getUncleanShutdownChannels,
-  markGracefulShutdownForActiveChannels,
+  isGracefulShutdownEntry,
 } from './store/crash-recovery.js';
 import {
   createLightweightCache,
@@ -277,15 +278,30 @@ export class SessionStore {
       authorId: entry.authorId,
       authorName: entry.authorName,
     });
-    const id = cache.nextId++;
+    const id = cache.nextId;
     const full: SessionEntry = { ...entry, id };
+    const previousNextId = cache.nextId;
+    const previousEntriesLength = cache.entries.length;
+    const previousMessageCount = cache.messageCount;
+    const previousLastTimestamp = cache.lastTimestamp;
+    cache.nextId = id + 1;
     if (cache.fullyLoaded) {
       cache.entries.push(full);
     }
     cache.messageCount += 1;
     cache.lastTimestamp = entry.timestamp;
     const journal = buildMessageJournalEntry(id, entry);
-    this.writeJournalEntry(cache, journal);
+    try {
+      this.writeJournalEntry(cache, journal);
+    } catch (error) {
+      cache.nextId = previousNextId;
+      cache.messageCount = previousMessageCount;
+      cache.lastTimestamp = previousLastTimestamp;
+      if (cache.fullyLoaded) {
+        cache.entries.length = previousEntriesLength;
+      }
+      throw error;
+    }
     this.indexSessionEntry(full);
     return id;
   }
@@ -420,32 +436,71 @@ export class SessionStore {
       authorId: 'system',
       authorName: 'system',
     });
-    const id = cache.nextId++;
+    const id = cache.nextId;
+    const previousNextId = cache.nextId;
+    const previousCompactionLength = cache.compactions.length;
+    cache.nextId = id + 1;
     if (cache.fullyLoaded) {
       cache.compactions.push({ id, channelId, summary, coveredUpTo, createdAt: now });
     }
     const journal = buildCompactionJournalEntry(id, channelId, summary, coveredUpTo, now);
-    this.writeJournalEntry(cache, journal);
+    try {
+      this.writeJournalEntry(cache, journal);
+    } catch (error) {
+      cache.nextId = previousNextId;
+      if (cache.fullyLoaded) {
+        cache.compactions.length = previousCompactionLength;
+      }
+      throw error;
+    }
   }
   insertExtractionMarker(channelId: string, coveredUpTo: number, timestamp = Date.now()): void {
     if (!Number.isFinite(coveredUpTo)) return;
     const cache = this.channels.get(channelId) ?? this.loadExistingChannelCache(channelId);
     if (!cache) return;
     const markerCoveredUpTo = Math.max(0, Math.floor(coveredUpTo));
-    const id = cache.nextId++;
+    const id = cache.nextId;
+    const previousNextId = cache.nextId;
+    cache.nextId = id + 1;
     const journal = buildExtractionMarkerJournalEntry(id, channelId, markerCoveredUpTo, timestamp);
-    this.writeJournalEntry(cache, journal);
+    try {
+      this.writeJournalEntry(cache, journal);
+    } catch (error) {
+      cache.nextId = previousNextId;
+      throw error;
+    }
   }
   markGracefulShutdownForActiveChannels(
     timestamp = Date.now(),
     options: { skipChannels?: ReadonlySet<string> } = {},
   ): string[] {
-    return markGracefulShutdownForActiveChannels({
-      channels: this.channels,
-      timestamp,
-      skipChannels: options.skipChannels,
-      writeJournalEntry: (cache, journal) => this.writeJournalEntry(cache, journal),
-    });
+    const marked: string[] = [];
+    const skipChannels = options.skipChannels;
+    for (const [channelId, cache] of this.channels.entries()) {
+      if (skipChannels?.has(channelId)) {
+        continue;
+      }
+      if (!cache.lastJournalEntry || isGracefulShutdownEntry(cache.lastJournalEntry)) {
+        continue;
+      }
+
+      const id = cache.nextId;
+      cache.nextId = id + 1;
+      const journal = buildGracefulShutdownMarkerJournalEntry(id, channelId, timestamp);
+
+      try {
+        this.writeJournalEntry(cache, journal);
+        marked.push(channelId);
+      } catch (error) {
+        cache.nextId = id;
+        log.warn('Failed to write graceful shutdown marker for channel; continuing shutdown', {
+          channelId,
+          error: toErrorMessage(error),
+        });
+      }
+    }
+
+    return marked;
   }
   getUncleanShutdownChannels(): string[] {
     return getUncleanShutdownChannels({

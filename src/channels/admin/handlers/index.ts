@@ -51,6 +51,7 @@ export class AdminHandlers {
         config: deps.config,
         contactStore: deps.contactStore,
         cardVersionStore: deps.cardVersionStore,
+        promptStore: deps.promptStore,
         appendAuditTimelineEntry: (
           actionType,
           decision,

@@ -4,8 +4,9 @@ import type { SubstrateConfig } from '../../../types.js';
 import { extractCardPatchFromRecord } from '../../../identity/card-versioning.js';
 import {
   normalizeImportedCard,
-  writeNormalizedCharacterCard,
 } from '../../../identity/importer.js';
+import type { PromptLayerStore } from '../../../identity/prompt-store.js';
+import { syncCharacterFoundationPromptFromCard } from '../../../identity/prompt-sync.js';
 import type { CCv3Data } from '@character-foundry/character-foundry/loader';
 import type {
   AdminIdentityData,
@@ -56,6 +57,7 @@ export class AdminIdentityDataService implements AdminIdentityService {
     config: SubstrateConfig;
     cardVersionStore?: CharacterCardVersionStore | null;
     importIdentityCardHtml?: (body: string) => Promise<string>;
+    promptStore?: PromptLayerStore | null;
   }) {}
 
   getIdentityData(): AdminIdentityData {
@@ -159,21 +161,24 @@ export class AdminIdentityDataService implements AdminIdentityService {
         return { ok: false, message: 'Uploaded card data must have a "data" object or a "name" field' };
       }
 
-      // Apply to version store
-      const patch = extractCardPatchFromRecord(normalizedCard.data as unknown as Record<string, unknown>);
-      const snapshot = cardVersionStore.updateData(patch, 'admin:upload', 'File upload import');
-
-      // Also persist to disk if a card path is configured
-      if (this.deps.config.characterCardPath) {
-        writeNormalizedCharacterCard(this.deps.config.characterCardPath, snapshot.card);
-      }
+      // Apply full-card replacement so missing fields are cleared.
+      const snapshot = cardVersionStore.update(normalizedCard, 'admin:upload', 'File upload import');
 
       // Update in-memory reference
       Object.assign(this.deps.characterCard, snapshot.card);
 
+      const promptSync = syncCharacterFoundationPromptFromCard(
+        this.deps.promptStore,
+        snapshot.card,
+        'admin:upload',
+      );
+      const promptWarning = !promptSync.ok
+        ? ` (Character Foundation sync warning: ${promptSync.error})`
+        : '';
+
       return {
         ok: true,
-        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}`,
+        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}${promptWarning}`,
       };
     } catch (error) {
       return {
@@ -217,6 +222,13 @@ export class AdminIdentityDataService implements AdminIdentityService {
 
     try {
       const snapshot = cardVersionStore.rollback(version, 'admin:api');
+      Object.assign(this.deps.characterCard, snapshot.card);
+      syncCharacterFoundationPromptFromCard(
+        this.deps.promptStore,
+        snapshot.card,
+        'admin:rollback',
+        `Sync Character Foundation prompt after rollback to version ${version}`,
+      );
       return {
         ok: true,
         message: `Rolled back to version ${version}`,

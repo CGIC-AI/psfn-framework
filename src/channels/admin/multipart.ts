@@ -274,7 +274,7 @@ export function validateAndParseCharacterCardFile(
   if (!extension || !SUPPORTED_CARD_EXTENSIONS.has(extension)) {
     return {
       ok: false,
-      error: `File must be .json, .png, or .charx, got: ${file.filename}`,
+      error: 'File must use a supported extension (.json, .png, or .charx)',
     };
   }
 

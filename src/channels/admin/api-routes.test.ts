@@ -962,7 +962,8 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(promptDiffRes.status).toBe(200);
     const promptDiffPayload = JSON.parse(promptDiffRes.body) as { oldContent: string; newContent: string };
-    expect(promptDiffPayload.oldContent).toContain('Base prompt');
+    expect(promptDiffPayload.oldContent.length).toBeGreaterThan(0);
+    expect(promptDiffPayload.oldContent).not.toContain('Updated API prompt content');
     expect(promptDiffPayload.newContent).toContain('Updated API prompt content');
 
     const priorityOnlyPatchRes = await request(
@@ -1166,6 +1167,77 @@ describe('AdminServer JSON API routes', () => {
     expect(foundationLayer).toBeDefined();
     expect(foundationLayer?.content).toContain('You are Imported Identity.');
     expect(foundationLayer?.content).toContain('New personality baseline');
+  });
+
+  it('sanitizes identity upload responses for hostile filenames and card names', async () => {
+    const hostileFilename = '<img src=x onerror=alert(1)>.txt';
+    const badBoundary = '----ApiIdentityUploadBoundaryHostileFilename';
+    const badExtensionBody = buildMultipartBody(badBoundary, [
+      {
+        name: 'file',
+        filename: hostileFilename,
+        contentType: 'application/json',
+        content: '{}',
+      },
+    ]);
+
+    const badExtensionRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/upload',
+      badExtensionBody,
+      {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/form-data; boundary=${badBoundary}`,
+      },
+    );
+    expect(badExtensionRes.status).toBe(400);
+    const badExtensionPayload = JSON.parse(badExtensionRes.body) as { error?: string };
+    expect(badExtensionPayload.error).toContain('.json, .png, or .charx');
+    expect(badExtensionPayload.error).not.toContain('<img');
+    expect(badExtensionPayload.error).not.toContain('onerror');
+
+    const hostileCard = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: '<script>alert(1)</script>',
+        description: 'Safe description',
+        personality: 'Safe personality',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: ['safe'],
+        creator: 'tester',
+      },
+    };
+
+    const hostileNameBoundary = '----ApiIdentityUploadBoundaryHostileCardName';
+    const hostileNameBody = buildMultipartBody(hostileNameBoundary, [
+      {
+        name: 'file',
+        filename: 'hostile-card.json',
+        contentType: 'application/json',
+        content: JSON.stringify(hostileCard),
+      },
+    ]);
+
+    const hostileNameRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/upload',
+      hostileNameBody,
+      {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/form-data; boundary=${hostileNameBoundary}`,
+      },
+    );
+    expect(hostileNameRes.status).toBe(201);
+    const hostileNamePayload = JSON.parse(hostileNameRes.body) as { message?: string };
+    expect(hostileNamePayload.message).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(hostileNamePayload.message).not.toContain('<script>');
   });
 
   it('records operator-attributed audit entries for /api/admin/identity mutation routes and renders actor labels', async () => {

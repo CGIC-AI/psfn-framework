@@ -961,6 +961,7 @@ describe('AdminServer', () => {
         expect(res.status).toBe(200);
         const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
         expect(payload.api.apiKey).toBeUndefined();
+        expect(payload.runtime.apiKey).toBeUndefined();
       } finally {
         if (previousApiKey === undefined) {
           delete process.env.API_KEY;
@@ -970,7 +971,7 @@ describe('AdminServer', () => {
       }
     });
 
-    it('includes api key in bootstrap when API_KEY is configured', async () => {
+    it('does not expose api key in bootstrap when API_KEY is configured', async () => {
       const previousApiKey = process.env.API_KEY;
       process.env.API_KEY = 'bootstrap-test-secret';
 
@@ -978,7 +979,9 @@ describe('AdminServer', () => {
         const res = await request(port, 'GET', '/api/chat/bootstrap');
         expect(res.status).toBe(200);
         const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
-        expect(payload.api.apiKey).toBe('bootstrap-test-secret');
+        expect(payload.api.apiKey).toBeUndefined();
+        expect(payload.runtime.apiKey).toBeUndefined();
+        expect(JSON.stringify(payload)).not.toContain('bootstrap-test-secret');
       } finally {
         if (previousApiKey === undefined) {
           delete process.env.API_KEY;
@@ -1000,6 +1003,7 @@ describe('AdminServer', () => {
       expect(payload.constraints.allowedProviders).toEqual(['anthropic', 'openai', 'google']);
       expect(payload.constraints.deniedProviders).toContain('openrouter');
       expect(Array.isArray(payload.participants)).toBe(true);
+      expect(payload.api.apiKey).toBeUndefined();
     });
 
     it('uses persisted chatApiBaseUrl override in bootstrap endpoints', async () => {

@@ -582,34 +582,52 @@ export function identityPage(card: CharacterCardV2, config: SubstrateConfig, opt
         (function() {
           var form = document.getElementById('identity-upload-form');
           var resultSpan = document.getElementById('identity-upload-result');
+          var fileInput = document.getElementById('identity-upload-file');
+          var btn = document.getElementById('identity-upload-btn');
+          if (!form || !resultSpan || !fileInput || !btn) return;
+
+          function setUploadResult(kind, message) {
+            while (resultSpan.firstChild) {
+              resultSpan.removeChild(resultSpan.firstChild);
+            }
+            if (!message) return;
+            var messageNode = document.createElement('span');
+            messageNode.className = kind === 'error' ? 'form-error' : 'form-success';
+            messageNode.textContent = message;
+            resultSpan.appendChild(messageNode);
+          }
+
           form.addEventListener('submit', function(e) {
             e.preventDefault();
-            var fileInput = document.getElementById('identity-upload-file');
             if (!fileInput.files || !fileInput.files.length) {
-              resultSpan.innerHTML = '<span class="form-error">Please select a file</span>';
+              setUploadResult('error', 'Please select a file');
               return;
             }
             var formData = new FormData();
             formData.append('file', fileInput.files[0]);
-            var btn = document.getElementById('identity-upload-btn');
             btn.disabled = true;
             btn.textContent = 'Uploading...';
-            resultSpan.innerHTML = '';
+            setUploadResult('success', '');
             fetch('/api/admin/identity/upload', {
               method: 'POST',
               body: formData
             })
             .then(function(res) { return res.json(); })
             .then(function(data) {
-              if (data.error) {
-                resultSpan.innerHTML = '<span class="form-error">' + data.error + '</span>';
+              var errorMessage = typeof data.error === 'string' ? data.error : '';
+              if (errorMessage) {
+                setUploadResult('error', errorMessage);
               } else {
-                resultSpan.innerHTML = '<span class="form-success">' + (data.message || 'Upload successful') + '</span>';
+                var successMessage = typeof data.message === 'string' && data.message
+                  ? data.message
+                  : 'Upload successful';
+                setUploadResult('success', successMessage);
                 fileInput.value = '';
               }
             })
             .catch(function(err) {
-              resultSpan.innerHTML = '<span class="form-error">Upload failed: ' + err.message + '</span>';
+              var message = err && err.message ? err.message : String(err);
+              setUploadResult('error', 'Upload failed: ' + message);
             })
             .finally(function() {
               btn.disabled = false;

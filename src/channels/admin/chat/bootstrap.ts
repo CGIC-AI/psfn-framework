@@ -170,7 +170,6 @@ export class AdminChatBootstrapService {
     return {
       api: {
         chatCompletionsUrl,
-        apiKey: this.resolveApiKey(),
       },
       defaultRoomId: DEFAULT_MODEL_ROOM_ID,
       purrsephone: {
@@ -296,7 +295,6 @@ export class AdminChatBootstrapService {
       ? undefined
       : normalizeTrimmed(this.resolveGlobalDefaultSessionIdFn?.() ?? undefined);
     const defaultSessionId = globalDefaultSessionId ?? selectedIdentitySessionId;
-    const apiKey = this.resolveApiKey();
     const transportHeaders = this.buildTransportHeaders(defaultSessionId, defaultAuthorId, defaultAuthorName);
     const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);
     const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, apiBaseUrl);
@@ -333,7 +331,6 @@ export class AdminChatBootstrapService {
       api: {
         chatCompletionsUrl,
         voiceWebSocketUrl,
-        apiKey,
       },
       runtime: {
         assets: {
@@ -342,7 +339,6 @@ export class AdminChatBootstrapService {
         },
         transportHeaders,
         model: runtimeModel,
-        apiKey,
       },
       defaultSessionId,
       defaultAuthorName,

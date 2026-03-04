@@ -3597,7 +3597,7 @@ describe('AdminServer with contacts', () => {
     });
     const primary = contactStore.upsert({
       displayName: 'Pia Primary',
-      trustLevel: 'primary',
+      trustLevel: 'trusted',
       relationshipType: 'partner',
       channels: [{
         channel: 'terminal',
@@ -3676,7 +3676,7 @@ describe('AdminServer with contacts', () => {
   it('renders canonical profile summary with timestamp and source IDs', async () => {
     const contact = contactStore.upsert({
       displayName: 'Eve Example',
-      trustLevel: 'primary',
+      trustLevel: 'trusted',
       relationshipType: 'partner',
     });
     memoryStore.upsertContactProfile({

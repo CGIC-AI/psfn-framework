@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getIdentity, importIdentity, rollbackIdentity, previewDiff, updateIdentityField } from '$lib/api/endpoints/identity';
+  import {
+    getIdentity,
+    importIdentity,
+    previewDiff,
+    rollbackIdentity,
+    updateIdentityField,
+    uploadIdentity,
+  } from '$lib/api/endpoints/identity';
   import type { DiffPreviewResponse } from '$lib/api/endpoints/identity';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
   import {
@@ -24,6 +31,11 @@
   let importing = $state(false);
   let importMessage = $state('');
   let importSuccess = $state(false);
+  let uploadFile = $state<File | null>(null);
+  let uploading = $state(false);
+  let uploadMessage = $state('');
+  let uploadSuccess = $state(false);
+  let uploadInput = $state<HTMLInputElement | null>(null);
 
   // Rollback
   let rollingBack = $state<number | null>(null);
@@ -92,6 +104,37 @@
       pushToast(importMessage, 'error');
     } finally {
       importing = false;
+    }
+  }
+
+  function onUploadFileChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    uploadFile = input.files?.[0] ?? null;
+    uploadMessage = '';
+  }
+
+  function clearUploadSelection() {
+    uploadFile = null;
+    if (uploadInput) uploadInput.value = '';
+  }
+
+  async function runUpload(file: File) {
+    uploading = true;
+    uploadMessage = '';
+    uploadSuccess = false;
+    try {
+      const result = await uploadIdentity(file);
+      uploadMessage = result.message || 'Upload import successful';
+      uploadSuccess = result.ok !== false;
+      pushToast(uploadMessage, uploadSuccess ? 'success' : 'error');
+      data = await getIdentity();
+      clearUploadSelection();
+    } catch (e) {
+      uploadMessage = e instanceof Error ? e.message : 'Upload import failed';
+      uploadSuccess = false;
+      pushToast(uploadMessage, 'error');
+    } finally {
+      uploading = false;
     }
   }
 
@@ -575,7 +618,7 @@
         <!-- Import card -->
         <div class="card-garden p-5">
           <h3 class="text-sm font-serif font-semibold text-shadow-800 mb-3">Import Character Card</h3>
-          <p class="text-sm text-shadow-600 mb-3">Import from JSON, PNG, or CharX using a local filesystem path.</p>
+          <p class="text-sm text-shadow-600 mb-3">Import from JSON, PNG, or CharX using a local filesystem path, or upload a JSON card file.</p>
           <form onsubmit={(e) => { e.preventDefault(); openImportConfirmation(); }} class="flex gap-2">
             <input
               type="text"
@@ -595,6 +638,45 @@
           </form>
           {#if importMessage}
             <p class="mt-2 text-sm {importSuccess ? 'text-moss-600' : 'text-wilt-600'}">{importMessage}</p>
+          {/if}
+
+          <div class="my-4 border-t border-bark-300"></div>
+
+          <form
+            onsubmit={(e) => {
+              e.preventDefault();
+              if (!uploadFile) return;
+              runUpload(uploadFile);
+            }}
+            class="space-y-2"
+          >
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                bind:this={uploadInput}
+                type="file"
+                accept=".json,application/json"
+                onchange={onUploadFileChange}
+                class="block w-full text-sm text-shadow-700 file:mr-3 file:rounded-lg file:border file:border-bark-300 file:bg-bark-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-shadow-800 hover:file:bg-bark-200"
+              />
+              <button
+                type="submit"
+                disabled={uploading || !uploadFile}
+                class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+              >
+                {uploading ? 'Uploading...' : 'Upload & Import'}
+              </button>
+              <button
+                type="button"
+                disabled={uploading || !uploadFile}
+                onclick={clearUploadSelection}
+                class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-700 text-sm hover:bg-bark-100 disabled:opacity-50 transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+          </form>
+          {#if uploadMessage}
+            <p class="mt-2 text-sm {uploadSuccess ? 'text-moss-600' : 'text-wilt-600'}">{uploadMessage}</p>
           {/if}
         </div>
 

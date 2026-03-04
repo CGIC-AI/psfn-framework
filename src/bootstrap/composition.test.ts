@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { EventBus } from '../event-bus.js';
 import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
@@ -27,6 +27,19 @@ const EMPTY_MEMORY_STORE = {
     byType: {},
   }),
 };
+const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
+
+beforeEach(() => {
+  process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH ?? 'companion/modules/repl-registry.json';
+});
+
+afterEach(() => {
+  if (ORIGINAL_MODULE_REGISTRY_PATH === undefined) {
+    delete process.env.MODULE_REGISTRY_PATH;
+  } else {
+    process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH;
+  }
+});
 
 interface GatewayLLMProvider extends LLMProvider {
   fsRead: (path: string) => Promise<string>;

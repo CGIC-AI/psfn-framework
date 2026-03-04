@@ -20,7 +20,7 @@ export interface GatewayMethodRuntime {
   gitOps?: GitOperations;
   policyConfig: PolicyConfig;
   workspacePath: string;
-  sessionHmacKeyring: SessionHmacKeyring | null;
+  sessionHmacKeyring: SessionHmacKeyring;
   notifyAll(method: string, params: unknown): void;
   listPendingConfirmations(): ConfirmationQueueEntry[];
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;

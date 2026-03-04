@@ -116,20 +116,20 @@ describe('settings', () => {
       expect(result.modelRoleAssignments?.extraction).toBe('extraction');
     });
 
-    it('reseeds defaults for invalid JSON', () => {
+    it('fails closed for invalid JSON', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, 'not json', 'utf-8');
-      const result = loadSettings(tempDir);
-      expect(result.sessionHistoryBudgetPct).toBe(6);
-      expect(result.memoryRetrievalBudgetPct).toBe(2);
+
+      expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
+      expect(readFileSync(path, 'utf-8')).toBe('not json');
     });
 
-    it('reseeds defaults for array JSON', () => {
+    it('fails closed for array JSON', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, '[]', 'utf-8');
-      const result = loadSettings(tempDir);
-      expect(result.sessionHistoryBudgetPct).toBe(6);
-      expect(result.memoryRetrievalBudgetPct).toBe(2);
+
+      expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
+      expect(readFileSync(path, 'utf-8')).toBe('[]');
     });
   });
 

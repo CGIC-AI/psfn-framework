@@ -184,6 +184,15 @@ describe('DiscordAdapter startup backfill', () => {
     rmSync(sessionsDir, { recursive: true, force: true });
   });
 
+  it('does not throw when discord token is missing', async () => {
+    const adapter = new DiscordAdapter(makeConfig({ discordToken: '' }), new EventBus(), { sessionStore: store });
+
+    await expect(adapter.start()).resolves.toBeUndefined();
+
+    const client = discordMock.createdClients[0];
+    expect(client.login).not.toHaveBeenCalled();
+  });
+
   it('backfills only channels with existing discord sessions', async () => {
     store.append({
       channelId: '123456789012345678',

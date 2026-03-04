@@ -231,7 +231,8 @@ export class DiscordAdapter implements ChannelAdapter {
 
   async start(): Promise<void> {
     if (!this.runtimeConfig.discordToken) {
-      throw new Error('DISCORD_TOKEN is required');
+      log.warn('Discord adapter disabled: DISCORD_TOKEN not configured');
+      return;
     }
     await this.client.login(this.runtimeConfig.discordToken);
     if (this.runtimeConfig.discordBackfillOnStartup !== false) {

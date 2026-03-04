@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { loadSettings } from '../settings.js';
 import {
   installPromotedToolsPersistenceHook,
+  resolveRuntimeVoiceProviderGate,
   resolveRuntimeVoiceSttProvider,
   resolveRuntimeVoiceTtsProvider,
 } from './bootstrap-helpers.js';
@@ -30,6 +31,75 @@ describe('resolveRuntimeVoiceTtsProvider', () => {
 
   it('defaults to elevenlabs when provider is not configured', () => {
     expect(resolveRuntimeVoiceTtsProvider({} as any)).toBe('elevenlabs');
+  });
+});
+
+describe('resolveRuntimeVoiceProviderGate', () => {
+  it('enables deepgram + elevenlabs by default when credentials are present', () => {
+    const gate = resolveRuntimeVoiceProviderGate({
+      deepgramApiKey: 'deepgram-key',
+      elevenLabsApiKey: 'elevenlabs-key',
+    } as any);
+    expect(gate).toEqual({
+      sttProvider: 'deepgram',
+      ttsProvider: 'elevenlabs',
+      sttEnabled: true,
+      ttsEnabled: true,
+    });
+  });
+
+  it('requires explicit echo URL/voice by default', () => {
+    const gate = resolveRuntimeVoiceProviderGate({
+      deepgramApiKey: 'deepgram-key',
+      ttsProvider: 'echo',
+      echoTtsUrl: '',
+      echoTtsVoice: '',
+    } as any);
+    expect(gate).toEqual({
+      sttProvider: 'deepgram',
+      ttsProvider: 'echo',
+      sttEnabled: true,
+      ttsEnabled: false,
+    });
+  });
+
+  it('can allow echo defaults for websocket runtime gating', () => {
+    const gate = resolveRuntimeVoiceProviderGate(
+      {
+        deepgramApiKey: 'deepgram-key',
+        ttsProvider: 'echo',
+      } as any,
+      { allowEchoDefaults: true },
+    );
+    expect(gate).toEqual({
+      sttProvider: 'deepgram',
+      ttsProvider: 'echo',
+      sttEnabled: true,
+      ttsEnabled: true,
+    });
+  });
+
+  it('can require explicit elevenlabs voice id when needed', () => {
+    const strictGate = resolveRuntimeVoiceProviderGate(
+      {
+        deepgramApiKey: 'deepgram-key',
+        ttsProvider: 'elevenlabs',
+        elevenLabsApiKey: 'elevenlabs-key',
+        elevenLabsVoiceId: '',
+      } as any,
+      { requireElevenLabsVoiceId: true },
+    );
+    expect(strictGate.ttsEnabled).toBe(false);
+
+    const relaxedGate = resolveRuntimeVoiceProviderGate(
+      {
+        deepgramApiKey: 'deepgram-key',
+        ttsProvider: 'elevenlabs',
+        elevenLabsApiKey: 'elevenlabs-key',
+        elevenLabsVoiceId: '',
+      } as any,
+    );
+    expect(relaxedGate.ttsEnabled).toBe(true);
   });
 });
 

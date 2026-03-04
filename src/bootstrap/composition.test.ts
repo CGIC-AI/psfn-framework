@@ -375,6 +375,37 @@ describe('agent-main split wiring', () => {
     expect(source).toContain('onModuleRegistryMutation: async (mutation) =>');
   });
 
+  it('uses deterministic workspace-root module registry paths in split mode', () => {
+    const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const gatewaySource = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+    expect(agentSource).toContain('resolveModuleRegistryPathFromWorkspace(');
+    expect(agentSource).toContain('ensureRegistryFile(moduleRegistryPath)');
+    expect(agentSource).toContain('registryPath: moduleRegistryPath');
+    expect(gatewaySource).toContain('resolveModuleRegistryPathFromWorkspace(');
+  });
+
+  it('passes split memory extraction dependencies through composition wiring', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const wireIndex = source.indexOf('wireMemoryRuntime({');
+    expect(wireIndex).toBeGreaterThanOrEqual(0);
+    expect(source.indexOf('sessionStore,', wireIndex)).toBeGreaterThan(wireIndex);
+    expect(source.indexOf('contactStore,', wireIndex)).toBeGreaterThan(wireIndex);
+  });
+
+  it('gates API voice websocket endpoint on fully wired runtime in split mode', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(source).toContain('createApiVoiceWebSocketRuntime({');
+    expect(source).toContain('voiceWebSocketPath = voiceWebSocketRuntime');
+    expect(source).toContain('voiceWebSocketRuntime,');
+  });
+
+  it('uses durable split shutdown sequence with module + marker teardown', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(source).toContain("runStep('shutdown module loader'");
+    expect(source).toContain('moduleLoader.shutdown()');
+    expect(source).toContain('sessionStore.markGracefulShutdownForActiveChannels()');
+  });
+
   it('re-validates tool wiring after module load in split mode', () => {
     const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     const preIndex = source.indexOf("agentLoop.validateToolWiring('gateway'");
@@ -402,6 +433,20 @@ describe('runtime composition wiring', () => {
     const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
     expect(source).toContain('createEmbeddingProviderFromEnv(process.env)');
     expect(source).not.toContain('new EmbeddingProvider(');
+  });
+
+  it('uses shared runtime voice provider gate for gateway Wyoming adapters', () => {
+    const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+    expect(source).toContain('resolveRuntimeVoiceProviderGate(config)');
+    expect(source).toContain('voiceProviderGate.sttEnabled');
+    expect(source).toContain('voiceProviderGate.ttsEnabled');
+  });
+
+  it('uses durable gateway shutdown sequencing in split mode', () => {
+    const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+    expect(source).toContain('let shuttingDown = false;');
+    expect(source).toContain('Gateway shutdown step failed');
+    expect(source).toContain('Gateway shutdown completed with errors');
   });
 
   it('avoids duplicating composition-owned constructor wiring', () => {

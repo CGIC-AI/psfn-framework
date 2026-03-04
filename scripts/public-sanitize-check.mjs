@@ -7,6 +7,8 @@ const tracked = execSync('git ls-files -z', { encoding: 'utf8' })
   .split('\0')
   .filter(Boolean);
 
+const SELF_PATH = 'scripts/public-sanitize-check.mjs';
+
 const binaryExt = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.zip', '.gz', '.tar', '.woff', '.woff2',
 ]);
@@ -50,6 +52,9 @@ function lineForIndex(text, idx) {
 const violations = [];
 
 for (const file of tracked) {
+  // Avoid matching this scanner's own regex literals.
+  if (file === SELF_PATH) continue;
+
   for (const rule of forbiddenPathRules) {
     if (rule.test(file)) {
       violations.push({ file, line: 1, rule: rule.name, snippet: file });

@@ -521,6 +521,88 @@ describe('wireHeartbeatRuntime', () => {
     expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
   });
 
+  it('suppresses rapid-fire deferred heartbeat template execution loops', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'Loop candidate reflection output' }),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+      registerPostTurnActionInferer: vi.fn().mockReturnValue(() => {}),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const postTurnActions = {
+      registerHandler: vi.fn().mockReturnValue(() => {}),
+      listQueued: vi.fn().mockReturnValue([]),
+    };
+
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_100_000);
+      wireHeartbeatRuntime(
+        target,
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+        undefined,
+        {
+          eventBus,
+          postTurnActions,
+        },
+      );
+
+      const heartbeatRegisterCall = postTurnActions.registerHandler.mock.calls.find(
+        (call) => call[0] === 'heartbeat.run_template',
+      );
+      expect(heartbeatRegisterCall).toBeDefined();
+
+      const deferredHandler = heartbeatRegisterCall?.[1] as (
+        action: {
+          id: string;
+          kind: string;
+          payload: Record<string, unknown>;
+          dedupeKey: string;
+          channelId: string;
+          sourceMessageId: string;
+          inferredAt: number;
+        },
+      ) => Promise<void>;
+
+      for (let index = 0; index < 6; index += 1) {
+        const now = 1_700_000_100_000 + index * 1_000;
+        nowSpy.mockReturnValue(now);
+        await deferredHandler({
+          id: `deferred-loop-${index}`,
+          kind: 'heartbeat.run_template',
+          payload: { templateId: 'emotional-check' },
+          dedupeKey: `heartbeat.run_template:emotional-check:${index}`,
+          channelId: 'test-channel',
+          sourceMessageId: `msg-loop-${index}`,
+          inferredAt: now,
+        });
+      }
+
+      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(4);
+      const handledChannels = agentLoop.handleMessage.mock.calls.map(call => call[0]?.channelId);
+      expect(handledChannels).toEqual([
+        'internal:reflection:emotional-check',
+        'internal:reflection:emotional-check',
+        'internal:reflection:emotional-check',
+        'internal:reflection:emotional-check',
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('infers deferred tool-handoff actions from late load_tools discovery payloads', () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {

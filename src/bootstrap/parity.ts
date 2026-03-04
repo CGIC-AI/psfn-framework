@@ -253,6 +253,9 @@ export function wireHeartbeatRuntime(
 ): void {
   const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
   const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
+  const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
+  const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
+  const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
   const store = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
@@ -261,9 +264,83 @@ export function wireHeartbeatRuntime(
   const policy = store.load();
   const pendingDeferredTemplates = new Set<string>();
   const lastScheduledRunAt = new Map<string, number>();
+  const templateExecutionHistory = new Map<string, number[]>();
+  const templateExecutionCooldownUntil = new Map<string, number>();
   const deferredToolHandoffPayloads = new Map<string, DeferredToolHandoffPayload>();
   const deferredToolHandoffExecutionState = new Map<string, { activated: boolean; executed: boolean }>();
   const telemetryEventBus = runtimeOptions.eventBus;
+
+  type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
+
+  class HeartbeatTemplateLoopGuardError extends Error {
+    readonly templateId: string;
+    readonly source: HeartbeatExecutionSource;
+    readonly cooldownUntil: number;
+
+    constructor(
+      templateId: string,
+      source: HeartbeatExecutionSource,
+      cooldownUntil: number,
+      message: string,
+    ) {
+      super(message);
+      this.name = 'HeartbeatTemplateLoopGuardError';
+      this.templateId = templateId;
+      this.source = source;
+      this.cooldownUntil = cooldownUntil;
+    }
+  }
+
+  const isHeartbeatTemplateLoopGuardError = (
+    error: unknown,
+  ): error is HeartbeatTemplateLoopGuardError => (
+    error instanceof HeartbeatTemplateLoopGuardError
+  );
+
+  const assertTemplateExecutionAllowed = (
+    templateId: string,
+    source: HeartbeatExecutionSource,
+  ): void => {
+    if (source === 'manual') {
+      return;
+    }
+
+    const now = Date.now();
+    const cooldownUntil = templateExecutionCooldownUntil.get(templateId);
+    if (typeof cooldownUntil === 'number' && cooldownUntil > now) {
+      throw new HeartbeatTemplateLoopGuardError(
+        templateId,
+        source,
+        cooldownUntil,
+        `Template "${templateId}" is temporarily suppressed by rapid-fire loop guard`,
+      );
+    }
+
+    const recentRuns = (templateExecutionHistory.get(templateId) ?? [])
+      .filter((timestamp) => now - timestamp <= TEMPLATE_EXECUTION_BURST_WINDOW_MS);
+    recentRuns.push(now);
+    templateExecutionHistory.set(templateId, recentRuns);
+
+    if (recentRuns.length <= TEMPLATE_EXECUTION_BURST_LIMIT) {
+      return;
+    }
+
+    const nextCooldownUntil = now + TEMPLATE_EXECUTION_COOLDOWN_MS;
+    templateExecutionCooldownUntil.set(templateId, nextCooldownUntil);
+    log.error('Suppressing reflection template due to rapid-fire loop guard', {
+      templateId,
+      source,
+      burstCount: recentRuns.length,
+      windowMs: TEMPLATE_EXECUTION_BURST_WINDOW_MS,
+      cooldownUntil: new Date(nextCooldownUntil).toISOString(),
+    });
+    throw new HeartbeatTemplateLoopGuardError(
+      templateId,
+      source,
+      nextCooldownUntil,
+      `Template "${templateId}" exceeded rapid-fire burst limits`,
+    );
+  };
 
   const emitDeferredToolHandoffTelemetry = (
     payload: {
@@ -411,7 +488,10 @@ export function wireHeartbeatRuntime(
   const executeTemplate = async (
     template: ReflectionTemplate,
     options: { sendToDiscordOverride?: boolean } = {},
+    source: HeartbeatExecutionSource = 'scheduled',
   ): Promise<{ templateId: string; templateName: string; reflection: string }> => {
+    assertTemplateExecutionAllowed(template.id, source);
+
     const reflectionChannelId = `internal:reflection:${template.id}`;
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
@@ -507,8 +587,16 @@ export function wireHeartbeatRuntime(
     }
     lastScheduledRunAt.set(template.id, now);
     try {
-      await executeTemplate(template);
+      await executeTemplate(template, {}, 'scheduled');
     } catch (error) {
+      if (isHeartbeatTemplateLoopGuardError(error)) {
+        log.warn('Scheduled reflection suppressed by rapid-fire loop guard', {
+          templateId: template.id,
+          source: error.source,
+          cooldownUntil: new Date(error.cooldownUntil).toISOString(),
+        });
+        return;
+      }
       if (!isBusyTurnError(error)) {
         throw error;
       }
@@ -573,8 +661,16 @@ export function wireHeartbeatRuntime(
               });
               return;
             }
-            await executeTemplate(latestTemplate, options);
+            await executeTemplate(latestTemplate, options, 'deferred_scheduler');
           } catch (error) {
+            if (isHeartbeatTemplateLoopGuardError(error)) {
+              log.warn(`Deferred reflection "${template.id}" suppressed by rapid-fire loop guard`, {
+                templateId: template.id,
+                source: error.source,
+                cooldownUntil: new Date(error.cooldownUntil).toISOString(),
+              });
+              return;
+            }
             log.error(`Deferred reflection "${template.id}" failed`, { error: String(error) });
           } finally {
             pendingDeferredTemplates.delete(template.id);
@@ -605,7 +701,7 @@ export function wireHeartbeatRuntime(
       throw new Error(`Template "${templateId}" not found`);
     }
     try {
-      return await executeTemplate(template, options);
+      return await executeTemplate(template, options, 'manual');
     } catch (error) {
       if (options.deferIfBusy === false || !isBusyTurnError(error)) {
         throw error;
@@ -774,9 +870,21 @@ export function wireHeartbeatRuntime(
         const sendToDiscordOverride = typeof action.payload.sendToDiscordOverride === 'boolean'
           ? action.payload.sendToDiscordOverride
           : undefined;
-        await executeTemplate(template, {
-          ...(sendToDiscordOverride !== undefined ? { sendToDiscordOverride } : {}),
-        });
+        try {
+          await executeTemplate(template, {
+            ...(sendToDiscordOverride !== undefined ? { sendToDiscordOverride } : {}),
+          }, 'deferred_post_turn');
+        } catch (error) {
+          if (isHeartbeatTemplateLoopGuardError(error)) {
+            log.warn(`Deferred heartbeat action "${action.id}" suppressed by rapid-fire loop guard`, {
+              templateId,
+              source: error.source,
+              cooldownUntil: new Date(error.cooldownUntil).toISOString(),
+            });
+            return;
+          }
+          throw error;
+        }
       },
     );
 

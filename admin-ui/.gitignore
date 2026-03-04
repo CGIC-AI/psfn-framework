@@ -1,3 +1,5 @@
 node_modules/
 build/
-.svelte-kit/
+.svelte-kit/*
+!.svelte-kit/
+!.svelte-kit/tsconfig.json

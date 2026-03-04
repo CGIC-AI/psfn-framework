@@ -302,6 +302,7 @@ export class AdminServer implements Lifecycle {
       config: config.config,
       cardVersionStore: config.cardVersionStore,
       importIdentityCardHtml: (body) => this.handlers.domains.identity.importIdentityCard(body),
+      promptStore: config.promptStore,
     });
     this.promptsService = new AdminPromptsDataService({
       promptStore: config.promptStore,

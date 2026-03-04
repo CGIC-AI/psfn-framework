@@ -26,7 +26,7 @@ function request(
   port: number,
   method: string,
   path: string,
-  body?: string,
+  body?: string | Buffer,
   headers?: Record<string, string>,
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
@@ -37,6 +37,12 @@ function request(
       const hasContentLength = Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'content-length');
       if (!hasContentLength) {
         requestHeaders['Content-Length'] = String(Buffer.byteLength(body));
+      }
+    }
+    if (Buffer.isBuffer(body) && body.length > 0) {
+      const hasContentLength = Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'content-length');
+      if (!hasContentLength) {
+        requestHeaders['Content-Length'] = String(body.length);
       }
     }
 
@@ -58,6 +64,34 @@ function request(
     if (body) req.write(body);
     req.end();
   });
+}
+
+function buildMultipartBody(
+  boundary: string,
+  parts: Array<{
+    name: string;
+    filename?: string;
+    contentType?: string;
+    content: string | Buffer;
+  }>,
+): Buffer {
+  const chunks: Buffer[] = [];
+  for (const part of parts) {
+    chunks.push(Buffer.from(`--${boundary}\r\n`));
+    let disposition = `Content-Disposition: form-data; name="${part.name}"`;
+    if (part.filename) {
+      disposition += `; filename="${part.filename}"`;
+    }
+    chunks.push(Buffer.from(`${disposition}\r\n`));
+    if (part.contentType) {
+      chunks.push(Buffer.from(`Content-Type: ${part.contentType}\r\n`));
+    }
+    chunks.push(Buffer.from('\r\n'));
+    chunks.push(Buffer.isBuffer(part.content) ? part.content : Buffer.from(part.content));
+    chunks.push(Buffer.from('\r\n'));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return Buffer.concat(chunks);
 }
 
 function allocatePort(): Promise<number> {
@@ -1033,6 +1067,105 @@ describe('AdminServer JSON API routes', () => {
         message: 'importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint',
       }),
     ]));
+  });
+
+  it('imports uploaded identity cards authoritatively and refreshes Character Foundation prompt', async () => {
+    const setAppearance = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({ field: 'extensions.visual_description', value: 'old visual description' }),
+      authHeaders,
+    );
+    expect(setAppearance.status).toBe(200);
+
+    const setGreetings = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({ field: 'alternate_greetings', value: JSON.stringify(['old greeting']) }),
+      authHeaders,
+    );
+    expect(setGreetings.status).toBe(200);
+
+    const setCreatorNotes = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({ field: 'creator_notes', value: 'legacy notes to clear' }),
+      authHeaders,
+    );
+    expect(setCreatorNotes.status).toBe(200);
+
+    const uploadedCard = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'Imported Identity',
+        description: 'Fresh description',
+        personality: 'New personality baseline',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: ['imported'],
+        creator: 'importer',
+      },
+    };
+
+    const boundary = '----ApiIdentityUploadBoundary';
+    const multipartBody = buildMultipartBody(boundary, [
+      {
+        name: 'file',
+        filename: 'imported-card.json',
+        contentType: 'application/json',
+        content: JSON.stringify(uploadedCard),
+      },
+    ]);
+
+    const uploadRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/upload',
+      multipartBody,
+      {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+    );
+    expect(uploadRes.status).toBe(201);
+
+    const uploadPayload = JSON.parse(uploadRes.body) as { ok: boolean; message: string; containerFormat?: string };
+    expect(uploadPayload.ok).toBe(true);
+    expect(uploadPayload.containerFormat).toBe('json');
+
+    const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
+    expect(identityRes.status).toBe(200);
+    const identityPayload = JSON.parse(identityRes.body) as {
+      card: {
+        data: {
+          name: string;
+          personality: string;
+          creator_notes?: string;
+          alternate_greetings?: string[];
+          extensions?: Record<string, unknown>;
+        };
+      };
+    };
+
+    expect(identityPayload.card.data.name).toBe('Imported Identity');
+    expect(identityPayload.card.data.personality).toBe('New personality baseline');
+    expect(identityPayload.card.data.creator_notes).toBeUndefined();
+    expect(identityPayload.card.data.alternate_greetings).toBeUndefined();
+    expect(identityPayload.card.data.extensions?.visual_description).toBeUndefined();
+
+    const foundationLayer = promptStore.getAll().find(
+      layer => layer.type === 'base' && layer.name === 'Character Foundation',
+    );
+    expect(foundationLayer).toBeDefined();
+    expect(foundationLayer?.content).toContain('You are Imported Identity.');
+    expect(foundationLayer?.content).toContain('New personality baseline');
   });
 
   it('records operator-attributed audit entries for /api/admin/identity mutation routes and renders actor labels', async () => {

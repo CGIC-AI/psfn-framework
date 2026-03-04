@@ -10,11 +10,14 @@ import type {
   ModelCatalogEntry,
   SubstrateConfig,
 } from '../../../types.js';
+import { isBootstrapStarterCard, loadCharacterCard } from '../../../identity/loader.js';
+import type { CharacterCardV2 } from '../../../identity/types.js';
 import type {
   AdminChatBootstrapResponse,
   AdminChatBootstrapUpdateInput,
   AdminChatContactOption,
   AdminChatLinkedChannelOption,
+  AdminChatOnboardingMetadata,
   AdminChatRuntimeModelConfig,
   AdminModelRoomBootstrapResponse,
   AdminModelRoomParticipant,
@@ -32,11 +35,13 @@ const PI_WEB_UI_STYLESHEET_ROUTE = '/static/pi-web-ui/app.css';
 const DEFAULT_RUNTIME_PROVIDER = 'openai';
 const DEFAULT_RUNTIME_MODEL_ID = 'openai/gpt-4.1-mini';
 const DEFAULT_RUNTIME_MODEL_NAME = 'Garden Chat';
+const DEFAULT_ASSISTANT_NAME = 'Assistant';
 const SYNTHETIC_CONTACT_ID = 'admin.synthetic.default';
 const SYNTHETIC_DISPLAY_NAME = 'Primary Contact';
 const SYNTHETIC_CHANNEL = 'api';
 const SYNTHETIC_USER_ID = 'admin-user';
 const DEFAULT_MODEL_ROOM_ID = 'garden-model-room';
+const STARTER_IDENTITY_ONBOARDING_MESSAGE = 'Starter identity is active. Import a character card or edit Identity to personalize your companion.';
 const MODEL_ROOM_DIRECT_PROVIDERS = new Set(['anthropic', 'openai', 'google']);
 
 interface ContactCandidate extends AdminChatContactOption {
@@ -297,6 +302,8 @@ export class AdminChatBootstrapService {
     const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, apiBaseUrl);
     const openAiBaseUrl = buildAbsoluteAdminChatApiUrl(OPENAI_API_BASE_PATH, apiBaseUrl);
     const runtimeModel = this.resolveRuntimeModel(openAiBaseUrl, transportHeaders);
+    const assistantName = this.resolveAssistantName();
+    const onboarding = this.resolveOnboardingMetadata();
 
     return {
       contactOptions: contacts.map(contact => ({
@@ -307,6 +314,7 @@ export class AdminChatBootstrapService {
           ? selectedLinkedChannels
           : contact.linkedChannels,
       })),
+      assistantName,
       canonicalContactId: selectedContact.canonicalContactId,
       displayName: selectedContact.displayName,
       nickname: selectedContact.nickname,
@@ -321,6 +329,7 @@ export class AdminChatBootstrapService {
         availableLevels: [...CHANNEL_PRIVACY_LEVELS],
         selectedLevel: selectedIdentity.privacyLevel,
       },
+      onboarding,
       api: {
         chatCompletionsUrl,
         voiceWebSocketUrl,
@@ -559,6 +568,35 @@ export class AdminChatBootstrapService {
       relationshipType: 'stranger',
       synthetic: true,
     };
+  }
+
+  private resolveAssistantName(): string {
+    const configuredName = normalizeTrimmed(this.runtimeConfig?.characterName);
+    if (configuredName) return configuredName;
+    const cardName = normalizeTrimmed(this.loadCurrentCharacterCard()?.data.name);
+    if (cardName) return cardName;
+    return DEFAULT_ASSISTANT_NAME;
+  }
+
+  private resolveOnboardingMetadata(): AdminChatOnboardingMetadata {
+    const card = this.loadCurrentCharacterCard();
+    if (card && isBootstrapStarterCard(card)) {
+      return {
+        required: true,
+        message: STARTER_IDENTITY_ONBOARDING_MESSAGE,
+      };
+    }
+    return { required: false };
+  }
+
+  private loadCurrentCharacterCard(): CharacterCardV2 | null {
+    const path = normalizeTrimmed(this.runtimeConfig?.characterCardPath);
+    if (!path) return null;
+    try {
+      return loadCharacterCard(path);
+    } catch {
+      return null;
+    }
   }
 
   private defaultPrivacyForChannel(channel: string): ChannelPrivacyLevel {

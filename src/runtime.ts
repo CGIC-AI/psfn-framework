@@ -334,6 +334,13 @@ export class SubstrateRuntime implements Lifecycle {
 
   async init(): Promise<void> {
     log.info('Initializing...');
+    const lifecycleRuntimeContract = resolveRuntimeModeContract({
+      entrypoint: RUNTIME_MODE.SINGLE,
+      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
+      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
+    });
+    const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
+    log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
 
     // Load persisted settings and apply over env defaults
     const savedSettings = loadSettings(this.config.dataDir);
@@ -369,13 +376,6 @@ export class SubstrateRuntime implements Lifecycle {
       envTier: this.config.capabilityTier,
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
-    const lifecycleRuntimeContract = resolveRuntimeModeContract({
-      entrypoint: RUNTIME_MODE.SINGLE,
-      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
-      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
-    });
-    const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
-    log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
 
     // Open database
     this.db = initDatabase(this.config.databasePath);

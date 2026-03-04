@@ -9,6 +9,10 @@ import { GatewayErrors } from '../protocol.js';
 
 function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<string, unknown>): Promise<any> } {
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<any>>();
+  const keyring = {
+    activeVersion: 'v1',
+    keys: { v1: 'test-shell-secret' },
+  };
   const runtime: GatewayMethodRuntime = {
     target: {
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
@@ -20,7 +24,7 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
     discordAdapter: {} as any,
     policyConfig,
     workspacePath: process.cwd(),
-    sessionHmacKeyring: null,
+    sessionHmacKeyring: keyring,
     notifyAll: vi.fn(),
     listPendingConfirmations: () => [],
     resolveConfirmation: vi.fn(async () => ({

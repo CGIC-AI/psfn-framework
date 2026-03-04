@@ -1,9 +1,23 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runRLMLoop } from './loop.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type { REPLDeps, REPLConfig } from './types.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../types.js';
+
+const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
+
+beforeEach(() => {
+  process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH ?? 'companion/modules/repl-registry.json';
+});
+
+afterEach(() => {
+  if (ORIGINAL_MODULE_REGISTRY_PATH === undefined) {
+    delete process.env.MODULE_REGISTRY_PATH;
+  } else {
+    process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH;
+  }
+});
 
 function mockResponse(content: string, inputTokens = 10, outputTokens = 20): LLMResponse {
   return {

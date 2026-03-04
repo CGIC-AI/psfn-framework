@@ -150,6 +150,38 @@ function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
   return fallback;
 }
 
+function resolveGatewayRuntimeMode(raw: string | undefined): string {
+  const normalized = raw?.trim().toLowerCase() ?? '';
+  if (!normalized) {
+    throw new Error(
+      'PSFN_RUNTIME_MODE is required for gateway startup. Set it to "split" or "yolo".',
+    );
+  }
+
+  const allowedModes = new Set([
+    'split',
+    'yolo',
+    'gateway',
+    'gateway-agent',
+    'gateway_agent',
+    'gatewayagent',
+    'agent',
+  ]);
+  if (!allowedModes.has(normalized)) {
+    throw new Error(
+      `Unsupported PSFN_RUNTIME_MODE "${raw}". Expected one of: split, yolo, gateway, gateway-agent.`,
+    );
+  }
+
+  if (normalized === 'gateway_agent' || normalized === 'gatewayagent') {
+    return 'gateway-agent';
+  }
+  if (normalized === 'agent') {
+    return 'gateway-agent';
+  }
+  return normalized;
+}
+
 async function runShutdownStep(
   step: string,
   action: () => void | Promise<void>,
@@ -279,7 +311,7 @@ async function main(): Promise<void> {
 
   // Ensure gateway socket directory exists
   mkdirSync(dirname(socketPath), { recursive: true });
-  const runtimeMode = process.env.PSFN_RUNTIME_MODE?.trim().toLowerCase() || 'gateway';
+  const runtimeMode = resolveGatewayRuntimeMode(process.env.PSFN_RUNTIME_MODE);
   const codebaseRoot = resolve('.');
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
   mkdirSync(workspaceRoot, { recursive: true });

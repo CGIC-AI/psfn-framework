@@ -220,7 +220,7 @@ export class SubstrateRuntime implements Lifecycle {
 
   private refreshCrashRecoveryRetryBacklog(channelId: string): boolean {
     const sessionStore = this.sessionStore;
-    if (!sessionStore) {
+    if (!sessionStore || typeof sessionStore.getCrashRecoveryExtractionCandidates !== 'function') {
       return this.crashRecoveryRetryBacklog.has(channelId);
     }
 
@@ -238,7 +238,7 @@ export class SubstrateRuntime implements Lifecycle {
 
   private resolveUnresolvedCrashRecoveryChannels(): Set<string> {
     const sessionStore = this.sessionStore;
-    if (!sessionStore) {
+    if (!sessionStore || typeof sessionStore.getCrashRecoveryExtractionCandidates !== 'function') {
       return new Set(this.crashRecoveryRetryBacklog.keys());
     }
 

@@ -70,6 +70,7 @@ describe('AdminIdentityDataService', () => {
     expect(foundation.content).toContain('You are {{char}}.');
     expect(foundation.content).toContain('{{description}}');
     expect(foundation.content).toContain('{{personality}}');
+    expect(foundation.content).not.toContain('Companion Prime');
     expect(foundation.updatedBy).toBe('admin:api');
   });
 });

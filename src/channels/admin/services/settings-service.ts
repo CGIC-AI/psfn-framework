@@ -34,11 +34,23 @@ import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/t
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
 import { toErrorMessage } from '../../../utils/errors.js';
-import { isStreamingSttProvider } from '../../../voice/connectors/stt/index.js';
-import { isStreamingTtsProvider } from '../../../voice/connectors/tts/index.js';
+import {
+  getStreamingSttProviderMetadata,
+  isStreamingSttProvider,
+  isStreamingSttProviderConfigured,
+  listStreamingSttProviders,
+} from '../../../voice/connectors/stt/index.js';
+import {
+  getStreamingTtsProviderMetadata,
+  isStreamingTtsProvider,
+  isStreamingTtsProviderConfigured,
+  listStreamingTtsProviders,
+} from '../../../voice/connectors/tts/index.js';
 import type {
   AdminSettingsData,
   AdminSettingsService,
+  AdminVoiceProviderData,
+  AdminVoiceProviderOption,
   ConfigUpdateResult,
   SettingsValidationError,
   SettingsConfigEditors,
@@ -299,6 +311,41 @@ export class AdminSettingsDataService implements AdminSettingsService {
       scheduler: loadSchedulerConfig(this.deps.config.dataDir),
       trustPolicy: loadTrustPolicyConfig(this.deps.config.dataDir),
       capabilities: loadCapabilityTierConfig(this.deps.config.dataDir),
+    };
+  }
+
+  private buildVoiceProviderOptionList(kind: 'stt' | 'tts'): AdminVoiceProviderOption[] {
+    if (kind === 'stt') {
+      return listStreamingSttProviders()
+        .map((providerId) => {
+          const metadata = getStreamingSttProviderMetadata(providerId);
+          return {
+            id: providerId,
+            configured: isStreamingSttProviderConfigured(providerId, this.deps.config),
+            canAutoEnable: metadata?.canAutoEnable === true,
+            requiredTokens: metadata?.eligibility?.requiredTokens ?? [],
+          };
+        })
+        .sort((a, b) => a.id.localeCompare(b.id));
+    }
+
+    return listStreamingTtsProviders()
+      .map((providerId) => {
+        const metadata = getStreamingTtsProviderMetadata(providerId);
+        return {
+          id: providerId,
+          configured: isStreamingTtsProviderConfigured(providerId, this.deps.config),
+          canAutoEnable: metadata?.canAutoEnable === true,
+          requiredTokens: metadata?.eligibility?.requiredTokens ?? [],
+        };
+      })
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  private loadVoiceProviderData(): AdminVoiceProviderData {
+    return {
+      stt: this.buildVoiceProviderOptionList('stt'),
+      tts: this.buildVoiceProviderOptionList('tts'),
     };
   }
 
@@ -565,6 +612,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       config: normalizedConfig as SubstrateConfig,
       env: this.getEnvInfo(),
       editors: this.loadSettingsConfigEditors(),
+      voiceProviders: this.loadVoiceProviderData(),
     };
   }
 

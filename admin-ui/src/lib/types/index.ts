@@ -267,6 +267,20 @@ export interface AdminSettingsData {
     trustPolicy: unknown;
     capabilities: unknown;
   };
+  voiceProviders: {
+    stt: Array<{
+      id: string;
+      configured: boolean;
+      canAutoEnable: boolean;
+      requiredTokens: string[];
+    }>;
+    tts: Array<{
+      id: string;
+      configured: boolean;
+      canAutoEnable: boolean;
+      requiredTokens: string[];
+    }>;
+  };
 }
 
 export interface ConfigUpdateResult {

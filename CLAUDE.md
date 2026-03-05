@@ -245,3 +245,30 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 - Test framework is Vitest. Tests use `*.test.ts` pattern.
 - No ORM — use better-sqlite3 directly with prepared statements.
 - No Bun, no PostgreSQL, no heavy frameworks. Keep dependencies minimal.
+
+## Coding Standards
+
+### Security: Fail Closed
+- Every security check must deny by default. If a policy check throws, the answer is DENY.
+- Never catch-and-continue on auth, trust, capability, or policy errors. Let them propagate.
+- No `try { } catch { /* ignore */ }` — every catch must log and either rethrow or return an explicit error.
+- Gateway policy: unknown method = DENY. Missing auth = DENY. Malformed request = DENY.
+
+### Error Handling: No Swallowing
+- Every `catch` block must do something visible: log, rethrow, return an error result, or emit an event.
+- Empty catch blocks are bugs. `catch (e) { }` is never acceptable.
+- Async errors must be awaited or explicitly fire-and-forget with `.catch(err => log.error(...))`.
+- If a function can fail, its return type must reflect that (throw, Result type, or nullable).
+
+### No Legacy Code
+- No backward-compatibility shims, migration paths, or "legacy mode" fallbacks.
+- No `// TODO: remove after migration` — if old code is dead, delete it now.
+- No renamed-but-unused `_variables` to keep old interfaces alive.
+- No re-exports for old import paths. Move the import, fix the callers.
+- One way to do things. If there's a new pattern, the old one gets removed in the same PR.
+
+### No Fallbacks
+- If a required config value is missing, throw — don't substitute a default and hope for the best.
+- If a service dependency is unavailable, fail with a clear error — don't silently degrade.
+- No `?? 'some-hardcoded-value'` on security-sensitive config (API keys, voice IDs, endpoints).
+- Optional features use explicit feature flags (`if (config.featureX)`) — not try/catch around missing deps.

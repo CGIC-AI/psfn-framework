@@ -5,7 +5,7 @@ import type { ContactStore } from '../contacts/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { SessionStore } from '../session/store.js';
 import type { SessionEntry } from '../session/types.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig, TurnID } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 import type { MemoryStore } from './store.js';
 import type { ExtractedFact } from './types.js';
@@ -144,7 +144,7 @@ export class MemoryExtractor {
     await this.trackExtraction(channelId, 'pre_compaction', canonicalContactId, orderedEntries);
   }
 
-  async maybeExtract(channelId: string, canonicalContactId?: string): Promise<void> {
+  async maybeExtract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
       return;
@@ -172,16 +172,16 @@ export class MemoryExtractor {
       });
     }
 
-    await this.trackExtraction(channelId, trigger.triggerReason, canonicalContactId);
+    await this.trackExtraction(channelId, trigger.triggerReason, canonicalContactId, undefined, turnId);
   }
 
-  async extract(channelId: string, canonicalContactId?: string): Promise<void> {
+  async extract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction request while extractor is draining', { channelId });
       return;
     }
 
-    await this.trackExtraction(channelId, 'manual', canonicalContactId);
+    await this.trackExtraction(channelId, 'manual', canonicalContactId, undefined, turnId);
   }
 
   async stop(options?: MemoryExtractorDrainOptions): Promise<boolean> {
@@ -231,6 +231,7 @@ export class MemoryExtractor {
     triggerReason: ExtractionTriggerReason,
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
+    turnId?: TurnID,
   ): Promise<void> {
     const existing = this.inFlightByChannel.get(channelId);
     if (existing) {
@@ -238,7 +239,7 @@ export class MemoryExtractor {
       return existing;
     }
 
-    const promise = this.runExtraction(channelId, triggerReason, canonicalContactId, recoveredEntries);
+    const promise = this.runExtraction(channelId, triggerReason, canonicalContactId, recoveredEntries, turnId);
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(channelId, promise);
     void promise
@@ -264,11 +265,13 @@ export class MemoryExtractor {
     triggerReason: ExtractionTriggerReason,
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
+    turnId?: TurnID,
   ): Promise<void> {
     await runExtractionOrchestration({
       channelId,
       triggerReason,
       canonicalContactId,
+      turnId,
       recoveredEntries,
       llmClient: this.llmClient,
       sessionManager: this.sessionManager,
@@ -283,8 +286,8 @@ export class MemoryExtractor {
       telemetryEnabled: this.isTelemetryEnabled(),
       isAcceptingExtractions: () => this.acceptingExtractions,
       processFact: (fact, sourceRef, maybeContactId) => this.processFact(fact, sourceRef, maybeContactId),
-      emitExtractionStart: (extractionChannelId, reason) => (
-        emitExtractionStartEvent(this.eventBus, this.isTelemetryEnabled(), extractionChannelId, reason)
+      emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
+        emitExtractionStartEvent(this.eventBus, this.isTelemetryEnabled(), extractionChannelId, reason, extractionTurnId)
       ),
       emitExtractionEnd: telemetry => (
         emitExtractionEndEvent(this.eventBus, this.isTelemetryEnabled(), telemetry)

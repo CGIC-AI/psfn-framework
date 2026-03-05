@@ -25,11 +25,15 @@ import type {
   LLMContext,
   MessageModelOverride,
   MessagePromptOverride,
+  MessagePromptOverrideMode,
   ResponseStyle,
   ObservabilityCallType,
   PostTurnActionCandidate,
   SubstrateConfig,
   SubstrateMessage,
+  TurnID,
+  TurnRecord,
+  TurnRecordToolCall,
   TurnUsage,
   ModelPurpose,
 } from '../types.js';
@@ -106,6 +110,7 @@ import type {
   AdaptiveToolSnapshotTool,
 } from './adaptive-tools-telemetry.js';
 import { contextMessagesToPiMessages } from '../llm/message-conversion.js';
+import { createTurnId } from '../turns/id.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -767,8 +772,8 @@ export class SubstrateAgent {
 
     const snapshot: AdaptiveToolSnapshotTelemetry = {
       ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.snapshot'),
-      turnId: message.id,
-      requestId: message.id,
+      turnId: correlation.turnId,
+      requestId: correlation.requestId,
       channelId: message.channelId,
       callType,
       timestamp: Date.now(),
@@ -1611,7 +1616,13 @@ export class SubstrateAgent {
   steer(message: SubstrateMessage): void {
     if (!this.agent.state.isStreaming) return;
     const authorContext = this.resolveAuthorContext(message);
-    this.recordUserMessage(message, authorContext.trustLevel, authorContext.canonicalContactKey);
+    this.recordUserMessage(
+      message,
+      createTurnId(),
+      message.id,
+      authorContext.trustLevel,
+      authorContext.canonicalContactKey,
+    );
     this.agent.steer({
       role: 'user',
       content: message.content,
@@ -1626,7 +1637,13 @@ export class SubstrateAgent {
    */
   followUp(message: SubstrateMessage): void {
     const authorContext = this.resolveAuthorContext(message);
-    this.recordUserMessage(message, authorContext.trustLevel, authorContext.canonicalContactKey);
+    this.recordUserMessage(
+      message,
+      createTurnId(),
+      message.id,
+      authorContext.trustLevel,
+      authorContext.canonicalContactKey,
+    );
     this.agent.followUp({
       role: 'user',
       content: message.content,
@@ -1657,9 +1674,11 @@ export class SubstrateAgent {
 
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
     const startTime = Date.now();
+    const requestId = message.id;
+    const turnId = createTurnId();
     const taskKind = this.resolveTaskKind(message);
     const turnCallType = this.resolveTurnCallType(message, taskKind);
-    const turnCorrelationBase = this.buildTurnCorrelation(message, turnCallType);
+    const turnCorrelationBase = this.buildTurnCorrelation(message, turnCallType, turnId, requestId);
     const channelMeta: ChannelMeta = {
       ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
       ...(message.routing?.broadcast?.approvalToken
@@ -1683,14 +1702,20 @@ export class SubstrateAgent {
 
     const trustStageStart = Date.now();
     const authorContext = this.resolveAuthorContext(message);
-    this.emitTurnStage(message, startTime, 'trust', turnCallType, {
+    this.emitTurnStage(message, startTime, turnId, requestId, 'trust', turnCallType, {
       durationMs: Date.now() - trustStageStart,
       trustLevel: authorContext.trustLevel,
       canonicalContactKey: authorContext.canonicalContactKey ?? null,
     });
 
     // Record user message in session (JSONL append = L0 archival)
-    this.recordUserMessage(message, authorContext.trustLevel, authorContext.canonicalContactKey);
+    const userSessionEntryId = this.recordUserMessage(
+      message,
+      turnId,
+      requestId,
+      authorContext.trustLevel,
+      authorContext.canonicalContactKey,
+    );
 
     try {
       const trustLevel = authorContext.trustLevel;
@@ -1728,7 +1753,7 @@ export class SubstrateAgent {
         .filter(section => section.length > 0)
         .join('\n\n');
       const scratchpadBlock = this.buildScratchpadContextBlock();
-      this.emitTurnStage(message, startTime, 'memory', turnCallType, {
+      this.emitTurnStage(message, startTime, turnId, requestId, 'memory', turnCallType, {
         durationMs: Date.now() - memoryStageStart,
         hasMemoryProvider: memoryProvider != null,
         memoryChars: memoryContextBlock.length,
@@ -1817,7 +1842,7 @@ export class SubstrateAgent {
           authorContext.continuityFallbackKeys,
         ),
       );
-      this.emitTurnStage(message, startTime, 'context', turnCallType, {
+      this.emitTurnStage(message, startTime, turnId, requestId, 'context', turnCallType, {
         durationMs: Date.now() - contextStageStart,
         contextMessages: context.messages.length,
         systemPromptChars: context.systemPrompt.length,
@@ -1834,13 +1859,13 @@ export class SubstrateAgent {
 
       const moaSettings = this.resolveMoaSettings();
       if (moaSettings) {
-        const moaResult = await this.runMoaTurn(context, message, moaSettings);
+        const moaResult = await this.runMoaTurn(context, message, moaSettings, turnId, requestId, turnCallType);
         firstTokenAt = Date.now();
-        this.emitTurnStage(message, startTime, 'first-token', turnCallType, {
+        this.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
           ttftMs: firstTokenAt - startTime,
           source: 'fallback',
         });
-        this.emitTurnStage(message, startTime, 'prompt', turnCallType, {
+        this.emitTurnStage(message, startTime, turnId, requestId, 'prompt', turnCallType, {
           durationMs: Date.now() - promptStageStart,
           ttftMs: firstTokenAt - startTime,
           mode: 'moa',
@@ -1878,7 +1903,7 @@ export class SubstrateAgent {
         const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
           if (channelId !== message.channelId || streamFirstTokenAt != null) return;
           streamFirstTokenAt = Date.now();
-          this.emitTurnStage(message, startTime, 'first-token', turnCallType, {
+          this.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
             ttftMs: streamFirstTokenAt - startTime,
             source: 'stream',
           });
@@ -1886,8 +1911,8 @@ export class SubstrateAgent {
 
         // Activate event bridge for this channel (streams deltas + tool events to EventBus)
         this.bridge.setChannel(message.channelId, {
-          turnId: message.id,
-          requestId: message.id,
+          turnId,
+          requestId,
           callType: turnCallType,
           originType: turnCallType,
           originStage: 'agent.turn.prompt',
@@ -1913,12 +1938,12 @@ export class SubstrateAgent {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
         if (streamFirstTokenAt == null) {
           streamFirstTokenAt = Date.now();
-          this.emitTurnStage(message, startTime, 'first-token', turnCallType, {
+          this.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
             ttftMs: streamFirstTokenAt - startTime,
             source: 'fallback',
           });
         }
-        this.emitTurnStage(message, startTime, 'prompt', turnCallType, {
+        this.emitTurnStage(message, startTime, turnId, requestId, 'prompt', turnCallType, {
           durationMs: Date.now() - promptStageStart,
           ttftMs: streamFirstTokenAt - startTime,
         });
@@ -1960,8 +1985,8 @@ export class SubstrateAgent {
             originStage: string,
           ): Promise<void> => {
             this.bridge.setChannel(message.channelId, {
-              turnId: message.id,
-              requestId: `${message.id}:${requestSuffix}`,
+              turnId,
+              requestId: `${requestId}:${requestSuffix}`,
               callType: turnCallType,
               originType: turnCallType,
               originStage,
@@ -2047,6 +2072,7 @@ export class SubstrateAgent {
       }
       let safeResponseText = responseText;
       let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
+      let assistantSessionEntryId: number | null = null;
 
       if (channelVisibility === 'broadcast') {
         const visibilityScope = broadcastVisibilityScope ?? 'public_only';
@@ -2104,8 +2130,10 @@ export class SubstrateAgent {
 
       // Record assistant message (JSONL append = L0 archival)
       if (!broadcastSafetyMeta?.approvalRequired) {
-        this.recordAssistantMessage(
+        assistantSessionEntryId = this.recordAssistantMessage(
           message,
+          turnId,
+          requestId,
           safeResponseText,
           authorContext.trustLevel,
           authorContext.canonicalContactKey,
@@ -2138,6 +2166,26 @@ export class SubstrateAgent {
         response: agentResponse,
         turnMessages,
       });
+      this.sessionManager.recordTurn(
+        this.buildTurnRecord({
+          message,
+          turnId,
+          requestId,
+          startedAt: startTime,
+          completedAt: Date.now(),
+          userSessionEntryId,
+          assistantSessionEntryId,
+          response: agentResponse,
+          turnMessages,
+          promptMode: promptOverride.mode,
+          promptText: fullPrompt,
+          contextMessageCount: context.messages.length,
+          memoryContextChars: memoryContextBlock.length,
+          trustLevel: authorContext.trustLevel,
+          canonicalContactKey: authorContext.canonicalContactKey,
+          retrievalProvenanceRefs,
+        }),
+      );
 
       await this.eventBus.emit('agent.turn.end', {
         message,
@@ -2157,7 +2205,7 @@ export class SubstrateAgent {
         usage: turnUsage,
         ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
       });
-      this.emitTurnStage(message, startTime, 'end', turnCallType, {
+      this.emitTurnStage(message, startTime, turnId, requestId, 'end', turnCallType, {
         durationMs: Date.now() - startTime,
         ttftMs: firstTokenAt - startTime,
         inputTokens: turnUsage.inputTokens,
@@ -2168,6 +2216,7 @@ export class SubstrateAgent {
       this.memoryExtractor?.maybeExtract(
         message.channelId,
         authorContext.canonicalContactKey,
+        turnId,
       ).catch(err => {
         log.error('Memory extraction error', { error: String(err) });
       });
@@ -2255,6 +2304,9 @@ export class SubstrateAgent {
     context: LLMContext,
     message: SubstrateMessage,
     settings: ResolvedMoaSettings,
+    turnId: TurnID,
+    requestId: string,
+    callType: ObservabilityCallType,
   ): Promise<{
     output: string;
     model: string;
@@ -2277,11 +2329,11 @@ export class SubstrateAgent {
       this.buildMoaPrompt(context),
       {
         correlation: {
-          turnId: message.id,
-          requestId: message.id,
+          turnId,
+          requestId,
           channelId: message.channelId,
-          callType: this.resolveTurnCallType(message, this.resolveTaskKind(message)),
-          originType: this.resolveTurnCallType(message, this.resolveTaskKind(message)),
+          callType,
+          originType: callType,
           originStage: 'agent.moa.turn',
           purpose: 'agent.moa.turn',
         },
@@ -2317,12 +2369,11 @@ export class SubstrateAgent {
       ...(deliberation.estimatedCostUsd > 0 ? { estimatedCostUsd: deliberation.estimatedCostUsd } : {}),
     };
 
-    const moaCallType = this.resolveTurnCallType(message, this.resolveTaskKind(message));
     this.emitTelemetry('agent.moa.turn', {
-      turnId: message.id,
-      requestId: message.id,
+      turnId,
+      requestId,
       channelId: message.channelId,
-      callType: moaCallType,
+      callType,
       purpose: 'agent.moa.turn',
       rounds: deliberation.rounds.length,
       stopReason: deliberation.stopReason,
@@ -2349,13 +2400,15 @@ export class SubstrateAgent {
   private emitTurnStage(
     message: SubstrateMessage,
     turnStartMs: number,
+    turnId: TurnID,
+    requestId: string,
     stage: TurnStageName,
     callType: ObservabilityCallType,
     payload: Record<string, unknown>,
   ): void {
     const telemetry = {
-      turnId: message.id,
-      requestId: message.id,
+      turnId,
+      requestId,
       channelId: message.channelId,
       callType,
       purpose: `agent.turn.stage.${stage}`,
@@ -2383,10 +2436,12 @@ export class SubstrateAgent {
   private buildTurnCorrelation(
     message: SubstrateMessage,
     callType: ObservabilityCallType,
+    turnId: TurnID,
+    requestId: string,
   ): CorrelationMetadata {
     return {
-      turnId: message.id,
-      requestId: message.id,
+      turnId,
+      requestId,
       channelId: message.channelId,
       callType,
       purpose: 'agent.turn',
@@ -2527,59 +2582,158 @@ export class SubstrateAgent {
 
   private recordUserMessage(
     message: SubstrateMessage,
+    turnId: TurnID,
+    requestId: string,
     trustLevel: TrustLevel,
     canonicalContactKey?: string,
-  ): void {
+  ): number | null {
     if (canonicalContactKey) {
-      this.sessionManager.recordUserMessage(
+      return this.sessionManager.recordUserMessage(
         message.channelId,
         message.content,
         message.authorId,
         message.authorName,
         message.isDirectMessage,
         canonicalContactKey,
-        { trustLevel },
+        {
+          trustLevel,
+          turnId,
+          requestId,
+          sourceMessageId: message.id,
+        },
       );
-      return;
     }
 
-    this.sessionManager.recordUserMessage(
+    return this.sessionManager.recordUserMessage(
       message.channelId,
       message.content,
       message.authorId,
       message.authorName,
       message.isDirectMessage,
       undefined,
-      { trustLevel },
+      {
+        trustLevel,
+        turnId,
+        requestId,
+        sourceMessageId: message.id,
+      },
     );
   }
 
   private recordAssistantMessage(
     message: SubstrateMessage,
+    turnId: TurnID,
+    requestId: string,
     responseText: string,
     trustLevel: TrustLevel,
     canonicalContactKey?: string,
-  ): void {
+  ): number | null {
     if (canonicalContactKey) {
-      this.sessionManager.recordAssistantMessage(
+      return this.sessionManager.recordAssistantMessage(
         message.channelId,
         responseText,
         message.authorId,
         message.isDirectMessage,
         canonicalContactKey,
-        { trustLevel },
+        {
+          trustLevel,
+          turnId,
+          requestId,
+          sourceMessageId: message.id,
+        },
       );
-      return;
     }
 
-    this.sessionManager.recordAssistantMessage(
+    return this.sessionManager.recordAssistantMessage(
       message.channelId,
       responseText,
       message.authorId,
       message.isDirectMessage,
       undefined,
-      { trustLevel },
+      {
+        trustLevel,
+        turnId,
+        requestId,
+        sourceMessageId: message.id,
+      },
     );
+  }
+
+  private buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] {
+    const toolCalls: TurnRecordToolCall[] = [];
+    for (const entry of turnMessages) {
+      if (!this.isToolResultAgentMessage(entry)) continue;
+      toolCalls.push({
+        toolName: entry.toolName,
+        toolCallId: entry.toolCallId,
+        ...(typeof entry.isError === 'boolean' ? { isError: entry.isError } : {}),
+      });
+    }
+    return toolCalls;
+  }
+
+  private buildTurnRecord(input: {
+    message: SubstrateMessage;
+    turnId: TurnID;
+    requestId: string;
+    startedAt: number;
+    completedAt: number;
+    userSessionEntryId: number | null;
+    assistantSessionEntryId: number | null;
+    response: AgentResponse;
+    turnMessages: AgentMessage[];
+    promptMode: MessagePromptOverrideMode;
+    promptText: string;
+    contextMessageCount: number;
+    memoryContextChars: number;
+    trustLevel: TrustLevel;
+    canonicalContactKey?: string;
+    retrievalProvenanceRefs: string[];
+  }): TurnRecord {
+    const toolCalls = this.buildTurnToolCalls(input.turnMessages);
+    const provenanceRefs = [...new Set([
+      `turn:${input.turnId}`,
+      ...input.retrievalProvenanceRefs,
+    ])];
+
+    return {
+      schemaVersion: 1,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      channelId: input.message.channelId,
+      channelType: input.message.channelType,
+      startedAt: input.startedAt,
+      completedAt: Math.max(input.startedAt, input.completedAt),
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: input.message.content,
+        timestamp: input.message.timestamp.getTime(),
+        sourceMessageId: input.message.id,
+        authorId: input.message.authorId,
+        authorName: input.message.authorName,
+        ...(input.userSessionEntryId != null ? { sessionEntryId: input.userSessionEntryId } : {}),
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: input.response.content,
+        timestamp: Math.max(input.startedAt, input.completedAt),
+        sourceMessageId: input.message.id,
+        ...(input.assistantSessionEntryId != null ? { sessionEntryId: input.assistantSessionEntryId } : {}),
+      },
+      toolCalls,
+      contextManifestRef: `session:${input.message.channelId}|messages:${input.contextMessageCount}|memory_chars:${input.memoryContextChars}`,
+      internalStateSnapshotRef: `trust:${input.trustLevel}|contact:${input.canonicalContactKey ?? 'none'}`,
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: {
+        model: input.response.metadata.model,
+        promptMode: input.promptMode,
+        promptHash: this.hashPromptText(input.promptText),
+      },
+      provenanceRefs,
+    };
   }
 
   /** Aggregate usage stats for a single turn across all tool loop iterations. */

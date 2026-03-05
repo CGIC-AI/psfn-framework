@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
 import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity } from './journal-utils.js';
+import { createTurnId, isTurnId } from '../turns/id.js';
 
 describe('SessionStore', () => {
   let dir: string;
@@ -64,6 +65,131 @@ describe('SessionStore', () => {
     expect(store.getRecent('ch2', 10)).toHaveLength(1);
     expect(store.count('ch1')).toBe(1);
     expect(store.count('ch2')).toBe(1);
+  });
+
+  it('persists canonical turn records in channel-scoped L0 streams', () => {
+    const turnId = createTurnId();
+    store.appendTurnRecord({
+      schemaVersion: 1,
+      turnId,
+      requestId: 'req-turn-record',
+      channelId: 'api:turn-record',
+      channelType: 'api',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_250,
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: 'hello',
+        timestamp: 1_700_000_000_000,
+        sourceMessageId: 'msg-1',
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: 'hi',
+        timestamp: 1_700_000_000_250,
+      },
+      toolCalls: [{ toolName: 'think', toolCallId: 'tool-1' }],
+      contextManifestRef: 'session:api:turn-record|messages:3|memory_chars:120',
+      internalStateSnapshotRef: 'trust:regular|contact:none',
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: {
+        model: 'openrouter/test-model',
+        promptMode: 'default',
+      },
+      provenanceRefs: ['turn:seed'],
+    });
+
+    const turnFile = join(dir, '_turn_records', `${sanitizeChannelId('api:turn-record')}.jsonl`);
+    expect(existsSync(turnFile)).toBe(true);
+
+    const records = store.getRecentTurnRecords('api:turn-record', 5);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      turnId,
+      requestId: 'req-turn-record',
+      channelId: 'api:turn-record',
+      status: 'completed',
+      userMessage: expect.objectContaining({ content: 'hello' }),
+      assistantMessage: expect.objectContaining({ content: 'hi' }),
+    });
+  });
+
+  it('backfills deterministic TurnID values for legacy turn records missing turnId', () => {
+    const channelId = 'api:legacy-turn-record';
+    const turnDir = join(dir, '_turn_records');
+    mkdirSync(turnDir, { recursive: true });
+    const turnFile = join(turnDir, `${sanitizeChannelId(channelId)}.jsonl`);
+    writeFileSync(turnFile, `${JSON.stringify({
+      schemaVersion: 1,
+      requestId: 'legacy-request',
+      channelId,
+      channelType: 'api',
+      startedAt: 1_700_000_100_000,
+      completedAt: 1_700_000_100_250,
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: 'legacy hello',
+        timestamp: 1_700_000_100_000,
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: 'legacy hi',
+        timestamp: 1_700_000_100_250,
+      },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: {
+        model: 'legacy/model',
+      },
+      provenanceRefs: [],
+    })}\n`);
+
+    const firstRead = store.getRecentTurnRecords(channelId, 1);
+    const secondRead = store.getRecentTurnRecords(channelId, 1);
+
+    expect(firstRead).toHaveLength(1);
+    expect(secondRead).toHaveLength(1);
+    expect(isTurnId(firstRead[0].turnId)).toBe(true);
+    expect(secondRead[0].turnId).toBe(firstRead[0].turnId);
+    expect(readFileSync(turnFile, 'utf-8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('fails closed on malformed turn records', () => {
+    const channelId = 'api:bad-turn-record';
+    const turnDir = join(dir, '_turn_records');
+    mkdirSync(turnDir, { recursive: true });
+    const turnFile = join(turnDir, `${sanitizeChannelId(channelId)}.jsonl`);
+    writeFileSync(turnFile, `${JSON.stringify({
+      schemaVersion: 1,
+      turnId: 'not-a-turn-id',
+      requestId: 'bad-request',
+      channelId,
+      channelType: 'api',
+      startedAt: 1,
+      completedAt: 2,
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: 'bad',
+        timestamp: 1,
+      },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: {
+        model: 'legacy/model',
+      },
+      provenanceRefs: [],
+    })}\n`);
+
+    expect(() => store.getRecentTurnRecords(channelId, 10)).toThrow();
   });
 
   it('indexes appended messages for FTS keyword search across channels', () => {

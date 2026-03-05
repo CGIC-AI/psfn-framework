@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../session/store.js';
 import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
+import { createTurnId, isTurnId } from '../turns/id.js';
 
 const tempDirs: string[] = [];
 
@@ -250,6 +251,7 @@ describe('extraction acceptance gates', () => {
 
 describe('MemoryExtractor telemetry payloads', () => {
   it('includes trigger reason and extraction stats in emitted events', async () => {
+    const turnId = createTurnId();
     const llmClient = {
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
     } as any;
@@ -257,7 +259,22 @@ describe('MemoryExtractor telemetry payloads', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(5),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'User likes coffee', authorName: 'user' },
+        {
+          id: 17,
+          channelId: 'api:telemetry-test',
+          role: 'user',
+          content: 'User likes coffee',
+          authorName: 'user',
+          timestamp: 1_000,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId,
+              requestId: 'req-telemetry-test',
+              role: 'user',
+            },
+          }),
+        },
       ]),
     } as any;
 
@@ -298,11 +315,75 @@ describe('MemoryExtractor telemetry payloads', () => {
 
     expect(startCall).toBeTruthy();
     expect(startCall?.[1]?.triggerReason).toBe('interval');
+    expect(startCall?.[1]?.turnId).toBe(turnId);
 
     expect(endCall).toBeTruthy();
+    expect(endCall?.[1]?.turnId).toBe(turnId);
     expect(endCall?.[1]?.count).toBe(0);
     expect(endCall?.[1]?.parsedCount).toBe(0);
     expect(endCall?.[1]?.acceptedCount).toBe(0);
+    expect(llmClient.complete).toHaveBeenCalled();
+    expect(llmClient.complete.mock.calls[0][0].correlation).toMatchObject({
+      turnId,
+      requestId: 'req-telemetry-test',
+    });
+  });
+
+  it('fails closed when session turn metadata is malformed', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(5),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 44,
+          channelId: 'api:malformed-turn',
+          role: 'user',
+          content: 'Broken metadata should block provenance',
+          authorName: 'user',
+          timestamp: 100,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId: 'not-a-turn-id',
+              role: 'user',
+            },
+          }),
+        },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5, telemetryEnabled: true },
+    );
+
+    await extractor.maybeExtract('api:malformed-turn');
+
+    expect(llmClient.complete).not.toHaveBeenCalled();
+    const emittedEventNames = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls.map(([name]) => name);
+    expect(emittedEventNames).not.toContain('memory.extraction.start');
+    expect(emittedEventNames).not.toContain('memory.extraction.end');
   });
 
   it('uses framed message token counting for context-threshold triggers', async () => {
@@ -707,6 +788,8 @@ describe('MemoryExtractor provenance and trust caps', () => {
   });
 
   it('tags shard extractions with shard source and session line range', async () => {
+    const turnId = createTurnId();
+    expect(isTurnId(turnId)).toBe(true);
     const llmClient = {
       complete: vi.fn().mockResolvedValue({
         content: `<response>
@@ -723,8 +806,38 @@ describe('MemoryExtractor provenance and trust caps', () => {
 
     const sessionManager = {
       getRecentMessages: vi.fn().mockReturnValue([
-        { id: 41, role: 'user', authorName: 'user', content: 'Investigating option A', timestamp: 1_000 },
-        { id: 42, role: 'assistant', authorName: 'assistant', content: 'Option A works', timestamp: 2_000 },
+        {
+          id: 41,
+          channelId: 'shard:shard-abc',
+          role: 'user',
+          authorName: 'user',
+          content: 'Investigating option A',
+          timestamp: 1_000,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId,
+              requestId: 'req-shard',
+              role: 'user',
+            },
+          }),
+        },
+        {
+          id: 42,
+          channelId: 'shard:shard-abc',
+          role: 'assistant',
+          authorName: 'assistant',
+          content: 'Option A works',
+          timestamp: 2_000,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId,
+              requestId: 'req-shard',
+              role: 'assistant',
+            },
+          }),
+        },
       ]),
     } as any;
 
@@ -761,6 +874,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
     expect(sourceRef).toContain('source:shard:shard-abc');
     expect(sourceRef).toContain('session:shard:shard-abc');
     expect(sourceRef).toContain('lines:41-42');
+    expect(sourceRef).toContain(`turn:${turnId}`);
   });
 });
 

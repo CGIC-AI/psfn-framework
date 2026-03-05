@@ -1,6 +1,7 @@
 import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from './types.js';
+import type { TurnRecord } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 import {
   buildExtractionMarkerJournalEntry,
@@ -52,6 +53,7 @@ import {
   readImportManifests,
   runLegacyChatImport,
 } from './store/legacy-import.js';
+import { appendTurnRecord, readRecentTurnRecords } from './turn-records.js';
 import { SessionJournalRuntime } from './store/journal-runtime.js';
 const log = createComponentLogger('SessionStore');
 export {
@@ -304,6 +306,12 @@ export class SessionStore {
     }
     this.indexSessionEntry(full);
     return id;
+  }
+  appendTurnRecord(record: TurnRecord): void {
+    appendTurnRecord(this.sessionsDir, record);
+  }
+  getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
+    return readRecentTurnRecords(this.sessionsDir, channelId, limit);
   }
   searchByKeywords(query: string, limit = 10): SessionSearchHit[] {
     if (!this.searchIndex) return [];

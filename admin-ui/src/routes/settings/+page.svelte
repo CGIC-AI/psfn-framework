@@ -378,6 +378,46 @@
     { key: 'capabilities', label: 'capabilities.json' },
   ] as const;
 
+  const MODEL_OWNED_FIELDS = new Set([
+    'primaryModel',
+    'primaryProvider',
+    'primaryMaxTokens',
+    'extractionModel',
+    'extractionProvider',
+    'extractionMaxTokens',
+    'modelCatalog',
+    'modelRoleAssignments',
+    'modelRoster',
+  ]);
+
+  type ModelsEditorConfig = {
+    modelCatalog?: Record<string, Record<string, unknown>>;
+    modelRoleAssignments?: Record<string, string>;
+  };
+
+  type SchedulerEditorConfig = {
+    tickIntervalMs?: number;
+    heartbeatIntervalMs?: number;
+    salienceDecayIntervalMs?: number;
+  };
+
+  type CapabilitiesEditorConfig = {
+    tier?: string;
+    customTokens?: string[];
+  };
+
+  function getModelsEditorConfig(): ModelsEditorConfig {
+    return (data?.editors?.models as ModelsEditorConfig | undefined) ?? {};
+  }
+
+  function getSchedulerEditorConfig(): SchedulerEditorConfig {
+    return (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
+  }
+
+  function getCapabilitiesEditorConfig(): CapabilitiesEditorConfig {
+    return (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
+  }
+
   function fieldErrors(field: string): string[] {
     return validationErrorsByField[field] ?? [];
   }
@@ -419,7 +459,13 @@
   }
 
   // ── Source attribution ──
-  type SettingSource = 'default' | 'settings.json' | 'env var';
+  type SettingSource =
+    | 'default'
+    | 'settings.json'
+    | 'env var'
+    | 'models.json'
+    | 'scheduler.json'
+    | 'capability-tier.json';
 
   function getSource(key: string): SettingSource {
     if (!data) return 'default';
@@ -430,6 +476,19 @@
       'webFetchAllowHttp': 'webFetchAllowHttp',
     };
     if (env && envMap[key] && env[envMap[key]] !== undefined) return 'env var';
+    if (MODEL_OWNED_FIELDS.has(key)) {
+      const models = getModelsEditorConfig();
+      if (key === 'primaryModel' && models.modelCatalog?.primary?.model !== undefined) return 'models.json';
+      if (key === 'extractionModel' && models.modelCatalog?.extraction?.model !== undefined) return 'models.json';
+      if ((key === 'modelCatalog' || key === 'modelRoleAssignments') && models[key] !== undefined) return 'models.json';
+      if (key !== 'primaryModel' && key !== 'extractionModel') return 'models.json';
+    }
+    if (key === 'maintenanceIntervalMs' && getSchedulerEditorConfig().salienceDecayIntervalMs !== undefined) {
+      return 'scheduler.json';
+    }
+    if (key === 'capabilityTier' && getCapabilitiesEditorConfig().tier !== undefined) {
+      return 'capability-tier.json';
+    }
     const config = data.config as Record<string, unknown>;
     if (config[key] !== undefined) return 'settings.json';
     return 'default';
@@ -515,9 +574,19 @@
   });
 
   // ── Helpers ──
-  function populateSimpleFields(config: Record<string, unknown>) {
-    primaryModel = String(config.primaryModel ?? '');
-    extractionModel = String(config.extractionModel ?? '');
+  function populateSimpleFields(settingsData: AdminSettingsData) {
+    const config = settingsData.config as Record<string, unknown>;
+    const models = settingsData.editors?.models as ModelsEditorConfig | undefined;
+    const scheduler = settingsData.editors?.scheduler as SchedulerEditorConfig | undefined;
+    const capabilities = settingsData.editors?.capabilities as CapabilitiesEditorConfig | undefined;
+    const catalog = models?.modelCatalog;
+    const primarySlot = catalog?.primary as Record<string, unknown> | undefined;
+    const extractionSlot = catalog?.extraction as Record<string, unknown> | undefined;
+    const primaryDefaults = primarySlot?.defaults as Record<string, unknown> | undefined;
+    const primaryOverrides = primarySlot?.overrides as Record<string, unknown> | undefined;
+
+    primaryModel = String(primarySlot?.model ?? config.primaryModel ?? '');
+    extractionModel = String(extractionSlot?.model ?? config.extractionModel ?? '');
     memoryBudgetPct = Number(config.memoryBudgetPct ?? 20);
     memoryRetrievalLimit = config.memoryRetrievalLimit != null ? Number(config.memoryRetrievalLimit) : null;
     sessionMessageLimit = config.sessionMessageLimit != null ? Number(config.sessionMessageLimit) : null;
@@ -526,7 +595,11 @@
     memoryRetrievalBudgetPct = Number(config.memoryRetrievalBudgetPct ?? 2);
     extractionThresholdPct = Number(config.extractionThresholdPct ?? 30);
     compactionThresholdPct = Number(config.compactionThresholdPct ?? 70);
-    maxResponseTokens = Number(config.primaryMaxTokens ?? 4096);
+    maxResponseTokens = Number(
+      primaryOverrides?.maxTokens
+      ?? primaryDefaults?.maxTokens
+      ?? 4096,
+    );
     retryMaxAttempts = Number(config.retryMaxAttempts ?? 3);
     retryBaseDelayMs = Number(config.retryBaseDelayMs ?? 2000);
     importRouteMode = String(config.importProcessingRouteMode ?? 'background');
@@ -538,13 +611,13 @@
     webFetchDomainAllowlist = Array.isArray(config.webFetchDomainAllowlist) ? config.webFetchDomainAllowlist.join(', ') : '';
     webFetchAllowInternalNetwork = Boolean(config.webFetchAllowInternalNetwork);
     webFetchTlsCaCertPaths = Array.isArray(config.webFetchTlsCaCertPaths) ? config.webFetchTlsCaCertPaths.join(', ') : '';
-    capabilityTier = String(config.capabilityTier ?? 'apprentice');
+    capabilityTier = String(capabilities?.tier ?? 'apprentice');
 
     // Memory & Extraction
     extractionInterval = Number(config.extractionInterval ?? 5);
     compactionEmotionalSalienceThresholdPct = Number(config.compactionEmotionalSalienceThresholdPct ?? 75);
     defaultContextWindow = Number(config.defaultContextWindow ?? 128000);
-    maintenanceIntervalMs = Number(config.maintenanceIntervalMs ?? 300000);
+    maintenanceIntervalMs = Number(scheduler?.salienceDecayIntervalMs ?? 300000);
 
     // Memory Extraction Tuning
     memoryExtractionMinImportance = Number(config.memoryExtractionMinImportance ?? 0.3);
@@ -599,7 +672,6 @@
     telegramAuthorizedUsers = String(config.telegramAuthorizedUsers ?? '');
 
     // Populate catalog slots
-    const catalog = config.modelCatalog as Record<string, Record<string, unknown>> | undefined;
     if (catalog && Object.keys(catalog).length > 0) {
       catalogSlots = Object.entries(catalog).map(([key, entry]) => ({
         slotKey: key,
@@ -616,13 +688,31 @@
       }));
     } else {
       catalogSlots = [
-        { slotKey: 'primary', model: String(config.primaryModel ?? ''), provider: String(config.primaryProvider ?? ''), routeProviderOrder: '', defaultMaxTokens: Number(config.primaryMaxTokens ?? 4096), defaultContextWindow: Number(config.defaultContextWindow ?? 128000), overrideMaxTokens: null, overrideContextWindow: null },
-        { slotKey: 'extraction', model: String(config.extractionModel ?? ''), provider: String(config.extractionProvider ?? ''), routeProviderOrder: '', defaultMaxTokens: Number(config.extractionMaxTokens ?? 4096), defaultContextWindow: null, overrideMaxTokens: null, overrideContextWindow: null },
+        {
+          slotKey: 'primary',
+          model: primaryModel,
+          provider: '',
+          routeProviderOrder: '',
+          defaultMaxTokens: maxResponseTokens,
+          defaultContextWindow: Number(config.defaultContextWindow ?? 128000),
+          overrideMaxTokens: null,
+          overrideContextWindow: null,
+        },
+        {
+          slotKey: 'extraction',
+          model: extractionModel,
+          provider: '',
+          routeProviderOrder: '',
+          defaultMaxTokens: null,
+          defaultContextWindow: null,
+          overrideMaxTokens: null,
+          overrideContextWindow: null,
+        },
       ];
     }
 
     // Populate purpose mappings
-    const assignments = config.modelRoleAssignments as Record<string, string> | undefined;
+    const assignments = models?.modelRoleAssignments;
     if (assignments && Object.keys(assignments).length > 0) {
       purposeMappings = Object.entries(assignments).map(([purpose, slotKey]) => ({ purpose, slotKey }));
     } else {
@@ -734,8 +824,35 @@
 
   // ── Save actions ──
   function buildCatalogPayload(): Record<string, unknown> {
+    const nextSlots = catalogSlots.map(slot => ({ ...slot }));
+    const ensureSlot = (slotKey: string): CatalogSlot => {
+      const existing = nextSlots.find(slot => slot.slotKey === slotKey);
+      if (existing) {
+        return existing;
+      }
+      const created: CatalogSlot = {
+        slotKey,
+        model: '',
+        provider: '',
+        routeProviderOrder: '',
+        defaultMaxTokens: null,
+        defaultContextWindow: null,
+        overrideMaxTokens: null,
+        overrideContextWindow: null,
+      };
+      nextSlots.push(created);
+      return created;
+    };
+
+    const primarySlot = ensureSlot('primary');
+    primarySlot.model = primaryModel.trim();
+    primarySlot.defaultMaxTokens = maxResponseTokens;
+
+    const extractionSlot = ensureSlot('extraction');
+    extractionSlot.model = extractionModel.trim();
+
     const catalog: Record<string, unknown> = {};
-    for (const slot of catalogSlots) {
+    for (const slot of nextSlots) {
       if (!slot.slotKey) continue;
       catalog[slot.slotKey] = {
         model: slot.model,
@@ -767,14 +884,12 @@
     return clamp(Math.round(value), 10, 600);
   }
 
-  function collectSimplePayload(catalogPayload: Record<string, unknown>): Record<string, unknown> {
+  function collectSimplePayload(): Record<string, unknown> {
     const discordTriggerListenWindowMs = normalizeDiscordListenWindowSeconds(
       discordTriggerListenWindowSeconds,
     ) * 1000;
 
     return {
-      primaryModel,
-      extractionModel,
       memoryBudgetPct,
       ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
       ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
@@ -783,7 +898,6 @@
       memoryRetrievalBudgetPct,
       extractionThresholdPct,
       compactionThresholdPct,
-      primaryMaxTokens: maxResponseTokens,
       retryMaxAttempts,
       retryBaseDelayMs,
       importProcessingRouteMode: importRouteMode,
@@ -795,12 +909,10 @@
       webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
       webFetchAllowInternalNetwork,
       webFetchTlsCaCertPaths: splitCsv(webFetchTlsCaCertPaths),
-      capabilityTier,
       // Memory & Extraction
       extractionInterval,
       compactionEmotionalSalienceThresholdPct,
       defaultContextWindow,
-      maintenanceIntervalMs,
       // Memory Extraction Tuning
       memoryExtractionMinImportance,
       memoryExtractionMinConfidence,
@@ -843,22 +955,93 @@
       discordTriggerListenWindowMs,
       telegramEnabled,
       telegramAuthorizedUsers,
-      ...catalogPayload,
+    };
+  }
+
+  function buildSchedulerPayload(): Record<string, unknown> {
+    return {
+      ...getSchedulerEditorConfig(),
+      salienceDecayIntervalMs: maintenanceIntervalMs,
+    };
+  }
+
+  function buildCapabilitiesPayload(): Record<string, unknown> {
+    const current = getCapabilitiesEditorConfig();
+    return {
+      ...current,
+      tier: capabilityTier,
+      customTokens: Array.isArray(current.customTokens) ? current.customTokens : [],
+    };
+  }
+
+  async function reloadSettingsState(settingsData?: AdminSettingsData): Promise<void> {
+    const nextSettingsData = settingsData ?? await getSettings();
+    data = nextSettingsData;
+    populateSimpleFields(nextSettingsData);
+    settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
+
+    const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([
+      getSubConfig('models').catch(() => '{}'),
+      getSubConfig('skills').catch(() => '{}'),
+      getSubConfig('scheduler').catch(() => '{}'),
+      getSubConfig('trust-policy').catch(() => '{}'),
+      getSubConfig('capabilities').catch(() => '{}'),
+    ]);
+    modelsJson = tryPrettyPrint(mConf);
+    skillsJson = tryPrettyPrint(skConf);
+    schedulerJson = tryPrettyPrint(schConf);
+    trustPolicyJson = tryPrettyPrint(tpConf);
+    capabilitiesJson = tryPrettyPrint(capConf);
+  }
+
+  async function saveSettingsContract(
+    runtimePayload: Record<string, unknown>,
+  ): Promise<{ ok: boolean; invalidFieldCount: number; message: string }> {
+    const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
+    let invalidFieldCount = 0;
+
+    if (hasRuntimePayload) {
+      const runtimeResult = await updateSettings(runtimePayload);
+      invalidFieldCount = applyValidationErrors(runtimeResult);
+      if (!runtimeResult.ok) {
+        return {
+          ok: false,
+          invalidFieldCount,
+          message: runtimeResult.message || 'Failed to save runtime settings',
+        };
+      }
+    } else {
+      applyValidationErrors({ ok: true, message: '' });
+    }
+
+    try {
+      await saveSubConfig('models', JSON.stringify(buildCatalogPayload(), null, 2));
+      await saveSubConfig('scheduler', JSON.stringify(buildSchedulerPayload(), null, 2));
+      await saveSubConfig('capabilities', JSON.stringify(buildCapabilitiesPayload(), null, 2));
+    } catch (error) {
+      return {
+        ok: false,
+        invalidFieldCount,
+        message: error instanceof Error
+          ? `Runtime settings saved, but canonical config save failed: ${error.message}`
+          : 'Runtime settings saved, but canonical config save failed',
+      };
+    }
+
+    await reloadSettingsState();
+    return {
+      ok: true,
+      invalidFieldCount,
+      message: 'Settings updated',
     };
   }
 
   async function saveSimple() {
     saving = true;
     try {
-      const catalogPayload = buildCatalogPayload();
-      const result = await updateSettings(collectSimplePayload(catalogPayload));
-      const invalidFieldCount = applyValidationErrors(result);
-      flash(result.ok, result.message || 'Settings saved');
-      if (result.ok) {
-        data = await getSettings();
-        populateSimpleFields(data.config as Record<string, unknown>);
-        settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
-      } else if (invalidFieldCount > 0) {
+      const result = await saveSettingsContract(collectSimplePayload());
+      flash(result.ok, result.message);
+      if (!result.ok && result.invalidFieldCount > 0) {
         mode = 'advanced';
       }
     } catch (e) {
@@ -872,14 +1055,9 @@
     if (!data) return;
     saving = true;
     try {
-      const result = await updateSettings(data.config as Record<string, unknown>);
-      const invalidFieldCount = applyValidationErrors(result);
-      flash(result.ok, result.message || 'Settings saved');
-      if (result.ok) {
-        data = await getSettings();
-        populateSimpleFields(data.config as Record<string, unknown>);
-        settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
-      } else if (invalidFieldCount > 0) {
+      const result = await saveSettingsContract(data.config as Record<string, unknown>);
+      flash(result.ok, result.message);
+      if (!result.ok && result.invalidFieldCount > 0) {
         mode = 'advanced';
       }
     } catch (e) {
@@ -911,9 +1089,7 @@
       }
 
       flashRaw('settings', true, result.message || 'settings.json saved');
-      data = await getSettings();
-      populateSimpleFields(data.config as Record<string, unknown>);
-      settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
+      await reloadSettingsState();
     } catch (e) {
       flashRaw('settings', false, e instanceof Error ? e.message : 'Failed to save settings.json');
     } finally {
@@ -928,6 +1104,9 @@
       JSON.parse(json);
       await saveSubConfig(key, json);
       applyValidationErrors({ ok: true, message: '' });
+      if (key === 'models' || key === 'scheduler' || key === 'capabilities') {
+        await reloadSettingsState();
+      }
       flashRaw(key, true, `${label} saved`);
     } catch (e) {
       flashRaw(key, false, e instanceof Error ? e.message : `Failed to save ${label}`);
@@ -959,7 +1138,7 @@
       ]);
       data = settingsData;
       discoveredModels = models;
-      populateSimpleFields(data.config as Record<string, unknown>);
+      populateSimpleFields(data);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
       const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([

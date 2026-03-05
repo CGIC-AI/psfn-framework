@@ -12,6 +12,7 @@ import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
 import type { SessionEntry } from '../../../session/types.js';
+import type { EditableSettings } from '../../../settings.js';
 import type { SubstrateConfig } from '../../../types.js';
 import type {
   Contact,
@@ -215,7 +216,7 @@ export interface AdminVoiceProviderData {
 }
 
 export interface AdminSettingsData {
-  config: SubstrateConfig;
+  config: EditableSettings;
   env: EnvInfo;
   editors: SettingsConfigEditors;
   voiceProviders: AdminVoiceProviderData;

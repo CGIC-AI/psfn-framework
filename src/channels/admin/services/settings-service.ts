@@ -27,9 +27,6 @@ import {
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
-import {
-  CAPABILITY_TIER_VALUES,
-} from '../../../capabilities/tiers.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
@@ -59,6 +56,20 @@ import type {
 const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local_endpoint']);
 const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
 const log = createComponentLogger('AdminSettingsService');
+const SETTINGS_OWNER_BY_FIELD = new Map<string, string>([
+  ['primaryModel', 'models.json'],
+  ['primaryProvider', 'models.json'],
+  ['primaryMaxTokens', 'models.json'],
+  ['extractionModel', 'models.json'],
+  ['extractionProvider', 'models.json'],
+  ['extractionMaxTokens', 'models.json'],
+  ['modelCatalog', 'models.json'],
+  ['modelRoleAssignments', 'models.json'],
+  ['modelRoster', 'models.json'],
+  ['maintenanceIntervalMs', 'scheduler.json'],
+  ['capabilityTier', 'capability-tier.json'],
+  ['customTokens', 'capability-tier.json'],
+]);
 
 type SettingsMutationResult =
   | { ok: true }
@@ -504,7 +515,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
     payload: Record<string, unknown>,
     errors: SettingsValidationError[],
   ): void {
-    if (!('modelCatalog' in payload) || !this.isRecord(payload.modelCatalog)) return;
+    if ('modelCatalog' in payload) return;
+    if (!this.isRecord(payload.modelCatalog)) return;
 
     for (const [slotKey, rawEntry] of Object.entries(payload.modelCatalog)) {
       if (!this.isRecord(rawEntry) || !('routing' in rawEntry)) continue;
@@ -535,8 +547,19 @@ export class AdminSettingsDataService implements AdminSettingsService {
   ): SettingsValidationError[] {
     const errors: SettingsValidationError[] = [];
 
+    for (const [field, owner] of SETTINGS_OWNER_BY_FIELD.entries()) {
+      if (!(field in payload)) continue;
+      this.pushFieldError(
+        errors,
+        field,
+        `${field} is owned by ${owner}; edit that canonical config instead`,
+        'wrong_owner',
+      );
+    }
+
     for (const [field, range] of Object.entries(SETTINGS_VALIDATION)) {
       if (!(field in payload)) continue;
+      if (SETTINGS_OWNER_BY_FIELD.has(field)) continue;
       const value = payload[field];
       if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
         this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'invalid_number');
@@ -553,7 +576,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     this.validateEnumField(payload, 'importProcessingRouteMode', IMPORT_ROUTE_MODE_VALUES, errors);
     this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES, errors);
-    this.validateEnumField(payload, 'capabilityTier', new Set(CAPABILITY_TIER_VALUES), errors);
     this.validateTtsProviderField(payload, errors);
     this.validateSttProviderField(payload, errors);
 
@@ -607,9 +629,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
   async getSettingsData(): Promise<AdminSettingsData> {
     await loadSettings(this.deps.config.dataDir);
     const normalizedConfig = normalizeEditableSettings(this.deps.config);
-    normalizedConfig.sessionRestartBehavior ??= 'reuse_latest_session';
+    const runtimeConfig = splitSettingsByDomain(normalizedConfig).runtime;
+    runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     return {
-      config: normalizedConfig as SubstrateConfig,
+      config: runtimeConfig,
       env: this.getEnvInfo(),
       editors: this.loadSettingsConfigEditors(),
       voiceProviders: this.loadVoiceProviderData(),

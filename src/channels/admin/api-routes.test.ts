@@ -18,9 +18,7 @@ import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
-import { applySettings, loadSettings, splitSettingsByDomain } from '../../settings.js';
-import { loadModelsConfig } from '../../config/models-config.js';
-import { loadCapabilityTierConfig } from '../../config/capability-tier-config.js';
+import { loadSettings } from '../../settings.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
@@ -838,10 +836,38 @@ describe('AdminServer JSON API routes', () => {
     const settingsRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsRes.status).toBe(200);
     const settingsPayload = JSON.parse(settingsRes.body) as {
-      config: { sessionMessageLimit: number; sessionRestartBehavior: string };
+      config: {
+        sessionMessageLimit: number;
+        sessionRestartBehavior: string;
+        primaryModel?: string;
+        maintenanceIntervalMs?: number;
+        capabilityTier?: string;
+      };
+      editors: {
+        models: {
+          modelCatalog: Record<string, { model?: string }>;
+        };
+        scheduler: {
+          salienceDecayIntervalMs: number;
+        };
+        capabilities: {
+          tier: string;
+        };
+      };
     };
     expect(settingsPayload.config.sessionMessageLimit).toBe(testConfig.sessionMessageLimit);
     expect(settingsPayload.config.sessionRestartBehavior).toBe('reuse_latest_session');
+    expect(settingsPayload.config.primaryModel).toBeUndefined();
+    expect(settingsPayload.config.maintenanceIntervalMs).toBeUndefined();
+    expect(settingsPayload.config.capabilityTier).toBeUndefined();
+    const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
+      modelCatalog: Record<string, { model?: string }>;
+    };
+    expect(settingsPayload.editors.models.modelCatalog.primary?.model).toBe(
+      persistedModels.modelCatalog.primary?.model,
+    );
+    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.maintenanceIntervalMs);
+    expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
     const settingsPatchRes = await request(
       port,
@@ -856,10 +882,15 @@ describe('AdminServer JSON API routes', () => {
     const settingsAfterPatchRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsAfterPatchRes.status).toBe(200);
     const settingsAfterPatch = JSON.parse(settingsAfterPatchRes.body) as {
-      config: { sessionMessageLimit: number; sessionRestartBehavior: string };
+      config: {
+        sessionMessageLimit: number;
+        sessionRestartBehavior: string;
+        primaryModel?: string;
+      };
     };
     expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
     expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
+    expect(settingsAfterPatch.config.primaryModel).toBeUndefined();
     const settingsAuditRes = await request(
       port,
       'GET',
@@ -872,129 +903,64 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsAuditRes.body).toContain('/api/admin/settings');
     expect(settingsAuditRes.body).toContain('fields=sessionMessageLimit,sessionRestartBehavior');
 
-    const rosterPatchRes = await request(
+    const ownerPatchRes = await request(
       port,
       'PATCH',
       '/api/admin/settings',
       JSON.stringify({
+        primaryModel: 'z-ai/glm-5',
         modelCatalog: {
           primary: {
             model: 'z-ai/glm-5',
             provider: 'openrouter',
-            defaults: { maxTokens: 16384, contextWindow: 128000 },
-            routing: { providerOrder: ['parasail', 'openai'] },
-          },
-          extraction: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 8192, contextWindow: 128000 },
-          },
-          vision: {
-            model: 'moonshotai/kimi-k2.5',
-            provider: 'openrouter',
-            overrides: { maxTokens: 16384, contextWindow: 128000 },
-            routing: { providerOrder: ['anthropic'] },
           },
         },
-        modelRoleAssignments: {
-          chat: 'primary',
-          background: 'extraction',
-          extraction: 'extraction',
-          summary: 'primary',
-          reasoning: 'primary',
-          longContext: 'primary',
-          import_processing: 'extraction',
-          vision: 'vision',
-        },
-      }),
-      authHeaders,
-    );
-    expect(rosterPatchRes.status).toBe(200);
-    expect(refreshModelsSpy).toHaveBeenCalledTimes(2);
-    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
-    const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
-      modelCatalog: Record<string, unknown>;
-      modelRoleAssignments: Record<string, string>;
-    };
-    expect(persistedModels.modelCatalog.vision).toBeDefined();
-    expect(persistedModels.modelRoleAssignments.vision).toBe('vision');
-    expect(persistedModels.modelCatalog.primary).toMatchObject({
-      routing: { providerOrder: ['parasail', 'openai'] },
-    });
-    expect(persistedModels.modelCatalog.vision).toMatchObject({
-      routing: { providerOrder: ['anthropic'] },
-    });
-    const persistedSettingsAfterModels = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
-      modelCatalog?: unknown;
-      modelRoleAssignments?: unknown;
-      primaryModel?: string;
-      extractionModel?: string;
-    };
-    expect(persistedSettingsAfterModels.modelCatalog).toBeUndefined();
-    expect(persistedSettingsAfterModels.modelRoleAssignments).toBeUndefined();
-    expect(persistedSettingsAfterModels.primaryModel).toBeUndefined();
-    expect(persistedSettingsAfterModels.extractionModel).toBeUndefined();
-
-    const capabilityPatchRes = await request(
-      port,
-      'PATCH',
-      '/api/admin/settings',
-      JSON.stringify({
+        maintenanceIntervalMs: 240000,
         capabilityTier: 'custom',
         customTokens: ['identity.read', 'git.read'],
       }),
       authHeaders,
     );
-    expect(capabilityPatchRes.status).toBe(200);
-    expect(refreshModelsSpy).toHaveBeenCalledTimes(3);
-    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
-    const persistedCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf8')) as {
-      tier: string;
-      customTokens: string[];
+    expect(ownerPatchRes.status).toBe(400);
+    const ownerPatchPayload = JSON.parse(ownerPatchRes.body) as {
+      ok: boolean;
+      message: string;
+      validationErrors?: Array<{ field: string; message: string; code?: string }>;
     };
-    expect(persistedCapabilities.tier).toBe('custom');
-    expect(persistedCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
-    expect(testConfig.capabilityTier).toBe('custom');
-    const persistedSettingsAfterCapability = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
-      capabilityTier?: string;
-      sessionMessageLimit?: number;
-    };
-    expect(persistedSettingsAfterCapability.capabilityTier).toBeUndefined();
-    expect(persistedSettingsAfterCapability.sessionMessageLimit).toBe(55);
-
-    const restartedConfig: SubstrateConfig = {
-      ...testConfig,
-      primaryModel: 'test-model',
-      primaryProvider: 'test',
-      primaryMaxTokens: 16384,
-      extractionModel: 'test-extract',
-      extractionProvider: 'test',
-      extractionMaxTokens: 8192,
-      modelCatalog: undefined,
-      modelRoleAssignments: undefined,
-      modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
-      },
-      capabilityTier: undefined,
-    };
-    const restartSettings = splitSettingsByDomain(loadSettings(tempDir));
-    applySettings(restartedConfig, restartSettings.runtime);
-    applySettings(restartedConfig, loadModelsConfig(tempDir, {
-      defaultContextWindow: restartedConfig.defaultContextWindow,
-    }));
-    restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
-    expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
-    expect(restartedConfig.modelRoleAssignments?.vision).toBe('vision');
-    expect(restartedConfig.modelCatalog?.primary?.routing).toEqual({
-      providerOrder: ['parasail', 'openai'],
-    });
-    expect(restartedConfig.modelRoster.chat?.routing).toEqual({
-      providerOrder: ['parasail', 'openai'],
-    });
-    expect(restartedConfig.modelRoster.vision?.routing).toEqual({
-      providerOrder: ['anthropic'],
-    });
-    expect(restartedConfig.capabilityTier).toBe('custom');
+    expect(ownerPatchPayload.ok).toBe(false);
+    expect(ownerPatchPayload.message).toContain('primaryModel is owned by models.json');
+    expect(ownerPatchPayload.message).toContain('maintenanceIntervalMs is owned by scheduler.json');
+    expect(ownerPatchPayload.message).toContain('capabilityTier is owned by capability-tier.json');
+    expect(ownerPatchPayload.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'primaryModel',
+        message: 'primaryModel is owned by models.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'modelCatalog',
+        message: 'modelCatalog is owned by models.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'maintenanceIntervalMs',
+        message: 'maintenanceIntervalMs is owned by scheduler.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'capabilityTier',
+        message: 'capabilityTier is owned by capability-tier.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'customTokens',
+        message: 'customTokens is owned by capability-tier.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+    ]));
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
+    expect(loadSettings(tempDir).sessionMessageLimit).toBe(55);
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);
@@ -1049,7 +1015,25 @@ describe('AdminServer JSON API routes', () => {
     const promptsPayload = JSON.parse(promptsRes.body) as { layers: Array<{ id: string }> };
     expect(promptsPayload.layers.length).toBeGreaterThan(0);
 
-    const layerId = promptsPayload.layers[0].id;
+    const foundationLayerId = promptsPayload.layers[0].id;
+    const foundationPatchRes = await request(
+      port,
+      'PATCH',
+      `/api/admin/prompts/${foundationLayerId}`,
+      JSON.stringify({ content: 'Updated API prompt content' }),
+      authHeaders,
+    );
+    expect(foundationPatchRes.status).toBe(400);
+    expect(JSON.parse(foundationPatchRes.body)).toEqual({
+      error: 'Character Foundation is derived from the character card and must be edited through Identity.',
+    });
+
+    const editableLayer = promptStore.create({
+      type: 'runtime',
+      name: 'API Editable Runtime Layer',
+      content: 'Original API prompt content',
+    });
+    const layerId = editableLayer.id;
     const promptDetailRes = await request(port, 'GET', `/api/admin/prompts/${layerId}`, undefined, authHeaders);
     expect(promptDetailRes.status).toBe(200);
 
@@ -1204,7 +1188,7 @@ describe('AdminServer JSON API routes', () => {
     ]));
   });
 
-  it('rejects invalid model route providerOrder payloads instead of silently coercing them', async () => {
+  it('rejects model-owned settings fields on the generic admin settings route', async () => {
     const res = await request(
       port,
       'PATCH',
@@ -1230,11 +1214,12 @@ describe('AdminServer JSON API routes', () => {
       validationErrors?: Array<{ field: string; message: string; code?: string }>;
     };
     expect(payload.ok).toBe(false);
-    expect(payload.message).toContain('modelCatalog.primary.routing.providerOrder must be an array of strings');
+    expect(payload.message).toContain('modelCatalog is owned by models.json');
     expect(payload.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        field: 'modelCatalog.primary.routing.providerOrder',
-        message: 'modelCatalog.primary.routing.providerOrder must be an array of strings',
+        field: 'modelCatalog',
+        message: 'modelCatalog is owned by models.json; edit that canonical config instead',
+        code: 'wrong_owner',
       }),
     ]));
   });

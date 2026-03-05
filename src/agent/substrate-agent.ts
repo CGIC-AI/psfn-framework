@@ -346,8 +346,9 @@ export class SubstrateAgent {
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
     try {
       this.refreshModelFromConfig('startup');
-    } catch {
+    } catch (err) {
       // Model will be resolved lazily on first handleMessage
+      log.debug('Deferred model resolution at startup', { error: String(err) });
     }
   }
 

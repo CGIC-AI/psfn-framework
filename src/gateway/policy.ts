@@ -1,6 +1,9 @@
 import { realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { createComponentLogger } from '../logger.js';
 import type { BeadsAction, PolicyContext, PolicyDecision } from './protocol.js';
+
+const log = createComponentLogger('Policy');
 import { evaluateUrlPolicy, type UrlPolicyConfig, type UrlPolicyLane } from './url-policy.js';
 import {
   normalizeWorkspaceRelativeGlob,
@@ -74,8 +77,9 @@ function resolveCanonicalPath(normalized: string, isWrite: boolean): string | nu
         try {
           const parentReal = realpathSync(dirname(normalized));
           return resolve(parentReal, basename(normalized));
-        } catch {
+        } catch (parentErr) {
           // Parent doesn't exist either — use normalized path (will fail at write time)
+          log.debug('resolveCanonicalPath: parent resolution failed', { path: normalized, error: String(parentErr) });
           return normalized;
         }
       }

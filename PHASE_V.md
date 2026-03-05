@@ -103,6 +103,8 @@ Any new setting merged in Phase V must satisfy all of the following:
 - Use `phase-v` as integration branch for Phase V execution.
 - All Phase V worktrees branch from and merge into `phase-v`.
 - `main` remains protected until full verification passes.
+- Do not push or merge Phase V changes to `main` before explicit manual validation sign-off.
+- Use `phase-v` for integration commits and test cycles until release approval.
 
 ## Work Process
 

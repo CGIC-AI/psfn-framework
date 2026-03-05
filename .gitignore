@@ -3,6 +3,7 @@ dist/
 data/
 data-phase45/
 purrsephone/
+companion/
 .env
 proxy/.env
 *.db

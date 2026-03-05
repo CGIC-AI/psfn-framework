@@ -134,7 +134,7 @@ describe('settings', () => {
   });
 
   describe('saveSettings', () => {
-    it('writes settings atomically and normalizes model fields', () => {
+    it('writes settings atomically and omits domain-owned model fields', () => {
       const settings = {
         primaryModel: 'test/chat',
         primaryProvider: 'openrouter',
@@ -145,9 +145,9 @@ describe('settings', () => {
 
       const raw = readFileSync(join(tempDir, 'settings.json'), 'utf-8');
       const parsed = JSON.parse(raw);
-      expect(parsed.primaryModel).toBe('test/chat');
-      expect(parsed.modelCatalog.primary.model).toBe('test/chat');
-      expect(parsed.modelRoleAssignments.chat).toBe('primary');
+      expect(parsed.primaryModel).toBeUndefined();
+      expect(parsed.modelCatalog).toBeUndefined();
+      expect(parsed.modelRoleAssignments).toBeUndefined();
       expect(parsed.extractionInterval).toBe(10);
     });
 
@@ -609,7 +609,7 @@ describe('settings', () => {
   });
 
   describe('round-trip', () => {
-    it('save → load → apply preserves role mappings and aliases', () => {
+    it('save → load → apply keeps existing model settings when payload contains model fields', () => {
       saveSettings(tempDir, {
         modelCatalog: {
           main: {
@@ -635,10 +635,12 @@ describe('settings', () => {
       const config = makeConfig();
       applySettings(config, loaded);
 
+      expect(loaded.modelCatalog).toBeUndefined();
+      expect(loaded.modelRoleAssignments).toBeUndefined();
       expect(config.primaryModel).toBe('z-ai/glm-5');
-      expect(config.primaryMaxTokens).toBe(5000);
+      expect(config.primaryMaxTokens).toBe(16384);
       expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
-      expect(config.extractionMaxTokens).toBe(1200);
+      expect(config.extractionMaxTokens).toBe(8192);
     });
 
     it('save → load → apply preserves explicitly cleared voice fields', () => {
@@ -1095,16 +1097,18 @@ describe('settings', () => {
       expect(config.moaTimeoutMs).toBe(30000);
     });
 
-    it('round-trip save -> load -> apply preserves capabilityTier', () => {
+    it('round-trip save -> load -> apply does not persist capabilityTier in settings.json', () => {
       saveSettings(tempDir, {
         capabilityTier: 'autonomous',
       });
 
       const loaded = loadSettings(tempDir);
       const config = makeConfig();
+      config.capabilityTier = 'nursery';
       applySettings(config, loaded);
 
-      expect(config.capabilityTier).toBe('autonomous');
+      expect(loaded.capabilityTier).toBeUndefined();
+      expect(config.capabilityTier).toBe('nursery');
     });
 
     it('round-trip save -> load -> apply preserves sessionRestartBehavior', () => {
@@ -1120,15 +1124,16 @@ describe('settings', () => {
       expect(config.sessionRestartBehavior).toBe('new_session');
     });
 
-    it('round-trip save -> load -> apply handles custom capabilityTier', () => {
+    it('round-trip save -> load -> apply keeps existing custom capabilityTier when only settings.json is used', () => {
       saveSettings(tempDir, {
         capabilityTier: 'custom',
       });
 
       const loaded = loadSettings(tempDir);
-      expect(loaded.capabilityTier).toBe('custom');
+      expect(loaded.capabilityTier).toBeUndefined();
 
       const config = makeConfig();
+      config.capabilityTier = 'custom';
       applySettings(config, loaded);
       expect(config.capabilityTier).toBe('custom');
     });

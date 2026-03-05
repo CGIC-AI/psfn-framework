@@ -206,8 +206,11 @@ export function readJournalFile(
   if (options.persistQuarantine !== false) {
     try {
       persistQuarantinedEntries(filePath, parsed.quarantined);
-    } catch {
+    } catch (err) {
       // Quarantine sidecar write failure should never block journal loading.
+      if (typeof process !== 'undefined' && process.env.LOG_LEVEL === 'debug') {
+        console.debug('[Journal] Quarantine sidecar write failed', String(err));
+      }
     }
   }
   return parsed;
@@ -288,8 +291,11 @@ export function scanJournalFileMetadata(
   if (options.persistQuarantine !== false) {
     try {
       persistQuarantinedEntries(filePath, quarantined);
-    } catch {
+    } catch (err) {
       // Quarantine sidecar write failure should never block journal loading.
+      if (typeof process !== 'undefined' && process.env.LOG_LEVEL === 'debug') {
+        console.debug('[Journal] Quarantine sidecar write failed', String(err));
+      }
     }
   }
 

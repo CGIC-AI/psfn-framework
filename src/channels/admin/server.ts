@@ -599,8 +599,11 @@ export class AdminServer implements Lifecycle {
         });
         res.end(content);
       })
-      .catch(() => {
+      .catch((fileErr) => {
         // File not found — serve index.html as SPA fallback
+        if ((fileErr as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log.debug('Garden asset read error', { path, error: String(fileErr) });
+        }
         const indexPath = join(this.gardenBuildDir!, 'index.html');
         readFile(indexPath)
           .then((content) => {
@@ -610,7 +613,8 @@ export class AdminServer implements Lifecycle {
             });
             res.end(content);
           })
-          .catch(() => {
+          .catch((indexErr) => {
+            log.debug('Garden SPA fallback failed', { error: String(indexErr) });
             this.send404(res, path);
           });
       });

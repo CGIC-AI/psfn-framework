@@ -1434,7 +1434,7 @@ export class DiscordVoiceRuntime {
       channelId: this.activeChannel?.id,
       userId: this.targetUserId,
       error: errorText,
-    }).catch(() => undefined);
+    }).catch((err) => { log.debug('Failed to emit voice error event', { error: String(err) }); });
 
     if (!voiceError.voiceTurnErrorEmitted) {
       this.eventBus.emit('voice.turn.error', {
@@ -1445,7 +1445,7 @@ export class DiscordVoiceRuntime {
         code,
         error: errorText,
         timestampMs: Date.now(),
-      }).catch(() => undefined);
+      }).catch((err) => { log.debug('Failed to emit voice turn error event', { error: String(err) }); });
     }
 
     this.trackDecryptFailure({

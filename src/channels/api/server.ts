@@ -393,7 +393,7 @@ export class ApiServer implements ChannelAdapter {
     turnPromise: Promise<unknown>,
   ): void {
     turnPromise
-      .catch(() => {})
+      .catch((err) => { log.debug('Turn promise rejected during cleanup', { error: String(err) }); })
       .finally(() => {
         releaseChannel();
       });
@@ -477,7 +477,7 @@ export class ApiServer implements ChannelAdapter {
     } catch (err) {
       queued.lease.then((lateLease) => {
         lateLease.release();
-      }).catch(() => undefined);
+      }).catch((leaseErr) => { log.debug('Late lease release failed', { error: String(leaseErr) }); });
 
       if (err instanceof RequestLifecycleError && err.reason === 'timeout' && this.canWriteResponse(res)) {
         this.sendError(res, 504, 'request_timeout', 'Request timed out before turn started');

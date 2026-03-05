@@ -93,8 +93,11 @@ export function createWyomingServiceRegistry(
           if (!adapter.onSessionClosed) return;
           try {
             await Promise.resolve(adapter.onSessionClosed(request));
-          } catch {
+          } catch (err) {
             // Service cleanup should never block runtime session teardown.
+            if (typeof process !== 'undefined' && process.env.LOG_LEVEL === 'debug') {
+              console.debug('[Wyoming] Service cleanup error during session close', String(err));
+            }
           }
         }),
       );

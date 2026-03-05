@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { LLMContext, SubstrateConfig } from '../types.js';
-import type { SessionRestartBehavior } from '../types.js';
+import type {
+  LLMContext,
+  SessionRestartBehavior,
+  SubstrateConfig,
+  TurnRecord,
+} from '../types.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type {
   SessionStore,
@@ -35,6 +39,7 @@ import {
 import {
   buildSessionContext,
 } from './manager/context-builder.js';
+import { buildSessionMetadataWithTurn } from './turn-provenance.js';
 import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
@@ -165,13 +170,21 @@ export class SessionManager {
     isDirectMessage?: boolean,
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
-  ): void {
+  ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    if (!shouldPersistSessionChannel(resolvedChannelId)) return;
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
-    this.store.append({
+    const metadata = options.turnId
+      ? buildSessionMetadataWithTurn(undefined, {
+        turnId: options.turnId,
+        requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
+        sourceMessageId: options.sourceMessageId,
+        role: 'user',
+      })
+      : undefined;
+    const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'user',
       content,
@@ -179,6 +192,7 @@ export class SessionManager {
       authorName,
       timestamp,
       channelVisibility,
+      ...(metadata ? { metadata } : {}),
     });
 
     const continuityKey = continuityUserId ?? authorId;
@@ -192,6 +206,7 @@ export class SessionManager {
         timestamp,
         originChannelId: resolvedChannelId,
         channelVisibility,
+        ...(metadata ? { metadata } : {}),
       });
     }
 
@@ -206,6 +221,7 @@ export class SessionManager {
       timestamp,
       mirrorEnabled: options.mirror !== false,
     });
+    return entryId;
   }
 
   recordAssistantMessage(
@@ -215,18 +231,27 @@ export class SessionManager {
     isDirectMessage?: boolean,
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
-  ): void {
+  ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    if (!shouldPersistSessionChannel(resolvedChannelId)) return;
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
-    this.store.append({
+    const metadata = options.turnId
+      ? buildSessionMetadataWithTurn(undefined, {
+        turnId: options.turnId,
+        requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
+        sourceMessageId: options.sourceMessageId,
+        role: 'assistant',
+      })
+      : undefined;
+    const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'assistant',
       content,
       timestamp,
       channelVisibility,
+      ...(metadata ? { metadata } : {}),
     });
 
     const continuityKey = continuityUserId ?? forUserId;
@@ -238,6 +263,7 @@ export class SessionManager {
         timestamp,
         originChannelId: resolvedChannelId,
         channelVisibility,
+        ...(metadata ? { metadata } : {}),
       });
     }
 
@@ -251,6 +277,11 @@ export class SessionManager {
       timestamp,
       mirrorEnabled: options.mirror !== false,
     });
+    return entryId;
+  }
+
+  recordTurn(record: TurnRecord): void {
+    this.store.appendTurnRecord(record);
   }
 
   private mirrorMessageToActiveSessions(params: {

@@ -2,7 +2,9 @@ import { createComponentLogger } from '../../logger.js';
 import type { LLMProvider } from '../../agent/contracts.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
+import { resolveLatestTurnContext } from '../../session/turn-provenance.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { TurnID } from '../../types.js';
 import {
   EXTRACTION_PROMPT_KEY,
   getDefaultPromptText,
@@ -37,6 +39,7 @@ export interface ExtractionRunOptions {
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId?: string;
+  turnId?: TurnID;
   recoveredEntries?: SessionEntry[];
   llmClient: LLMProvider;
   sessionManager: SessionManager;
@@ -47,7 +50,11 @@ export interface ExtractionRunOptions {
   telemetryEnabled: boolean;
   isAcceptingExtractions: () => boolean;
   processFact: (fact: ExtractedFact, sourceRef: string, canonicalContactId?: string) => Promise<WriteResult>;
-  emitExtractionStart: (channelId: string, triggerReason: ExtractionTriggerReason) => Promise<void>;
+  emitExtractionStart: (
+    channelId: string,
+    triggerReason: ExtractionTriggerReason,
+    turnId?: TurnID,
+  ) => Promise<void>;
   emitExtractionEnd: (telemetry: ExtractionEndTelemetry) => Promise<void>;
   resolveCoveredUpToMessageId: (channelId: string, entries: SessionEntry[]) => number | null;
   recordExtractionMarker: (channelId: string, coveredUpToMessageId: number | null) => void;
@@ -65,15 +72,18 @@ export interface ExtractionRunOptions {
 }
 
 export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
-  await options.emitExtractionStart(options.channelId, options.triggerReason);
-
   try {
     const recentEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
       ? options.recoveredEntries
       : options.sessionManager.getRecentMessages(options.channelId, 10)
     ).slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+    const latestTurnContext = resolveLatestTurnContext(recentEntries);
+    const turnId = options.turnId ?? latestTurnContext?.turnId;
+    const requestId = latestTurnContext?.requestId ?? `memory-extraction:${options.channelId}:${options.triggerReason}`;
+    await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
+
     const channelVisibility = classifyChannel(options.channelId);
-    const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility);
+    const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility, turnId);
     const recentMessages = recentEntries
       .map(e => `${e.authorName ?? e.role}: ${e.content}`)
       .join('\n');
@@ -96,7 +106,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         systemPrompt: prompt,
         messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
         correlation: {
-          requestId: `memory-extraction:${options.channelId}:${options.triggerReason}`,
+          requestId,
+          ...(turnId ? { turnId } : {}),
           channelId: options.channelId,
           callType: 'memory',
           purpose: 'memory.extraction',
@@ -127,6 +138,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       await options.emitExtractionEnd({
         channelId: options.channelId,
         count: 0,
+        ...(turnId ? { turnId } : {}),
         triggerReason: options.triggerReason,
         parsedCount: facts.length,
         acceptedCount: 0,
@@ -243,6 +255,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const telemetry: ExtractionEndTelemetry = {
       channelId: options.channelId,
       count: acceptedCount,
+      ...(turnId ? { turnId } : {}),
       triggerReason: options.triggerReason,
       coveredUpToMessageId: coveredUpToMessageId ?? undefined,
       parsedCount: facts.length,

@@ -7,6 +7,7 @@ import { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ChannelPromptDock } from '../channels/types.js';
+import { isTurnId } from '../turns/id.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -117,8 +118,9 @@ function makeMessage(overrides?: Partial<SubstrateMessage>): SubstrateMessage {
 
 function makeMockSessionManager(): SessionManager {
   return {
-    recordUserMessage: vi.fn(),
-    recordAssistantMessage: vi.fn(),
+    recordUserMessage: vi.fn().mockReturnValue(101),
+    recordAssistantMessage: vi.fn().mockReturnValue(102),
+    recordTurn: vi.fn(),
     appendSystemNote: vi.fn(),
     buildContext: vi.fn<any>().mockResolvedValue({
       systemPrompt: 'You are PSFN.',
@@ -460,21 +462,22 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     expect(captured.start).toMatchObject({
-      turnId: 'turn-telemetry-1',
       requestId: 'turn-telemetry-1',
       channelId: 'internal:heartbeat',
       callType: 'scheduled',
       purpose: 'agent.turn.start',
     });
+    expect(isTurnId(captured.start.turnId)).toBe(true);
+
     expect(captured.usage).toMatchObject({
-      turnId: 'turn-telemetry-1',
+      turnId: captured.start.turnId,
       requestId: 'turn-telemetry-1',
       channelId: 'internal:heartbeat',
       callType: 'scheduled',
       purpose: 'agent.turn.usage',
     });
     expect(captured.stage).toMatchObject({
-      turnId: 'turn-telemetry-1',
+      turnId: captured.start.turnId,
       requestId: 'turn-telemetry-1',
       channelId: 'internal:heartbeat',
       callType: 'scheduled',
@@ -717,7 +720,11 @@ describe('SubstrateAgent.handleMessage', () => {
       'TestUser',
       undefined,
       undefined,
-      { trustLevel: 'regular' },
+      expect.objectContaining({
+        trustLevel: 'regular',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
     );
   });
 
@@ -737,8 +744,53 @@ describe('SubstrateAgent.handleMessage', () => {
       'user-1',
       undefined,
       undefined,
-      { trustLevel: 'regular' },
+      expect.objectContaining({
+        trustLevel: 'regular',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
     );
+  });
+
+  it('generates TurnID once per turn and persists a canonical TurnRecord', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    let startPayload: any = null;
+    eventBus.on('agent.turn.start', (payload) => { startPayload = payload; });
+
+    await agent.handleMessage(makeMessage({ id: 'msg-turn-record' }));
+
+    const userOptions = (sessionManager.recordUserMessage as any).mock.calls[0][6];
+    const assistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[0][5];
+    expect(isTurnId(userOptions.turnId)).toBe(true);
+    expect(assistantOptions.turnId).toBe(userOptions.turnId);
+    expect(assistantOptions.requestId).toBe('msg-turn-record');
+    expect(startPayload.turnId).toBe(userOptions.turnId);
+
+    const record = (sessionManager.recordTurn as any).mock.calls[0][0];
+    expect(record).toMatchObject({
+      schemaVersion: 1,
+      turnId: userOptions.turnId,
+      requestId: 'msg-turn-record',
+      channelId: 'test-channel',
+      status: 'completed',
+      userMessage: expect.objectContaining({
+        role: 'user',
+        sourceMessageId: 'msg-turn-record',
+      }),
+      assistantMessage: expect.objectContaining({
+        role: 'assistant',
+      }),
+      versionPointers: expect.objectContaining({
+        model: expect.any(String),
+        promptMode: 'default',
+      }),
+    });
   });
 
   it('uses canonical contact key for continuity indexing and context lookup', async () => {
@@ -773,7 +825,11 @@ describe('SubstrateAgent.handleMessage', () => {
       'TestUser',
       undefined,
       'contact-canonical-1',
-      { trustLevel: 'trusted' },
+      expect.objectContaining({
+        trustLevel: 'trusted',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
     );
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
@@ -786,7 +842,11 @@ describe('SubstrateAgent.handleMessage', () => {
       'api-user-1',
       undefined,
       'contact-canonical-1',
-      { trustLevel: 'trusted' },
+      expect.objectContaining({
+        trustLevel: 'trusted',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
     );
   });
 
@@ -882,7 +942,11 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage());
 
     // Fire-and-forget, but should have been called
-    expect(mockExtractor.maybeExtract).toHaveBeenCalledWith('test-channel', undefined);
+    expect(mockExtractor.maybeExtract).toHaveBeenCalledTimes(1);
+    const [channelId, canonicalContactId, turnId] = (mockExtractor.maybeExtract as any).mock.calls[0];
+    expect(channelId).toBe('test-channel');
+    expect(canonicalContactId).toBeUndefined();
+    expect(isTurnId(turnId)).toBe(true);
   });
 
   it('returns AgentResponse with content and metadata', async () => {
@@ -1449,7 +1513,11 @@ describe('SubstrateAgent.handleMessage', () => {
       'user-1',
       undefined,
       undefined,
-      { trustLevel: 'regular' },
+      expect.objectContaining({
+        trustLevel: 'regular',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
     );
   });
 
@@ -2165,13 +2233,13 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const snapshot = adaptiveSnapshots.at(-1);
     expect(snapshot).toMatchObject({
-      turnId: 'msg-adaptive-telemetry',
       requestId: 'msg-adaptive-telemetry',
       channelId: 'test-channel',
       callType: 'chat',
       purpose: 'agent.tools.adaptive.snapshot',
       taskKind: null,
     });
+    expect(isTurnId(snapshot?.turnId)).toBe(true);
     expect(snapshot?.tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'load_tools', source: 'core' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
@@ -2605,7 +2673,11 @@ describe('SubstrateAgent.handleMessage', () => {
       'TestUser',
       true,
       undefined,
-      { trustLevel: 'regular' },
+      expect.objectContaining({
+        trustLevel: 'regular',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[5]).toEqual({ isDirectMessage: true });
@@ -2690,7 +2762,11 @@ describe('SubstrateAgent.handleMessage', () => {
       'user-1',
       undefined,
       undefined,
-      { trustLevel: 'regular' },
+      expect.objectContaining({
+        trustLevel: 'regular',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[5]).toEqual({
@@ -2808,7 +2884,11 @@ describe('SubstrateAgent steering + follow-up', () => {
       'TestUser',
       undefined,
       undefined,
-      { trustLevel: 'regular' },
+      expect.objectContaining({
+        trustLevel: 'regular',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
     );
     expect(followUpSpy).toHaveBeenCalled();
 

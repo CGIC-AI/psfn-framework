@@ -1,4 +1,4 @@
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig, TurnID } from '../types.js';
 import { countTokens } from '../llm/tokens.js';
 import { SESSION_HISTORY_MIN_MESSAGES } from '../context-budget.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../trust/types.js';
@@ -103,6 +103,9 @@ const MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS = 240;
 export interface SessionMessageRecordOptions {
   trustLevel?: TrustLevel;
   mirror?: boolean;
+  turnId?: TurnID;
+  requestId?: string;
+  sourceMessageId?: string;
 }
 
 export interface MirrorEntryMetadata {

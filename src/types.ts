@@ -11,6 +11,52 @@ import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 
 export type ChannelType = 'discord' | 'terminal' | 'api' | 'telegram';
 
+declare const turnIdBrand: unique symbol;
+export type TurnID = string & { readonly [turnIdBrand]: true };
+
+export interface TurnRecordMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  sessionEntryId?: number;
+  sourceMessageId?: string;
+  authorId?: string;
+  authorName?: string;
+}
+
+export interface TurnRecordToolCall {
+  toolName: string;
+  toolCallId?: string;
+  isError?: boolean;
+}
+
+export interface TurnRecordVersionPointers {
+  model: string;
+  promptMode?: MessagePromptOverrideMode;
+  promptHash?: string;
+}
+
+export interface TurnRecord {
+  schemaVersion: 1;
+  turnId: TurnID;
+  requestId: string;
+  channelId: string;
+  channelType: ChannelType;
+  startedAt: number;
+  completedAt: number;
+  status: 'completed' | 'failed';
+  userMessage: TurnRecordMessage;
+  assistantMessage?: TurnRecordMessage;
+  toolCalls: TurnRecordToolCall[];
+  contextManifestRef?: string;
+  internalStateSnapshotRef?: string;
+  extractedMemoryIds: string[];
+  concernDeltaRefs: string[];
+  contactDeltaRefs: string[];
+  versionPointers: TurnRecordVersionPointers;
+  provenanceRefs: string[];
+}
+
 export interface WyomingShardDelegationHint {
   eligible: boolean;
   reason: string;

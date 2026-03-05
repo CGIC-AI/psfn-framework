@@ -4,7 +4,7 @@ import { countMessageTokens } from '../../llm/tokens.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionEntry } from '../../session/types.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig, TurnID } from '../../types.js';
 import type {
   AcceptedFactWrite,
   ExtractionEndTelemetry,
@@ -136,15 +136,19 @@ export async function emitExtractionStart(
   telemetryEnabled: boolean,
   channelId: string,
   triggerReason: ExtractionTriggerReason,
+  turnId?: TurnID,
 ): Promise<void> {
   if (!telemetryEnabled) {
-    await eventBus.emit('memory.extraction.start', { channelId });
+    await eventBus.emit('memory.extraction.start', {
+      channelId,
+      ...(turnId ? { turnId } : {}),
+    });
     return;
   }
 
   await eventBus.emit(
     'memory.extraction.start',
-    { channelId, triggerReason } as { channelId: string },
+    { channelId, triggerReason, ...(turnId ? { turnId } : {}) } as { channelId: string },
   );
 }
 
@@ -157,6 +161,7 @@ export async function emitExtractionEnd(
     await eventBus.emit('memory.extraction.end', {
       channelId: telemetry.channelId,
       count: telemetry.count,
+      ...(telemetry.turnId ? { turnId: telemetry.turnId } : {}),
     });
     return;
   }

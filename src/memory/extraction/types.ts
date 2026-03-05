@@ -1,4 +1,5 @@
 import type { ExtractedFact, MemoryType } from '../types.js';
+import type { TurnID } from '../../types.js';
 
 export interface MemoryExtractorConfig {
   extractionInterval?: number;
@@ -45,6 +46,7 @@ export interface FactAcceptanceDecision {
 export interface ExtractionEndTelemetry {
   channelId: string;
   count: number;
+  turnId?: TurnID;
   triggerReason: ExtractionTriggerReason;
   coveredUpToMessageId?: number;
   parsedCount: number;

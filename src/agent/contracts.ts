@@ -8,6 +8,7 @@ import type {
   LLMContext,
   LLMResponse,
   StreamCallbacks,
+  TurnID,
 } from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
@@ -36,7 +37,7 @@ export interface MemoryProvider {
 }
 
 export interface MemoryExtractor {
-  maybeExtract(channelId: string, canonicalContactId?: string): Promise<void>;
+  maybeExtract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void>;
 }
 
 export interface ScratchpadEntry {

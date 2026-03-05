@@ -10,6 +10,7 @@ import {
   type ImportProcessingRouteMode,
   type ModelCatalogEntry,
   type ModelContextBudgetConfig,
+  type ModelRouteConfig,
   type ModelPurpose,
   type ModelRoleAssignments,
   type SessionRestartBehavior,
@@ -424,6 +425,20 @@ function sanitizeModelSlotOverrides(value: unknown): ModelSlotOverrides | undefi
   };
 }
 
+function sanitizeModelRouteConfig(value: unknown): ModelRouteConfig | undefined {
+  if (!isRecord(value) || !('providerOrder' in value)) return undefined;
+  return {
+    providerOrder: toStringList(value.providerOrder) ?? [],
+  };
+}
+
+function cloneModelRouteConfig(value: ModelRouteConfig | undefined): ModelRouteConfig | undefined {
+  if (!value || !('providerOrder' in value)) return undefined;
+  return {
+    providerOrder: [...(value.providerOrder ?? [])],
+  };
+}
+
 function sanitizeModelCatalog(value: unknown): Record<string, ModelCatalogEntry> {
   if (!isRecord(value)) return {};
   const catalog: Record<string, ModelCatalogEntry> = {};
@@ -453,12 +468,14 @@ function sanitizeModelCatalog(value: unknown): Record<string, ModelCatalogEntry>
 
     const defaults = sanitizeModelSlotDefaults(rawEntry.defaults);
     const overrides = sanitizeModelSlotOverrides(rawEntry.overrides);
+    const routing = sanitizeModelRouteConfig(rawEntry.routing);
 
     catalog[slotKey] = {
       model,
       provider,
       ...(defaults ? { defaults } : {}),
       ...(overrides ? { overrides } : {}),
+      ...(routing ? { routing } : {}),
     };
   }
   return catalog;
@@ -489,6 +506,7 @@ function sanitizeModelRoster(value: unknown): Partial<Record<ModelPurpose, Model
     const maxTokens = toPositiveInteger(candidate.maxTokens);
     const contextWindow = toPositiveInteger(candidate.contextWindow);
     const contextBudget = sanitizeModelContextBudget(candidate.contextBudget);
+    const routing = sanitizeModelRouteConfig(candidate.routing);
     if (!model || !provider || maxTokens === undefined) continue;
 
     roster[purpose] = {
@@ -497,6 +515,7 @@ function sanitizeModelRoster(value: unknown): Partial<Record<ModelPurpose, Model
       maxTokens,
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(contextBudget !== undefined ? { contextBudget } : {}),
+      ...(routing ? { routing } : {}),
     };
   }
 
@@ -512,6 +531,7 @@ function mergeCatalogSlot(
     maxTokens?: number;
     contextWindow?: number;
     contextBudget?: ModelContextBudgetConfig;
+    routing?: ModelRouteConfig;
   },
 ): void {
   const model = toNonEmptyString(slot.model);
@@ -534,6 +554,9 @@ function mergeCatalogSlot(
   if (slot.contextWindow !== undefined) overrides.contextWindow = slot.contextWindow;
   if (slot.contextBudget !== undefined) overrides.contextBudget = slot.contextBudget;
   merged.overrides = Object.keys(overrides).length > 0 ? overrides : undefined;
+  if (slot.routing !== undefined) {
+    merged.routing = cloneModelRouteConfig(slot.routing);
+  }
 
   catalog[slotKey] = merged;
 }
@@ -596,6 +619,7 @@ function modelSlotFromCatalogEntry(
     maxTokens,
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(contextBudget !== undefined ? { contextBudget } : {}),
+    ...(entry.routing !== undefined ? { routing: cloneModelRouteConfig(entry.routing) } : {}),
   };
 }
 
@@ -914,6 +938,7 @@ export function normalizeEditableSettings(
       maxTokens: slot.maxTokens,
       contextWindow: slot.contextWindow,
       contextBudget: slot.contextBudget,
+      routing: slot.routing,
     });
   }
 
@@ -950,6 +975,7 @@ export function normalizeEditableSettings(
       provider: explicitEntry.provider,
       ...(explicitEntry.defaults ? { defaults: explicitEntry.defaults } : {}),
       ...(explicitEntry.overrides ? { overrides: explicitEntry.overrides } : {}),
+      ...(explicitEntry.routing ? { routing: cloneModelRouteConfig(explicitEntry.routing) } : {}),
     };
   }
 

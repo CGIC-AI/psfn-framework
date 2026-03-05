@@ -193,6 +193,7 @@ export class LLMClient {
 
   private withOpenRouterPreferences(candidate: RoutingCandidate): RoutingCandidate {
     if (candidate.provider !== 'openrouter') return candidate;
+    if (candidate.openRouterProviderOrder !== undefined) return candidate;
     const providerOrder = this.config.openRouterProviderOrder?.filter(Boolean) ?? [];
     if (providerOrder.length === 0) return candidate;
     return {

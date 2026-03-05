@@ -113,6 +113,53 @@ describe('resolveRoutingCandidates(background)', () => {
     expect(candidates[0]?.openRouterProviderOrder).toEqual(['parasail', 'openai']);
     expect(candidates.every(candidate => candidate.provider === 'openrouter')).toBe(true);
   });
+
+  it('prefers slot-level OpenRouter provider ordering over the global setting', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      openRouterProviderOrder: ['global-provider'],
+      modelCatalog: {
+        primary: {
+          model: 'catalog/primary',
+          provider: 'openrouter',
+          overrides: { maxTokens: 6144 },
+          routing: { providerOrder: ['slot-provider', 'backup-provider'] },
+        },
+      },
+      modelRoleAssignments: {
+        background: 'primary',
+        chat: 'primary',
+      },
+      modelRoster: {},
+    }), 'background');
+
+    expect(candidates[0]).toMatchObject({
+      slotKey: 'primary',
+      model: 'catalog/primary',
+      provider: 'openrouter',
+      openRouterProviderOrder: ['slot-provider', 'backup-provider'],
+    });
+  });
+
+  it('allows a slot to clear inherited global OpenRouter provider ordering', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      openRouterProviderOrder: ['global-provider'],
+      modelCatalog: {
+        primary: {
+          model: 'catalog/primary',
+          provider: 'openrouter',
+          overrides: { maxTokens: 6144 },
+          routing: { providerOrder: [] },
+        },
+      },
+      modelRoleAssignments: {
+        background: 'primary',
+        chat: 'primary',
+      },
+      modelRoster: {},
+    }), 'background');
+
+    expect(candidates[0]?.openRouterProviderOrder).toEqual([]);
+  });
 });
 
 describe('resolveRoutingCandidates(import_processing)', () => {

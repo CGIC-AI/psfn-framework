@@ -1,6 +1,7 @@
 import type {
   ImportProcessingRouteMode,
   ModelCatalogEntry,
+  ModelRouteConfig,
   ModelRoleAssignments,
   ModelSlot,
   SubstrateConfig,
@@ -75,9 +76,10 @@ function fallbackTokenBudget(
 
 function candidateFromCatalogEntry(
   slotKey: string,
-  entry: ModelCatalogEntry,
+  entry: ModelCatalogEntry | undefined,
   fallback: { maxTokens: number; contextWindow?: number },
 ): RoutingCandidate | undefined {
+  if (!entry) return undefined;
   const maxTokens = entry.overrides?.maxTokens
     ?? entry.defaults?.maxTokens
     ?? fallback.maxTokens;
@@ -93,6 +95,9 @@ function candidateFromCatalogEntry(
     provider: entry.provider,
     maxTokens,
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(entry.provider === 'openrouter'
+      ? { openRouterProviderOrder: resolveRouteProviderOrder(entry.routing) }
+      : {}),
   };
 }
 
@@ -105,7 +110,15 @@ function candidateFromRosterSlot(slot: ModelSlot | undefined): RoutingCandidate 
     provider: slot.provider,
     maxTokens: slot.maxTokens,
     ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    ...(slot.provider === 'openrouter'
+      ? { openRouterProviderOrder: resolveRouteProviderOrder(slot.routing) }
+      : {}),
   };
+}
+
+function resolveRouteProviderOrder(route: ModelRouteConfig | undefined): string[] | undefined {
+  if (!route || !('providerOrder' in route)) return undefined;
+  return [...(route.providerOrder ?? [])];
 }
 
 function purposeSlotChain(assignments: ModelRoleAssignments | undefined, purpose: RoutingPurpose): string[] {
@@ -230,6 +243,7 @@ function withOpenRouterPreferences(
   config: SubstrateConfig,
 ): RoutingCandidate | undefined {
   if (!candidate || candidate.provider !== 'openrouter') return candidate;
+  if (candidate.openRouterProviderOrder !== undefined) return candidate;
   const providerOrder = config.openRouterProviderOrder?.filter(Boolean) ?? [];
   if (providerOrder.length === 0) return candidate;
 

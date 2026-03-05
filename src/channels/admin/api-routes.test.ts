@@ -240,6 +240,8 @@ describe('AdminServer JSON API routes', () => {
   let cardVersionStore: CharacterCardVersionStore;
   let server: AdminServer;
   let port: number;
+  let refreshModelsSpy: ReturnType<typeof vi.fn>;
+  let refreshCapabilitiesSpy: ReturnType<typeof vi.fn>;
   const token = 'test-admin-token';
   const authHeaders = {
     Authorization: `Bearer ${token}`,
@@ -248,6 +250,13 @@ describe('AdminServer JSON API routes', () => {
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-api-test-'));
+    refreshModelsSpy = vi.fn();
+    refreshCapabilitiesSpy = vi.fn();
+    testConfig.runtimeHooks = {
+      refreshModels: refreshModelsSpy,
+      refreshCapabilities: refreshCapabilitiesSpy,
+    };
+    testConfig.capabilityTier = 'nursery';
     testConfig.dataDir = tempDir;
     testConfig.characterCardPath = join(tempDir, 'character.json');
     writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');
@@ -360,6 +369,8 @@ describe('AdminServer JSON API routes', () => {
     await server.stop();
     db.close();
     rmSync(tempDir, { recursive: true, force: true });
+    testConfig.runtimeHooks = undefined;
+    testConfig.capabilityTier = undefined;
   });
 
   it('enforces auth on JSON API routes', async () => {
@@ -835,6 +846,8 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(settingsPatchRes.status).toBe(200);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
     const settingsAfterPatchRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsAfterPatchRes.status).toBe(200);
     const settingsAfterPatch = JSON.parse(settingsAfterPatchRes.body) as {
@@ -879,12 +892,35 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(rosterPatchRes.status).toBe(200);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(2);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
     const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
       modelCatalog: Record<string, unknown>;
       modelRoleAssignments: Record<string, string>;
     };
     expect(persistedModels.modelCatalog.vision).toBeDefined();
     expect(persistedModels.modelRoleAssignments.vision).toBe('vision');
+
+    const capabilityPatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        capabilityTier: 'custom',
+        customTokens: ['identity.read', 'git.read'],
+      }),
+      authHeaders,
+    );
+    expect(capabilityPatchRes.status).toBe(200);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(3);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
+    const persistedCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf8')) as {
+      tier: string;
+      customTokens: string[];
+    };
+    expect(persistedCapabilities.tier).toBe('custom');
+    expect(persistedCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
+    expect(testConfig.capabilityTier).toBe('custom');
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);

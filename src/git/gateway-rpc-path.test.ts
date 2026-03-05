@@ -38,6 +38,7 @@ function createServerOptions(
         v1: 'test-gateway-rpc-secret',
       },
     },
+    capabilityTierProvider: () => 'autonomous',
   };
 }
 

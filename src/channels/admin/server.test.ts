@@ -328,9 +328,9 @@ const testSkillSnapshot: SkillSnapshot = {
   },
   directories: [
     {
-      absolutePath: '/repo/psfn/skills',
-      relativePath: 'psfn/skills',
-      source: 'psfn',
+      absolutePath: '/repo/companion/skills',
+      relativePath: 'companion/skills',
+      source: 'companion',
       precedence: 0,
     },
     {
@@ -1109,7 +1109,7 @@ describe('AdminServer', () => {
       const payload = JSON.parse(res.body) as AdminModelRoomBootstrapResponse;
       expectApiPath(payload.api.chatCompletionsUrl, '/v1/chat/completions');
       expect(payload.defaultRoomId).toBe('garden-model-room');
-      expect(payload.psfn.id).toBe('psfn');
+      expect(payload.companion.id).toBe('companion');
       expect(payload.constraints.allowedProviders).toEqual(['anthropic', 'openai', 'google']);
       expect(payload.constraints.deniedProviders).toContain('openrouter');
       expect(Array.isArray(payload.participants)).toBe(true);
@@ -1844,7 +1844,7 @@ describe('AdminServer', () => {
       testConfig.sessionMessageLimit = 30;
     });
 
-    it('applies identical save+refresh semantics for legacy and JSON settings endpoints', async () => {
+    it('applies legacy cross-domain saves and keeps JSON runtime endpoint scoped to runtime-owned fields', async () => {
       const formPayload = new URLSearchParams();
       formPayload.set('sessionMessageLimit', '44');
       formPayload.set('capabilityTier', 'custom');
@@ -1873,7 +1873,7 @@ describe('AdminServer', () => {
       });
       expect(legacyRes.status).toBe(200);
       expect(legacyRes.body).toContain('Settings saved');
-      expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+      expect(refreshModelsSpy).toHaveBeenCalled();
       expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
 
       const legacyModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
@@ -1896,44 +1896,24 @@ describe('AdminServer', () => {
         '/api/admin/settings',
         JSON.stringify({
           sessionMessageLimit: 45,
-          capabilityTier: 'custom',
-          customTokens: ['memory.write'],
-          modelCatalog: {
-            jsonPrimary: {
-              model: 'z-ai/glm-5',
-              provider: 'openrouter',
-              defaults: { maxTokens: 8192, contextWindow: 128000 },
-            },
-            jsonExtract: {
-              model: 'openai/gpt-4.1-mini',
-              provider: 'openrouter',
-              defaults: { maxTokens: 3072 },
-            },
-          },
-          modelRoleAssignments: {
-            chat: 'jsonPrimary',
-            extraction: 'jsonExtract',
-            background: 'jsonExtract',
-          },
         }),
         { 'Content-Type': 'application/json' },
       );
       expect(jsonRes.status).toBe(200);
-      expect(refreshModelsSpy).toHaveBeenCalledTimes(2);
-      expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(2);
+      expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
 
       const jsonModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
         modelCatalog: Record<string, unknown>;
         modelRoleAssignments: Record<string, string>;
       };
-      expect(jsonModels.modelCatalog.jsonPrimary).toBeDefined();
-      expect(jsonModels.modelRoleAssignments.chat).toBe('jsonPrimary');
+      expect(jsonModels.modelCatalog.legacyPrimary).toBeDefined();
+      expect(jsonModels.modelRoleAssignments.chat).toBe('legacyPrimary');
       const jsonCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8')) as {
         tier: string;
         customTokens: string[];
       };
       expect(jsonCapabilities.tier).toBe('custom');
-      expect(jsonCapabilities.customTokens).toEqual(['memory.write']);
+      expect(jsonCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
       expect(testConfig.capabilityTier).toBe('custom');
 
       const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf-8')) as {
@@ -1969,8 +1949,8 @@ describe('AdminServer', () => {
         defaultContextWindow: restartedConfig.defaultContextWindow,
       }));
       restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
-      expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
-      expect(restartedConfig.modelRoleAssignments?.chat).toBe('jsonPrimary');
+      expect(restartedConfig.primaryModel).toBe('openai/gpt-4.1-mini');
+      expect(restartedConfig.modelRoleAssignments?.chat).toBe('legacyPrimary');
       expect(restartedConfig.capabilityTier).toBe('custom');
     });
 

@@ -321,7 +321,7 @@ export class AdminContactsHandlers {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `PSFN updated identity details for contact "${updated.displayName}".`,
+        `${legacy.resolveCompanionName()} updated identity details for contact "${updated.displayName}".`,
         [
           displayName !== contact.displayName ? `displayName=${updated.displayName}` : null,
           nickname !== currentNickname ? `nickname=${nickname ?? '(none)'}` : null,

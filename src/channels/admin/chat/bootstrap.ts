@@ -10,6 +10,7 @@ import type {
   ModelCatalogEntry,
   SubstrateConfig,
 } from '../../../types.js';
+import { DEFAULT_COMPANION_ID } from '../../../identity/companion-naming.js';
 import { isBootstrapStarterCard, loadCharacterCard } from '../../../identity/loader.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type {
@@ -172,9 +173,9 @@ export class AdminChatBootstrapService {
         chatCompletionsUrl,
       },
       defaultRoomId: DEFAULT_MODEL_ROOM_ID,
-      psfn: {
-        id: 'psfn',
-        displayName: 'PSFN',
+      companion: {
+        id: DEFAULT_COMPANION_ID,
+        displayName: this.resolveAssistantName(),
         defaultSystemPromptMode: 'default',
       },
       participants,

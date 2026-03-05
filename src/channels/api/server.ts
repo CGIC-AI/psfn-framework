@@ -17,6 +17,7 @@ import type {
 import type { ContactStore } from '../../contacts/store.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
+import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import type { SessionManager } from '../../session/manager.js';
 import type {
   ChannelAdapter,
@@ -215,7 +216,7 @@ export class ApiServer implements ChannelAdapter {
     this.apiKey = this.clampHeader(config.apiKey, 512);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
     this.corsAllowedOrigins = this.normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
-    this.modelName = config.modelName ?? 'psfn';
+    this.modelName = config.modelName ?? DEFAULT_COMPANION_ID;
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
     this.voiceWebSocket = new ApiVoiceWebSocketAdapter({

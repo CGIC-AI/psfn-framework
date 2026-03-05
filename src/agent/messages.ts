@@ -1,10 +1,11 @@
 // ── Custom Message Types + convertToLlm ──
-// Extends pi-agent-core's AgentMessage with PSFN-specific types
+// Extends pi-agent-core's AgentMessage with companion-specific types
 // via TypeScript declaration merging. These are first-class in our session
 // pipeline but get flattened to standard Messages before hitting the LLM.
 
 import type { Message, UserMessage, AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import { DEFAULT_COMPANION_NAME } from '../identity/companion-naming.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 
 // ── Custom message types ──
@@ -123,9 +124,8 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       // Skip in LLM conversion.
       continue;
     } else if (isMirrorMessage(msg)) {
-      const speaker = msg.sourceRole === 'assistant'
-        ? 'PSFN'
-        : (msg.sourceAuthorName ?? 'User');
+      const speaker = msg.sourceAuthorName
+        ?? (msg.sourceRole === 'assistant' ? DEFAULT_COMPANION_NAME : 'User');
       result.push({
         role: 'user',
         content: `[Mirror note from ${msg.originChannelId}] ${speaker}: ${compactMirrorText(msg.content)}`,

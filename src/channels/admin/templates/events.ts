@@ -4,6 +4,7 @@ import {
   ADMIN_AUDIT_DECISIONS,
   ADMIN_AUDIT_TIME_RANGES,
 } from '../audit-timeline.js';
+import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -29,11 +30,6 @@ const ACTION_TYPE_LABELS: Record<AdminAuditActionType, string> = {
 const DECISION_LABELS: Record<AdminAuditDecision, string> = {
   allowed: 'Allowed',
   denied: 'Denied',
-};
-
-const ACTOR_LABELS: Record<AdminAuditActor, string> = {
-  operator: 'Operator',
-  companion: 'PSFN',
 };
 
 const TIME_RANGE_LABELS: Record<AdminAuditTimeRange, string> = {
@@ -130,7 +126,15 @@ export function eventItem(type: string, timestamp: number, payload: Record<strin
   return `<div class="event-item"><span class="event-time">${time}</span> <span class="event-type">${escapeHtml(type)}</span> ${escapeHtml(details)}</div>`;
 }
 
-export function auditTimelinePage(model: AuditTimelinePageModel): string {
+function resolveActorLabel(actor: AdminAuditActor, companionName: string): string {
+  if (actor === 'operator') return 'Operator';
+  return companionName;
+}
+
+export function auditTimelinePage(
+  model: AuditTimelinePageModel,
+  companionName = DEFAULT_COMPANION_NAME,
+): string {
   const { entries, filters } = model;
   const actionTypeOptions = [
     renderSelectOption('all', 'All action types', filters.actionType === 'all'),
@@ -152,7 +156,7 @@ export function auditTimelinePage(model: AuditTimelinePageModel): string {
     .map((timeRange) => renderSelectOption(timeRange, TIME_RANGE_LABELS[timeRange], filters.timeRange === timeRange))
     .join('');
   const items = entries.length > 0
-    ? entries.map(entry => auditTimelineItem(entry)).join('')
+    ? entries.map(entry => auditTimelineItem(entry, companionName)).join('')
     : '<div class="empty">No audit events match the selected filters.</div>';
 
   return `
@@ -177,13 +181,16 @@ export function auditTimelinePage(model: AuditTimelinePageModel): string {
     <div class="audit-feed">${items}</div>`;
 }
 
-export function auditTimelineItem(entry: AdminAuditTimelineEntry): string {
+export function auditTimelineItem(
+  entry: AdminAuditTimelineEntry,
+  companionName = DEFAULT_COMPANION_NAME,
+): string {
   const timestamp = new Date(entry.timestamp);
   const dateLabel = timestamp.toLocaleDateString();
   const timeLabel = timestamp.toLocaleTimeString();
   const actionTypeLabel = ACTION_TYPE_LABELS[entry.actionType];
   const decisionLabel = DECISION_LABELS[entry.decision];
-  const actorLabel = entry.actor ? ACTOR_LABELS[entry.actor] : null;
+  const actorLabel = entry.actor ? resolveActorLabel(entry.actor, companionName) : null;
   const detailsHtml = entry.details
     ? `<div class="audit-item-details">${escapeHtml(entry.details)}</div>`
     : '';

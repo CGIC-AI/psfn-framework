@@ -94,7 +94,7 @@ export function createRepoApplyPatchTool(gitOps: GitOperations): AgentTool<any> 
     label: 'repo_apply_patch',
     description:
       'Write content to a file and stage it for commit. Path must be in allowed directories ' +
-      '(src/, docs/, psfn/). Blocked on protected branches.',
+      '(src/, docs/, companion/; legacy psfn/ is still allowed). Blocked on protected branches.',
     parameters: Type.Object({
       file_path: Type.String({
         description: 'Path relative to repo root (must be in allowed directories).',

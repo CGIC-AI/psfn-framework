@@ -1,5 +1,6 @@
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
+import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import {
   PROMPT_LAYER_ROLES,
   type LayerType,
@@ -33,6 +34,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     promptRegistry?: PromptRegistryStore | null;
     sessionStore?: SessionStore | null;
     sessionManager?: SessionManager | null;
+    resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
       actionType: 'identity_edit',
       decision: 'allowed' | 'denied',
@@ -40,6 +42,10 @@ export class AdminPromptsDataService implements AdminPromptsService {
       details?: Array<string | null | undefined>,
     ) => void;
   }) {}
+
+  private resolveCompanionName(): string {
+    return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
+  }
 
   private parseBody(body: string): URLSearchParams {
     const trimmed = body.trim();
@@ -296,7 +302,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
       this.deps.appendAuditTimelineEntry?.(
         'identity_edit',
         'allowed',
-        `PSFN edited ${layer.type} prompt layer "${layer.name}".`,
+        `${this.resolveCompanionName()} edited ${layer.type} prompt layer "${layer.name}".`,
         [`layerId=${layer.id}`, `version=${layer.version}`],
       );
       return {

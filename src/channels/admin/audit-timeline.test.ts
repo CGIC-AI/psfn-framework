@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AdminAuditTimelineStore, ADMIN_AUDIT_ACTION_TYPES } from './audit-timeline.js';
 import type { EventBus } from '../../event-bus.js';
+import { DEFAULT_COMPANION_NAME } from '../../identity/companion-naming.js';
 import type { AdminAuditActor } from './types.js';
 import { registerAuditTimelineSources, type AuditTimelineAppender } from './services/audit-event-collector.js';
 
@@ -110,7 +111,7 @@ describe('AdminAuditTimelineStore', () => {
     store.append({
       actionType: 'tool_invocation',
       decision: 'allowed',
-      narrative: 'PSFN completed tool "think".',
+      narrative: `${DEFAULT_COMPANION_NAME} completed tool "think".`,
       actor: 'companion',
     });
 
@@ -138,7 +139,7 @@ describe('AdminAuditTimelineStore', () => {
     const companionEntry = store.append({
       actionType: 'identity_edit',
       decision: 'allowed',
-      narrative: 'PSFN edited identity via "prompt_layer_update".',
+      narrative: `${DEFAULT_COMPANION_NAME} edited identity via "prompt_layer_update".`,
       actor: 'companion',
     });
     expect(companionEntry.actor).toBe('companion');
@@ -262,7 +263,7 @@ describe('audit event collector actor attribution', () => {
     const identityEntry = entries.find(e => e.actionType === 'identity_edit');
     expect(identityEntry).toBeDefined();
     expect(identityEntry!.actor).toBe('companion');
-    expect(identityEntry!.narrative).toContain('PSFN');
+    expect(identityEntry!.narrative).toContain('Companion');
   });
 
   it('memory extraction events have companion actor', () => {

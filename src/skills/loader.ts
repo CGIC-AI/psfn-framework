@@ -14,6 +14,10 @@ import {
   sep,
 } from 'node:path';
 import type { SkillsRuntimeConfig } from '../config/skills-config.js';
+import {
+  DEFAULT_COMPANION_SKILLS_DIRECTORY,
+  LEGACY_COMPANION_SKILLS_DIRECTORY,
+} from '../identity/companion-naming.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { isRecord } from '../utils/types.js';
 import type {
@@ -26,7 +30,7 @@ import type {
 } from './types.js';
 
 const SKILL_FILE_NAME = 'SKILL.md';
-const DEFAULT_DIRECTORIES = ['psfn/skills', 'skills'];
+const DEFAULT_DIRECTORIES = [DEFAULT_COMPANION_SKILLS_DIRECTORY, 'skills'];
 
 function toPosix(path: string): string {
   return path.split(sep).join('/');
@@ -382,8 +386,13 @@ function normalizeFrontmatter(raw: Record<string, unknown>, sourcePath: string):
 }
 
 function sourceFromPath(displayPath: string): SkillSource {
-  if (displayPath === 'psfn/skills' || displayPath.startsWith('psfn/skills/')) {
-    return 'psfn';
+  if (
+    displayPath === DEFAULT_COMPANION_SKILLS_DIRECTORY
+    || displayPath.startsWith(`${DEFAULT_COMPANION_SKILLS_DIRECTORY}/`)
+    || displayPath === LEGACY_COMPANION_SKILLS_DIRECTORY
+    || displayPath.startsWith(`${LEGACY_COMPANION_SKILLS_DIRECTORY}/`)
+  ) {
+    return 'companion';
   }
   if (displayPath === 'skills' || displayPath.startsWith('skills/')) {
     return 'bundled';

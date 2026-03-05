@@ -1,5 +1,5 @@
 const BOOTSTRAP_URL = '/api/chat/bootstrap';
-const DEFAULT_MODEL_ID = 'psfn-admin-chat';
+const DEFAULT_MODEL_ID = 'companion-admin-chat';
 const DEFAULT_MODEL_NAME = 'PSFN Garden Chat';
 const DEFAULT_MODEL_PROVIDER = 'openai';
 const DEFAULT_SYSTEM_PROMPT = 'You are the active companion speaking through the garden chat canopy.';

@@ -11,7 +11,7 @@ interface ChannelIndexPayload {
   channels?: Record<string, unknown>;
 }
 
-const DEFAULT_LEGACY_SHARED_DATA_DIR = './data';
+export const DEFAULT_LEGACY_SHARED_DATA_DIR = './data';
 
 export interface PersistenceRoots {
   systemDataDir: string;

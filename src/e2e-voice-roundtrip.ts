@@ -43,13 +43,14 @@ const execFileAsync = promisify(execFile);
 const SIGN_PHRASE = process.env.VOICE_E2E_SIGN ?? 'sunset orchard';
 const COUNTERSIGN_PHRASE = process.env.VOICE_E2E_COUNTERSIGN ?? 'amber lantern';
 
-const DEFAULT_INPUT_PHRASE = [
-  'PSFN, this is a voice verification challenge.',
-  `Reply in one short sentence that starts with "Countersign ${SIGN_PHRASE}."`,
-  `Also include the phrase "${COUNTERSIGN_PHRASE}".`,
-  'Do not use markdown.',
-].join(' ');
-const INPUT_PHRASE = process.env.VOICE_E2E_PROMPT ?? DEFAULT_INPUT_PHRASE;
+function buildDefaultInputPhrase(companionName: string): string {
+  return [
+    `${companionName}, this is a voice verification challenge.`,
+    `Reply in one short sentence that starts with "Countersign ${SIGN_PHRASE}."`,
+    `Also include the phrase "${COUNTERSIGN_PHRASE}".`,
+    'Do not use markdown.',
+  ].join(' ');
+}
 
 const INPUT_PCM_CHUNK_BYTES = 4096;
 const WAIT_TIMEOUT_MS = 180_000;
@@ -357,7 +358,10 @@ async function main(): Promise<void> {
 
   // Step 1: seed text -> elevenlabs audio
   console.log('\n[1/6] Synthesizing seed phrase with ElevenLabs...');
-  const seedMp3 = await ttsClient.synthesize(INPUT_PHRASE);
+  const { card, systemPrompt } = composeIdentity(config);
+  const companionName = card.data.name.trim() || 'Companion';
+  const inputPhrase = process.env.VOICE_E2E_PROMPT ?? buildDefaultInputPhrase(companionName);
+  const seedMp3 = await ttsClient.synthesize(inputPhrase);
   console.log(`  Seed MP3 bytes: ${seedMp3.length}`);
 
   // Step 2: elevenlabs audio -> deepgram stt baseline
@@ -368,14 +372,13 @@ async function main(): Promise<void> {
     '-f', 'wav',
   ]);
   const seedBaselineTranscript = await sttClient.transcribeWav(seedWav16k);
-  const baselineMatch = textsMatch(INPUT_PHRASE, seedBaselineTranscript);
+  const baselineMatch = textsMatch(inputPhrase, seedBaselineTranscript);
   console.log(`  Baseline transcript: ${seedBaselineTranscript}`);
   console.log(`  Baseline match: ${baselineMatch.pass} (${baselineMatch.score.toFixed(2)} | ${baselineMatch.reason})`);
 
   // Build agent + voice runtime using real system components
   const eventBus = new EventBus();
   const llmClient = new LLMClient(config);
-  const { systemPrompt } = composeIdentity(config);
   const { sessionManager } = composeSessionRuntime({ config });
   const agentLoop = composeSubstrateAgent({
     eventBus,
@@ -445,7 +448,7 @@ async function main(): Promise<void> {
 
     // Step 6: comparisons
     console.log('[6/6] Comparing expected text and recovered response text...');
-    const inputRuntimeMatch = textsMatch(INPUT_PHRASE, transcriptFromRuntime || seedBaselineTranscript);
+    const inputRuntimeMatch = textsMatch(inputPhrase, transcriptFromRuntime || seedBaselineTranscript);
     const outputMatch = textsMatch(textSentToTts, responseTranscript);
     const expectedSignals = {
       signPhrase: SIGN_PHRASE,
@@ -467,7 +470,7 @@ async function main(): Promise<void> {
     };
 
     console.log('\n=== Results ===');
-    console.log(`Input phrase: ${INPUT_PHRASE}`);
+    console.log(`Input phrase: ${inputPhrase}`);
     console.log(`Required sign phrase: ${expectedSignals.signPhrase}`);
     console.log(`Required countersign phrase: ${expectedSignals.countersignPhrase}`);
     console.log(`Input runtime match: ${inputRuntimeMatch.pass} (${inputRuntimeMatch.score.toFixed(2)} | ${inputRuntimeMatch.reason})`);

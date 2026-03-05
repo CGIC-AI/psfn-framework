@@ -63,7 +63,7 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   {
     token: '{{char}}',
     description: 'Character/assistant name from runtime context.',
-    example: 'PSFN',
+    example: 'Companion',
   },
   {
     token: '{{description}}',

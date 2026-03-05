@@ -1,5 +1,5 @@
 // ── Scheduler ──
-// PSFN's internal clock. A base tick checks registered tasks for due status.
+// The companion's internal clock. A base tick checks registered tasks for due status.
 // Heartbeat is a special 'every' task — her self-check rhythm.
 
 import type { EventBus } from '../event-bus.js';

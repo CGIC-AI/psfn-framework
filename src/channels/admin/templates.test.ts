@@ -12,6 +12,7 @@ import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { ConfirmationQueueEntry } from '../../gateway/protocol.js';
 import { EventBus } from '../../event-bus.js';
+import { DEFAULT_COMPANION_NAME } from '../../identity/companion-naming.js';
 import { AdminHandlers } from './handlers.js';
 import {
   auditTimelinePage,
@@ -438,7 +439,7 @@ describe('admin templates', () => {
           timestamp: 1_700_000_000_000,
           actionType: 'identity_edit',
           decision: 'allowed',
-          narrative: 'PSFN edited runtime prompt layer.',
+          narrative: `${DEFAULT_COMPANION_NAME} edited runtime prompt layer.`,
           details: 'layerId=runtime-main',
           actor: 'operator',
         },
@@ -454,7 +455,7 @@ describe('admin templates', () => {
     expect(html).toContain('name="actionType"');
     expect(html).toContain('name="decision"');
     expect(html).toContain('name="timeRange"');
-    expect(html).toContain('PSFN edited runtime prompt layer');
+    expect(html).toContain(`${DEFAULT_COMPANION_NAME} edited runtime prompt layer`);
     expect(html).toContain('data-action-type="identity_edit"');
     expect(html).toContain('Actor: Operator');
   });

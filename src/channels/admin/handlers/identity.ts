@@ -2,6 +2,7 @@ import type { MemoryStore } from '../../../memory/store.js';
 import { MemoryWriter } from '../../../memory/writer.js';
 import type { SessionStore } from '../../../session/store.js';
 import type { EmbeddingService } from '../../../agent/contracts.js';
+import { resolveCompanionNameFromCard } from '../../../identity/companion-runtime.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { SubstrateConfig } from '../../../types.js';
 import type { ContactStore } from '../../../contacts/store.js';
@@ -132,7 +133,7 @@ export class AdminIdentityHandlers {
       this.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `PSFN staged intake bundle ${stage.id} for operator review.`,
+        `${this.resolveCompanionName()} staged intake bundle ${stage.id} for operator review.`,
         [
           `sources=${stage.sources.map(source => source.kind).join(',')}`,
           stage.chatMutation ? `chatChunks=${stage.chatMutation.chunks.length}` : null,
@@ -406,7 +407,7 @@ export class AdminIdentityHandlers {
       this.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `PSFN imported an identity card from ${imported.sourcePath}.`,
+        `${this.resolveCompanionName()} imported an identity card from ${imported.sourcePath}.`,
         [
           `name=${imported.card.data.name}`,
           `format=${imported.containerFormat}`,
@@ -470,7 +471,7 @@ export class AdminIdentityHandlers {
       this.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `PSFN rolled identity back to version ${version}.`,
+        `${this.resolveCompanionName()} rolled identity back to version ${version}.`,
         [
           `currentVersion=${snapshot.version}`,
           !promptSync.ok ? `promptSyncError=${promptSync.error}` : null,
@@ -526,6 +527,10 @@ export class AdminIdentityHandlers {
     actor?: AdminAuditActor,
   ): void {
     this.appendAuditTimelineEntryDelegate(actionType, decision, narrative, details, actor);
+  }
+
+  private resolveCompanionName(): string {
+    return resolveCompanionNameFromCard(this.characterCard);
   }
 
   private renderIdentityIntakeReview(flash?: IntakeFlash): string {

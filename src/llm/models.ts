@@ -54,7 +54,7 @@ export function createLiteLLMModel(config: LiteLLMModelConfig): Model<'openai-co
   };
 }
 
-/** Known model defaults for PSFN's preferred models */
+/** Known model defaults for the companion's preferred models */
 const MODEL_DEFAULTS: Record<string, Partial<LiteLLMModelConfig>> = {
   'z-ai/glm-5': { contextWindow: 128_000, maxTokens: 16384, reasoning: true, thinkingFormat: 'zai' },
   'deepseek/deepseek-v3.2': { contextWindow: 128_000, maxTokens: 16384 },

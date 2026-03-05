@@ -15,6 +15,7 @@ import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { EventBus, EventName, EventMap } from '../../event-bus.js';
+import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
 import { AdminHandlers } from './handlers.js';
 import { buildAdminApiRoutes } from './api-routes.js';
 import { createComponentLogger } from '../../logger.js';
@@ -283,6 +284,7 @@ export class AdminServer implements Lifecycle {
       memoryStore: config.memoryStore,
       contactStore: config.contactStore,
       embeddingService: config.embeddingService,
+      resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),
     });
     this.sessionService = new AdminSessionDataService({
       sessionStore: config.sessionStore,
@@ -309,6 +311,7 @@ export class AdminServer implements Lifecycle {
       promptRegistry: config.promptRegistry,
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
+      resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),
     });
     this.adaptiveToolsService = new AdminAdaptiveToolsDataService({
       eventBus: config.eventBus,

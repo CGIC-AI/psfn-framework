@@ -1,3 +1,4 @@
+import { isCanonicalCharacterFoundationLayer } from '../../../identity/canonical-foundation.js';
 import type { PromptLayer, PromptHistoryEntry } from '../../../identity/prompt-types.js';
 import { LAYER_TYPE_ORDER, PROMPT_LAYER_ROLES } from '../../../identity/prompt-types.js';
 import type { PromptRegistryEntry, PromptRegistryHistoryEntry } from '../../../identity/prompt-registry.js';
@@ -150,14 +151,11 @@ export function promptLayersFragment(layers: PromptLayer[]): string {
     return a.priority - b.priority;
   });
 
-  const isCardBackedFoundationLayer = (layer: PromptLayer): boolean =>
-    layer.type === 'base' && (layer.identifier === 'main' || layer.name === 'Character Foundation');
-
   const rows = sorted.map(layer => {
     const color = LAYER_TYPE_COLORS[layer.type] ?? '#666';
     const statusClass = layer.enabled ? 'form-success' : 'form-error';
     const status = layer.enabled ? 'ON' : 'OFF';
-    const actions = isCardBackedFoundationLayer(layer)
+    const actions = isCanonicalCharacterFoundationLayer(layer)
       ? '<span style="font-size:0.75rem;color:var(--text-muted)">Managed via Identity</span>'
       : `
           <form hx-post="/api/prompts/toggle" hx-target="#prompt-layers" hx-swap="innerHTML" style="display:inline">
@@ -250,8 +248,7 @@ export function promptDiffFragment(oldContent: string, newContent: string): stri
 export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry[]): string {
   const color = LAYER_TYPE_COLORS[layer.type] ?? '#666';
   const parsedContent = decomposePromptContent(layer.content);
-  const isCardBackedFoundationLayer =
-    layer.type === 'base' && (layer.identifier === 'main' || layer.name === 'Character Foundation');
+  const isFoundationLayer = isCanonicalCharacterFoundationLayer(layer);
 
   const historyRows = [...history].reverse().slice(0, 20).map(h => `
     <tr>
@@ -260,7 +257,7 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
       <td>${new Date(h.timestamp).toLocaleString()}</td>
       <td>${escapeHtml(h.previousChecksum)}</td>
       <td>
-        ${isCardBackedFoundationLayer
+        ${isFoundationLayer
           ? '<span style="font-size:0.75rem;color:var(--text-muted)">Managed via Identity</span>'
           : `
             <form hx-post="/api/prompts/rollback" hx-target="#prompt-result" hx-swap="innerHTML" style="display:inline">
@@ -297,7 +294,7 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
     </div>
   `).join('');
 
-  const editorForm = isCardBackedFoundationLayer
+  const editorForm = isFoundationLayer
     ? `
       <div style="background:rgba(77, 124, 15, 0.08);border:1px solid rgba(77, 124, 15, 0.25);border-radius:8px;padding:0.85rem 1rem;margin-bottom:1rem">
         <p style="margin:0 0 0.5rem 0;font-weight:600">Character Foundation is card-backed</p>
@@ -363,7 +360,7 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
       ${parseWarnings}
       ${parseErrors}
       ${editorForm}
-      ${isCardBackedFoundationLayer ? '' : '<div id="prompt-diff-preview"></div>'}
+      ${isFoundationLayer ? '' : '<div id="prompt-diff-preview"></div>'}
     </div>
 
     ${history.length > 0 ? `

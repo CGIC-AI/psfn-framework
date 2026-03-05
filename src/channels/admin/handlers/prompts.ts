@@ -1,4 +1,8 @@
 import type { LegacyAdminHandlers } from '../handlers-legacy.js';
+import {
+  CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
+  isCanonicalCharacterFoundationLayer,
+} from '../../../identity/canonical-foundation.js';
 import type { PromptLayerMetadataUpdate } from '../../../identity/prompt-store.js';
 import { PROMPT_LAYER_ROLES, type PromptLayerRole } from '../../../identity/prompt-types.js';
 import {
@@ -7,16 +11,6 @@ import {
   parseStructuredPromptForm,
 } from '../prompt-structured-content.js';
 import * as tpl from '../templates.js';
-
-const CARD_BACKED_FOUNDATION_PROMPT_MESSAGE =
-  'Character Foundation is derived from the character card and must be edited through Identity.';
-
-function isCardBackedFoundationLayer(
-  layer: { type?: string; identifier?: string; name?: string } | null | undefined,
-): boolean {
-  if (!layer || layer.type !== 'base') return false;
-  return layer.identifier === 'main' || layer.name === 'Character Foundation';
-}
 
 export class AdminPromptsHandlers {
   constructor(private readonly legacy: LegacyAdminHandlers) {}
@@ -143,7 +137,7 @@ export class AdminPromptsHandlers {
       );
       return '<div class="form-error">Prompt layer not found</div>';
     }
-    if (isCardBackedFoundationLayer(layer)) {
+    if (isCanonicalCharacterFoundationLayer(layer)) {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'denied',
@@ -256,7 +250,7 @@ export class AdminPromptsHandlers {
       );
       return '<div class="form-error">Prompt layer not found</div>';
     }
-    if (isCardBackedFoundationLayer(layer)) {
+    if (isCanonicalCharacterFoundationLayer(layer)) {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'denied',
@@ -315,7 +309,7 @@ export class AdminPromptsHandlers {
       );
       return '<div class="form-error">Prompt layer not found</div>';
     }
-    if (isCardBackedFoundationLayer(layer)) {
+    if (isCanonicalCharacterFoundationLayer(layer)) {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'denied',

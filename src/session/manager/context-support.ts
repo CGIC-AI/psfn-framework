@@ -93,7 +93,7 @@ export function entriesToMessages(
     }
 
     // Merge consecutive same-role messages
-    const last = messages[messages.length - 1];
+    const last = messages.at(-1);
     if (last && last.role === role) {
       last.content += '\n' + content;
     } else {

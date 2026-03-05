@@ -131,39 +131,6 @@ describe('GatewayClient streaming', () => {
     expect(resultB.content).toBe('hello-B world-B');
   });
 
-  it('handles backward-compat chunks with missing requestId', async () => {
-    const chunks: string[] = [];
-
-    const streamPromise = client.stream(
-      { systemPrompt: 'test', messages: [{ role: 'user', content: 'hi' }] },
-      { onText: (text) => chunks.push(text) },
-    );
-
-    const req = conn.sent[0] as { id: number; params: { requestId: string } };
-
-    // Simulate a legacy gateway sending chunks without requestId
-    conn._emit({ method: 'llm.chunk', params: { requestId: '0', text: 'legacy-chunk' } });
-
-    // Resolve the stream
-    conn._emit({
-      id: req.id,
-      jsonrpc: '2.0',
-      result: {
-        content: 'legacy-chunk',
-        toolCalls: [],
-        model: 'test',
-        inputTokens: 10,
-        outputTokens: 5,
-        stopReason: 'end',
-      },
-    });
-
-    const result = await streamPromise;
-    // Backward compat: '0' falls back to any available handler
-    expect(chunks).toEqual(['legacy-chunk']);
-    expect(result.content).toBe('legacy-chunk');
-  });
-
   it('cleans up chunk handler after stream completes', async () => {
     const chunks: string[] = [];
 
@@ -286,38 +253,6 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(response.result.durationMs).toBe(500);
   });
 
-  it('supports legacy discord.handleMessage reverse RPC alias', async () => {
-    const handler = vi.fn().mockResolvedValue({
-      content: 'legacy response',
-      channelId: 'discord-voice:123',
-      metadata: { model: 'legacy-model', inputTokens: 10, outputTokens: 5, durationMs: 500 },
-    });
-    client.onHandleMessage(handler);
-
-    conn._emit({
-      jsonrpc: '2.0',
-      id: 43,
-      method: 'discord.handleMessage',
-      params: {
-        message: {
-          id: 'voice-legacy-1',
-          channelId: 'discord-voice:123',
-          channelType: 'discord',
-          authorId: 'user-1',
-          authorName: 'LegacyUser',
-          content: 'legacy hello',
-          timestamp: '2025-01-01T00:00:00.000Z',
-        },
-      },
-    });
-
-    await new Promise(r => setTimeout(r, 50));
-
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0][0].content).toBe('legacy hello');
-    expect(getRpcResponse(conn.sent, 43).result.content).toBe('legacy response');
-  });
-
   it('handles voice.stream.start/chunk/end reverse RPC flow', async () => {
     const handler = vi.fn().mockResolvedValue({
       content: 'assembled response',
@@ -389,62 +324,6 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(getRpcResponse(conn.sent, 101).result.accepted).toBe(true);
     expect(getRpcResponse(conn.sent, 102).result.accepted).toBe(true);
     expect(getRpcResponse(conn.sent, 103).result.content).toBe('assembled response');
-  });
-
-  it('supports legacy discord.voice.* reverse RPC aliases', async () => {
-    const handler = vi.fn().mockResolvedValue({
-      content: 'legacy assembled response',
-      channelId: 'discord-voice:123',
-      metadata: { model: 'voice-model', inputTokens: 10, outputTokens: 4, durationMs: 250 },
-    });
-    client.onHandleMessage(handler);
-
-    conn._emit({
-      jsonrpc: '2.0',
-      id: 150,
-      method: 'discord.voice.start',
-      params: {
-        correlationId: 'corr-legacy',
-        streamId: 'stream-legacy',
-        sequence: 0,
-        message: {
-          id: 'voice-legacy',
-          channelId: 'discord-voice:123',
-          channelType: 'discord',
-          authorId: 'user-1',
-          authorName: 'Legacy Voice User',
-          content: '',
-          timestamp: '2025-01-01T00:00:00.000Z',
-        },
-      },
-    });
-    conn._emit({
-      jsonrpc: '2.0',
-      id: 151,
-      method: 'discord.voice.chunk',
-      params: {
-        correlationId: 'corr-legacy',
-        streamId: 'stream-legacy',
-        sequence: 1,
-        text: 'legacy voice',
-      },
-    });
-    conn._emit({
-      jsonrpc: '2.0',
-      id: 152,
-      method: 'discord.voice.end',
-      params: {
-        correlationId: 'corr-legacy',
-        streamId: 'stream-legacy',
-        sequence: 2,
-      },
-    });
-
-    await new Promise(r => setTimeout(r, 50));
-
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0][0].content).toBe('legacy voice');
-    expect(getRpcResponse(conn.sent, 152).result.content).toBe('legacy assembled response');
   });
 
   it('supports voice stream cancellation', async () => {
@@ -819,6 +698,82 @@ describe('GatewayClient git RPC wrappers', () => {
       result: { url: 'https://example.test/pr/1' },
     });
     await expect(openPrPromise).resolves.toBe('https://example.test/pr/1');
+  });
+});
+
+describe('GatewayClient beads RPC wrappers', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('routes beads methods with typed payloads', async () => {
+    const readyPromise = client.beadsReady({ actor: 'agent' });
+    const readyReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+    expect(readyReq.method).toBe('beads.ready');
+    expect(readyReq.params).toEqual({ actor: 'agent' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: readyReq.id,
+      result: {
+        actor: 'agent',
+        action: 'ready',
+        target: 'ready',
+        result: 'success',
+        payload: [{ id: 'PSFN-1' }],
+      },
+    });
+    await expect(readyPromise).resolves.toMatchObject({ action: 'ready' });
+
+    const createPromise = client.beadsCreate({
+      title: 'New issue',
+      issueType: 'task',
+      priority: 2,
+      actor: 'agent',
+    });
+    const createReq = conn.sent[1] as { id: number; method: string; params: Record<string, unknown> };
+    expect(createReq.method).toBe('beads.create');
+    expect(createReq.params).toEqual({
+      title: 'New issue',
+      issueType: 'task',
+      priority: 2,
+      actor: 'agent',
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: createReq.id,
+      result: {
+        actor: 'agent',
+        action: 'create',
+        target: 'new',
+        result: 'success',
+        payload: { id: 'PSFN-2' },
+      },
+    });
+    await expect(createPromise).resolves.toMatchObject({ action: 'create' });
+
+    const closePromise = client.beadsClose({
+      id: 'PSFN-2',
+      reason: 'done',
+    });
+    const closeReq = conn.sent[2] as { id: number; method: string; params: Record<string, unknown> };
+    expect(closeReq.method).toBe('beads.close');
+    expect(closeReq.params).toEqual({ id: 'PSFN-2', reason: 'done' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: closeReq.id,
+      result: {
+        actor: 'runtime-agent',
+        action: 'close',
+        target: 'PSFN-2',
+        result: 'success',
+        payload: { closed: true },
+      },
+    });
+    await expect(closePromise).resolves.toMatchObject({ action: 'close' });
   });
 });
 

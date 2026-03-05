@@ -771,14 +771,14 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>Operator is a direct communicator and primary partner.</summary></profile>',
+          content: '<profile><summary>PrimaryUser is a direct communicator and primary partner.</summary></profile>',
         }),
     } as any;
 
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'Operator' },
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -789,7 +789,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'relational',
-          text: 'Operator is my primary partner.',
+          text: 'PrimaryUser is my primary partner.',
           importance: 0.95,
           confidence: 0.95,
           salience: 0.92,
@@ -797,7 +797,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm2',
           type: 'semantic',
-          text: 'Operator prefers direct technical communication.',
+          text: 'PrimaryUser prefers direct technical communication.',
           importance: 0.82,
           confidence: 0.88,
           salience: 0.8,
@@ -840,7 +840,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     expect(memoryStore.getMemoriesByContact).toHaveBeenCalledWith('contact-canonical-1', 16);
     expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'contact-canonical-1',
-      summary: 'Operator is a direct communicator and primary partner.',
+      summary: 'PrimaryUser is a direct communicator and primary partner.',
       sourceMemoryIds: ['m1', 'm2'],
     }));
   });
@@ -851,28 +851,28 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>Operator prefers concise updates.</summary></profile>',
+          content: '<profile><summary>PrimaryUser prefers concise updates.</summary></profile>',
         }),
     } as any;
 
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'Operator' },
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
     const memoryStore = {
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       getContactProfile: vi.fn().mockReturnValue({
-        summary: 'Operator prefers concise updates.',
+        summary: 'PrimaryUser prefers concise updates.',
         updatedAt: Date.now() - (24 * 60 * 60 * 1000),
       }),
       getMemoriesByContact: vi.fn().mockReturnValue([
         {
           id: 'm1',
           type: 'semantic',
-          text: 'Operator prefers concise updates.',
+          text: 'PrimaryUser prefers concise updates.',
           importance: 0.8,
           confidence: 0.9,
           salience: 0.8,
@@ -880,7 +880,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm2',
           type: 'relational',
-          text: 'Operator is my partner.',
+          text: 'PrimaryUser is my partner.',
           importance: 0.95,
           confidence: 0.95,
           salience: 0.9,
@@ -917,6 +917,77 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     await extractor.maybeExtract('api:profile-test', 'contact-canonical-1');
     await extractor.drain({ timeoutMs: 2_000 });
 
+    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
+
+  it('drains cleanly when fire-and-forget profile refresh rejects', async () => {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({ content: '<response></response>' })
+        .mockRejectedValueOnce(new Error('profile synthesis timeout')),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(6),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([
+        {
+          id: 'm1',
+          type: 'relational',
+          text: 'PrimaryUser is my primary partner.',
+          importance: 0.95,
+          confidence: 0.95,
+          salience: 0.92,
+        },
+        {
+          id: 'm2',
+          type: 'semantic',
+          text: 'PrimaryUser prefers direct technical communication.',
+          importance: 0.82,
+          confidence: 0.88,
+          salience: 0.8,
+        },
+      ]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+    );
+
+    await extractor.maybeExtract('api:profile-error-test', 'contact-canonical-1');
+
+    await expect(extractor.drain({ timeoutMs: 2_000 })).resolves.toBe(true);
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
     expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
   });
 });

@@ -167,7 +167,7 @@ export function parseTelegramCommand(content: string): TelegramCommand | null {
 
   return {
     command: match[1].toLowerCase(),
-    args: (match[2] ?? '').trim(),
+    args: (((match[2] as string | undefined) ?? '')).trim(),
     raw: normalized,
   };
 }
@@ -731,14 +731,19 @@ export class TelegramAdapter implements ChannelAdapter {
         await this.eventBus.emit('message.sent', { response });
       }
     } catch (error) {
+      const errorText = toErrorMessage(error);
       log.error('Telegram message handling error', {
         channelId,
-        error: toErrorMessage(error),
+        messageId,
+        error: errorText,
       });
-      await this.sendTextInternal(
-        { channelId, replyToMessageId: messageId, threadId },
-        'Something went wrong. Please try again.',
-      ).catch(() => undefined);
+      await this.eventBus.emit('channel.message.error', {
+        channelId,
+        channelType: 'telegram',
+        messageId,
+        phase: 'handler',
+        error: errorText,
+      }).catch(() => undefined);
     } finally {
       clearInterval(typingInterval);
       const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();

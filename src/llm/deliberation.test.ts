@@ -48,7 +48,7 @@ function scriptedProvider(steps: ScriptedStep[]): {
     ) => {
       calls.push(purpose);
       options.push(requestOptions);
-      const step = steps[index++];
+      const step = steps[index++] as ScriptedStep | undefined;
       if (!step) {
         throw new Error(`No scripted response available for purpose ${purpose}`);
       }

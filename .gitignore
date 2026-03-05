@@ -1,7 +1,9 @@
 node_modules/
 dist/
 data/
+data-phase45/
 psfn/
+companion/
 .env
 proxy/.env
 *.db

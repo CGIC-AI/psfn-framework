@@ -152,8 +152,7 @@ export function group_by<T>(arr: T[], key: (item: T) => string): Record<string, 
   const groups: Record<string, T[]> = {};
   for (const item of arr) {
     const k = key(item);
-    if (!groups[k]) groups[k] = [];
-    groups[k].push(item);
+    (groups[k] ??= []).push(item);
   }
   return groups;
 }

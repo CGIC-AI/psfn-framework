@@ -15,6 +15,10 @@ import type { SessionSearchHit } from './search-index.js';
 import type { EventBus } from '../event-bus.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
+import {
+  markCompactionSummaryAsUntrustedRecord,
+  wrapCompactionSummaryAsUntrustedContext,
+} from '../identity/prompt-composer.js';
 import { resolveSessionHistoryBudget } from '../context-budget.js';
 import {
   trimRecentEntriesToTokenBudget,
@@ -49,6 +53,37 @@ function shouldPersistSessionChannel(channelId: string): boolean {
   return !channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
 }
 
+function createCompactionBoundaryStore(store: SessionStore): SessionStore {
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      if (property === 'insertCompaction') {
+        return (channelId: string, summary: string, coveredUpTo: number): void => {
+          target.insertCompaction(
+            channelId,
+            markCompactionSummaryAsUntrustedRecord(summary),
+            coveredUpTo,
+          );
+        };
+      }
+
+      if (property === 'getCompactionSummaries') {
+        return (channelId: string) => (
+          target.getCompactionSummaries(channelId).map(summary => ({
+            ...summary,
+            summary: wrapCompactionSummaryAsUntrustedContext(summary.summary),
+          }))
+        );
+      }
+
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value === 'function') {
+        return value.bind(target);
+      }
+      return value;
+    },
+  }) as SessionStore;
+}
+
 export interface LegacyChatImportRunRequest extends LegacyChatImportRequest {
   canonicalContactId?: string;
   bootstrap?: boolean;
@@ -68,6 +103,7 @@ export interface StartupSessionMetadata {
 
 export class SessionManager {
   private store: SessionStore;
+  private compactionBoundaryStore: SessionStore;
   private config: SubstrateConfig;
   private eventBus: EventBus | null;
   private promptRegistry: PromptRegistryStore | null;
@@ -84,6 +120,7 @@ export class SessionManager {
     promptRegistry?: PromptRegistryStore | null,
   ) {
     this.store = store;
+    this.compactionBoundaryStore = createCompactionBoundaryStore(store);
     this.config = config;
     this.eventBus = eventBus ?? null;
     this.promptRegistry = promptRegistry ?? null;
@@ -254,7 +291,7 @@ export class SessionManager {
       userId,
       channelMeta,
       continuityFallbackUserIds,
-      store: this.store,
+      store: this.compactionBoundaryStore,
       config: this.config,
       eventBus: this.eventBus,
       promptRegistry: this.promptRegistry,

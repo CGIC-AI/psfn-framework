@@ -220,22 +220,22 @@ export class LLMClient {
       : undefined;
     const catalogMatch = fromSlot ?? fromModelId;
 
-    let provider = modelHint.provider ?? qualified?.provider ?? catalogMatch?.provider ?? baseCandidate?.provider;
-    let model = qualified?.model ?? (catalogMatch?.model ?? hintedModel ?? baseCandidate?.model);
+    let provider = modelHint.provider ?? qualified?.provider ?? catalogMatch?.provider ?? baseCandidate.provider;
+    let model = qualified?.model ?? (catalogMatch?.model ?? hintedModel ?? baseCandidate.model);
     let maxTokens = modelHint.maxTokens
       ?? catalogMatch?.overrides?.maxTokens
       ?? catalogMatch?.defaults?.maxTokens
-      ?? baseCandidate?.maxTokens;
+      ?? baseCandidate.maxTokens;
     const contextWindow = catalogMatch?.overrides?.contextWindow
       ?? catalogMatch?.defaults?.contextWindow
-      ?? baseCandidate?.contextWindow;
+      ?? baseCandidate.contextWindow;
 
     if (!provider || !model) return null;
     provider = provider.trim().toLowerCase();
     model = model.trim();
     if (!provider || !model) return null;
 
-    if (!Number.isFinite(maxTokens) || maxTokens === undefined || maxTokens <= 0) {
+    if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
       maxTokens = this.config.primaryMaxTokens;
     }
     if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
@@ -247,7 +247,7 @@ export class LLMClient {
       ...(contextWindow !== undefined ? { contextWindow } : {}),
     };
 
-    if (baseCandidate && baseCandidate.provider === provider) {
+    if (baseCandidate.provider === provider) {
       if (baseCandidate.requestBaseUrl) hinted.requestBaseUrl = baseCandidate.requestBaseUrl;
       if (baseCandidate.requestApiKeyEnv) hinted.requestApiKeyEnv = baseCandidate.requestApiKeyEnv;
       if (baseCandidate.openRouterZdrOnly) hinted.openRouterZdrOnly = true;
@@ -337,11 +337,11 @@ export class LLMClient {
 
                   case 'done': {
                     // If text_delta events didn't fire, extract text from content blocks
-                    if (!content && event.message.content) {
+                    if (!content) {
                       content = extractTextContent(event.message.content as unknown[]);
                     }
                     // Extract reasoning from content blocks if thinking_delta didn't fire
-                    if (!reasoning && event.message.content) {
+                    if (!reasoning) {
                       reasoning = extractReasoningContent(event.message.content as unknown[]);
                     }
                     // Normalize away stringified content block arrays from streaming
@@ -592,5 +592,3 @@ export function inferCallType(
 ) {
   return inferCorrelationCallType(purpose, channelId);
 }
-
-export { toPiTools } from './conversion.js';

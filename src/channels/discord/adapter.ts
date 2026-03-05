@@ -35,6 +35,7 @@ import {
   type TurnContentionPhase,
   type TurnContentionPolicy,
 } from '../../lifecycle/turn-contention.js';
+import { toErrorMessage } from '../../utils/errors.js';
 
 const log = createComponentLogger('Discord');
 
@@ -231,7 +232,8 @@ export class DiscordAdapter implements ChannelAdapter {
 
   async start(): Promise<void> {
     if (!this.runtimeConfig.discordToken) {
-      throw new Error('DISCORD_TOKEN is required');
+      log.warn('Discord adapter disabled: DISCORD_TOKEN not configured');
+      return;
     }
     await this.client.login(this.runtimeConfig.discordToken);
     if (this.runtimeConfig.discordBackfillOnStartup !== false) {
@@ -447,12 +449,19 @@ export class DiscordAdapter implements ChannelAdapter {
       }
 
     } catch (error) {
-      log.error('Error processing message', { error: String(error) });
-      try {
-        await msg.reply('Something went wrong. Please try again.');
-      } catch {
-        // Ignore reply errors.
-      }
+      const errorText = toErrorMessage(error);
+      log.error('Error processing message', {
+        channelId,
+        messageId: substrateMsg.id,
+        error: errorText,
+      });
+      await this.eventBus.emit('channel.message.error', {
+        channelId,
+        channelType: 'discord',
+        messageId: substrateMsg.id,
+        phase: 'handler',
+        error: errorText,
+      }).catch(() => undefined);
     } finally {
       clearInterval(typingInterval);
       this.processing.delete(channelId);
@@ -503,7 +512,7 @@ export class DiscordAdapter implements ChannelAdapter {
       channelType: 'discord',
       isDirectMessage,
       authorId: msg.author.id,
-      authorName: msg.author.displayName ?? msg.author.username,
+      authorName: msg.author.displayName,
       content: resolvedContent,
       ...(attachments.length > 0 ? { attachments } : {}),
       timestamp: msg.createdAt,
@@ -511,8 +520,7 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   private extractAttachments(msg: Message): SubstrateMessage['attachments'] {
-    const rawAttachments = msg.attachments?.values();
-    if (!rawAttachments) return [];
+    const rawAttachments = msg.attachments.values();
 
     const attachments: NonNullable<SubstrateMessage['attachments']> = [];
     for (const raw of rawAttachments) {
@@ -528,18 +536,20 @@ export class DiscordAdapter implements ChannelAdapter {
         log.debug('Skipping oversized Discord image attachment', {
           channelId: msg.channelId,
           messageId: msg.id,
-          name: raw.name ?? raw.id,
+          name: raw.name,
           size,
         });
         continue;
       }
 
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- discord.js types claim non-null but mocks/edge cases disagree
       const url = (raw.proxyURL ?? raw.url ?? '').trim();
       if (!url) continue;
 
       attachments.push({
         url,
         contentType,
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive for partial mock data
         name: raw.name ?? `attachment-${raw.id ?? attachments.length + 1}`,
       });
     }
@@ -1008,7 +1018,7 @@ export class DiscordAdapter implements ChannelAdapter {
             role: 'user',
             content: msg.content.trim() || '(empty message)',
             authorId: msg.author.id,
-            authorName: msg.author.displayName ?? msg.author.username,
+            authorName: msg.author.displayName,
             timestamp: msg.createdTimestamp,
             discordMessageId: msg.id,
           });

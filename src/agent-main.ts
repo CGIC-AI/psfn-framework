@@ -3,6 +3,7 @@
 // Run: npm run agent
 
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './types.js';
 import type {
@@ -17,6 +18,7 @@ import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from './security/policy-constants.js';
 import { ApiServer } from './channels/api/server.js';
+import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import {
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
@@ -24,9 +26,19 @@ import {
 } from './channels/api/active-health-probe.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, saveSettings, applySettings } from './settings.js';
-import { loadModelsConfig } from './config/models-config.js';
+import { applySettings, loadSettings, saveSettings, splitSettingsByDomain } from './settings.js';
+import { loadModelsConfigWithLegacyMigration } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
+import {
+  CAPABILITY_TIER_FILE_NAME,
+  loadCapabilityTierConfig,
+  saveCapabilityTierConfig,
+} from './config/capability-tier-config.js';
+import {
+  SCHEDULER_FILE_NAME,
+  loadSchedulerConfig,
+  saveSchedulerConfig,
+} from './config/scheduler-config.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
@@ -51,6 +63,8 @@ import {
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
+import { registerBeadsTools } from './beads/runtime-wiring.js';
+import { GatewayBeadsOps } from './beads/gateway-ops.js';
 import {
   DiscordLifecycleNotifier,
   writeLastActiveSession,
@@ -79,6 +93,7 @@ import {
   wireStaticPromptRegistry,
   wireSettingsRuntime,
   wireSessionToolsRuntime,
+  buildCharacterPromptVariablesProvider,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
@@ -92,9 +107,17 @@ import {
 } from './capabilities/safeguards.js';
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
+import {
+  composeSystemPromptTemplate,
+} from './identity/loader.js';
 import { ModuleLoader } from './modules/loader.js';
+import {
+  ensureRegistryFile,
+  resolveModuleRegistryPathFromWorkspace,
+} from './modules/registry.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
+import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
   resolveContactsDir,
   resolveNotesDir,
@@ -106,11 +129,58 @@ const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
+const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
 
 function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
+}
+
+function parseCommaSeparatedEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  const entries = value
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+  return [...new Set(entries)];
+}
+
+async function runShutdownStep(
+  step: string,
+  action: () => void | Promise<void>,
+  maxAttempts = 2,
+): Promise<void> {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await action();
+      if (attempt > 1) {
+        log.info('Shutdown step recovered after retry', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+        });
+      }
+      return;
+    } catch (error) {
+      if (attempt < attempts) {
+        log.warn('Shutdown step failed; retrying', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+          error: String(error),
+        });
+        continue;
+      }
+      log.error('Shutdown step failed; continuing shutdown', {
+        step,
+        attempt,
+        maxAttempts: attempts,
+        error: String(error),
+      });
+    }
+  }
 }
 
 function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
@@ -163,12 +233,91 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
 async function main(): Promise<void> {
   const config = loadConfig();
   const savedSettings = loadSettings(config.dataDir);
-  applySettings(config, savedSettings);
+  const settingsDomains = splitSettingsByDomain(savedSettings);
+  applySettings(config, settingsDomains.runtime);
   installPromotedToolsPersistenceHook(config);
-  const modelsConfig = loadModelsConfig(config.dataDir, {
+
+  const modelsLoadResult = loadModelsConfigWithLegacyMigration(config.dataDir, {
     defaultContextWindow: config.defaultContextWindow,
+    legacySettings: settingsDomains.models,
   });
-  applySettings(config, modelsConfig);
+  if (modelsLoadResult.migratedFromLegacySettings) {
+    log.warn('Migrated legacy model settings from settings.json to models.json');
+  } else if (modelsLoadResult.legacyDriftDetected) {
+    log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+  }
+  applySettings(config, modelsLoadResult.config);
+
+  if (settingsDomains.maintenanceIntervalMs !== undefined) {
+    try {
+      const schedulerPath = join(config.dataDir, SCHEDULER_FILE_NAME);
+      const schedulerFileExisted = existsSync(schedulerPath);
+      const persistedScheduler = loadSchedulerConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      if (!schedulerFileExisted) {
+        saveSchedulerConfig(config.dataDir, {
+          ...persistedScheduler,
+          salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
+        });
+        log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
+          maintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
+        });
+      } else if (persistedScheduler.salienceDecayIntervalMs !== settingsDomains.maintenanceIntervalMs) {
+        log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
+          settingsMaintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
+          schedulerMaintenanceIntervalMs: persistedScheduler.salienceDecayIntervalMs,
+        });
+      }
+    } catch (error) {
+      log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
+        error: String(error),
+      });
+    }
+  }
+
+  if (settingsDomains.capabilityTier !== undefined) {
+    try {
+      const capabilityPath = join(config.dataDir, CAPABILITY_TIER_FILE_NAME);
+      const capabilityFileExisted = existsSync(capabilityPath);
+      const persistedCapabilities = loadCapabilityTierConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      if (!capabilityFileExisted) {
+        saveCapabilityTierConfig(config.dataDir, {
+          ...persistedCapabilities,
+          tier: settingsDomains.capabilityTier,
+        });
+        log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
+          capabilityTier: settingsDomains.capabilityTier,
+        });
+      } else if (persistedCapabilities.tier !== settingsDomains.capabilityTier) {
+        log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
+          settingsCapabilityTier: settingsDomains.capabilityTier,
+          capabilityTier: persistedCapabilities.tier,
+        });
+      }
+    } catch (error) {
+      log.warn('Failed to migrate legacy capabilityTier from settings.json', {
+        error: String(error),
+      });
+    }
+  }
+
+  if (settingsDomains.legacyKeys.length > 0) {
+    try {
+      saveSettings(config.dataDir, settingsDomains.runtime);
+      log.warn('Removed legacy cross-domain keys from settings.json', {
+        keys: settingsDomains.legacyKeys,
+      });
+    } catch (error) {
+      log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
+        keys: settingsDomains.legacyKeys,
+        error: String(error),
+      });
+    }
+  }
+
   const trustPolicyConfig = loadTrustPolicyConfig(config.dataDir, {
     seedDir: process.env.CONFIG_DIR,
   });
@@ -202,6 +351,17 @@ async function main(): Promise<void> {
   });
   const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
+  const workspacePathEnv = process.env.WORKSPACE_PATH;
+  const workspacePath = workspacePathEnv ?? './workspace';
+  const workspaceRoot = resolveWorkspaceRoot(workspacePath);
+  if (!workspacePathEnv) {
+    log.warn('WORKSPACE_PATH not set, defaulting to ./workspace', { resolved: workspaceRoot });
+  }
+  const moduleRegistryPath = resolveModuleRegistryPathFromWorkspace(
+    workspaceRoot,
+    process.env.MODULE_REGISTRY_PATH,
+  );
+  ensureRegistryFile(moduleRegistryPath);
   const eventBus = new EventBus();
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
 
@@ -217,6 +377,7 @@ async function main(): Promise<void> {
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
   log.info('Connected to gateway');
   let shuttingDown = false;
+  let stopPromise: Promise<void> | null = null;
   let stopFn: () => Promise<void> = async () => {};
   const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {
     if (shuttingDown) return;
@@ -239,7 +400,22 @@ async function main(): Promise<void> {
 
   // ── Load identity (mounted read-only in container) ──
 
-  const { card, systemPrompt } = composeIdentity(config);
+  const {
+    card,
+    systemPrompt,
+    initializedCard,
+    migratedLegacyBootstrap,
+  } = composeIdentity(config);
+  if (initializedCard) {
+    log.warn('Character card file was missing and has been initialized with defaults', {
+      characterCardPath: config.characterCardPath,
+    });
+  }
+  if (migratedLegacyBootstrap) {
+    log.warn('Legacy bootstrap character card was migrated to neutral starter defaults', {
+      characterCardPath: config.characterCardPath,
+    });
+  }
   const cardVersionStore = new CharacterCardVersionStore(
     config.characterCardPath,
     join(config.dataDir, 'character-card-history.jsonl'),
@@ -307,6 +483,7 @@ async function main(): Promise<void> {
     sessionManager,
     systemPrompt,
     characterName: card.data.name,
+    characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
   });
   agentLoop.scratchpadProvider = memoryStore;
@@ -329,7 +506,7 @@ async function main(): Promise<void> {
   });
 
   // Prompt stack — layered, editable system prompt
-  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, systemPrompt, {
+  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, composeSystemPromptTemplate(), {
     identityCoolingOff,
     getCapabilityTier: () => capabilityRuntime.getTier(),
   });
@@ -370,11 +547,13 @@ async function main(): Promise<void> {
     agentLoop,
     llmProvider: gateway,
     sessionManager,
+    sessionStore,
     memoryStore,
     embeddingService: gateway,
     eventBus,
     config,
     promptRegistry,
+    contactStore,
   });
 
   const salienceDecay = new SalienceDecay(memoryStore);
@@ -419,7 +598,9 @@ async function main(): Promise<void> {
   const moduleLoader = new ModuleLoader({
     eventBus,
     registerTool: (tool, category) => agentLoop.registerTool(tool, category),
+    registryPath: moduleRegistryPath,
   });
+  log.info('Split module registry path resolved', { moduleRegistryPath });
 
   const replConfig = buildReplConfig(config);
   const shardManager = wireShardAndThinkRuntime({
@@ -456,6 +637,10 @@ async function main(): Promise<void> {
   registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });
   log.info('Git self-modification tools enabled');
 
+  // Beads issue-management tools — policy-scoped gateway RPC access (no shell passthrough)
+  registerBeadsTools(agentLoop, new GatewayBeadsOps(gateway), { gatewayMode: true });
+  log.info('Beads issue-management tools enabled');
+
   // Vault tools — Obsidian note read/write via gateway shell.exec
   if (config.obsidianVaultName) {
     const { GatewayVaultOps } = await import('./vault/gateway-ops.js');
@@ -488,6 +673,19 @@ async function main(): Promise<void> {
   const apiHost = process.env.API_HOST || undefined;
   const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
   if (apiPort) {
+    const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
+    const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
+    const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
+      agentLoop,
+      eventBus,
+      config,
+    });
+    const voiceWebSocketPath = voiceWebSocketRuntime
+      ? undefined
+      : DISABLED_VOICE_WEBSOCKET_PATH;
+    if (!voiceWebSocketRuntime) {
+      log.info('API voice websocket runtime gated off: STT/TTS runtime is not fully wired');
+    }
     const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
     const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
     const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
@@ -499,11 +697,15 @@ async function main(): Promise<void> {
       sessionManager,
       contactStore,
       apiKey: process.env.API_KEY || undefined,
+      allowInsecureWithoutAuth,
+      corsAllowedOrigins,
       modelName: process.env.API_MODEL_NAME,
       requestTimeoutMs: parsePositiveIntEnv(
         process.env.API_REQUEST_TIMEOUT_MS,
         DEFAULT_API_REQUEST_TIMEOUT_MS,
       ),
+      voiceWebSocketPath,
+      voiceWebSocketRuntime,
       healthChecks: {
         memory: () => {
           const stats = memoryStore.getStats();
@@ -519,8 +721,8 @@ async function main(): Promise<void> {
         llm: async () => {
           const configured = Boolean(config.primaryModel && config.primaryProvider);
           const baseMeta = {
-            provider: config.primaryProvider ?? null,
-            model: config.primaryModel ?? null,
+            provider: config.primaryProvider,
+            model: config.primaryModel,
             ...toActiveProbeMeta(activeProbeConfig),
             ...runtimeStatusMeta,
           };
@@ -719,25 +921,46 @@ async function main(): Promise<void> {
   });
 
   stopFn = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    unregisterGatewayDisconnect();
-    await eventBus.emit('system.shutdown', {});
-    stopDebugObserver();
-    scheduler.stop();
-    const timeoutMs = parsePositiveIntEnv(
-      process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
-      DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
-    );
-    const drained = await memoryExtractor.stop({ timeoutMs });
-    if (!drained) {
-      log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+    if (stopPromise) {
+      await stopPromise;
+      return;
     }
-    if (apiServer) await apiServer.stop();
-    if (adminServer) await adminServer.stop();
-    gateway.destroy();
-    db.close();
-    log.info('Stopped');
+
+    shuttingDown = true;
+    stopPromise = (async () => {
+      await runShutdownStep('unregister gateway disconnect hook', () => unregisterGatewayDisconnect());
+      await runShutdownStep('emit system.shutdown event', () => eventBus.emit('system.shutdown', {}));
+      await runShutdownStep('stop debug observer', () => stopDebugObserver());
+      await runShutdownStep('stop scheduler', () => scheduler.stop());
+
+      const timeoutMs = parsePositiveIntEnv(
+        process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
+        DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+      );
+      await runShutdownStep('drain memory extractor', async () => {
+        const drained = await memoryExtractor.stop({ timeoutMs });
+        if (!drained) {
+          log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+        }
+      });
+
+      await runShutdownStep('write graceful shutdown markers', () => {
+        const markedChannels = sessionStore.markGracefulShutdownForActiveChannels();
+        if (markedChannels.length > 0) {
+          log.info('Wrote graceful shutdown markers', { channels: markedChannels });
+        }
+      });
+      await runShutdownStep('shutdown module loader', () => moduleLoader.shutdown());
+      await runShutdownStep('stop API server', () => apiServer?.stop());
+      await runShutdownStep('stop admin server', () => adminServer?.stop());
+      await runShutdownStep('destroy gateway client', () => gateway.destroy());
+      await runShutdownStep('close database', () => {
+        db.close();
+      });
+      log.info('Stopped');
+    })();
+
+    await stopPromise;
   };
 
   agentLoop.registerTool(createRestartTool(
@@ -793,6 +1016,7 @@ async function main(): Promise<void> {
     {
       eventBus,
       llmProvider: gateway,
+      characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
       postTurnActions,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
@@ -834,14 +1058,41 @@ async function main(): Promise<void> {
 
   // ── Graceful shutdown ──
 
+  let shutdownPromise: Promise<void> | null = null;
   const shutdown = async (signal: string) => {
-    log.info(`Received ${signal}, shutting down...`);
-    await stopFn();
-    process.exit(0);
+    if (shutdownPromise) {
+      log.warn('Shutdown already in progress; ignoring additional signal', { signal });
+      await shutdownPromise;
+      return;
+    }
+
+    shutdownPromise = (async () => {
+      log.info(`Received ${signal}, shutting down...`);
+      await stopFn();
+      process.exit(0);
+    })().catch((error) => {
+      log.error('Graceful shutdown failed; forcing exit', {
+        signal,
+        error: String(error),
+      });
+      process.exit(1);
+    });
+
+    await shutdownPromise;
   };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT').catch((error) => {
+      log.error('Unhandled SIGINT shutdown error', { error: String(error) });
+      process.exit(1);
+    });
+  });
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM').catch((error) => {
+      log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
+      process.exit(1);
+    });
+  });
 }
 
 main().catch((err) => {

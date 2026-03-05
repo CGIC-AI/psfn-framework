@@ -223,11 +223,6 @@ export interface ConfigUpdateResult {
 export interface AdminSettingsService {
   getSettingsData(): Promise<AdminSettingsData>;
   updateSettings(body: string): ConfigUpdateResult;
-  updateModelsConfig(body: string): ConfigUpdateResult;
-  updateSkillsConfig(body: string): ConfigUpdateResult;
-  updateSchedulerConfig(body: string): ConfigUpdateResult;
-  updateTrustPolicyConfig(body: string): ConfigUpdateResult;
-  updateCapabilitiesConfig(body: string): ConfigUpdateResult;
 }
 
 export interface AdminContactListData {

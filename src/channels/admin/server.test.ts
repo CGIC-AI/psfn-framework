@@ -19,6 +19,9 @@ import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore, EXTRACTION_PROMPT_KEY } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+import { applySettings, loadSettings, splitSettingsByDomain } from '../../settings.js';
+import { loadModelsConfig } from '../../config/models-config.js';
+import { loadCapabilityTierConfig } from '../../config/capability-tier-config.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
@@ -67,7 +70,7 @@ function sseRequest(
       (res) => {
         resolve({ status: res.statusCode!, headers: res.headers });
         // Must destroy the socket to release the connection
-        res.socket?.destroy();
+        res.socket.destroy();
       },
     );
     req.on('error', () => {});
@@ -96,7 +99,7 @@ function captureSseBody(
           if (settled) return;
           settled = true;
           clearTimeout(timeoutHandle);
-          res.socket?.destroy();
+          res.socket.destroy();
           result();
         };
 
@@ -121,6 +124,102 @@ function captureSseBody(
       },
     );
     req.on('error', reject);
+  });
+}
+
+function openWebSocket(
+  port: number,
+  path: string,
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers });
+    const cleanup = () => {
+      ws.removeAllListeners('open');
+      ws.removeAllListeners('error');
+      ws.removeAllListeners('unexpected-response');
+    };
+
+    ws.once('open', () => {
+      cleanup();
+      resolve(ws);
+    });
+
+    ws.once('unexpected-response', (_request, response) => {
+      cleanup();
+      const status = response.statusCode ?? 0;
+      response.resume();
+      reject(new Error(`Unexpected websocket response: ${status}`));
+    });
+
+    ws.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
+function openWebSocketExpectStatus(
+  port: number,
+  path: string,
+  headers?: Record<string, string>,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    let settled = false;
+    let responseBuffer = '';
+
+    const resolveStatus = (status: number): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(status);
+    };
+
+    const rejectWith = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      reject(error);
+    };
+
+    const maybeResolveFromBuffer = (): boolean => {
+      const match = /^HTTP\/1\.1 (\d{3})/m.exec(responseBuffer);
+      if (!match) return false;
+      resolveStatus(Number(match[1]));
+      return true;
+    };
+
+    socket.once('connect', () => {
+      const requestHeaders = [
+        `GET ${path} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        'Sec-WebSocket-Version: 13',
+        `Sec-WebSocket-Key: ${Buffer.from('0123456789abcdef').toString('base64')}`,
+      ];
+      for (const [name, value] of Object.entries(headers ?? {})) {
+        requestHeaders.push(`${name}: ${value}`);
+      }
+      requestHeaders.push('\r\n');
+      socket.write(requestHeaders.join('\r\n'));
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      responseBuffer += chunk.toString('utf8');
+      maybeResolveFromBuffer();
+    });
+
+    socket.once('end', () => {
+      if (maybeResolveFromBuffer()) return;
+      rejectWith(new Error('Expected websocket upgrade to fail with status'));
+    });
+
+    socket.once('error', (error) => {
+      if (maybeResolveFromBuffer()) return;
+      rejectWith(error as Error);
+    });
   });
 }
 
@@ -307,12 +406,21 @@ describe('AdminServer', () => {
   let server: AdminServer;
   let port: number;
   let skillsRuntimeInvalidate: ReturnType<typeof vi.fn>;
+  let refreshModelsSpy: ReturnType<typeof vi.fn>;
+  let refreshCapabilitiesSpy: ReturnType<typeof vi.fn>;
   let confirmationEntries: ConfirmationQueueEntry[];
   let confirmationListMock: ReturnType<typeof vi.fn>;
   let confirmationResolveMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-test-'));
+    refreshModelsSpy = vi.fn();
+    refreshCapabilitiesSpy = vi.fn();
+    testConfig.runtimeHooks = {
+      refreshModels: refreshModelsSpy,
+      refreshCapabilities: refreshCapabilitiesSpy,
+    };
+    testConfig.capabilityTier = 'nursery';
     testConfig.dataDir = tempDir;
     testConfig.characterCardPath = join(tempDir, 'character.json');
     writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');
@@ -442,6 +550,8 @@ describe('AdminServer', () => {
     db.close();
     rmSync(tempDir, { recursive: true, force: true });
     resetRuntimeTrustPolicy();
+    testConfig.runtimeHooks = undefined;
+    testConfig.capabilityTier = undefined;
   });
 
   describe('Dashboard', () => {
@@ -878,6 +988,9 @@ describe('AdminServer', () => {
       expect(payload.defaultSessionId).toBe('api:admin-user');
       expect(payload.defaultAuthorName).toBe('Primary Contact');
       expect(payload.defaultAuthorId).toBe('admin-user');
+      expect(payload.assistantName).toBeTruthy();
+      expect(payload.assistantName).not.toBe('Assistant');
+      expect(payload.onboarding.required).toBe(false);
     });
 
     it('uses computed latest session when persisted metadata is stale', async () => {
@@ -958,6 +1071,7 @@ describe('AdminServer', () => {
         expect(res.status).toBe(200);
         const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
         expect(payload.api.apiKey).toBeUndefined();
+        expect(payload.runtime.apiKey).toBeUndefined();
       } finally {
         if (previousApiKey === undefined) {
           delete process.env.API_KEY;
@@ -967,7 +1081,7 @@ describe('AdminServer', () => {
       }
     });
 
-    it('includes api key in bootstrap when API_KEY is configured', async () => {
+    it('does not expose api key in bootstrap when API_KEY is configured', async () => {
       const previousApiKey = process.env.API_KEY;
       process.env.API_KEY = 'bootstrap-test-secret';
 
@@ -975,7 +1089,9 @@ describe('AdminServer', () => {
         const res = await request(port, 'GET', '/api/chat/bootstrap');
         expect(res.status).toBe(200);
         const payload = JSON.parse(res.body) as AdminChatBootstrapResponse;
-        expect(payload.api.apiKey).toBe('bootstrap-test-secret');
+        expect(payload.api.apiKey).toBeUndefined();
+        expect(payload.runtime.apiKey).toBeUndefined();
+        expect(JSON.stringify(payload)).not.toContain('bootstrap-test-secret');
       } finally {
         if (previousApiKey === undefined) {
           delete process.env.API_KEY;
@@ -997,6 +1113,7 @@ describe('AdminServer', () => {
       expect(payload.constraints.allowedProviders).toEqual(['anthropic', 'openai', 'google']);
       expect(payload.constraints.deniedProviders).toContain('openrouter');
       expect(Array.isArray(payload.participants)).toBe(true);
+      expect(payload.api.apiKey).toBeUndefined();
     });
 
     it('uses persisted chatApiBaseUrl override in bootstrap endpoints', async () => {
@@ -1727,6 +1844,136 @@ describe('AdminServer', () => {
       testConfig.sessionMessageLimit = 30;
     });
 
+    it('applies identical save+refresh semantics for legacy and JSON settings endpoints', async () => {
+      const formPayload = new URLSearchParams();
+      formPayload.set('sessionMessageLimit', '44');
+      formPayload.set('capabilityTier', 'custom');
+      formPayload.append('customTokens', 'identity.read');
+      formPayload.append('customTokens', 'git.read');
+      formPayload.set('modelCatalogJson', JSON.stringify({
+        legacyPrimary: {
+          model: 'openai/gpt-4.1-mini',
+          provider: 'openrouter',
+          defaults: { maxTokens: 4096, contextWindow: 128000 },
+        },
+        legacyExtract: {
+          model: 'deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          defaults: { maxTokens: 2048 },
+        },
+      }));
+      formPayload.set('modelRoleAssignmentsJson', JSON.stringify({
+        chat: 'legacyPrimary',
+        extraction: 'legacyExtract',
+        background: 'legacyExtract',
+      }));
+
+      const legacyRes = await request(port, 'POST', '/api/settings', formPayload.toString(), {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(legacyRes.status).toBe(200);
+      expect(legacyRes.body).toContain('Settings saved');
+      expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+      expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
+
+      const legacyModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
+        modelCatalog: Record<string, unknown>;
+        modelRoleAssignments: Record<string, string>;
+      };
+      expect(legacyModels.modelCatalog.legacyPrimary).toBeDefined();
+      expect(legacyModels.modelRoleAssignments.chat).toBe('legacyPrimary');
+      const legacyCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8')) as {
+        tier: string;
+        customTokens: string[];
+      };
+      expect(legacyCapabilities.tier).toBe('custom');
+      expect(legacyCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
+      expect(testConfig.capabilityTier).toBe('custom');
+
+      const jsonRes = await request(
+        port,
+        'PATCH',
+        '/api/admin/settings',
+        JSON.stringify({
+          sessionMessageLimit: 45,
+          capabilityTier: 'custom',
+          customTokens: ['memory.write'],
+          modelCatalog: {
+            jsonPrimary: {
+              model: 'z-ai/glm-5',
+              provider: 'openrouter',
+              defaults: { maxTokens: 8192, contextWindow: 128000 },
+            },
+            jsonExtract: {
+              model: 'openai/gpt-4.1-mini',
+              provider: 'openrouter',
+              defaults: { maxTokens: 3072 },
+            },
+          },
+          modelRoleAssignments: {
+            chat: 'jsonPrimary',
+            extraction: 'jsonExtract',
+            background: 'jsonExtract',
+          },
+        }),
+        { 'Content-Type': 'application/json' },
+      );
+      expect(jsonRes.status).toBe(200);
+      expect(refreshModelsSpy).toHaveBeenCalledTimes(2);
+      expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(2);
+
+      const jsonModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
+        modelCatalog: Record<string, unknown>;
+        modelRoleAssignments: Record<string, string>;
+      };
+      expect(jsonModels.modelCatalog.jsonPrimary).toBeDefined();
+      expect(jsonModels.modelRoleAssignments.chat).toBe('jsonPrimary');
+      const jsonCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8')) as {
+        tier: string;
+        customTokens: string[];
+      };
+      expect(jsonCapabilities.tier).toBe('custom');
+      expect(jsonCapabilities.customTokens).toEqual(['memory.write']);
+      expect(testConfig.capabilityTier).toBe('custom');
+
+      const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf-8')) as {
+        sessionMessageLimit: number;
+        modelCatalog?: unknown;
+        modelRoleAssignments?: unknown;
+        capabilityTier?: string;
+      };
+      expect(persistedSettings.sessionMessageLimit).toBe(45);
+      expect(persistedSettings.modelCatalog).toBeUndefined();
+      expect(persistedSettings.modelRoleAssignments).toBeUndefined();
+      expect(persistedSettings.capabilityTier).toBeUndefined();
+      expect(testConfig.sessionMessageLimit).toBe(45);
+
+      const restartedConfig: SubstrateConfig = {
+        ...testConfig,
+        primaryModel: 'test-model',
+        primaryProvider: 'test',
+        primaryMaxTokens: 16384,
+        extractionModel: 'test-extract',
+        extractionProvider: 'test',
+        extractionMaxTokens: 8192,
+        modelCatalog: undefined,
+        modelRoleAssignments: undefined,
+        modelRoster: {
+          chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+        },
+        capabilityTier: undefined,
+      };
+      const restartSettings = splitSettingsByDomain(loadSettings(tempDir));
+      applySettings(restartedConfig, restartSettings.runtime);
+      applySettings(restartedConfig, loadModelsConfig(tempDir, {
+        defaultContextWindow: restartedConfig.defaultContextWindow,
+      }));
+      restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
+      expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
+      expect(restartedConfig.modelRoleAssignments?.chat).toBe('jsonPrimary');
+      expect(restartedConfig.capabilityTier).toBe('custom');
+    });
+
     it('updates capability tier via settings form POST', async () => {
       const body = 'capabilityTier=apprentice';
       const res = await request(port, 'POST', '/api/settings', body, {
@@ -1849,7 +2096,7 @@ describe('AdminServer', () => {
       expect(testConfig.extractionMaxTokens).toBe(1536);
       expect(testConfig.modelRoleAssignments?.chat).toBe('chatfast');
       expect(testConfig.modelRoleAssignments?.extraction).toBe('extract');
-      expect(testConfig.modelCatalog?.chatfast?.defaults?.contextWindow).toBe(200000);
+      expect(testConfig.modelCatalog?.chatfast.defaults?.contextWindow).toBe(200000);
       expect(testConfig.modelRoster.reasoning?.model).toBe('moonshotai/kimi-k2.5');
 
       testConfig.primaryModel = 'test-model';
@@ -2109,7 +2356,6 @@ describe('AdminServer', () => {
 
     it('returns prompt layer detail page with structured section editors', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       const res = await request(port, 'GET', `/legacy/prompts/${encodeURIComponent(layer.id)}`);
       expect(res.status).toBe(200);
       expect(res.body).toContain('name="description"');
@@ -2130,7 +2376,6 @@ describe('AdminServer', () => {
 
     it('updates prompt layer via structured section form and persists composed content + metadata', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       const body = new URLSearchParams({
         layerId: layer.id,
         identifier: 'garden.main',
@@ -2168,7 +2413,6 @@ describe('AdminServer', () => {
 
     it('injects session system notes when admin updates prompt layers', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       sessionManager.recordUserMessage(
         'discord:identity-note',
         'hello',
@@ -2197,7 +2441,6 @@ describe('AdminServer', () => {
 
     it('rejects invalid role metadata updates', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       const before = promptStore.getById(layer.id);
 
       const body = new URLSearchParams({
@@ -2220,7 +2463,6 @@ describe('AdminServer', () => {
 
     it('rejects non-integer or negative promptOrder updates', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
 
       const badDecimal = new URLSearchParams({
         layerId: layer.id,
@@ -2249,7 +2491,6 @@ describe('AdminServer', () => {
 
     it('rejects malformed structured prompt content updates', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       const before = promptStore.getById(layer.id);
       const beforeVersion = before?.version;
       const beforeContent = before?.content;
@@ -2273,7 +2514,6 @@ describe('AdminServer', () => {
 
     it('shows malformed structured prompt errors on prompt detail page', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       promptStore.update(
         layer.id,
         ['### description', 'A good start', '', '### unknown_section', 'Broken block'].join('\n'),
@@ -2400,7 +2640,6 @@ describe('AdminServer', () => {
 
     it('shows unified audit timeline entries for tool, identity, external, and memory actions', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
 
       await eventBus.emit('agent.tool.start', {
         channelId: 'timeline-ch',
@@ -2556,7 +2795,7 @@ describe('AdminServer', () => {
           const timeout = setTimeout(() => {
             if (settled) return;
             settled = true;
-            res.socket?.destroy();
+            res.socket.destroy();
             reject(new Error('Timed out waiting for SSE events'));
           }, 3000);
 
@@ -2564,7 +2803,7 @@ describe('AdminServer', () => {
             if (settled) return;
             settled = true;
             clearTimeout(timeout);
-            res.socket?.destroy();
+            res.socket.destroy();
             resolve(result);
           };
 
@@ -2986,6 +3225,24 @@ describe('AdminServer with auth', () => {
     expect(legacy.body).toContain('Dashboard');
   });
 
+  it('rejects admin telemetry websocket upgrade with query token auth', async () => {
+    for (const path of [
+      '/api/admin/events?token=test-admin-secret',
+      '/api/admin/events?api_key=test-admin-secret',
+    ]) {
+      const status = await openWebSocketExpectStatus(port, path);
+      expect(status).toBe(401);
+    }
+  });
+
+  it('accepts admin telemetry websocket upgrade with bearer auth', async () => {
+    const ws = await openWebSocket(port, '/api/admin/events', {
+      Authorization: 'Bearer test-admin-secret',
+    });
+    ws.close();
+    await new Promise<void>((resolve) => ws.once('close', () => resolve()));
+  });
+
   it('applies token auth middleware consistently for /garden and /legacy', async () => {
     const unauthorizedGarden = await request(port, 'GET', '/garden');
     const unauthorizedLegacy = await request(port, 'GET', '/legacy');
@@ -3055,6 +3312,25 @@ describe('AdminServer with auth', () => {
 
     expect(gardenRes.status).not.toBe(401);
     expect(legacyRes.status).not.toBe(401);
+  });
+
+  it('accepts admin telemetry websocket upgrade with auth cookie', async () => {
+    const body = new URLSearchParams({ token: 'test-admin-secret' }).toString();
+    const loginRes = await request(port, 'POST', '/login', body, {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+    expect(loginRes.status).toBe(302);
+
+    const setCookie = loginRes.headers['set-cookie'];
+    const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+    expect(cookie).toContain('psfn_token=');
+    const cookieHeader = cookie!.split(';')[0];
+
+    const ws = await openWebSocket(port, '/api/admin/events', {
+      Cookie: cookieHeader,
+    });
+    ws.close();
+    await new Promise<void>((resolve) => ws.once('close', () => resolve()));
   });
 
   it('clears auth cookie via /api/admin/logout', async () => {
@@ -3457,7 +3733,7 @@ describe('AdminServer with contacts', () => {
     });
     const primary = contactStore.upsert({
       displayName: 'Pia Primary',
-      trustLevel: 'primary',
+      trustLevel: 'trusted',
       relationshipType: 'partner',
       channels: [{
         channel: 'terminal',
@@ -3536,7 +3812,7 @@ describe('AdminServer with contacts', () => {
   it('renders canonical profile summary with timestamp and source IDs', async () => {
     const contact = contactStore.upsert({
       displayName: 'Eve Example',
-      trustLevel: 'primary',
+      trustLevel: 'trusted',
       relationshipType: 'partner',
     });
     memoryStore.upsertContactProfile({

@@ -441,15 +441,46 @@ describe('Scheduler', () => {
   });
 
   describe('start/stop', () => {
-    it('start creates a timer and stop clears it', () => {
+    it('start creates a timer and stop clears it', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       scheduler.start();
       // Start again should be no-op
       scheduler.start();
-      scheduler.stop();
+      await scheduler.stop();
       // Stop again should be no-op
-      scheduler.stop();
+      await scheduler.stop();
       logSpy.mockRestore();
+    });
+
+    it('waits for in-flight tick work to drain during stop', async () => {
+      let resolveTask: (() => void) | null = null;
+      scheduler.register({
+        id: 'drain-test',
+        name: 'Drain Test',
+        type: 'every',
+        intervalMs: 1,
+        handler: () => new Promise<void>((resolve) => {
+          resolveTask = resolve;
+        }),
+        state: 'idle',
+      });
+
+      const tickPromise = scheduler.tick();
+      await Promise.resolve();
+
+      let stopped = false;
+      const stopPromise = scheduler.stop().then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+
+      expect(stopped).toBe(false);
+
+      resolveTask?.();
+      await tickPromise;
+      await stopPromise;
+
+      expect(stopped).toBe(true);
     });
   });
 });

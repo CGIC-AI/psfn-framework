@@ -33,7 +33,7 @@ export class VoiceStageTimeoutError extends Error {
 
 export interface VoiceStageExecutionOptions<T> {
   stage: VoiceRuntimeStage;
-  task: () => Promise<T>;
+  task: (signal: AbortSignal) => Promise<T>;
   budgets?: VoiceReliabilityBudgets;
   signal?: AbortSignal;
   retryOptions?: Pick<RetryOptions, 'isRetryable' | 'onRetry' | 'sleep'>;
@@ -75,50 +75,83 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
 
+function createStageAbortError(stage: VoiceRuntimeStage): Error {
+  const error = new Error(`${stage} stage aborted`);
+  error.name = 'AbortError';
+  return error;
+}
+
+function mirrorAbortSignal(signal: AbortSignal | undefined, controller: AbortController): () => void {
+  if (!signal) {
+    return () => undefined;
+  }
+
+  const onAbort = () => {
+    controller.abort(signal.reason);
+  };
+
+  if (signal.aborted) {
+    onAbort();
+    return () => undefined;
+  }
+
+  signal.addEventListener('abort', onAbort, { once: true });
+  return () => {
+    signal.removeEventListener('abort', onAbort);
+  };
+}
+
 async function withStageTimeout<T>(
   stage: VoiceRuntimeStage,
   timeoutMs: number,
-  task: () => Promise<T>,
+  task: (signal: AbortSignal) => Promise<T>,
   signal?: AbortSignal,
+  waitForCancellationAckOnTimeout = false,
 ): Promise<T> {
   if (signal?.aborted) {
-    throw new Error(`${stage} stage aborted`);
+    throw createStageAbortError(stage);
   }
 
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
+  const attemptAbortController = new AbortController();
+  const releaseAbortMirror = mirrorAbortSignal(signal, attemptAbortController);
+  let timedOut = false;
+  let timeoutError: VoiceStageTimeoutError | null = null;
+  let timer: NodeJS.Timeout | undefined;
 
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new VoiceStageTimeoutError(stage, timeoutMs));
+  const taskPromise = Promise.resolve().then(() => task(attemptAbortController.signal));
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      if (attemptAbortController.signal.aborted) {
+        return;
+      }
+
+      timedOut = true;
+      timeoutError = new VoiceStageTimeoutError(stage, timeoutMs);
+      attemptAbortController.abort(timeoutError);
+      reject(timeoutError);
     }, timeoutMs);
 
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`${stage} stage aborted`));
-    };
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  });
 
-    if (signal) {
-      signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await Promise.race([taskPromise, timeoutPromise]);
+  } catch (error) {
+    const normalized = toError(error);
+
+    if (attemptAbortController.signal.aborted && signal?.aborted) {
+      throw createStageAbortError(stage);
     }
 
-    task()
-      .then((result) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(result);
-      })
-      .catch((error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(toError(error));
-      });
-  });
+    throw normalized;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    releaseAbortMirror();
+  }
 }
 
 export async function runWithVoiceStageBudget<T>(options: VoiceStageExecutionOptions<T>): Promise<T> {
@@ -126,7 +159,13 @@ export async function runWithVoiceStageBudget<T>(options: VoiceStageExecutionOpt
   const budget = budgets[options.stage];
 
   return withRetry(
-    () => withStageTimeout(options.stage, budget.timeoutMs, options.task, options.signal),
+    () => withStageTimeout(
+      options.stage,
+      budget.timeoutMs,
+      options.task,
+      options.signal,
+      budget.maxRetries > 0,
+    ),
     {
       maxRetries: budget.maxRetries,
       baseDelayMs: budget.baseDelayMs,

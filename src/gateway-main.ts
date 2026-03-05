@@ -23,8 +23,10 @@ import {
   resolveFullCodebaseReadRootFromEnv,
   resolveTrustedModuleRegistryPathFromEnv,
 } from './gateway/policy-config.js';
-import { MODULE_REGISTRY_PATH } from './security/policy-constants.js';
-import { ensureRegistryFile } from './modules/registry.js';
+import {
+  ensureRegistryFile,
+  resolveModuleRegistryPathFromWorkspace,
+} from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
@@ -34,10 +36,7 @@ import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/h
 import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
 import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
-import {
-  createStreamingTtsConnector,
-  type StreamingTtsProvider,
-} from './voice/connectors/tts/index.js';
+import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import { GitOps } from './git/ops.js';
@@ -46,9 +45,11 @@ import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parsePositiveIntEnv } from './utils/env.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
+import { resolveRuntimeVoiceProviderGate } from './runtime/bootstrap-helpers.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
+import type { BeadsAction } from './gateway/protocol.js';
 import {
   startDiscordWithRetry,
   DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
@@ -65,6 +66,14 @@ const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;
 const DEFAULT_SHELL_EXEC_OUTPUT_CHARS = 20_000;
 const DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP = 100_000;
+const ALL_BEADS_ACTIONS: readonly BeadsAction[] = [
+  'ready',
+  'show',
+  'create',
+  'update',
+  'close',
+  'sync',
+];
 
 interface GatewayVoiceModuleContext {
   gateway: GatewayServer;
@@ -150,6 +159,92 @@ function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
   return fallback;
 }
 
+function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefined {
+  const parsed = parseStringListEnv(value);
+  if (!parsed) {
+    return value === undefined ? undefined : [];
+  }
+
+  const valid = new Set(ALL_BEADS_ACTIONS);
+  const actions: BeadsAction[] = [];
+  for (const entry of parsed) {
+    const normalized = entry.toLowerCase();
+    if (valid.has(normalized as BeadsAction)) {
+      actions.push(normalized as BeadsAction);
+    }
+  }
+  return actions;
+}
+
+function resolveGatewayRuntimeMode(raw: string | undefined): string {
+  const normalized = raw?.trim().toLowerCase() ?? '';
+  if (!normalized) {
+    throw new Error(
+      'PSFN_RUNTIME_MODE is required for gateway startup. Set it to "split" or "yolo".',
+    );
+  }
+
+  const allowedModes = new Set([
+    'split',
+    'yolo',
+    'gateway',
+    'gateway-agent',
+    'gateway_agent',
+    'gatewayagent',
+    'agent',
+  ]);
+  if (!allowedModes.has(normalized)) {
+    throw new Error(
+      `Unsupported PSFN_RUNTIME_MODE "${raw}". Expected one of: split, yolo, gateway, gateway-agent.`,
+    );
+  }
+
+  if (normalized === 'gateway_agent' || normalized === 'gatewayagent') {
+    return 'gateway-agent';
+  }
+  if (normalized === 'agent') {
+    return 'gateway-agent';
+  }
+  return normalized;
+}
+
+async function runShutdownStep(
+  step: string,
+  action: () => void | Promise<void>,
+  maxAttempts = 2,
+): Promise<void> {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await action();
+      if (attempt > 1) {
+        log.info('Shutdown step recovered after retry', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+        });
+      }
+      return;
+    } catch (error) {
+      if (attempt < attempts) {
+        log.warn('Shutdown step failed; retrying', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+          error: String(error),
+        });
+        continue;
+      }
+      log.error('Shutdown step failed; continuing shutdown', {
+        step,
+        attempt,
+        maxAttempts: attempts,
+        error: String(error),
+      });
+    }
+  }
+}
+
 function buildGatewayChannelsConfigOverrides(
   config: SubstrateConfig,
   settings: EditableSettings,
@@ -186,7 +281,11 @@ async function main(): Promise<void> {
     buildGatewayChannelsConfigOverrides(config, savedSettings),
   );
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
-  const workspacePath = process.env.WORKSPACE_PATH ?? './workspace';
+  const workspacePathEnv = process.env.WORKSPACE_PATH;
+  const workspacePath = workspacePathEnv ?? './workspace';
+  if (!workspacePathEnv) {
+    log.warn('WORKSPACE_PATH not set, defaulting to ./workspace');
+  }
   const ntfyBaseUrl = process.env.NTFY_BASE_URL?.trim() || undefined;
   const ntfyTopic = process.env.NTFY_TOPIC?.trim() || undefined;
   const ntfyToken = process.env.NTFY_TOKEN?.trim() || undefined;
@@ -217,6 +316,9 @@ async function main(): Promise<void> {
     process.env.SHELL_EXEC_MAX_OUTPUT_CHARS,
     DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
   );
+  const beadsToolsEnabled = parseBooleanEnv(process.env.BEADS_TOOLS_ENABLED, false);
+  const beadsAllowActions = parseBeadsActionsEnv(process.env.BEADS_ALLOW_ACTIONS)
+    ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
   const discordStartRetryBaseDelayMs = parsePositiveIntEnv(
     process.env.DISCORD_START_RETRY_BASE_DELAY_MS,
     DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
@@ -242,7 +344,7 @@ async function main(): Promise<void> {
 
   // Ensure gateway socket directory exists
   mkdirSync(dirname(socketPath), { recursive: true });
-  const runtimeMode = process.env.PSFN_RUNTIME_MODE?.trim().toLowerCase() || 'gateway';
+  const runtimeMode = resolveGatewayRuntimeMode(process.env.PSFN_RUNTIME_MODE);
   const codebaseRoot = resolve('.');
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
   mkdirSync(workspaceRoot, { recursive: true });
@@ -259,9 +361,9 @@ async function main(): Promise<void> {
 
   // Ensure the module registry file exists regardless of policy — prevents
   // ENOENT when the REPL sandbox or ModuleLoader reads it for the first time.
-  const moduleRegistryAbsolute = resolve(
+  const moduleRegistryAbsolute = resolveModuleRegistryPathFromWorkspace(
     workspaceRoot,
-    process.env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH,
+    process.env.MODULE_REGISTRY_PATH,
   );
   ensureRegistryFile(moduleRegistryAbsolute);
   const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(process.env, workspaceRoot);
@@ -337,6 +439,10 @@ async function main(): Promise<void> {
         defaultMaxOutputChars: shellExecDefaultMaxOutputChars,
         maxOutputChars: shellExecMaxOutputChars,
       },
+      beads: {
+        enabled: beadsToolsEnabled,
+        ...(beadsAllowActions ? { allowActions: beadsAllowActions } : {}),
+      },
     },
     ntfy: ntfyBaseUrl && ntfyTopic
       ? {
@@ -396,39 +502,53 @@ async function main(): Promise<void> {
     });
 
     const wyomingAdapters = [handleAdapter];
+    const voiceProviderGate = resolveRuntimeVoiceProviderGate(config);
+    const wyomingSttProvider = voiceProviderGate.sttProvider;
+    const wyomingTtsProvider = voiceProviderGate.ttsProvider;
 
-    // ASR adapter — wired to Deepgram STT when API key is available
-    const wyomingDeepgramKey = config.deepgramApiKey;
-    if (wyomingDeepgramKey) {
+    // ASR adapter — wired to Deepgram STT only when provider + credentials are enabled
+    if (voiceProviderGate.sttEnabled && wyomingSttProvider === 'deepgram') {
       const sttConnector = createStreamingSttConnector('deepgram', {
-        apiKey: wyomingDeepgramKey,
+        apiKey: config.deepgramApiKey!,
         model: config.deepgramModel,
       });
       wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
       log.info('Wyoming ASR adapter enabled (deepgram)');
+    } else {
+      log.info('Wyoming ASR adapter disabled', {
+        provider: wyomingSttProvider,
+        hasDeepgramApiKey: Boolean(config.deepgramApiKey),
+      });
     }
 
-    // TTS adapter — wired to the configured TTS provider (elevenlabs or echo)
-    const wyomingTtsProvider: StreamingTtsProvider = config.ttsProvider ?? 'elevenlabs';
+    // TTS adapter — wired only when provider + credentials/config are enabled
     try {
       let ttsConnector;
-      if (wyomingTtsProvider === 'echo' && config.echoTtsUrl && config.echoTtsVoice) {
-        ttsConnector = createStreamingTtsConnector('echo', {
-          url: config.echoTtsUrl,
-          voice: config.echoTtsVoice,
-          preset: config.echoTtsPreset ?? 'normal',
-          ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
-        });
-      } else if (config.elevenLabsApiKey) {
-        ttsConnector = createStreamingTtsConnector('elevenlabs', {
-          apiKey: config.elevenLabsApiKey,
-          voiceId: config.elevenLabsVoiceId ?? 'rPQ6h200dfjiuYAy0JDA',
-          modelId: config.elevenLabsModelId,
-        });
+      if (voiceProviderGate.ttsEnabled) {
+        if (wyomingTtsProvider === 'echo') {
+          ttsConnector = createStreamingTtsConnector('echo', {
+            url: config.echoTtsUrl!,
+            voice: config.echoTtsVoice!,
+            ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
+            ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
+          });
+        } else if (wyomingTtsProvider === 'elevenlabs' && config.elevenLabsVoiceId) {
+          ttsConnector = createStreamingTtsConnector('elevenlabs', {
+            apiKey: config.elevenLabsApiKey!,
+            voiceId: config.elevenLabsVoiceId,
+            modelId: config.elevenLabsModelId,
+          });
+        }
       }
       if (ttsConnector) {
         wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: ttsConnector }));
         log.info('Wyoming TTS adapter enabled', { provider: wyomingTtsProvider });
+      } else {
+        log.info('Wyoming TTS adapter disabled', {
+          provider: wyomingTtsProvider,
+          hasElevenLabsApiKey: Boolean(config.elevenLabsApiKey),
+          hasEchoConfig: Boolean(config.echoTtsUrl && config.echoTtsVoice),
+        });
       }
     } catch (error) {
       log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
@@ -537,21 +657,64 @@ async function main(): Promise<void> {
 
   // ── Graceful shutdown ──
 
-  const shutdown = async (signal: string) => {
-    log.info(`Received ${signal}, shutting down...`);
-    stopDebugObserver();
-    if (wyomingRuntime) await wyomingRuntime.stop();
-    if (wyomingTcpServer) await wyomingTcpServer.stop();
-    await voiceModuleHost.stopAll();
-    await gateway.stop();
-    if (telegram) await telegram.stop();
-    await discord.stop();
-    auditDb.close();
-    process.exit(0);
+  let stopPromise: Promise<void> | null = null;
+  const stop = async (): Promise<void> => {
+    if (stopPromise) {
+      await stopPromise;
+      return;
+    }
+
+    stopPromise = (async () => {
+      await runShutdownStep('stop debug observer', () => stopDebugObserver());
+      await runShutdownStep('stop Wyoming runtime', () => wyomingRuntime?.stop());
+      await runShutdownStep('stop Wyoming TCP server', () => wyomingTcpServer?.stop());
+      await runShutdownStep('stop voice modules', () => voiceModuleHost.stopAll());
+      await runShutdownStep('stop gateway server', () => gateway.stop());
+      await runShutdownStep('stop Telegram adapter', () => telegram?.stop());
+      await runShutdownStep('stop Discord adapter', () => discord.stop());
+      await runShutdownStep('close audit database', () => {
+        auditDb.close();
+      });
+    })();
+
+    await stopPromise;
   };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdown = async (signal: string) => {
+    if (shutdownPromise) {
+      log.warn('Shutdown already in progress; ignoring additional signal', { signal });
+      await shutdownPromise;
+      return;
+    }
+
+    shutdownPromise = (async () => {
+      log.info(`Received ${signal}, shutting down...`);
+      await stop();
+      process.exit(0);
+    })().catch((error) => {
+      log.error('Graceful shutdown failed; forcing exit', {
+        signal,
+        error: String(error),
+      });
+      process.exit(1);
+    });
+
+    await shutdownPromise;
+  };
+
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT').catch((error) => {
+      log.error('Unhandled SIGINT shutdown error', { error: String(error) });
+      process.exit(1);
+    });
+  });
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM').catch((error) => {
+      log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
+      process.exit(1);
+    });
+  });
 }
 
 // Serialize SubstrateMessage for JSON transport (Date → ISO string)

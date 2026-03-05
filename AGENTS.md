@@ -176,6 +176,20 @@ history/
 Run `bd <command> --help` to see all available flags for any command.
 For example: `bd create --help` shows `--parent`, `--deps`, `--assignee`, etc.
 
+### Parallel Work Safety
+
+**NEVER delete branches, worktrees, stashes, or refs without explicit user confirmation.** Multiple agents work in parallel across worktrees and branches. What looks stale to one agent may be actively used by another.
+
+Forbidden without user approval:
+- `git branch -D` / `git branch -d`
+- `git worktree remove` (especially `--force`)
+- `git stash drop` / `git stash clear`
+- `git reflog expire` + `git gc --prune=now`
+- `git reset --hard`, `git checkout -- .`, `git clean -f`
+- Removing directories that may contain worktrees
+
+**Always ask first. No exceptions.**
+
 ### Important Rules
 
 - ✅ Use bd for ALL task tracking
@@ -185,6 +199,13 @@ For example: `bd create --help` shows `--parent`, `--deps`, `--assignee`, etc.
 - ✅ Wire new code to a real runtime entrypoint (or explicit registry path); do not leave implementation-only modules unwired
 - ✅ Before closing work, verify no newly introduced orphan/unreachable production modules
 - ✅ Prove wiring with either a smoke test or an import/reachability check, and include the result in handoff notes
+
+## Coding Standards
+
+1. **Security: Fail Closed** — deny by default, no catch-and-continue on auth/trust/policy
+2. **Error Handling: No Swallowing** — every catch must log/rethrow/return error, empty catches are bugs
+3. **No Legacy Code** — no shims, no migration paths, no dead re-exports, one way to do things
+4. **No Fallbacks** — missing config = throw, unavailable service = fail loud, no hardcoded fallback values on security-sensitive config
 
 ## Code Structure Requirements
 

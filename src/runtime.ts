@@ -1,9 +1,13 @@
 import type Database from 'better-sqlite3';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SubstrateConfig, Lifecycle } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
+import {
+  composeSystemPromptTemplate,
+} from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
 import { SessionManager } from './session/manager.js';
@@ -27,9 +31,19 @@ import type { ChannelAdapter } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, applySettings } from './settings.js';
-import { loadModelsConfig } from './config/models-config.js';
+import { applySettings, loadSettings, saveSettings, splitSettingsByDomain } from './settings.js';
+import { loadModelsConfigWithLegacyMigration } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
+import {
+  CAPABILITY_TIER_FILE_NAME,
+  loadCapabilityTierConfig,
+  saveCapabilityTierConfig,
+} from './config/capability-tier-config.js';
+import {
+  SCHEDULER_FILE_NAME,
+  loadSchedulerConfig,
+  saveSchedulerConfig,
+} from './config/scheduler-config.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
@@ -81,6 +95,7 @@ import {
   wireStaticPromptRegistry,
   wireSettingsRuntime,
   wireSessionToolsRuntime,
+  buildCharacterPromptVariablesProvider,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
@@ -131,6 +146,19 @@ export {
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 
+function isExplicitTrue(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === 'true';
+}
+
+function parseCommaSeparatedEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  const entries = value
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+  return [...new Set(entries)];
+}
+
 export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;
   private eventBus: EventBus;
@@ -155,7 +183,9 @@ export class SubstrateRuntime implements Lifecycle {
   private stopVoiceObservers?: () => void;
   private stopDebugObserver?: () => void;
   private crashRecoveryQueue: CrashRecoveryExtractionCandidate[] = [];
+  private crashRecoveryRetryBacklog = new Map<string, CrashRecoveryExtractionCandidate>();
   private stopping = false;
+  private stopPromise: Promise<void> | null = null;
   private startTime: number;
 
   constructor(config: SubstrateConfig) {
@@ -196,6 +226,52 @@ export class SubstrateRuntime implements Lifecycle {
     return parsed;
   }
 
+  private seedCrashRecoveryRetryBacklog(candidates: CrashRecoveryExtractionCandidate[]): void {
+    this.crashRecoveryRetryBacklog.clear();
+    for (const candidate of candidates) {
+      this.crashRecoveryRetryBacklog.set(candidate.channelId, candidate);
+    }
+  }
+
+  private refreshCrashRecoveryRetryBacklog(channelId: string): boolean {
+    const sessionStore = this.sessionStore;
+    if (typeof sessionStore.getCrashRecoveryExtractionCandidates !== 'function') {
+      return this.crashRecoveryRetryBacklog.has(channelId);
+    }
+
+    const candidate = sessionStore
+      .getCrashRecoveryExtractionCandidates()
+      .find(item => item.channelId === channelId);
+    if (candidate) {
+      this.crashRecoveryRetryBacklog.set(channelId, candidate);
+      return true;
+    }
+
+    this.crashRecoveryRetryBacklog.delete(channelId);
+    return false;
+  }
+
+  private resolveUnresolvedCrashRecoveryChannels(): Set<string> {
+    const sessionStore = this.sessionStore;
+    if (typeof sessionStore.getCrashRecoveryExtractionCandidates !== 'function') {
+      return new Set(this.crashRecoveryRetryBacklog.keys());
+    }
+
+    const unresolvedCandidates = sessionStore.getCrashRecoveryExtractionCandidates();
+    const unresolvedChannelIds = new Set(unresolvedCandidates.map(candidate => candidate.channelId));
+
+    for (const candidate of unresolvedCandidates) {
+      this.crashRecoveryRetryBacklog.set(candidate.channelId, candidate);
+    }
+    for (const channelId of [...this.crashRecoveryRetryBacklog.keys()]) {
+      if (!unresolvedChannelIds.has(channelId)) {
+        this.crashRecoveryRetryBacklog.delete(channelId);
+      }
+    }
+
+    return unresolvedChannelIds;
+  }
+
   private queueCrashRecoveryExtractions(): void {
     if (this.crashRecoveryQueue.length === 0) return;
 
@@ -211,15 +287,37 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     for (const candidate of queued) {
-      this.memoryExtractor.queueRetroactiveExtraction(
+      this.crashRecoveryRetryBacklog.set(candidate.channelId, candidate);
+      void this.memoryExtractor.queueRetroactiveExtraction(
         candidate.channelId,
         candidate.unextractedEntries,
-      ).catch((error) => {
-        log.error('Crash recovery extraction queue failed', {
-          channelId: candidate.channelId,
-          error: String(error),
+      )
+        .catch((error) => {
+          log.error('Crash recovery extraction queue failed', {
+            channelId: candidate.channelId,
+            error: String(error),
+          });
+        })
+        .finally(() => {
+          let unresolved = false;
+          try {
+            unresolved = this.refreshCrashRecoveryRetryBacklog(candidate.channelId);
+          } catch (error) {
+            log.error('Crash recovery retry bookkeeping failed', {
+              channelId: candidate.channelId,
+              error: String(error),
+            });
+            return;
+          }
+          if (!unresolved) return;
+
+          const pending = this.crashRecoveryRetryBacklog.get(candidate.channelId);
+          log.warn('Crash recovery extraction remains unresolved; retry deferred to next startup', {
+            channelId: candidate.channelId,
+            pendingEntryCount: pending?.unextractedEntries.length
+              ?? candidate.unextractedEntries.length,
+          });
         });
-      });
     }
   }
 
@@ -247,15 +345,101 @@ export class SubstrateRuntime implements Lifecycle {
 
   async init(): Promise<void> {
     log.info('Initializing...');
-
-    // Load persisted settings and apply over env defaults
-    const savedSettings = loadSettings(this.config.dataDir);
-    applySettings(this.config, savedSettings);
-    installPromotedToolsPersistenceHook(this.config);
-    const modelsConfig = loadModelsConfig(this.config.dataDir, {
-      defaultContextWindow: this.config.defaultContextWindow,
+    const lifecycleRuntimeContract = resolveRuntimeModeContract({
+      entrypoint: RUNTIME_MODE.SINGLE,
+      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
+      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
     });
-    applySettings(this.config, modelsConfig);
+    const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
+    log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
+
+    // Load persisted settings and apply runtime-owned domain over env defaults.
+    const savedSettings = loadSettings(this.config.dataDir);
+    const settingsDomains = splitSettingsByDomain(savedSettings);
+    applySettings(this.config, settingsDomains.runtime);
+    installPromotedToolsPersistenceHook(this.config);
+
+    const modelsLoadResult = loadModelsConfigWithLegacyMigration(this.config.dataDir, {
+      defaultContextWindow: this.config.defaultContextWindow,
+      legacySettings: settingsDomains.models,
+    });
+    if (modelsLoadResult.migratedFromLegacySettings) {
+      log.warn('Migrated legacy model settings from settings.json to models.json');
+    } else if (modelsLoadResult.legacyDriftDetected) {
+      log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+    }
+    applySettings(this.config, modelsLoadResult.config);
+
+    if (settingsDomains.maintenanceIntervalMs !== undefined) {
+      try {
+        const schedulerPath = join(this.config.dataDir, SCHEDULER_FILE_NAME);
+        const schedulerFileExisted = existsSync(schedulerPath);
+        const persistedScheduler = loadSchedulerConfig(this.config.dataDir, {
+          seedDir: process.env.CONFIG_DIR,
+        });
+        if (!schedulerFileExisted) {
+          saveSchedulerConfig(this.config.dataDir, {
+            ...persistedScheduler,
+            salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
+          });
+          log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
+            maintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
+          });
+        } else if (persistedScheduler.salienceDecayIntervalMs !== settingsDomains.maintenanceIntervalMs) {
+          log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
+            settingsMaintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
+            schedulerMaintenanceIntervalMs: persistedScheduler.salienceDecayIntervalMs,
+          });
+        }
+      } catch (error) {
+        log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
+          error: String(error),
+        });
+      }
+    }
+
+    if (settingsDomains.capabilityTier !== undefined) {
+      try {
+        const capabilityPath = join(this.config.dataDir, CAPABILITY_TIER_FILE_NAME);
+        const capabilityFileExisted = existsSync(capabilityPath);
+        const persistedCapabilities = loadCapabilityTierConfig(this.config.dataDir, {
+          seedDir: process.env.CONFIG_DIR,
+        });
+        if (!capabilityFileExisted) {
+          saveCapabilityTierConfig(this.config.dataDir, {
+            ...persistedCapabilities,
+            tier: settingsDomains.capabilityTier,
+          });
+          log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
+            capabilityTier: settingsDomains.capabilityTier,
+          });
+        } else if (persistedCapabilities.tier !== settingsDomains.capabilityTier) {
+          log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
+            settingsCapabilityTier: settingsDomains.capabilityTier,
+            capabilityTier: persistedCapabilities.tier,
+          });
+        }
+      } catch (error) {
+        log.warn('Failed to migrate legacy capabilityTier from settings.json', {
+          error: String(error),
+        });
+      }
+    }
+
+    if (settingsDomains.legacyKeys.length > 0) {
+      try {
+        saveSettings(this.config.dataDir, settingsDomains.runtime);
+        log.warn('Removed legacy cross-domain keys from settings.json', {
+          keys: settingsDomains.legacyKeys,
+        });
+      } catch (error) {
+        log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
+          keys: settingsDomains.legacyKeys,
+          error: String(error),
+        });
+      }
+    }
+
     const trustPolicyConfig = loadTrustPolicyConfig(this.config.dataDir, {
       seedDir: process.env.CONFIG_DIR,
     });
@@ -282,13 +466,6 @@ export class SubstrateRuntime implements Lifecycle {
       envTier: this.config.capabilityTier,
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
-    const lifecycleRuntimeContract = resolveRuntimeModeContract({
-      entrypoint: RUNTIME_MODE.SINGLE,
-      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
-      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
-    });
-    const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
-    log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
 
     // Open database
     this.db = initDatabase(this.config.databasePath);
@@ -296,7 +473,22 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('SQLite integrity check passed');
 
     // Load identity
-    const { card, systemPrompt } = composeIdentity(this.config);
+    const {
+      card,
+      systemPrompt,
+      initializedCard,
+      migratedLegacyBootstrap,
+    } = composeIdentity(this.config);
+    if (initializedCard) {
+      log.warn('Character card file was missing and has been initialized with defaults', {
+        characterCardPath: this.config.characterCardPath,
+      });
+    }
+    if (migratedLegacyBootstrap) {
+      log.warn('Legacy bootstrap character card was migrated to neutral starter defaults', {
+        characterCardPath: this.config.characterCardPath,
+      });
+    }
     const cardVersionStore = new CharacterCardVersionStore(
       this.config.characterCardPath,
       join(this.config.dataDir, 'character-card-history.jsonl'),
@@ -341,6 +533,7 @@ export class SubstrateRuntime implements Lifecycle {
       });
     }
     this.crashRecoveryQueue = this.sessionStore.getCrashRecoveryExtractionCandidates();
+    this.seedCrashRecoveryRetryBacklog(this.crashRecoveryQueue);
     this.restoreLatestSessionMetadata();
 
     // Embedding provider (selected by EMBEDDING_PROVIDER)
@@ -379,6 +572,7 @@ export class SubstrateRuntime implements Lifecycle {
       sessionManager: this.sessionManager,
       systemPrompt,
       characterName: card.data.name,
+      characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       config: this.config,
     });
     this.agentLoop.scratchpadProvider = this.memoryStore;
@@ -404,7 +598,7 @@ export class SubstrateRuntime implements Lifecycle {
     const promptStore = wirePromptRuntime(
       this.agentLoop,
       this.config.dataDir,
-      systemPrompt,
+      composeSystemPromptTemplate(),
       {
         identityCoolingOff,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
@@ -662,6 +856,7 @@ export class SubstrateRuntime implements Lifecycle {
       {
         eventBus: this.eventBus,
         llmProvider: this.llmClient,
+        characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
         memoryWriter,
         postTurnActions,
         ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
@@ -672,6 +867,8 @@ export class SubstrateRuntime implements Lifecycle {
     const apiHost = process.env.API_HOST || undefined;
     const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
     if (apiPort) {
+      const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
+      const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
       const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
         agentLoop: this.agentLoop,
         eventBus: this.eventBus,
@@ -689,6 +886,8 @@ export class SubstrateRuntime implements Lifecycle {
         sessionManager: this.sessionManager,
         contactStore,
         apiKey: process.env.API_KEY || undefined,
+        allowInsecureWithoutAuth,
+        corsAllowedOrigins,
         modelName: process.env.API_MODEL_NAME,
         healthChecks: {
           memory: () => {
@@ -705,8 +904,8 @@ export class SubstrateRuntime implements Lifecycle {
           llm: async () => {
             const configured = Boolean(this.config.primaryModel && this.config.primaryProvider);
             const baseMeta = {
-              provider: this.config.primaryProvider ?? null,
-              model: this.config.primaryModel ?? null,
+              provider: this.config.primaryProvider,
+              model: this.config.primaryModel,
               ...toActiveProbeMeta(activeProbeConfig),
               ...runtimeStatusMeta,
             };
@@ -919,13 +1118,13 @@ export class SubstrateRuntime implements Lifecycle {
           ttsConnector = createStreamingTtsConnector('echo', {
             url: this.config.echoTtsUrl,
             voice: this.config.echoTtsVoice,
-            preset: this.config.echoTtsPreset ?? 'normal',
+            ...(this.config.echoTtsPreset ? { preset: this.config.echoTtsPreset } : {}),
             ...(this.config.echoTtsModel ? { model: this.config.echoTtsModel } : {}),
           });
-        } else if (wyomingTtsProvider === 'elevenlabs' && this.config.elevenLabsApiKey) {
+        } else if (wyomingTtsProvider === 'elevenlabs' && this.config.elevenLabsApiKey && this.config.elevenLabsVoiceId) {
           ttsConnector = createStreamingTtsConnector('elevenlabs', {
             apiKey: this.config.elevenLabsApiKey,
-            voiceId: this.config.elevenLabsVoiceId ?? 'rPQ6h200dfjiuYAy0JDA',
+            voiceId: this.config.elevenLabsVoiceId,
             modelId: this.config.elevenLabsModelId,
           });
         }
@@ -987,31 +1186,100 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   async stop(): Promise<void> {
+    if (this.stopPromise) {
+      await this.stopPromise;
+      return;
+    }
+
+    this.stopPromise = this.stopInternal();
+    await this.stopPromise;
+  }
+
+  private async stopInternal(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
 
     log.info('Shutting down...');
-    await this.eventBus.emit('system.shutdown', {});
-    this.stopVoiceObservers?.();
-    this.stopVoiceObservers = undefined;
-    this.stopDebugObserver?.();
-    this.stopDebugObserver = undefined;
-    this.scheduler?.stop();
+    await this.runShutdownStep('emit system.shutdown event', () => this.eventBus.emit('system.shutdown', {}));
+    await this.runShutdownStep('stop voice observers', () => {
+      this.stopVoiceObservers?.();
+      this.stopVoiceObservers = undefined;
+    });
+    await this.runShutdownStep('stop debug observer', () => {
+      this.stopDebugObserver?.();
+      this.stopDebugObserver = undefined;
+    });
+    await this.runShutdownStep('stop scheduler', () => this.scheduler.stop());
+
     const timeoutMs = this.resolveExtractionDrainTimeoutMs();
-    const drained = await this.memoryExtractor?.stop({ timeoutMs });
-    if (drained === false) {
-      log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+    await this.runShutdownStep('drain memory extractor', async () => {
+      const drained = await this.memoryExtractor.stop({ timeoutMs });
+      if (drained === false) {
+        log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+      }
+    });
+
+    const unresolvedCrashRecoveryChannels = this.resolveUnresolvedCrashRecoveryChannels();
+    if (unresolvedCrashRecoveryChannels.size > 0) {
+      log.warn('Skipping graceful markers for channels with unresolved extraction backlog', {
+        channels: [...unresolvedCrashRecoveryChannels],
+      });
     }
-    const markedChannels = this.sessionStore?.markGracefulShutdownForActiveChannels();
-    if ((markedChannels?.length ?? 0) > 0) {
-      log.info('Wrote graceful shutdown markers', { channels: markedChannels });
-    }
-    if (this.wyomingRuntime) await this.wyomingRuntime.stop();
-    if (this.wyomingTcpServer) await this.wyomingTcpServer.stop();
-    if (this.adminServer) await this.adminServer.stop();
-    await this.moduleLoader?.shutdown();
-    await this.stopChannels();
-    this.db?.close();
+
+    await this.runShutdownStep('write graceful shutdown markers', () => {
+      const markedChannels = this.sessionStore.markGracefulShutdownForActiveChannels(
+        Date.now(),
+        { skipChannels: unresolvedCrashRecoveryChannels },
+      );
+      if (markedChannels.length > 0) {
+        log.info('Wrote graceful shutdown markers', { channels: markedChannels });
+      }
+    });
+    await this.runShutdownStep('stop Wyoming runtime', () => this.wyomingRuntime?.stop());
+    await this.runShutdownStep('stop Wyoming TCP server', () => this.wyomingTcpServer?.stop());
+    await this.runShutdownStep('stop admin server', () => this.adminServer?.stop());
+    await this.runShutdownStep('shutdown modules', () => this.moduleLoader?.shutdown());
+    await this.runShutdownStep('stop channel adapters', () => this.stopChannels());
+    await this.runShutdownStep('close database', () => {
+      this.db.close();
+    });
     log.info('Stopped');
+  }
+
+  private async runShutdownStep(
+    step: string,
+    action: () => void | Promise<void>,
+    maxAttempts = 2,
+  ): Promise<void> {
+    const attempts = Math.max(1, Math.floor(maxAttempts));
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await action();
+        if (attempt > 1) {
+          log.info('Shutdown step recovered after retry', {
+            step,
+            attempt,
+            maxAttempts: attempts,
+          });
+        }
+        return;
+      } catch (error) {
+        if (attempt < attempts) {
+          log.warn('Shutdown step failed; retrying', {
+            step,
+            attempt,
+            maxAttempts: attempts,
+            error: String(error),
+          });
+          continue;
+        }
+        log.error('Shutdown step failed; continuing shutdown', {
+          step,
+          attempt,
+          maxAttempts: attempts,
+          error: String(error),
+        });
+      }
+    }
   }
 }

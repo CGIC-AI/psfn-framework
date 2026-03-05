@@ -1,6 +1,10 @@
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { ModelCatalogEntry, ModelRoleAssignments } from '../types.js';
 import {
+  extractModelSettings,
+  hasModelSettings,
   normalizeEditableSettings,
   type EditableSettings,
 } from '../settings.js';
@@ -21,6 +25,12 @@ export interface ModelsRuntimeConfig {
 interface ModelsRuntimeLoadOptions {
   seedDir?: string;
   defaultContextWindow?: number;
+}
+
+export interface ModelsLoadResult {
+  config: ModelsRuntimeConfig;
+  migratedFromLegacySettings: boolean;
+  legacyDriftDetected: boolean;
 }
 
 function validateModelsConfig(
@@ -67,6 +77,63 @@ export function loadModelsConfig(
     seedPath: join(seedDir, MODELS_SEED_FILE_NAME),
     validate: (raw, sourcePath) => validateModelsConfig(raw, sourcePath, options.defaultContextWindow),
   });
+}
+
+export function loadModelsConfigWithLegacyMigration(
+  dataDir: string,
+  options: ModelsRuntimeLoadOptions & { legacySettings?: EditableSettings } = {},
+): ModelsLoadResult {
+  const filePath = join(dataDir, MODELS_FILE_NAME);
+  const modelsFileExisted = existsSync(filePath);
+  const persisted = loadModelsConfig(dataDir, options);
+  const legacySettings = options.legacySettings;
+  if (!legacySettings) {
+    return {
+      config: persisted,
+      migratedFromLegacySettings: false,
+      legacyDriftDetected: false,
+    };
+  }
+
+  const legacyModelSettings = extractModelSettings(legacySettings);
+  if (!hasModelSettings(legacyModelSettings)) {
+    return {
+      config: persisted,
+      migratedFromLegacySettings: false,
+      legacyDriftDetected: false,
+    };
+  }
+
+  const normalizedLegacy = normalizeEditableSettings(legacyModelSettings, {
+    defaultContextWindow: options.defaultContextWindow,
+  });
+  const legacyConfig: ModelsRuntimeConfig = {
+    modelCatalog: normalizedLegacy.modelCatalog ?? {},
+    modelRoleAssignments: normalizedLegacy.modelRoleAssignments ?? {},
+  };
+
+  if (Object.keys(legacyConfig.modelCatalog).length === 0) {
+    return {
+      config: persisted,
+      migratedFromLegacySettings: false,
+      legacyDriftDetected: false,
+    };
+  }
+
+  if (!modelsFileExisted) {
+    const migrated = saveModelsConfig(dataDir, legacyConfig, options);
+    return {
+      config: migrated,
+      migratedFromLegacySettings: true,
+      legacyDriftDetected: false,
+    };
+  }
+
+  return {
+    config: persisted,
+    migratedFromLegacySettings: false,
+    legacyDriftDetected: !isDeepStrictEqual(persisted, legacyConfig),
+  };
 }
 
 export function saveModelsConfig(

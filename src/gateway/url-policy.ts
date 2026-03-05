@@ -27,10 +27,35 @@ const ALWAYS_BLOCKED_RANGES = [
   /^fe80:/i,                         // IPv6 link-local
 ];
 
+function decodeIPv4MappedIPv6(ip: string): string | null {
+  const dottedMapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (dottedMapped) {
+    return dottedMapped[1];
+  }
+
+  const hexMapped = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hexMapped) {
+    return null;
+  }
+
+  const upper = Number.parseInt(hexMapped[1], 16);
+  const lower = Number.parseInt(hexMapped[2], 16);
+  if (!Number.isFinite(upper) || !Number.isFinite(lower)) {
+    return null;
+  }
+
+  return [
+    (upper >>> 8) & 0xff,
+    upper & 0xff,
+    (lower >>> 8) & 0xff,
+    lower & 0xff,
+  ].join('.');
+}
+
 export function isPrivateIP(ip: string): boolean {
   // Handle IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:7f00:1)
-  const mapped4 = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (mapped4) return isPrivateIP(mapped4[1]);
+  const mapped4 = decodeIPv4MappedIPv6(ip);
+  if (mapped4) return isPrivateIP(mapped4);
   if (/^::ffff:/i.test(ip)) return true; // hex-form mapped addresses (::ffff:7f00:1) — block conservatively
 
   return PRIVATE_RANGES.some(r => r.test(ip));
@@ -39,8 +64,9 @@ export function isPrivateIP(ip: string): boolean {
 /** Check if an IP is in an always-blocked range (cloud metadata, link-local).
  *  These are blocked even when internal network access is allowed. */
 export function isAlwaysBlockedIP(ip: string): boolean {
-  const mapped4 = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (mapped4) return isAlwaysBlockedIP(mapped4[1]);
+  const mapped4 = decodeIPv4MappedIPv6(ip);
+  if (mapped4) return isAlwaysBlockedIP(mapped4);
+  if (/^::ffff:/i.test(ip)) return true; // conservatively block unknown mapped form
 
   return ALWAYS_BLOCKED_RANGES.some(r => r.test(ip));
 }
@@ -63,6 +89,10 @@ export interface UrlPolicyConfig {
 export interface UrlPolicyResult {
   allowed: boolean;
   reason?: string;
+}
+
+export interface ResolvedIPPolicyResult extends UrlPolicyResult {
+  address?: string;
 }
 
 function toLowerList(values: readonly string[] | undefined): string[] {
@@ -138,6 +168,11 @@ export function evaluateUrlPolicy(
       return { allowed: false, reason: `Host ${hostname} not allowlisted for local crawler lane` };
     }
 
+    // Always block cloud metadata/link-local targets regardless of lane flags.
+    if (isIP(hostname) && isAlwaysBlockedIP(hostname)) {
+      return { allowed: false, reason: `IP ${hostname} blocked (cloud metadata / link-local)` };
+    }
+
     // Local crawler lane is explicit opt-in. Do not apply the strict private-host default checks.
     return { allowed: true };
   }
@@ -180,25 +215,37 @@ export type DnsResolver = (hostname: string) => Promise<{ address: string; famil
  */
 export async function checkResolvedIP(
   hostname: string,
-  resolver: DnsResolver = lookup,
+  resolver: DnsResolver | undefined = lookup,
   options: { allowPrivateResolvedIp?: boolean } = {},
-): Promise<UrlPolicyResult> {
+): Promise<ResolvedIPPolicyResult> {
   // Strip IPv6 brackets if present (URL parser adds them)
   const bare = hostname.startsWith('[') && hostname.endsWith(']')
     ? hostname.slice(1, -1)
     : hostname;
 
-  // Skip for raw IPs — already checked by evaluateUrlPolicy
+  // Evaluate raw IPs too for defense in depth.
   if (isIP(bare)) {
-    return { allowed: true };
+    if (isAlwaysBlockedIP(bare)) {
+      return { allowed: false, reason: `IP ${bare} blocked (cloud metadata / link-local)` };
+    }
+    if (isPrivateIP(bare) && !options.allowPrivateResolvedIp) {
+      return { allowed: false, reason: `Private IP ${bare} blocked` };
+    }
+    return { allowed: true, address: bare };
   }
 
   try {
     const result = await resolver(bare);
+    if (isAlwaysBlockedIP(result.address)) {
+      return {
+        allowed: false,
+        reason: `DNS resolved ${bare} to blocked IP ${result.address} (cloud metadata / link-local)`,
+      };
+    }
     if (isPrivateIP(result.address) && !options.allowPrivateResolvedIp) {
       return { allowed: false, reason: `DNS resolved ${bare} to private IP ${result.address}` };
     }
-    return { allowed: true };
+    return { allowed: true, address: result.address };
   } catch {
     return { allowed: false, reason: `DNS resolution failed for ${bare}` };
   }

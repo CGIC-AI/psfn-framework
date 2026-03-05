@@ -254,7 +254,7 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'discord response');
   });
 
-  it('sends a generic discord error response when agent handling fails', async () => {
+  it('records diagnostics when discord agent handling fails', async () => {
     const harness = createHarness({
       handleMessage: async () => {
         throw new Error('agent handling failure');
@@ -269,11 +269,15 @@ describe('registerGatewayMessageHandlers', () => {
     await harness.onDiscordMessage(message);
 
     expect(harness.log.error).toHaveBeenCalledWith('Error handling message', {
-      error: 'Error: agent handling failure',
+      channelId: 'discord:general',
+      messageId: 'msg-1',
+      error: 'agent handling failure',
     });
-    expect(harness.gateway.discordSend).toHaveBeenCalledWith(
-      'discord:general',
-      'Something went wrong. Please try again.',
-    );
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('discord.message.error', {
+      channelId: 'discord:general',
+      messageId: 'msg-1',
+      error: 'agent handling failure',
+    });
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
   });
 });

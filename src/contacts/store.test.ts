@@ -160,6 +160,58 @@ describe('ContactStore', () => {
       expect(updated.trustLevel).toBe('primary');
     });
 
+    it('rejects unauthorized primary trust assignment via upsert and audits denial', () => {
+      const contact = store.upsert({
+        displayName: 'Mallory',
+        discordUserId: 'discord-mallory',
+        trustLevel: 'trusted',
+      });
+
+      expect(() => store.upsert({
+        id: contact.id,
+        displayName: 'Mallory',
+        trustLevel: 'primary',
+      })).toThrow(/Primary trust assignment denied/);
+
+      const unchanged = store.getById(contact.id);
+      expect(unchanged?.trustLevel).toBe('trusted');
+
+      const entries = store.listMutationAuditEntries({
+        contactId: contact.id,
+        field: 'trust_level',
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        contactId: contact.id,
+        field: 'trust_level',
+        oldValue: 'trusted',
+        newValue: 'primary',
+      });
+      expect(entries[0].actor).toContain('primary_denied');
+    });
+
+    it('audits allowed owner-mapped upsert primary assignment', () => {
+      const contact = store.upsert({
+        displayName: 'V',
+        discordUserId: PRIMARY_USER_ID,
+        trustLevel: 'regular',
+      });
+      expect(contact.trustLevel).toBe('primary');
+
+      const entries = store.listMutationAuditEntries({
+        contactId: contact.id,
+        field: 'trust_level',
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        contactId: contact.id,
+        field: 'trust_level',
+        oldValue: null,
+        newValue: 'primary',
+      });
+      expect(entries[0].actor).toContain('primary_allowed');
+    });
+
     it('preserves existing fields when partial update', () => {
       store.upsert({
         displayName: 'Carol',
@@ -288,6 +340,58 @@ describe('ContactStore', () => {
 
       const unchanged = store.getById(primary.id);
       expect(unchanged!.trustLevel).toBe('primary');
+    });
+
+    it('denies unauthorized promotion to primary via setTrustLevel and audits denial', () => {
+      const contact = store.upsert({ displayName: 'Frank', discordUserId: 'discord-frank' });
+      expect(store.setTrustLevel(contact.id, 'primary', 'admin:gui')).toBe(false);
+
+      const unchanged = store.getById(contact.id);
+      expect(unchanged?.trustLevel).toBe('regular');
+
+      const entries = store.listMutationAuditEntries({
+        contactId: contact.id,
+        field: 'trust_level',
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        contactId: contact.id,
+        field: 'trust_level',
+        actor: 'admin:gui:primary_denied',
+        oldValue: 'regular',
+        newValue: 'primary',
+      });
+    });
+
+    it('allows owner-mapped promotion to primary via setTrustLevel and audits allowance', () => {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO contacts (
+          id, discord_user_id, display_name, trust_level, relationship_type,
+          emotional_baseline, first_seen, last_seen, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run('owner-legacy', PRIMARY_USER_ID, 'Owner Legacy', 'regular', 'friend', '{}', now, now, null);
+      db.prepare(`
+        INSERT INTO contact_channel_ids (
+          contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run('owner-legacy', 'discord', PRIMARY_USER_ID, 'semi_private', now, now);
+
+      expect(store.setTrustLevel('owner-legacy', 'primary', 'admin:api')).toBe(true);
+      expect(store.getById('owner-legacy')?.trustLevel).toBe('primary');
+
+      const entries = store.listMutationAuditEntries({
+        contactId: 'owner-legacy',
+        field: 'trust_level',
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        contactId: 'owner-legacy',
+        field: 'trust_level',
+        actor: 'admin:api:primary_allowed',
+        oldValue: 'regular',
+        newValue: 'primary',
+      });
     });
 
     it('returns false for nonexistent id', () => {
@@ -441,20 +545,20 @@ describe('ContactStore', () => {
 
     it('prefers human-readable display name when target uses opaque identifier text', () => {
       const target = store.upsert({
-        displayName: '388908766306893854',
-        discordUserId: '388908766306893854',
+        displayName: 'YOUR_DISCORD_USER_ID',
+        discordUserId: 'YOUR_DISCORD_USER_ID',
       });
       const source = store.upsert({
-        displayName: 'Operator',
-        channelIdentities: [{ channel: 'discord', userId: 'operator' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'primary-user' }],
       });
 
       const merged = store.mergeContacts(source.id, target.id);
       expect(merged).toBe(true);
 
       const updated = store.getById(target.id);
-      expect(updated?.displayName).toBe('Operator');
-      expect(updated?.discordUserId).toBe('388908766306893854');
+      expect(updated?.displayName).toBe('PrimaryUser');
+      expect(updated?.discordUserId).toBe('YOUR_DISCORD_USER_ID');
     });
   });
 
@@ -622,16 +726,16 @@ describe('ContactStore', () => {
   describe('identity link verification challenges', () => {
     it('issues a challenge, verifies it, and commits the target link', () => {
       const contact = store.upsert({
-        displayName: 'Operator',
-        channelIdentities: [{ channel: 'discord', userId: 'operator-discord' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
       const challenge = store.createIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
-        sourceUserId: 'operator-discord',
+        sourceUserId: 'user-discord',
         targetChannel: 'api',
-        targetUserId: 'operator-api',
+        targetUserId: 'user-api',
       });
 
       expect(challenge.status).toBe('challenge_created');
@@ -640,16 +744,16 @@ describe('ContactStore', () => {
       const verified = store.verifyIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
-        sourceUserId: 'operator-discord',
+        sourceUserId: 'user-discord',
         targetChannel: 'api',
-        targetUserId: 'operator-api',
+        targetUserId: 'user-api',
         nonce: challenge.verification.nonce,
         expiresAt: challenge.verification.expiresAt,
         signature: challenge.verification.signature,
       });
 
       expect(verified.status).toBe('linked');
-      expect(store.getByChannelIdentity('api', 'operator-api')?.id).toBe(contact.id);
+      expect(store.getByChannelIdentity('api', 'user-api')?.id).toBe(contact.id);
       expect(store.listIdentityLinkVerifications(5)[0]?.status).toBe('verified');
     });
 

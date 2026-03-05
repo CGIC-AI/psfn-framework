@@ -176,8 +176,8 @@ export class VaultOps implements VaultOperations {
       });
     } catch (err) {
       const record = err as Record<string, unknown>;
-      const stderr = typeof record?.stderr === 'string' ? record.stderr.trim() : '';
-      const code = typeof record?.status === 'number' ? record.status : null;
+      const stderr = typeof record.stderr === 'string' ? record.stderr.trim() : '';
+      const code = typeof record.status === 'number' ? record.status : null;
       const msg = stderr || toErrorMessage(err);
 
       // Map common errors to user-friendly messages

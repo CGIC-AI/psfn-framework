@@ -117,6 +117,66 @@ describe('WebSocketVoiceRuntime', () => {
     expect(findAckFrame(harness.outboundFrames, 'session.start')).toBeDefined();
   });
 
+  it('treats duplicate session.start as idempotent while start is in progress', async () => {
+    const harness = createHarness();
+    const startGate = createDeferred<void>();
+    harness.startStream.mockImplementation(async () => {
+      await startGate.promise;
+      return {
+        transcripts: harness.sttQueue,
+        writeAudio: harness.writeAudio,
+        endInput: harness.endInput,
+        cancel: harness.cancelStt,
+      };
+    });
+
+    const firstStart = harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'voice-1',
+    });
+    await flushPromises();
+
+    const secondStart = harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'voice-1',
+    });
+    await flushPromises();
+
+    expect(harness.startStream).toHaveBeenCalledTimes(1);
+
+    startGate.resolve();
+    await Promise.all([firstStart, secondStart]);
+
+    const sessionStartAcks = harness.outboundFrames.filter((frame) => (
+      frame.type === 'ack' && frame.ackType === 'session.start'
+    ));
+    expect(harness.startStream).toHaveBeenCalledTimes(1);
+    expect(sessionStartAcks).toHaveLength(2);
+  });
+
+  it('acknowledges repeated session.start without restarting active streams', async () => {
+    const harness = createHarness();
+
+    await harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'voice-1',
+    });
+
+    harness.outboundFrames.length = 0;
+    await harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'voice-1',
+    });
+
+    expect(harness.startStream).toHaveBeenCalledTimes(1);
+    expect(harness.cancelStt).not.toHaveBeenCalled();
+    expect(findAckFrame(harness.outboundFrames, 'session.start')).toBeDefined();
+  });
+
   it('decodes audio.chunk, validates it, and streams transcript frames', async () => {
     const harness = createHarness();
 
@@ -355,6 +415,29 @@ function createTtsChunk(sequence: number, bytes: number[], isFinal: boolean): Tt
 async function flushPromises(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value?: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolveDeferred!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolveDeferred = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  const resolve = (value?: T | PromiseLike<T>) => {
+    resolveDeferred(value as T | PromiseLike<T>);
+  };
+
+  return {
+    promise,
+    resolve,
+    reject,
+  };
 }
 
 async function waitForCondition(condition: () => boolean, maxAttempts = 40): Promise<void> {

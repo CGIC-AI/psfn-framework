@@ -89,12 +89,17 @@ export class UserContinuityStore {
    */
   append(userId: string, entry: Omit<SessionEntry, 'id'>): number {
     const cache = this.ensureUser(userId);
-    const id = cache.nextId++;
+    const id = cache.nextId;
 
     const full: SessionEntry = { ...entry, id };
     if (!full.channelVisibility) {
       full.channelVisibility = classifyChannel(entry.channelId);
     }
+
+    const journal = buildMessageJournalEntry(id, full);
+    appendJournalEntry(cache.filePath, journal);
+
+    cache.nextId = id + 1;
     cache.entries.push(full);
 
     // Cap in-memory entries to maxEntries (JSONL file keeps all for audit)
@@ -102,8 +107,6 @@ export class UserContinuityStore {
       cache.entries = cache.entries.slice(-this.maxEntries);
     }
 
-    const journal = buildMessageJournalEntry(id, entry);
-    appendJournalEntry(cache.filePath, journal);
     return id;
   }
 

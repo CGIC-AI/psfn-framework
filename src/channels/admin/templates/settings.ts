@@ -268,6 +268,9 @@ const CAPABILITY_TOKEN_LABELS: Readonly<Record<CapabilityToken, string>> = {
   'external.web': 'External: Web',
   'git.read': 'Git Read',
   'git.write': 'Git Write',
+  'issue.read': 'Issues Read',
+  'issue.write': 'Issues Write',
+  'issue.close': 'Issues Close/Sync',
   'lifecycle.restart': 'Lifecycle: Restart',
   'lifecycle.rebuild': 'Lifecycle: Rebuild',
   'repl.execute': 'REPL Execute',
@@ -282,7 +285,7 @@ function renderCustomTokenCheckboxes(
   const isCustom = currentTier === 'custom';
   const rows = CAPABILITY_TOKENS.map((token) => {
     const checked = selectedSet.has(token) ? ' checked' : '';
-    const label = CAPABILITY_TOKEN_LABELS[token] ?? token;
+    const label = CAPABILITY_TOKEN_LABELS[token];
     // Show which preset tiers include this token
     const includedIn: string[] = [];
     for (const [tier, tokens] of Object.entries(CAPABILITY_TIER_DEFAULTS)) {

@@ -217,14 +217,7 @@ function parseMirrorSessionMetadata(metadata?: string): MirrorSessionMetadata | 
   try {
     const parsed = JSON.parse(metadata) as Partial<MirrorSessionMetadata>;
     if (parsed.type !== 'mirror') return null;
-    if (
-      parsed.sourceRole !== undefined
-      && parsed.sourceRole !== 'user'
-      && parsed.sourceRole !== 'assistant'
-    ) {
-      return null;
-    }
-    return parsed;
+    return parsed as MirrorSessionMetadata;
   } catch {
     return null;
   }

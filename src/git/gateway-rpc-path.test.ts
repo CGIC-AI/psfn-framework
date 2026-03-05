@@ -32,6 +32,13 @@ function createServerOptions(
     policyConfig: {
       workspacePath: process.cwd(),
     },
+    sessionHmacKeyring: {
+      activeVersion: 'v1',
+      keys: {
+        v1: 'test-gateway-rpc-secret',
+      },
+    },
+    capabilityTierProvider: () => 'autonomous',
   };
 }
 

@@ -253,7 +253,7 @@ export function createSessionResumeTool(
       params: { sessionId: string },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const requestedSessionId = params.sessionId?.trim();
+      const requestedSessionId = params.sessionId.trim();
       if (!requestedSessionId) {
         return textResultWithError('session_resume requires a non-empty sessionId.', true);
       }

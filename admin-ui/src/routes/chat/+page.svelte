@@ -472,6 +472,11 @@
     return opt.nickname ? `${opt.displayName} (${opt.nickname})` : opt.displayName;
   }
 
+  function activeAssistantName(): string {
+    const value = bootstrap?.assistantName?.trim();
+    return value && value.length > 0 ? value : 'Assistant';
+  }
+
   function toggleThinking(id: string) {
     const next = new Set(expandedThinking);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -535,6 +540,21 @@
       </p>
     </div>
   {:else if bootstrap}
+    {#if bootstrap.onboarding.required}
+      <div class="card-garden p-3 mb-3 border-gold-300 bg-gold-50 shrink-0">
+        <p class="text-sm font-semibold text-shadow-900">Starter profile detected</p>
+        <p class="text-sm text-shadow-700 mt-1">
+          {bootstrap.onboarding.message ?? 'Import a character card or edit identity details to personalize this companion.'}
+        </p>
+        <a
+          href="/garden/identity"
+          class="inline-flex mt-2 text-sm font-medium text-shadow-800 hover:text-shadow-900 underline"
+        >
+          Open Identity Settings
+        </a>
+      </div>
+    {/if}
+
     <!-- Controls Bar -->
     <div class="card-garden p-3 mb-3 shrink-0">
       <div class="flex flex-wrap items-end gap-3">
@@ -660,7 +680,7 @@
         <div class="flex items-center justify-center h-full">
           <div class="text-center">
             <p class="text-shadow-700 text-sm font-medium">No messages in this session yet.</p>
-            <p class="text-shadow-500 text-sm mt-1">Type a message below to start chatting with PSFN.</p>
+            <p class="text-shadow-500 text-sm mt-1">Type a message below to start chatting with {activeAssistantName()}.</p>
             {#if bootstrap}
               <p class="text-shadow-400 text-sm mt-2 font-mono">{bootstrap.defaultSessionId}</p>
             {/if}
@@ -778,7 +798,7 @@
                 <div class="max-w-[85%] bg-white border border-bark-300 rounded-2xl rounded-bl-md px-4 py-2.5 shadow-sm">
                   <div class="flex items-center gap-2 text-sm text-shadow-600">
                     <span class="inline-block w-2 h-2 bg-gold-400 rounded-full animate-pulse"></span>
-                    Waiting for PSFN...
+                    Waiting for {activeAssistantName()}...
                   </div>
                 </div>
               </div>

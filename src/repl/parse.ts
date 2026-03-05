@@ -29,7 +29,7 @@ export function detectFinalInText(text: string): string | null {
   const stripped = stripCodeBlocks(text);
   const match = stripped.match(/FINAL\(\s*(?:"([\s\S]*?)"|'([\s\S]*?)'|`([\s\S]*?)`)\s*\)/);
   if (!match) return null;
-  return match[1] ?? match[2] ?? match[3] ?? null;
+  return match[1] || match[2] || match[3] || null;
 }
 
 /**

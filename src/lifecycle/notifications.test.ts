@@ -73,7 +73,7 @@ describe('DiscordLifecycleNotifier', () => {
     });
 
     it('prefers last-active channel over heartbeat channel', async () => {
-      writeLastActiveChannel(tempDir, 'active-channel');
+      writeLastActiveChannel(tempDir, '1234567890123456');
 
       const notifier = new DiscordLifecycleNotifier({
         sender: mockSender,
@@ -84,7 +84,7 @@ describe('DiscordLifecycleNotifier', () => {
 
       await notifier.notifyPreRestart();
 
-      expect(sentMessages[0].channelId).toBe('active-channel');
+      expect(sentMessages[0].channelId).toBe('1234567890123456');
     });
 
     it('falls back to heartbeat when latest active session is non-discord', async () => {

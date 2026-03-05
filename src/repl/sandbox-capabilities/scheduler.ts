@@ -131,10 +131,6 @@ export function createSchedulerCapabilities(options: CreateSchedulerCapabilities
     if (!taskId) {
       return { ok: false, error: 'task id is required' };
     }
-    if (!updates || typeof updates !== 'object') {
-      return { ok: false, error: 'updates object is required' };
-    }
-
     const next: { intervalMs?: number; state?: TaskState; name?: string; runAt?: number } = {};
 
     if (updates.intervalMs !== undefined) {

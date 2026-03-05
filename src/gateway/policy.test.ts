@@ -32,16 +32,40 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy({ method: 'notify.ntfy', params: {} }, policyConfig)).toBe('ALLOW');
   });
 
-  it('allows web.fetch with valid HTTPS URL', () => {
-    expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'https://example.com' } }, policyConfig)).toBe('ALLOW');
+  it('allows web.fetch with valid HTTPS URL when urlPolicy is configured', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: {},
+    };
+    expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'https://example.com' } }, configWithUrlPolicy)).toBe('ALLOW');
   });
 
-  it('allows web.fetch_binary with valid HTTPS URL', () => {
-    expect(evaluatePolicy({ method: 'web.fetch_binary', params: { url: 'https://example.com/image.png' } }, policyConfig)).toBe('ALLOW');
+  it('allows web.fetch_binary with valid HTTPS URL when urlPolicy is configured', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: {},
+    };
+    expect(evaluatePolicy({ method: 'web.fetch_binary', params: { url: 'https://example.com/image.png' } }, configWithUrlPolicy)).toBe('ALLOW');
   });
 
-  it('allows web.fetch when no urlPolicy is configured', () => {
-    expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'http://example.com' } }, policyConfig)).toBe('ALLOW');
+  it('denies web.fetch when no urlPolicy is configured', () => {
+    expect(evaluatePolicy({ method: 'web.fetch', params: { url: 'http://example.com' } }, policyConfig)).toBe('DENY');
+  });
+
+  it('denies web.fetch when URL is missing', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: {},
+    };
+    expect(evaluatePolicy({ method: 'web.fetch', params: {} }, configWithUrlPolicy)).toBe('DENY');
+  });
+
+  it('denies web.fetch when URL is not a string', () => {
+    const configWithUrlPolicy: PolicyConfig = {
+      ...policyConfig,
+      urlPolicy: {},
+    };
+    expect(evaluatePolicy({ method: 'web.fetch', params: { url: 123 } }, configWithUrlPolicy)).toBe('DENY');
   });
 
   it('denies web.fetch for HTTP URL when urlPolicy disallows HTTP', () => {
@@ -162,6 +186,49 @@ describe('evaluatePolicy', () => {
       { method: 'shell.exec', params: { command: 'node', args: ['-v'] } },
       configWithShell,
     )).toBe('ALLOW');
+  });
+
+  it('denies beads methods when beads policy is disabled', () => {
+    expect(evaluatePolicy(
+      { method: 'beads.ready', params: {} },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows beads read methods when explicitly allowlisted', () => {
+    const configWithBeads: PolicyConfig = {
+      ...policyConfig,
+      beads: {
+        enabled: true,
+        allowActions: ['ready', 'show'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'beads.ready', params: {} },
+      configWithBeads,
+    )).toBe('ALLOW');
+    expect(evaluatePolicy(
+      { method: 'beads.show', params: { id: 'PSFN-1' } },
+      configWithBeads,
+    )).toBe('ALLOW');
+  });
+
+  it('denies beads write methods when action is not allowlisted', () => {
+    const configWithReadOnlyBeads: PolicyConfig = {
+      ...policyConfig,
+      beads: {
+        enabled: true,
+        allowActions: ['ready', 'show'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'beads.create', params: { title: 'Blocked' } },
+      configWithReadOnlyBeads,
+    )).toBe('DENY');
+    expect(evaluatePolicy(
+      { method: 'beads.close', params: { id: 'PSFN-1', reason: 'done' } },
+      configWithReadOnlyBeads,
+    )).toBe('DENY');
   });
 
   // ── Filesystem: workspace paths ──
@@ -297,7 +364,7 @@ describe('evaluatePolicy', () => {
 
   it('requires approval for module registry path by default', () => {
     expect(evaluatePolicy(
-      { method: 'fs.read', params: { path: '/app/psfn/modules/repl-registry.json' } },
+      { method: 'fs.read', params: { path: '/app/companion/modules/repl-registry.json' } },
       policyConfig,
     )).toBe('NEEDS_APPROVAL');
   });
@@ -307,11 +374,11 @@ describe('evaluatePolicy', () => {
       ...policyConfig,
       allowedReadPaths: [
         ...(policyConfig.allowedReadPaths ?? []),
-        '/app/psfn/modules/repl-registry.json',
+        '/app/companion/modules/repl-registry.json',
       ],
     };
     expect(evaluatePolicy(
-      { method: 'fs.read', params: { path: '/app/psfn/modules/repl-registry.json' } },
+      { method: 'fs.read', params: { path: '/app/companion/modules/repl-registry.json' } },
       trustedConfig,
     )).toBe('ALLOW');
   });
@@ -319,6 +386,50 @@ describe('evaluatePolicy', () => {
   it('does not allow fs.write on allowed read paths', () => {
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: '/app/identity/character.json' } },
+      policyConfig,
+    )).toBe('NEEDS_APPROVAL');
+  });
+
+  // ── Git methods ──
+
+  it('allows git.status (read-only)', () => {
+    expect(evaluatePolicy(
+      { method: 'git.status', params: {} },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('allows git.diff (read-only)', () => {
+    expect(evaluatePolicy(
+      { method: 'git.diff', params: { staged: true } },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('requires approval for git.commit (write)', () => {
+    expect(evaluatePolicy(
+      { method: 'git.commit', params: { message: 'test', intent: 'fix', scope: 'src' } },
+      policyConfig,
+    )).toBe('NEEDS_APPROVAL');
+  });
+
+  it('requires approval for git.create_branch (write)', () => {
+    expect(evaluatePolicy(
+      { method: 'git.create_branch', params: { name: 'feature/test' } },
+      policyConfig,
+    )).toBe('NEEDS_APPROVAL');
+  });
+
+  it('requires approval for git.apply_patch (write)', () => {
+    expect(evaluatePolicy(
+      { method: 'git.apply_patch', params: { filePath: 'src/test.ts', content: 'patch' } },
+      policyConfig,
+    )).toBe('NEEDS_APPROVAL');
+  });
+
+  it('requires approval for git.open_pr (write)', () => {
+    expect(evaluatePolicy(
+      { method: 'git.open_pr', params: { title: 'test PR', body: 'body', base: 'main' } },
       policyConfig,
     )).toBe('NEEDS_APPROVAL');
   });
@@ -343,6 +454,8 @@ describe('evaluatePolicy symlink traversal', () => {
   const symlinkToOutside = join(workspace, 'escape-link');
   const symlinkDirToOutside = join(workspace, 'dir-link');
   const brokenSymlink = join(workspace, 'broken-link');
+  const loopSymlinkA = join(workspace, 'loop-a');
+  const loopSymlinkB = join(workspace, 'loop-b');
   const normalFile = join(workspace, 'normal.txt');
 
   const realPolicyConfig: PolicyConfig = {
@@ -362,6 +475,9 @@ describe('evaluatePolicy symlink traversal', () => {
     symlinkSync(outsideDir, symlinkDirToOutside);
     // Broken symlink (target doesn't exist)
     symlinkSync('/nonexistent/path/to/nowhere', brokenSymlink);
+    // Symlink loop: A→B, B→A (causes ELOOP)
+    symlinkSync(loopSymlinkB, loopSymlinkA);
+    symlinkSync(loopSymlinkA, loopSymlinkB);
   });
 
   afterAll(() => {
@@ -420,5 +536,19 @@ describe('evaluatePolicy symlink traversal', () => {
       realPolicyConfig,
     );
     expect(result).toBe('ALLOW');
+  });
+
+  it('denies fs.read on symlink loop (ELOOP)', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: loopSymlinkA } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.write on symlink loop (ELOOP)', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: loopSymlinkA } },
+      realPolicyConfig,
+    )).toBe('DENY');
   });
 });

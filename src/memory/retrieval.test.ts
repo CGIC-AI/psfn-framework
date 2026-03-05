@@ -472,7 +472,7 @@ describe('MemoryRetriever basic behavior', () => {
   it('falls back to lexical retrieval when semantic candidates are empty', async () => {
     const store = makeMockStore([]);
     const lexicalMatch = makeMemory({
-      text: 'Operator said love is important to remember.',
+      text: 'PrimaryUser said love is important to remember.',
       sensitivity: 'public',
       similarity: 0.85,
     });
@@ -668,7 +668,7 @@ describe('MemoryRetriever basic behavior', () => {
     const store = makeMockStore(memories);
     (store.getContactProfile as ReturnType<typeof vi.fn>).mockReturnValue({
       contactId: 'contact-1',
-      summary: 'Operator is the primary partner and values direct technical communication.',
+      summary: 'PrimaryUser is the primary partner and values direct technical communication.',
       sourceMemoryIds: ['mem-1'],
       confidenceScore: 0.91,
       noveltyScore: 0.42,
@@ -689,14 +689,14 @@ describe('MemoryRetriever basic behavior', () => {
     const memoriesIndex = result.indexOf('What you remember about this person:');
     expect(profileIndex).toBeGreaterThanOrEqual(0);
     expect(memoriesIndex).toBeGreaterThan(profileIndex);
-    expect(result).toContain('Operator is the primary partner');
+    expect(result).toContain('PrimaryUser is the primary partner');
   });
 
   it('returns profile block when memory candidates are empty', async () => {
     const store = makeMockStore([]);
     (store.getContactProfile as ReturnType<typeof vi.fn>).mockReturnValue({
       contactId: 'contact-1',
-      summary: 'Operator prefers concise responses and high signal summaries.',
+      summary: 'PrimaryUser prefers concise responses and high signal summaries.',
       sourceMemoryIds: ['mem-1'],
       confidenceScore: 0.88,
       noveltyScore: 0.4,
@@ -714,7 +714,7 @@ describe('MemoryRetriever basic behavior', () => {
     );
 
     expect(result).toContain('Core profile for this person:');
-    expect(result).toContain('Operator prefers concise responses');
+    expect(result).toContain('PrimaryUser prefers concise responses');
     expect(result).not.toContain('What you remember about this person:');
   });
 

@@ -298,7 +298,7 @@ export class AdminContactsHandlers {
 
     if (wantsNewChannelLink && newChannel && newChannelUserId) {
       const linkResult = legacy.contactStore.linkChannelIdentity(contactId, newChannel, newChannelUserId, {
-        privacyLevel: newChannelPrivacy || 'semi_private',
+        privacyLevel: newChannelPrivacy,
       });
       if (linkResult === 'identity_conflict') {
         return tpl.settingsFormResult(false, `Identity ${newChannel}:${newChannelUserId} is already linked to another contact`);

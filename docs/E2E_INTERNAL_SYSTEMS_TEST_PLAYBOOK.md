@@ -63,8 +63,8 @@ Capture all of the following:
 
 - Use a fixed API session id, e.g. `X-Session-ID: e2e-internal`.
 - Use fixed user identity:
-  - `X-User-ID: operator`
-  - `X-User-Name: V`
+  - `X-User-ID: primary-user`
+  - `X-User-Name: PrimaryUser`
 - REPL note:
   - Async tool calls in `think` are bounded by REPL execution timeout (`executionTimeoutMs`, default 5000ms).
   - If you see `Execution timed out after 5000ms`, treat it as budget/timeout behavior unless unexpected for the scenario.
@@ -84,7 +84,7 @@ Pass:
 ### T01 Memory write/read loop
 
 Prompt:
-- "Use `memory_write` to store: `E2E_MARKER_MEMORY_01: V likes jasmine tea at 9pm`. Then confirm by using `think` + `memory_search` and report exactly what you found."
+- "Use `memory_write` to store: `E2E_MARKER_MEMORY_01: the primary user likes jasmine tea at 9pm`. Then confirm by using `think` + `memory_search` and report exactly what you found."
 
 Pass:
 - Marker memory is written and later retrieved.

@@ -65,7 +65,7 @@ function migrateReflectionSessionFiles(dataDir: string): void {
 
   try {
     const payload = JSON.parse(readFileSafely(channelIndexPath)) as ChannelIndexPayload;
-    if (!payload || typeof payload !== 'object' || !payload.channels || typeof payload.channels !== 'object') {
+    if (!payload.channels || typeof payload.channels !== 'object') {
       return;
     }
 

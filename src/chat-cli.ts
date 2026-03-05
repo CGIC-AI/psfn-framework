@@ -156,8 +156,8 @@ async function main(): Promise<void> {
       id: `cli-${Date.now()}`,
       channelId: CHANNEL_ID,
       channelType: 'terminal',
-      authorId: 'operator',
-      authorName: 'V',
+      authorId: 'primary-user',
+      authorName: 'PrimaryUser',
       content: input,
       timestamp: new Date(),
     };

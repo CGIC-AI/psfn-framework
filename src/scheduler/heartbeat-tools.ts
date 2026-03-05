@@ -417,8 +417,8 @@ export function createScheduleTaskTool(
                 timestamp: new Date(),
               });
 
-              // If sender + channel available, send result to Discord
-              if (sender && heartbeatChannelId) {
+              // If channel available, send result to Discord
+              if (heartbeatChannelId) {
                 await sender.send(heartbeatChannelId, response.content);
               }
             };
@@ -429,7 +429,7 @@ export function createScheduleTaskTool(
               if (!isBusyTurnError(err)) {
                 throw err;
               }
-              await agentLoop.waitForIdle?.();
+              await agentLoop.waitForIdle();
               await runPlannedPrompt();
             }
           },

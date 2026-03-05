@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  EmbeddingProvider,
+  OllamaEmbeddingProvider,
   TransformersEmbeddingProvider,
   createEmbeddingProviderFromEnv,
 } from './embedding.js';
@@ -83,7 +83,7 @@ describe('embedding providers', () => {
     });
   });
 
-  it('keeps legacy EmbeddingProvider ollama behavior', async () => {
+  it('OllamaEmbeddingProvider embeds with explicit config', async () => {
     fetchMock.mockResolvedValue(okJson({
       embeddings: [
         [1, 2],
@@ -91,7 +91,7 @@ describe('embedding providers', () => {
       ],
     }));
 
-    const provider = new EmbeddingProvider({
+    const provider = new OllamaEmbeddingProvider({
       ollamaUrl: 'http://ollama.local:11434',
       model: 'legacy-model',
       dims: 2,

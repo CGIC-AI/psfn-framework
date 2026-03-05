@@ -27,7 +27,7 @@ import type { GitOperations } from '../git/ops.js';
 import type { AuditStore } from './audit.js';
 import type { SessionHmacKeyring } from '../session/journal-utils.js';
 import { createComponentLogger } from '../logger.js';
-import { resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
+import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
 import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
@@ -59,7 +59,7 @@ export interface GatewayConfirmationConfig {
   ntfyTopic?: string;
 }
 
-export { resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
+export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
 
 // ── Gateway Server Class ──
 
@@ -72,7 +72,7 @@ export interface GatewayServerOptions {
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: AuditStore;
-  sessionHmacKeyring?: SessionHmacKeyring | null;
+  sessionHmacKeyring?: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
   wyomingShardRouting?: WyomingShardRoutingConfig;
@@ -83,7 +83,7 @@ export class GatewayServer {
   private readonly connections = new Set<NdjsonConnection>();
   private readonly rpcClients = new Map<NdjsonConnection, JSONRPCServerAndClient>();
   private readonly options: GatewayServerOptions;
-  private readonly sessionHmacKeyring: SessionHmacKeyring | null;
+  private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
   private readonly confirmationQueue: ConfirmationQueue;
   private readonly confirmationConfig: GatewayConfirmationConfig;
@@ -93,9 +93,8 @@ export class GatewayServer {
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
-    this.sessionHmacKeyring = options.sessionHmacKeyring === undefined
-      ? resolveGatewaySessionHmacKeyring(process.env)
-      : options.sessionHmacKeyring;
+    this.sessionHmacKeyring = options.sessionHmacKeyring
+      ?? requireGatewaySessionHmacKeyring(process.env);
     this.confirmationConfig = {
       expiryMs: this.normalizePositiveInt(
         options.confirmation?.expiryMs,
@@ -110,12 +109,10 @@ export class GatewayServer {
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => this.resolveCapabilityTierFromEnv());
     this.wyomingShardRouting = options.wyomingShardRouting ?? parseWyomingShardRoutingConfigEnv(process.env);
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
-    if (this.sessionHmacKeyring) {
-      log.info('Session HMAC keyring configured', {
-        activeVersion: this.sessionHmacKeyring.activeVersion,
-        versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
-      });
-    }
+    log.info('Session HMAC keyring configured', {
+      activeVersion: this.sessionHmacKeyring.activeVersion,
+      versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
+    });
   }
 
   // Wrap a handler with audit timing — logs call, records duration/error on completion
@@ -241,6 +238,11 @@ export class GatewayServer {
       resolveConfirmation: (params) => this.confirmationQueue.resolve(params),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
+      recordAuditEvent: (entry) => {
+        if (this.options.auditStore) {
+          this.options.auditStore.recordSummary(entry);
+        }
+      },
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
       gated: (method, handler, paramsSummary, approvalAction, approvalScope, approvalReason) =>
         this.gated(

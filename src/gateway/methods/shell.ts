@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { basename, normalize, resolve } from 'node:path';
+import { accessSync, constants, realpathSync } from 'node:fs';
+import { basename, delimiter, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type { ShellExecParams, ShellExecResult } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
@@ -16,6 +17,11 @@ const MAX_COMMAND_LENGTH = 256;
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
 
+interface NormalizedShellAllowlist {
+  names: Set<string>;
+  canonicalPaths: Set<string>;
+}
+
 function normalizePositiveInt(value: unknown): number | undefined {
   if (!Number.isFinite(value)) return undefined;
   const parsed = Math.floor(Number(value));
@@ -23,13 +29,74 @@ function normalizePositiveInt(value: unknown): number | undefined {
   return parsed;
 }
 
-function normalizeAllowlist(values: readonly string[] | undefined): string[] {
-  if (!values || values.length === 0) return [];
-  return [...new Set(
-    values
-      .map(value => value.trim().toLowerCase())
-      .filter(Boolean),
-  )];
+function includesPathSeparator(value: string): boolean {
+  return value.includes('/') || value.includes('\\');
+}
+
+function resolveCanonicalPath(pathValue: string): string {
+  const normalized = resolve(normalize(pathValue));
+  try {
+    return realpathSync(normalized);
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      try {
+        const parent = realpathSync(dirname(normalized));
+        return resolve(parent, basename(normalized));
+      } catch {
+        return normalized;
+      }
+    }
+    return normalized;
+  }
+}
+
+function resolveCanonicalExecutablePath(command: string): string | null {
+  const absolute = resolve(normalize(command));
+  try {
+    accessSync(absolute, constants.X_OK);
+    return realpathSync(absolute);
+  } catch {
+    return null;
+  }
+}
+
+function resolveExecutableFromPath(command: string): string | null {
+  const pathValue = process.env.PATH ?? '';
+  const candidates = pathValue.split(delimiter).filter(Boolean);
+  for (const candidateDir of candidates) {
+    const candidate = join(candidateDir, command);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return realpathSync(candidate);
+    } catch {
+      // Keep scanning PATH
+    }
+  }
+  return null;
+}
+
+function normalizeAllowlist(values: readonly string[] | undefined): NormalizedShellAllowlist {
+  const names = new Set<string>();
+  const canonicalPaths = new Set<string>();
+  if (!values || values.length === 0) {
+    return { names, canonicalPaths };
+  }
+
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    if (includesPathSeparator(trimmed) || isAbsolute(trimmed)) {
+      const canonical = resolveCanonicalExecutablePath(trimmed);
+      if (canonical) {
+        canonicalPaths.add(canonical);
+      }
+      continue;
+    }
+    names.add(trimmed.toLowerCase());
+  }
+
+  return { names, canonicalPaths };
 }
 
 function resolveCommand(command: unknown): string {
@@ -80,17 +147,25 @@ function resolveWorkingDirectory(
     ? rawCwd.trim()
     : runtime.workspacePath;
   const resolvedCwd = resolve(normalize(requestedCwd));
+  const canonicalCwd = resolveCanonicalPath(resolvedCwd);
   const allowedRootsRaw = policy.allowedCwd && policy.allowedCwd.length > 0
     ? policy.allowedCwd
     : [runtime.workspacePath];
   const allowedRoots = allowedRootsRaw.map(path => resolve(normalize(path)));
+  const canonicalAllowedRoots = allowedRoots.map(path => resolveCanonicalPath(path));
   if (!isInsideAllowedPaths(resolvedCwd, allowedRoots)) {
     throw new JSONRPCErrorException(
       `shell.exec cwd not allowlisted: ${resolvedCwd}`,
       GatewayErrors.POLICY_DENIED,
     );
   }
-  return resolvedCwd;
+  if (!isInsideAllowedPaths(canonicalCwd, canonicalAllowedRoots)) {
+    throw new JSONRPCErrorException(
+      `shell.exec cwd not allowlisted: ${canonicalCwd}`,
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+  return canonicalCwd;
 }
 
 function resolveBoundedExecutionPolicy(
@@ -121,18 +196,52 @@ function assertCommandAllowed(command: string, allowlist: readonly string[]): vo
     );
   }
   const normalizedAllowlist = normalizeAllowlist(allowlist);
-  if (normalizedAllowlist.length === 0) {
+  if (normalizedAllowlist.names.size === 0 && normalizedAllowlist.canonicalPaths.size === 0) {
     throw new JSONRPCErrorException('shell.exec allowlist is empty', GatewayErrors.POLICY_DENIED);
   }
 
+  const commandIsPath = includesPathSeparator(command) || isAbsolute(command);
+  const canonicalCommand = commandIsPath
+    ? resolveCanonicalExecutablePath(command)
+    : resolveExecutableFromPath(command);
   const commandLower = command.toLowerCase();
-  const commandBaseLower = basename(command).toLowerCase();
-  if (!normalizedAllowlist.includes(commandLower) && !normalizedAllowlist.includes(commandBaseLower)) {
+
+  if (!commandIsPath) {
+    if (normalizedAllowlist.names.has(commandLower)) {
+      return;
+    }
+    if (canonicalCommand && normalizedAllowlist.canonicalPaths.has(canonicalCommand)) {
+      return;
+    }
     throw new JSONRPCErrorException(
       `shell.exec command not allowlisted: ${command}`,
       GatewayErrors.POLICY_DENIED,
     );
   }
+
+  if (!canonicalCommand) {
+    throw new JSONRPCErrorException(
+      `shell.exec command not executable or not found: ${command}`,
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+
+  if (normalizedAllowlist.canonicalPaths.has(canonicalCommand)) {
+    return;
+  }
+
+  const canonicalBase = basename(canonicalCommand).toLowerCase();
+  if (normalizedAllowlist.names.has(canonicalBase)) {
+    const expectedCanonical = resolveExecutableFromPath(canonicalBase);
+    if (expectedCanonical && expectedCanonical === canonicalCommand) {
+      return;
+    }
+  }
+
+  throw new JSONRPCErrorException(
+    `shell.exec command not allowlisted: ${command}`,
+    GatewayErrors.POLICY_DENIED,
+  );
 }
 
 async function runCommandBounded(
@@ -181,8 +290,8 @@ async function runCommandBounded(
       setTimeout(() => child.kill('SIGKILL'), 250).unref();
     }, limits.timeoutMs);
 
-    child.stdout?.on('data', chunk => appendOutput('stdout', chunk));
-    child.stderr?.on('data', chunk => appendOutput('stderr', chunk));
+    child.stdout.on('data', chunk => appendOutput('stdout', chunk));
+    child.stderr.on('data', chunk => appendOutput('stderr', chunk));
     child.once('error', (error) => {
       clearTimeout(timeoutHandle);
       rejectResult(error);

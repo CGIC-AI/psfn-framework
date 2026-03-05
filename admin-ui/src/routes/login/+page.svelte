@@ -2,10 +2,12 @@
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { setToken } from '$lib/stores/auth.svelte';
+  import { getCompanionName } from '$lib/stores/companion.svelte';
 
   let tokenInput = $state('');
   let error = $state('');
   let loading = $state(false);
+  const companionName = $derived(getCompanionName());
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
@@ -45,7 +47,7 @@
   <div class="card max-w-md w-full p-8">
     <div class="text-center mb-8">
       <h1 class="font-serif text-3xl text-gold-600 font-semibold">
-        admin UI
+        {companionName}'s Garden
       </h1>
       <p class="text-shadow-700 mt-2 text-sm">
         Enter your admin token to continue

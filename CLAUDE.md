@@ -177,16 +177,6 @@ Ported from ElizaOS plugin-psfn:
 - **Decay**: Exponential salience — episodic 7d, semantic 30d, emotional 14d, procedural 90d, reflection 60d, relational 60d
 - **Retrieval**: Composite score = similarity * recency * emotionalWeight * importance * salience
 
-## PSFN Identity
-
-- Character card (V2 spec): `/home/operator/.openclaw/agents/main/character.json`
-- Voice: Provider-pluggable streaming TTS (`elevenlabs` or `echo`)
-- ElevenLabs voice ID (current PSFN V2(B) identity): `rPQ6h200dfjiuYAy0JDA`
-- Echo defaults (API voice websocket runtime): `${ECHO_TTS_URL}`, `11labs-Allison`, `Independent-High-Speaker-CFG`
-- Discord bot: ID 1467253459387678963
-- Voxta history: 8,160 messages across 316 chats (importable as L0 archive)
-- Memory books: 10 entries from Voxta (importable as L2 semantic memories)
-
 ## Gateway / Agent Security Architecture
 
 The runtime splits into two processes for defense-in-depth:
@@ -213,7 +203,7 @@ Additional hardening:
 - **Default localhost binding**: API and admin servers bind to `127.0.0.1` by default (not `0.0.0.0`)
 - **Content block normalization**: `normalizeContent()` in LLM/gateway clients unwraps stringified `[{'type': 'text', 'text': '...'}]` content blocks that LiteLLM streaming can produce
 - **Bidirectional gateway RPC**: `JSONRPCServerAndClient` per connection enables voice turns to await agent responses via reverse RPC (`discord.handleMessage`), while text messages remain fire-and-forget notifications
-- **Git path allowlisting**: `GitOps.validatePath()` restricts self-modification to `src/`, `docs/`, `psfn/` with protected branch blocking on `main`/`master`
+- **Git path allowlisting**: `GitOps.validatePath()` restricts self-modification to `src/`, `docs/` with protected branch blocking on `main`/`master`
 - **Reasoning support**: `thinkingFormat` in model compat (`'qwen'` for kimi-k2.5, `'zai'` for glm-5), `thinking_delta` events bridged to `agent.stream.thinking`, `ThinkingContent` extracted alongside `TextContent` in LLMClient and SubstrateAgent. `LLMResponse.reasoning` propagated through gateway protocol
 - **Runtime context injection**: `buildRuntimeContext()` in SubstrateAgent injects current time, channel/visibility, user/trust, model, tool counts into system prompt every turn — eliminates confabulation of model identity and temporal awareness
 - **Lazy tool loading**: Tools split into `coreTools` (9: think, spawn_shard, memory_write, memory_import_batch, contact_lookup, contact_list, self_restart, self_rebuild, load_tools) and `extendedTools` (15: git, prompt, heartbeat, contact_set_trust, contact_note). `load_tools` meta-tool hot-swaps active set via `agent.setTools()`. Per-turn reset in `handleMessage()`
@@ -229,9 +219,21 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 - **Deps**: `@mariozechner/pi-ai`, `@mariozechner/pi-agent-core`, `better-sqlite3`, `sqlite-vec`, `discord.js`, `@discordjs/voice`, `json-rpc-2.0`, `winston`, `js-tiktoken`, `ws`
 - **LLM**: LiteLLM proxy → OpenRouter (deepseek/deepseek-v3.2 primary+extraction; also z-ai/glm-5, moonshotai/kimi-k2.5 — reasoning models supported via `thinkingFormat` compat)
 - **Embeddings**: Local Ollama (snowflake-arctic-embed2, 1024d)
-- **PSFN still runs on OpenClaw/BotMaker** until substrate is live-tested
 - **Admin UI (Svelte SPA)**: `admin-ui/` — SvelteKit 5, `npm run garden:dev` for dev, `npm run garden:build` for prod. Serves at `/garden` on admin port. API client at `admin-ui/src/lib/api/`.
 - **Not yet built**: module system (hot-load), capability tokens
+
+## Parallel Work Safety
+
+**NEVER delete, force-remove, or destroy branches, worktrees, stashes, or refs without explicit user confirmation.** Multiple agents may be working in parallel across different worktrees and branches. What looks "stale" or "unused" to you may be actively in use by another agent. This applies to:
+
+- `git branch -D` / `git branch -d`
+- `git worktree remove` (especially `--force`)
+- `git stash drop` / `git stash clear`
+- `git reflog expire` + `git gc --prune=now`
+- `git reset --hard`, `git checkout -- .`, `git clean -f`
+- Deleting directories that contain worktrees
+
+**Always ask first. No exceptions.**
 
 ## Guidelines
 
@@ -243,3 +245,30 @@ Single-process mode (`npm run dev`) is preserved — uses concrete classes direc
 - Test framework is Vitest. Tests use `*.test.ts` pattern.
 - No ORM — use better-sqlite3 directly with prepared statements.
 - No Bun, no PostgreSQL, no heavy frameworks. Keep dependencies minimal.
+
+## Coding Standards
+
+### Security: Fail Closed
+- Every security check must deny by default. If a policy check throws, the answer is DENY.
+- Never catch-and-continue on auth, trust, capability, or policy errors. Let them propagate.
+- No `try { } catch { /* ignore */ }` — every catch must log and either rethrow or return an explicit error.
+- Gateway policy: unknown method = DENY. Missing auth = DENY. Malformed request = DENY.
+
+### Error Handling: No Swallowing
+- Every `catch` block must do something visible: log, rethrow, return an error result, or emit an event.
+- Empty catch blocks are bugs. `catch (e) { }` is never acceptable.
+- Async errors must be awaited or explicitly fire-and-forget with `.catch(err => log.error(...))`.
+- If a function can fail, its return type must reflect that (throw, Result type, or nullable).
+
+### No Legacy Code
+- No backward-compatibility shims, migration paths, or "legacy mode" fallbacks.
+- No `// TODO: remove after migration` — if old code is dead, delete it now.
+- No renamed-but-unused `_variables` to keep old interfaces alive.
+- No re-exports for old import paths. Move the import, fix the callers.
+- One way to do things. If there's a new pattern, the old one gets removed in the same PR.
+
+### No Fallbacks
+- If a required config value is missing, throw — don't substitute a default and hope for the best.
+- If a service dependency is unavailable, fail with a clear error — don't silently degrade.
+- No `?? 'some-hardcoded-value'` on security-sensitive config (API keys, voice IDs, endpoints).
+- Optional features use explicit feature flags (`if (config.featureX)`) — not try/catch around missing deps.

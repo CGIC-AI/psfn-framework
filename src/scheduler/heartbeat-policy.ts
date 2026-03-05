@@ -252,7 +252,7 @@ export class HeartbeatPolicyStore {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {
           log.warn('Invalid heartbeat template in policy file, restoring defaults', {
-            templateId: template?.id,
+            templateId: template.id,
             errors,
           });
           const defaults = getDefaults();

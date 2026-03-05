@@ -137,7 +137,6 @@ function normalizePurposes(values: DeliberationPurpose[] | undefined): Deliberat
 
   const deduped: DeliberationPurpose[] = [];
   for (const purpose of values) {
-    if (purpose !== 'background' && purpose !== 'reasoning') continue;
     if (!deduped.includes(purpose)) deduped.push(purpose);
   }
   return deduped.length > 0 ? deduped : [...DEFAULT_VOICES];

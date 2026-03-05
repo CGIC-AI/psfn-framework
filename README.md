@@ -107,7 +107,8 @@ OLLAMA_URL=http://localhost:11434
 
 # Data storage
 DATA_DIR=./data
-DATABASE_PATH=./data/psfn.db
+# DATABASE_BASENAME=companion        # Used when DATABASE_PATH is not set
+DATABASE_PATH=./data/companion.db
 ```
 
 For full configuration details, use `src/types.ts` as the parser/defaults source of truth and confirm runtime wiring in `src/runtime.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`. `.env.example` is a starter template and can lag newer voice keys (for example `ECHO_TTS_*`).
@@ -169,8 +170,10 @@ Svelte 5 SPA served at `/garden` (build with `npm run garden:build` or dev with 
 **OpenAI-compatible API:**
 ```bash
 API_PORT=3000          # Activates /v1/chat/completions
-API_KEY=your-key       # Optional auth
 API_HOST=127.0.0.1
+API_KEY=your-key       # Required unless ALLOW_INSECURE_LOCAL_API=true
+ALLOW_INSECURE_LOCAL_API=false  # Explicitly allow keyless local-only mode
+API_CORS_ALLOWLIST=http://127.0.0.1:3001  # Comma-separated browser origin allowlist
 API_MODEL_NAME=psfn
 API_REQUEST_TIMEOUT_MS=90000
 ```
@@ -185,7 +188,7 @@ TTS_PROVIDER=elevenlabs           # or: echo
 
 # ElevenLabs path
 ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=rPQ6h200dfjiuYAy0JDA
+ELEVENLABS_VOICE_ID=your-voice-id-here
 ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
 
 # Echo path (provider-pluggable streaming TTS)
@@ -230,7 +233,7 @@ LIFECYCLE_RESTART_COMMAND=npm run split
 ALLOW_HTTP_FETCH=false               # Gateway web fetch policy
 FETCH_DOMAIN_ALLOWLIST=example.com   # Optional gateway fetch domain restriction
 MODULE_REGISTRY_TRUSTED_READ=false   # Optional explicit allow for module registry reads
-MODULE_REGISTRY_PATH=psfn/modules/repl-registry.json
+MODULE_REGISTRY_PATH=companion/modules/repl-registry.json
 AUDIT_DB_PATH=./data/gateway-audit.db
 LOG_LEVEL=info
 ```
@@ -243,7 +246,7 @@ Prerequisites:
 - Admin server is running and reachable (for `/api/chat/bootstrap`)
 - API server is running and reachable (for `/v1/chat/completions`)
 - If admin auth is enabled, pass `ADMIN_TOKEN`
-- If API auth is enabled, ensure `API_KEY` is configured so bootstrap can expose `api.apiKey`
+- Ensure `API_KEY` is configured (or explicitly enable `ALLOW_INSECURE_LOCAL_API=true` on loopback-only dev runs)
 - For optional voice check, voice websocket runtime must be enabled
 
 Command:

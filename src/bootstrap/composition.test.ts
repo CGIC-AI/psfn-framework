@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { EventBus } from '../event-bus.js';
 import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
@@ -27,6 +27,19 @@ const EMPTY_MEMORY_STORE = {
     byType: {},
   }),
 };
+const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
+
+beforeEach(() => {
+  process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH ?? 'companion/modules/repl-registry.json';
+});
+
+afterEach(() => {
+  if (ORIGINAL_MODULE_REGISTRY_PATH === undefined) {
+    delete process.env.MODULE_REGISTRY_PATH;
+  } else {
+    process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH;
+  }
+});
 
 interface GatewayLLMProvider extends LLMProvider {
   fsRead: (path: string) => Promise<string>;
@@ -375,6 +388,37 @@ describe('agent-main split wiring', () => {
     expect(source).toContain('onModuleRegistryMutation: async (mutation) =>');
   });
 
+  it('uses deterministic workspace-root module registry paths in split mode', () => {
+    const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const gatewaySource = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+    expect(agentSource).toContain('resolveModuleRegistryPathFromWorkspace(');
+    expect(agentSource).toContain('ensureRegistryFile(moduleRegistryPath)');
+    expect(agentSource).toContain('registryPath: moduleRegistryPath');
+    expect(gatewaySource).toContain('resolveModuleRegistryPathFromWorkspace(');
+  });
+
+  it('passes split memory extraction dependencies through composition wiring', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const wireIndex = source.indexOf('wireMemoryRuntime({');
+    expect(wireIndex).toBeGreaterThanOrEqual(0);
+    expect(source.indexOf('sessionStore,', wireIndex)).toBeGreaterThan(wireIndex);
+    expect(source.indexOf('contactStore,', wireIndex)).toBeGreaterThan(wireIndex);
+  });
+
+  it('gates API voice websocket endpoint on fully wired runtime in split mode', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(source).toContain('createApiVoiceWebSocketRuntime({');
+    expect(source).toContain('voiceWebSocketPath = voiceWebSocketRuntime');
+    expect(source).toContain('voiceWebSocketRuntime,');
+  });
+
+  it('uses durable split shutdown sequence with module + marker teardown', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(source).toContain("runShutdownStep('shutdown module loader'");
+    expect(source).toContain('moduleLoader.shutdown()');
+    expect(source).toContain('sessionStore.markGracefulShutdownForActiveChannels()');
+  });
+
   it('re-validates tool wiring after module load in split mode', () => {
     const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     const preIndex = source.indexOf("agentLoop.validateToolWiring('gateway'");
@@ -402,6 +446,20 @@ describe('runtime composition wiring', () => {
     const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
     expect(source).toContain('createEmbeddingProviderFromEnv(process.env)');
     expect(source).not.toContain('new EmbeddingProvider(');
+  });
+
+  it('uses shared runtime voice provider gate for gateway Wyoming adapters', () => {
+    const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+    expect(source).toContain('resolveRuntimeVoiceProviderGate(config)');
+    expect(source).toContain('voiceProviderGate.sttEnabled');
+    expect(source).toContain('voiceProviderGate.ttsEnabled');
+  });
+
+  it('uses durable gateway shutdown sequencing in split mode', () => {
+    const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+    expect(source).toContain('let stopPromise: Promise<void> | null = null;');
+    expect(source).toContain("runShutdownStep('stop gateway server'");
+    expect(source).toContain('Shutdown step failed; continuing shutdown');
   });
 
   it('avoids duplicating composition-owned constructor wiring', () => {

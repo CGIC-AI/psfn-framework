@@ -1,9 +1,11 @@
-import type { SkillsRuntime } from '../../../skills/runtime.js';
 import type { SubstrateConfig } from '../../../types.js';
 import {
   applySettings,
+  type EditableSettings,
+  hasModelSettings,
   loadSettings,
   normalizeEditableSettings,
+  splitSettingsByDomain,
   SETTINGS_VALIDATION,
   saveSettings,
 } from '../../../settings.js';
@@ -13,7 +15,6 @@ import {
 } from '../../../config/models-config.js';
 import {
   loadSkillsConfig,
-  saveSkillsConfig,
 } from '../../../config/skills-config.js';
 import {
   loadSchedulerConfig,
@@ -21,18 +22,17 @@ import {
 } from '../../../config/scheduler-config.js';
 import {
   loadTrustPolicyConfig,
-  saveTrustPolicyConfig,
 } from '../../../config/trust-policy-config.js';
 import {
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
-import { resolveRuntimeSchedulerConfig } from '../../../config/scheduler-runtime.js';
-import { setRuntimeTrustPolicy } from '../../../trust/runtime-policy.js';
 import {
   CAPABILITY_TIER_VALUES,
-  isCapabilityTier,
 } from '../../../capabilities/tiers.js';
+import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
+import { MEMORY_CONFIG } from '../../../memory/types.js';
+import { createComponentLogger } from '../../../logger.js';
 import { toErrorMessage } from '../../../utils/errors.js';
 import type {
   AdminSettingsData,
@@ -46,6 +46,208 @@ const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local
 const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
 const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
 const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
+const log = createComponentLogger('AdminSettingsService');
+
+type SettingsMutationResult =
+  | { ok: true }
+  | { ok: false; message: string };
+
+function refreshModels(config: SubstrateConfig): void {
+  try {
+    config.runtimeHooks?.refreshModels?.();
+  } catch (error) {
+    log.warn('Runtime model refresh hook failed after settings mutation', {
+      error: toErrorMessage(error),
+    });
+  }
+}
+
+function refreshCapabilities(config: SubstrateConfig): void {
+  try {
+    config.runtimeHooks?.refreshCapabilities?.();
+  } catch (error) {
+    log.warn('Runtime capability refresh hook failed after settings mutation', {
+      error: toErrorMessage(error),
+    });
+  }
+}
+
+export function applyAdminModelsConfigMutation(options: {
+  config: SubstrateConfig;
+  payload: unknown;
+}): SettingsMutationResult {
+  const { config, payload } = options;
+  try {
+    const saved = saveModelsConfig(
+      config.dataDir,
+      payload,
+      { defaultContextWindow: config.defaultContextWindow },
+    );
+    applySettings(config, saved);
+    refreshModels(config);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message: toErrorMessage(error),
+    };
+  }
+}
+
+export function applyAdminCapabilityTierMutation(options: {
+  config: SubstrateConfig;
+  payload: unknown;
+}): SettingsMutationResult {
+  const { config, payload } = options;
+  try {
+    const saved = saveCapabilityTierConfig(config.dataDir, payload);
+    config.capabilityTier = saved.tier;
+    refreshCapabilities(config);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message: toErrorMessage(error),
+    };
+  }
+}
+
+export function applyAdminSettingsMutation(options: {
+  config: SubstrateConfig;
+  settings: EditableSettings;
+  capabilityCustomTokens?: readonly CapabilityToken[];
+}): SettingsMutationResult {
+  const { config, settings, capabilityCustomTokens } = options;
+
+  const currentRuntimeSettings = splitSettingsByDomain(loadSettings(config.dataDir)).runtime;
+  const domainSplit = splitSettingsByDomain(settings);
+
+  const mergedRuntimeSettings = normalizeEditableSettings(
+    { ...currentRuntimeSettings, ...domainSplit.runtime },
+    { defaultContextWindow: config.defaultContextWindow },
+  );
+
+  saveSettings(config.dataDir, mergedRuntimeSettings);
+  applySettings(config, mergedRuntimeSettings);
+
+  let modelsRefreshed = false;
+  if (hasModelSettings(domainSplit.models)) {
+    try {
+      const currentModels = loadModelsConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+        defaultContextWindow: config.defaultContextWindow,
+      });
+      const modelPatch: EditableSettings = { ...domainSplit.models };
+      const hasPrimaryAliasPatch = modelPatch.primaryModel !== undefined
+        || modelPatch.primaryProvider !== undefined
+        || modelPatch.primaryMaxTokens !== undefined;
+      if (hasPrimaryAliasPatch) {
+        const currentPrimary = config.modelRoster.chat ?? {
+          model: config.primaryModel,
+          provider: config.primaryProvider,
+          maxTokens: config.primaryMaxTokens,
+        };
+        modelPatch.primaryModel ??= currentPrimary.model;
+        modelPatch.primaryProvider ??= currentPrimary.provider;
+        modelPatch.primaryMaxTokens ??= currentPrimary.maxTokens;
+      }
+      const hasExtractionAliasPatch = modelPatch.extractionModel !== undefined
+        || modelPatch.extractionProvider !== undefined
+        || modelPatch.extractionMaxTokens !== undefined;
+      if (hasExtractionAliasPatch) {
+        const currentExtraction = config.modelRoster.background ?? config.modelRoster.extraction ?? {
+          model: config.extractionModel,
+          provider: config.extractionProvider,
+          maxTokens: config.extractionMaxTokens,
+        };
+        modelPatch.extractionModel ??= currentExtraction.model;
+        modelPatch.extractionProvider ??= currentExtraction.provider;
+        modelPatch.extractionMaxTokens ??= currentExtraction.maxTokens;
+      }
+
+      const mergedModelSettings = normalizeEditableSettings(
+        {
+          modelCatalog: currentModels.modelCatalog,
+          modelRoleAssignments: currentModels.modelRoleAssignments,
+          ...modelPatch,
+        },
+        { defaultContextWindow: config.defaultContextWindow },
+      );
+      const modelMutation = applyAdminModelsConfigMutation({
+        config,
+        payload: {
+          modelCatalog: mergedModelSettings.modelCatalog ?? currentModels.modelCatalog,
+          modelRoleAssignments: mergedModelSettings.modelRoleAssignments ?? currentModels.modelRoleAssignments,
+        },
+      });
+      if (!modelMutation.ok) {
+        return {
+          ok: false,
+          message: `Settings saved but models config update failed: ${modelMutation.message}`,
+        };
+      }
+      modelsRefreshed = true;
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Settings saved but models config update failed: ${toErrorMessage(error)}`,
+      };
+    }
+  }
+
+  if (!modelsRefreshed) {
+    refreshModels(config);
+  }
+
+  if (domainSplit.maintenanceIntervalMs !== undefined) {
+    try {
+      const currentScheduler = loadSchedulerConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      const savedScheduler = saveSchedulerConfig(config.dataDir, {
+        ...currentScheduler,
+        salienceDecayIntervalMs: domainSplit.maintenanceIntervalMs,
+      });
+      config.maintenanceIntervalMs = savedScheduler.salienceDecayIntervalMs;
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Settings saved but scheduler update failed: ${toErrorMessage(error)}`,
+      };
+    }
+  }
+
+  if (domainSplit.capabilityTier !== undefined) {
+    try {
+      const currentCapabilities = loadCapabilityTierConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      const capabilityMutation = applyAdminCapabilityTierMutation({
+        config,
+        payload: {
+          ...currentCapabilities,
+          tier: domainSplit.capabilityTier,
+          customTokens: domainSplit.capabilityTier === 'custom'
+            ? [...(capabilityCustomTokens ?? [])]
+            : currentCapabilities.customTokens,
+        },
+      });
+      if (!capabilityMutation.ok) {
+        return {
+          ok: false,
+          message: `Settings saved but capability tier update failed: ${capabilityMutation.message}`,
+        };
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Settings saved but capability tier update failed: ${toErrorMessage(error)}`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
 
 const BOOLEAN_SETTINGS_FIELDS = new Set([
   'importProcessingStrictPolicy',
@@ -72,12 +274,11 @@ const STRING_ARRAY_SETTINGS_FIELDS = new Set([
 export class AdminSettingsDataService implements AdminSettingsService {
   constructor(private readonly deps: {
     config: SubstrateConfig;
-    skillsRuntime?: SkillsRuntime | null;
   }) {}
 
   private getEnvInfo() {
     return {
-      salienceFloor: Number(process.env.SALIENCE_FLOOR ?? 0.45),
+      salienceFloor: Number(process.env.SALIENCE_FLOOR ?? MEMORY_CONFIG.salienceFloor),
       maintenanceIntervalMs: Number(process.env.MAINTENANCE_INTERVAL_MS ?? this.deps.config.maintenanceIntervalMs),
       discordToken: process.env.DISCORD_TOKEN ? '[set]' : '[not set]',
       apiKey: process.env.API_KEY ? '[set]' : '[not set]',
@@ -87,6 +288,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       litellmApiKey: process.env.LITELLM_API_KEY ? '[set]' : '[not set]',
       ollamaUrl: process.env.OLLAMA_URL ? '[set]' : '[not set]',
       importProcessingLocalApiKey: process.env.IMPORT_PROCESSING_LOCAL_API_KEY ? '[set]' : '[not set]',
+      telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ? '[set]' : '[not set]',
     };
   }
 
@@ -98,13 +300,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
       trustPolicy: loadTrustPolicyConfig(this.deps.config.dataDir),
       capabilities: loadCapabilityTierConfig(this.deps.config.dataDir),
     };
-  }
-
-  private parseConfigJsonBody(body: string): unknown {
-    if (!body.trim()) {
-      throw new Error('Configuration payload is empty');
-    }
-    return JSON.parse(body);
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {
@@ -260,6 +455,14 @@ export class AdminSettingsDataService implements AdminSettingsService {
     return errors;
   }
 
+  private parseCapabilityCustomTokens(payload: Record<string, unknown>): CapabilityToken[] | undefined {
+    if (!Array.isArray(payload.customTokens)) return undefined;
+    return payload.customTokens
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map(entry => entry.trim())
+      .filter((entry): entry is CapabilityToken => isCapabilityToken(entry));
+  }
+
   async getSettingsData(): Promise<AdminSettingsData> {
     await loadSettings(this.deps.config.dataDir);
     const normalizedConfig = normalizeEditableSettings(this.deps.config);
@@ -298,90 +501,16 @@ export class AdminSettingsDataService implements AdminSettingsService {
         return this.buildValidationResult(validationErrors);
       }
 
-      const payload = parsed as Partial<SubstrateConfig>;
-      const next = {
-        ...current,
-        ...payload,
-      };
-      saveSettings(this.deps.config.dataDir, next);
-      applySettings(this.deps.config, next);
-      if (this.deps.config.modelCatalog && this.deps.config.modelRoleAssignments) {
-        saveModelsConfig(
-          this.deps.config.dataDir,
-          {
-            modelCatalog: this.deps.config.modelCatalog,
-            modelRoleAssignments: this.deps.config.modelRoleAssignments,
-          },
-          { defaultContextWindow: this.deps.config.defaultContextWindow },
-        );
+      const payload = parsed as EditableSettings;
+      const mutationResult = applyAdminSettingsMutation({
+        config: this.deps.config,
+        settings: payload,
+        capabilityCustomTokens: this.parseCapabilityCustomTokens(parsed),
+      });
+      if (!mutationResult.ok) {
+        return { ok: false, message: mutationResult.message };
       }
       return { ok: true, message: 'Settings updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateModelsConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveModelsConfig(this.deps.config.dataDir, parsed);
-      return { ok: true, message: 'models.json updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateSkillsConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveSkillsConfig(this.deps.config.dataDir, parsed);
-      this.deps.skillsRuntime?.invalidateCache();
-      return { ok: true, message: 'skills.json updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateSchedulerConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveSchedulerConfig(this.deps.config.dataDir, parsed);
-      const runtimeScheduler = resolveRuntimeSchedulerConfig(this.deps.config.dataDir, this.deps.config);
-      this.deps.config.maintenanceIntervalMs = runtimeScheduler.maintenanceIntervalMs;
-      this.deps.config.extractionInterval = runtimeScheduler.extractionIntervalMinutes;
-      return { ok: true, message: 'scheduler.json updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateTrustPolicyConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveTrustPolicyConfig(this.deps.config.dataDir, parsed);
-      const runtimeTrustPolicy = loadTrustPolicyConfig(this.deps.config.dataDir);
-      setRuntimeTrustPolicy(runtimeTrustPolicy);
-      return { ok: true, message: 'trust-policy.json updated' };
-    } catch (error) {
-      return { ok: false, message: toErrorMessage(error) };
-    }
-  }
-
-  updateCapabilitiesConfig(body: string): ConfigUpdateResult {
-    try {
-      const parsed = this.parseConfigJsonBody(body);
-      saveCapabilityTierConfig(this.deps.config.dataDir, parsed);
-      const runtimeCapabilities = loadCapabilityTierConfig(this.deps.config.dataDir);
-      const tier = runtimeCapabilities.tier;
-      if (!isCapabilityTier(tier)) {
-        return {
-          ok: false,
-          message: `tier must be one of ${CAPABILITY_TIER_VALUES.join(', ')}`,
-        };
-      }
-      this.deps.config.capabilityTier = tier;
-      this.deps.config.runtimeHooks?.refreshCapabilities?.();
-      return { ok: true, message: 'capability-tier.json updated' };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };
     }

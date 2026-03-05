@@ -26,9 +26,8 @@ const log = createComponentLogger('SessionStore');
 
 export class SessionJournalRuntime {
   private integrityProvider: SessionIntegrityProvider | null;
-  private integritySignFailureLogged = false;
-  private integrityVerifyFailureLogged = false;
   private searchIndexFailureLogged = false;
+  private channelIndexFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
 
   constructor(integrityProvider: SessionIntegrityProvider | null) {
@@ -47,13 +46,9 @@ export class SessionJournalRuntime {
     try {
       verification = this.integrityProvider.verify(entry, previousHmac);
     } catch (error) {
-      if (!this.integrityVerifyFailureLogged) {
-        this.integrityVerifyFailureLogged = true;
-        log.warn('Session integrity verification unavailable; loading entry without verification', {
-          error: toErrorMessage(error),
-        });
-      }
-      return entry;
+      throw new Error(
+        `Session integrity verification failed: ${toErrorMessage(error)}`,
+      );
     }
 
     if (verification.verified) {
@@ -202,24 +197,34 @@ export class SessionJournalRuntime {
     journal: JournalEntry;
     upsertChannelIndex: (channelId: string, entry: ChannelIndexEntry) => void;
   }): void {
+    const previousHmac = params.cache.lastHmac;
     let signed = params.journal;
+    let nextHmac = previousHmac;
     if (this.integrityProvider) {
       try {
-        signed = this.integrityProvider.sign(signed, params.cache.lastHmac);
-        params.cache.lastHmac = signed._hmac ?? params.cache.lastHmac;
+        signed = this.integrityProvider.sign(signed, previousHmac);
+        nextHmac = signed._hmac ?? previousHmac;
       } catch (error) {
-        if (!this.integritySignFailureLogged) {
-          this.integritySignFailureLogged = true;
-          log.warn('Session integrity signing unavailable; writing unsigned journal entry', {
-            error: toErrorMessage(error),
-          });
-        }
+        throw new Error(
+          `Session integrity signing failed: ${toErrorMessage(error)}`,
+        );
       }
     }
 
     appendJournalEntry(params.cache.resolvedPath, signed);
     applyJournalState(params.cache, signed);
-    params.upsertChannelIndex(params.journal.channelId, snapshotIndexEntry(params.cache));
+    params.cache.lastHmac = nextHmac;
+    try {
+      params.upsertChannelIndex(params.journal.channelId, snapshotIndexEntry(params.cache));
+    } catch (error) {
+      if (!this.channelIndexFailureLogged) {
+        this.channelIndexFailureLogged = true;
+        log.warn('Session channel index write failed after journal append; continuing without interruption', {
+          channelId: params.journal.channelId,
+          error: toErrorMessage(error),
+        });
+      }
+    }
   }
 
   readRecentEntriesFromTail(channelId: string, filePath: string, limit: number): SessionEntry[] {
@@ -242,7 +247,7 @@ export class SessionJournalRuntime {
     let previousHmac: string | null = null;
     if (oldestMessageIndex > 0) {
       const boundaryEntry = tail.entries[oldestMessageIndex - 1];
-      previousHmac = typeof boundaryEntry?._hmac === 'string' ? boundaryEntry._hmac : null;
+      previousHmac = typeof boundaryEntry._hmac === 'string' ? boundaryEntry._hmac : null;
     }
 
     const messages: SessionEntry[] = [];

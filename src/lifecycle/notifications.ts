@@ -85,13 +85,7 @@ async function flushLastActiveWrite(path: string, state: PendingLastActiveWrite)
   }
 
   state.writing = false;
-  if (!state.dirty) {
-    pendingLastActiveWrites.delete(path);
-    return;
-  }
-
-  state.writing = true;
-  void flushLastActiveWrite(path, state);
+  pendingLastActiveWrites.delete(path);
 }
 
 function normalizeLastActiveData(data: LastActiveData | LastActiveSessionData): LastActiveSessionData | null {
@@ -256,8 +250,7 @@ function resolveDiscordNotificationChannel(session: LastActiveSessionData | null
     return rawChannelId.length > 0 ? rawChannelId : null;
   }
 
-  // Backward-compatible fallback for legacy payloads that did not include channelType.
-  return normalizedSessionId;
+  return null;
 }
 
 // ── Notifier implementation ──

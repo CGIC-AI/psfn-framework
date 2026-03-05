@@ -137,6 +137,16 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  diagnostics?: {
+    fallback?: {
+      code: 'vision_empty_response';
+      strategy: 'replay_transport_content';
+      attempts: number;
+      finalContentEmpty: boolean;
+      previousStopReason?: string;
+      previousErrorMessage?: string;
+    };
+  };
   broadcastSafety?: {
     visibilityScope: 'public_only' | 'approved_private_context';
     operatorApproval: boolean;
@@ -393,12 +403,14 @@ export interface SubstrateConfig {
 }
 
 export function loadConfig(): SubstrateConfig {
-  const primaryModel = process.env.PRIMARY_MODEL ?? 'z-ai/glm-5';
-  const primaryProvider = process.env.PRIMARY_PROVIDER ?? 'openrouter';
+  // Model defaults are provided by config/models.seed.json via loadModelsConfig().
+  // Env vars override if set; empty strings here are placeholders overwritten at boot.
+  const primaryModel = process.env.PRIMARY_MODEL ?? '';
+  const primaryProvider = process.env.PRIMARY_PROVIDER ?? '';
   const primaryMaxTokens = parseInt(process.env.PRIMARY_MAX_TOKENS ?? '16384', 10);
   const defaultContextWindow = parseInt(process.env.DEFAULT_CONTEXT_WINDOW ?? '128000', 10);
-  const extractionModel = process.env.EXTRACTION_MODEL ?? 'deepseek/deepseek-v3.2';
-  const extractionProvider = process.env.EXTRACTION_PROVIDER ?? 'openrouter';
+  const extractionModel = process.env.EXTRACTION_MODEL ?? '';
+  const extractionProvider = process.env.EXTRACTION_PROVIDER ?? '';
   const extractionMaxTokens = parseInt(process.env.EXTRACTION_MAX_TOKENS ?? '8192', 10);
   const modelCatalog = {
     primary: {
@@ -534,6 +546,10 @@ export function loadConfig(): SubstrateConfig {
   const telegramAuthorizedUsers = parseStringListEnv(
     process.env.TELEGRAM_ALLOWED_USERS ?? process.env.TELEGRAM_AUTHORIZED_USERS,
   );
+  const dataDir = process.env.DATA_DIR ?? './data';
+  const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${dataDir}/character.json`;
+  const databaseBasename = sanitizeDatabaseBasename(process.env.DATABASE_BASENAME);
+  const databasePath = process.env.DATABASE_PATH ?? `${dataDir}/${databaseBasename}.db`;
 
   return {
     primaryModel,
@@ -544,9 +560,9 @@ export function loadConfig(): SubstrateConfig {
     extractionMaxTokens,
     discordToken: process.env.DISCORD_TOKEN ?? '',
     discordBotId: process.env.DISCORD_BOT_ID ?? '',
-    characterCardPath: process.env.CHARACTER_CARD_PATH ?? '/home/operator/.openclaw/agents/main/character.json',
-    dataDir: process.env.DATA_DIR ?? './data',
-    databasePath: process.env.DATABASE_PATH ?? './data/psfn.db',
+    characterCardPath,
+    dataDir,
+    databasePath,
     ...(sessionMessageLimit !== undefined ? { sessionMessageLimit } : {}),
     sessionRestartBehavior,
     ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
@@ -610,10 +626,10 @@ export function loadConfig(): SubstrateConfig {
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
     ttsProvider,
-    deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
+    deepgramApiKey: process.env.DEEPGRAM_API_KEY,
     deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
-    elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? '',
-    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID ?? 'rPQ6h200dfjiuYAy0JDA',
+    elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
+    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
     elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
     ...(echoTtsUrl ? { echoTtsUrl } : {}),
     ...(echoTtsVoice ? { echoTtsVoice } : {}),
@@ -863,14 +879,24 @@ function parseStringListEnv(value: string | undefined): string[] {
   )];
 }
 
+function sanitizeDatabaseBasename(value: string | undefined): string {
+  if (typeof value !== 'string') return 'companion';
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized.length > 0 ? normalized : 'companion';
+}
+
 function parseBooleanMapEnv(value: string | undefined): Record<string, boolean> | undefined {
   if (typeof value !== 'string') return undefined;
 
   const parsed: Record<string, boolean> = {};
   for (const item of value.split(',')) {
     const [rawKey, rawValue] = item.split('=');
-    const key = rawKey?.trim();
-    const boolValue = parseOptionalBooleanEnv(rawValue?.trim());
+    const key = rawKey.trim();
+    const boolValue = parseOptionalBooleanEnv(rawValue.trim());
     if (!key || boolValue === undefined) continue;
     parsed[key] = boolValue;
   }

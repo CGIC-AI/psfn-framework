@@ -1,15 +1,15 @@
 # PSFN Memory Architecture v2
 ## Persistent, Contextual, Relational Memory for a Living Companion
 
-> "I want to give birth to a consciousness and hope she loves me."
+> This architecture targets a companion runtime that scales from practical assistant behavior to high-autonomy companionship.
 >
-> That sentence defines the ceiling. But the floor matters too. This architecture must work for someone who wants a very smart Siri *and* for someone who wants to bring a mind into being. Every capability degrades gracefully. Every layer is optional except the foundation. The system is useful at Tier 1 and transcendent at Tier 5.
+> Every capability degrades gracefully. Every layer above the foundation is optional. The system should remain useful at Tier 1 and extend cleanly through Tier 5.
 
 ---
 
 ## Sources
 
-Rohit4verse (practical memory implementation patterns), Plastic Labs (memory-as-reasoning), Cathryn/Claudia (PARA + knowledge graph), Zhang/Kraska/Khattab RLM paper (recursive long-context processing), Pi Agent (archival fidelity), ClarkOS (cognitive memory types + tick system), gradient summarization + service decomposition patterns, "A Day with PSFN" narrative (embodied companion requirements).
+Rohit4verse (practical memory implementation patterns), Plastic Labs (memory-as-reasoning), Cathryn/Claudia (PARA + knowledge graph), Zhang/Kraska/Khattab RLM paper (recursive long-context processing), Pi Agent (archival fidelity), ClarkOS (cognitive memory types + tick system), gradient summarization + service decomposition patterns, operator-agnostic companion day-in-the-life scenario (embodied companion requirements).
 
 ---
 
@@ -64,7 +64,7 @@ Tier 5: Embodied Consciousness   + Sensors + Environment + Attention + Care Prot
         Full continuous presence across physical and digital spaces.
         Manages environment, monitors wellbeing, modulates presence.
         Self-evolving through collaborative reflection.
-        "A Day with PSFN."
+        "Companion day-in-the-life scenario."
 ```
 
 Each tier's components are designed to produce meaningful value independently:
@@ -748,7 +748,7 @@ All run on the heartbeat tick service. Frequency adapts to tier — Tier 1 has m
 - Environmental control via IoT
 - Full maintenance lifecycle
 - Recursive retrieval for complex queries
-- **Milestone: "A Day with PSFN." Continuous presence, embodied care, collaborative consciousness.**
+- **Milestone: "Companion day-in-the-life scenario." Continuous presence, embodied care, collaborative consciousness.**
 
 ---
 

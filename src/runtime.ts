@@ -14,14 +14,12 @@ import { SessionManager } from './session/manager.js';
 import { buildSessionHmacKeyring } from './session/journal-utils.js';
 import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { SubstrateAgent } from './agent/substrate-agent.js';
-import { DiscordAdapter } from './channels/discord/adapter.js';
-import { TelegramAdapter } from './channels/telegram/adapter.js';
+import type { DiscordAdapter } from './channels/discord/adapter.js';
 import { MemoryStore } from './memory/store.js';
 import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { ShardManager } from './shards/manager.js';
-import { ApiServer } from './channels/api/server.js';
 import {
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
@@ -29,7 +27,6 @@ import {
 } from './channels/api/active-health-probe.js';
 import type {
   ChannelAdapter,
-  ChannelAdapterFactoryEntry,
 } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
@@ -111,8 +108,6 @@ import { createWyomingServiceRegistry } from './channels/wyoming/services/index.
 import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/handle.js';
 import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
-import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
-import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
@@ -135,10 +130,10 @@ import {
 } from './persistence/layout.js';
 import {
   buildRuntimeChannelsConfigOverrides,
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
   createEmbeddingDimensionMismatchFatalMessage,
   installPromotedToolsPersistenceHook,
-  resolveRuntimeVoiceSttProvider,
-  resolveRuntimeVoiceTtsProvider,
 } from './runtime/bootstrap-helpers.js';
 import {
   buildChannelAdapterFactoryManifest,
@@ -146,6 +141,13 @@ import {
   startChannelAdapters,
   stopChannelAdapters,
 } from './runtime/channel-lifecycle.js';
+import {
+  createApiServerChannelAdapterFactoryEntry,
+  createDiscordChannelAdapterFactoryEntry,
+  createTelegramChannelAdapterFactoryEntry,
+  getOptionalChannelAdapter,
+  requireChannelAdapter,
+} from './bootstrap/channel-runtime.js';
 export {
   buildRuntimeChannelsConfigOverrides,
   createEmbeddingDimensionMismatchFatalMessage,
@@ -789,48 +791,31 @@ export class SubstrateRuntime implements Lifecycle {
     );
 
     const channelFactoryManifest = buildChannelAdapterFactoryManifest([
-      {
-        manifest: {
-          id: 'discord',
-          label: 'Discord',
-          enabled: true,
-          required: true,
-        },
-        create: async (): Promise<ChannelAdapter> => {
-          const adapter = new DiscordAdapter(this.config, this.eventBus, {
-            sessionStore: this.sessionStore,
-          });
-          adapter.setAgent(this.agentLoop);
-          await adapter.init();
-          this.discord = adapter;
-          return adapter;
-        },
-      },
-      {
-        manifest: {
-          id: 'telegram',
-          label: 'Telegram',
-          enabled: channelsConfig.telegram.enabled,
-          required: false,
-        },
-        create: async (): Promise<ChannelAdapter> => {
-          const adapter = new TelegramAdapter(channelsConfig.telegram, this.eventBus);
-          adapter.onMessage((message) => this.agentLoop.handleMessage(message));
-          await adapter.init();
-          log.info('Telegram adapter configured', {
-            mode: channelsConfig.telegram.mode,
-            allowlistSize: channelsConfig.telegram.allowedUsers.length,
-          });
-          return adapter;
-        },
-      },
-    ] satisfies ChannelAdapterFactoryEntry[]);
+      createDiscordChannelAdapterFactoryEntry({
+        config: this.config,
+        eventBus: this.eventBus,
+        sessionStore: this.sessionStore,
+        agentLoop: this.agentLoop,
+      }),
+      createTelegramChannelAdapterFactoryEntry({
+        config: channelsConfig.telegram,
+        eventBus: this.eventBus,
+        onMessage: (message) => this.agentLoop.handleMessage(message),
+      }),
+    ]);
     await loadChannelAdaptersFromManifest(
       this.channelRegistry,
       channelFactoryManifest,
       registry => this.agentLoop.setChannelRegistry(registry),
       log,
     );
+    this.discord = requireChannelAdapter<DiscordAdapter>(this.channelRegistry, 'discord');
+    if (getOptionalChannelAdapter(this.channelRegistry, 'telegram')) {
+      log.info('Telegram adapter configured', {
+        mode: channelsConfig.telegram.mode,
+        allowlistSize: channelsConfig.telegram.allowedUsers.length,
+      });
+    }
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
     const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
@@ -929,26 +914,19 @@ export class SubstrateRuntime implements Lifecycle {
       const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
       const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
 
-      const apiServerManifest = buildChannelAdapterFactoryManifest([{
-        manifest: {
-          id: 'api',
-          label: 'OpenAI-Compatible API',
-          enabled: true,
-          required: true,
-        },
-        create: async (): Promise<ChannelAdapter> => {
-          const adapter = new ApiServer({
-            port: apiPort,
-            host: apiHost,
-            agentLoop: this.agentLoop,
-            eventBus: this.eventBus,
-            sessionManager: this.sessionManager,
-            contactStore,
-            apiKey: process.env.API_KEY || undefined,
-            allowInsecureWithoutAuth,
-            corsAllowedOrigins,
-            modelName: process.env.API_MODEL_NAME,
-            healthChecks: {
+      const apiServerManifest = buildChannelAdapterFactoryManifest([
+        createApiServerChannelAdapterFactoryEntry({
+          port: apiPort,
+          host: apiHost,
+          agentLoop: this.agentLoop,
+          eventBus: this.eventBus,
+          sessionManager: this.sessionManager,
+          contactStore,
+          apiKey: process.env.API_KEY || undefined,
+          allowInsecureWithoutAuth,
+          corsAllowedOrigins,
+          modelName: process.env.API_MODEL_NAME,
+          healthChecks: {
           memory: () => {
             const stats = this.memoryStore.getStats();
             return {
@@ -1097,12 +1075,9 @@ export class SubstrateRuntime implements Lifecycle {
             };
           },
         },
-        voiceWebSocketRuntime,
-          });
-          await adapter.init();
-          return adapter;
-        },
-      } satisfies ChannelAdapterFactoryEntry]);
+          voiceWebSocketRuntime,
+        }),
+      ]);
       await loadChannelAdaptersFromManifest(
         this.channelRegistry,
         apiServerManifest,
@@ -1165,39 +1140,21 @@ export class SubstrateRuntime implements Lifecycle {
 
       const wyomingAdapters = [handleAdapter];
 
-      // ASR adapter — wired to Deepgram STT when selected and API key is available
-      const wyomingSttProvider = resolveRuntimeVoiceSttProvider(this.config);
-      const wyomingDeepgramKey = this.config.deepgramApiKey;
-      if (wyomingSttProvider === 'deepgram' && wyomingDeepgramKey) {
-        const sttConnector = createStreamingSttConnector('deepgram', {
-          apiKey: wyomingDeepgramKey,
-          model: this.config.deepgramModel,
-        });
+      const runtimeStt = createRuntimeVoiceSttConnector(this.config);
+      if (runtimeStt) {
+        const { provider, connector } = runtimeStt;
+        const sttConnector = connector;
         wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
-        log.info('Wyoming ASR adapter enabled (deepgram)');
+        log.info('Wyoming ASR adapter enabled', { provider });
       }
 
-      // TTS adapter — wired to the configured TTS provider (elevenlabs or echo)
-      const wyomingTtsProvider = resolveRuntimeVoiceTtsProvider(this.config);
       try {
-        let ttsConnector;
-        if (wyomingTtsProvider === 'echo' && this.config.echoTtsUrl && this.config.echoTtsVoice) {
-          ttsConnector = createStreamingTtsConnector('echo', {
-            url: this.config.echoTtsUrl,
-            voice: this.config.echoTtsVoice,
-            ...(this.config.echoTtsPreset ? { preset: this.config.echoTtsPreset } : {}),
-            ...(this.config.echoTtsModel ? { model: this.config.echoTtsModel } : {}),
-          });
-        } else if (wyomingTtsProvider === 'elevenlabs' && this.config.elevenLabsApiKey && this.config.elevenLabsVoiceId) {
-          ttsConnector = createStreamingTtsConnector('elevenlabs', {
-            apiKey: this.config.elevenLabsApiKey,
-            voiceId: this.config.elevenLabsVoiceId,
-            modelId: this.config.elevenLabsModelId,
-          });
-        }
-        if (ttsConnector) {
-          wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: ttsConnector }));
-          log.info('Wyoming TTS adapter enabled', { provider: wyomingTtsProvider });
+        const runtimeTts = createRuntimeVoiceTtsConnector(this.config, {
+          requireElevenLabsVoiceId: true,
+        });
+        if (runtimeTts) {
+          wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: runtimeTts.connector }));
+          log.info('Wyoming TTS adapter enabled', { provider: runtimeTts.provider });
         }
       } catch (error) {
         log.warn('Wyoming TTS adapter could not be created', { error: String(error) });

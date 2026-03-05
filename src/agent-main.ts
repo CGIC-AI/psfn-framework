@@ -17,7 +17,7 @@ import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from './security/policy-constants.js';
-import { ApiServer } from './channels/api/server.js';
+import type { ApiServer } from './channels/api/server.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import {
   CachedActiveHealthProbe,
@@ -119,6 +119,15 @@ import {
   ensureRegistryFile,
   resolveModuleRegistryPathFromWorkspace,
 } from './modules/registry.js';
+import type { ChannelAdapter } from './channels/types.js';
+import {
+  createApiServerChannelAdapterFactoryEntry,
+  requireChannelAdapter,
+} from './bootstrap/channel-runtime.js';
+import {
+  buildChannelAdapterFactoryManifest,
+  loadChannelAdaptersFromManifest,
+} from './runtime/channel-lifecycle.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
@@ -717,24 +726,26 @@ async function main(): Promise<void> {
     const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
     const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
     const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
-    apiServer = new ApiServer({
-      port: apiPort,
-      host: apiHost,
-      agentLoop,
-      eventBus,
-      sessionManager,
-      contactStore,
-      apiKey: process.env.API_KEY || undefined,
-      allowInsecureWithoutAuth,
-      corsAllowedOrigins,
-      modelName: process.env.API_MODEL_NAME,
-      requestTimeoutMs: parsePositiveIntEnv(
-        process.env.API_REQUEST_TIMEOUT_MS,
-        DEFAULT_API_REQUEST_TIMEOUT_MS,
-      ),
-      voiceWebSocketPath,
-      voiceWebSocketRuntime,
-      healthChecks: {
+    const apiChannelRegistry = new Map<string, ChannelAdapter>();
+    const apiChannelManifest = buildChannelAdapterFactoryManifest([
+      createApiServerChannelAdapterFactoryEntry({
+        port: apiPort,
+        host: apiHost,
+        agentLoop,
+        eventBus,
+        sessionManager,
+        contactStore,
+        apiKey: process.env.API_KEY || undefined,
+        allowInsecureWithoutAuth,
+        corsAllowedOrigins,
+        modelName: process.env.API_MODEL_NAME,
+        requestTimeoutMs: parsePositiveIntEnv(
+          process.env.API_REQUEST_TIMEOUT_MS,
+          DEFAULT_API_REQUEST_TIMEOUT_MS,
+        ),
+        voiceWebSocketPath,
+        voiceWebSocketRuntime,
+        healthChecks: {
         memory: () => {
           const stats = memoryStore.getStats();
           return {
@@ -865,9 +876,16 @@ async function main(): Promise<void> {
             meta: { taskCount, ...runtimeStatusMeta },
           };
         },
-      },
-    });
-    await apiServer.init();
+        },
+      }),
+    ]);
+    await loadChannelAdaptersFromManifest(
+      apiChannelRegistry,
+      apiChannelManifest,
+      () => undefined,
+      log,
+    );
+    apiServer = requireChannelAdapter<ApiServer>(apiChannelRegistry, 'api');
     await apiServer.start();
     log.info(`API server listening on port ${apiPort}`);
   }

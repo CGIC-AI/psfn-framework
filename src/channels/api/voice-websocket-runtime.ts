@@ -4,12 +4,15 @@ import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
-import { createStreamingSttConnector } from '../../voice/connectors/stt/index.js';
-import { createStreamingTtsConnector } from '../../voice/connectors/tts/index.js';
 import {
   resolveVoiceReliabilityBudgets,
   runWithVoiceStageBudget,
 } from '../../voice/policy/reliability.js';
+import {
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
+  resolveRuntimeVoiceProviderGate,
+} from '../../runtime/bootstrap-helpers.js';
 import {
   resolveVoiceSecurityLimits,
   validatePcmAudio,
@@ -31,12 +34,10 @@ import type {
   VoiceWebSocketRuntimeContext,
 } from './voice-websocket.js';
 import type { ApiAuthPrincipal } from '../http/auth.js';
-import { resolveRuntimeVoiceProviderGate } from '../../runtime/bootstrap-helpers.js';
 
 const log = createComponentLogger('ApiVoiceRuntime');
 
 const DEFAULT_CHANNEL_PREFIX = 'api-voice';
-// Echo TTS requires explicit config — no silent localhost defaults
 
 interface ApiVoiceWebSocketRuntimeConfig {
   agentLoop: SubstrateAgent;
@@ -118,33 +119,6 @@ function deriveChannelId(
   }
 
   return `${channelPrefix}:${principal.id}:${connectionId}`;
-}
-
-function createVoiceTtsConnector(
-  config: SubstrateConfig,
-  ttsProvider: 'echo' | 'elevenlabs',
-) {
-  if (ttsProvider === 'echo') {
-    if (!config.echoTtsUrl || !config.echoTtsVoice) {
-      throw new Error('Echo TTS provider selected but ECHO_TTS_URL and ECHO_TTS_VOICE are not configured');
-    }
-    const model = config.echoTtsModel;
-    return createStreamingTtsConnector('echo', {
-      url: config.echoTtsUrl,
-      voice: config.echoTtsVoice,
-      ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
-      ...(model ? { model } : {}),
-    });
-  }
-
-  if (!config.elevenLabsApiKey || !config.elevenLabsVoiceId) {
-    throw new Error('ElevenLabs TTS provider selected but ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID are not configured');
-  }
-  return createStreamingTtsConnector('elevenlabs', {
-    apiKey: config.elevenLabsApiKey,
-    voiceId: config.elevenLabsVoiceId,
-    modelId: config.elevenLabsModelId,
-  });
 }
 
 function toCloseReason(
@@ -284,10 +258,11 @@ async function runAssistantTurn(params: {
 export function createApiVoiceWebSocketRuntime(
   options: ApiVoiceWebSocketRuntimeConfig,
 ): VoiceWebSocketRuntime | undefined {
-  const providerGate = resolveRuntimeVoiceProviderGate(options.config, {
+  const providerGateOptions = {
     allowEchoDefaults: true,
     requireElevenLabsVoiceId: true,
-  });
+  } satisfies Parameters<typeof resolveRuntimeVoiceProviderGate>[1];
+  const providerGate = resolveRuntimeVoiceProviderGate(options.config, providerGateOptions);
   const sttProvider = providerGate.sttProvider;
   const ttsProvider = providerGate.ttsProvider;
   if (!providerGate.sttEnabled || !providerGate.ttsEnabled) {
@@ -302,8 +277,17 @@ export function createApiVoiceWebSocketRuntime(
     });
     return undefined;
   }
-  if (sttProvider !== 'deepgram' || (ttsProvider !== 'echo' && ttsProvider !== 'elevenlabs')) {
-    return undefined;
+
+  const sttBinding = createRuntimeVoiceSttConnector(options.config, {
+    ...providerGateOptions,
+    provider: sttProvider,
+  });
+  const ttsBinding = createRuntimeVoiceTtsConnector(options.config, {
+    ...providerGateOptions,
+    provider: ttsProvider,
+  });
+  if (!sttBinding || !ttsBinding) {
+    throw new Error('API voice websocket runtime resolved enabled providers without connector bindings');
   }
 
   const channelPrefix = options.channelPrefix ?? DEFAULT_CHANNEL_PREFIX;
@@ -312,12 +296,8 @@ export function createApiVoiceWebSocketRuntime(
   const securityLimits = resolveVoiceSecurityLimits();
   const reliabilityBudgets = resolveVoiceReliabilityBudgets();
 
-  const stt = createStreamingSttConnector('deepgram', {
-    apiKey: options.config.deepgramApiKey!,
-    model: options.config.deepgramModel,
-  });
-
-  const tts = createVoiceTtsConnector(options.config, ttsProvider);
+  const stt = sttBinding.connector;
+  const tts = ttsBinding.connector;
 
   const runtime = new WebSocketVoiceRuntime({
     stt,

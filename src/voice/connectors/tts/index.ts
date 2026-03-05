@@ -25,8 +25,11 @@ export interface StreamingTtsProviderRuntimeConfig {
   [key: string]: unknown;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
+  elevenLabsModelId?: string;
   echoTtsUrl?: string;
   echoTtsVoice?: string;
+  echoTtsPreset?: string;
+  echoTtsModel?: string;
 }
 
 export interface StreamingTtsProviderMetadataOptions {
@@ -45,6 +48,7 @@ export interface StreamingTtsProviderMetadata {
 export interface StreamingTtsProviderRegistration<TConfig = unknown> {
   createConnector: (config: TConfig) => StreamingTtsConnector;
   metadata: StreamingTtsProviderMetadata;
+  resolveRuntimeConfig?: (config: StreamingTtsProviderRuntimeConfig) => TConfig;
 }
 
 type AnyStreamingTtsProviderRegistration = StreamingTtsProviderRegistration<any>;
@@ -60,6 +64,29 @@ const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistratio
           : Boolean(config.elevenLabsApiKey)
       ),
     },
+    resolveRuntimeConfig: (config) => {
+      const apiKey = typeof config.elevenLabsApiKey === 'string'
+        ? config.elevenLabsApiKey.trim()
+        : '';
+      const voiceId = typeof config.elevenLabsVoiceId === 'string'
+        ? config.elevenLabsVoiceId.trim()
+        : '';
+      if (!apiKey || !voiceId) {
+        throw new Error(
+          'ElevenLabs TTS provider selected but ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID are not configured',
+        );
+      }
+
+      const modelId = typeof config.elevenLabsModelId === 'string'
+        ? config.elevenLabsModelId.trim()
+        : '';
+
+      return {
+        apiKey,
+        voiceId,
+        ...(modelId ? { modelId } : {}),
+      };
+    },
   }],
   ['echo', {
     createConnector: (config: EchoStreamingTtsConfig) => createEchoStreamingTtsConnector({
@@ -73,6 +100,31 @@ const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistratio
         options?.allowEchoDefaults === true
           || Boolean(config.echoTtsUrl && config.echoTtsVoice)
       ),
+    },
+    resolveRuntimeConfig: (config) => {
+      const url = typeof config.echoTtsUrl === 'string'
+        ? config.echoTtsUrl.trim()
+        : '';
+      const voice = typeof config.echoTtsVoice === 'string'
+        ? config.echoTtsVoice.trim()
+        : '';
+      if (!url || !voice) {
+        throw new Error('Echo TTS provider selected but ECHO_TTS_URL and ECHO_TTS_VOICE are not configured');
+      }
+
+      const preset = typeof config.echoTtsPreset === 'string'
+        ? config.echoTtsPreset.trim()
+        : '';
+      const model = typeof config.echoTtsModel === 'string'
+        ? config.echoTtsModel.trim()
+        : '';
+
+      return {
+        url,
+        voice,
+        ...(preset ? { preset } : {}),
+        ...(model ? { model } : {}),
+      };
     },
   }],
 ]);
@@ -135,6 +187,7 @@ export function registerStreamingTtsConnectorFactory<TProvider extends Streaming
     metadata: previousRegistration?.metadata ?? {
       isConfigured: () => false,
     },
+    resolveRuntimeConfig: previousRegistration?.resolveRuntimeConfig,
   });
 }
 
@@ -175,4 +228,19 @@ export function createStreamingTtsConnector<TProvider extends StreamingTtsProvid
   }
 
   throw new Error(`Unsupported streaming TTS provider: ${provider}`);
+}
+
+export function resolveStreamingTtsRuntimeConfig<TProvider extends StreamingTtsProvider>(
+  provider: TProvider,
+  config: StreamingTtsProviderRuntimeConfig,
+): StreamingTtsConfigByProvider[TProvider] {
+  const registration = providerRegistrations.get(normalizeProviderId(provider));
+  if (!registration) {
+    throw new Error(`Unsupported streaming TTS provider: ${provider}`);
+  }
+  if (!registration.resolveRuntimeConfig) {
+    throw new Error(`Streaming TTS provider "${provider}" does not expose runtime bootstrap config`);
+  }
+
+  return registration.resolveRuntimeConfig(config);
 }

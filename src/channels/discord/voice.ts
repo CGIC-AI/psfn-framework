@@ -15,9 +15,7 @@ import { Readable } from 'node:stream';
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
-import { createStreamingSttConnector, type StreamingSttConnector, type SttStreamSession } from '../../voice/connectors/stt/index.js';
 import {
-  createStreamingTtsConnector,
   type StreamingTtsConnector,
   type StreamingTtsProvider,
   type TtsAudioChunk,
@@ -40,6 +38,14 @@ import {
 } from '../../voice/policy/security.js';
 import type { MessageHandler } from '../types.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import {
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
+  resolveRuntimeVoiceProviderGate,
+  resolveRuntimeVoiceTtsProvider,
+  resolveRuntimeVoiceTtsProviderOrder,
+} from '../../runtime/bootstrap-helpers.js';
+import type { StreamingSttConnector, SttStreamSession } from '../../voice/connectors/stt/index.js';
 
 const log = createComponentLogger('DiscordVoice');
 const CAPTURE_SILENCE_MS = 1_200;
@@ -121,10 +127,13 @@ export interface VoicePreflightResult {
 export function voicePreflight(config: SubstrateConfig): VoicePreflightResult {
   const opus = checkOpusAvailability();
   const missingConfig: string[] = [];
+  const providerGate = resolveRuntimeVoiceProviderGate(config, {
+    requireElevenLabsVoiceId: true,
+  });
 
   if (!config.voiceTargetGuildId) missingConfig.push('VOICE_TARGET_GUILD_ID');
   if (!config.voiceTargetUserId) missingConfig.push('VOICE_TARGET_USER_ID');
-  if (!config.deepgramApiKey) missingConfig.push('DEEPGRAM_API_KEY');
+  if (!providerGate.sttEnabled) missingConfig.push('VOICE_STT_PROVIDER_CONFIG');
 
   const configComplete = missingConfig.length === 0;
   const canReceive = opus.available && configComplete;
@@ -198,59 +207,35 @@ interface ActiveVoiceTurn {
 }
 
 function hasTtsProviderConfig(provider: StreamingTtsProvider, config: SubstrateConfig): boolean {
-  if (provider === 'echo') {
-    return Boolean(config.echoTtsUrl && config.echoTtsVoice);
+  try {
+    return createRuntimeVoiceTtsConnector(config, {
+      provider,
+      requireElevenLabsVoiceId: true,
+    }) !== null;
+  } catch {
+    return false;
   }
-
-  return Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId);
-}
-
-function createConfiguredTtsConnector(
-  provider: StreamingTtsProvider,
-  config: SubstrateConfig,
-): StreamingTtsConnector | null {
-  if (provider === 'echo') {
-    const url = config.echoTtsUrl ?? '';
-    const voice = config.echoTtsVoice ?? '';
-    if (!url || !voice) {
-      return null;
-    }
-
-    return createStreamingTtsConnector('echo', {
-      url,
-      voice,
-      ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
-      ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
-    });
-  }
-
-  const apiKey = config.elevenLabsApiKey ?? '';
-  const voiceId = config.elevenLabsVoiceId ?? '';
-  if (!apiKey || !voiceId) {
-    return null;
-  }
-
-  return createStreamingTtsConnector('elevenlabs', {
-    apiKey,
-    voiceId,
-    modelId: config.elevenLabsModelId,
-  });
 }
 
 function buildConfiguredTtsConnectors(
   config: SubstrateConfig,
   preferredProviderId: StreamingTtsProvider,
 ): StreamingTtsConnector[] {
-  const providerOrder: StreamingTtsProvider[] = preferredProviderId === 'echo'
-    ? ['echo', 'elevenlabs']
-    : ['elevenlabs', 'echo'];
+  const providerOrder = resolveRuntimeVoiceTtsProviderOrder(
+    config,
+    preferredProviderId,
+    { requireElevenLabsVoiceId: true },
+  );
   const connectors: StreamingTtsConnector[] = [];
 
   for (const providerId of providerOrder) {
     try {
-      const connector = createConfiguredTtsConnector(providerId, config);
-      if (connector) {
-        connectors.push(connector);
+      const binding = createRuntimeVoiceTtsConnector(config, {
+        provider: providerId,
+        requireElevenLabsVoiceId: true,
+      });
+      if (binding) {
+        connectors.push(binding.connector);
       }
     } catch (error) {
       log.warn('Discord voice TTS connector initialization failed', {
@@ -311,7 +296,11 @@ export class DiscordVoiceRuntime {
     this.targetGuildId = config.voiceTargetGuildId ?? '';
     this.targetUserId = config.voiceTargetUserId ?? '';
     this.daveEncryption = config.voiceDaveEncryption ?? true;
-    this.preferredTtsProviderId = config.ttsProvider ?? DEFAULT_TTS_PROVIDER;
+    const configuredTtsProvider = resolveRuntimeVoiceTtsProvider(config);
+    const ttsProviderDisabled = config.ttsProvider === 'disabled';
+    this.preferredTtsProviderId = configuredTtsProvider === 'disabled'
+      ? DEFAULT_TTS_PROVIDER
+      : configuredTtsProvider;
     const configuredDecryptionTolerance = config.voiceDecryptionFailureTolerance;
     this.decryptionFailureTolerance = (
       typeof configuredDecryptionTolerance === 'number'
@@ -321,7 +310,6 @@ export class DiscordVoiceRuntime {
       : 24;
 
     const voiceEnabled = config.voiceEnabled === true;
-    const deepgramApiKey = config.deepgramApiKey ?? '';
 
     if (!voiceEnabled) {
       this.enabled = false;
@@ -334,13 +322,22 @@ export class DiscordVoiceRuntime {
     this.opusAvailable = preflight.opusAvailable;
     this.receiveEnabled = preflight.opusAvailable;
 
-    if (!this.targetGuildId || !this.targetUserId || !deepgramApiKey) {
+    let sttBinding: ReturnType<typeof createRuntimeVoiceSttConnector> = null;
+    try {
+      sttBinding = createRuntimeVoiceSttConnector(config);
+    } catch (error) {
+      log.warn('Discord voice STT connector initialization failed', {
+        error: toErrorMessage(error),
+      });
+    }
+
+    if (!this.targetGuildId || !this.targetUserId || !sttBinding) {
       this.enabled = false;
       this.ttsConnectors = [];
       log.warn('Voice enabled but missing required config, disabling voice runtime', {
         hasGuild: !!this.targetGuildId,
         hasUser: !!this.targetUserId,
-        hasDeepgram: !!deepgramApiKey,
+        hasSttConfig: Boolean(sttBinding),
         ttsProvider: this.preferredTtsProviderId,
         hasSelectedTtsConfig: hasTtsProviderConfig(this.preferredTtsProviderId, config),
         hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', config),
@@ -357,7 +354,9 @@ export class DiscordVoiceRuntime {
       );
     }
 
-    const ttsConnectors = buildConfiguredTtsConnectors(config, this.preferredTtsProviderId);
+    const ttsConnectors = ttsProviderDisabled
+      ? []
+      : buildConfiguredTtsConnectors(config, this.preferredTtsProviderId);
     if (ttsConnectors.length === 0) {
       this.enabled = false;
       this.ttsConnectors = [];
@@ -370,10 +369,7 @@ export class DiscordVoiceRuntime {
       return;
     }
 
-    this.sttConnector = createStreamingSttConnector('deepgram', {
-      apiKey: deepgramApiKey,
-      model: config.deepgramModel,
-    });
+    this.sttConnector = sttBinding.connector;
     this.ttsConnectors = ttsConnectors;
     this.enabled = true;
   }

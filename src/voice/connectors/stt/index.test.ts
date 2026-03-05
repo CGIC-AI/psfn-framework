@@ -5,6 +5,7 @@ import {
   getStreamingSttProviderMetadata,
   registerStreamingSttProvider,
   resolveDefaultStreamingSttProvider,
+  resolveStreamingSttRuntimeConfig,
 } from './index.js';
 import type { StreamingSttConnector } from './types.js';
 
@@ -77,5 +78,53 @@ describe('createStreamingSttConnector', () => {
     expect(() => createStreamingSttConnector('invalid-provider', {})).toThrow(
       'Unsupported streaming STT provider: invalid-provider',
     );
+  });
+
+  it('resolves built-in runtime config without entrypoint switch logic', () => {
+    expect(resolveStreamingSttRuntimeConfig('deepgram', {
+      deepgramApiKey: 'test-key',
+      deepgramModel: 'nova-3',
+    })).toEqual({
+      apiKey: 'test-key',
+      model: 'nova-3',
+    });
+  });
+
+  it('resolves registered provider runtime config without core switch edits', () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => createStubConnector('plugin-test')),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginSttEndpoint) }),
+    });
+
+    try {
+      expect(resolveStreamingSttRuntimeConfig('plugin-test', {
+        pluginSttToken: 'plugin-key',
+        pluginSttEndpoint: 'wss://plugin-stt.invalid',
+      })).toEqual({
+        endpoint: 'wss://plugin-stt.invalid',
+      });
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('fails closed when a provider lacks runtime bootstrap config', () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => createStubConnector('plugin-test')),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+    });
+
+    try {
+      expect(() => resolveStreamingSttRuntimeConfig('plugin-test', {
+        pluginSttToken: 'plugin-key',
+      })).toThrow('Streaming STT provider "plugin-test" does not expose runtime bootstrap config');
+    } finally {
+      restoreProvider();
+    }
   });
 });

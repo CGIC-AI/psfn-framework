@@ -28,6 +28,7 @@ import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { applySettings, loadSettings, saveSettings, splitSettingsByDomain } from './settings.js';
 import { loadModelsConfigWithLegacyMigration } from './config/models-config.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import {
   CAPABILITY_TIER_FILE_NAME,
@@ -264,6 +265,12 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
+  if (ignoredMutableEnvKeys.length > 0) {
+    log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
+      keys: ignoredMutableEnvKeys,
+    });
+  }
   const systemDataDir = resolveConfiguredSystemDataDir(config);
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const savedSettings = loadSettings(systemDataDir);
@@ -375,7 +382,6 @@ async function main(): Promise<void> {
   const capabilityRuntime = new CapabilityRuntime({
     dataDir: systemDataDir,
     seedDir: process.env.CONFIG_DIR,
-    envTier: config.capabilityTier,
   });
   config.capabilityTier = capabilityRuntime.getTier();
   const eligibilityGate = createEligibilityGate(

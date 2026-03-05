@@ -12,8 +12,8 @@ import { LLMClient } from './llm/client.js';
 import { MemoryStore } from './memory/store.js';
 import { SalienceDecay } from './memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
-import { loadSettings, applySettings } from './settings.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
+import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -26,9 +26,7 @@ import {
 const CHANNEL_ID = 'cli:chat';
 
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const savedSettings = loadSettings(config.dataDir);
-  applySettings(config, savedSettings);
+  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
   const eventBus = new EventBus();
 
   console.log('[CLI] Initializing Purrsephone...');

@@ -95,4 +95,56 @@ describe('loadConfig path defaults', () => {
       'SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together',
     );
   });
+
+  it('ignores JSON-backed config env vars and keeps canonical defaults until JSON config is loaded', () => {
+    clearRuntimePathEnv();
+    process.env.PRIMARY_MODEL = 'env-primary';
+    process.env.PRIMARY_PROVIDER = 'env-provider';
+    process.env.PRIMARY_MAX_TOKENS = '999';
+    process.env.DEFAULT_CONTEXT_WINDOW = '4096';
+    process.env.EXTRACTION_MODEL = 'env-extraction';
+    process.env.EXTRACTION_PROVIDER = 'env-extraction-provider';
+    process.env.EXTRACTION_MAX_TOKENS = '111';
+    process.env.SESSION_MESSAGE_LIMIT = '77';
+    process.env.MAINTENANCE_INTERVAL_MS = '1234';
+    process.env.RETRY_MAX_ATTEMPTS = '9';
+    process.env.DEEPGRAM_MODEL = 'env-deepgram';
+    process.env.DISCORD_TRIGGER_REACTIONS = '🔥';
+    process.env.TELEGRAM_ENABLED = 'true';
+    process.env.OBSIDIAN_AUTO_PUBLISH = 'true';
+    process.env.TTS_PROVIDER = 'echo';
+
+    const config = loadConfig();
+    expect(config.primaryModel).toBe('z-ai/glm-5');
+    expect(config.primaryProvider).toBe('openrouter');
+    expect(config.primaryMaxTokens).toBe(16_384);
+    expect(config.defaultContextWindow).toBe(128_000);
+    expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
+    expect(config.extractionProvider).toBe('openrouter');
+    expect(config.extractionMaxTokens).toBe(8_192);
+    expect(config.sessionMessageLimit).toBe(30);
+    expect(config.maintenanceIntervalMs).toBe(300_000);
+    expect(config.retryMaxAttempts).toBe(3);
+    expect(config.deepgramModel).toBe('nova-3');
+    expect(config.discordTriggerReactions).toEqual(['👆']);
+    expect(config.telegramEnabled).toBe(false);
+    expect(config.obsidianAutoPublish).toBe(false);
+    expect(config.ttsProvider).toBeUndefined();
+  });
+
+  it('still reads secret and bootstrap env wiring', () => {
+    clearRuntimePathEnv();
+    process.env.DATA_DIR = './sandbox-data';
+    process.env.DISCORD_TOKEN = 'discord-secret';
+    process.env.DEEPGRAM_API_KEY = 'deepgram-secret';
+    process.env.ELEVENLABS_API_KEY = 'eleven-secret';
+    process.env.GATEWAY_TLS_CA_PATH = './certs/dev-ca.pem';
+
+    const config = loadConfig();
+    expect(config.dataDir).toBe('./sandbox-data');
+    expect(config.discordToken).toBe('discord-secret');
+    expect(config.deepgramApiKey).toBe('deepgram-secret');
+    expect(config.elevenLabsApiKey).toBe('eleven-secret');
+    expect(config.gatewayTlsCaPath).toBe('./certs/dev-ca.pem');
+  });
 });

@@ -33,6 +33,7 @@ import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { applySettings, loadSettings, saveSettings, splitSettingsByDomain } from './settings.js';
 import { loadModelsConfigWithLegacyMigration } from './config/models-config.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
 import {
   CAPABILITY_TIER_FILE_NAME,
@@ -369,6 +370,12 @@ export class SubstrateRuntime implements Lifecycle {
 
   async init(): Promise<void> {
     log.info('Initializing...');
+    const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
+    if (ignoredMutableEnvKeys.length > 0) {
+      log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
+        keys: ignoredMutableEnvKeys,
+      });
+    }
     const systemDataDir = resolveConfiguredSystemDataDir(this.config);
     const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
     const lifecycleRuntimeContract = resolveRuntimeModeContract({
@@ -379,7 +386,7 @@ export class SubstrateRuntime implements Lifecycle {
     const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
     log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
 
-    // Load persisted settings and apply runtime-owned domain over env defaults.
+    // Load persisted settings and apply runtime-owned config from canonical JSON.
     const savedSettings = loadSettings(systemDataDir);
     const settingsDomains = splitSettingsByDomain(savedSettings);
     applySettings(this.config, settingsDomains.runtime);
@@ -489,7 +496,6 @@ export class SubstrateRuntime implements Lifecycle {
     this.capabilityRuntime = new CapabilityRuntime({
       dataDir: systemDataDir,
       seedDir: process.env.CONFIG_DIR,
-      envTier: this.config.capabilityTier,
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
     const eligibilityGate = createEligibilityGate(

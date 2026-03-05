@@ -302,7 +302,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
   private getEnvInfo() {
     return {
       salienceFloor: Number(process.env.SALIENCE_FLOOR ?? MEMORY_CONFIG.salienceFloor),
-      maintenanceIntervalMs: Number(process.env.MAINTENANCE_INTERVAL_MS ?? this.deps.config.maintenanceIntervalMs),
+      maintenanceIntervalMs: this.deps.config.maintenanceIntervalMs,
       discordToken: process.env.DISCORD_TOKEN ? '[set]' : '[not set]',
       apiKey: process.env.API_KEY ? '[set]' : '[not set]',
       adminToken: process.env.ADMIN_TOKEN ? '[set]' : '[not set]',

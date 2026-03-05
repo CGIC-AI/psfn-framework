@@ -106,7 +106,7 @@ export class GatewayServer {
     this.confirmationQueue = new ConfirmationQueue({
       defaultExpiryMs: this.confirmationConfig.expiryMs,
     });
-    this.capabilityTierProvider = options.capabilityTierProvider ?? (() => this.resolveCapabilityTierFromEnv());
+    this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting ?? parseWyomingShardRoutingConfigEnv(process.env);
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
     log.info('Session HMAC keyring configured', {
@@ -213,14 +213,6 @@ export class GatewayServer {
     } catch {
       return 'nursery';
     }
-  }
-
-  private resolveCapabilityTierFromEnv(): CapabilityTier {
-    const value = process.env.CAPABILITY_TIER?.trim().toLowerCase();
-    if (value && isCapabilityTier(value)) {
-      return value;
-    }
-    return 'nursery';
   }
 
   private registerMethods(target: JSONRPCServerAndClient): void {

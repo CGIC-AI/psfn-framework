@@ -110,13 +110,7 @@ function resolveUrlPolicyConfig(runtime: GatewayMethodRuntime): UrlPolicyConfig 
     return runtime.policyConfig.urlPolicy;
   }
 
-  // Backward-compatible env fallback for direct gateway method registration in tests.
-  const fallback: UrlPolicyConfig = {
-    allowHttp: process.env.ALLOW_HTTP_FETCH === 'true',
-    domainAllowlist: process.env.FETCH_DOMAIN_ALLOWLIST
-      ? process.env.FETCH_DOMAIN_ALLOWLIST.split(',').map(d => d.trim()).filter(Boolean)
-      : undefined,
-  };
+  const fallback: UrlPolicyConfig = {};
   runtime.policyConfig.urlPolicy = fallback;
   return fallback;
 }
@@ -125,24 +119,13 @@ function resolveDnsResolver(runtime: GatewayMethodRuntime): DnsResolver | undefi
   return (runtime.policyConfig as WebPolicyTestHooks).webFetchDnsResolver;
 }
 
-function parseCsvEnv(value: string | undefined): string[] | undefined {
-  if (typeof value !== 'string') return undefined;
-  const parsed = [...new Set(
-    value
-      .split(',')
-      .map(entry => entry.trim())
-      .filter(Boolean),
-  )];
-  return parsed.length > 0 ? parsed : undefined;
-}
-
 function resolveTlsCertPaths(runtime: GatewayMethodRuntime): string[] {
   const configured = runtime.policyConfig.webFetchTlsCaCertPaths;
   if (configured && configured.length > 0) {
     return configured;
   }
 
-  return parseCsvEnv(process.env.FETCH_TLS_CA_CERT_PATHS) ?? [];
+  return [];
 }
 
 function loadTlsBundle(paths: readonly string[]): string | undefined {

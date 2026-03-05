@@ -20,6 +20,7 @@ import { MemoryStore } from './memory/store.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { runRLMLoop } from './repl/loop.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
+import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -65,7 +66,7 @@ function makeMessage(channelId: string, content: string, id?: string): Substrate
 async function main(): Promise<void> {
   console.log('=== PSFN E2E Integration Test ===\n');
 
-  const config = loadConfig();
+  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
   const CHANNEL = 'e2e:test-' + Date.now();
 
   // Use temp directory for sessions to avoid polluting production data

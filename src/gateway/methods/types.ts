@@ -8,6 +8,7 @@ import type {
   ConfirmationResolveResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
+  PolicyDecision,
 } from '../protocol.js';
 import type { SessionHmacKeyring } from '../../session/journal-utils.js';
 import type { PolicyConfig } from '../policy.js';
@@ -26,6 +27,13 @@ export interface GatewayMethodRuntime {
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
   sendNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
   nextStreamRequestId(): string;
+  recordAuditEvent?(entry: {
+    method: string;
+    decision: PolicyDecision;
+    params?: Record<string, unknown>;
+    durationMs?: number;
+    error?: string;
+  }): void;
   audited<P, R>(
     method: string,
     handler: (params: P) => Promise<R>,

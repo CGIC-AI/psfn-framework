@@ -59,6 +59,13 @@ import type {
   GitApplyPatchResult,
   GitCommitResult,
   GitOpenPRResult,
+  BeadsReadyParams,
+  BeadsShowParams,
+  BeadsCreateParams,
+  BeadsUpdateParams,
+  BeadsCloseParams,
+  BeadsSyncParams,
+  BeadsActionResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -601,6 +608,32 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   async gitOpenPR(title: string, body: string, base?: string): Promise<string> {
     const result = await this.rpcInstance.request('git.open_pr', { title, body, base }) as GitOpenPRResult;
     return result.url;
+  }
+
+  // ── Beads issue management ──
+
+  async beadsReady(params: BeadsReadyParams = {}): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.ready', params) as BeadsActionResult;
+  }
+
+  async beadsShow(params: BeadsShowParams): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.show', params) as BeadsActionResult;
+  }
+
+  async beadsCreate(params: BeadsCreateParams): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.create', params) as BeadsActionResult;
+  }
+
+  async beadsUpdate(params: BeadsUpdateParams): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.update', params) as BeadsActionResult;
+  }
+
+  async beadsClose(params: BeadsCloseParams): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.close', params) as BeadsActionResult;
+  }
+
+  async beadsSync(params: BeadsSyncParams = {}): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.sync', params) as BeadsActionResult;
   }
 
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {

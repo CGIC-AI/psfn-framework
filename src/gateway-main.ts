@@ -49,6 +49,7 @@ import { resolveRuntimeVoiceProviderGate } from './runtime/bootstrap-helpers.js'
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
+import type { BeadsAction } from './gateway/protocol.js';
 import {
   startDiscordWithRetry,
   DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
@@ -65,6 +66,14 @@ const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;
 const DEFAULT_SHELL_EXEC_OUTPUT_CHARS = 20_000;
 const DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP = 100_000;
+const ALL_BEADS_ACTIONS: readonly BeadsAction[] = [
+  'ready',
+  'show',
+  'create',
+  'update',
+  'close',
+  'sync',
+];
 
 interface GatewayVoiceModuleContext {
   gateway: GatewayServer;
@@ -148,6 +157,23 @@ function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
   if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
   if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
   return fallback;
+}
+
+function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefined {
+  const parsed = parseStringListEnv(value);
+  if (!parsed) {
+    return value === undefined ? undefined : [];
+  }
+
+  const valid = new Set(ALL_BEADS_ACTIONS);
+  const actions: BeadsAction[] = [];
+  for (const entry of parsed) {
+    const normalized = entry.toLowerCase();
+    if (valid.has(normalized as BeadsAction)) {
+      actions.push(normalized as BeadsAction);
+    }
+  }
+  return actions;
 }
 
 function resolveGatewayRuntimeMode(raw: string | undefined): string {
@@ -286,6 +312,9 @@ async function main(): Promise<void> {
     process.env.SHELL_EXEC_MAX_OUTPUT_CHARS,
     DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
   );
+  const beadsToolsEnabled = parseBooleanEnv(process.env.BEADS_TOOLS_ENABLED, false);
+  const beadsAllowActions = parseBeadsActionsEnv(process.env.BEADS_ALLOW_ACTIONS)
+    ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
   const discordStartRetryBaseDelayMs = parsePositiveIntEnv(
     process.env.DISCORD_START_RETRY_BASE_DELAY_MS,
     DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
@@ -405,6 +434,10 @@ async function main(): Promise<void> {
         maxTimeoutMs: shellExecMaxTimeoutMs,
         defaultMaxOutputChars: shellExecDefaultMaxOutputChars,
         maxOutputChars: shellExecMaxOutputChars,
+      },
+      beads: {
+        enabled: beadsToolsEnabled,
+        ...(beadsAllowActions ? { allowActions: beadsAllowActions } : {}),
       },
     },
     ntfy: ntfyBaseUrl && ntfyTopic

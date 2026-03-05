@@ -63,6 +63,8 @@ import {
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
+import { registerBeadsTools } from './beads/runtime-wiring.js';
+import { GatewayBeadsOps } from './beads/gateway-ops.js';
 import {
   DiscordLifecycleNotifier,
   writeLastActiveSession,
@@ -630,6 +632,10 @@ async function main(): Promise<void> {
   // Git tools — self-modification via gateway-hosted git ops
   registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });
   log.info('Git self-modification tools enabled');
+
+  // Beads issue-management tools — policy-scoped gateway RPC access (no shell passthrough)
+  registerBeadsTools(agentLoop, new GatewayBeadsOps(gateway), { gatewayMode: true });
+  log.info('Beads issue-management tools enabled');
 
   // Vault tools — Obsidian note read/write via gateway shell.exec
   if (config.obsidianVaultName) {

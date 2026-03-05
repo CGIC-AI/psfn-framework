@@ -434,6 +434,37 @@ describe('MemoryRetriever trust-gated filtering', () => {
     );
   });
 
+  it('downranks superseded memories relative to supported alternatives', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Superseded memory candidate',
+        sensitivity: 'public',
+        supersededBy: 'mem-replacement',
+        similarity: 0.98,
+        confidence: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+      makeMemory({
+        text: 'Current stable memory candidate',
+        sensitivity: 'public',
+        provenanceRefs: ['discord:stable', 'telegram:stable'],
+        similarity: 0.9,
+        confidence: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('memory check', 'api:test', 'primary');
+    expect(result.indexOf('Current stable memory candidate')).toBeLessThan(
+      result.indexOf('Superseded memory candidate'),
+    );
+  });
+
   it('returns empty string when all memories are filtered out by trust', async () => {
     const memories = [
       makeMemory({ text: 'Secret stuff', sensitivity: 'confidential', similarity: 0.95 }),
@@ -1229,6 +1260,36 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     const telemetry = calls[0][1] as Record<string, unknown>;
     expect(telemetry.contradictionAdjustedCount).toBeGreaterThanOrEqual(1);
     expect(telemetry.lowConfidenceSuppressedCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('counts superseded memories in contradiction diagnostics telemetry', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Superseded memory with stale details',
+        sensitivity: 'public',
+        similarity: 0.97,
+        confidence: 0.95,
+        supersededBy: 'mem-replacement',
+      }),
+      makeMemory({
+        text: 'Current memory with stronger support',
+        sensitivity: 'public',
+        similarity: 0.87,
+        confidence: 0.9,
+        provenanceRefs: ['discord:stable', 'telegram:stable'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await retriever.retrieve('general status', 'api:test', 'primary');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    const telemetry = calls[0][1] as Record<string, unknown>;
+    expect(telemetry.contradictionAdjustedCount).toBeGreaterThanOrEqual(1);
   });
 
   it('emits telemetry with pipeline stage counts for trust-filtered scenario', async () => {

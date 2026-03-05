@@ -1227,7 +1227,7 @@ describe('DiscordVoiceRuntime', () => {
 
   describe('Discord voice TTS provider config', () => {
     it('exports the default voice ID constant', () => {
-      expect(DISCORD_VOICE_DEFAULT_VOICE_ID).toBe('YOUR_VOICE_ID');
+      expect(DISCORD_VOICE_DEFAULT_VOICE_ID).toBe('rPQ6h200dfjiuYAy0JDA');
     });
 
     it('honors echo provider config instead of overriding to elevenlabs', () => {

@@ -179,11 +179,11 @@ Ported from ElizaOS plugin-psfn:
 
 ## PSFN Identity
 
-- Character card (V2 spec): `/path/to/your/character.json`
+- Character card (V2 spec): `/home/operator/.openclaw/agents/main/character.json`
 - Voice: Provider-pluggable streaming TTS (`elevenlabs` or `echo`)
-- ElevenLabs voice ID (current PSFN V2(B) identity): `YOUR_VOICE_ID`
+- ElevenLabs voice ID (current PSFN V2(B) identity): `rPQ6h200dfjiuYAy0JDA`
 - Echo defaults (API voice websocket runtime): `${ECHO_TTS_URL}`, `11labs-Allison`, `Independent-High-Speaker-CFG`
-- Discord bot: ID YOUR_DISCORD_BOT_ID
+- Discord bot: ID 1467253459387678963
 - Voxta history: 8,160 messages across 316 chats (importable as L0 archive)
 - Memory books: 10 entries from Voxta (importable as L2 semantic memories)
 

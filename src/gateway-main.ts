@@ -422,7 +422,7 @@ async function main(): Promise<void> {
       } else if (config.elevenLabsApiKey) {
         ttsConnector = createStreamingTtsConnector('elevenlabs', {
           apiKey: config.elevenLabsApiKey,
-          voiceId: config.elevenLabsVoiceId ?? 'YOUR_VOICE_ID',
+          voiceId: config.elevenLabsVoiceId ?? 'rPQ6h200dfjiuYAy0JDA',
           modelId: config.elevenLabsModelId,
         });
       }

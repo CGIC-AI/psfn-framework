@@ -441,8 +441,8 @@ describe('ContactStore', () => {
 
     it('prefers human-readable display name when target uses opaque identifier text', () => {
       const target = store.upsert({
-        displayName: 'YOUR_DISCORD_USER_ID',
-        discordUserId: 'YOUR_DISCORD_USER_ID',
+        displayName: '388908766306893854',
+        discordUserId: '388908766306893854',
       });
       const source = store.upsert({
         displayName: 'Operator',
@@ -454,7 +454,7 @@ describe('ContactStore', () => {
 
       const updated = store.getById(target.id);
       expect(updated?.displayName).toBe('Operator');
-      expect(updated?.discordUserId).toBe('YOUR_DISCORD_USER_ID');
+      expect(updated?.discordUserId).toBe('388908766306893854');
     });
   });
 

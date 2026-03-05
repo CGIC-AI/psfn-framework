@@ -34,6 +34,7 @@ import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/t
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
 import { toErrorMessage } from '../../../utils/errors.js';
+import { isStreamingSttProvider } from '../../../voice/connectors/stt/index.js';
 import type {
   AdminSettingsData,
   AdminSettingsService,
@@ -45,7 +46,6 @@ import type {
 const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local_endpoint']);
 const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
 const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
-const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
 const log = createComponentLogger('AdminSettingsService');
 
 type SettingsMutationResult =
@@ -352,6 +352,38 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateSttProviderField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('sttProvider' in payload)) return;
+    const value = payload.sttProvider;
+    if (typeof value !== 'string') {
+      this.pushFieldError(errors, 'sttProvider', 'sttProvider must be a string', 'invalid_type');
+      return;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      this.pushFieldError(
+        errors,
+        'sttProvider',
+        'sttProvider must be "disabled" or a registered STT provider id',
+        'invalid_stt_provider',
+      );
+      return;
+    }
+
+    if (normalized !== 'disabled' && !isStreamingSttProvider(normalized)) {
+      this.pushFieldError(
+        errors,
+        'sttProvider',
+        'sttProvider must be "disabled" or a registered STT provider id',
+        'invalid_stt_provider',
+      );
+    }
+  }
+
   private validateStringArrayField(
     payload: Record<string, unknown>,
     field: string,
@@ -415,7 +447,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES, errors);
     this.validateEnumField(payload, 'capabilityTier', new Set(CAPABILITY_TIER_VALUES), errors);
     this.validateEnumField(payload, 'ttsProvider', TTS_PROVIDER_VALUES, errors);
-    this.validateEnumField(payload, 'sttProvider', STT_PROVIDER_VALUES, errors);
+    this.validateSttProviderField(payload, errors);
 
     for (const field of STRING_ARRAY_SETTINGS_FIELDS) {
       this.validateStringArrayField(payload, field, errors);

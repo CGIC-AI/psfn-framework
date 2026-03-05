@@ -13,6 +13,7 @@ import {
   normalizeEditableSettings,
 } from './settings.js';
 import type { SubstrateConfig } from './types.js';
+import { registerStreamingSttProvider } from './voice/connectors/stt/index.js';
 
 function makeConfig(): SubstrateConfig {
   return {
@@ -590,6 +591,15 @@ describe('settings', () => {
       expect((config as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('disabled');
     });
 
+    it('preserves plugin STT provider ids without core switch edits', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        sttProvider: 'plugin-test',
+      });
+
+      expect((config as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('plugin-test');
+    });
+
     it('clears voice override fields when empty strings are provided', () => {
       const config = makeConfig();
       applySettings(config, {
@@ -672,6 +682,19 @@ describe('settings', () => {
       expect(config.echoTtsVoice).toBeUndefined();
       expect(config.echoTtsPreset).toBeUndefined();
       expect(config.deepgramModel).toBeUndefined();
+    });
+
+    it('save → load → apply preserves plugin STT provider ids', () => {
+      saveSettings(tempDir, {
+        sttProvider: 'plugin-test',
+      });
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.sttProvider).toBe('plugin-test');
+
+      const config = makeConfig();
+      applySettings(config, loaded);
+      expect((config as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('plugin-test');
     });
   });
 
@@ -861,6 +884,33 @@ describe('settings', () => {
       expect(settings.capabilityTier).toBe('custom');
     });
 
+    it('accepts registered STT provider ids', () => {
+      const restoreProvider = registerStreamingSttProvider('plugin-test', {
+        createConnector: () => ({
+          id: 'plugin-test',
+          startStream: async () => ({
+            transcripts: (async function* emptyTranscripts() {})(),
+            writeAudio: async () => {},
+            endInput: async () => {},
+            cancel: async () => {},
+          }),
+        }),
+        metadata: {
+          isConfigured: (config) => Boolean(config.pluginSttToken),
+        },
+      });
+
+      try {
+        const [settings, errors] = parseSettingsForm(new URLSearchParams({
+          sttProvider: 'plugin-test',
+        }));
+        expect(errors).toEqual([]);
+        expect(settings.sttProvider).toBe('plugin-test');
+      } finally {
+        restoreProvider();
+      }
+    });
+
     it('rejects invalid capabilityTier value', () => {
       const params = new URLSearchParams({
         capabilityTier: 'invalid_tier',
@@ -942,7 +992,7 @@ describe('settings', () => {
 
     it('honors explicit sttProvider override before api-key fallback in snapshot', () => {
       const config = makeConfig();
-      const runtimeConfig = config as SubstrateConfig & { sttProvider?: 'deepgram' | 'disabled' };
+      const runtimeConfig = config as SubstrateConfig & { sttProvider?: string };
 
       runtimeConfig.sttProvider = 'disabled';
       expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('disabled');
@@ -954,6 +1004,39 @@ describe('settings', () => {
       expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('deepgram');
       config.deepgramApiKey = '';
       expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('disabled');
+    });
+
+    it('surfaces plugin STT providers in snapshot and default resolution', () => {
+      const restoreProvider = registerStreamingSttProvider('plugin-test', {
+        createConnector: () => ({
+          id: 'plugin-test',
+          startStream: async () => ({
+            transcripts: (async function* emptyTranscripts() {})(),
+            writeAudio: async () => {},
+            endInput: async () => {},
+            cancel: async () => {},
+          }),
+        }),
+        metadata: {
+          canAutoEnable: true,
+          isConfigured: (config) => Boolean(config.pluginSttToken),
+        },
+      });
+
+      try {
+        const config = makeConfig();
+        const runtimeConfig = config as SubstrateConfig & { sttProvider?: string; pluginSttToken?: string };
+
+        runtimeConfig.sttProvider = 'plugin-test';
+        expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('plugin-test');
+
+        runtimeConfig.sttProvider = undefined;
+        runtimeConfig.pluginSttToken = 'plugin-key';
+        config.deepgramApiKey = '';
+        expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('plugin-test');
+      } finally {
+        restoreProvider();
+      }
     });
 
     it('includes MoA settings in snapshot with defaults', () => {

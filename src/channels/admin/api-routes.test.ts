@@ -24,6 +24,7 @@ import { loadCapabilityTierConfig } from '../../config/capability-tier-config.js
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
+import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
 
 function request(
   port: number,
@@ -1183,6 +1184,35 @@ describe('AdminServer JSON API routes', () => {
         message: 'importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint',
       }),
     ]));
+  });
+
+  it('accepts registered STT provider ids through admin settings patch', async () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in admin settings validation');
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+    });
+
+    try {
+      const res = await request(
+        port,
+        'PATCH',
+        '/api/admin/settings',
+        JSON.stringify({
+          sttProvider: 'plugin-test',
+        }),
+        authHeaders,
+      );
+
+      expect(res.status).toBe(200);
+      expect(loadSettings(tempDir).sttProvider).toBe('plugin-test');
+      expect((testConfig as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('plugin-test');
+    } finally {
+      restoreProvider();
+    }
   });
 
   it('imports uploaded identity cards authoritatively and refreshes Character Foundation prompt', async () => {

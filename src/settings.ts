@@ -28,6 +28,10 @@ import {
 import { loadOrSeedJson, writeJsonAtomic } from './config/load-or-seed.js';
 import { isRecord } from './utils/types.js';
 import { isCapabilityTier } from './capabilities/tiers.js';
+import {
+  isStreamingSttProvider,
+  resolveDefaultStreamingSttProvider,
+} from './voice/connectors/stt/index.js';
 
 const log = createComponentLogger('Settings');
 
@@ -158,7 +162,7 @@ export interface EditableSettings {
   echoTtsUrl?: string;
   echoTtsVoice?: string;
   echoTtsPreset?: string;
-  sttProvider?: 'deepgram' | 'disabled';
+  sttProvider?: SubstrateConfig['sttProvider'];
   deepgramModel?: string;
 
   // Channel configuration (non-secret — bot tokens stay in .env)
@@ -315,9 +319,8 @@ function toBoolean(value: unknown): boolean | undefined {
 }
 
 const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
-const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
 type RuntimeVoiceTtsProvider = 'elevenlabs' | 'echo' | 'disabled';
-type RuntimeVoiceSttProvider = 'deepgram' | 'disabled';
+type RuntimeVoiceSttProvider = Exclude<SubstrateConfig['sttProvider'], undefined>;
 
 function toTtsProvider(value: unknown): 'elevenlabs' | 'echo' | 'disabled' | undefined {
   if (typeof value !== 'string') return undefined;
@@ -326,11 +329,18 @@ function toTtsProvider(value: unknown): 'elevenlabs' | 'echo' | 'disabled' | und
   return trimmed as 'elevenlabs' | 'echo' | 'disabled';
 }
 
-function toSttProvider(value: unknown): 'deepgram' | 'disabled' | undefined {
+function normalizeSttProvider(value: unknown): RuntimeVoiceSttProvider | undefined {
   if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim().toLowerCase();
-  if (!STT_PROVIDER_VALUES.has(trimmed)) return undefined;
-  return trimmed as 'deepgram' | 'disabled';
+  return value.trim().toLowerCase() as RuntimeVoiceSttProvider;
+}
+
+function toConfiguredSttProvider(value: unknown): RuntimeVoiceSttProvider | undefined {
+  const normalized = normalizeSttProvider(value);
+  if (!normalized) return undefined;
+  if (normalized === 'disabled' || isStreamingSttProvider(normalized)) {
+    return normalized;
+  }
+  return undefined;
 }
 
 function resolveRuntimeTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
@@ -340,9 +350,9 @@ function resolveRuntimeTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProv
 }
 
 function resolveRuntimeSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
-  const configured = (config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider }).sttProvider;
-  if (configured === 'deepgram' || configured === 'disabled') return configured;
-  return config.deepgramApiKey ? 'deepgram' : 'disabled';
+  const configured = normalizeSttProvider(config.sttProvider);
+  if (configured !== undefined) return configured;
+  return resolveDefaultStreamingSttProvider(config) ?? 'disabled';
 }
 
 function toImportProcessingRouteMode(value: unknown): ImportProcessingRouteMode | undefined {
@@ -749,7 +759,12 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.echoTtsPreset = typeof settings.echoTtsPreset === 'string' ? settings.echoTtsPreset.trim() : '';
   }
   if ('sttProvider' in settings) {
-    normalized.sttProvider = toSttProvider(settings.sttProvider) ?? 'disabled';
+    const provider = normalizeSttProvider(settings.sttProvider);
+    if (provider !== undefined) {
+      normalized.sttProvider = provider;
+    } else {
+      delete normalized.sttProvider;
+    }
   }
   if ('deepgramModel' in settings) {
     normalized.deepgramModel = typeof settings.deepgramModel === 'string' ? settings.deepgramModel.trim() : '';
@@ -1294,13 +1309,7 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     config.echoTtsPreset = trimmed || undefined;
   }
   if ('sttProvider' in settings) {
-    const provider = settings.sttProvider;
-    const voiceConfig = config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider };
-    if (provider === 'deepgram' || provider === 'disabled') {
-      voiceConfig.sttProvider = provider;
-    } else {
-      voiceConfig.sttProvider = undefined;
-    }
+    config.sttProvider = normalizeSttProvider(settings.sttProvider);
   }
   if ('deepgramModel' in settings) {
     const trimmed = settings.deepgramModel?.trim() ?? '';
@@ -1624,9 +1633,9 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
 
   const sttProviderRaw = params.get('sttProvider');
   if (sttProviderRaw !== null) {
-    const provider = toSttProvider(sttProviderRaw);
+    const provider = toConfiguredSttProvider(sttProviderRaw);
     if (!provider) {
-      errors.push('sttProvider must be one of: deepgram, disabled');
+      errors.push('sttProvider must be "disabled" or a registered STT provider id');
     } else {
       settings.sttProvider = provider;
     }

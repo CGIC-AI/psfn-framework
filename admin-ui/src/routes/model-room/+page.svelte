@@ -2,6 +2,10 @@
   import { onMount, tick } from 'svelte';
   import { getModelRoomBootstrap } from '$lib/api/endpoints/model-room';
   import { getToken } from '$lib/stores/auth.svelte';
+  import {
+    ensureCompanionNameLoaded,
+    getCompanionName,
+  } from '$lib/stores/companion.svelte';
   import type {
     AdminModelRoomBootstrapResponse,
     AdminModelRoomParticipant,
@@ -20,9 +24,10 @@
   let loading = $state(true);
   let sending = $state(false);
   let error = $state('');
+  const companionName = $derived(getCompanionName());
 
   let roomId = $state('garden-model-room');
-  let includePurrsephone = $state(true);
+  let includeCompanion = $state(true);
   let inputText = $state('');
   let messages = $state<RoomMessage[]>([]);
   let participantEnabled = $state<Record<string, boolean>>({});
@@ -33,7 +38,10 @@
 
   onMount(async () => {
     try {
-      const data = await getModelRoomBootstrap();
+      const [data] = await Promise.all([
+        getModelRoomBootstrap(),
+        ensureCompanionNameLoaded(),
+      ]);
       bootstrap = data;
       roomId = data.defaultRoomId;
       participantEnabled = Object.fromEntries(
@@ -156,8 +164,8 @@
     if (!userText) return;
 
     const activeParticipants = selectedParticipants();
-    if (!includePurrsephone && activeParticipants.length === 0) {
-      error = 'Enable Purrsephone or at least one model participant.';
+    if (!includeCompanion && activeParticipants.length === 0) {
+      error = `Enable ${companionName} or at least one model participant.`;
       return;
     }
 
@@ -176,22 +184,22 @@
     let previousSpeakerName = 'You';
 
     try {
-      if (includePurrsephone) {
-        const purrReply = await requestTurn({
-          speakerId: bootstrap.purrsephone.id,
-          speakerName: bootstrap.purrsephone.displayName,
+      if (includeCompanion) {
+        const companionReply = await requestTurn({
+          speakerId: bootstrap.companion.id,
+          speakerName: companionName,
           input: baton,
-          model: 'purrsephone',
+          model: bootstrap.companion.id,
           previousSpeakerName,
         });
         appendMessage({
-          speakerId: bootstrap.purrsephone.id,
-          speakerName: bootstrap.purrsephone.displayName,
-          content: purrReply,
+          speakerId: bootstrap.companion.id,
+          speakerName: companionName,
+          content: companionReply,
         });
         await scrollToBottom();
-        baton = purrReply;
-        previousSpeakerName = bootstrap.purrsephone.displayName;
+        baton = companionReply;
+        previousSpeakerName = companionName;
       }
 
       for (const participant of activeParticipants) {
@@ -262,7 +270,7 @@
   <div class="flex items-center justify-between mb-3 shrink-0">
     <div>
       <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Atrium</h1>
-      <p class="text-shadow-600 text-sm mt-0.5">Multi-model room chat for Purrsephone + direct-provider personas</p>
+      <p class="text-shadow-600 text-sm mt-0.5">Multi-model room chat for {companionName} + direct-provider personas</p>
     </div>
     <button
       onclick={clearTranscript}
@@ -297,10 +305,10 @@
         <label class="flex items-center gap-2 text-sm text-shadow-800 font-medium">
           <input
             type="checkbox"
-            checked={includePurrsephone}
-            onchange={() => includePurrsephone = !includePurrsephone}
+            checked={includeCompanion}
+            onchange={() => includeCompanion = !includeCompanion}
           />
-          Include {bootstrap.purrsephone.displayName}
+          Include {companionName}
         </label>
         <p class="text-sm text-shadow-600">
           Allowed providers: {bootstrap.constraints.allowedProviders.join(', ')}
@@ -353,7 +361,7 @@
     >
       {#if messages.length === 0}
         <div class="flex items-center justify-center h-full">
-          <p class="text-shadow-600 text-sm">Start a round to let Purrsephone and your selected models chat.</p>
+          <p class="text-shadow-600 text-sm">Start a round to let {companionName} and your selected models chat.</p>
         </div>
       {:else}
         <div class="space-y-3">

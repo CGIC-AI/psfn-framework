@@ -595,6 +595,7 @@ export class MemoryStore {
         memory.supersededBy ?? null,
         JSON.stringify(memory.tags),
         JSON.stringify(memory.provenanceRefs ?? []),
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- default for callers without sensitivity
         memory.sensitivity ?? 'personal',
         JSON.stringify(memory.consentFlags ?? {}),
         memory.contactId ?? null,

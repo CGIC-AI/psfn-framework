@@ -209,8 +209,8 @@ async function runBdCommand(
       setTimeout(() => child.kill('SIGKILL'), 250).unref();
     }, DEFAULT_BD_TIMEOUT_MS);
 
-    child.stdout?.on('data', (chunk) => append('stdout', chunk));
-    child.stderr?.on('data', (chunk) => append('stderr', chunk));
+    child.stdout.on('data', (chunk) => append('stdout', chunk));
+    child.stderr.on('data', (chunk) => append('stderr', chunk));
 
     child.once('error', (error) => {
       finalize(() => {

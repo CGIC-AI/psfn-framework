@@ -78,7 +78,7 @@ export function checkOpusAvailability(): OpusAvailabilityResult {
       frameSize: 960,
     });
     // Clean up the test decoder
-    decoder.destroy?.();
+    decoder.destroy();
 
     // Determine which backend prism-media resolved to
     let backend: string = 'unknown';
@@ -1253,7 +1253,7 @@ export class DiscordVoiceRuntime {
         signal?.removeEventListener('abort', onAbort);
         // Ensure decoder is properly destroyed
         try {
-          decoder.destroy?.();
+          decoder.destroy();
         } catch {
           // Ignore cleanup errors
         }
@@ -1497,9 +1497,6 @@ export class DiscordVoiceRuntime {
     }
 
     const recoveryChannel = this.activeChannel;
-    if (!recoveryChannel) {
-      return;
-    }
 
     void this.startDecryptRecovery({
       channel: recoveryChannel,

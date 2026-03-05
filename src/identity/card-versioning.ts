@@ -258,7 +258,7 @@ export class CharacterCardVersionStore {
         ? {
           extensions: {
             ...(
-              typeof currentData.extensions === 'object' && currentData.extensions !== null
+              typeof currentData.extensions === 'object'
                 ? currentData.extensions
                 : {}
             ),

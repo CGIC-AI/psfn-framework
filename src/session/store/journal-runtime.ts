@@ -247,7 +247,7 @@ export class SessionJournalRuntime {
     let previousHmac: string | null = null;
     if (oldestMessageIndex > 0) {
       const boundaryEntry = tail.entries[oldestMessageIndex - 1];
-      previousHmac = typeof boundaryEntry?._hmac === 'string' ? boundaryEntry._hmac : null;
+      previousHmac = typeof boundaryEntry._hmac === 'string' ? boundaryEntry._hmac : null;
     }
 
     const messages: SessionEntry[] = [];

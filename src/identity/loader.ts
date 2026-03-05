@@ -180,7 +180,7 @@ export function loadOrInitializeCharacterCard(path: string): {
 }
 
 export function assertValidCharacterCard(card: CharacterCardV2, pathHint = 'character card'): void {
-  if (!card.data?.name || !card.data?.personality) {
+  if (!card.data.name || !card.data.personality) {
     throw new Error(`Invalid character card at ${pathHint}: missing name or personality`);
   }
 }

@@ -127,7 +127,7 @@ function pickPrimaryAsset(assets: readonly ImportedAssetMetadata[]): ImportedAss
     ?? assets.find(asset => asset.type === 'icon')
     ?? assets.find(asset => asset.isMain)
     ?? assets[0];
-  return ranked ?? null;
+  return ranked;
 }
 
 export function mapCharacterBookEntriesToMemorySeeds(card: CCv3Data): CharacterMemorySeed[] {
@@ -135,7 +135,7 @@ export function mapCharacterBookEntriesToMemorySeeds(card: CCv3Data): CharacterM
   const seeds: CharacterMemorySeed[] = [];
   for (const entry of entries) {
     if (entry.enabled === false) continue;
-    const text = entry.content?.trim();
+    const text = entry.content.trim();
     if (!text) continue;
 
     const keywords = toTextArray(entry.keys)

@@ -427,11 +427,8 @@ export class WebSocketVoiceRuntime {
     }
 
     state.droppedFinalTranscriptCount += 1;
-    if (FINAL_TRANSCRIPT_OVERFLOW_POLICY === 'drop_oldest') {
-      state.finalTranscripts.shift();
-      state.finalTranscripts.push(text);
-      return;
-    }
+    state.finalTranscripts.shift();
+    state.finalTranscripts.push(text);
   }
 
   private collectTranscript(state: RuntimeSessionState): string {

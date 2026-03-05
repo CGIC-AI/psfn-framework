@@ -181,9 +181,6 @@ export class WyomingFrameCodec {
 
     if (frame.data !== undefined) {
       const serializedData = JSON.stringify(frame.data);
-      if (serializedData === undefined) {
-        throw new WyomingCodecError('INVALID_DATA', 'Frame data is not serializable');
-      }
       headerEntries.push(['data', ensureHeaderValue(serializedData, 'data')]);
     }
 
@@ -231,7 +228,7 @@ export class WyomingFrameCodec {
   private drain(): WyomingFrame[] {
     const frames: WyomingFrame[] = [];
 
-    while (true) {
+    for (;;) {
       const delimiterIndex = this.buffer.indexOf(HEADER_DELIMITER);
       if (delimiterIndex === -1) {
         if (this.buffer.byteLength > this.maxHeaderBytes) {

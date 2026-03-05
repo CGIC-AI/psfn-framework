@@ -252,9 +252,6 @@ export class ModuleLoader {
 
     try {
       const status = await moduleDefinition.health();
-      if (!status || typeof status !== 'object') {
-        return { ok: false, details: 'module health() must return an object' };
-      }
       if (status.ok) return { ok: true, details: status.details };
       return { ok: false, details: status.details || 'module reported unhealthy status' };
     } catch (error) {

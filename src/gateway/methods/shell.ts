@@ -290,8 +290,8 @@ async function runCommandBounded(
       setTimeout(() => child.kill('SIGKILL'), 250).unref();
     }, limits.timeoutMs);
 
-    child.stdout?.on('data', chunk => appendOutput('stdout', chunk));
-    child.stderr?.on('data', chunk => appendOutput('stderr', chunk));
+    child.stdout.on('data', chunk => appendOutput('stdout', chunk));
+    child.stderr.on('data', chunk => appendOutput('stderr', chunk));
     child.once('error', (error) => {
       clearTimeout(timeoutHandle);
       rejectResult(error);

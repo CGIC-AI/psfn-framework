@@ -141,16 +141,6 @@ async function withStageTimeout<T>(
   } catch (error) {
     const normalized = toError(error);
 
-    if (timedOut && timeoutError) {
-      if (waitForCancellationAckOnTimeout) {
-        // Wait for the attempt to acknowledge cancellation before allowing retries.
-        await taskPromise.catch(() => undefined);
-      } else {
-        void taskPromise.catch(() => undefined);
-      }
-      throw timeoutError;
-    }
-
     if (attemptAbortController.signal.aborted && signal?.aborted) {
       throw createStageAbortError(stage);
     }

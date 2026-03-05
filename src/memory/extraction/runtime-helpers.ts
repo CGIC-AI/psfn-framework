@@ -64,7 +64,7 @@ export function evaluateExtractionTrigger(
   if (runtimeConfig && !intervalMet) {
     const chatSlot = runtimeConfig.modelRoster.chat;
     const contextWindow = chatSlot?.contextWindow ?? runtimeConfig.defaultContextWindow;
-    thresholdPct = runtimeConfig.extractionThresholdPct ?? 30;
+    thresholdPct = runtimeConfig.extractionThresholdPct;
     tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
 
     const recent = sessionManager.getRecentMessages(channelId);
@@ -106,7 +106,7 @@ export function resolveCoveredUpToMessageId(
   }
 
   const latestEntry = sessionManager.getRecentMessages(channelId, 1)[0];
-  if (typeof latestEntry?.id === 'number' && Number.isFinite(latestEntry.id)) {
+  if (typeof latestEntry.id === 'number' && Number.isFinite(latestEntry.id)) {
     return latestEntry.id;
   }
   return null;

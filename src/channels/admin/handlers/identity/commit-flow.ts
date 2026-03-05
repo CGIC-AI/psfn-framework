@@ -69,7 +69,7 @@ export async function applyStagedIdentityCommit(
 
   if (applyCard && stage.cardMutation && stage.cardMutation.status === 'pending') {
     try {
-      const destinationPath = config.characterCardPath?.trim();
+      const destinationPath = config.characterCardPath.trim();
       if (cardVersionStore) {
         const updated = cardVersionStore.update(
           stage.cardMutation.importedCard,

@@ -289,7 +289,7 @@ export class GitOps implements GitOperations {
       });
     } catch (err) {
       const record = err as Record<string, unknown>;
-      const stderr = typeof record?.stderr === 'string' ? record.stderr : undefined;
+      const stderr = typeof record.stderr === 'string' ? record.stderr : undefined;
       const msg = stderr || toErrorMessage(err);
       throw new Error(`Git command failed: ${msg}`);
     }
@@ -383,7 +383,7 @@ export class GitOps implements GitOperations {
 
       return { entries, rawLineCount: lines.length };
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code;
+      const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
         return { entries: [], rawLineCount: 0 };
       }

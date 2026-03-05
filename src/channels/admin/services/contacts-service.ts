@@ -392,7 +392,7 @@ export class AdminContactsDataService implements AdminContactsService {
     // Apply channel privacy updates
     if (Array.isArray(payload.channelPrivacy)) {
       for (const cp of payload.channelPrivacy) {
-        if (!cp.channel?.trim() || !cp.userId?.trim()) continue;
+        if (!cp.channel.trim() || !cp.userId.trim()) continue;
         if (!CHANNEL_PRIVACY_LEVELS.includes(cp.privacyLevel)) {
           return { ok: false, message: `Invalid privacy level: ${cp.privacyLevel}` };
         }
@@ -411,7 +411,7 @@ export class AdminContactsDataService implements AdminContactsService {
     // Add new channel link
     if (payload.addChannel) {
       const ch = payload.addChannel;
-      if (!ch.channel?.trim() || !ch.userId?.trim()) {
+      if (!ch.channel.trim() || !ch.userId.trim()) {
         return { ok: false, message: 'Channel and userId are required for addChannel' };
       }
       if (ch.privacyLevel && !CHANNEL_PRIVACY_LEVELS.includes(ch.privacyLevel)) {

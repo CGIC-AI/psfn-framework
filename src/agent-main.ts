@@ -721,8 +721,8 @@ async function main(): Promise<void> {
         llm: async () => {
           const configured = Boolean(config.primaryModel && config.primaryProvider);
           const baseMeta = {
-            provider: config.primaryProvider ?? null,
-            model: config.primaryModel ?? null,
+            provider: config.primaryProvider,
+            model: config.primaryModel,
             ...toActiveProbeMeta(activeProbeConfig),
             ...runtimeStatusMeta,
           };

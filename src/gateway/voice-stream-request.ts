@@ -79,7 +79,7 @@ export async function requestAgentVoiceStream({
     overflowPolicy,
   });
 
-  const chunks = chunkText(routedMessage.content ?? '', chunkSize);
+  const chunks = chunkText(routedMessage.content, chunkSize);
   let droppedChunks = 0;
   for (const chunk of chunks) {
     try {
@@ -220,7 +220,7 @@ function normalizePositiveInt(value: number | undefined, fallback: number): numb
 }
 
 function chunkText(text: string, chunkSize: number): string[] {
-  const source = text ?? '';
+  const source = text;
   if (!source) return [''];
 
   const chunks: string[] = [];

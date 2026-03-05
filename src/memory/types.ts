@@ -229,7 +229,7 @@ export function evaluateMemoryPrivacyRisk(
     confidential: 0.82,
   };
 
-  const normalizedTags = normalizeMemoryTags(input.tags ?? []);
+  const normalizedTags = normalizeMemoryTags(input.tags);
   const tagMatches = normalizedTags.filter(tag => (
     SENSITIVE_PRIVACY_TAG_HINTS.has(tag)
     || SENSITIVE_PRIVACY_TAG_HINT_LIST.some(hint => tag.includes(hint))

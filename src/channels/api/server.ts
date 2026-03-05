@@ -762,6 +762,7 @@ export class ApiServer implements ChannelAdapter {
       return;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime validation of untrusted JSON
     if (!parsed.messages || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
       this.sendError(res, 400, 'invalid_request', 'messages field is required and must be a non-empty array');
       return;

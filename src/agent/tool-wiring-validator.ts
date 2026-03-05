@@ -85,7 +85,7 @@ export interface ValidationReport {
  */
 export function extractGatewayMethods(client: object): Set<string> {
   const methods = new Set<string>();
-  const proto = Object.getPrototypeOf(client) as Record<string, unknown>;
+  const proto = Object.getPrototypeOf(client) as Record<string, unknown> | null;
   if (!proto) return methods;
 
   for (const key of Object.getOwnPropertyNames(proto)) {

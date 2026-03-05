@@ -895,8 +895,8 @@ function parseBooleanMapEnv(value: string | undefined): Record<string, boolean> 
   const parsed: Record<string, boolean> = {};
   for (const item of value.split(',')) {
     const [rawKey, rawValue] = item.split('=');
-    const key = rawKey?.trim();
-    const boolValue = parseOptionalBooleanEnv(rawValue?.trim());
+    const key = rawKey.trim();
+    const boolValue = parseOptionalBooleanEnv(rawValue.trim());
     if (!key || boolValue === undefined) continue;
     parsed[key] = boolValue;
   }

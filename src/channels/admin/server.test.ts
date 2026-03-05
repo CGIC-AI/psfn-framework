@@ -70,7 +70,7 @@ function sseRequest(
       (res) => {
         resolve({ status: res.statusCode!, headers: res.headers });
         // Must destroy the socket to release the connection
-        res.socket?.destroy();
+        res.socket.destroy();
       },
     );
     req.on('error', () => {});
@@ -99,7 +99,7 @@ function captureSseBody(
           if (settled) return;
           settled = true;
           clearTimeout(timeoutHandle);
-          res.socket?.destroy();
+          res.socket.destroy();
           result();
         };
 
@@ -2096,7 +2096,7 @@ describe('AdminServer', () => {
       expect(testConfig.extractionMaxTokens).toBe(1536);
       expect(testConfig.modelRoleAssignments?.chat).toBe('chatfast');
       expect(testConfig.modelRoleAssignments?.extraction).toBe('extract');
-      expect(testConfig.modelCatalog?.chatfast?.defaults?.contextWindow).toBe(200000);
+      expect(testConfig.modelCatalog?.chatfast.defaults?.contextWindow).toBe(200000);
       expect(testConfig.modelRoster.reasoning?.model).toBe('moonshotai/kimi-k2.5');
 
       testConfig.primaryModel = 'test-model';
@@ -2356,7 +2356,6 @@ describe('AdminServer', () => {
 
     it('returns prompt layer detail page with structured section editors', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       const res = await request(port, 'GET', `/legacy/prompts/${encodeURIComponent(layer.id)}`);
       expect(res.status).toBe(200);
       expect(res.body).toContain('name="description"');
@@ -2377,7 +2376,6 @@ describe('AdminServer', () => {
 
     it('updates prompt layer via structured section form and persists composed content + metadata', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       const body = new URLSearchParams({
         layerId: layer.id,
         identifier: 'garden.main',
@@ -2415,7 +2413,6 @@ describe('AdminServer', () => {
 
     it('injects session system notes when admin updates prompt layers', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       sessionManager.recordUserMessage(
         'discord:identity-note',
         'hello',
@@ -2444,7 +2441,6 @@ describe('AdminServer', () => {
 
     it('rejects invalid role metadata updates', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       const before = promptStore.getById(layer.id);
 
       const body = new URLSearchParams({
@@ -2467,7 +2463,6 @@ describe('AdminServer', () => {
 
     it('rejects non-integer or negative promptOrder updates', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
 
       const badDecimal = new URLSearchParams({
         layerId: layer.id,
@@ -2496,7 +2491,6 @@ describe('AdminServer', () => {
 
     it('rejects malformed structured prompt content updates', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       const before = promptStore.getById(layer.id);
       const beforeVersion = before?.version;
       const beforeContent = before?.content;
@@ -2520,7 +2514,6 @@ describe('AdminServer', () => {
 
     it('shows malformed structured prompt errors on prompt detail page', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
       promptStore.update(
         layer.id,
         ['### description', 'A good start', '', '### unknown_section', 'Broken block'].join('\n'),
@@ -2647,7 +2640,6 @@ describe('AdminServer', () => {
 
     it('shows unified audit timeline entries for tool, identity, external, and memory actions', async () => {
       const layer = promptStore.getAll()[0];
-      if (!layer) throw new Error('Expected seeded prompt layer');
 
       await eventBus.emit('agent.tool.start', {
         channelId: 'timeline-ch',
@@ -2803,7 +2795,7 @@ describe('AdminServer', () => {
           const timeout = setTimeout(() => {
             if (settled) return;
             settled = true;
-            res.socket?.destroy();
+            res.socket.destroy();
             reject(new Error('Timed out waiting for SSE events'));
           }, 3000);
 
@@ -2811,7 +2803,7 @@ describe('AdminServer', () => {
             if (settled) return;
             settled = true;
             clearTimeout(timeout);
-            res.socket?.destroy();
+            res.socket.destroy();
             resolve(result);
           };
 

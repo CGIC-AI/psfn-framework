@@ -111,7 +111,7 @@ export class ShardManager {
   }
 
   async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {
-    const content = request.message.content?.trim();
+    const content = request.message.content.trim();
     if (!content) {
       throw new Error('Wyoming shard delegation requires non-empty message content.');
     }
@@ -367,13 +367,9 @@ export class ShardManager {
       return [...nursery, ...APPRENTICE_SHARD_TOOL_EXTRAS.filter(name => !nursery.includes(name))];
     }
 
-    if (tier === 'autonomous' || tier === 'custom') {
-      const tierConfig = normalizeToolNames(configured?.[tier] ?? configured?.autonomous);
-      if (tierConfig.length > 0) return tierConfig;
-      return [...DEFAULT_SHARD_TOOLSETS_BY_TIER[tier]];
-    }
-
-    return [...DEFAULT_SHARD_TOOLSETS_BY_TIER.nursery];
+    const tierConfig = normalizeToolNames(configured?.[tier] ?? configured?.autonomous);
+    if (tierConfig.length > 0) return tierConfig;
+    return [...DEFAULT_SHARD_TOOLSETS_BY_TIER[tier]];
   }
 
   private resolveCapabilityTier(): CapabilityTier {

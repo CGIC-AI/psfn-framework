@@ -256,7 +256,7 @@ export class AdminIdentityDataService implements AdminIdentityService {
 
     const version = Number(payload.version);
     const entry = Number.isInteger(version) ? cardVersionStore.getHistoryEntry(version) : undefined;
-    const current = cardVersionStore.getCurrent()?.card ?? this.deps.characterCard;
+    const current = cardVersionStore.getCurrent().card;
     return {
       ok: Boolean(entry),
       current,

@@ -30,6 +30,7 @@ export function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): Runtime
 
 export function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
   const configured = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 'disabled' is valid at runtime via settings
   if (configured === 'elevenlabs' || configured === 'echo' || configured === 'disabled') return configured;
   return 'elevenlabs';
 }

@@ -235,7 +235,7 @@ export class SubstrateRuntime implements Lifecycle {
 
   private refreshCrashRecoveryRetryBacklog(channelId: string): boolean {
     const sessionStore = this.sessionStore;
-    if (!sessionStore || typeof sessionStore.getCrashRecoveryExtractionCandidates !== 'function') {
+    if (typeof sessionStore.getCrashRecoveryExtractionCandidates !== 'function') {
       return this.crashRecoveryRetryBacklog.has(channelId);
     }
 
@@ -253,7 +253,7 @@ export class SubstrateRuntime implements Lifecycle {
 
   private resolveUnresolvedCrashRecoveryChannels(): Set<string> {
     const sessionStore = this.sessionStore;
-    if (!sessionStore || typeof sessionStore.getCrashRecoveryExtractionCandidates !== 'function') {
+    if (typeof sessionStore.getCrashRecoveryExtractionCandidates !== 'function') {
       return new Set(this.crashRecoveryRetryBacklog.keys());
     }
 
@@ -904,8 +904,8 @@ export class SubstrateRuntime implements Lifecycle {
           llm: async () => {
             const configured = Boolean(this.config.primaryModel && this.config.primaryProvider);
             const baseMeta = {
-              provider: this.config.primaryProvider ?? null,
-              model: this.config.primaryModel ?? null,
+              provider: this.config.primaryProvider,
+              model: this.config.primaryModel,
               ...toActiveProbeMeta(activeProbeConfig),
               ...runtimeStatusMeta,
             };
@@ -1209,11 +1209,11 @@ export class SubstrateRuntime implements Lifecycle {
       this.stopDebugObserver?.();
       this.stopDebugObserver = undefined;
     });
-    await this.runShutdownStep('stop scheduler', () => this.scheduler?.stop());
+    await this.runShutdownStep('stop scheduler', () => this.scheduler.stop());
 
     const timeoutMs = this.resolveExtractionDrainTimeoutMs();
     await this.runShutdownStep('drain memory extractor', async () => {
-      const drained = await this.memoryExtractor?.stop({ timeoutMs });
+      const drained = await this.memoryExtractor.stop({ timeoutMs });
       if (drained === false) {
         log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
       }
@@ -1227,11 +1227,11 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     await this.runShutdownStep('write graceful shutdown markers', () => {
-      const markedChannels = this.sessionStore?.markGracefulShutdownForActiveChannels(
+      const markedChannels = this.sessionStore.markGracefulShutdownForActiveChannels(
         Date.now(),
         { skipChannels: unresolvedCrashRecoveryChannels },
       );
-      if ((markedChannels?.length ?? 0) > 0) {
+      if (markedChannels.length > 0) {
         log.info('Wrote graceful shutdown markers', { channels: markedChannels });
       }
     });
@@ -1241,7 +1241,7 @@ export class SubstrateRuntime implements Lifecycle {
     await this.runShutdownStep('shutdown modules', () => this.moduleLoader?.shutdown());
     await this.runShutdownStep('stop channel adapters', () => this.stopChannels());
     await this.runShutdownStep('close database', () => {
-      this.db?.close();
+      this.db.close();
     });
     log.info('Stopped');
   }

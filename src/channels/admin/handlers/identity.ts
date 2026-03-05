@@ -329,7 +329,7 @@ export class AdminIdentityHandlers {
       return tpl.identityImportResult(false, 'path is required');
     }
 
-    const destinationPath = this.config.characterCardPath?.trim();
+    const destinationPath = this.config.characterCardPath.trim();
     if (!destinationPath) {
       this.appendAuditTimelineEntry(
         'identity_edit',

@@ -594,7 +594,7 @@ export class AdminServer implements Lifecycle {
       .then((content) => {
         const isHtml = ext === '.html';
         res.writeHead(200, {
-          'Content-Type': mimeType ?? 'application/octet-stream',
+          'Content-Type': mimeType,
           'Cache-Control': isHtml ? GARDEN_HTML_CACHE_CONTROL : GARDEN_ASSET_CACHE_CONTROL,
         });
         res.end(content);

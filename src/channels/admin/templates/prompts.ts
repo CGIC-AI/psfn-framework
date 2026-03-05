@@ -145,7 +145,7 @@ export function promptLayersFragment(layers: PromptLayer[]): string {
 
   // Sort by type order then priority
   const sorted = [...layers].sort((a, b) => {
-    const typeOrder = (LAYER_TYPE_ORDER[a.type] ?? 99) - (LAYER_TYPE_ORDER[b.type] ?? 99);
+    const typeOrder = (LAYER_TYPE_ORDER[a.type]) - (LAYER_TYPE_ORDER[b.type]);
     if (typeOrder !== 0) return typeOrder;
     return a.priority - b.priority;
   });
@@ -199,8 +199,8 @@ function computeNaiveLineDiff(oldContent: string, newContent: string): Array<{ k
   const rows: Array<{ kind: 'same' | 'remove' | 'add'; line: string }> = [];
 
   for (let i = 0; i < max; i++) {
-    const oldLine = oldLines[i];
-    const newLine = newLines[i];
+    const oldLine = oldLines[i] as string | undefined;
+    const newLine = newLines[i] as string | undefined;
     if (oldLine === newLine) {
       rows.push({ kind: 'same', line: oldLine ?? '' });
       continue;

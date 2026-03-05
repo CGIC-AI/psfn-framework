@@ -390,9 +390,9 @@ export class AdminChatBootstrapService {
     transportHeaders: Record<string, string>,
   ): AdminChatRuntimeModelConfig {
     const config = this.runtimeConfig;
-    const chatSlot = config?.modelRoster?.chat;
+    const chatSlot = config?.modelRoster.chat;
     const slotKey = config?.modelRoleAssignments?.chat;
-    const catalogEntry = slotKey ? config?.modelCatalog?.[slotKey] : undefined;
+    const catalogEntry = slotKey ? config.modelCatalog?.[slotKey] : undefined;
     const provider = normalizeTrimmed(catalogEntry?.provider)
       ?? normalizeTrimmed(chatSlot?.provider)
       ?? normalizeTrimmed(config?.primaryProvider)

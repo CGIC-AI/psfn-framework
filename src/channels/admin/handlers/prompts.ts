@@ -8,6 +8,16 @@ import {
 } from '../prompt-structured-content.js';
 import * as tpl from '../templates.js';
 
+const CARD_BACKED_FOUNDATION_PROMPT_MESSAGE =
+  'Character Foundation is derived from the character card and must be edited through Identity.';
+
+function isCardBackedFoundationLayer(
+  layer: { type?: string; identifier?: string; name?: string } | null | undefined,
+): boolean {
+  if (!layer || layer.type !== 'base') return false;
+  return layer.identifier === 'main' || layer.name === 'Character Foundation';
+}
+
 export class AdminPromptsHandlers {
   constructor(private readonly legacy: LegacyAdminHandlers) {}
 
@@ -123,6 +133,25 @@ export class AdminPromptsHandlers {
     }
     const params = new URLSearchParams(body);
     const layerId = params.get('layerId') ?? '';
+    const layer = legacy.promptStore.getById(layerId);
+    if (!layer) {
+      legacy.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Prompt layer edit was denied: prompt layer not found.',
+        [`layerId=${layerId}`],
+      );
+      return '<div class="form-error">Prompt layer not found</div>';
+    }
+    if (isCardBackedFoundationLayer(layer)) {
+      legacy.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt layer edit was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`],
+      );
+      return tpl.settingsFormResult(false, CARD_BACKED_FOUNDATION_PROMPT_MESSAGE);
+    }
     const resolved = this.resolvePromptLayerContent(params);
     if ('error' in resolved) {
       legacy.appendAuditTimelineEntry(
@@ -144,7 +173,7 @@ export class AdminPromptsHandlers {
       return tpl.settingsFormResult(false, resolvedMetadata.error);
     }
     try {
-      const layer = legacy.promptStore.update(
+      const updatedLayer = legacy.promptStore.update(
         layerId,
         resolved.content,
         'admin',
@@ -154,13 +183,13 @@ export class AdminPromptsHandlers {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `PSFN edited ${layer.type} prompt layer "${layer.name}".`,
-        [`layerId=${layer.id}`, `version=${layer.version}`],
+        `PSFN edited ${updatedLayer.type} prompt layer "${updatedLayer.name}".`,
+        [`layerId=${updatedLayer.id}`, `version=${updatedLayer.version}`],
       );
       this.injectPromptEditSystemNote(
-        `Admin updated ${layer.type} prompt layer "${layer.name}" (v${layer.version}).`,
+        `Admin updated ${updatedLayer.type} prompt layer "${updatedLayer.name}" (v${updatedLayer.version}).`,
       );
-      return tpl.settingsFormResult(true, `Updated "${layer.name}" to v${layer.version}`);
+      return tpl.settingsFormResult(true, `Updated "${updatedLayer.name}" to v${updatedLayer.version}`);
     } catch (err) {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
@@ -217,18 +246,37 @@ export class AdminPromptsHandlers {
     }
     const params = new URLSearchParams(body);
     const layerId = params.get('layerId') ?? '';
+    const layer = legacy.promptStore.getById(layerId);
+    if (!layer) {
+      legacy.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Prompt toggle was denied: prompt layer not found.',
+        [`layerId=${layerId}`],
+      );
+      return '<div class="form-error">Prompt layer not found</div>';
+    }
+    if (isCardBackedFoundationLayer(layer)) {
+      legacy.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt toggle was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`],
+      );
+      return tpl.settingsFormResult(false, CARD_BACKED_FOUNDATION_PROMPT_MESSAGE);
+    }
     try {
       legacy.promptStore.toggle(layerId);
-      const layer = legacy.promptStore.getById(layerId);
+      const updatedLayer = legacy.promptStore.getById(layerId);
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `PSFN toggled prompt layer "${layer?.name ?? layerId}".`,
-        [layer ? `enabled=${layer.enabled}` : null],
+        `PSFN toggled prompt layer "${updatedLayer?.name ?? layerId}".`,
+        [updatedLayer ? `enabled=${updatedLayer.enabled}` : null],
       );
-      if (layer) {
+      if (updatedLayer) {
         this.injectPromptEditSystemNote(
-          `Admin toggled ${layer.type} prompt layer "${layer.name}" (${layer.enabled ? 'enabled' : 'disabled'}).`,
+          `Admin toggled ${updatedLayer.type} prompt layer "${updatedLayer.name}" (${updatedLayer.enabled ? 'enabled' : 'disabled'}).`,
         );
       }
       const layers = legacy.promptStore.getAll();
@@ -257,18 +305,37 @@ export class AdminPromptsHandlers {
     const params = new URLSearchParams(body);
     const layerId = params.get('layerId') ?? '';
     const version = parseInt(params.get('version') ?? '0', 10);
+    const layer = legacy.promptStore.getById(layerId);
+    if (!layer) {
+      legacy.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        'Prompt rollback was denied: prompt layer not found.',
+        [`layerId=${layerId}`, `version=${version}`],
+      );
+      return '<div class="form-error">Prompt layer not found</div>';
+    }
+    if (isCardBackedFoundationLayer(layer)) {
+      legacy.appendAuditTimelineEntry(
+        'identity_edit',
+        'denied',
+        `Prompt rollback was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`, `version=${version}`],
+      );
+      return tpl.settingsFormResult(false, CARD_BACKED_FOUNDATION_PROMPT_MESSAGE);
+    }
     try {
-      const layer = legacy.promptStore.rollback(layerId, version);
+      const updatedLayer = legacy.promptStore.rollback(layerId, version);
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `PSFN rolled prompt layer "${layer.name}" back to v${version}.`,
-        [`layerId=${layer.id}`, `version=${layer.version}`],
+        `PSFN rolled prompt layer "${updatedLayer.name}" back to v${version}.`,
+        [`layerId=${updatedLayer.id}`, `version=${updatedLayer.version}`],
       );
       this.injectPromptEditSystemNote(
-        `Admin rolled back ${layer.type} prompt layer "${layer.name}" using v${version} content (now v${layer.version}).`,
+        `Admin rolled back ${updatedLayer.type} prompt layer "${updatedLayer.name}" using v${version} content (now v${updatedLayer.version}).`,
       );
-      return tpl.settingsFormResult(true, `Rolled back "${layer.name}" to content from v${version}`);
+      return tpl.settingsFormResult(true, `Rolled back "${updatedLayer.name}" to content from v${version}`);
     } catch (err) {
       legacy.appendAuditTimelineEntry(
         'identity_edit',

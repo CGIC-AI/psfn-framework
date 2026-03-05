@@ -132,6 +132,9 @@ import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-vali
 import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
+  resolveCharacterCardHistoryPath,
+  resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
   resolveContactsDir,
   resolveNotesDir,
   resolveScratchpadMirrorPath,
@@ -261,12 +264,14 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const savedSettings = loadSettings(config.dataDir);
+  const systemDataDir = resolveConfiguredSystemDataDir(config);
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const savedSettings = loadSettings(systemDataDir);
   const settingsDomains = splitSettingsByDomain(savedSettings);
   applySettings(config, settingsDomains.runtime);
   installPromotedToolsPersistenceHook(config);
 
-  const modelsLoadResult = loadModelsConfigWithLegacyMigration(config.dataDir, {
+  const modelsLoadResult = loadModelsConfigWithLegacyMigration(systemDataDir, {
     defaultContextWindow: config.defaultContextWindow,
     legacySettings: settingsDomains.models,
   });
@@ -279,13 +284,13 @@ async function main(): Promise<void> {
 
   if (settingsDomains.maintenanceIntervalMs !== undefined) {
     try {
-      const schedulerPath = join(config.dataDir, SCHEDULER_FILE_NAME);
+      const schedulerPath = join(systemDataDir, SCHEDULER_FILE_NAME);
       const schedulerFileExisted = existsSync(schedulerPath);
-      const persistedScheduler = loadSchedulerConfig(config.dataDir, {
+      const persistedScheduler = loadSchedulerConfig(systemDataDir, {
         seedDir: process.env.CONFIG_DIR,
       });
       if (!schedulerFileExisted) {
-        saveSchedulerConfig(config.dataDir, {
+        saveSchedulerConfig(systemDataDir, {
           ...persistedScheduler,
           salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
         });
@@ -307,13 +312,13 @@ async function main(): Promise<void> {
 
   if (settingsDomains.capabilityTier !== undefined) {
     try {
-      const capabilityPath = join(config.dataDir, CAPABILITY_TIER_FILE_NAME);
+      const capabilityPath = join(systemDataDir, CAPABILITY_TIER_FILE_NAME);
       const capabilityFileExisted = existsSync(capabilityPath);
-      const persistedCapabilities = loadCapabilityTierConfig(config.dataDir, {
+      const persistedCapabilities = loadCapabilityTierConfig(systemDataDir, {
         seedDir: process.env.CONFIG_DIR,
       });
       if (!capabilityFileExisted) {
-        saveCapabilityTierConfig(config.dataDir, {
+        saveCapabilityTierConfig(systemDataDir, {
           ...persistedCapabilities,
           tier: settingsDomains.capabilityTier,
         });
@@ -335,7 +340,7 @@ async function main(): Promise<void> {
 
   if (settingsDomains.legacyKeys.length > 0) {
     try {
-      saveSettings(config.dataDir, settingsDomains.runtime);
+      saveSettings(systemDataDir, settingsDomains.runtime);
       log.warn('Removed legacy cross-domain keys from settings.json', {
         keys: settingsDomains.legacyKeys,
       });
@@ -347,7 +352,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const trustPolicyConfig = loadTrustPolicyConfig(config.dataDir, {
+  const trustPolicyConfig = loadTrustPolicyConfig(systemDataDir, {
     seedDir: process.env.CONFIG_DIR,
   });
   setRuntimeTrustPolicy(trustPolicyConfig);
@@ -360,15 +365,15 @@ async function main(): Promise<void> {
     ).length,
   });
   const schedulerConfig = resolveRuntimeSchedulerConfig({
-    dataDir: config.dataDir,
+    dataDir: systemDataDir,
     seedDir: process.env.CONFIG_DIR,
   });
   const backupConfig = resolveBackupRuntimeConfig({
-    dataDir: config.dataDir,
+    dataDir: companionDataDir,
   });
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const capabilityRuntime = new CapabilityRuntime({
-    dataDir: config.dataDir,
+    dataDir: systemDataDir,
     seedDir: process.env.CONFIG_DIR,
     envTier: config.capabilityTier,
   });
@@ -451,18 +456,18 @@ async function main(): Promise<void> {
   }
   const cardVersionStore = new CharacterCardVersionStore(
     config.characterCardPath,
-    join(config.dataDir, 'character-card-history.jsonl'),
+    resolveCharacterCardHistoryPath(companionDataDir),
   );
   const cardProposalQueue = new ConfirmationQueue({
     idFactory: () => `card-${randomUUID()}`,
   });
   log.info(`Loaded character: ${card.data.name}`);
   config.characterName = card.data.name;
-  const promptRegistry = wireStaticPromptRegistry(config.dataDir);
+  const promptRegistry = wireStaticPromptRegistry(companionDataDir);
 
   // ── Initialize local components ──
 
-  const sessionsDir = resolveSessionsDir(config.dataDir);
+  const sessionsDir = resolveSessionsDir(companionDataDir);
   const sessionComposition = composeSessionRuntime({
     config,
     eventBus,
@@ -476,7 +481,7 @@ async function main(): Promise<void> {
   const restartBehavior = config.sessionRestartBehavior ?? 'reuse_latest_session';
   const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
   if (startupSession) {
-    writeLastActiveSession(config.dataDir, startupSession);
+    writeLastActiveSession(companionDataDir, startupSession);
     if (restartBehavior === 'new_session') {
       log.info('Initialized fresh startup session metadata', {
         sessionId: startupSession.sessionId,
@@ -493,8 +498,8 @@ async function main(): Promise<void> {
   }
 
   const memoryStore = new MemoryStore(db, gateway.dims, {
-    notesDir: resolveNotesDir(config.dataDir),
-    scratchpadMirrorPath: resolveScratchpadMirrorPath(config.dataDir),
+    notesDir: resolveNotesDir(companionDataDir),
+    scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
   });
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
   const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
@@ -521,7 +526,7 @@ async function main(): Promise<void> {
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
-  const safeguardAuditTrail = createSafeguardAuditTrail(config.dataDir);
+  const safeguardAuditTrail = createSafeguardAuditTrail(companionDataDir);
   const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
     auditTrail: safeguardAuditTrail,
   });
@@ -533,13 +538,13 @@ async function main(): Promise<void> {
   });
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
-    dataDir: config.dataDir,
+    dataDir: systemDataDir,
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
   });
 
   // Prompt stack — layered, editable system prompt
-  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, composeSystemPromptTemplate(), {
+  const promptStore = wirePromptRuntime(agentLoop, companionDataDir, composeSystemPromptTemplate(), {
     identityCoolingOff,
     getCapabilityTier: () => capabilityRuntime.getTier(),
   });
@@ -548,7 +553,7 @@ async function main(): Promise<void> {
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config);
-  wireSessionToolsRuntime(agentLoop, sessionManager, config.dataDir);
+  wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir);
 
   // Contact store + tools — trust-gated privacy system
   const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
@@ -562,7 +567,7 @@ async function main(): Promise<void> {
     db,
     primaryUserId,
     {
-      exportDir: resolveContactsDir(config.dataDir),
+      exportDir: resolveContactsDir(companionDataDir),
       ...(primaryTelegramUserId
         ? {
           bootstrapPrimaryIdentityLinks: [{
@@ -964,7 +969,7 @@ async function main(): Promise<void> {
   const lifecycleNotifier = new DiscordLifecycleNotifier({
     sender: gatewaySender,
     heartbeatChannelId,
-    dataDir: config.dataDir,
+    dataDir: companionDataDir,
     startTime,
   });
 
@@ -1059,7 +1064,7 @@ async function main(): Promise<void> {
     scheduler,
     agentLoop,
     gatewaySender,
-    config.dataDir,
+    companionDataDir,
     heartbeatChannelId,
     {
       eventBus,
@@ -1073,7 +1078,7 @@ async function main(): Promise<void> {
 
   const trackSessionActivity = (message: SubstrateMessage): void => {
     const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
-    writeLastActiveSession(config.dataDir, {
+    writeLastActiveSession(companionDataDir, {
       sessionId,
       channelType: inferSessionChannelType(sessionId) ?? message.channelType,
       timestamp: message.timestamp instanceof Date

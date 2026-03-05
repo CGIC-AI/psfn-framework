@@ -124,6 +124,9 @@ import {
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { ModuleLoader } from './modules/loader.js';
 import {
+  resolveCharacterCardHistoryPath,
+  resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
   resolveContactsDir,
   resolveNotesDir,
   resolveScratchpadMirrorPath,
@@ -342,11 +345,12 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   private restoreLatestSessionMetadata(): void {
+    const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
     const behavior = this.config.sessionRestartBehavior ?? 'reuse_latest_session';
     const resolved = this.sessionManager.resolveStartupSessionMetadata(behavior);
     if (!resolved) return;
 
-    writeLastActiveSession(this.config.dataDir, resolved);
+    writeLastActiveSession(companionDataDir, resolved);
     if (behavior === 'new_session') {
       log.info('Initialized fresh startup session metadata', {
         sessionId: resolved.sessionId,
@@ -365,6 +369,8 @@ export class SubstrateRuntime implements Lifecycle {
 
   async init(): Promise<void> {
     log.info('Initializing...');
+    const systemDataDir = resolveConfiguredSystemDataDir(this.config);
+    const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
     const lifecycleRuntimeContract = resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SINGLE,
       runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
@@ -374,12 +380,12 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
 
     // Load persisted settings and apply runtime-owned domain over env defaults.
-    const savedSettings = loadSettings(this.config.dataDir);
+    const savedSettings = loadSettings(systemDataDir);
     const settingsDomains = splitSettingsByDomain(savedSettings);
     applySettings(this.config, settingsDomains.runtime);
     installPromotedToolsPersistenceHook(this.config);
 
-    const modelsLoadResult = loadModelsConfigWithLegacyMigration(this.config.dataDir, {
+    const modelsLoadResult = loadModelsConfigWithLegacyMigration(systemDataDir, {
       defaultContextWindow: this.config.defaultContextWindow,
       legacySettings: settingsDomains.models,
     });
@@ -392,13 +398,13 @@ export class SubstrateRuntime implements Lifecycle {
 
     if (settingsDomains.maintenanceIntervalMs !== undefined) {
       try {
-        const schedulerPath = join(this.config.dataDir, SCHEDULER_FILE_NAME);
+        const schedulerPath = join(systemDataDir, SCHEDULER_FILE_NAME);
         const schedulerFileExisted = existsSync(schedulerPath);
-        const persistedScheduler = loadSchedulerConfig(this.config.dataDir, {
+        const persistedScheduler = loadSchedulerConfig(systemDataDir, {
           seedDir: process.env.CONFIG_DIR,
         });
         if (!schedulerFileExisted) {
-          saveSchedulerConfig(this.config.dataDir, {
+          saveSchedulerConfig(systemDataDir, {
             ...persistedScheduler,
             salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
           });
@@ -420,13 +426,13 @@ export class SubstrateRuntime implements Lifecycle {
 
     if (settingsDomains.capabilityTier !== undefined) {
       try {
-        const capabilityPath = join(this.config.dataDir, CAPABILITY_TIER_FILE_NAME);
+        const capabilityPath = join(systemDataDir, CAPABILITY_TIER_FILE_NAME);
         const capabilityFileExisted = existsSync(capabilityPath);
-        const persistedCapabilities = loadCapabilityTierConfig(this.config.dataDir, {
+        const persistedCapabilities = loadCapabilityTierConfig(systemDataDir, {
           seedDir: process.env.CONFIG_DIR,
         });
         if (!capabilityFileExisted) {
-          saveCapabilityTierConfig(this.config.dataDir, {
+          saveCapabilityTierConfig(systemDataDir, {
             ...persistedCapabilities,
             tier: settingsDomains.capabilityTier,
           });
@@ -448,7 +454,7 @@ export class SubstrateRuntime implements Lifecycle {
 
     if (settingsDomains.legacyKeys.length > 0) {
       try {
-        saveSettings(this.config.dataDir, settingsDomains.runtime);
+        saveSettings(systemDataDir, settingsDomains.runtime);
         log.warn('Removed legacy cross-domain keys from settings.json', {
           keys: settingsDomains.legacyKeys,
         });
@@ -460,7 +466,7 @@ export class SubstrateRuntime implements Lifecycle {
       }
     }
 
-    const trustPolicyConfig = loadTrustPolicyConfig(this.config.dataDir, {
+    const trustPolicyConfig = loadTrustPolicyConfig(systemDataDir, {
       seedDir: process.env.CONFIG_DIR,
     });
     setRuntimeTrustPolicy(trustPolicyConfig);
@@ -473,15 +479,15 @@ export class SubstrateRuntime implements Lifecycle {
       ).length,
     });
     const schedulerConfig = resolveRuntimeSchedulerConfig({
-      dataDir: this.config.dataDir,
+      dataDir: systemDataDir,
       seedDir: process.env.CONFIG_DIR,
     });
     const backupConfig = resolveBackupRuntimeConfig({
-      dataDir: this.config.dataDir,
+      dataDir: companionDataDir,
     });
     this.config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
     this.capabilityRuntime = new CapabilityRuntime({
-      dataDir: this.config.dataDir,
+      dataDir: systemDataDir,
       seedDir: process.env.CONFIG_DIR,
       envTier: this.config.capabilityTier,
     });
@@ -515,18 +521,18 @@ export class SubstrateRuntime implements Lifecycle {
     }
     const cardVersionStore = new CharacterCardVersionStore(
       this.config.characterCardPath,
-      join(this.config.dataDir, 'character-card-history.jsonl'),
+      resolveCharacterCardHistoryPath(companionDataDir),
     );
     log.info(`Loaded character: ${card.data.name}`);
     this.config.characterName = card.data.name;
-    const promptRegistry = wireStaticPromptRegistry(this.config.dataDir);
+    const promptRegistry = wireStaticPromptRegistry(companionDataDir);
     const cardProposalQueue = new ConfirmationQueue();
 
     // Initialize core components
     this.llmClient = new LLMClient(this.config, {
       eligibilityGate,
     });
-    const sessionsDir = resolveSessionsDir(this.config.dataDir);
+    const sessionsDir = resolveSessionsDir(companionDataDir);
     const sessionHmacKeyring = buildSessionHmacKeyring({
       serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
       singleKey: process.env.GATEWAY_SESSION_HMAC_KEY,
@@ -569,10 +575,10 @@ export class SubstrateRuntime implements Lifecycle {
       dims: embeddingProvider.dims,
     });
 
-    const notesDir = resolveNotesDir(this.config.dataDir);
+    const notesDir = resolveNotesDir(companionDataDir);
     this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims, {
       notesDir,
-      scratchpadMirrorPath: resolveScratchpadMirrorPath(this.config.dataDir),
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
     });
     const embeddingDimensionCheck = validateEmbeddingDimensions(
       this.db,
@@ -603,7 +609,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
     this.agentLoop.scratchpadProvider = this.memoryStore;
     this.agentLoop.setCapabilityRuntime(this.capabilityRuntime);
-    const safeguardAuditTrail = createSafeguardAuditTrail(this.config.dataDir);
+    const safeguardAuditTrail = createSafeguardAuditTrail(companionDataDir);
     const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
       auditTrail: safeguardAuditTrail,
     });
@@ -615,7 +621,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     const skillsRuntime = wireSkillsRuntime(this.agentLoop, {
-      dataDir: this.config.dataDir,
+      dataDir: systemDataDir,
       seedDir: process.env.CONFIG_DIR,
       repoRoot: process.cwd(),
     });
@@ -623,7 +629,7 @@ export class SubstrateRuntime implements Lifecycle {
     // Prompt stack — layered, editable system prompt
     const promptStore = wirePromptRuntime(
       this.agentLoop,
-      this.config.dataDir,
+      companionDataDir,
       composeSystemPromptTemplate(),
       {
         identityCoolingOff,
@@ -635,7 +641,7 @@ export class SubstrateRuntime implements Lifecycle {
       confirmationQueue: cardProposalQueue,
     });
     wireSettingsRuntime(this.agentLoop, this.config);
-    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, this.config.dataDir);
+    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir);
 
     // Contact store + tools — trust-gated privacy system
     const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
@@ -649,7 +655,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.db,
       primaryUserId,
       {
-        exportDir: resolveContactsDir(this.config.dataDir),
+        exportDir: resolveContactsDir(companionDataDir),
         ...(primaryTelegramUserId
           ? {
             bootstrapPrimaryIdentityLinks: [{
@@ -787,7 +793,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.validateToolWiring('single');
 
     const channelsConfig = loadRuntimeChannelsConfig(
-      this.config.dataDir,
+      systemDataDir,
       process.env,
       buildRuntimeChannelsConfigOverrides(this.config, savedSettings),
     );
@@ -826,14 +832,14 @@ export class SubstrateRuntime implements Lifecycle {
     this.lifecycleNotifier = new DiscordLifecycleNotifier({
       sender: this.discord,
       heartbeatChannelId,
-      dataDir: this.config.dataDir,
+      dataDir: companionDataDir,
       startTime: this.startTime,
     });
 
     // Track last-active channel on every incoming message
     this.eventBus.on('message.received', ({ message }) => {
       const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
-      writeLastActiveSession(this.config.dataDir, {
+      writeLastActiveSession(companionDataDir, {
         sessionId,
         channelType: inferSessionChannelType(sessionId) ?? message.channelType,
         timestamp: message.timestamp instanceof Date
@@ -891,7 +897,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.scheduler,
       this.agentLoop,
       this.discord,
-      this.config.dataDir,
+      companionDataDir,
       heartbeatChannelId,
       {
         eventBus: this.eventBus,

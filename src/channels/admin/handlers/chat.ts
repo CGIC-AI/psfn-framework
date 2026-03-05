@@ -4,6 +4,10 @@ import type { SessionStore } from '../../../session/store.js';
 import type { EventBus, EventMap } from '../../../event-bus.js';
 import type { SubstrateConfig } from '../../../types.js';
 import { restoreLastActiveSession } from '../../../lifecycle/notifications.js';
+import {
+  resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
+} from '../../../persistence/layout.js';
 import { loadSettings } from '../../../settings.js';
 import {
   AdminChatBootstrapService,
@@ -113,8 +117,9 @@ export class AdminChatHandlers {
   }
 
   private resolveGlobalDefaultSessionId(): string | null {
+    const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
     const restored = restoreLastActiveSession({
-      dataDir: this.config.dataDir,
+      dataDir: companionDataDir,
       computedLatestSession: this.sessionStore.getLatestSessionByTimestamp(),
       isSessionValid: (sessionId) => this.sessionStore.count(sessionId) > 0,
     });
@@ -123,7 +128,7 @@ export class AdminChatHandlers {
 
   private resolveChatApiBaseUrlFromSettings(): string | undefined {
     try {
-      const settings = loadSettings(this.config.dataDir);
+      const settings = loadSettings(resolveConfiguredSystemDataDir(this.config));
       const raw = settings.chatApiBaseUrl;
       if (typeof raw !== 'string') return undefined;
       const trimmed = raw.trim();

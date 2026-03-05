@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import type { CharacterImportResult, CharacterMemorySeed } from '../../../../identity/importer.js';
 import { persistExtractedCharacterAssets } from '../../../../identity/importer.js';
 import type { MemoryWriteOptions, MemoryWriter } from '../../../../memory/writer.js';
+import { resolveConfiguredCompanionDataDir } from '../../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../../types.js';
 import { toErrorMessage } from '../../../../utils/errors.js';
 import { uniqueLowercase } from '../../utils.js';
@@ -22,7 +23,7 @@ export interface CharacterBookSeedImportResult {
 }
 
 export function resolveCharacterImportAssetRootDir(config: SubstrateConfig): string | null {
-  const dataDir = config.dataDir.trim();
+  const dataDir = resolveConfiguredCompanionDataDir(config).trim();
   if (!dataDir) return null;
   return join(dataDir, 'identity-assets');
 }

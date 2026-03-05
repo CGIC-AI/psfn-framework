@@ -36,6 +36,7 @@ import type { ModuleRegistryMutation } from '../modules/types.js';
 import {
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
+  resolveConfiguredCompanionDataDir,
   resolveContinuityDir,
   resolveSessionsDir,
 } from '../persistence/layout.js';
@@ -56,10 +57,11 @@ export interface SessionCompositionOptions {
 }
 
 export function composeSessionRuntime(options: SessionCompositionOptions): SessionComposition {
-  ensurePersistenceLayout(options.config.dataDir);
-  migrateLegacyPersistenceLayout(options.config.dataDir);
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  ensurePersistenceLayout(companionDataDir);
+  migrateLegacyPersistenceLayout(companionDataDir);
 
-  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(options.config.dataDir);
+  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
   const sessionStore = new SessionStore(sessionsDir, {
     integrityProvider: options.sessionIntegrityProvider ?? null,
   });
@@ -72,7 +74,7 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
 
   let continuityStore: UserContinuityStore | null = null;
   if (options.enableContinuity) {
-    continuityStore = new UserContinuityStore(resolveContinuityDir(options.config.dataDir));
+    continuityStore = new UserContinuityStore(resolveContinuityDir(companionDataDir));
     sessionManager.continuityStore = continuityStore;
   }
 

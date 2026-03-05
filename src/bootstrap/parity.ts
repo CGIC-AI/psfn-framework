@@ -1,7 +1,6 @@
 // ── Shared Runtime Wiring ──
 // Common primitives used by both single-process runtime and gateway agent mode.
 
-import { join } from 'node:path';
 import type {
   PostTurnActionCandidate,
   SubstrateConfig,
@@ -65,7 +64,12 @@ import type { MemoryWriter } from '../memory/writer.js';
 import { ValuesJournalStore } from '../values/store.js';
 import type { ValuesDeliberationMetadata } from '../values/store.js';
 import {
+  resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,
+  resolvePromptHistoryPath,
+  resolvePromptLayersPath,
+  resolvePromptRegistryHistoryPath,
+  resolvePromptRegistryPath,
   resolveReflectionJournalPath,
   resolveValuesJournalPath,
 } from '../persistence/layout.js';
@@ -154,8 +158,8 @@ export function wirePromptRuntime(
   options: PromptLayerUpdateToolOptions = {},
 ): PromptLayerStore {
   const promptStore = new PromptLayerStore(
-    join(dataDir, 'prompt-layers.json'),
-    join(dataDir, 'prompt-history.jsonl'),
+    resolvePromptLayersPath(dataDir),
+    resolvePromptHistoryPath(dataDir),
   );
   promptStore.seedFromCharacterCard(baseSystemPrompt);
 
@@ -187,8 +191,8 @@ export function wireCharacterCardRuntime(
  */
 export function wireStaticPromptRegistry(dataDir: string): PromptRegistryStore {
   const promptRegistry = new PromptRegistryStore(
-    join(dataDir, 'prompt-registry.json'),
-    join(dataDir, 'prompt-registry-history.jsonl'),
+    resolvePromptRegistryPath(dataDir),
+    resolvePromptRegistryHistoryPath(dataDir),
   );
   log.info(`Static prompt registry enabled (${promptRegistry.list().length} prompts)`);
   return promptRegistry;
@@ -264,7 +268,7 @@ export function wireHeartbeatRuntime(
   const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
   const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
   const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
-  const store = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
+  const store = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(dataDir));
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });

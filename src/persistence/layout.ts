@@ -11,6 +11,79 @@ interface ChannelIndexPayload {
   channels?: Record<string, unknown>;
 }
 
+const DEFAULT_LEGACY_SHARED_DATA_DIR = './data';
+
+export interface PersistenceRoots {
+  systemDataDir: string;
+  companionDataDir: string;
+  usesLegacySharedDataDir: boolean;
+}
+
+export interface PersistenceRootOptions {
+  systemDataDir?: string;
+  companionDataDir?: string;
+  legacyDataDir?: string;
+}
+
+export interface ConfiguredPersistenceDirs {
+  dataDir?: string;
+  systemDataDir?: string;
+  companionDataDir?: string;
+}
+
+function normalizeDir(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function resolvePersistenceRoots(
+  options: PersistenceRootOptions = {},
+): PersistenceRoots {
+  const explicitSystem = normalizeDir(options.systemDataDir);
+  const explicitCompanion = normalizeDir(options.companionDataDir);
+
+  if ((explicitSystem && !explicitCompanion) || (!explicitSystem && explicitCompanion)) {
+    throw new Error(
+      'SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together; ' +
+      'use DATA_DIR for legacy shared-root mode',
+    );
+  }
+
+  if (explicitSystem && explicitCompanion) {
+    if (explicitSystem === explicitCompanion) {
+      throw new Error(
+        'SYSTEM_DATA_DIR and COMPANION_DATA_DIR must point to different roots; ' +
+        'use DATA_DIR for legacy shared-root mode',
+      );
+    }
+    return {
+      systemDataDir: explicitSystem,
+      companionDataDir: explicitCompanion,
+      usesLegacySharedDataDir: false,
+    };
+  }
+
+  const legacyDataDir = normalizeDir(options.legacyDataDir) ?? DEFAULT_LEGACY_SHARED_DATA_DIR;
+  return {
+    systemDataDir: legacyDataDir,
+    companionDataDir: legacyDataDir,
+    usesLegacySharedDataDir: true,
+  };
+}
+
+export function resolveConfiguredSystemDataDir(config: ConfiguredPersistenceDirs): string {
+  return normalizeDir(config.systemDataDir)
+    ?? normalizeDir(config.dataDir)
+    ?? DEFAULT_LEGACY_SHARED_DATA_DIR;
+}
+
+export function resolveConfiguredCompanionDataDir(config: ConfiguredPersistenceDirs): string {
+  return normalizeDir(config.companionDataDir)
+    ?? normalizeDir(config.dataDir)
+    ?? DEFAULT_LEGACY_SHARED_DATA_DIR;
+}
+
 function isInternalReflectionChannel(channelId: string | undefined): boolean {
   return typeof channelId === 'string' && channelId.startsWith('internal:reflection:');
 }
@@ -150,6 +223,46 @@ export function resolveReflectionJournalPath(dataDir: string): string {
 
 export function resolveScratchpadMirrorPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'scratchpad.json');
+}
+
+export function resolveCharacterCardHistoryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'character-card-history.jsonl');
+}
+
+export function resolvePromptLayersPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-layers.json');
+}
+
+export function resolvePromptHistoryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-history.jsonl');
+}
+
+export function resolvePromptRegistryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-registry.json');
+}
+
+export function resolvePromptRegistryHistoryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-registry-history.jsonl');
+}
+
+export function resolveHeartbeatPolicyPath(companionDataDir: string): string {
+  return join(companionDataDir, 'heartbeat-policy.json');
+}
+
+export function resolveSafeguardAuditTrailPath(companionDataDir: string): string {
+  return join(companionDataDir, 'safeguards-audit.jsonl');
+}
+
+export function resolveIdentityAssetsDir(companionDataDir: string): string {
+  return join(companionDataDir, 'identity-assets');
+}
+
+export function resolveBackupsDir(companionDataDir: string): string {
+  return join(companionDataDir, 'backups');
+}
+
+export function resolveLastActiveSessionPath(companionDataDir: string): string {
+  return join(companionDataDir, 'last_active_channel.json');
 }
 
 export function ensurePersistenceLayout(dataDir: string): void {

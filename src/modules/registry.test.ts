@@ -1,15 +1,26 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   ensureRegistryFile,
   isModuleRecord,
   parseModuleRegistry,
   readModuleRegistry,
   resolveModuleRegistryPath,
+  resolveModuleRegistryPathFromWorkspace,
   writeModuleRegistry,
 } from './registry.js';
+
+const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
+
+afterEach(() => {
+  if (ORIGINAL_MODULE_REGISTRY_PATH === undefined) {
+    delete process.env.MODULE_REGISTRY_PATH;
+  } else {
+    process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH;
+  }
+});
 
 describe('ensureRegistryFile', () => {
   it('creates file with empty array when path does not exist', () => {
@@ -142,5 +153,27 @@ describe('resolveModuleRegistryPath', () => {
   it('resolves relative paths against cwd', () => {
     const result = resolveModuleRegistryPath('rel/path.json', '/home/test');
     expect(result).toBe('/home/test/rel/path.json');
+  });
+
+  it('requires MODULE_REGISTRY_PATH when no override is provided', () => {
+    delete process.env.MODULE_REGISTRY_PATH;
+    expect(() => resolveModuleRegistryPath(undefined, '/home/test')).toThrow('MODULE_REGISTRY_PATH must be set');
+  });
+});
+
+describe('resolveModuleRegistryPathFromWorkspace', () => {
+  it('resolves relative paths against workspace root', () => {
+    const result = resolveModuleRegistryPathFromWorkspace('/workspace/root', 'rel/path.json');
+    expect(result).toBe('/workspace/root/rel/path.json');
+  });
+
+  it('returns absolute paths unchanged', () => {
+    const result = resolveModuleRegistryPathFromWorkspace('/workspace/root', '/abs/modules.json');
+    expect(result).toBe('/abs/modules.json');
+  });
+
+  it('requires MODULE_REGISTRY_PATH when no override is provided', () => {
+    delete process.env.MODULE_REGISTRY_PATH;
+    expect(() => resolveModuleRegistryPathFromWorkspace('/workspace/root')).toThrow('MODULE_REGISTRY_PATH must be set');
   });
 });

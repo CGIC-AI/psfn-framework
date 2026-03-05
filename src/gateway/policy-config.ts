@@ -1,5 +1,4 @@
 import { resolve } from 'node:path';
-import { MODULE_REGISTRY_PATH } from '../security/policy-constants.js';
 
 export interface GatewayPolicyEnv {
   [key: string]: string | undefined;
@@ -52,7 +51,10 @@ export function resolveTrustedModuleRegistryPathFromEnv(
   if (!parseBooleanTrue(env.MODULE_REGISTRY_TRUSTED_READ)) {
     return undefined;
   }
-  const moduleRegistryPath = env.MODULE_REGISTRY_PATH?.trim() || MODULE_REGISTRY_PATH;
+  const moduleRegistryPath = env.MODULE_REGISTRY_PATH?.trim();
+  if (!moduleRegistryPath) {
+    throw new Error('MODULE_REGISTRY_TRUSTED_READ=true requires MODULE_REGISTRY_PATH');
+  }
   return resolve(workspacePath, moduleRegistryPath);
 }
 

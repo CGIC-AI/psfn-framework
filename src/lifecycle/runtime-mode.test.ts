@@ -31,18 +31,10 @@ describe('normalizeRestartCommand', () => {
 });
 
 describe('resolveRuntimeModeContract', () => {
-  it('maps single entrypoint to canonical single mode with supervisor restart', () => {
-    const contract = resolveRuntimeModeContract({
+  it('rejects monolithic runtime entrypoints', () => {
+    expect(() => resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SINGLE,
-    });
-
-    expect(contract).toEqual({
-      mode: RUNTIME_MODE.SINGLE,
-      restart: {
-        strategy: 'supervisor',
-        source: 'none',
-      },
-    });
+    })).toThrow('Monolithic runtime mode has been removed');
   });
 
   it('maps split entrypoint to canonical split mode with default split restart command', () => {
@@ -107,13 +99,18 @@ describe('resolveRuntimeModeContract', () => {
     });
   });
 
-  it('ignores unsupported env mode for entrypoint contract', () => {
-    const contract = resolveRuntimeModeContract({
-      entrypoint: RUNTIME_MODE.SINGLE,
-      runtimeModeEnv: 'split',
-    });
+  it('rejects unsupported env mode for entrypoint contract', () => {
+    expect(() => resolveRuntimeModeContract({
+      entrypoint: RUNTIME_MODE.SPLIT,
+      runtimeModeEnv: 'gateway-agent',
+    })).toThrow('is not allowed for entrypoint');
+  });
 
-    expect(contract.mode).toBe(RUNTIME_MODE.SINGLE);
+  it('rejects unknown runtime mode values instead of silently falling back', () => {
+    expect(() => resolveRuntimeModeContract({
+      entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
+      runtimeModeEnv: 'mystery',
+    })).toThrow('Unsupported PSFN_RUNTIME_MODE');
   });
 });
 

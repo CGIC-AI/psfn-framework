@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost } from '$lib/api/client';
+import { apiGet, apiPatch, apiPost, apiPostMultipart } from '$lib/api/client';
 import type { AdminIdentityData, CharacterCardV2 } from '$lib/types';
 
 export function getIdentity(): Promise<AdminIdentityData> {
@@ -11,6 +11,27 @@ export function importIdentity(
   return apiPost<{ ok: boolean; message: string }>(
     '/api/admin/identity/import',
     body
+  );
+}
+
+export interface UploadIdentityResponse {
+  ok: boolean;
+  message: string;
+  filename?: string;
+  version?: number;
+  name?: string;
+  containerFormat?: string;
+  sourceFormat?: string;
+  spec?: string;
+  warnings?: string[];
+}
+
+export function uploadIdentity(file: File): Promise<UploadIdentityResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  return apiPostMultipart<UploadIdentityResponse>(
+    '/api/admin/identity/upload',
+    form
   );
 }
 

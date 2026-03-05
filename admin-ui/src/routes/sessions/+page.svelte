@@ -133,8 +133,8 @@
     // Use authorName if available (from backend)
     if (msg.authorName) return msg.authorName;
 
-    // For assistant role, use character name
-    if (msg.role === 'assistant') return 'Purrsephone';
+    // For assistant role, use a neutral fallback when authorName is unavailable.
+    if (msg.role === 'assistant') return 'Assistant';
 
     // For user role, try to use the linked contact name from the selected channel
     if (msg.role === 'user') {

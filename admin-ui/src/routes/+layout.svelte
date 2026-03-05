@@ -12,6 +12,10 @@
     ensureAuthResolved,
     clearToken,
   } from '$lib/stores/auth.svelte';
+  import {
+    ensureCompanionNameLoaded,
+    getCompanionName,
+  } from '$lib/stores/companion.svelte';
   import { getToasts, removeToast } from '$lib/stores/toast.svelte';
 
   let { children } = $props();
@@ -19,6 +23,7 @@
   let sidebarOpen = $state(true);
   let isDesktop = $state(true);
   let mobileNavOpen = $state(false);
+  const companionName = $derived(getCompanionName());
 
   // Check if current path is the login page
   // SvelteKit strips the base path from $page.url.pathname, so we check for '/login'
@@ -33,7 +38,9 @@
     }
     if (!isAuthenticated()) {
       goto(`${base}/login`);
+      return;
     }
+    void ensureCompanionNameLoaded(true);
   });
 
   async function handleLogout() {
@@ -164,11 +171,11 @@
       <div class="p-4 border-b border-bark-300">
         {#if sidebarOpen || !isDesktop}
           <h1 class="font-serif text-xl text-gold-600 font-semibold leading-tight">
-            Purrsephone's Garden
+            {companionName}'s Garden
           </h1>
           <p class="text-sm text-shadow-600 mt-1">Admin Console</p>
         {:else}
-          <span class="text-gold-500 text-xl block text-center" title="Purrsephone's Garden">
+          <span class="text-gold-500 text-xl block text-center" title={`${companionName}'s Garden`}>
             &#x2727;
           </span>
         {/if}

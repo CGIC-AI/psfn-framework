@@ -19,3 +19,17 @@ export function resolveGatewaySessionHmacKeyring(
     activeVersion: env[GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV],
   });
 }
+
+export function requireGatewaySessionHmacKeyring(
+  env: NodeJS.ProcessEnv = process.env,
+): SessionHmacKeyring {
+  const keyring = resolveGatewaySessionHmacKeyring(env);
+  if (keyring) {
+    return keyring;
+  }
+
+  throw new Error(
+    `Session HMAC keyring is required for gateway mode. Set ${GATEWAY_SESSION_HMAC_KEYS_ENV} ` +
+    `or ${GATEWAY_SESSION_HMAC_KEY_ENV} (optionally ${GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV}).`,
+  );
+}

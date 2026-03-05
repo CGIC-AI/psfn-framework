@@ -58,12 +58,42 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   {
     token: '{{user}}',
     description: 'Current author/user display name from runtime context.',
-    example: 'Vega',
+    example: 'PrimaryUser',
   },
   {
     token: '{{char}}',
     description: 'Character/assistant name from runtime context.',
     example: 'Purrsephone',
+  },
+  {
+    token: '{{description}}',
+    description: 'Character card description field.',
+    example: 'A new companion identity waiting to be customized.',
+  },
+  {
+    token: '{{personality}}',
+    description: 'Character card personality field.',
+    example: 'A blank starter personality.',
+  },
+  {
+    token: '{{scenario}}',
+    description: 'Character card scenario field.',
+    example: '{{user}} and {{char}} are chatting.',
+  },
+  {
+    token: '{{system_prompt}}',
+    description: 'Character card system_prompt field.',
+    example: 'Use clear language and stay grounded.',
+  },
+  {
+    token: '{{mes_example}}',
+    description: 'Character card message example block.',
+    example: 'Example dialogue style:\\n{{user}}: hi\\n{{char}}: hello',
+  },
+  {
+    token: '{{post_history_instructions}}',
+    description: 'Character card post-history instructions field.',
+    example: 'Stay concise and ask clarifying questions when needed.',
   },
   {
     token: '{{channel_id}}',
@@ -166,16 +196,22 @@ export function injectPromptRuntimeTokens(
   const variableLookup = buildVariableLookup(context.variables ?? {});
   let output = text;
 
-  for (const [pattern, resolver] of TOKEN_RESOLVERS) {
-    output = output.replace(pattern, () => resolver(now));
-  }
+  for (let pass = 0; pass < 3; pass += 1) {
+    const before = output;
 
-  output = output.replace(/\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g, (fullToken, rawName: string) => {
-    const cleaned = rawName.endsWith('()') ? rawName.slice(0, -2) : rawName;
-    const normalized = normalizeLookupKey(cleaned);
-    const resolved = variableLookup.get(normalized);
-    return resolved ?? fullToken;
-  });
+    for (const [pattern, resolver] of TOKEN_RESOLVERS) {
+      output = output.replace(pattern, () => resolver(now));
+    }
+
+    output = output.replace(/\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g, (fullToken, rawName: string) => {
+      const cleaned = rawName.endsWith('()') ? rawName.slice(0, -2) : rawName;
+      const normalized = normalizeLookupKey(cleaned);
+      const resolved = variableLookup.get(normalized);
+      return resolved ?? fullToken;
+    });
+
+    if (output === before) break;
+  }
 
   return output;
 }

@@ -308,7 +308,7 @@ function parseFrontmatter(document: string): { yaml: string; body: string } {
 
   const body = document.slice(match[0].length).trim();
   return {
-    yaml: match[1] ?? '',
+    yaml: match[1],
     body,
   };
 }

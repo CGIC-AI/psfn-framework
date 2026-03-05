@@ -11,6 +11,10 @@ import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../types.js';
 import type { ApiServerHealthChecks } from './types.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import {
+  deriveApiKeyPrincipalId,
+  INSECURE_LOCAL_API_PRINCIPAL_ID,
+} from '../http/auth.js';
 import type {
   VoiceWebSocketCloseReason,
   VoiceWebSocketRuntimeHooks,
@@ -19,6 +23,10 @@ import type {
 // ── Helpers ──
 
 const WAIT_TIMEOUT_MS = 2_000;
+
+function insecureSessionChannel(sessionId: string): string {
+  return `api:${INSECURE_LOCAL_API_PRINCIPAL_ID}:${sessionId}`;
+}
 
 function allocatePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -134,6 +142,39 @@ function openWebSocket(
   });
 }
 
+function openWebSocketWithProtocols(
+  port: number,
+  path: string,
+  protocols: string[],
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, protocols, { headers });
+    const cleanup = () => {
+      ws.removeAllListeners('open');
+      ws.removeAllListeners('error');
+      ws.removeAllListeners('unexpected-response');
+    };
+
+    ws.once('open', () => {
+      cleanup();
+      resolve(ws);
+    });
+
+    ws.once('unexpected-response', (_request, response) => {
+      cleanup();
+      const status = response.statusCode ?? 0;
+      response.resume();
+      reject(new Error(`Unexpected websocket response: ${status}`));
+    });
+
+    ws.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
 function openWebSocketExpectStatus(
   port: number,
   path: string,
@@ -185,6 +226,15 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function toAuthSubprotocol(apiToken: string): string {
+  const encoded = Buffer.from(apiToken, 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+  return `auth.b64.${encoded}`;
 }
 
 // ── Mocks ──
@@ -270,6 +320,7 @@ describe('ApiServer', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
     });
     await server.init();
     await server.start();
@@ -286,7 +337,7 @@ describe('ApiServer', () => {
       expect(server.meta.label).toBe('API Server');
       expect(server.capabilities.promptChannelType).toBe('api');
       expect(server.gateway).toBe(server);
-      expect(server.prompt?.resolveChannelType({
+      expect(server.prompt.resolveChannelType({
         id: 'msg-1',
         channelId: 'api:session-1',
         channelType: 'api',
@@ -304,6 +355,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: mockSessionMgr,
+      allowInsecureWithoutAuth: true,
       });
 
       await localServer.outbound.sendText({ channelId: 'api:facet' }, '  assistant reply  ');
@@ -339,6 +391,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
         modelName: 'custom-model',
       });
       await server.init();
@@ -358,6 +411,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
         healthChecks: createHealthyHealthChecks(),
       });
       await server.init();
@@ -386,6 +440,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
         healthChecks: createHealthyHealthChecks({
           llm: () => {
             throw new Error('LLM provider timeout');
@@ -430,7 +485,7 @@ describe('ApiServer', () => {
       expect(body.usage.total_tokens).toBe(15);
     });
 
-    it('uses X-User-ID and X-User-Name for author identity', async () => {
+    it('binds author identity to the local insecure principal and ignores spoofed headers', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
       server = new ApiServer({
@@ -438,6 +493,7 @@ describe('ApiServer', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
       });
       await server.init();
       await server.start();
@@ -452,8 +508,8 @@ describe('ApiServer', () => {
       expect(res.status).toBe(200);
 
       const call = (mockAgent.handleMessage as any).mock.calls[0][0];
-      expect(call.authorId).toBe('v-primary');
-      expect(call.authorName).toBe('V');
+      expect(call.authorId).toBe(INSECURE_LOCAL_API_PRINCIPAL_ID);
+      expect(call.authorName).toBe('Local API Principal');
     });
 
     it('passes direct-provider, prompt, and style overrides to substrate messages', async () => {
@@ -464,6 +520,7 @@ describe('ApiServer', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
       });
       await server.init();
       await server.start();
@@ -514,12 +571,26 @@ describe('ApiServer', () => {
       expect(body.error.message).toContain('provider override must be one of');
     });
 
+    it('rejects caller-provided primary trust fields in API payloads', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: 'purrsephone',
+        trustLevel: 'primary',
+        contact: { trust_level: 'primary' },
+        messages: [{ role: 'user', content: 'attempt privilege escalation' }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('primary trust level');
+    });
+
     it('returns explicit verification challenge and does not link unverified identity claims', async () => {
       const db = new Database(':memory:');
       const contactStore = new ContactStore(db);
       const contact = contactStore.upsert({
-        displayName: 'Vega',
-        channelIdentities: [{ channel: 'discord', userId: 'vega-discord' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
       await server.stop();
@@ -528,6 +599,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
         contactStore,
       });
       await server.init();
@@ -537,10 +609,9 @@ describe('ApiServer', () => {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'hello with claim' }],
       }, {
-        'X-User-ID': 'api-vega',
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
       });
 
       expect(res.status).toBe(428);
@@ -549,7 +620,8 @@ describe('ApiServer', () => {
       expect(body.error.details?.verification?.nonce).toBeTruthy();
       expect(body.error.details?.verification?.expiresAt).toBeTruthy();
       expect(body.error.details?.verification?.signature).toBeTruthy();
-      expect(contactStore.getByChannelIdentity('api', 'api-vega')).toBeUndefined();
+      expect(body.error.details?.verification?.targetUserId).toBe(INSECURE_LOCAL_API_PRINCIPAL_ID);
+      expect(contactStore.getByChannelIdentity('api', INSECURE_LOCAL_API_PRINCIPAL_ID)).toBeUndefined();
 
       db.close();
     });
@@ -558,8 +630,8 @@ describe('ApiServer', () => {
       const db = new Database(':memory:');
       const contactStore = new ContactStore(db);
       const contact = contactStore.upsert({
-        displayName: 'Vega',
-        channelIdentities: [{ channel: 'discord', userId: 'vega-discord' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
       await server.stop();
@@ -568,6 +640,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
         contactStore,
       });
       await server.init();
@@ -577,10 +650,9 @@ describe('ApiServer', () => {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'claim me' }],
       }, {
-        'X-User-ID': 'api-vega',
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
       });
       const initialBody = JSON.parse(initial.body);
       const verification = initialBody.error.details.verification as {
@@ -593,26 +665,24 @@ describe('ApiServer', () => {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'claim me verified' }],
       }, {
-        'X-User-ID': 'api-vega',
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
         'X-Identity-Claim-Nonce': verification.nonce,
         'X-Identity-Claim-Expires': verification.expiresAt,
         'X-Identity-Claim-Signature': verification.signature,
       });
 
       expect(verified.status).toBe(200);
-      expect(contactStore.getByChannelIdentity('api', 'api-vega')?.id).toBe(contact.id);
+      expect(contactStore.getByChannelIdentity('api', INSECURE_LOCAL_API_PRINCIPAL_ID)?.id).toBe(contact.id);
 
       const replay = await request(port, 'POST', '/v1/chat/completions', {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'replay proof' }],
       }, {
-        'X-User-ID': 'api-vega',
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
         'X-Identity-Claim-Nonce': verification.nonce,
         'X-Identity-Claim-Expires': verification.expiresAt,
         'X-Identity-Claim-Signature': verification.signature,
@@ -628,8 +698,8 @@ describe('ApiServer', () => {
       const db = new Database(':memory:');
       const contactStore = new ContactStore(db);
       const contact = contactStore.upsert({
-        displayName: 'Vega',
-        channelIdentities: [{ channel: 'discord', userId: 'vega-discord' }],
+        displayName: 'PrimaryUser',
+        channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
       await server.stop();
@@ -638,6 +708,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
         contactStore,
       });
       await server.init();
@@ -647,7 +718,6 @@ describe('ApiServer', () => {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'spoofed claim' }],
       }, {
-        'X-User-ID': 'api-spoof',
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
         'X-Identity-Claim-User-ID': 'not-linked-user',
@@ -659,10 +729,9 @@ describe('ApiServer', () => {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'issue challenge' }],
       }, {
-        'X-User-ID': 'api-expiring',
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
       });
       const initialBody = JSON.parse(initial.body);
       const verification = initialBody.error.details.verification as {
@@ -682,10 +751,9 @@ describe('ApiServer', () => {
         model: 'purrsephone',
         messages: [{ role: 'user', content: 'use expired challenge' }],
       }, {
-        'X-User-ID': 'api-expiring',
         'X-Canonical-Contact-ID': contact.id,
         'X-Identity-Claim-Channel': 'discord',
-        'X-Identity-Claim-User-ID': 'vega-discord',
+        'X-Identity-Claim-User-ID': 'user-discord',
         'X-Identity-Claim-Nonce': verification.nonce,
         'X-Identity-Claim-Expires': expiredAt,
         'X-Identity-Claim-Signature': verification.signature,
@@ -741,7 +809,7 @@ describe('ApiServer', () => {
           .mockImplementationOnce(async () => deferred.promise)
           .mockImplementationOnce(async () => ({
             content: 'Second done',
-            channelId: 'api:same-session',
+            channelId: insecureSessionChannel('same-session'),
             metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
           })),
       } as unknown as SubstrateAgent;
@@ -752,6 +820,7 @@ describe('ApiServer', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
       });
       await server.init();
       await server.start();
@@ -773,7 +842,7 @@ describe('ApiServer', () => {
 
       deferred.resolve({
         content: 'First done',
-        channelId: 'api:same-session',
+        channelId: insecureSessionChannel('same-session'),
         metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
       });
 
@@ -797,7 +866,7 @@ describe('ApiServer', () => {
           .mockImplementationOnce(async () => deferred.promise)
           .mockImplementationOnce(async () => ({
             content: 'Second telemetry turn',
-            channelId: 'api:queue-telemetry',
+            channelId: insecureSessionChannel('queue-telemetry'),
             metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
           })),
       } as unknown as SubstrateAgent;
@@ -808,6 +877,7 @@ describe('ApiServer', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
       });
       await server.init();
       await server.start();
@@ -827,7 +897,7 @@ describe('ApiServer', () => {
       await new Promise(resolve => setTimeout(resolve, 20));
       deferred.resolve({
         content: 'First telemetry done',
-        channelId: 'api:queue-telemetry',
+        channelId: insecureSessionChannel('queue-telemetry'),
         metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
       });
 
@@ -838,7 +908,7 @@ describe('ApiServer', () => {
         event.phase === 'contended'
         && event.policy === 'queue'
         && event.source === 'api'
-        && event.channelId === 'api:queue-telemetry'
+        && event.channelId === insecureSessionChannel('queue-telemetry')
       )).toBe(true);
       expect(queueEvents.some(event =>
         event.phase === 'acquired'
@@ -861,7 +931,7 @@ describe('ApiServer', () => {
           .mockImplementationOnce(async () => deferred.promise)
           .mockImplementation(async () => ({
             content: 'Recovered',
-            channelId: 'api:timeout-session',
+            channelId: insecureSessionChannel('timeout-session'),
             metadata: { model: 'test', inputTokens: 2, outputTokens: 2, durationMs: 2 },
           })),
         abort: abortSpy,
@@ -873,6 +943,7 @@ describe('ApiServer', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
         requestTimeoutMs: 40,
       });
       await server.init();
@@ -897,7 +968,7 @@ describe('ApiServer', () => {
 
       deferred.resolve({
         content: 'Recovered from first',
-        channelId: 'api:timeout-session',
+        channelId: insecureSessionChannel('timeout-session'),
         metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
       });
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -923,6 +994,7 @@ describe('ApiServer', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
       });
       await server.init();
       await server.start();
@@ -945,7 +1017,7 @@ describe('ApiServer', () => {
           .mockImplementationOnce(async () => deferred.promise)
           .mockImplementation(async () => ({
             content: 'After disconnect',
-            channelId: 'api:disconnect-session',
+            channelId: insecureSessionChannel('disconnect-session'),
             metadata: { model: 'test', inputTokens: 2, outputTokens: 3, durationMs: 5 },
           })),
         abort: abortSpy,
@@ -957,6 +1029,7 @@ describe('ApiServer', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
       });
       await server.init();
       await server.start();
@@ -1004,7 +1077,7 @@ describe('ApiServer', () => {
 
       deferred.resolve({
         content: 'disconnected done',
-        channelId: 'api:disconnect-session',
+        channelId: insecureSessionChannel('disconnect-session'),
         metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
       });
       const queued = await queuedRecovery;
@@ -1074,14 +1147,39 @@ describe('ApiServer', () => {
   });
 
   describe('CORS', () => {
-    it('returns CORS headers on normal request', async () => {
+    it('does not emit wildcard CORS headers by default', async () => {
       const res = await request(port, 'GET', '/v1/models');
-      expect(res.headers['access-control-allow-origin']).toBe('*');
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
     });
 
-    it('handles OPTIONS preflight', async () => {
-      const res = await request(port, 'OPTIONS', '/v1/chat/completions');
+    it('rejects preflight from non-allowlisted origins', async () => {
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Origin: 'https://evil.example',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.body).error.type).toBe('cors_origin_not_allowed');
+    });
+
+    it('allows preflight when origin is in API_CORS_ALLOWLIST', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: ['https://console.example'],
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Origin: 'https://console.example',
+        'Access-Control-Request-Method': 'POST',
+      });
       expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('https://console.example');
       expect(res.headers['access-control-allow-methods']).toContain('POST');
       expect(res.headers['access-control-allow-headers']).toContain('X-Session-ID');
     });
@@ -1097,6 +1195,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
         voiceWebSocketHooks: voice.hooks,
       });
       await server.init();
@@ -1130,6 +1229,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
         voiceWebSocketHooks: voice.hooks,
       });
       await server.init();
@@ -1168,6 +1268,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: mockSessionMgr,
+        allowInsecureWithoutAuth: true,
       });
       await server.init();
       await server.start();
@@ -1183,14 +1284,18 @@ describe('ApiServer', () => {
 
       // Prior messages (first two) should be seeded, last user message handled by agentLoop
       expect(mockSessionMgr.recordUserMessage).toHaveBeenCalledWith(
-        'api:test-seed', 'First message', 'api-user', 'User',
+        insecureSessionChannel('test-seed'),
+        'First message',
+        INSECURE_LOCAL_API_PRINCIPAL_ID,
+        'Local API Principal',
       );
       expect(mockSessionMgr.recordAssistantMessage).toHaveBeenCalledWith(
-        'api:test-seed', 'First response',
+        insecureSessionChannel('test-seed'),
+        'First response',
       );
     });
 
-    it('seeds prior user messages with API author headers when provided', async () => {
+    it('ignores spoofed author headers when seeding prior user messages', async () => {
       const mockSessionMgr = createMockSessionManager();
       await server.stop();
       server = new ApiServer({
@@ -1198,6 +1303,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: mockSessionMgr,
+        allowInsecureWithoutAuth: true,
       });
       await server.init();
       await server.start();
@@ -1216,7 +1322,10 @@ describe('ApiServer', () => {
       });
 
       expect(mockSessionMgr.recordUserMessage).toHaveBeenCalledWith(
-        'api:test-seed-headers', 'First message', 'v-primary', 'V',
+        insecureSessionChannel('test-seed-headers'),
+        'First message',
+        INSECURE_LOCAL_API_PRINCIPAL_ID,
+        'Local API Principal',
       );
     });
   });
@@ -1235,6 +1344,42 @@ describe('ApiServer', () => {
       const body = JSON.parse(res.body);
       expect(body.error.type).toBe('telemetry_auth_unconfigured');
     });
+  });
+});
+
+describe('ApiServer startup auth guard', () => {
+  it('fails startup without API key unless insecure local mode is explicit', async () => {
+    const eventBus = new EventBus();
+    const port = await allocatePort();
+    const server = new ApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+    });
+    await server.init();
+
+    await expect(server.start()).rejects.toThrow(
+      'API_KEY is required unless ALLOW_INSECURE_LOCAL_API=true',
+    );
+  });
+
+  it('rejects insecure local mode when API_HOST is not loopback', async () => {
+    const eventBus = new EventBus();
+    const port = await allocatePort();
+    const server = new ApiServer({
+      port,
+      host: '0.0.0.0',
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
+    });
+    await server.init();
+
+    await expect(server.start()).rejects.toThrow(
+      'ALLOW_INSECURE_LOCAL_API=true requires API_HOST to be loopback',
+    );
   });
 });
 
@@ -1282,6 +1427,98 @@ describe('ApiServer with auth', () => {
     expect(res.status).toBe(200);
   });
 
+  it('binds message identity to authenticated principal and ignores spoofed user headers', async () => {
+    await server.stop();
+    const mockAgent = createMockAgentLoop(eventBus);
+    server = new ApiServer({
+      port,
+      agentLoop: mockAgent,
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'POST', '/v1/chat/completions', {
+      model: 'purrsephone',
+      messages: [{ role: 'user', content: 'identity test' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-User-ID': 'spoofed-user',
+      'X-User-Name': 'Spoof Name',
+      'X-Session-ID': 'identity-session',
+    });
+    expect(res.status).toBe(200);
+
+    const principalId = deriveApiKeyPrincipalId('test-secret-key');
+    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    expect(call.authorId).toBe(principalId);
+    expect(call.authorName).toBe('API Principal');
+    expect(call.channelId).toBe(`api:${principalId}:identity-session`);
+  });
+
+  it('binds identity claims to the authenticated principal and prevents X-User-ID spoofing', async () => {
+    const db = new Database(':memory:');
+    const contactStore = new ContactStore(db);
+    const contact = contactStore.upsert({
+      displayName: 'PrimaryUser',
+      channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
+    });
+
+    await server.stop();
+    server = new ApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      contactStore,
+    });
+    await server.init();
+    await server.start();
+
+    const principalId = deriveApiKeyPrincipalId('test-secret-key');
+    const challenge = await request(port, 'POST', '/v1/chat/completions', {
+      model: 'purrsephone',
+      messages: [{ role: 'user', content: 'claim identity' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-User-ID': 'spoofed-a',
+      'X-Canonical-Contact-ID': contact.id,
+      'X-Identity-Claim-Channel': 'discord',
+      'X-Identity-Claim-User-ID': 'user-discord',
+    });
+    expect(challenge.status).toBe(428);
+    const challengeBody = JSON.parse(challenge.body);
+    expect(challengeBody.error.details?.verification?.targetUserId).toBe(principalId);
+
+    const verification = challengeBody.error.details.verification as {
+      nonce: string;
+      expiresAt: string;
+      signature: string;
+    };
+    const verified = await request(port, 'POST', '/v1/chat/completions', {
+      model: 'purrsephone',
+      messages: [{ role: 'user', content: 'claim identity verified' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-User-ID': 'spoofed-b',
+      'X-Canonical-Contact-ID': contact.id,
+      'X-Identity-Claim-Channel': 'discord',
+      'X-Identity-Claim-User-ID': 'user-discord',
+      'X-Identity-Claim-Nonce': verification.nonce,
+      'X-Identity-Claim-Expires': verification.expiresAt,
+      'X-Identity-Claim-Signature': verification.signature,
+    });
+    expect(verified.status).toBe(200);
+    expect(contactStore.getByChannelIdentity('api', principalId)?.id).toBe(contact.id);
+    expect(contactStore.getByChannelIdentity('api', 'spoofed-a')).toBeUndefined();
+    expect(contactStore.getByChannelIdentity('api', 'spoofed-b')).toBeUndefined();
+
+    db.close();
+  });
+
   it('allows OPTIONS without auth (CORS preflight)', async () => {
     const res = await request(port, 'OPTIONS', '/v1/chat/completions');
     expect(res.status).toBe(204);
@@ -1299,14 +1536,14 @@ describe('ApiServer with auth', () => {
     expect(status).toBe(401);
   });
 
-  it('accepts websocket upgrades with api_key query token', async () => {
-    const ws = await openWebSocket(port, '/v1/voice/ws?api_key=test-secret-key');
-    ws.close();
+  it('rejects websocket upgrades with api_key query token', async () => {
+    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?api_key=test-secret-key');
+    expect(status).toBe(401);
   });
 
-  it('accepts websocket upgrades with token query token', async () => {
-    const ws = await openWebSocket(port, '/v1/voice/ws?token=test-secret-key');
-    ws.close();
+  it('rejects websocket upgrades with token query token', async () => {
+    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?token=test-secret-key');
+    expect(status).toBe(401);
   });
 
   it('rejects websocket upgrades with wrong query token', async () => {
@@ -1318,6 +1555,15 @@ describe('ApiServer with auth', () => {
     const ws = await openWebSocket(port, '/v1/voice/ws', {
       Authorization: 'Bearer test-secret-key',
     });
+    ws.close();
+  });
+
+  it('accepts websocket upgrades with secure auth subprotocol token', async () => {
+    const ws = await openWebSocketWithProtocols(
+      port,
+      '/v1/voice/ws',
+      ['voice-wire-v1', toAuthSubprotocol('test-secret-key')],
+    );
     ws.close();
   });
 

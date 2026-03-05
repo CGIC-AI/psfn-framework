@@ -56,7 +56,7 @@ const reliabilityMocks = vi.hoisted(() => {
     })),
     buildFallbackOrder: vi.fn((_preferredId: string, providerIds: string[]) => providerIds),
     selectFallbackCandidate: vi.fn((preferredId: string, candidates: Array<{ id: string }>) => {
-      return candidates.find((candidate) => candidate.id === preferredId) ?? candidates[0] ?? null;
+      return candidates.find((candidate) => candidate.id === preferredId) ?? (candidates[0] as { id: string } | undefined) ?? null;
     }),
   };
 });
@@ -163,7 +163,6 @@ vi.mock('../../voice/policy/security.js', () => {
 import prism from 'prism-media';
 import {
   DiscordVoiceRuntime,
-  DISCORD_VOICE_DEFAULT_VOICE_ID,
   checkOpusAvailability,
   voicePreflight,
 } from './voice.js';
@@ -1184,7 +1183,7 @@ describe('DiscordVoiceRuntime', () => {
     const { runtime } = makeRuntimeHarness(eventBus, handler);
     (runtime as any).decodeOpusToPcm = vi.fn(async () => Buffer.alloc(40_000, 1));
     (runtime as any).playReadableAudio = vi.fn(async (_audio: unknown, turn: { abortController?: AbortController }) => {
-      const signal = turn?.abortController?.signal;
+      const signal = turn.abortController?.signal;
       await new Promise<void>((resolve) => {
         if (!signal || signal.aborted) {
           resolve();
@@ -1226,10 +1225,6 @@ describe('DiscordVoiceRuntime', () => {
   });
 
   describe('Discord voice TTS provider config', () => {
-    it('exports the default voice ID constant', () => {
-      expect(DISCORD_VOICE_DEFAULT_VOICE_ID).toBe('rPQ6h200dfjiuYAy0JDA');
-    });
-
     it('honors echo provider config instead of overriding to elevenlabs', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
@@ -1263,10 +1258,10 @@ describe('DiscordVoiceRuntime', () => {
       expect((runtime as any).preferredTtsProviderId).toBe('elevenlabs');
     });
 
-    it('uses default voice ID when none is explicitly configured', () => {
+    it('skips elevenlabs connector when no voice ID is configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
-      new DiscordVoiceRuntime({
+      const runtime = new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
         config: makeConfig({
           elevenLabsVoiceId: '',
@@ -1275,9 +1270,8 @@ describe('DiscordVoiceRuntime', () => {
         getHandler: () => null,
       });
 
-      expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledWith('elevenlabs', expect.objectContaining({
-        voiceId: DISCORD_VOICE_DEFAULT_VOICE_ID,
-      }));
+      // Voice ID is empty, so no elevenlabs connector — runtime should be disabled
+      expect((runtime as any).enabled).toBe(false);
     });
 
     it('uses explicit voice ID when configured', () => {

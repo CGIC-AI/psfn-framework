@@ -96,14 +96,14 @@ async function* responseBodyToAudioChunks(
   let pending: Uint8Array | null = null;
 
   try {
-    while (true) {
+    for (;;) {
       if (signal?.aborted) {
         throw abortError('TTS streaming aborted');
       }
 
       const { done, value } = await reader.read();
       if (done) break;
-      if (!value || value.byteLength === 0) continue;
+      if (value.byteLength === 0) continue;
 
       if (pending) {
         yield {

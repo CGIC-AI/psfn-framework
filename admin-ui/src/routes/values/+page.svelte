@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getValuesData } from '$lib/api/endpoints/values';
+  import {
+    ensureCompanionNameLoaded,
+    getCompanionName,
+  } from '$lib/stores/companion.svelte';
   import type { ValuesJournalEntry } from '$lib/types';
 
   // ── State ──
@@ -8,6 +12,7 @@
   let loading = $state(true);
   let error = $state('');
   let endpointMissing = $state(false);
+  const companionName = $derived(getCompanionName());
 
   function formatDate(isoStr: string): string {
     const date = new Date(isoStr);
@@ -44,7 +49,8 @@
   }
 
   onMount(() => {
-    loadData();
+    void ensureCompanionNameLoaded();
+    void loadData();
   });
 </script>
 
@@ -98,7 +104,7 @@
     <div class="card-garden p-5">
       <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">About the Values Journal</h2>
       <div class="space-y-3 text-sm text-shadow-700">
-        <p>The values journal stores Purrsephone's periodic self-reflections. These are triggered by heartbeat templates configured on the Scheduler page.</p>
+        <p>The values journal stores {companionName}'s periodic self-reflections. These are triggered by heartbeat templates configured on the Scheduler page.</p>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
           <div class="p-4 bg-bark-50 rounded-lg border border-bark-200">
             <p class="font-semibold text-shadow-800 mb-1">Prompt</p>

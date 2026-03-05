@@ -18,6 +18,9 @@ import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+import { applySettings, loadSettings, splitSettingsByDomain } from '../../settings.js';
+import { loadModelsConfig } from '../../config/models-config.js';
+import { loadCapabilityTierConfig } from '../../config/capability-tier-config.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
@@ -26,7 +29,7 @@ function request(
   port: number,
   method: string,
   path: string,
-  body?: string,
+  body?: string | Buffer,
   headers?: Record<string, string>,
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
@@ -37,6 +40,12 @@ function request(
       const hasContentLength = Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'content-length');
       if (!hasContentLength) {
         requestHeaders['Content-Length'] = String(Buffer.byteLength(body));
+      }
+    }
+    if (Buffer.isBuffer(body) && body.length > 0) {
+      const hasContentLength = Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'content-length');
+      if (!hasContentLength) {
+        requestHeaders['Content-Length'] = String(body.length);
       }
     }
 
@@ -58,6 +67,34 @@ function request(
     if (body) req.write(body);
     req.end();
   });
+}
+
+function buildMultipartBody(
+  boundary: string,
+  parts: Array<{
+    name: string;
+    filename?: string;
+    contentType?: string;
+    content: string | Buffer;
+  }>,
+): Buffer {
+  const chunks: Buffer[] = [];
+  for (const part of parts) {
+    chunks.push(Buffer.from(`--${boundary}\r\n`));
+    let disposition = `Content-Disposition: form-data; name="${part.name}"`;
+    if (part.filename) {
+      disposition += `; filename="${part.filename}"`;
+    }
+    chunks.push(Buffer.from(`${disposition}\r\n`));
+    if (part.contentType) {
+      chunks.push(Buffer.from(`Content-Type: ${part.contentType}\r\n`));
+    }
+    chunks.push(Buffer.from('\r\n'));
+    chunks.push(Buffer.isBuffer(part.content) ? part.content : Buffer.from(part.content));
+    chunks.push(Buffer.from('\r\n'));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return Buffer.concat(chunks);
 }
 
 function allocatePort(): Promise<number> {
@@ -206,6 +243,8 @@ describe('AdminServer JSON API routes', () => {
   let cardVersionStore: CharacterCardVersionStore;
   let server: AdminServer;
   let port: number;
+  let refreshModelsSpy: ReturnType<typeof vi.fn>;
+  let refreshCapabilitiesSpy: ReturnType<typeof vi.fn>;
   const token = 'test-admin-token';
   const authHeaders = {
     Authorization: `Bearer ${token}`,
@@ -214,6 +253,13 @@ describe('AdminServer JSON API routes', () => {
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-api-test-'));
+    refreshModelsSpy = vi.fn();
+    refreshCapabilitiesSpy = vi.fn();
+    testConfig.runtimeHooks = {
+      refreshModels: refreshModelsSpy,
+      refreshCapabilities: refreshCapabilitiesSpy,
+    };
+    testConfig.capabilityTier = 'nursery';
     testConfig.dataDir = tempDir;
     testConfig.characterCardPath = join(tempDir, 'character.json');
     writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');
@@ -326,6 +372,8 @@ describe('AdminServer JSON API routes', () => {
     await server.stop();
     db.close();
     rmSync(tempDir, { recursive: true, force: true });
+    testConfig.runtimeHooks = undefined;
+    testConfig.capabilityTier = undefined;
   });
 
   it('enforces auth on JSON API routes', async () => {
@@ -801,6 +849,8 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(settingsPatchRes.status).toBe(200);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
     const settingsAfterPatchRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsAfterPatchRes.status).toBe(200);
     const settingsAfterPatch = JSON.parse(settingsAfterPatchRes.body) as {
@@ -808,6 +858,17 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
     expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
+    const settingsAuditRes = await request(
+      port,
+      'GET',
+      '/legacy/events?actionType=settings_change&timeRange=all',
+      undefined,
+      authHeaders,
+    );
+    expect(settingsAuditRes.status).toBe(200);
+    expect(settingsAuditRes.body).toContain('data-action-type="settings_change"');
+    expect(settingsAuditRes.body).toContain('/api/admin/settings');
+    expect(settingsAuditRes.body).toContain('fields=sessionMessageLimit,sessionRestartBehavior');
 
     const rosterPatchRes = await request(
       port,
@@ -845,12 +906,76 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(rosterPatchRes.status).toBe(200);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(2);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
     const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
       modelCatalog: Record<string, unknown>;
       modelRoleAssignments: Record<string, string>;
     };
     expect(persistedModels.modelCatalog.vision).toBeDefined();
     expect(persistedModels.modelRoleAssignments.vision).toBe('vision');
+    const persistedSettingsAfterModels = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
+      modelCatalog?: unknown;
+      modelRoleAssignments?: unknown;
+      primaryModel?: string;
+      extractionModel?: string;
+    };
+    expect(persistedSettingsAfterModels.modelCatalog).toBeUndefined();
+    expect(persistedSettingsAfterModels.modelRoleAssignments).toBeUndefined();
+    expect(persistedSettingsAfterModels.primaryModel).toBeUndefined();
+    expect(persistedSettingsAfterModels.extractionModel).toBeUndefined();
+
+    const capabilityPatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        capabilityTier: 'custom',
+        customTokens: ['identity.read', 'git.read'],
+      }),
+      authHeaders,
+    );
+    expect(capabilityPatchRes.status).toBe(200);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(3);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
+    const persistedCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf8')) as {
+      tier: string;
+      customTokens: string[];
+    };
+    expect(persistedCapabilities.tier).toBe('custom');
+    expect(persistedCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
+    expect(testConfig.capabilityTier).toBe('custom');
+    const persistedSettingsAfterCapability = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
+      capabilityTier?: string;
+      sessionMessageLimit?: number;
+    };
+    expect(persistedSettingsAfterCapability.capabilityTier).toBeUndefined();
+    expect(persistedSettingsAfterCapability.sessionMessageLimit).toBe(55);
+
+    const restartedConfig: SubstrateConfig = {
+      ...testConfig,
+      primaryModel: 'test-model',
+      primaryProvider: 'test',
+      primaryMaxTokens: 16384,
+      extractionModel: 'test-extract',
+      extractionProvider: 'test',
+      extractionMaxTokens: 8192,
+      modelCatalog: undefined,
+      modelRoleAssignments: undefined,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+      },
+      capabilityTier: undefined,
+    };
+    const restartSettings = splitSettingsByDomain(loadSettings(tempDir));
+    applySettings(restartedConfig, restartSettings.runtime);
+    applySettings(restartedConfig, loadModelsConfig(tempDir, {
+      defaultContextWindow: restartedConfig.defaultContextWindow,
+    }));
+    restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
+    expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
+    expect(restartedConfig.modelRoleAssignments?.vision).toBe('vision');
+    expect(restartedConfig.capabilityTier).toBe('custom');
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);
@@ -928,7 +1053,8 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(promptDiffRes.status).toBe(200);
     const promptDiffPayload = JSON.parse(promptDiffRes.body) as { oldContent: string; newContent: string };
-    expect(promptDiffPayload.oldContent).toContain('Base prompt');
+    expect(promptDiffPayload.oldContent.length).toBeGreaterThan(0);
+    expect(promptDiffPayload.oldContent).not.toContain('Updated API prompt content');
     expect(promptDiffPayload.newContent).toContain('Updated API prompt content');
 
     const priorityOnlyPatchRes = await request(
@@ -997,6 +1123,30 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('keeps /api/admin/settings PATCH reachable through the canonical JSON handler', async () => {
+    const malformedPatch = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      '{',
+      authHeaders,
+    );
+
+    expect(malformedPatch.status).toBe(400);
+    expect(JSON.parse(malformedPatch.body)).toEqual({
+      error: 'Invalid JSON payload',
+    });
+    const settingsAuditRes = await request(
+      port,
+      'GET',
+      '/legacy/events?actionType=settings_change&decision=denied&timeRange=all',
+      undefined,
+      authHeaders,
+    );
+    expect(settingsAuditRes.status).toBe(200);
+    expect(settingsAuditRes.body).toContain('/api/admin/settings failed: invalid JSON payload');
+  });
+
   it('returns field-level validation details for invalid settings payloads', async () => {
     const res = await request(
       port,
@@ -1033,6 +1183,178 @@ describe('AdminServer JSON API routes', () => {
         message: 'importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint',
       }),
     ]));
+  });
+
+  it('imports uploaded identity cards authoritatively and refreshes Character Foundation prompt', async () => {
+    const setAppearance = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({ field: 'extensions.visual_description', value: 'old visual description' }),
+      authHeaders,
+    );
+    expect(setAppearance.status).toBe(200);
+
+    const setGreetings = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({ field: 'alternate_greetings', value: JSON.stringify(['old greeting']) }),
+      authHeaders,
+    );
+    expect(setGreetings.status).toBe(200);
+
+    const setCreatorNotes = await request(
+      port,
+      'PATCH',
+      '/api/admin/identity/fields',
+      JSON.stringify({ field: 'creator_notes', value: 'legacy notes to clear' }),
+      authHeaders,
+    );
+    expect(setCreatorNotes.status).toBe(200);
+
+    const uploadedCard = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'Imported Identity',
+        description: 'Fresh description',
+        personality: 'New personality baseline',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: ['imported'],
+        creator: 'importer',
+      },
+    };
+
+    const boundary = '----ApiIdentityUploadBoundary';
+    const multipartBody = buildMultipartBody(boundary, [
+      {
+        name: 'file',
+        filename: 'imported-card.json',
+        contentType: 'application/json',
+        content: JSON.stringify(uploadedCard),
+      },
+    ]);
+
+    const uploadRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/upload',
+      multipartBody,
+      {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+    );
+    expect(uploadRes.status).toBe(201);
+
+    const uploadPayload = JSON.parse(uploadRes.body) as { ok: boolean; message: string; containerFormat?: string };
+    expect(uploadPayload.ok).toBe(true);
+    expect(uploadPayload.containerFormat).toBe('json');
+
+    const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
+    expect(identityRes.status).toBe(200);
+    const identityPayload = JSON.parse(identityRes.body) as {
+      card: {
+        data: {
+          name: string;
+          personality: string;
+          creator_notes?: string;
+          alternate_greetings?: string[];
+          extensions?: Record<string, unknown>;
+        };
+      };
+    };
+
+    expect(identityPayload.card.data.name).toBe('Imported Identity');
+    expect(identityPayload.card.data.personality).toBe('New personality baseline');
+    expect(identityPayload.card.data.creator_notes).toBeUndefined();
+    expect(identityPayload.card.data.alternate_greetings).toBeUndefined();
+    expect(identityPayload.card.data.extensions?.visual_description).toBeUndefined();
+
+    const foundationLayer = promptStore.getAll().find(
+      layer => layer.type === 'base' && layer.name === 'Character Foundation',
+    );
+    expect(foundationLayer).toBeDefined();
+    expect(foundationLayer?.content).toContain('You are {{char}}.');
+    expect(foundationLayer?.content).toContain('{{description}}');
+    expect(foundationLayer?.content).toContain('{{personality}}');
+    expect(foundationLayer?.content).not.toContain('Imported Identity');
+  });
+
+  it('sanitizes identity upload responses for hostile filenames and card names', async () => {
+    const hostileFilename = '<img src=x onerror=alert(1)>.txt';
+    const badBoundary = '----ApiIdentityUploadBoundaryHostileFilename';
+    const badExtensionBody = buildMultipartBody(badBoundary, [
+      {
+        name: 'file',
+        filename: hostileFilename,
+        contentType: 'application/json',
+        content: '{}',
+      },
+    ]);
+
+    const badExtensionRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/upload',
+      badExtensionBody,
+      {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/form-data; boundary=${badBoundary}`,
+      },
+    );
+    expect(badExtensionRes.status).toBe(400);
+    const badExtensionPayload = JSON.parse(badExtensionRes.body) as { error?: string };
+    expect(badExtensionPayload.error).toContain('.json, .png, or .charx');
+    expect(badExtensionPayload.error).not.toContain('<img');
+    expect(badExtensionPayload.error).not.toContain('onerror');
+
+    const hostileCard = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: '<script>alert(1)</script>',
+        description: 'Safe description',
+        personality: 'Safe personality',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: ['safe'],
+        creator: 'tester',
+      },
+    };
+
+    const hostileNameBoundary = '----ApiIdentityUploadBoundaryHostileCardName';
+    const hostileNameBody = buildMultipartBody(hostileNameBoundary, [
+      {
+        name: 'file',
+        filename: 'hostile-card.json',
+        contentType: 'application/json',
+        content: JSON.stringify(hostileCard),
+      },
+    ]);
+
+    const hostileNameRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/upload',
+      hostileNameBody,
+      {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/form-data; boundary=${hostileNameBoundary}`,
+      },
+    );
+    expect(hostileNameRes.status).toBe(201);
+    const hostileNamePayload = JSON.parse(hostileNameRes.body) as { message?: string };
+    expect(hostileNamePayload.message).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(hostileNamePayload.message).not.toContain('<script>');
   });
 
   it('records operator-attributed audit entries for /api/admin/identity mutation routes and renders actor labels', async () => {

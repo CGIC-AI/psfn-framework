@@ -3,9 +3,15 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { GatewayServer, resolveGatewaySessionHmacKeyring, type GatewayServerOptions } from './server.js';
+import {
+  GatewayServer,
+  requireGatewaySessionHmacKeyring,
+  resolveGatewaySessionHmacKeyring,
+  type GatewayServerOptions,
+} from './server.js';
 import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
+import type { SessionHmacKeyring } from '../session/journal-utils.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -16,6 +22,13 @@ vi.mock('./transport.js', () => ({
 import { createSocketServer } from './transport.js';
 
 const mockedCreateSocketServer = vi.mocked(createSocketServer);
+
+const TEST_SESSION_HMAC_KEYRING: SessionHmacKeyring = {
+  activeVersion: 'v1',
+  keys: {
+    v1: 'test-session-secret',
+  },
+};
 
 function createMockConnection(
   onSend?: (message: any, emit: (response: unknown) => void) => void,
@@ -98,6 +111,7 @@ function createMinimalOptions(): GatewayServerOptions {
     policyConfig: {
       workspacePath: '/workspace',
     },
+    sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
   };
 }
 
@@ -170,6 +184,10 @@ describe('resolveGatewaySessionHmacKeyring', () => {
   it('returns null when gateway HMAC env vars are absent', () => {
     const keyring = resolveGatewaySessionHmacKeyring({});
     expect(keyring).toBeNull();
+  });
+
+  it('fails closed when a required gateway keyring is missing', () => {
+    expect(() => requireGatewaySessionHmacKeyring({})).toThrow('Session HMAC keyring is required');
   });
 });
 
@@ -284,9 +302,9 @@ describe('GatewayServer', () => {
       });
     });
 
-    it('degrades gracefully when keyring is unavailable', async () => {
+    it('returns failed verification for unsigned entries', async () => {
       const { conn } = await setupServerConnection(createMinimalOptions());
-      const signResponse = await invokeRpc(conn, 902, 'session.hmac.sign', {
+      const verifyResponse = await invokeRpc(conn, 902, 'session.hmac.verify', {
         entry: {
           type: 'message',
           id: 1,
@@ -298,23 +316,10 @@ describe('GatewayServer', () => {
         previousHmac: null,
       });
 
-      expect(signResponse.error).toBeUndefined();
-      expect(signResponse.result.entry).toMatchObject({
-        type: 'message',
-        id: 1,
-        channelId: 'api:test',
-      });
-
-      const verifyResponse = await invokeRpc(conn, 903, 'session.hmac.verify', {
-        entry: signResponse.result.entry,
-        previousHmac: null,
-      });
-
       expect(verifyResponse.error).toBeUndefined();
-      // When no keyring is configured, integrity is disabled — entries load normally (verified: true)
       expect(verifyResponse.result).toMatchObject({
-        verified: true,
-        reason: 'integrity_disabled',
+        verified: false,
+        reason: 'missing_signature',
       });
     });
   });
@@ -737,102 +742,6 @@ describe('GatewayServer', () => {
         eligible: true,
         reason: 'eligible',
       });
-    });
-
-    it('falls back to legacy discord.voice.* stream methods when generic stream methods are unavailable', async () => {
-      const methods: string[] = [];
-      const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
-        if (!msg.id || typeof msg.method !== 'string') return;
-        methods.push(msg.method);
-        if (msg.method === 'voice.stream.start') {
-          emit({
-            jsonrpc: '2.0',
-            id: msg.id,
-            error: { code: -32601, message: 'Method not found' },
-          });
-          return;
-        }
-        if (msg.method === 'discord.voice.start' || msg.method === 'discord.voice.chunk') {
-          emit({
-            jsonrpc: '2.0',
-            id: msg.id,
-            result: {
-              correlationId: msg.params.correlationId,
-              streamId: msg.params.streamId,
-              sequence: msg.params.sequence,
-              accepted: true,
-              queueDepth: 0,
-            },
-          });
-          return;
-        }
-        if (msg.method === 'discord.voice.end') {
-          emit({
-            jsonrpc: '2.0',
-            id: msg.id,
-            result: {
-              content: 'legacy stream response',
-              channelId: 'discord-voice:123',
-              model: 'legacy-model',
-              durationMs: 111,
-              correlationId: msg.params.correlationId,
-              streamId: msg.params.streamId,
-              droppedChunks: 0,
-            },
-          });
-        }
-      });
-
-      const result = await server.requestAgentVoiceStream(makeVoiceMessage('legacy please'));
-      expect(result.content).toBe('legacy stream response');
-      expect(methods[0]).toBe('voice.stream.start');
-      expect(methods).toContain('discord.voice.start');
-      expect(methods).toContain('discord.voice.end');
-    });
-
-    it('falls back to discord.handleMessage when stream and generic handle methods are unavailable', async () => {
-      const methods: string[] = [];
-      const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
-        if (!msg.id || typeof msg.method !== 'string') return;
-        methods.push(msg.method);
-        if (msg.method === 'voice.stream.start' || msg.method === 'discord.voice.start') {
-          emit({
-            jsonrpc: '2.0',
-            id: msg.id,
-            error: { code: -32601, message: 'Method not found' },
-          });
-          return;
-        }
-        if (msg.method === 'voice.handleMessage') {
-          emit({
-            jsonrpc: '2.0',
-            id: msg.id,
-            error: { code: -32601, message: 'Method not found' },
-          });
-          return;
-        }
-        if (msg.method === 'discord.handleMessage') {
-          emit({
-            jsonrpc: '2.0',
-            id: msg.id,
-            result: {
-              content: 'legacy handle response',
-              channelId: 'discord-voice:123',
-              model: 'legacy-model',
-              durationMs: 111,
-            },
-          });
-        }
-      });
-
-      const result = await server.requestAgentVoiceStream(makeVoiceMessage('legacy handle please'));
-      expect(result.content).toBe('legacy handle response');
-      expect(methods).toEqual([
-        'voice.stream.start',
-        'discord.voice.start',
-        'voice.handleMessage',
-        'discord.handleMessage',
-      ]);
     });
 
     it('sends cancel when stream fails mid-flight', async () => {

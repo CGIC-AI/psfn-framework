@@ -477,8 +477,7 @@ describe('ShardManager', () => {
     });
 
     const result = await manager.spawn({ name: 'provenance', task: 'test' });
-    const tools = (setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>)
-      ?? [];
+    const tools = (setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>);
     const wrappedMemoryWrite = tools.find((tool) => tool.name === 'memory_write');
     const wrappedMemoryImport = tools.find((tool) => tool.name === 'memory_import_batch');
 

@@ -67,7 +67,7 @@ export function createRestartTool(
       params: { reason: string },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const reason = params.reason?.trim();
+      const reason = params.reason.trim();
       if (!reason) {
         return textResultWithError('Restart blocked: reason is required.', true);
       }
@@ -140,7 +140,7 @@ export function createRebuildTool(
       params: { reason: string },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const reason = params.reason?.trim();
+      const reason = params.reason.trim();
       if (!reason) {
         return textResultWithError('Rebuild blocked: reason is required.', true);
       }
@@ -183,20 +183,18 @@ export function createRebuildTool(
           return;
         }
 
-        if (buildSucceeded) {
-          try {
-            await stopFn();
-            if (restartCommand) {
-              await launchRestartCommand(restartCommand);
-              log.info('Spawned restart command after rebuild', {
-                runtimeMode: options.runtimeMode ?? 'unknown',
-              });
-            }
-          } catch (err) {
-            log.error('Error during shutdown', { error: String(err) });
+        try {
+          await stopFn();
+          if (restartCommand) {
+            await launchRestartCommand(restartCommand);
+            log.info('Spawned restart command after rebuild', {
+              runtimeMode: options.runtimeMode ?? 'unknown',
+            });
           }
-          process.exit(0);
+        } catch (err) {
+          log.error('Error during shutdown', { error: String(err) });
         }
+        process.exit(0);
       });
 
       return {

@@ -9,6 +9,13 @@ function writeJson(path: string, value: unknown): void {
 }
 
 describe('resolveRuntimeSchedulerConfig', () => {
+  it('requires object-form options with a dataDir', () => {
+    expect(() => resolveRuntimeSchedulerConfig('invalid' as unknown as {
+      dataDir: string;
+    })).toThrow('expects an options object argument');
+    expect(() => resolveRuntimeSchedulerConfig({ dataDir: '' })).toThrow('requires options.dataDir');
+  });
+
   it('loads persisted config when env overrides are absent', () => {
     const root = mkdtempSync(join(tmpdir(), 'scheduler-runtime-config-'));
     const dataDir = join(root, 'data');

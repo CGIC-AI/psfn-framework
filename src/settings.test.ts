@@ -110,31 +110,31 @@ describe('settings', () => {
       }), 'utf-8');
 
       const result = loadSettings(tempDir);
-      expect(result.modelCatalog?.primary?.model).toBe('legacy/chat');
-      expect(result.modelCatalog?.extraction?.model).toBe('legacy/extract');
+      expect(result.modelCatalog.primary.model).toBe('legacy/chat');
+      expect(result.modelCatalog.extraction.model).toBe('legacy/extract');
       expect(result.modelRoleAssignments?.chat).toBe('primary');
       expect(result.modelRoleAssignments?.extraction).toBe('extraction');
     });
 
-    it('reseeds defaults for invalid JSON', () => {
+    it('fails closed for invalid JSON', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, 'not json', 'utf-8');
-      const result = loadSettings(tempDir);
-      expect(result.sessionHistoryBudgetPct).toBe(6);
-      expect(result.memoryRetrievalBudgetPct).toBe(2);
+
+      expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
+      expect(readFileSync(path, 'utf-8')).toBe('not json');
     });
 
-    it('reseeds defaults for array JSON', () => {
+    it('fails closed for array JSON', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, '[]', 'utf-8');
-      const result = loadSettings(tempDir);
-      expect(result.sessionHistoryBudgetPct).toBe(6);
-      expect(result.memoryRetrievalBudgetPct).toBe(2);
+
+      expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
+      expect(readFileSync(path, 'utf-8')).toBe('[]');
     });
   });
 
   describe('saveSettings', () => {
-    it('writes settings atomically and normalizes model fields', () => {
+    it('writes settings atomically and omits domain-owned model fields', () => {
       const settings = {
         primaryModel: 'test/chat',
         primaryProvider: 'openrouter',
@@ -145,9 +145,9 @@ describe('settings', () => {
 
       const raw = readFileSync(join(tempDir, 'settings.json'), 'utf-8');
       const parsed = JSON.parse(raw);
-      expect(parsed.primaryModel).toBe('test/chat');
-      expect(parsed.modelCatalog.primary.model).toBe('test/chat');
-      expect(parsed.modelRoleAssignments.chat).toBe('primary');
+      expect(parsed.primaryModel).toBeUndefined();
+      expect(parsed.modelCatalog).toBeUndefined();
+      expect(parsed.modelRoleAssignments).toBeUndefined();
       expect(parsed.extractionInterval).toBe(10);
     });
 
@@ -252,6 +252,87 @@ describe('settings', () => {
         maxTokens: 4096,
         contextWindow: 128_000,
       });
+    });
+
+    it('normalizes openrouter-prefixed model ids when provider is empty', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 16384, contextWindow: 128_000 },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 8192 },
+          },
+          vision: {
+            model: 'openrouter/google/gemini-3-flash-preview',
+            provider: '',
+            overrides: { maxTokens: 16384, contextWindow: 128_000 },
+          },
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelCatalog?.vision).toEqual({
+        model: 'google/gemini-3-flash-preview',
+        provider: 'openrouter',
+        overrides: { maxTokens: 16384, contextWindow: 128_000 },
+      });
+      expect(normalized.modelRoleAssignments?.vision).toBe('vision');
+      expect(normalized.modelRoster?.vision).toEqual({
+        model: 'google/gemini-3-flash-preview',
+        provider: 'openrouter',
+        maxTokens: 16384,
+        contextWindow: 128_000,
+      });
+    });
+
+    it('prefers explicit modelCatalog slots over stale modelRoster values', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 16384, contextWindow: 128_000 },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 8192 },
+          },
+          vision: {
+            model: 'google/gemini-3-flash-preview',
+            provider: 'openrouter',
+            overrides: { maxTokens: 16384, contextWindow: 128_000 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          background: 'extraction',
+          extraction: 'extraction',
+          summary: 'primary',
+          reasoning: 'primary',
+          longContext: 'primary',
+          vision: 'vision',
+        },
+        modelRoster: {
+          vision: {
+            model: 'moonshotai/kimi-k2.5',
+            provider: 'openrouter',
+            maxTokens: 16384,
+            contextWindow: 128_000,
+          },
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelCatalog.vision.model).toBe('google/gemini-3-flash-preview');
+      expect(normalized.modelRoster?.vision?.model).toBe('google/gemini-3-flash-preview');
     });
   });
 
@@ -528,7 +609,7 @@ describe('settings', () => {
   });
 
   describe('round-trip', () => {
-    it('save → load → apply preserves role mappings and aliases', () => {
+    it('save → load → apply keeps existing model settings when payload contains model fields', () => {
       saveSettings(tempDir, {
         modelCatalog: {
           main: {
@@ -554,10 +635,12 @@ describe('settings', () => {
       const config = makeConfig();
       applySettings(config, loaded);
 
+      expect(loaded.modelCatalog).toBeUndefined();
+      expect(loaded.modelRoleAssignments).toBeUndefined();
       expect(config.primaryModel).toBe('z-ai/glm-5');
-      expect(config.primaryMaxTokens).toBe(5000);
+      expect(config.primaryMaxTokens).toBe(16384);
       expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
-      expect(config.extractionMaxTokens).toBe(1200);
+      expect(config.extractionMaxTokens).toBe(8192);
     });
 
     it('save → load → apply preserves explicitly cleared voice fields', () => {
@@ -629,7 +712,7 @@ describe('settings', () => {
       expect(settings.memoryRetrievalBudgetPct).toBe(3);
       expect(settings.sessionMessageLimit).toBe(50);
       expect(settings.retryMaxAttempts).toBe(4);
-      expect(settings.modelCatalog?.primary?.model).toBe('test-model');
+      expect(settings.modelCatalog.primary.model).toBe('test-model');
     });
 
     it('parses roster-v2 catalog and role assignment JSON', () => {
@@ -657,7 +740,7 @@ describe('settings', () => {
 
       const [settings, errors] = parseSettingsForm(params);
       expect(errors).toEqual([]);
-      expect(settings.modelCatalog?.fast?.overrides?.maxTokens).toBe(1536);
+      expect(settings.modelCatalog.fast.overrides.maxTokens).toBe(1536);
       expect(settings.modelRoleAssignments?.chat).toBe('fast');
       expect(settings.primaryModel).toBe('openai/gpt-4.1-mini');
       expect(settings.extractionModel).toBe('deepseek/deepseek-v3.2');
@@ -1014,16 +1097,18 @@ describe('settings', () => {
       expect(config.moaTimeoutMs).toBe(30000);
     });
 
-    it('round-trip save -> load -> apply preserves capabilityTier', () => {
+    it('round-trip save -> load -> apply does not persist capabilityTier in settings.json', () => {
       saveSettings(tempDir, {
         capabilityTier: 'autonomous',
       });
 
       const loaded = loadSettings(tempDir);
       const config = makeConfig();
+      config.capabilityTier = 'nursery';
       applySettings(config, loaded);
 
-      expect(config.capabilityTier).toBe('autonomous');
+      expect(loaded.capabilityTier).toBeUndefined();
+      expect(config.capabilityTier).toBe('nursery');
     });
 
     it('round-trip save -> load -> apply preserves sessionRestartBehavior', () => {
@@ -1039,15 +1124,16 @@ describe('settings', () => {
       expect(config.sessionRestartBehavior).toBe('new_session');
     });
 
-    it('round-trip save -> load -> apply handles custom capabilityTier', () => {
+    it('round-trip save -> load -> apply keeps existing custom capabilityTier when only settings.json is used', () => {
       saveSettings(tempDir, {
         capabilityTier: 'custom',
       });
 
       const loaded = loadSettings(tempDir);
-      expect(loaded.capabilityTier).toBe('custom');
+      expect(loaded.capabilityTier).toBeUndefined();
 
       const config = makeConfig();
+      config.capabilityTier = 'custom';
       applySettings(config, loaded);
       expect(config.capabilityTier).toBe('custom');
     });

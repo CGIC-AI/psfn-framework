@@ -4,8 +4,9 @@ import type { SubstrateConfig } from '../../../types.js';
 import { extractCardPatchFromRecord } from '../../../identity/card-versioning.js';
 import {
   normalizeImportedCard,
-  writeNormalizedCharacterCard,
 } from '../../../identity/importer.js';
+import type { PromptLayerStore } from '../../../identity/prompt-store.js';
+import { syncCharacterFoundationPromptFromCard } from '../../../identity/prompt-sync.js';
 import type { CCv3Data } from '@character-foundry/character-foundry/loader';
 import type {
   AdminIdentityData,
@@ -18,21 +19,12 @@ import type {
   RollbackResult,
 } from './types.js';
 
-function decodeHtmlEntities(input: string): string {
-  return input
-    .replaceAll('&amp;', '&')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'");
-}
-
 function extractSettingsResultMessage(html: string): ImportResult {
   const successMatch = html.match(/<span class="form-success">([\s\S]*?)<\/span>/i);
   if (successMatch) {
     return {
       ok: true,
-      message: decodeHtmlEntities(successMatch[1].trim()),
+      message: successMatch[1].trim(),
     };
   }
 
@@ -40,7 +32,7 @@ function extractSettingsResultMessage(html: string): ImportResult {
   if (errorMatch) {
     return {
       ok: false,
-      message: decodeHtmlEntities(errorMatch[1].trim()),
+      message: errorMatch[1].trim(),
     };
   }
 
@@ -56,6 +48,7 @@ export class AdminIdentityDataService implements AdminIdentityService {
     config: SubstrateConfig;
     cardVersionStore?: CharacterCardVersionStore | null;
     importIdentityCardHtml?: (body: string) => Promise<string>;
+    promptStore?: PromptLayerStore | null;
   }) {}
 
   getIdentityData(): AdminIdentityData {
@@ -159,21 +152,24 @@ export class AdminIdentityDataService implements AdminIdentityService {
         return { ok: false, message: 'Uploaded card data must have a "data" object or a "name" field' };
       }
 
-      // Apply to version store
-      const patch = extractCardPatchFromRecord(normalizedCard.data as unknown as Record<string, unknown>);
-      const snapshot = cardVersionStore.updateData(patch, 'admin:upload', 'File upload import');
-
-      // Also persist to disk if a card path is configured
-      if (this.deps.config.characterCardPath) {
-        writeNormalizedCharacterCard(this.deps.config.characterCardPath, snapshot.card);
-      }
+      // Apply full-card replacement so missing fields are cleared.
+      const snapshot = cardVersionStore.update(normalizedCard, 'admin:upload', 'File upload import');
 
       // Update in-memory reference
       Object.assign(this.deps.characterCard, snapshot.card);
 
+      const promptSync = syncCharacterFoundationPromptFromCard(
+        this.deps.promptStore,
+        snapshot.card,
+        'admin:upload',
+      );
+      const promptWarning = !promptSync.ok
+        ? ` (Character Foundation sync warning: ${promptSync.error})`
+        : '';
+
       return {
         ok: true,
-        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}`,
+        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}${promptWarning}`,
       };
     } catch (error) {
       return {
@@ -217,6 +213,13 @@ export class AdminIdentityDataService implements AdminIdentityService {
 
     try {
       const snapshot = cardVersionStore.rollback(version, 'admin:api');
+      Object.assign(this.deps.characterCard, snapshot.card);
+      syncCharacterFoundationPromptFromCard(
+        this.deps.promptStore,
+        snapshot.card,
+        'admin:rollback',
+        `Sync Character Foundation prompt after rollback to version ${version}`,
+      );
       return {
         ok: true,
         message: `Rolled back to version ${version}`,
@@ -253,7 +256,7 @@ export class AdminIdentityDataService implements AdminIdentityService {
 
     const version = Number(payload.version);
     const entry = Number.isInteger(version) ? cardVersionStore.getHistoryEntry(version) : undefined;
-    const current = cardVersionStore.getCurrent()?.card ?? this.deps.characterCard;
+    const current = cardVersionStore.getCurrent().card;
     return {
       ok: Boolean(entry),
       current,
@@ -307,7 +310,19 @@ export class AdminIdentityDataService implements AdminIdentityService {
       // Also update the in-memory character card reference
       const current = snapshot.card;
       Object.assign(this.deps.characterCard, current);
-      return { ok: true, message: `Updated "${field}" to v${snapshot.version}` };
+      const promptSync = syncCharacterFoundationPromptFromCard(
+        this.deps.promptStore,
+        current,
+        'admin:api',
+        `Sync Character Foundation prompt after field update: ${field}`,
+      );
+      const promptWarning = !promptSync.ok
+        ? ` (Character Foundation sync warning: ${promptSync.error})`
+        : '';
+      return {
+        ok: true,
+        message: `Updated "${field}" to v${snapshot.version}${promptWarning}`,
+      };
     } catch (error) {
       return { ok: false, message: String(error) };
     }

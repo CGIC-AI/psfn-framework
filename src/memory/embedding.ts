@@ -164,11 +164,11 @@ export class OllamaEmbeddingProvider extends HttpEmbeddingProvider {
   constructor(config?: Partial<EmbeddingConfig>) {
     super();
     const merged = { ...DEFAULT_EMBEDDING_CONFIG, ...config };
-    const model = (merged.model ?? DEFAULT_EMBEDDING_CONFIG.model).trim();
+    const model = merged.model.trim();
     this.config = {
-      ollamaUrl: (merged.ollamaUrl ?? DEFAULT_EMBEDDING_CONFIG.ollamaUrl).trim(),
+      ollamaUrl: merged.ollamaUrl.trim(),
       model: model.length > 0 ? model : DEFAULT_EMBEDDING_CONFIG.model,
-      dims: merged.dims ?? DEFAULT_EMBEDDING_CONFIG.dims,
+      dims: merged.dims,
     };
   }
 
@@ -213,10 +213,10 @@ export class TransformersEmbeddingProvider implements EmbeddingRuntimeProvider {
 
   constructor(config?: Partial<TransformersEmbeddingConfig>) {
     const merged = { ...DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG, ...config };
-    const model = (merged.model ?? DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.model).trim();
+    const model = merged.model.trim();
     this.config = {
       model: model.length > 0 ? model : DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.model,
-      dims: merged.dims ?? DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.dims,
+      dims: merged.dims,
       cacheDir: merged.cacheDir?.trim() || undefined,
     };
   }
@@ -299,16 +299,16 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
   constructor(config?: Partial<ApiEmbeddingConfig>) {
     super();
     const merged = { ...DEFAULT_API_EMBEDDING_CONFIG, ...config };
-    const endpoint = merged.endpoint?.trim();
+    const endpoint = merged.endpoint.trim();
     if (!endpoint) {
       throw new Error('EMBEDDING_API_URL must be set when EMBEDDING_PROVIDER=api');
     }
-    const model = (merged.model ?? DEFAULT_API_EMBEDDING_CONFIG.model).trim();
+    const model = merged.model.trim();
     this.config = {
       endpoint,
       model: model.length > 0 ? model : DEFAULT_API_EMBEDDING_CONFIG.model,
       apiKey: merged.apiKey?.trim(),
-      dims: merged.dims ?? DEFAULT_API_EMBEDDING_CONFIG.dims,
+      dims: merged.dims,
     };
   }
 
@@ -420,6 +420,3 @@ export function createEmbeddingProviderFromEnv(
       return resolveApiProvider(env);
   }
 }
-
-// Backward-compatible name for existing Ollama callers.
-export class EmbeddingProvider extends OllamaEmbeddingProvider {}

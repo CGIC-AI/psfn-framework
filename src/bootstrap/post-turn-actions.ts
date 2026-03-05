@@ -123,7 +123,7 @@ export function wirePostTurnActionRuntime(
     const dueEntries = [...queue.values()]
       .filter((entry) => entry.nextRunAt <= now)
       .sort((left, right) => left.nextRunAt - right.nextRunAt || left.action.inferredAt - right.action.inferredAt);
-    const entry = dueEntries[0];
+    const entry = dueEntries[0] as typeof dueEntries[number] | undefined;
     if (!entry) {
       return false;
     }

@@ -146,8 +146,8 @@ function ensurePurposeInputCapabilities(
     return model;
   }
 
-  const currentInput = Array.isArray(model.input)
-    ? model.input.filter((cap): cap is 'text' | 'image' => cap === 'text' || cap === 'image')
+  const currentInput: Array<'text' | 'image'> = Array.isArray(model.input)
+    ? model.input
     : [];
   const nextInput: Array<'text' | 'image'> = [...currentInput];
   if (!nextInput.includes('text')) nextInput.unshift('text');

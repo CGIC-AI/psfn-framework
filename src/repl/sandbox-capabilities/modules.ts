@@ -1,4 +1,4 @@
-import { MODULE_REGISTRY_PATH } from '../../security/policy-constants.js';
+import { resolveRequiredModuleRegistryPath } from '../../security/policy-constants.js';
 import type { ConfirmationQueue } from '../../capabilities/confirmation-queue.js';
 import type { CapabilityTier } from '../../types.js';
 import { isModuleRecord } from '../../modules/registry.js';
@@ -66,6 +66,7 @@ function proposalReason(tier: CapabilityTier): string {
 export function createModuleCapabilities(options: CreateModuleCapabilitiesOptions): ModuleCapabilities {
   const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
   const confirmationQueue = options.confirmationQueue ?? null;
+  const moduleRegistryPath = resolveRequiredModuleRegistryPath();
 
   const loadModuleRegistry = async (): Promise<ModuleRecord[]> => {
     if (typeof options.gatewayCaps.fsRead !== 'function') {
@@ -73,7 +74,7 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
     }
 
     try {
-      const raw = await options.gatewayCaps.fsRead(MODULE_REGISTRY_PATH);
+      const raw = await options.gatewayCaps.fsRead(moduleRegistryPath);
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) {
         return [];
@@ -92,7 +93,7 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
     if (typeof options.gatewayCaps.fsWrite !== 'function') {
       throw new Error('module ops require gateway fs policy (fsWrite unavailable)');
     }
-    await options.gatewayCaps.fsWrite(MODULE_REGISTRY_PATH, JSON.stringify(records, null, 2));
+    await options.gatewayCaps.fsWrite(moduleRegistryPath, JSON.stringify(records, null, 2));
   };
 
   const notifyMutation = async (

@@ -387,6 +387,21 @@ describe('evaluateUrlPolicy', () => {
       expect(privateIpResult.allowed).toBe(true);
     });
 
+    it('still blocks always-blocked metadata IP when explicitly allowlisted', () => {
+      const result = evaluateUrlPolicy(
+        'https://169.254.169.254/latest/meta-data/',
+        {
+          localCrawlerLane: {
+            enabled: true,
+            hostAllowlist: ['169.254.169.254'],
+          },
+        },
+        'local_crawler',
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('cloud metadata');
+    });
+
     it('denies local crawler host outside allowlist', () => {
       const result = evaluateUrlPolicy(
         'https://crawler.internal/fetch',
@@ -442,14 +457,24 @@ describe('checkResolvedIP', () => {
   const failingResolver: DnsResolver =
     async () => { throw new Error('ENOTFOUND'); };
 
-  it('skips check for raw IPs (already validated)', async () => {
+  it('allows raw public IPs', async () => {
     const result = await checkResolvedIP('8.8.8.8');
     expect(result.allowed).toBe(true);
+    expect(result.address).toBe('8.8.8.8');
   });
 
-  it('skips check for bracketed IPv6 (already validated)', async () => {
+  it('allows raw bracketed public IPv6 IPs', async () => {
     const result = await checkResolvedIP('[2606:4700::1]');
     expect(result.allowed).toBe(true);
+    expect(result.address).toBe('2606:4700::1');
+  });
+
+  it('blocks raw always-blocked metadata IP even when private resolution is allowed', async () => {
+    const result = await checkResolvedIP('169.254.169.254', fakeResolver('93.184.216.34'), {
+      allowPrivateResolvedIp: true,
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('cloud metadata');
   });
 
   it('blocks hostname resolving to private IP', async () => {
@@ -462,7 +487,7 @@ describe('checkResolvedIP', () => {
   it('blocks hostname resolving to cloud metadata IP', async () => {
     const result = await checkResolvedIP('metadata.evil.com', fakeResolver('169.254.169.254'));
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain('private IP');
+    expect(result.reason).toContain('cloud metadata');
   });
 
   it('blocks hostname resolving to RFC1918 IP', async () => {
@@ -474,6 +499,7 @@ describe('checkResolvedIP', () => {
   it('allows hostname resolving to public IP', async () => {
     const result = await checkResolvedIP('example.com', fakeResolver('93.184.216.34'));
     expect(result.allowed).toBe(true);
+    expect(result.address).toBe('93.184.216.34');
   });
 
   it('blocks on DNS resolution failure', async () => {
@@ -491,7 +517,13 @@ describe('checkResolvedIP', () => {
   it('blocks hostname resolving to IPv4-mapped metadata IP', async () => {
     const result = await checkResolvedIP('meta.evil.com', fakeResolver('::ffff:169.254.169.254'));
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain('private IP');
+    expect(result.reason).toContain('cloud metadata');
+  });
+
+  it('blocks hostname resolving to hex-form IPv4-mapped metadata IP', async () => {
+    const result = await checkResolvedIP('metahex.evil.com', fakeResolver('::ffff:a9fe:a9fe'));
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('cloud metadata');
   });
 
   it('allows private DNS resolution when explicitly requested', async () => {
@@ -501,5 +533,15 @@ describe('checkResolvedIP', () => {
       { allowPrivateResolvedIp: true },
     );
     expect(result.allowed).toBe(true);
+  });
+
+  it('still blocks metadata DNS resolution when private resolution is enabled', async () => {
+    const result = await checkResolvedIP(
+      'metadata.internal',
+      fakeResolver('169.254.169.254'),
+      { allowPrivateResolvedIp: true },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('cloud metadata');
   });
 });

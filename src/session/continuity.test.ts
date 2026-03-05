@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,7 @@ import { UserContinuityStore } from './continuity.js';
 import { SessionStore } from './store.js';
 import { SessionManager } from './manager.js';
 import type { SubstrateConfig } from '../types.js';
+import * as journalUtils from './journal-utils.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
@@ -207,6 +208,35 @@ describe('UserContinuityStore', () => {
       originChannelId: 'ch3',
     });
     expect(id3).toBe(3);
+  });
+
+  it('does not advance continuity IDs or cache when append persistence fails', () => {
+    const appendSpy = vi.spyOn(journalUtils, 'appendJournalEntry').mockImplementationOnce(() => {
+      throw new Error('simulated continuity append failure');
+    });
+
+    expect(() => store.append('user1', {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'will fail',
+      timestamp: 1_000,
+      originChannelId: 'ch1',
+    })).toThrow('simulated continuity append failure');
+
+    expect(store.count('user1')).toBe(0);
+    expect(store.getRecent('user1', 10)).toEqual([]);
+
+    appendSpy.mockRestore();
+
+    const recoveredId = store.append('user1', {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'after rollback',
+      timestamp: 2_000,
+      originChannelId: 'ch1',
+    });
+    expect(recoveredId).toBe(1);
+    expect(store.count('user1')).toBe(1);
   });
 
   it('handles assistant messages in continuity', () => {

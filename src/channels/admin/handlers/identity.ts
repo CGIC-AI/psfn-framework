@@ -6,10 +6,12 @@ import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { SubstrateConfig } from '../../../types.js';
 import type { ContactStore } from '../../../contacts/store.js';
 import type { CharacterCardVersionStore } from '../../../identity/card-versioning.js';
+import type { PromptLayerStore } from '../../../identity/prompt-store.js';
 import {
   importCharacterCardFromPath,
   writeNormalizedCharacterCard,
 } from '../../../identity/importer.js';
+import { syncCharacterFoundationPromptFromCard } from '../../../identity/prompt-sync.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -34,6 +36,7 @@ export interface AdminIdentityHandlersDeps {
   config: SubstrateConfig;
   contactStore?: ContactStore | null;
   cardVersionStore?: CharacterCardVersionStore | null;
+  promptStore?: PromptLayerStore | null;
   appendAuditTimelineEntry: (
     actionType: AdminAuditActionType,
     decision: AdminAuditDecision,
@@ -52,6 +55,7 @@ export class AdminIdentityHandlers {
   private readonly config: SubstrateConfig;
   private readonly contactStore: ContactStore | null;
   private readonly cardVersionStore: CharacterCardVersionStore | null;
+  private readonly promptStore: PromptLayerStore | null;
   private readonly appendAuditTimelineEntryDelegate: (
     actionType: AdminAuditActionType,
     decision: AdminAuditDecision,
@@ -72,6 +76,7 @@ export class AdminIdentityHandlers {
     this.config = deps.config;
     this.contactStore = deps.contactStore ?? null;
     this.cardVersionStore = deps.cardVersionStore ?? null;
+    this.promptStore = deps.promptStore ?? null;
     this.appendAuditTimelineEntryDelegate = deps.appendAuditTimelineEntry;
   }
 
@@ -324,7 +329,7 @@ export class AdminIdentityHandlers {
       return tpl.identityImportResult(false, 'path is required');
     }
 
-    const destinationPath = this.config.characterCardPath?.trim();
+    const destinationPath = this.config.characterCardPath.trim();
     if (!destinationPath) {
       this.appendAuditTimelineEntry(
         'identity_edit',
@@ -349,6 +354,15 @@ export class AdminIdentityHandlers {
       }
 
       const warnings = [...imported.warnings];
+      const promptSync = syncCharacterFoundationPromptFromCard(
+        this.promptStore,
+        this.characterCard,
+        'admin:import',
+        `Sync Character Foundation prompt from imported card: ${imported.sourcePath}`,
+      );
+      if (!promptSync.ok) {
+        warnings.push(`Character Foundation prompt sync failed: ${promptSync.error}`);
+      }
 
       const {
         persistedAssetCount,
@@ -447,15 +461,25 @@ export class AdminIdentityHandlers {
     try {
       const snapshot = this.cardVersionStore.rollback(version);
       this.characterCard = snapshot.card;
+      const promptSync = syncCharacterFoundationPromptFromCard(
+        this.promptStore,
+        snapshot.card,
+        'admin:rollback',
+        `Sync Character Foundation prompt after rollback to version ${version}`,
+      );
       this.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
         `Purrsephone rolled identity back to version ${version}.`,
-        [`currentVersion=${snapshot.version}`],
+        [
+          `currentVersion=${snapshot.version}`,
+          !promptSync.ok ? `promptSyncError=${promptSync.error}` : null,
+        ],
       );
       return tpl.identityCardVersionResult(
         true,
-        `Rolled back to version ${version}. Current version is v${snapshot.version}.`,
+        `Rolled back to version ${version}. Current version is v${snapshot.version}.`
+          + (!promptSync.ok ? ` Warning: Character Foundation prompt sync failed (${promptSync.error}).` : ''),
       );
     } catch (error) {
       const message = toErrorMessage(error);

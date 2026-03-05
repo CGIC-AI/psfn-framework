@@ -170,7 +170,7 @@ function resolveMetadata(
     request: {
       ...(voiceId ? { voiceId } : {}),
       ...(Number.isFinite(sampleRate) ? { sampleRateHz: sampleRate } : {}),
-      ...(encoding ? { encoding } : {}),
+      encoding,
       ...(allowBufferFallback !== undefined ? { allowBufferFallback } : {}),
     },
     language: readString(data, ['language', 'lang']),

@@ -5,7 +5,7 @@ import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
 import { createStreamingSttConnector } from '../../voice/connectors/stt/index.js';
-import { createStreamingTtsConnector, type StreamingTtsProvider } from '../../voice/connectors/tts/index.js';
+import { createStreamingTtsConnector } from '../../voice/connectors/tts/index.js';
 import {
   resolveVoiceReliabilityBudgets,
   runWithVoiceStageBudget,
@@ -30,16 +30,13 @@ import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
 } from './voice-websocket.js';
+import type { ApiAuthPrincipal } from '../http/auth.js';
+import { resolveRuntimeVoiceProviderGate } from '../../runtime/bootstrap-helpers.js';
 
 const log = createComponentLogger('ApiVoiceRuntime');
 
 const DEFAULT_CHANNEL_PREFIX = 'api-voice';
-const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
-const DEFAULT_ECHO_TTS_URL = 'http://localhost:8001';
-const DEFAULT_ECHO_TTS_VOICE = '11labs-Allison';
-const DEFAULT_ECHO_TTS_PRESET = 'Independent-High-Speaker-CFG';
-type RuntimeVoiceSttProvider = 'deepgram' | 'disabled';
-type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
+// Echo TTS requires explicit config — no silent localhost defaults
 
 interface ApiVoiceWebSocketRuntimeConfig {
   agentLoop: SubstrateAgent;
@@ -97,26 +94,18 @@ function readHeaderOrQuery(
   return clampHeader(readQueryParam(request, queryNames), maxLength);
 }
 
-function deriveActor(request: IncomingMessage): VoiceActor {
-  const authorId = readHeaderOrQuery(
-    request,
-    'x-user-id',
-    ['user_id', 'x_user_id', 'x-user-id'],
-    128,
-  ) ?? 'api-voice-user';
-  const authorName = readHeaderOrQuery(
-    request,
-    'x-user-name',
-    ['user_name', 'x_user_name', 'x-user-name'],
-    80,
-  ) ?? 'Voice User';
-  return { authorId, authorName };
+function deriveActor(principal: ApiAuthPrincipal): VoiceActor {
+  return {
+    authorId: principal.id,
+    authorName: principal.mode === 'api_key' ? 'API Voice Principal' : 'Local Voice Principal',
+  };
 }
 
 function deriveChannelId(
   request: IncomingMessage,
   connectionId: string,
   channelPrefix: string,
+  principal: ApiAuthPrincipal,
 ): string {
   const sessionId = readHeaderOrQuery(
     request,
@@ -125,67 +114,35 @@ function deriveChannelId(
     128,
   );
   if (sessionId) {
-    return `api:${sessionId}`;
+    return `api:${principal.id}:${sessionId}`;
   }
 
-  return `${channelPrefix}:${connectionId}`;
+  return `${channelPrefix}:${principal.id}:${connectionId}`;
 }
 
-function hasVoiceConnectorConfig(config: SubstrateConfig): boolean {
-  const sttProvider = resolveSttProvider(config);
-  if (sttProvider !== 'deepgram') {
-    return false;
-  }
-
-  if (!config.deepgramApiKey) {
-    return false;
-  }
-
-  const ttsProvider = resolveTtsProvider(config);
-  if (ttsProvider === 'disabled') {
-    return false;
-  }
+function createVoiceTtsConnector(
+  config: SubstrateConfig,
+  ttsProvider: 'echo' | 'elevenlabs',
+) {
   if (ttsProvider === 'echo') {
-    return true;
-  }
-
-  return Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId);
-}
-
-function resolveSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
-  const configured = (config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider }).sttProvider;
-  if (configured === 'deepgram' || configured === 'disabled') return configured;
-  return config.deepgramApiKey ? 'deepgram' : 'disabled';
-}
-
-function resolveTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
-  const configured = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
-  if (configured === 'echo' || configured === 'elevenlabs' || configured === 'disabled') {
-    return configured;
-  }
-  return DEFAULT_TTS_PROVIDER;
-}
-
-function createVoiceTtsConnector(config: SubstrateConfig) {
-  const ttsProvider = resolveTtsProvider(config);
-
-  if (ttsProvider === 'disabled') {
-    throw new Error('TTS provider is disabled');
-  }
-
-  if (ttsProvider === 'echo') {
+    if (!config.echoTtsUrl || !config.echoTtsVoice) {
+      throw new Error('Echo TTS provider selected but ECHO_TTS_URL and ECHO_TTS_VOICE are not configured');
+    }
     const model = config.echoTtsModel;
     return createStreamingTtsConnector('echo', {
-      url: config.echoTtsUrl ?? DEFAULT_ECHO_TTS_URL,
-      voice: config.echoTtsVoice ?? DEFAULT_ECHO_TTS_VOICE,
-      preset: config.echoTtsPreset ?? DEFAULT_ECHO_TTS_PRESET,
+      url: config.echoTtsUrl,
+      voice: config.echoTtsVoice,
+      ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
       ...(model ? { model } : {}),
     });
   }
 
+  if (!config.elevenLabsApiKey || !config.elevenLabsVoiceId) {
+    throw new Error('ElevenLabs TTS provider selected but ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID are not configured');
+  }
   return createStreamingTtsConnector('elevenlabs', {
-    apiKey: config.elevenLabsApiKey ?? '',
-    voiceId: config.elevenLabsVoiceId ?? '',
+    apiKey: config.elevenLabsApiKey,
+    voiceId: config.elevenLabsVoiceId,
     modelId: config.elevenLabsModelId,
   });
 }
@@ -209,6 +166,7 @@ async function runAssistantTurn(params: {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   request: IncomingMessage;
+  principal: ApiAuthPrincipal;
   transportSession: WebSocketVoiceSession;
   sessionId: string;
   transcript: string;
@@ -219,6 +177,7 @@ async function runAssistantTurn(params: {
     agentLoop,
     eventBus,
     request,
+    principal,
     transportSession,
     sessionId,
     transcript,
@@ -226,8 +185,8 @@ async function runAssistantTurn(params: {
     channelPrefix,
   } = params;
 
-  const actor = deriveActor(request);
-  const channelId = deriveChannelId(request, transportSession.connectionId, channelPrefix);
+  const actor = deriveActor(principal);
+  const channelId = deriveChannelId(request, transportSession.connectionId, channelPrefix, principal);
   const turnId = `api-voice-${transportSession.connectionId}-${sessionId}-${Date.now()}`;
 
   const message: SubstrateMessage = {
@@ -238,6 +197,10 @@ async function runAssistantTurn(params: {
     authorName: actor.authorName,
     content: transcript,
     isDirectMessage: true,
+    routing: {
+      source: 'api',
+      responseStyle: 'concise',
+    },
     timestamp: new Date(),
   };
 
@@ -321,16 +284,25 @@ async function runAssistantTurn(params: {
 export function createApiVoiceWebSocketRuntime(
   options: ApiVoiceWebSocketRuntimeConfig,
 ): VoiceWebSocketRuntime | undefined {
-  const sttProvider = resolveSttProvider(options.config);
-  const ttsProvider = resolveTtsProvider(options.config);
-  if (!hasVoiceConnectorConfig(options.config)) {
+  const providerGate = resolveRuntimeVoiceProviderGate(options.config, {
+    allowEchoDefaults: true,
+    requireElevenLabsVoiceId: true,
+  });
+  const sttProvider = providerGate.sttProvider;
+  const ttsProvider = providerGate.ttsProvider;
+  if (!providerGate.sttEnabled || !providerGate.ttsEnabled) {
     log.warn('API voice websocket runtime disabled: missing STT/TTS provider credentials', {
       sttProvider,
       ttsProvider,
+      sttEnabled: providerGate.sttEnabled,
+      ttsEnabled: providerGate.ttsEnabled,
       hasDeepgramApiKey: Boolean(options.config.deepgramApiKey),
       hasElevenLabsApiKey: Boolean(options.config.elevenLabsApiKey),
       hasElevenLabsVoiceId: Boolean(options.config.elevenLabsVoiceId),
     });
+    return undefined;
+  }
+  if (sttProvider !== 'deepgram' || (ttsProvider !== 'echo' && ttsProvider !== 'elevenlabs')) {
     return undefined;
   }
 
@@ -340,19 +312,12 @@ export function createApiVoiceWebSocketRuntime(
   const securityLimits = resolveVoiceSecurityLimits();
   const reliabilityBudgets = resolveVoiceReliabilityBudgets();
 
-  if (sttProvider !== 'deepgram') {
-    log.warn('API voice websocket runtime disabled: unsupported STT provider for websocket runtime', {
-      sttProvider,
-    });
-    return undefined;
-  }
-
   const stt = createStreamingSttConnector('deepgram', {
-    apiKey: options.config.deepgramApiKey ?? '',
+    apiKey: options.config.deepgramApiKey!,
     model: options.config.deepgramModel,
   });
 
-  const tts = createVoiceTtsConnector(options.config);
+  const tts = createVoiceTtsConnector(options.config, ttsProvider);
 
   const runtime = new WebSocketVoiceRuntime({
     stt,
@@ -394,6 +359,7 @@ export function createApiVoiceWebSocketRuntime(
         agentLoop: options.agentLoop,
         eventBus: options.eventBus,
         request: context.request,
+        principal: context.principal,
         transportSession,
         sessionId,
         transcript,

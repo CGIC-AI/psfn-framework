@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayMethodRuntime } from './types.js';
 import type { PolicyConfig } from '../policy.js';
 import { registerShellMethods } from './shell.js';
@@ -6,6 +9,10 @@ import { GatewayErrors } from '../protocol.js';
 
 function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<string, unknown>): Promise<any> } {
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<any>>();
+  const keyring = {
+    activeVersion: 'v1',
+    keys: { v1: 'test-shell-secret' },
+  };
   const runtime: GatewayMethodRuntime = {
     target: {
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
@@ -17,7 +24,7 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
     discordAdapter: {} as any,
     policyConfig,
     workspacePath: process.cwd(),
-    sessionHmacKeyring: null,
+    sessionHmacKeyring: keyring,
     notifyAll: vi.fn(),
     listPendingConfirmations: () => [],
     resolveConfirmation: vi.fn(async () => ({
@@ -44,6 +51,22 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
 }
 
 describe('registerShellMethods', () => {
+  const tempPaths: string[] = [];
+
+  afterEach(() => {
+    while (tempPaths.length > 0) {
+      const target = tempPaths.pop();
+      if (!target) continue;
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  function makeTempDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    tempPaths.push(dir);
+    return dir;
+  }
+
   it('executes allowlisted command within policy bounds', async () => {
     const harness = createHarness({
       workspacePath: process.cwd(),
@@ -140,6 +163,56 @@ describe('registerShellMethods', () => {
       command: 'node',
       args: ['-v'],
       cwd: '/tmp',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('cwd not allowlisted'),
+    });
+  });
+
+  it('denies basename/path allowlist bypass attempts', async () => {
+    const fakeBinDir = makeTempDir('psfn-shell-fake-bin-');
+    const fakeNode = join(fakeBinDir, 'node');
+    writeFileSync(fakeNode, '#!/bin/sh\necho fake-node\n', 'utf8');
+    chmodSync(fakeNode, 0o755);
+
+    const harness = createHarness({
+      workspacePath: process.cwd(),
+      shellExec: {
+        enabled: true,
+        allowlist: ['node'],
+        allowedCwd: [process.cwd()],
+      },
+    });
+
+    await expect(harness.invoke({
+      command: fakeNode,
+      args: ['-v'],
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('not allowlisted'),
+    });
+  });
+
+  it('denies cwd symlink escapes via canonical path checks', async () => {
+    const allowedRoot = makeTempDir('psfn-shell-allowed-root-');
+    const outsideRoot = makeTempDir('psfn-shell-outside-root-');
+    const escapeLink = join(allowedRoot, 'escape');
+    mkdirSync(join(outsideRoot, 'real-cwd'), { recursive: true });
+    symlinkSync(outsideRoot, escapeLink, 'dir');
+
+    const harness = createHarness({
+      workspacePath: process.cwd(),
+      shellExec: {
+        enabled: true,
+        allowlist: ['node'],
+        allowedCwd: [allowedRoot],
+      },
+    });
+
+    await expect(harness.invoke({
+      command: 'node',
+      args: ['-e', 'process.stdout.write("blocked")'],
+      cwd: join(escapeLink, 'real-cwd'),
     })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,
       message: expect.stringContaining('cwd not allowlisted'),

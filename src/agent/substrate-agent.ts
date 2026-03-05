@@ -45,7 +45,10 @@ import {
   type ChannelMeta,
 } from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
-import type { PromptComposer } from '../identity/prompt-composer.js';
+import {
+  enforceUntrustedCompactionGuard,
+  type PromptComposer,
+} from '../identity/prompt-composer.js';
 import type { ComposeContext, ComposeSplitResult } from '../identity/prompt-types.js';
 import {
   createSubstrateStreamFn,
@@ -271,6 +274,7 @@ export class SubstrateAgent {
   private sessionManager: SessionManager;
   private systemPrompt: string;
   private characterName: string;
+  private resolveCharacterPromptVariables: () => Record<string, string>;
   private config: SubstrateConfig;
   private coreTools: AgentTool<any>[] = [];
   private extendedTools: AgentTool<any>[] = [];
@@ -308,13 +312,21 @@ export class SubstrateAgent {
     sessionManager: SessionManager,
     systemPrompt: string,
     config: SubstrateConfig,
-    options?: { streamFn?: StreamFn; characterName?: string },
+    options?: {
+      streamFn?: StreamFn;
+      characterName?: string;
+      characterPromptVariables?: Record<string, string>;
+      characterPromptVariablesProvider?: () => Record<string, string>;
+    },
   ) {
     this.eventBus = eventBus;
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.systemPrompt = systemPrompt;
     this.characterName = options?.characterName?.trim() || this.deriveCharacterName(systemPrompt);
+    const fallbackPromptVariables = { ...(options?.characterPromptVariables ?? {}) };
+    this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
+      ?? (() => fallbackPromptVariables);
     this.config = config;
 
     this.agent = new Agent({
@@ -334,8 +346,9 @@ export class SubstrateAgent {
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
     try {
       this.refreshModelFromConfig('startup');
-    } catch {
+    } catch (err) {
       // Model will be resolved lazily on first handleMessage
+      log.debug('Deferred model resolution at startup', { error: String(err) });
     }
   }
 
@@ -500,7 +513,7 @@ export class SubstrateAgent {
     const override = this.normalizeTurnModelOverride(message);
     const purpose = override ? null : this.resolveTurnModelPurpose(message);
     const nextSignature = this.getTurnModelSignature(message);
-    if (this.modelResolved && this.modelSignature === nextSignature && this.agent.state.model) {
+    if (this.modelResolved && this.modelSignature === nextSignature) {
       return;
     }
 
@@ -527,19 +540,13 @@ export class SubstrateAgent {
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      if (this.agent.state.model) {
-        this.modelResolved = true;
-        log.warn('Model refresh failed; keeping previous chat model', {
-          reason,
-          error: err.message,
-          currentModel: this.agent.state.model.id,
-        });
-        return;
-      }
-
-      this.modelResolved = false;
-      this.modelSignature = null;
-      throw err;
+      this.modelResolved = true;
+      log.warn('Model refresh failed; keeping previous chat model', {
+        reason,
+        error: err.message,
+        currentModel: this.agent.state.model.id,
+      });
+      return;
     }
   }
 
@@ -732,7 +739,7 @@ export class SubstrateAgent {
       else if (entry.source === 'promoted') counts.promoted += 1;
       else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
       else if (entry.source === 'autoload') counts.autoload += 1;
-      else if (entry.source === 'deferred') counts.deferred += 1;
+      else counts.deferred += 1;
     }
 
     return {
@@ -1484,7 +1491,7 @@ export class SubstrateAgent {
           lane: 'default',
           maxBytes: VISION_ATTACHMENT_MAX_BYTES,
         });
-        const responseMimeType = (fetched.mimeType ?? inferredContentType)
+        const responseMimeType = fetched.mimeType
           .split(';')[0]
           .trim()
           .toLowerCase();
@@ -1752,6 +1759,8 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         responseStyle,
         runtimeNow,
+        taskKind,
+        templateVariables,
       );
       let fullPrompt = '';
 
@@ -1821,6 +1830,7 @@ export class SubstrateAgent {
       let turnUsage: TurnUsage;
       let responseModel: string;
       let responseText: string;
+      let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
 
       const moaSettings = this.resolveMoaSettings();
       if (moaSettings) {
@@ -1843,7 +1853,7 @@ export class SubstrateAgent {
       } else {
         // Configure pi-agent-core Agent for this turn
         this.ensureModel(message);
-        this.agent.setSystemPrompt(context.systemPrompt);
+        this.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
         const autoloadOutcome = this.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
         this.applyActiveToolsToAgentForTurn(
           message,
@@ -1900,6 +1910,7 @@ export class SubstrateAgent {
           this.bridge.clearChannel();
           this.activeTurnCorrelation = null;
         }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
         if (streamFirstTokenAt == null) {
           streamFirstTokenAt = Date.now();
           this.emitTurnStage(message, startTime, 'first-token', turnCallType, {
@@ -1914,22 +1925,22 @@ export class SubstrateAgent {
 
         turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
         turnUsage = this.accumulateTurnUsage(turnMessages);
-        responseModel = this.agent.state.model?.id ?? 'unknown';
+        responseModel = this.agent.state.model.id;
         firstTokenAt = streamFirstTokenAt;
 
         // Extract response from agent state (last assistant message)
         responseText = this.extractResponseText();
         if (this.hasVisionAttachments(message) && responseText.trim().length === 0) {
           const assistantMessage = this.getLatestAssistantMessage();
-          log.warn('Vision turn produced empty assistant text; attempting recovery reply', {
+          log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
             channelId: message.channelId,
-            model: this.agent.state.model?.id ?? null,
+            model: this.agent.state.model.id,
             stopReason: assistantMessage?.stopReason ?? null,
             errorMessage: assistantMessage?.errorMessage ?? null,
           });
 
-          // Recovery always falls back to chat slot so the user gets a response
-          // even when the configured vision deployment is unavailable.
+          // Recovery falls back to the chat slot, but replays transport-normalized
+          // user content instead of injecting synthetic assistant/user wording.
           try {
             const recoveryModel = resolveModel(this.config, 'chat');
             this.agent.setModel(recoveryModel);
@@ -1941,12 +1952,10 @@ export class SubstrateAgent {
             });
           }
 
-          const recoveryNote = assistantMessage?.errorMessage
-            ? `Runtime note: the previous vision reply produced no text (${assistantMessage.errorMessage}). Respond to the user's latest image turn now. If the image could not be processed, clearly say so and ask for resend.`
-            : 'Runtime note: the previous vision reply produced no text. Respond to the user\'s latest image turn now. If the image could not be processed, clearly say so and ask for resend.';
-
+          const replayTransportContent = message.content.trim();
+          let recoveryAttempts = 0;
           const runVisionRecoveryPrompt = async (
-            content: string,
+            content: UserMessage['content'],
             requestSuffix: string,
             originStage: string,
           ): Promise<void> => {
@@ -1974,39 +1983,64 @@ export class SubstrateAgent {
             }
           };
 
-          await runVisionRecoveryPrompt(
-            recoveryNote,
-            'vision-recovery',
-            'agent.turn.vision_recovery',
-          );
-
-          turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
-          turnUsage = this.accumulateTurnUsage(turnMessages);
-          responseModel = this.agent.state.model?.id ?? responseModel;
-          responseText = this.extractResponseText();
-
-          if (responseText.trim().length === 0) {
-            log.warn('Vision recovery reply was empty; attempting strict non-empty recovery reply', {
-              channelId: message.channelId,
-              model: this.agent.state.model?.id ?? null,
-            });
-
+          if (replayTransportContent.length > 0) {
             await runVisionRecoveryPrompt(
-              'Runtime note: the previous recovery reply was empty. Reply now with exactly one short sentence. If the image could not be processed, clearly say so and ask for resend.',
-              'vision-recovery-strict',
-              'agent.turn.vision_recovery_strict',
+              replayTransportContent,
+              'vision-recovery',
+              'agent.turn.vision_recovery',
             );
+            recoveryAttempts += 1;
 
             turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
             turnUsage = this.accumulateTurnUsage(turnMessages);
-            responseModel = this.agent.state.model?.id ?? responseModel;
+            responseModel = this.agent.state.model.id;
             responseText = this.extractResponseText();
+
+            if (responseText.trim().length === 0) {
+              log.warn('Vision recovery replay remained empty; retrying once with same transport content', {
+                channelId: message.channelId,
+                model: this.agent.state.model.id,
+              });
+              await runVisionRecoveryPrompt(
+                replayTransportContent,
+                'vision-recovery-retry',
+                'agent.turn.vision_recovery_retry',
+              );
+              recoveryAttempts += 1;
+
+              turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
+              turnUsage = this.accumulateTurnUsage(turnMessages);
+              responseModel = this.agent.state.model.id;
+              responseText = this.extractResponseText();
+            }
+          } else {
+            log.warn('Vision recovery replay skipped because transport-normalized content was empty', {
+              channelId: message.channelId,
+            });
           }
 
-          if (responseText.trim().length === 0) {
-            log.warn('Vision turn remained empty after recovery attempts', {
+          const finalContentEmpty = responseText.trim().length === 0;
+          fallbackDiagnostics = {
+            fallback: {
+              code: 'vision_empty_response',
+              strategy: 'replay_transport_content',
+              attempts: recoveryAttempts,
+              finalContentEmpty,
+              ...(assistantMessage?.stopReason ? { previousStopReason: assistantMessage.stopReason } : {}),
+              ...(assistantMessage?.errorMessage ? { previousErrorMessage: assistantMessage.errorMessage } : {}),
+            },
+          };
+          this.emitTelemetry('agent.turn.fallback', {
+            channelId: message.channelId,
+            channelType: message.channelType,
+            ...fallbackDiagnostics.fallback,
+            ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.fallback'),
+          });
+
+          if (finalContentEmpty) {
+            log.warn('Vision turn remained empty after non-fabricating recovery replay', {
               channelId: message.channelId,
-              model: this.agent.state.model?.id ?? null,
+              model: this.agent.state.model.id,
             });
           }
         }
@@ -2095,6 +2129,7 @@ export class SubstrateAgent {
           inputTokens: turnUsage.inputTokens,
           outputTokens: turnUsage.outputTokens,
           durationMs: Date.now() - startTime,
+          ...(fallbackDiagnostics ? { diagnostics: fallbackDiagnostics } : {}),
           ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         },
       };
@@ -2269,10 +2304,8 @@ export class SubstrateAgent {
       ? Math.min(100, (peakInputTokens / contextWindow) * 100)
       : 0;
     const lastRound = deliberation.rounds[deliberation.rounds.length - 1];
-    const model = lastRound?.aggregatorModel
-      ?? lastRound?.voices[lastRound.voices.length - 1]?.model
-      ?? this.config.modelRoster.chat?.model
-      ?? this.config.primaryModel;
+    const model = lastRound.aggregatorModel
+      ?? lastRound.voices[lastRound.voices.length - 1].model;
 
     const turnUsage: TurnUsage = {
       inputTokens: deliberation.totalInputTokens,
@@ -2797,6 +2830,25 @@ export class SubstrateAgent {
     return candidate && candidate.length > 0 ? candidate : 'Assistant';
   }
 
+  private resolveRuntimeCharacterName(characterPromptVariables: Record<string, string>): string {
+    const candidates = [
+      characterPromptVariables.char,
+      characterPromptVariables.char_name,
+      characterPromptVariables.character,
+      characterPromptVariables.character_name,
+      characterPromptVariables['character.name'],
+      characterPromptVariables.name,
+    ];
+    for (const candidate of candidates) {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
+      const trimmed = candidate?.trim();
+      if (trimmed && trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+    return this.characterName;
+  }
+
   private buildPromptTemplateVariables(
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -2806,16 +2858,20 @@ export class SubstrateAgent {
     now: Date,
   ): Record<string, string> {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
-    const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
+    const modelId = this.agent.state.model.id;
+    const characterPromptVariables = this.resolveCharacterPromptVariables();
+    const runtimeCharacterName = this.resolveRuntimeCharacterName(characterPromptVariables);
+    this.characterName = runtimeCharacterName;
 
     return {
+      ...characterPromptVariables,
       user: resolvedUserName,
       user_name: resolvedUserName,
       user_id: message.authorId,
-      char: this.characterName,
-      char_name: this.characterName,
-      character: this.characterName,
-      character_name: this.characterName,
+      char: runtimeCharacterName,
+      char_name: runtimeCharacterName,
+      character: runtimeCharacterName,
+      character_name: runtimeCharacterName,
       channel: message.channelId,
       channel_id: message.channelId,
       channel_type: channelType ?? 'unknown',
@@ -2837,9 +2893,11 @@ export class SubstrateAgent {
     canonicalContactKey?: string,
     responseStyle: ResponseStyle = 'concise',
     now: Date = new Date(),
+    taskKind?: string,
+    templateVariables?: Record<string, string>,
   ): string {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
-    const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
+    const modelId = this.agent.state.model.id;
     const contextWindow = this.resolveContextWindow();
     const extendedCount = this.extendedTools.length;
     const activeResolution = this.resolveActiveTools();
@@ -2877,6 +2935,20 @@ export class SubstrateAgent {
       + ')'
       + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
     ];
+
+    const isScheduledTask = taskKind === 'heartbeat' || taskKind === 'reflection' || message.channelId.startsWith('internal:');
+    if (isScheduledTask) {
+      const promptVariables = templateVariables ?? this.resolveCharacterPromptVariables();
+      const appearance = (
+        promptVariables['character.visual_description']
+        || promptVariables.extensions_visual_description
+        || promptVariables.visual_description
+        || ''
+      ).trim();
+      if (appearance.length > 0) {
+        lines.push(`Appearance context: ${appearance}`);
+      }
+    }
 
     // Tool directory for extended tools
     if (extendedCount > 0) {
@@ -3031,7 +3103,7 @@ export class SubstrateAgent {
   private resolveIdentityChannel(message: SubstrateMessage): string {
     if (message.channelType === 'discord') return 'discord';
     if (message.channelType === 'api') return 'api';
-    if (message.channelType && message.channelType !== 'terminal') return message.channelType;
+    if (message.channelType !== 'terminal') return message.channelType;
     if (message.channelId.startsWith('discord-voice:')) return 'discord';
     if (message.channelId.startsWith('api:')) return 'api';
     if (message.channelId.startsWith('internal:')) return 'internal';
@@ -3062,10 +3134,11 @@ export class SubstrateAgent {
     const nickname = contact?.nickname?.trim();
     if (nickname) return nickname;
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Contact from mocks may lack displayName
     const displayName = contact?.displayName?.trim();
     if (displayName) return displayName;
 
-    const authorName = message.authorName?.trim();
+    const authorName = message.authorName.trim();
     if (authorName) return authorName;
 
     return 'User';
@@ -3099,7 +3172,7 @@ export class SubstrateAgent {
       const contact = typeof maybeChannelResolver.resolveChannelIdentity === 'function'
         ? maybeChannelResolver.resolveChannelIdentity(channel, message.authorId, message.authorName)
         : this.contactStore.resolveUserId(message.authorId);
-      const canonicalContactKey = contact?.id;
+      const canonicalContactKey = contact.id;
 
       const maybeActivityRecorder = this.contactStore as ContactStore & {
         recordChannelActivity?: (contactId: string, channel: string, channelId: string) => void;
@@ -3112,7 +3185,7 @@ export class SubstrateAgent {
       }
 
       return {
-        trustLevel: contact?.trustLevel ?? 'regular',
+        trustLevel: contact.trustLevel,
         resolvedUserName: this.resolvePromptUserName(message, contact),
         canonicalContactKey,
         continuityFallbackKeys: canonicalContactKey

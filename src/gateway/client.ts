@@ -59,6 +59,13 @@ import type {
   GitApplyPatchResult,
   GitCommitResult,
   GitOpenPRResult,
+  BeadsReadyParams,
+  BeadsShowParams,
+  BeadsCreateParams,
+  BeadsUpdateParams,
+  BeadsCloseParams,
+  BeadsSyncParams,
+  BeadsActionResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -603,6 +610,32 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     return result.url;
   }
 
+  // ── Beads issue management ──
+
+  async beadsReady(params: BeadsReadyParams = {}): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.ready', params) as BeadsActionResult;
+  }
+
+  async beadsShow(params: BeadsShowParams): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.show', params) as BeadsActionResult;
+  }
+
+  async beadsCreate(params: BeadsCreateParams): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.create', params) as BeadsActionResult;
+  }
+
+  async beadsUpdate(params: BeadsUpdateParams): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.update', params) as BeadsActionResult;
+  }
+
+  async beadsClose(params: BeadsCloseParams): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.close', params) as BeadsActionResult;
+  }
+
+  async beadsSync(params: BeadsSyncParams = {}): Promise<BeadsActionResult> {
+    return await this.rpcInstance.request('beads.sync', params) as BeadsActionResult;
+  }
+
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
     return await this.rpcInstance.request('notify.ntfy', params) as NotifyNtfyResult;
   }
@@ -924,14 +957,6 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       return;
     }
 
-    // Backward compat: if requestId is missing or '0', fall back to any single handler
-    if (!chunk.requestId || chunk.requestId === '0') {
-      const fallback = this.chunkHandlers.values().next().value;
-      if (fallback) {
-        fallback(chunk.text);
-        return;
-      }
-    }
   }
 
   private handleNotification(method: string, params: unknown): void {

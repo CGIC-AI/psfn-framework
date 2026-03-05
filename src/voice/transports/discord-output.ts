@@ -21,7 +21,8 @@ export class DiscordVoiceOutputTransport implements VoiceTransportOutput {
     const resource = createAudioResource(Readable.from(audio));
     this.player.play(resource);
 
-    await entersState(this.player, AudioPlayerStatus.Playing, PLAYBACK_START_TIMEOUT_MS).catch(() => undefined);
+    await entersState(this.player, AudioPlayerStatus.Playing, PLAYBACK_START_TIMEOUT_MS)
+      .catch(() => { /* Playback start timeout — continue to wait for idle */ });
     await entersState(this.player, AudioPlayerStatus.Idle, PLAYBACK_FINISH_TIMEOUT_MS);
   }
 

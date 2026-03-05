@@ -26,7 +26,7 @@ import { createThinkTool } from '../repl/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { CapabilityTier } from '../types.js';
-import { loadCharacterCard, composeSystemPrompt } from '../identity/loader.js';
+import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../identity/loader.js';
 import type { CharacterCardV2 } from '../identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -86,13 +86,19 @@ export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {
 export interface IdentityComposition {
   card: CharacterCardV2;
   systemPrompt: string;
+  initializedCard: boolean;
+  migratedLegacyBootstrap: boolean;
 }
 
 export function composeIdentity(config: SubstrateConfig): IdentityComposition {
-  const card = loadCharacterCard(config.characterCardPath);
+  const { card, initialized, migratedLegacyBootstrap } = loadOrInitializeCharacterCard(
+    config.characterCardPath,
+  );
   return {
     card,
     systemPrompt: composeSystemPrompt(card),
+    initializedCard: initialized,
+    migratedLegacyBootstrap,
   };
 }
 
@@ -102,6 +108,8 @@ export interface SubstrateAgentCompositionOptions {
   sessionManager: SessionManager;
   systemPrompt: string;
   characterName?: string;
+  characterPromptVariables?: Record<string, string>;
+  characterPromptVariablesProvider?: () => Record<string, string>;
   config: SubstrateConfig;
 }
 
@@ -112,7 +120,13 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
     options.sessionManager,
     options.systemPrompt,
     options.config,
-    options.characterName ? { characterName: options.characterName } : undefined,
+    {
+      ...(options.characterName ? { characterName: options.characterName } : {}),
+      ...(options.characterPromptVariables ? { characterPromptVariables: options.characterPromptVariables } : {}),
+      ...(options.characterPromptVariablesProvider
+        ? { characterPromptVariablesProvider: options.characterPromptVariablesProvider }
+        : {}),
+    },
   );
 }
 

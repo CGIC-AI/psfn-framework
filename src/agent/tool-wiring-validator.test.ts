@@ -35,6 +35,8 @@ describe('resolveClientMethod', () => {
     expect(resolveClientMethod('git.apply_patch')).toBe('gitApplyPatch');
     expect(resolveClientMethod('git.commit')).toBe('gitCommit');
     expect(resolveClientMethod('git.open_pr')).toBe('gitOpenPR');
+    expect(resolveClientMethod('beads.ready')).toBe('beadsReady');
+    expect(resolveClientMethod('beads.create')).toBe('beadsCreate');
     expect(resolveClientMethod('llm.chat')).toBe('stream');
     expect(resolveClientMethod('llm.complete')).toBe('complete');
     expect(resolveClientMethod('discord.send')).toBe('discordSend');
@@ -392,6 +394,12 @@ describe('extractGatewayMethods with GatewayClient shape', () => {
       gitCommit(): void { /* noop */ }
       gitOpenPR(): void { /* noop */ }
       notifyNtfy(): void { /* noop */ }
+      beadsReady(): void { /* noop */ }
+      beadsShow(): void { /* noop */ }
+      beadsCreate(): void { /* noop */ }
+      beadsUpdate(): void { /* noop */ }
+      beadsClose(): void { /* noop */ }
+      beadsSync(): void { /* noop */ }
     }
 
     const methods = extractGatewayMethods(new FakeGatewayClient());
@@ -403,6 +411,8 @@ describe('extractGatewayMethods with GatewayClient shape', () => {
     expect(methods.has('gitApplyPatch')).toBe(true);
     expect(methods.has('gitCommit')).toBe(true);
     expect(methods.has('gitOpenPR')).toBe(true);
+    expect(methods.has('beadsReady')).toBe(true);
+    expect(methods.has('beadsCreate')).toBe(true);
 
     // Verify LLM methods
     expect(methods.has('stream')).toBe(true);

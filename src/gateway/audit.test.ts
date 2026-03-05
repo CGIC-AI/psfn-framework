@@ -102,7 +102,7 @@ describe('AuditStore', () => {
     });
 
     const entries = store.getRecent(1);
-    const parsed = JSON.parse(entries[0].paramsJson ?? '{}') as Record<string, string>;
+    const parsed = JSON.parse(entries[0].paramsJson) as Record<string, string>;
     expect(parsed.turnId).toBe('turn-77');
     expect(parsed.requestId).toBe('req-77');
     expect(parsed.channelId).toBe('internal:heartbeat');

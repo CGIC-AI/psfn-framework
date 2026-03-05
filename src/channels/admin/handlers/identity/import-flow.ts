@@ -22,7 +22,7 @@ export interface CharacterBookSeedImportResult {
 }
 
 export function resolveCharacterImportAssetRootDir(config: SubstrateConfig): string | null {
-  const dataDir = config.dataDir?.trim();
+  const dataDir = config.dataDir.trim();
   if (!dataDir) return null;
   return join(dataDir, 'identity-assets');
 }

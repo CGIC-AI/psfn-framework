@@ -340,7 +340,7 @@ export async function migrateMemoryEmbeddings(
     const workerCount = Math.min(parallelism, batches.length);
 
     const runWorker = async (): Promise<void> => {
-      while (true) {
+      for (;;) {
         const batchIndex = nextBatch++;
         if (batchIndex >= batches.length) return;
 

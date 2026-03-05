@@ -295,13 +295,13 @@ export class AdminServer implements Lifecycle {
     });
     this.settingsService = new AdminSettingsDataService({
       config: config.config,
-      skillsRuntime: config.skillsRuntime,
     });
     this.identityService = new AdminIdentityDataService({
       characterCard: config.characterCard,
       config: config.config,
       cardVersionStore: config.cardVersionStore,
       importIdentityCardHtml: (body) => this.handlers.domains.identity.importIdentityCard(body),
+      promptStore: config.promptStore,
     });
     this.promptsService = new AdminPromptsDataService({
       promptStore: config.promptStore,
@@ -594,13 +594,16 @@ export class AdminServer implements Lifecycle {
       .then((content) => {
         const isHtml = ext === '.html';
         res.writeHead(200, {
-          'Content-Type': mimeType ?? 'application/octet-stream',
+          'Content-Type': mimeType,
           'Cache-Control': isHtml ? GARDEN_HTML_CACHE_CONTROL : GARDEN_ASSET_CACHE_CONTROL,
         });
         res.end(content);
       })
-      .catch(() => {
+      .catch((fileErr) => {
         // File not found — serve index.html as SPA fallback
+        if ((fileErr as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log.debug('Garden asset read error', { path, error: String(fileErr) });
+        }
         const indexPath = join(this.gardenBuildDir!, 'index.html');
         readFile(indexPath)
           .then((content) => {
@@ -610,7 +613,8 @@ export class AdminServer implements Lifecycle {
             });
             res.end(content);
           })
-          .catch(() => {
+          .catch((indexErr) => {
+            log.debug('Garden SPA fallback failed', { error: String(indexErr) });
             this.send404(res, path);
           });
       });
@@ -788,7 +792,7 @@ export class AdminServer implements Lifecycle {
       return;
     }
 
-    if (!this.checkUpgradeAuth(req, url)) {
+    if (!this.checkUpgradeAuth(req)) {
       socket.write('HTTP/1.1 401 Unauthorized\\r\\n\\r\\n');
       socket.destroy();
       return;
@@ -799,11 +803,9 @@ export class AdminServer implements Lifecycle {
     });
   }
 
-  private checkUpgradeAuth(req: IncomingMessage, url: URL): boolean {
+  private checkUpgradeAuth(req: IncomingMessage): boolean {
     if (!this.token) return true;
-    if (this.hasRequestAuthCredentials(req)) return true;
-    const queryToken = url.searchParams.get('token') ?? url.searchParams.get('api_key');
-    return queryToken === this.token;
+    return this.hasRequestAuthCredentials(req);
   }
 
   private attachTelemetryWebSocket(ws: WebSocket): void {
@@ -1283,30 +1285,6 @@ export class AdminServer implements Lifecycle {
               sendText(res, 200, '[]', { 'Content-Type': 'application/json' });
             },
           );
-        },
-      },
-      // ── JSON API: Settings (for SvelteKit Garden UI) ──
-      {
-        method: 'GET',
-        match: exactPath('/api/admin/settings'),
-        handle: (_req, res) => {
-          this.settingsService.getSettingsData().then(
-            (data) => sendText(res, 200, JSON.stringify(data), { 'Content-Type': 'application/json' }),
-            (err) => {
-              log.error('Settings data error', { error: String(err) });
-              sendText(res, 500, JSON.stringify({ error: 'Failed to load settings' }), { 'Content-Type': 'application/json' });
-            },
-          );
-        },
-      },
-      {
-        method: 'PATCH',
-        match: exactPath('/api/admin/settings'),
-        handle: (req, res) => {
-          this.withBody(req, res, (body) => {
-            const result = this.settingsService.updateSettings(body);
-            sendText(res, result.ok ? 200 : 400, JSON.stringify(result), { 'Content-Type': 'application/json' });
-          });
         },
       },
       { method: 'GET', match: exactPath('/prompts'), handle: (_req, res) => this.sendHtml(res, this.handlers.domains.prompts.promptsPage()) },

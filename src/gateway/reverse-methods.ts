@@ -27,23 +27,23 @@ interface ReverseGatewayMethodDescriptor<P, R> {
 
 const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = [
   {
-    names: ['voice.handleMessage', 'discord.handleMessage'],
+    names: ['voice.handleMessage'],
     handler: (params: { message: RpcSubstrateMessage }, runtime) => runtime.dispatchHandleMessage(params.message),
   },
   {
-    names: ['voice.stream.start', 'discord.voice.start'],
+    names: ['voice.stream.start'],
     handler: (params: VoiceStreamStartParams, runtime) => runtime.handleVoiceStreamStart(params),
   },
   {
-    names: ['voice.stream.chunk', 'discord.voice.chunk'],
+    names: ['voice.stream.chunk'],
     handler: (params: VoiceStreamChunkParams, runtime) => runtime.handleVoiceStreamChunk(params),
   },
   {
-    names: ['voice.stream.end', 'discord.voice.end'],
+    names: ['voice.stream.end'],
     handler: (params: VoiceStreamEndParams, runtime) => runtime.handleVoiceStreamEnd(params),
   },
   {
-    names: ['voice.stream.cancel', 'discord.voice.cancel'],
+    names: ['voice.stream.cancel'],
     handler: (params: VoiceStreamCancelParams, runtime) => runtime.handleVoiceStreamCancel(params),
   },
 ];

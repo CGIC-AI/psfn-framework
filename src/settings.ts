@@ -1,6 +1,7 @@
 // ── Persistent Editable Settings ──
 // Subset of SubstrateConfig that can be changed at runtime via admin GUI.
-// Persisted to data/settings.json. Loaded at startup, merged over env defaults.
+// Persisted to data/settings.json (runtime-owned domain fields only).
+// Loaded at startup, merged over env defaults.
 
 import { join } from 'node:path';
 import {
@@ -46,6 +47,32 @@ const SESSION_RESTART_BEHAVIOR_VALUES = new Set<SessionRestartBehavior>([
 ]);
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+const MODEL_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
+  'primaryModel',
+  'primaryProvider',
+  'primaryMaxTokens',
+  'extractionModel',
+  'extractionProvider',
+  'extractionMaxTokens',
+  'modelCatalog',
+  'modelRoleAssignments',
+  'modelRoster',
+];
+
+const NON_RUNTIME_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
+  ...MODEL_SETTINGS_KEYS,
+  'maintenanceIntervalMs',
+  'capabilityTier',
+];
+
+export interface SettingsDomainSplit {
+  runtime: EditableSettings;
+  models: EditableSettings;
+  maintenanceIntervalMs?: number;
+  capabilityTier?: CapabilityTier;
+  legacyKeys: string[];
+}
 
 export const DEFAULT_MODEL_ROLE_ASSIGNMENTS: Readonly<ModelRoleAssignments> = {
   chat: PRIMARY_MODEL_SLOT_KEY,
@@ -308,7 +335,7 @@ function toSttProvider(value: unknown): 'deepgram' | 'disabled' | undefined {
 
 function resolveRuntimeTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
   const provider = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
-  if (provider === 'elevenlabs' || provider === 'echo' || provider === 'disabled') return provider;
+  if (provider === 'elevenlabs' || provider === 'echo') return provider;
   return 'disabled';
 }
 
@@ -384,8 +411,24 @@ function sanitizeModelCatalog(value: unknown): Record<string, ModelCatalogEntry>
     const slotKey = rawSlotKey.trim();
     if (!slotKey || !MODEL_SLOT_KEY_PATTERN.test(slotKey) || !isRecord(rawEntry)) continue;
 
-    const model = toNonEmptyString(rawEntry.model);
-    const provider = toNonEmptyString(rawEntry.provider);
+    let model = toNonEmptyString(rawEntry.model);
+    let provider = toNonEmptyString(rawEntry.provider);
+
+    // Accept "openrouter/<model-id>" shorthand and normalize to canonical
+    // provider + model fields so settings PATCH round-trips do not drift.
+    if (model && (!provider || provider.length === 0) && model.toLowerCase().startsWith('openrouter/')) {
+      const normalizedModel = model.slice('openrouter/'.length).trim();
+      if (normalizedModel) {
+        model = normalizedModel;
+        provider = 'openrouter';
+      }
+    } else if (model && provider?.toLowerCase() === 'openrouter' && model.toLowerCase().startsWith('openrouter/')) {
+      const normalizedModel = model.slice('openrouter/'.length).trim();
+      if (normalizedModel) {
+        model = normalizedModel;
+      }
+    }
+
     if (!model || !provider) continue;
 
     const defaults = sanitizeModelSlotDefaults(rawEntry.defaults);
@@ -457,12 +500,14 @@ function mergeCatalogSlot(
 
   const existing = catalog[slotKey];
   const merged: ModelCatalogEntry = {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
     ...(existing ?? {}),
     model,
     provider,
   };
 
   const overrides: ModelSlotOverrides = {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
     ...(existing?.overrides ?? {}),
   };
   if (slot.maxTokens !== undefined) overrides.maxTokens = slot.maxTokens;
@@ -501,6 +546,7 @@ function resolveCatalogSlotKey(
 
   for (const candidate of candidates) {
     if (!candidate) continue;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
     if (catalog[candidate]) return candidate;
   }
 
@@ -543,6 +589,7 @@ function resolvePurposeSlot(
   const slotKey = resolveCatalogSlotKey(catalog, assignments, purpose, fallbackSlotKey);
   if (!slotKey) return undefined;
   const entry = catalog[slotKey];
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record<string,T> hides runtime undefined
   if (!entry) return undefined;
   return modelSlotFromCatalogEntry(entry, fallback);
 }
@@ -768,16 +815,48 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
   return normalized;
 }
 
-function hasModelSettings(settings: EditableSettings): boolean {
-  return settings.primaryModel !== undefined
-    || settings.primaryProvider !== undefined
-    || settings.primaryMaxTokens !== undefined
-    || settings.extractionModel !== undefined
-    || settings.extractionProvider !== undefined
-    || settings.extractionMaxTokens !== undefined
-    || settings.modelCatalog !== undefined
-    || settings.modelRoleAssignments !== undefined
-    || settings.modelRoster !== undefined;
+export function hasModelSettings(settings: EditableSettings): boolean {
+  return MODEL_SETTINGS_KEYS.some((key) => settings[key] !== undefined);
+}
+
+export function extractModelSettings(settings: EditableSettings): EditableSettings {
+  const modelSettings: EditableSettings = {};
+  for (const key of MODEL_SETTINGS_KEYS) {
+    const value = settings[key];
+    if (value === undefined) continue;
+    (modelSettings as Record<string, unknown>)[key] = value;
+  }
+  return modelSettings;
+}
+
+export function splitSettingsByDomain(settings: EditableSettings): SettingsDomainSplit {
+  const runtime: EditableSettings = { ...settings };
+  for (const key of NON_RUNTIME_SETTINGS_KEYS) {
+    delete runtime[key];
+  }
+
+  const legacyKeys: string[] = [];
+  for (const key of NON_RUNTIME_SETTINGS_KEYS) {
+    if (settings[key] !== undefined) {
+      legacyKeys.push(key);
+    }
+  }
+
+  return {
+    runtime,
+    models: extractModelSettings(settings),
+    ...(settings.maintenanceIntervalMs !== undefined
+      ? { maintenanceIntervalMs: settings.maintenanceIntervalMs }
+      : {}),
+    ...(settings.capabilityTier !== undefined
+      ? { capabilityTier: settings.capabilityTier }
+      : {}),
+    legacyKeys,
+  };
+}
+
+export function toRuntimeOwnedSettings(settings: EditableSettings): EditableSettings {
+  return splitSettingsByDomain(settings).runtime;
 }
 
 export function normalizeEditableSettings(
@@ -791,7 +870,8 @@ export function normalizeEditableSettings(
   }
 
   const normalized: EditableSettings = { ...normalizedInput };
-  const catalog = sanitizeModelCatalog(normalizedInput.modelCatalog);
+  const explicitCatalog = sanitizeModelCatalog(normalizedInput.modelCatalog);
+  const catalog: Record<string, ModelCatalogEntry> = { ...explicitCatalog };
   const assignments = sanitizeModelRoleAssignments(normalizedInput.modelRoleAssignments);
   const roster = sanitizeModelRoster(normalizedInput.modelRoster);
 
@@ -820,27 +900,42 @@ export function normalizeEditableSettings(
     maxTokens: normalizedInput.extractionMaxTokens,
   });
 
-  if (catalog[PRIMARY_MODEL_SLOT_KEY]) {
-    assignments.chat ??= PRIMARY_MODEL_SLOT_KEY;
-    assignments.summary ??= assignments.chat;
-    assignments.reasoning ??= assignments.chat;
-    assignments.longContext ??= assignments.chat;
+  // Explicit modelCatalog payload must win over inferred/legacy/roster merges.
+  // This prevents stale modelRoster entries from rewriting operator-selected slots.
+  const hasPrimaryLegacyOverride = normalizedInput.primaryModel !== undefined
+    || normalizedInput.primaryProvider !== undefined
+    || normalizedInput.primaryMaxTokens !== undefined;
+  const hasExtractionLegacyOverride = normalizedInput.extractionModel !== undefined
+    || normalizedInput.extractionProvider !== undefined
+    || normalizedInput.extractionMaxTokens !== undefined;
+  for (const [slotKey, explicitEntry] of Object.entries(explicitCatalog)) {
+    if (slotKey === PRIMARY_MODEL_SLOT_KEY && hasPrimaryLegacyOverride) continue;
+    if (slotKey === EXTRACTION_MODEL_SLOT_KEY && hasExtractionLegacyOverride) continue;
+
+    const existing = catalog[slotKey];
+    catalog[slotKey] = {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
+      ...(existing ?? {}),
+      model: explicitEntry.model,
+      provider: explicitEntry.provider,
+      ...(explicitEntry.defaults ? { defaults: explicitEntry.defaults } : {}),
+      ...(explicitEntry.overrides ? { overrides: explicitEntry.overrides } : {}),
+    };
   }
-  if (catalog[EXTRACTION_MODEL_SLOT_KEY]) {
-    assignments.background ??= EXTRACTION_MODEL_SLOT_KEY;
-    assignments.extraction ??= assignments.background;
-    assignments.import_processing ??= assignments.background;
-  }
+
+  assignments.chat ||= PRIMARY_MODEL_SLOT_KEY;
+  assignments.summary ||= assignments.chat;
+  assignments.reasoning ||= assignments.chat;
+  assignments.longContext ||= assignments.chat;
+  assignments.background ||= EXTRACTION_MODEL_SLOT_KEY;
+  assignments.extraction ||= assignments.background;
+  assignments.import_processing ||= assignments.background;
   if (!assignments.vision) {
-    const visionDefaultSlot = catalog.vision
-      ? 'vision'
-      : (catalog[PRIMARY_MODEL_SLOT_KEY] ? PRIMARY_MODEL_SLOT_KEY : undefined);
-    if (visionDefaultSlot) {
-      assignments.vision = visionDefaultSlot;
-    }
+    assignments.vision = 'vision';
   }
 
   for (const [purpose, slotKey] of Object.entries(assignments)) {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
     if (!catalog[slotKey]) {
       delete assignments[purpose];
     }
@@ -865,7 +960,7 @@ export function normalizeEditableSettings(
     {
       maxTokens: normalizedInput.extractionMaxTokens ?? normalizedInput.primaryMaxTokens,
     },
-    assignments.background ?? EXTRACTION_MODEL_SLOT_KEY,
+    assignments.background,
   );
 
   const backgroundSlot = resolvePurposeSlot(
@@ -875,7 +970,7 @@ export function normalizeEditableSettings(
     {
       maxTokens: extractionSlot?.maxTokens ?? normalizedInput.extractionMaxTokens ?? normalizedInput.primaryMaxTokens,
     },
-    assignments.extraction ?? EXTRACTION_MODEL_SLOT_KEY,
+    assignments.extraction,
   );
 
   const reasoningSlot = resolvePurposeSlot(
@@ -887,7 +982,7 @@ export function normalizeEditableSettings(
       contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
       contextBudget: chatSlot?.contextBudget,
     },
-    assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
+    assignments.chat,
   );
 
   const longContextSlot = resolvePurposeSlot(
@@ -899,7 +994,7 @@ export function normalizeEditableSettings(
       contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
       contextBudget: chatSlot?.contextBudget,
     },
-    assignments.chat ?? PRIMARY_MODEL_SLOT_KEY,
+    assignments.chat,
   );
 
   const visionSlot = resolvePurposeSlot(
@@ -911,7 +1006,7 @@ export function normalizeEditableSettings(
       contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
       contextBudget: chatSlot?.contextBudget,
     },
-    assignments.vision ?? (catalog.vision ? 'vision' : (assignments.chat ?? PRIMARY_MODEL_SLOT_KEY)),
+    assignments.vision,
   );
 
   const nextRoster: Partial<Record<ModelPurpose, ModelSlot>> = {
@@ -1074,7 +1169,13 @@ export function loadSettings(
 export function saveSettings(dataDir: string, settings: EditableSettings): void {
   const path = join(dataDir, SETTINGS_FILE);
   const normalized = normalizeEditableSettings(settings);
-  writeJsonAtomic(path, normalized);
+  const split = splitSettingsByDomain(normalized);
+  writeJsonAtomic(path, split.runtime);
+  if (split.legacyKeys.length > 0) {
+    log.warn('Dropped non-runtime keys while saving settings.json', {
+      keys: split.legacyKeys,
+    });
+  }
   log.info('Saved settings');
 }
 
@@ -1673,6 +1774,7 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
 
   if (settings.modelCatalog && settings.modelRoleAssignments) {
     for (const [purpose, slotKey] of Object.entries(settings.modelRoleAssignments)) {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
       if (!settings.modelCatalog[slotKey]) {
         errors.push(`purpose "${purpose}" references unknown model slot "${slotKey}"`);
       }

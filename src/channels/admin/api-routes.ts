@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseJsonBody, sendJson } from '../http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
-import { handleMultipartUpload, validateAndParseJsonFile } from './multipart.js';
+import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';
 import type {
   AdminAdaptiveToolsService,
   AdminContactsService,
@@ -129,6 +129,22 @@ function parseAdminJsonBody(body: string): { ok: true; value: unknown } | { ok: 
   return { ok: true, value: result.value };
 }
 
+function escapeHtmlPayloadText(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('\'', '&#39;');
+}
+
+function toSanitizedMessage(value: unknown, fallback: string): string {
+  const normalized = typeof value === 'string'
+    ? value.trim()
+    : (value instanceof Error ? value.message.trim() : String(value ?? '').trim());
+  return escapeHtmlPayloadText(normalized || fallback);
+}
+
 function toMemoryType(value: string | null): MemoryType | undefined {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
@@ -176,6 +192,8 @@ function toDateFilter(value: string | null, boundary: 'start' | 'end'): number |
   return parsed;
 }
 
+const ADMIN_SETTINGS_API_PATH = '/api/admin/settings';
+
 export function buildAdminApiRoutes(options: {
   dashboardService: AdminDashboardService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
@@ -221,6 +239,14 @@ export function buildAdminApiRoutes(options: {
     details: Array<string | null | undefined> = [],
   ): void => {
     appendAuditTimelineEntry?.('identity_edit', decision, narrative, details, 'operator');
+  };
+
+  const appendSettingsMutationAudit = (
+    decision: AdminAuditDecision,
+    narrative: string,
+    details: Array<string | null | undefined> = [],
+  ): void => {
+    appendAuditTimelineEntry?.('settings_change', decision, narrative, details, 'operator');
   };
 
   const handleContactUpdate = (req: IncomingMessage, res: ServerResponse, id: string): void => {
@@ -536,7 +562,7 @@ export function buildAdminApiRoutes(options: {
           }
           const result = contactsService.mergeContacts(id, JSON.stringify(parsed.value));
           if (!result.ok) {
-            sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
             return;
           }
           sendJson(res, 200, result);
@@ -555,7 +581,7 @@ export function buildAdminApiRoutes(options: {
           }
           const result = contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value));
           if (!result.ok) {
-            sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
             return;
           }
           sendJson(res, 200, result);
@@ -580,7 +606,7 @@ export function buildAdminApiRoutes(options: {
       handle: (_req, res, { id }) => {
         const result = contactsService.deleteContact(id);
         if (!result.ok) {
-          sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+          sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
           return;
         }
         sendJson(res, 200, result);
@@ -602,7 +628,7 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'GET',
-      match: exactPath('/api/admin/settings'),
+      match: exactPath(ADMIN_SETTINGS_API_PATH),
       handle: (_req, res) => {
         settingsService.getSettingsData().then(
           data => sendJson(res, 200, data),
@@ -612,22 +638,41 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'PATCH',
-      match: exactPath('/api/admin/settings'),
+      match: exactPath(ADMIN_SETTINGS_API_PATH),
       handle: (req, res) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
+            appendSettingsMutationAudit(
+              'denied',
+              'Operator settings update via /api/admin/settings failed: invalid JSON payload.',
+            );
             sendJson(res, 400, { error: parsed.error });
             return;
           }
+          const changedFields = parsed.value && typeof parsed.value === 'object' && !Array.isArray(parsed.value)
+            ? Object.keys(parsed.value as Record<string, unknown>).sort()
+            : [];
           const result = settingsService.updateSettings(JSON.stringify(parsed.value));
           if (!result.ok) {
+            const safeMessage = toSanitizedMessage(result.message, 'Settings update failed');
+            appendSettingsMutationAudit(
+              'denied',
+              `Operator settings update via /api/admin/settings failed: ${safeMessage}`,
+              [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
+            );
             sendJson(res, 400, {
-              error: result.message,
+              error: safeMessage,
               ...result,
+              message: safeMessage,
             });
             return;
           }
+          appendSettingsMutationAudit(
+            'allowed',
+            'Operator updated runtime settings via /api/admin/settings.',
+            [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
+          );
           sendJson(res, 200, result);
         });
       },
@@ -657,13 +702,14 @@ export function buildAdminApiRoutes(options: {
           const rawPath = typeof payload.path === 'string' ? payload.path.trim() : '';
           identityService.importIdentityCard(JSON.stringify(parsed.value)).then(
             result => {
+              const safeMessage = toSanitizedMessage(result.message, 'Identity import failed');
               if (!result.ok) {
                 appendIdentityMutationAudit(
                   'denied',
-                  `Operator identity import via /api/admin/identity/import failed: ${result.message}`,
+                  `Operator identity import via /api/admin/identity/import failed: ${safeMessage}`,
                   [rawPath ? `path=${rawPath}` : null],
                 );
-                sendJson(res, 400, { error: result.message });
+                sendJson(res, 400, { error: safeMessage });
                 return;
               }
               appendIdentityMutationAudit(
@@ -671,18 +717,19 @@ export function buildAdminApiRoutes(options: {
                 'Operator imported identity card via /api/admin/identity/import.',
                 [
                   rawPath ? `path=${rawPath}` : null,
-                  result.message || null,
+                  safeMessage,
                 ],
               );
-              sendJson(res, 201, result);
+              sendJson(res, 201, { ...result, message: safeMessage });
             },
             error => {
+              const safeError = toSanitizedMessage(error, 'Identity import failed unexpectedly');
               appendIdentityMutationAudit(
                 'denied',
-                `Operator identity import via /api/admin/identity/import failed: ${String(error)}`,
+                `Operator identity import via /api/admin/identity/import failed: ${safeError}`,
                 [rawPath ? `path=${rawPath}` : null],
               );
-              sendJson(res, 500, { error: String(error) });
+              sendJson(res, 500, { error: safeError });
             },
           );
         });
@@ -695,58 +742,77 @@ export function buildAdminApiRoutes(options: {
         handleMultipartUpload(req, res).then(
           (uploadResult) => {
             if (!uploadResult.ok) {
+              const safeError = toSanitizedMessage(uploadResult.error, 'Identity upload failed');
               appendIdentityMutationAudit(
                 'denied',
-                `Operator identity upload via /api/admin/identity/upload failed: ${uploadResult.error}`,
+                `Operator identity upload via /api/admin/identity/upload failed: ${safeError}`,
               );
-              sendJson(res, uploadResult.status, { error: uploadResult.error });
+              sendJson(res, uploadResult.status, { error: safeError });
               return;
             }
-            const jsonResult = validateAndParseJsonFile(uploadResult.file);
-            if (!jsonResult.ok) {
+            const cardResult = validateAndParseCharacterCardFile(uploadResult.file);
+            if (!cardResult.ok) {
+              const safeError = toSanitizedMessage(cardResult.error, 'Identity upload failed');
               appendIdentityMutationAudit(
                 'denied',
-                `Operator identity upload via /api/admin/identity/upload failed: ${jsonResult.error}`,
+                `Operator identity upload via /api/admin/identity/upload failed: ${safeError}`,
                 [`filename=${uploadResult.file.filename}`],
               );
-              sendJson(res, 400, { error: jsonResult.error });
+              sendJson(res, 400, { error: safeError });
               return;
             }
             // Pass the parsed card data as a JSON string to the import service
-            identityService.importIdentityCard(JSON.stringify({ cardData: jsonResult.data })).then(
+            identityService.importIdentityCard(JSON.stringify({ cardData: cardResult.cardData })).then(
               result => {
+                const safeMessage = toSanitizedMessage(result.message, 'Identity upload import failed');
                 if (!result.ok) {
                   appendIdentityMutationAudit(
                     'denied',
-                    `Operator identity upload via /api/admin/identity/upload failed: ${result.message}`,
-                    [`filename=${jsonResult.filename}`],
+                    `Operator identity upload via /api/admin/identity/upload failed: ${safeMessage}`,
+                    [`filename=${cardResult.filename}`],
                   );
-                  sendJson(res, 400, { error: result.message });
+                  sendJson(res, 400, { error: safeMessage });
                   return;
                 }
                 appendIdentityMutationAudit(
                   'allowed',
                   'Operator imported identity card via /api/admin/identity/upload.',
-                  [`filename=${jsonResult.filename}`, result.message || null],
+                  [
+                    `filename=${cardResult.filename}`,
+                    `container=${cardResult.containerFormat}`,
+                    `source=${cardResult.sourceFormat}`,
+                    `spec=${cardResult.spec}`,
+                    safeMessage,
+                  ],
                 );
-                sendJson(res, 201, { ...result, filename: jsonResult.filename });
+                sendJson(res, 201, {
+                  ...result,
+                  message: safeMessage,
+                  filename: cardResult.filename,
+                  containerFormat: cardResult.containerFormat,
+                  sourceFormat: cardResult.sourceFormat,
+                  spec: cardResult.spec,
+                  warnings: cardResult.warnings,
+                });
               },
               error => {
+                const safeError = toSanitizedMessage(error, 'Identity upload import failed unexpectedly');
                 appendIdentityMutationAudit(
                   'denied',
-                  `Operator identity upload via /api/admin/identity/upload failed: ${String(error)}`,
-                  [`filename=${jsonResult.filename}`],
+                  `Operator identity upload via /api/admin/identity/upload failed: ${safeError}`,
+                  [`filename=${cardResult.filename}`],
                 );
-                sendJson(res, 500, { error: String(error) });
+                sendJson(res, 500, { error: safeError });
               },
             );
           },
           (error) => {
+            const safeError = toSanitizedMessage(error, 'Identity upload failed unexpectedly');
             appendIdentityMutationAudit(
               'denied',
-              `Operator identity upload via /api/admin/identity/upload failed: ${String(error)}`,
+              `Operator identity upload via /api/admin/identity/upload failed: ${safeError}`,
             );
-            sendJson(res, 500, { error: String(error) });
+            sendJson(res, 500, { error: safeError });
           },
         );
       },
@@ -1162,7 +1228,7 @@ export function buildAdminApiRoutes(options: {
           }
           try {
             const { name } = parsed.value as { name: string };
-            if (!name?.trim()) {
+            if (!name.trim()) {
               sendJson(res, 400, { error: 'Skill name is required' });
               return;
             }

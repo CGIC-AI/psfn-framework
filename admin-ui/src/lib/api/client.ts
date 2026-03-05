@@ -47,6 +47,24 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return res.json();
 }
 
+export async function apiPostMultipart<T>(
+  path: string,
+  formData: FormData
+): Promise<T> {
+  const res = await fetch(API_BASE + path, {
+    method: 'POST',
+    headers: authHeaders(),
+    credentials: 'include',
+    body: formData,
+  });
+  if (res.status === 401) {
+    window.location.href = '/garden/login';
+    throw new ApiError(401, 'Unauthorized');
+  }
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  return res.json();
+}
+
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(API_BASE + path, {
     method: 'PATCH',

@@ -14,10 +14,16 @@ export default [
       parser: tsParser,
       ecmaVersion: 'latest',
       sourceType: 'module',
+      parserOptions: {
+        project: './tsconfig.eslint.json',
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
     plugins: {
       '@typescript-eslint': tsPlugin,
     },
-    rules: {},
+    rules: {
+      '@typescript-eslint/no-unnecessary-condition': 'error',
+    },
   },
 ];

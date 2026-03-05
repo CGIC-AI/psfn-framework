@@ -13,6 +13,7 @@ const NURSERY_TOKENS: readonly CapabilityToken[] = [
   'identity.write.runtime',
   'memory.write',
   'git.read',
+  'issue.read',
   'repl.execute',
 ];
 
@@ -27,6 +28,8 @@ const APPRENTICE_TOKENS: readonly CapabilityToken[] = [
   'external.email',
   'external.web',
   'git.read',
+  'issue.read',
+  'issue.write',
   'repl.execute',
   'shard.spawn',
 ];
@@ -43,6 +46,9 @@ const AUTONOMOUS_TOKENS: readonly CapabilityToken[] = [
   'external.web',
   'git.read',
   'git.write',
+  'issue.read',
+  'issue.write',
+  'issue.close',
   'lifecycle.restart',
   'lifecycle.rebuild',
   'repl.execute',

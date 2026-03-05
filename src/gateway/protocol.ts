@@ -111,6 +111,41 @@ export interface GitOpenPRParams {
   base?: string;
 }
 
+export type BeadsAction = 'ready' | 'show' | 'create' | 'update' | 'close' | 'sync';
+export type BeadsIssueType = 'bug' | 'feature' | 'task' | 'epic' | 'chore';
+export type BeadsIssueStatus = 'open' | 'in_progress' | 'blocked' | 'closed';
+
+export interface BeadsBaseParams extends GatewayCorrelationParams {
+  actor?: string;
+}
+
+export interface BeadsReadyParams extends BeadsBaseParams {}
+
+export interface BeadsShowParams extends BeadsBaseParams {
+  id: string;
+}
+
+export interface BeadsCreateParams extends BeadsBaseParams {
+  title: string;
+  issueType?: BeadsIssueType;
+  priority?: number;
+  deps?: string[];
+  parent?: string;
+}
+
+export interface BeadsUpdateParams extends BeadsBaseParams {
+  id: string;
+  status?: BeadsIssueStatus;
+  priority?: number;
+}
+
+export interface BeadsCloseParams extends BeadsBaseParams {
+  id: string;
+  reason: string;
+}
+
+export interface BeadsSyncParams extends BeadsBaseParams {}
+
 export interface ShellExecParams {
   command: string;
   args?: string[];
@@ -267,6 +302,14 @@ export interface GitOpenPRResult {
   url: string;
 }
 
+export interface BeadsActionResult {
+  actor: string;
+  action: BeadsAction;
+  target: string;
+  result: 'success';
+  payload: unknown;
+}
+
 export interface ShellExecResult {
   command: string;
   args: string[];
@@ -321,6 +364,12 @@ export interface GatewayMethods {
   'git.apply_patch': [GitApplyPatchParams, GitApplyPatchResult];
   'git.commit': [GitCommitParams, GitCommitResult];
   'git.open_pr': [GitOpenPRParams, GitOpenPRResult];
+  'beads.ready': [BeadsReadyParams, BeadsActionResult];
+  'beads.show': [BeadsShowParams, BeadsActionResult];
+  'beads.create': [BeadsCreateParams, BeadsActionResult];
+  'beads.update': [BeadsUpdateParams, BeadsActionResult];
+  'beads.close': [BeadsCloseParams, BeadsActionResult];
+  'beads.sync': [BeadsSyncParams, BeadsActionResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
@@ -411,28 +460,12 @@ export interface VoiceStreamEndResult extends VoiceHandleMessageResult {
   droppedChunks: number;
 }
 
-// Backward-compatible aliases for Discord-specific reverse RPC naming.
-export type DiscordHandleMessageParams = VoiceHandleMessageParams;
-export type DiscordHandleMessageResult = VoiceHandleMessageResult;
-export type DiscordVoiceStreamStartParams = VoiceStreamStartParams;
-export type DiscordVoiceStreamChunkParams = VoiceStreamChunkParams;
-export type DiscordVoiceStreamEndParams = VoiceStreamEndParams;
-export type DiscordVoiceStreamCancelParams = VoiceStreamCancelParams;
-export type DiscordVoiceStreamAckResult = VoiceStreamAckResult;
-export type DiscordVoiceStreamCancelResult = VoiceStreamCancelResult;
-export type DiscordVoiceStreamEndResult = VoiceStreamEndResult;
-
 export interface AgentMethods {
   'voice.handleMessage': [VoiceHandleMessageParams, VoiceHandleMessageResult];
   'voice.stream.start': [VoiceStreamStartParams, VoiceStreamAckResult];
   'voice.stream.chunk': [VoiceStreamChunkParams, VoiceStreamAckResult];
   'voice.stream.end': [VoiceStreamEndParams, VoiceStreamEndResult];
   'voice.stream.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
-  'discord.handleMessage': [DiscordHandleMessageParams, DiscordHandleMessageResult];
-  'discord.voice.start': [DiscordVoiceStreamStartParams, DiscordVoiceStreamAckResult];
-  'discord.voice.chunk': [DiscordVoiceStreamChunkParams, DiscordVoiceStreamAckResult];
-  'discord.voice.end': [DiscordVoiceStreamEndParams, DiscordVoiceStreamEndResult];
-  'discord.voice.cancel': [DiscordVoiceStreamCancelParams, DiscordVoiceStreamCancelResult];
 }
 
 // ── Error codes (JSON-RPC custom range: -32000 to -32099) ──

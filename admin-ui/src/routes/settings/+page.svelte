@@ -1768,7 +1768,7 @@
               </div>
               <div>
                 <label class={LABEL_CLS}>Domain Allowlist</label>
-                <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains (e.g. local.vega.nyc, internal.corp)" />
+                <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains (e.g. example.local, internal.corp)" />
               </div>
               <div>
                 <label class={LABEL_CLS}>TLS CA Cert Paths</label>
@@ -1818,7 +1818,7 @@
               </div>
               <div>
                 <label class={LABEL_CLS}>ElevenLabs Voice ID</label>
-                <input type="text" bind:value={voiceId} class={INPUT_CLS} placeholder="rPQ6h200dfjiuYAy0JDA" />
+                <input type="text" bind:value={voiceId} class={INPUT_CLS} placeholder="your-voice-id" />
                 <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted voice override.</p>
               </div>
               <div>
@@ -1879,7 +1879,7 @@
           <div class="px-5 py-4 space-y-4 border-t border-bark-200">
             <div>
               <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianVaultName">Vault Name</label>
-              <input type="text" id="obsidianVaultName" class="input-garden w-full" bind:value={obsidianVaultName} placeholder="e.g. Purrsephone" />
+              <input type="text" id="obsidianVaultName" class="input-garden w-full" bind:value={obsidianVaultName} placeholder="e.g. companion" />
               <p class="text-xs text-shadow-500 mt-0.5">Leave empty to disable vault tools. Must match the name in Obsidian.</p>
             </div>
             <div>
@@ -1937,7 +1937,7 @@
               </div>
               <div class="md:col-span-2">
                 <label class={LABEL_CLS}>Discord Trigger Words</label>
-                <input type="text" bind:value={discordTriggerWords} class={INPUT_CLS} placeholder="pixie, hey purrsephone" />
+                <input type="text" bind:value={discordTriggerWords} class={INPUT_CLS} placeholder="pixie, hey companion" />
                 <p class="text-sm text-shadow-500 mt-1">
                   Comma-separated words or phrases that trigger replies in guild channels.
                 </p>

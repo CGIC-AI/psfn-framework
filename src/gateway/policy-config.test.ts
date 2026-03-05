@@ -23,9 +23,10 @@ describe('resolveAllowedReadPathsFromEnv', () => {
   it('adds module registry path when MODULE_REGISTRY_TRUSTED_READ=true', () => {
     const value = resolveAllowedReadPathsFromEnv({
       MODULE_REGISTRY_TRUSTED_READ: 'true',
+      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
     }, workspacePath);
 
-    expect(value).toEqual(['/app/workspace/purrsephone/modules/repl-registry.json']);
+    expect(value).toEqual(['/app/workspace/companion/modules/repl-registry.json']);
   });
 
   it('uses MODULE_REGISTRY_PATH override when trusted read is enabled', () => {
@@ -41,9 +42,16 @@ describe('resolveAllowedReadPathsFromEnv', () => {
   it('resolves trusted module registry path when enabled', () => {
     const value = resolveTrustedModuleRegistryPathFromEnv({
       MODULE_REGISTRY_TRUSTED_READ: 'true',
+      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
     }, workspacePath);
 
-    expect(value).toBe('/app/workspace/purrsephone/modules/repl-registry.json');
+    expect(value).toBe('/app/workspace/companion/modules/repl-registry.json');
+  });
+
+  it('throws when trusted read is enabled without MODULE_REGISTRY_PATH', () => {
+    expect(() => resolveTrustedModuleRegistryPathFromEnv({
+      MODULE_REGISTRY_TRUSTED_READ: 'true',
+    }, workspacePath)).toThrow('MODULE_REGISTRY_TRUSTED_READ=true requires MODULE_REGISTRY_PATH');
   });
 
   it('returns undefined trusted module registry path when disabled', () => {

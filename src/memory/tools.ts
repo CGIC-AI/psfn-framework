@@ -279,7 +279,7 @@ export function createMemoryRedactTool(writer: MemoryWriter): AgentTool<any> {
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
         const internalSource = extractInternalSource(params as Record<string, unknown>);
-        const memoryId = params.memory_id?.trim();
+        const memoryId = params.memory_id.trim();
         if (!memoryId) {
           return textResultWithError('Error: memory_id is required', true);
         }
@@ -342,7 +342,7 @@ export function createMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<any>
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const memoryId = params.memory_id?.trim();
+        const memoryId = params.memory_id.trim();
         if (!memoryId) {
           return textResultWithError('Error: memory_id is required', true);
         }
@@ -384,7 +384,7 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const deleteId = params.delete_id?.trim();
+        const deleteId = params.delete_id.trim();
         if (!deleteId) {
           return textResultWithError('Error: delete_id is required', true);
         }

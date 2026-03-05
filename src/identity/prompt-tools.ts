@@ -75,8 +75,8 @@ function countLineChanges(previousContent: string, nextContent: string): { added
     const previous = previousLines[index];
     const next = nextLines[index];
     if (previous === next) continue;
-    if (previous !== undefined) removed += 1;
-    if (next !== undefined) added += 1;
+    removed += 1;
+    added += 1;
   }
 
   return { added, removed };
@@ -99,14 +99,10 @@ function buildPromptLineDiff(
     const previous = previousLines[index];
     const next = nextLines[index];
     if (previous === next) continue;
-    if (previous !== undefined) {
-      removed += 1;
-      fullLines.push(`- ${previous}`);
-    }
-    if (next !== undefined) {
-      added += 1;
-      fullLines.push(`+ ${next}`);
-    }
+    removed += 1;
+    fullLines.push(`- ${previous}`);
+    added += 1;
+    fullLines.push(`+ ${next}`);
   }
 
   if (fullLines.length <= maxLines) {

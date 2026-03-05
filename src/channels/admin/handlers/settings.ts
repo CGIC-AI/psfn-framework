@@ -2,15 +2,10 @@ import type { LegacyAdminHandlers } from '../handlers-legacy.js';
 import type { EnvInfo } from '../types.js';
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import {
-  loadSettings,
-  saveSettings,
-  applySettings,
   parseSettingsForm,
-  normalizeEditableSettings,
 } from '../../../settings.js';
 import {
   loadModelsConfig,
-  saveModelsConfig,
   type ModelsRuntimeConfig,
 } from '../../../config/models-config.js';
 import {
@@ -30,14 +25,17 @@ import {
 } from '../../../config/trust-policy-config.js';
 import {
   loadCapabilityTierConfig,
-  saveCapabilityTierConfig,
   type CapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
 import { resolveRuntimeSchedulerConfig } from '../../../config/scheduler-runtime.js';
 import { setRuntimeTrustPolicy } from '../../../trust/runtime-policy.js';
-import { CAPABILITY_TIER_VALUES, isCapabilityTier } from '../../../capabilities/tiers.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
 import { toErrorMessage } from '../../../utils/errors.js';
+import {
+  applyAdminCapabilityTierMutation,
+  applyAdminModelsConfigMutation,
+  applyAdminSettingsMutation,
+} from '../services/settings-service.js';
 import * as tpl from '../templates.js';
 
 interface SettingsConfigEditors {
@@ -129,81 +127,33 @@ export class AdminSettingsHandlers {
   updateSettings(body: string): string {
     const legacy = this.legacy as any;
     const params = new URLSearchParams(body);
-    const capabilityTierInput = (params.get('capabilityTier') ?? '').trim();
-    if (capabilityTierInput && !isCapabilityTier(capabilityTierInput)) {
-      return tpl.settingsFormResult(
-        false,
-        `capabilityTier must be one of: ${CAPABILITY_TIER_VALUES.join(', ')}`,
-      );
-    }
     const [settings, errors] = parseSettingsForm(params);
 
     if (errors.length > 0) {
       return tpl.settingsFormResult(false, errors.join('; '));
     }
 
-    const existing = loadSettings(legacy.config.dataDir);
-    const merged = normalizeEditableSettings(
-      { ...existing, ...settings },
-      { defaultContextWindow: legacy.config.defaultContextWindow },
-    );
-    saveSettings(legacy.config.dataDir, merged);
-    applySettings(legacy.config, merged);
-    if (legacy.config.modelCatalog && legacy.config.modelRoleAssignments) {
-      try {
-        saveModelsConfig(
-          legacy.config.dataDir,
-          {
-            modelCatalog: legacy.config.modelCatalog,
-            modelRoleAssignments: legacy.config.modelRoleAssignments,
-          },
-          { defaultContextWindow: legacy.config.defaultContextWindow },
-        );
-      } catch (error) {
-        const message = toErrorMessage(error);
-        return tpl.settingsFormResult(false, `Settings saved but models config write failed: ${message}`);
-      }
-    }
-    try {
-      legacy.config.runtimeHooks?.refreshModels?.();
-    } catch {
-      // Keep settings save successful even if runtime model refresh fails.
-      // Next turn will still re-attempt refresh through SubstrateAgent drift detection.
-    }
-
-    if (capabilityTierInput) {
-      try {
-        const current = loadCapabilityTierConfig(legacy.config.dataDir, {
-          seedDir: process.env.CONFIG_DIR,
-        });
-
-        const customTokens: CapabilityToken[] = [];
-        if (capabilityTierInput === 'custom') {
-          for (const rawToken of params.getAll('customTokens')) {
-            const token = rawToken.trim();
-            if (token && isCapabilityToken(token)) {
-              customTokens.push(token);
-            }
-          }
+    let capabilityCustomTokens: CapabilityToken[] | undefined;
+    if (settings.capabilityTier === 'custom') {
+      capabilityCustomTokens = [];
+      for (const rawToken of params.getAll('customTokens')) {
+        const token = rawToken.trim();
+        if (token && isCapabilityToken(token)) {
+          capabilityCustomTokens.push(token);
         }
-
-        const saved = saveCapabilityTierConfig(legacy.config.dataDir, {
-          ...current,
-          tier: capabilityTierInput,
-          customTokens: capabilityTierInput === 'custom' ? customTokens : current.customTokens,
-        });
-        legacy.config.capabilityTier = saved.tier;
-        legacy.config.runtimeHooks?.refreshCapabilities?.();
-      } catch (error) {
-        const message = toErrorMessage(error);
-        return tpl.settingsFormResult(false, `Settings saved but capability tier update failed: ${message}`);
       }
+    }
+
+    const mutationResult = applyAdminSettingsMutation({
+      config: legacy.config,
+      settings,
+      capabilityCustomTokens,
+    });
+    if (!mutationResult.ok) {
+      return tpl.settingsFormResult(false, mutationResult.message);
     }
 
     const changedFields = Object.keys(settings).sort();
-    if (capabilityTierInput) {
-      changedFields.push('capabilityTier');
-    }
     legacy.appendAuditTimelineEntry(
       'settings_change',
       'allowed',
@@ -230,16 +180,12 @@ export class AdminSettingsHandlers {
     const legacy = this.legacy as any;
     try {
       const payload = this.parseConfigJsonBody(body);
-      const saved = saveModelsConfig(
-        legacy.config.dataDir,
+      const mutation = applyAdminModelsConfigMutation({
+        config: legacy.config,
         payload,
-        { defaultContextWindow: legacy.config.defaultContextWindow },
-      );
-      applySettings(legacy.config, saved);
-      try {
-        legacy.config.runtimeHooks?.refreshModels?.();
-      } catch {
-        // Preserve successful save result even when runtime model refresh fails.
+      });
+      if (!mutation.ok) {
+        return tpl.settingsFormResult(false, mutation.message);
       }
       return tpl.settingsFormResult(true, 'models.json saved');
     } catch (error) {
@@ -335,9 +281,13 @@ export class AdminSettingsHandlers {
     const legacy = this.legacy as any;
     try {
       const payload = this.parseConfigJsonBody(body);
-      const saved = saveCapabilityTierConfig(legacy.config.dataDir, payload);
-      legacy.config.capabilityTier = saved.tier;
-      legacy.config.runtimeHooks?.refreshCapabilities?.();
+      const mutation = applyAdminCapabilityTierMutation({
+        config: legacy.config,
+        payload,
+      });
+      if (!mutation.ok) {
+        return tpl.settingsFormResult(false, mutation.message);
+      }
       return tpl.settingsFormResult(true, 'capability-tier.json saved');
     } catch (error) {
       return tpl.settingsFormResult(false, this.formatConfigError(error));

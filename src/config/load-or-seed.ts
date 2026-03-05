@@ -53,7 +53,9 @@ export function loadOrSeedJson<T>(options: LoadOrSeedJsonOptions<T>): T {
       return loadSeed();
     }
 
-    // Corrupt or invalid data config: recover by reseeding from canonical defaults.
-    return loadSeed();
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Refusing to reseed invalid JSON config at ${dataPath}; fix or remove the file explicitly. Cause: ${reason}`,
+    );
   }
 }

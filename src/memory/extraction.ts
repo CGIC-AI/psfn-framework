@@ -241,12 +241,20 @@ export class MemoryExtractor {
     const promise = this.runExtraction(channelId, triggerReason, canonicalContactId, recoveredEntries);
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(channelId, promise);
-    promise.finally(() => {
-      this.inFlightExtractions.delete(promise);
-      if (this.inFlightByChannel.get(channelId) === promise) {
-        this.inFlightByChannel.delete(channelId);
-      }
-    });
+    void promise
+      .catch((error) => {
+        log.error('Extraction run failed', {
+          channelId,
+          triggerReason,
+          error: String(error),
+        });
+      })
+      .finally(() => {
+        this.inFlightExtractions.delete(promise);
+        if (this.inFlightByChannel.get(channelId) === promise) {
+          this.inFlightByChannel.delete(channelId);
+        }
+      });
 
     return promise;
   }

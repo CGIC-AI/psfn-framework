@@ -14,6 +14,9 @@ export class Scheduler {
   private config: SchedulerConfig;
   private tasks = new Map<string, ScheduledTask & { lastRun: number }>();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private tickInFlight: Promise<void> | null = null;
+  private stopDrainPromise: Promise<void> | null = null;
+  private stopping = false;
 
   constructor(eventBus: EventBus, config?: Partial<SchedulerConfig>) {
     this.eventBus = eventBus;
@@ -93,7 +96,9 @@ export class Scheduler {
 
   start(): void {
     if (this.tickTimer) return;
+    this.stopping = false;
     this.tickTimer = setInterval(() => {
+      if (this.stopping) return;
       this.tick().catch(err => {
         log.error('Tick error', { error: String(err) });
       });
@@ -101,16 +106,56 @@ export class Scheduler {
     log.info(`Started (tick=${this.config.tickIntervalMs}ms, ${this.tasks.size} tasks)`);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    if (this.stopDrainPromise) {
+      await this.stopDrainPromise;
+      return;
+    }
+
+    this.stopping = true;
+    const hadTimer = this.tickTimer !== null;
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
-      log.info('Stopped');
     }
+
+    const drainTarget = this.tickInFlight;
+    if (!hadTimer && !drainTarget) return;
+
+    this.stopDrainPromise = (async () => {
+      if (drainTarget) {
+        try {
+          await drainTarget;
+        } catch (error) {
+          log.warn('Tick drain failed during stop; continuing scheduler shutdown', {
+            error: String(error),
+          });
+        }
+      }
+      log.info('Stopped');
+    })().finally(() => {
+      this.stopDrainPromise = null;
+    });
+
+    await this.stopDrainPromise;
   }
 
   /** Run a single tick — check all tasks and fire those that are due. Exposed for testing. */
   async tick(): Promise<void> {
+    if (this.tickInFlight) {
+      return this.tickInFlight;
+    }
+
+    const run = this.runTick().finally(() => {
+      if (this.tickInFlight === run) {
+        this.tickInFlight = null;
+      }
+    });
+    this.tickInFlight = run;
+    return run;
+  }
+
+  private async runTick(): Promise<void> {
     const now = Date.now();
     await this.eventBus.emit('schedule.tick', { timestamp: now });
 
@@ -121,7 +166,7 @@ export class Scheduler {
 
       if (entry.type === 'every') {
         isDue = entry.lastRun === 0 || (now - entry.lastRun >= entry.intervalMs);
-      } else if (entry.type === 'one-shot') {
+      } else {
         isDue = entry.runAt !== undefined && now >= entry.runAt;
       }
 

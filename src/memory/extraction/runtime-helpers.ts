@@ -64,7 +64,7 @@ export function evaluateExtractionTrigger(
   if (runtimeConfig && !intervalMet) {
     const chatSlot = runtimeConfig.modelRoster.chat;
     const contextWindow = chatSlot?.contextWindow ?? runtimeConfig.defaultContextWindow;
-    thresholdPct = runtimeConfig.extractionThresholdPct ?? 30;
+    thresholdPct = runtimeConfig.extractionThresholdPct;
     tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
 
     const recent = sessionManager.getRecentMessages(channelId);
@@ -106,7 +106,7 @@ export function resolveCoveredUpToMessageId(
   }
 
   const latestEntry = sessionManager.getRecentMessages(channelId, 1)[0];
-  if (typeof latestEntry?.id === 'number' && Number.isFinite(latestEntry.id)) {
+  if (typeof latestEntry.id === 'number' && Number.isFinite(latestEntry.id)) {
     return latestEntry.id;
   }
   return null;
@@ -212,10 +212,19 @@ export function scheduleProfileRefresh(options: ProfileRefreshQueueOptions): voi
   );
   options.inFlightProfileRefreshes.add(promise);
   options.inFlightProfileByContact.set(options.canonicalContactId, promise);
-  promise.finally(() => {
-    options.inFlightProfileRefreshes.delete(promise);
-    if (options.inFlightProfileByContact.get(options.canonicalContactId!) === promise) {
-      options.inFlightProfileByContact.delete(options.canonicalContactId!);
-    }
-  });
+  void promise
+    .catch((error) => {
+      log.error('Profile refresh failed', {
+        channelId: options.channelId,
+        canonicalContactId: options.canonicalContactId,
+        triggerReason: options.triggerReason,
+        error: String(error),
+      });
+    })
+    .finally(() => {
+      options.inFlightProfileRefreshes.delete(promise);
+      if (options.inFlightProfileByContact.get(options.canonicalContactId!) === promise) {
+        options.inFlightProfileByContact.delete(options.canonicalContactId!);
+      }
+    });
 }

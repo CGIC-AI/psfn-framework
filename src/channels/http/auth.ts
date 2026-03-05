@@ -1,4 +1,50 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+
+const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
+export const INSECURE_LOCAL_API_PRINCIPAL_ID = 'local-insecure';
+
+export interface ApiAuthPrincipal {
+  id: string;
+  mode: 'api_key' | 'insecure_local';
+}
+
+export const INSECURE_LOCAL_API_PRINCIPAL: Readonly<ApiAuthPrincipal> = Object.freeze({
+  id: INSECURE_LOCAL_API_PRINCIPAL_ID,
+  mode: 'insecure_local',
+});
+
+function normalizeToken(value: string): string {
+  return value.trim();
+}
+
+export function isExpectedApiToken(candidate: string | null | undefined, expected: string): boolean {
+  if (!candidate) return false;
+
+  const normalizedCandidate = normalizeToken(candidate);
+  const normalizedExpected = normalizeToken(expected);
+  if (!normalizedCandidate || !normalizedExpected) return false;
+
+  const candidateBuffer = Buffer.from(normalizedCandidate);
+  const expectedBuffer = Buffer.from(normalizedExpected);
+  if (candidateBuffer.length !== expectedBuffer.length) return false;
+  return timingSafeEqual(candidateBuffer, expectedBuffer);
+}
+
+export function deriveApiKeyPrincipalId(apiToken: string): string {
+  const normalized = normalizeToken(apiToken);
+  const digest = createHash('sha256')
+    .update(normalized)
+    .digest('hex');
+  return `api-key-${digest.slice(0, API_KEY_PRINCIPAL_DIGEST_LENGTH)}`;
+}
+
+export function principalFromApiKeyToken(apiToken: string): ApiAuthPrincipal {
+  return {
+    id: deriveApiKeyPrincipalId(apiToken),
+    mode: 'api_key',
+  };
+}
 
 export function getBearerToken(req: IncomingMessage): string | null {
   const auth = req.headers.authorization;
@@ -6,9 +52,14 @@ export function getBearerToken(req: IncomingMessage): string | null {
   return auth.slice(7);
 }
 
-export function hasBearerToken(req: IncomingMessage, expected: string): boolean {
+export function getBearerPrincipal(req: IncomingMessage, expected: string): ApiAuthPrincipal | null {
   const token = getBearerToken(req);
-  return token === expected;
+  if (!isExpectedApiToken(token, expected)) return null;
+  return principalFromApiKeyToken(expected);
+}
+
+export function hasBearerToken(req: IncomingMessage, expected: string): boolean {
+  return getBearerPrincipal(req, expected) !== null;
 }
 
 export function getCookieValue(req: IncomingMessage, cookieName: string): string | null {

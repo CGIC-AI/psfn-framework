@@ -163,4 +163,55 @@ describe('DeepgramStreamingSttConnector', () => {
 
     await expect(iterator.next()).rejects.toThrow('unexpectedly');
   });
+
+  it('bounds transcript buffering and applies drop_oldest overflow policy', async () => {
+    const socket = new FakeWebSocket();
+
+    const connector = new DeepgramStreamingSttConnector({
+      apiKey: 'test-key',
+      transcriptQueueMaxEntries: 2,
+      transcriptQueueOverflowPolicy: 'drop_oldest',
+      webSocketFactory: () => {
+        queueMicrotask(() => {
+          socket.readyState = 1;
+          socket.emit('open');
+        });
+        return socket;
+      },
+      openTimeoutMs: 500,
+    });
+
+    const session = await connector.startStream({
+      sampleRateHz: 16_000,
+      channels: 1,
+      encoding: 'pcm_s16le',
+    });
+
+    socket.emit('message', {
+      data: JSON.stringify({
+        type: 'Results',
+        is_final: false,
+        channel: { alternatives: [{ transcript: 'one' }] },
+      }),
+    });
+    socket.emit('message', {
+      data: JSON.stringify({
+        type: 'Results',
+        is_final: false,
+        channel: { alternatives: [{ transcript: 'two' }] },
+      }),
+    });
+    socket.emit('message', {
+      data: JSON.stringify({
+        type: 'Results',
+        is_final: false,
+        channel: { alternatives: [{ transcript: 'three' }] },
+      }),
+    });
+
+    socket.close(1000, 'done');
+    const chunks = await collectAsync(session.transcripts);
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual(['two', 'three']);
+  });
 });

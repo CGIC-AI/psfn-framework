@@ -49,6 +49,12 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
   repo_commit: Object.freeze(['git.commit']),
   repo_create_branch: Object.freeze(['git.create_branch']),
   repo_open_pr: Object.freeze(['git.open_pr']),
+  issue_ready: Object.freeze(['beads.ready']),
+  issue_show: Object.freeze(['beads.show']),
+  issue_create: Object.freeze(['beads.create']),
+  issue_update: Object.freeze(['beads.update']),
+  issue_close: Object.freeze(['beads.close']),
+  issue_sync: Object.freeze(['beads.sync']),
 });
 
 // ── Validation Types ──
@@ -79,7 +85,7 @@ export interface ValidationReport {
  */
 export function extractGatewayMethods(client: object): Set<string> {
   const methods = new Set<string>();
-  const proto = Object.getPrototypeOf(client) as Record<string, unknown>;
+  const proto = Object.getPrototypeOf(client) as Record<string, unknown> | null;
   if (!proto) return methods;
 
   for (const key of Object.getOwnPropertyNames(proto)) {
@@ -103,6 +109,12 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'git.apply_patch': 'gitApplyPatch',
   'git.commit': 'gitCommit',
   'git.open_pr': 'gitOpenPR',
+  'beads.ready': 'beadsReady',
+  'beads.show': 'beadsShow',
+  'beads.create': 'beadsCreate',
+  'beads.update': 'beadsUpdate',
+  'beads.close': 'beadsClose',
+  'beads.sync': 'beadsSync',
   'llm.chat': 'stream',
   'llm.complete': 'complete',
   'llm.embed': 'embed',

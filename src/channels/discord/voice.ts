@@ -50,7 +50,6 @@ const DECRYPT_RECOVERY_COOLDOWN_MS = 1_500;
 const DECRYPT_RECOVERY_MAX_REJOINS = 3;
 const DECRYPT_RECOVERY_WINDOW_MS = 5 * 60_000;
 const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
-const DEFAULT_ECHO_TTS_PRESET = 'normal';
 
 /**
  * Maximum number of consecutive stream errors per user before tearing down
@@ -79,7 +78,7 @@ export function checkOpusAvailability(): OpusAvailabilityResult {
       frameSize: 960,
     });
     // Clean up the test decoder
-    decoder.destroy?.();
+    decoder.destroy();
 
     // Determine which backend prism-media resolved to
     let backend: string = 'unknown';
@@ -160,8 +159,6 @@ export function voicePreflight(config: SubstrateConfig): VoicePreflightResult {
   };
 }
 
-/** Default ElevenLabs voice ID used when no explicit voice ID is configured. */
-export const DISCORD_VOICE_DEFAULT_VOICE_ID = 'rPQ6h200dfjiuYAy0JDA';
 
 type VoiceTurnErrorStage = 'ingest' | 'stt' | 'llm' | 'tts' | 'unknown';
 type VoiceTurnObservationKind = 'silence' | 'empty-transcript' | 'empty-response' | 'playback-error';
@@ -222,7 +219,7 @@ function createConfiguredTtsConnector(
     return createStreamingTtsConnector('echo', {
       url,
       voice,
-      preset: config.echoTtsPreset ?? DEFAULT_ECHO_TTS_PRESET,
+      ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
       ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
     });
   }
@@ -360,21 +357,15 @@ export class DiscordVoiceRuntime {
       );
     }
 
-    // Apply default ElevenLabs voice ID when none is explicitly configured
-    const configWithDefaults: SubstrateConfig = {
-      ...config,
-      elevenLabsVoiceId: config.elevenLabsVoiceId || DISCORD_VOICE_DEFAULT_VOICE_ID,
-    };
-
-    const ttsConnectors = buildConfiguredTtsConnectors(configWithDefaults, this.preferredTtsProviderId);
+    const ttsConnectors = buildConfiguredTtsConnectors(config, this.preferredTtsProviderId);
     if (ttsConnectors.length === 0) {
       this.enabled = false;
       this.ttsConnectors = [];
       log.warn('Voice enabled but no TTS connectors could be created, disabling voice runtime', {
         ttsProvider: this.preferredTtsProviderId,
-        hasSelectedTtsConfig: hasTtsProviderConfig(this.preferredTtsProviderId, configWithDefaults),
-        hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', configWithDefaults),
-        hasEchoConfig: hasTtsProviderConfig('echo', configWithDefaults),
+        hasSelectedTtsConfig: hasTtsProviderConfig(this.preferredTtsProviderId, config),
+        hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', config),
+        hasEchoConfig: hasTtsProviderConfig('echo', config),
       });
       return;
     }
@@ -1262,7 +1253,7 @@ export class DiscordVoiceRuntime {
         signal?.removeEventListener('abort', onAbort);
         // Ensure decoder is properly destroyed
         try {
-          decoder.destroy?.();
+          decoder.destroy();
         } catch {
           // Ignore cleanup errors
         }
@@ -1443,7 +1434,7 @@ export class DiscordVoiceRuntime {
       channelId: this.activeChannel?.id,
       userId: this.targetUserId,
       error: errorText,
-    }).catch(() => undefined);
+    }).catch((err) => { log.debug('Failed to emit voice error event', { error: String(err) }); });
 
     if (!voiceError.voiceTurnErrorEmitted) {
       this.eventBus.emit('voice.turn.error', {
@@ -1454,7 +1445,7 @@ export class DiscordVoiceRuntime {
         code,
         error: errorText,
         timestampMs: Date.now(),
-      }).catch(() => undefined);
+      }).catch((err) => { log.debug('Failed to emit voice turn error event', { error: String(err) }); });
     }
 
     this.trackDecryptFailure({
@@ -1506,9 +1497,6 @@ export class DiscordVoiceRuntime {
     }
 
     const recoveryChannel = this.activeChannel;
-    if (!recoveryChannel) {
-      return;
-    }
 
     void this.startDecryptRecovery({
       channel: recoveryChannel,

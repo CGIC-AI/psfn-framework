@@ -8,9 +8,5 @@ export function createStreamingSttConnector(
   provider: 'deepgram',
   config: DeepgramStreamingSttConfig,
 ): StreamingSttConnector {
-  if (provider === 'deepgram') {
-    return createDeepgramStreamingSttConnector(config);
-  }
-
-  throw new Error(`Unsupported streaming STT provider: ${provider}`);
+  return createDeepgramStreamingSttConnector(config);
 }

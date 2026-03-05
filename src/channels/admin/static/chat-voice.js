@@ -1,4 +1,5 @@
 const VOICE_WIRE_PROTOCOL = 'voice-wire-v1';
+const AUTH_SUBPROTOCOL_PREFIX = 'auth.b64.';
 const HOTKEY = 'v';
 const TARGET_SAMPLE_RATE_HZ = 48_000;
 const SCRIPT_PROCESSOR_BUFFER_SIZE = 4096;
@@ -36,16 +37,6 @@ function safeReadStorage(key) {
 }
 
 function resolveLocalApiToken() {
-  const pageUrl = new URL(window.location.href);
-  const fromQuery = normalizeText(
-    pageUrl.searchParams.get('api_key')
-      ?? pageUrl.searchParams.get('token')
-      ?? '',
-  );
-  if (fromQuery && !PLACEHOLDER_TOKENS.has(fromQuery)) {
-    return fromQuery;
-  }
-
   for (const key of TOKEN_STORAGE_KEYS) {
     const value = normalizeText(safeReadStorage(key) ?? '');
     if (value && !PLACEHOLDER_TOKENS.has(value)) {
@@ -64,6 +55,27 @@ function readBootstrapApiToken(bootstrap) {
 
 function resolveApiToken(bootstrap) {
   return readBootstrapApiToken(bootstrap) || resolveLocalApiToken();
+}
+
+function encodeBase64Url(value) {
+  if (!value) return '';
+  const encoded = new TextEncoder().encode(value);
+  let binary = '';
+  for (const byte of encoded) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function buildAuthSubprotocol(token) {
+  const normalized = normalizeText(token);
+  if (!normalized) return '';
+  const encoded = encodeBase64Url(normalized);
+  if (!encoded) return '';
+  return `${AUTH_SUBPROTOCOL_PREFIX}${encoded}`;
 }
 
 function bytesToBase64(bytes) {
@@ -282,10 +294,11 @@ function buildSocketConnection(root, getBootstrap) {
   const identity = computeIdentity(root, bootstrap);
   const token = resolveApiToken(bootstrap);
   const wsUrl = toWsUrl(endpoint);
+  const protocols = [VOICE_WIRE_PROTOCOL];
+  const authSubprotocol = buildAuthSubprotocol(token);
 
-  if (token) {
-    wsUrl.searchParams.set('api_key', token);
-    wsUrl.searchParams.set('token', token);
+  if (authSubprotocol) {
+    protocols.push(authSubprotocol);
   }
 
   wsUrl.searchParams.set('session_id', identity.sessionId);
@@ -294,6 +307,8 @@ function buildSocketConnection(root, getBootstrap) {
 
   return {
     url: wsUrl.toString(),
+    protocols,
+    key: `${wsUrl.toString()}|${identity.sessionId}|${identity.userId}|${authSubprotocol}`,
     identity,
   };
 }
@@ -385,11 +400,11 @@ function createVoiceRuntime(root, ui, getBootstrap) {
 
     if (state.socket
       && state.socket.readyState === WebSocket.OPEN
-      && state.socketKey === connection.url) {
+      && state.socketKey === connection.key) {
       return;
     }
 
-    if (state.socketReady && state.socketKey === connection.url) {
+    if (state.socketReady && state.socketKey === connection.key) {
       await state.socketReady;
       return;
     }
@@ -397,9 +412,9 @@ function createVoiceRuntime(root, ui, getBootstrap) {
     await closeSocket(true);
 
     setVoiceStatus(ui, 'Connecting voice websocket...');
-    const socket = new WebSocket(connection.url);
+    const socket = new WebSocket(connection.url, connection.protocols);
     state.socket = socket;
-    state.socketKey = connection.url;
+    state.socketKey = connection.key;
 
     state.socketReady = new Promise((resolve, reject) => {
       const handleOpen = () => {

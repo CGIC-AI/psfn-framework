@@ -1,7 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmationQueue } from '../../capabilities/confirmation-queue.js';
 import type { ModuleRecord } from '../../modules/types.js';
 import { createModuleCapabilities } from './modules.js';
+
+const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
+
+afterEach(() => {
+  if (ORIGINAL_MODULE_REGISTRY_PATH === undefined) {
+    delete process.env.MODULE_REGISTRY_PATH;
+  } else {
+    process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH;
+  }
+});
 
 function registryHarness(initial = '[]') {
   let stored = initial;
@@ -18,6 +28,7 @@ function registryHarness(initial = '[]') {
 
 describe('createModuleCapabilities', () => {
   it('denies module_install in nursery tier', async () => {
+    process.env.MODULE_REGISTRY_PATH = 'companion/modules/repl-registry.json';
     const harness = registryHarness();
     const modules = createModuleCapabilities({
       gatewayCaps: harness.caps,
@@ -32,6 +43,7 @@ describe('createModuleCapabilities', () => {
   });
 
   it('queues module_install in apprentice tier until approval', async () => {
+    process.env.MODULE_REGISTRY_PATH = 'companion/modules/repl-registry.json';
     const harness = registryHarness();
     const queue = new ConfirmationQueue({
       idFactory: () => 'confirm-module-install',
@@ -66,6 +78,7 @@ describe('createModuleCapabilities', () => {
   });
 
   it('installs immediately in autonomous tier and emits registry mutation', async () => {
+    process.env.MODULE_REGISTRY_PATH = 'companion/modules/repl-registry.json';
     const harness = registryHarness();
     const onModuleRegistryMutation = vi.fn();
     const modules = createModuleCapabilities({

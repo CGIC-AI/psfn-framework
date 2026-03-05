@@ -815,11 +815,11 @@ export class MemoryWriter {
             novelty: err.novelty,
             minSalience: err.minSalience,
             minNovelty: err.minNovelty,
-            text: record.text?.slice(0, 60),
+            text: record.text.slice(0, 60),
           });
           continue;
         }
-        log.error('Error importing memory', { error: String(err), text: record.text?.slice(0, 60) });
+        log.error('Error importing memory', { error: String(err), text: record.text.slice(0, 60) });
       }
     }
 

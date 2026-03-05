@@ -106,7 +106,7 @@ async function* responseBodyToAudioChunks(
   let pending: Uint8Array | null = null;
 
   try {
-    while (true) {
+    for (;;) {
       if (signal?.aborted) {
         throw abortError('Echo streaming TTS aborted');
       }
@@ -119,7 +119,7 @@ async function* responseBodyToAudioChunks(
       }
 
       if (chunk.done) break;
-      if (!chunk.value || chunk.value.byteLength === 0) continue;
+      if (chunk.value.byteLength === 0) continue;
 
       if (pending) {
         yield {

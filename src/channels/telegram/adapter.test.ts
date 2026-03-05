@@ -370,6 +370,44 @@ describe('TelegramAdapter', () => {
     expect(sendDocumentCall?.body.document).toBe('https://example.com/spec.pdf');
   });
 
+  it('emits channel.message.error diagnostics without sending canned fallback text when handler throws', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 777 }),
+    });
+    const eventBus = new EventBus();
+    const diagnostics: any[] = [];
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
+
+    const adapter = new TelegramAdapter(makeConfig(), eventBus, { fetchImpl });
+    adapter.onMessage(async () => {
+      throw new Error('telegram handler exploded');
+    });
+
+    await (adapter as any).handleUpdate({
+      update_id: 2,
+      message: {
+        message_id: 44,
+        date: 1_700_000_050,
+        text: 'will fail',
+        chat: { id: 654, type: 'private' },
+        from: { id: 77, is_bot: false, username: 'broken_user' },
+      },
+    });
+
+    const sendCalls = calls.filter(call => call.method === 'sendMessage');
+    expect(sendCalls).toHaveLength(0);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      channelId: 'telegram:654',
+      channelType: 'telegram',
+      messageId: 'telegram:654:44',
+      phase: 'handler',
+      error: expect.stringContaining('telegram handler exploded'),
+    }));
+  });
+
   it('defers same-channel concurrent updates and processes the deferred turn', async () => {
     const { fetchImpl, calls } = makeFetchMock({
       sendChatAction: () => true,

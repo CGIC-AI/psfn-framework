@@ -184,6 +184,15 @@ describe('DiscordAdapter startup backfill', () => {
     rmSync(sessionsDir, { recursive: true, force: true });
   });
 
+  it('does not throw when discord token is missing', async () => {
+    const adapter = new DiscordAdapter(makeConfig({ discordToken: '' }), new EventBus(), { sessionStore: store });
+
+    await expect(adapter.start()).resolves.toBeUndefined();
+
+    const client = discordMock.createdClients[0];
+    expect(client.login).not.toHaveBeenCalled();
+  });
+
   it('backfills only channels with existing discord sessions', async () => {
     store.append({
       channelId: '123456789012345678',
@@ -1161,9 +1170,9 @@ describe('DiscordAdapter status visibility', () => {
     expect(adapter.capabilities.promptChannelType).toBe('discord_text');
     expect(adapter.gateway).toBe(adapter);
     expect(adapter.outbound.textChunkLimit).toBe(2000);
-    expect(adapter.security?.requiresMentionForChannelMessages).toBe(true);
+    expect(adapter.security.requiresMentionForChannelMessages).toBe(true);
 
-    const promptTextType = adapter.prompt?.resolveChannelType({
+    const promptTextType = adapter.prompt.resolveChannelType({
       id: 'msg-1',
       channelId: '123456789012345678',
       channelType: 'discord',
@@ -1172,7 +1181,7 @@ describe('DiscordAdapter status visibility', () => {
       content: 'hello',
       timestamp: new Date(),
     } satisfies SubstrateMessage);
-    const promptVoiceType = adapter.prompt?.resolveChannelType({
+    const promptVoiceType = adapter.prompt.resolveChannelType({
       id: 'msg-2',
       channelId: 'discord-voice:guild-1',
       channelType: 'discord',
@@ -1190,7 +1199,7 @@ describe('DiscordAdapter status visibility', () => {
     discordMock.channelsById.set(channelId, interactive.channel);
 
     await adapter.outbound.sendText({ channelId }, 'facet reply');
-    await adapter.streaming?.sendTyping(channelId);
+    await adapter.streaming.sendTyping(channelId);
 
     expect(interactive.sent).toContain('facet reply');
     expect(interactive.typingCalls).toBeGreaterThan(0);
@@ -1394,5 +1403,37 @@ describe('DiscordAdapter status visibility', () => {
     await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
 
     expect(interactive.sent).toHaveLength(0);
+  });
+
+  it('emits channel.message.error diagnostics without sending canned fallback text when handler throws', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-handler-error';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const diagnostics: any[] = [];
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
+
+    adapter.onMessage(async () => {
+      throw new Error('discord handler exploded');
+    });
+
+    const incoming = makeDiscordIncomingMessage(channelId, interactive.channel, { id: 'msg-error-1' });
+    await (adapter as any).onDiscordMessage(incoming);
+
+    expect(interactive.sent).toHaveLength(0);
+    expect((incoming.reply as any).mock.calls.length).toBe(0);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      channelId,
+      channelType: 'discord',
+      messageId: 'msg-error-1',
+      phase: 'handler',
+      error: expect.stringContaining('discord handler exploded'),
+    }));
   });
 });

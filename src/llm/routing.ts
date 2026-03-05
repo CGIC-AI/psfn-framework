@@ -253,7 +253,6 @@ function buildStandardCandidates(
     const slotChain = purposeSlotChain(config.modelRoleAssignments, purpose);
     for (const slotKey of slotChain) {
       const entry = catalog[slotKey];
-      if (!entry) continue;
       uniquePush(
         candidates,
         withOpenRouterPreferences(candidateFromCatalogEntry(slotKey, entry, fallback), config),

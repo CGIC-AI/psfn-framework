@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -130,8 +130,8 @@ describe('SessionStore', () => {
       channelId: 'api:e2e-internal',
       role: 'user',
       content: 'hello',
-      authorId: 'vega',
-      authorName: 'V',
+      authorId: 'primary-user',
+      authorName: 'PrimaryUser',
       timestamp: 1739443200000,
     });
 
@@ -203,6 +203,29 @@ describe('SessionStore', () => {
 
     const reloaded = new SessionStore(dir);
     expect(reloaded.getUncleanShutdownChannels()).toEqual([]);
+  });
+
+  it('skips graceful shutdown markers for channels flagged as unresolved', () => {
+    store.append({
+      channelId: 'ch1',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+    });
+    store.append({
+      channelId: 'ch2',
+      role: 'assistant',
+      content: 'world',
+      timestamp: 2_000,
+    });
+
+    const marked = store.markGracefulShutdownForActiveChannels(3_000, {
+      skipChannels: new Set(['ch2']),
+    });
+    expect(marked).toEqual(['ch1']);
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getUncleanShutdownChannels()).toEqual(['ch2']);
   });
 
   it('detects unclean shutdown and reports un-extracted recovery entries', () => {
@@ -343,6 +366,34 @@ describe('SessionStore', () => {
     const store2 = new SessionStore(dir);
     const id3 = store2.append({ channelId: 'ch1', role: 'user', content: 'C', timestamp: 3000 });
     expect(id3).toBe(3);
+  });
+
+  it('rolls back in-memory append state when journal persistence fails', () => {
+    const channelId = 'api:append-rollback';
+    const journalRuntime = (store as unknown as { journalRuntime: { writeJournalEntry: (params: unknown) => void } }).journalRuntime;
+    vi.spyOn(journalRuntime, 'writeJournalEntry').mockImplementationOnce(() => {
+      throw new Error('simulated journal append failure');
+    });
+
+    expect(() => store.append({
+      channelId,
+      role: 'user',
+      content: 'will fail',
+      timestamp: 1_000,
+    })).toThrow('simulated journal append failure');
+
+    expect(store.count(channelId)).toBe(0);
+    expect(store.getRecent(channelId, 10)).toEqual([]);
+
+    const recoveredId = store.append({
+      channelId,
+      role: 'user',
+      content: 'after rollback',
+      timestamp: 2_000,
+    });
+    expect(recoveredId).toBe(1);
+    expect(store.count(channelId)).toBe(1);
+    expect(store.getRecent(channelId, 10).map(entry => entry.content)).toEqual(['after rollback']);
   });
 
   it('handles channelId with colons (api:session-1)', () => {

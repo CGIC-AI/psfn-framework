@@ -40,7 +40,11 @@ import type {
 } from './types.js';
 import { API_HEALTH_SUBSYSTEMS } from './types.js';
 import { createComponentLogger } from '../../logger.js';
-import { hasBearerToken } from '../http/auth.js';
+import {
+  getBearerPrincipal,
+  INSECURE_LOCAL_API_PRINCIPAL,
+  type ApiAuthPrincipal,
+} from '../http/auth.js';
 import {
   ApiVoiceWebSocketAdapter,
   type VoiceWebSocketRuntime,
@@ -71,6 +75,20 @@ const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
   'external.telemetry.incident',
 ]);
 const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google']);
+const API_CORS_ALLOWED_METHODS = 'GET, POST, OPTIONS';
+const API_CORS_ALLOWED_HEADERS = [
+  'Content-Type',
+  'Authorization',
+  'X-Session-ID',
+  'X-Broadcast-Approval-Token',
+  'X-Broadcast-Visibility-Scope',
+  'X-Canonical-Contact-ID',
+  'X-Identity-Claim-Channel',
+  'X-Identity-Claim-User-ID',
+  'X-Identity-Claim-Nonce',
+  'X-Identity-Claim-Expires',
+  'X-Identity-Claim-Signature',
+] as const;
 
 const IDENTITY_CLAIM_HEADERS = {
   canonicalContactId: 'x-canonical-contact-id',
@@ -144,6 +162,8 @@ export interface ApiServerConfig {
   voiceWebSocketPath?: string;
   voiceWebSocketRuntime?: VoiceWebSocketRuntime;
   voiceWebSocketHooks?: VoiceWebSocketRuntimeHooks;
+  allowInsecureWithoutAuth?: boolean;
+  corsAllowedOrigins?: string[];
   healthChecks?: ApiServerHealthChecks;
 }
 
@@ -175,6 +195,8 @@ export class ApiServer implements ChannelAdapter {
   private sessionManager: SessionManager;
   private contactStore: ContactStore | null;
   private apiKey?: string;
+  private allowInsecureWithoutAuth: boolean;
+  private corsAllowedOrigins: Set<string>;
   private modelName: string;
   private requestTimeoutMs: number;
   private seenTelemetryNonces = new Map<string, number>();
@@ -190,7 +212,9 @@ export class ApiServer implements ChannelAdapter {
     this.eventBus = config.eventBus;
     this.sessionManager = config.sessionManager;
     this.contactStore = config.contactStore ?? null;
-    this.apiKey = config.apiKey;
+    this.apiKey = this.clampHeader(config.apiKey, 512);
+    this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
+    this.corsAllowedOrigins = this.normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
     this.modelName = config.modelName ?? 'purrsephone';
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
@@ -227,11 +251,49 @@ export class ApiServer implements ChannelAdapter {
   async init(): Promise<void> {}
 
   async start(): Promise<void> {
-    return new Promise((resolve) => {
+    if (!this.apiKey && !this.allowInsecureWithoutAuth) {
+      const err = new Error('API_KEY is required unless ALLOW_INSECURE_LOCAL_API=true');
+      log.error('Refusing to start API server without authentication', {
+        host: this.host,
+        port: this.port,
+        requiredEnv: 'API_KEY or ALLOW_INSECURE_LOCAL_API=true',
+      });
+      throw err;
+    }
+
+    if (!this.apiKey && !this.isLoopbackHost(this.host)) {
+      const err = new Error(
+        'ALLOW_INSECURE_LOCAL_API=true requires API_HOST to be loopback (127.0.0.1, ::1, or localhost)',
+      );
+      log.error('Refusing to start insecure API server on non-loopback host', {
+        host: this.host,
+        port: this.port,
+      });
+      throw err;
+    }
+
+    return new Promise((resolve, reject) => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        log.error('API server failed to start', {
+          host: this.host,
+          port: this.port,
+          code: err.code,
+          errno: err.errno,
+          syscall: err.syscall,
+          error: err.message,
+        });
+        reject(err);
+      };
+
+      this.server.once('error', onError);
       this.server.listen(this.port, this.host, () => {
+        this.server.off('error', onError);
         log.info(`Listening on ${this.host}:${this.port}`);
         if (!this.apiKey) {
-          log.warn('API server started WITHOUT authentication — set API_KEY to secure');
+          log.warn('API authentication disabled by explicit ALLOW_INSECURE_LOCAL_API=true');
+        }
+        if (this.corsAllowedOrigins.size === 0) {
+          log.warn('API CORS allowlist is empty; cross-origin browser requests are denied by default');
         }
         resolve();
       });
@@ -263,12 +325,75 @@ export class ApiServer implements ChannelAdapter {
     return Math.floor(value);
   }
 
+  private normalizeCorsAllowedOrigins(origins: readonly string[] | undefined): Set<string> {
+    const normalized = new Set<string>();
+    if (!origins) return normalized;
+
+    for (const origin of origins) {
+      const trimmed = origin.trim();
+      if (!trimmed || trimmed === '*') continue;
+      normalized.add(trimmed);
+    }
+
+    return normalized;
+  }
+
+  private isLoopbackHost(host: string): boolean {
+    const normalized = host.trim().toLowerCase();
+    if (normalized === 'localhost' || normalized === '::1') return true;
+    return normalized.startsWith('127.');
+  }
+
+  private appendVaryHeader(res: ServerResponse, value: string): void {
+    const existing = res.getHeader('Vary');
+    const varyValues = new Set<string>();
+
+    if (typeof existing === 'string') {
+      for (const item of existing.split(',')) {
+        const trimmed = item.trim();
+        if (trimmed) varyValues.add(trimmed);
+      }
+    } else if (Array.isArray(existing)) {
+      for (const item of existing) {
+        const trimmed = item.trim();
+        if (trimmed) varyValues.add(trimmed);
+      }
+    }
+
+    varyValues.add(value);
+    res.setHeader('Vary', Array.from(varyValues).join(', '));
+  }
+
+  private applyCorsPolicy(req: IncomingMessage, res: ServerResponse): boolean {
+    const origin = this.clampHeader(this.singleHeader(req.headers.origin), 512);
+    if (!origin) {
+      return true;
+    }
+
+    if (!this.corsAllowedOrigins.has(origin)) {
+      this.sendError(
+        res,
+        403,
+        'cors_origin_not_allowed',
+        'Origin is not allowed by API_CORS_ALLOWLIST',
+      );
+      return false;
+    }
+
+    this.appendVaryHeader(res, 'Origin');
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', API_CORS_ALLOWED_METHODS);
+    res.setHeader('Access-Control-Allow-Headers', API_CORS_ALLOWED_HEADERS.join(', '));
+    res.setHeader('Access-Control-Max-Age', '600');
+    return true;
+  }
+
   private attachTurnCleanup(
     releaseChannel: () => void,
     turnPromise: Promise<unknown>,
   ): void {
     turnPromise
-      .catch(() => {})
+      .catch((err) => { log.debug('Turn promise rejected during cleanup', { error: String(err) }); })
       .finally(() => {
         releaseChannel();
       });
@@ -352,7 +477,7 @@ export class ApiServer implements ChannelAdapter {
     } catch (err) {
       queued.lease.then((lateLease) => {
         lateLease.release();
-      }).catch(() => undefined);
+      }).catch((leaseErr) => { log.debug('Late lease release failed', { error: String(leaseErr) }); });
 
       if (err instanceof RequestLifecycleError && err.reason === 'timeout' && this.canWriteResponse(res)) {
         this.sendError(res, 504, 'request_timeout', 'Request timed out before turn started');
@@ -450,27 +575,8 @@ export class ApiServer implements ChannelAdapter {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    // CORS headers on every response
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader(
-      'Access-Control-Allow-Headers',
-      [
-        'Content-Type',
-        'Authorization',
-        'X-Session-ID',
-        'X-User-ID',
-        'X-User-Name',
-        'X-Canonical-Contact-ID',
-        'X-Identity-Claim-Channel',
-        'X-Identity-Claim-User-ID',
-        'X-Identity-Claim-Nonce',
-        'X-Identity-Claim-Expires',
-        'X-Identity-Claim-Signature',
-      ].join(', '),
-    );
+    if (!this.applyCorsPolicy(req, res)) return;
 
-    // Preflight
     if (req.method === 'OPTIONS') {
       sendEmpty(res, 204);
       return;
@@ -479,26 +585,15 @@ export class ApiServer implements ChannelAdapter {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
-
-    if (isTelemetryIngest && !this.apiKey) {
-      this.sendError(
-        res,
-        503,
-        'telemetry_auth_unconfigured',
-        'Telemetry ingestion requires API authentication to be configured',
-      );
-      return;
-    }
-
-    // Auth check
-    if ((this.apiKey || isTelemetryIngest) && !this.checkAuth(req, res)) return;
+    const principal = this.resolveRequestPrincipal(req, res, isTelemetryIngest);
+    if (!principal) return;
 
     if (req.method === 'GET' && path === '/v1/models') {
       this.handleModels(res);
     } else if (req.method === 'GET' && path === '/health') {
       void this.handleHealth(res);
     } else if (req.method === 'POST' && path === '/v1/chat/completions') {
-      void this.handleChatCompletions(req, res);
+      void this.handleChatCompletions(req, res, principal);
     } else if (isTelemetryIngest) {
       void this.handleTelemetryIngest(req, res);
     } else {
@@ -506,12 +601,41 @@ export class ApiServer implements ChannelAdapter {
     }
   }
 
-  private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
-    if (!this.apiKey || !hasBearerToken(req, this.apiKey)) {
-      this.sendError(res, 401, 'invalid_api_key', 'Invalid or missing API key');
-      return false;
+  private resolveRequestPrincipal(
+    req: IncomingMessage,
+    res: ServerResponse,
+    isTelemetryIngest: boolean,
+  ): ApiAuthPrincipal | null {
+    if (this.apiKey) {
+      const principal = getBearerPrincipal(req, this.apiKey);
+      if (!principal) {
+        this.sendError(res, 401, 'invalid_api_key', 'Invalid or missing API key');
+        return null;
+      }
+      return principal;
     }
-    return true;
+
+    if (isTelemetryIngest) {
+      this.sendError(
+        res,
+        503,
+        'telemetry_auth_unconfigured',
+        'Telemetry ingestion requires API authentication to be configured',
+      );
+      return null;
+    }
+
+    if (this.allowInsecureWithoutAuth) {
+      return INSECURE_LOCAL_API_PRINCIPAL;
+    }
+
+    this.sendError(
+      res,
+      503,
+      'api_auth_unconfigured',
+      'API_KEY is required unless ALLOW_INSECURE_LOCAL_API=true',
+    );
+    return null;
   }
 
   private handleModels(res: ServerResponse): void {
@@ -590,7 +714,11 @@ export class ApiServer implements ChannelAdapter {
     };
   }
 
-  private async handleChatCompletions(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handleChatCompletions(
+    req: IncomingMessage,
+    res: ServerResponse,
+    principal: ApiAuthPrincipal,
+  ): Promise<void> {
     const parsedBody = await readJsonBodyWithLimit<ChatCompletionRequest>(req, res, {
       maxBytes: MAX_BODY_SIZE,
       logger: log,
@@ -620,16 +748,49 @@ export class ApiServer implements ChannelAdapter {
     }
 
     const parsed = parsedBody.value;
+    if (this.hasCallerProvidedPrimaryTrust(parsed)) {
+      log.warn('Rejected caller-provided primary trust field in API payload', {
+        path: req.url ?? '/v1/chat/completions',
+        remoteAddress: req.socket.remoteAddress,
+      });
+      this.sendError(
+        res,
+        400,
+        'invalid_request',
+        'Caller-provided primary trust level is not allowed',
+      );
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime validation of untrusted JSON
     if (!parsed.messages || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
       this.sendError(res, 400, 'invalid_request', 'messages field is required and must be a non-empty array');
       return;
     }
 
     if (parsed.stream) {
-      await this.handleStreaming(parsed, req, res);
+      await this.handleStreaming(parsed, req, res, principal);
     } else {
-      await this.handleNonStreaming(parsed, req, res);
+      await this.handleNonStreaming(parsed, req, res, principal);
     }
+  }
+
+  private isPrimaryTrustLevelValue(value: unknown): boolean {
+    return typeof value === 'string' && value.trim().toLowerCase() === 'primary';
+  }
+
+  private hasCallerProvidedPrimaryTrust(payload: unknown): boolean {
+    if (!payload || typeof payload !== 'object') return false;
+    const record = payload as Record<string, unknown>;
+    if (this.isPrimaryTrustLevelValue(record.trustLevel) || this.isPrimaryTrustLevelValue(record.trust_level)) {
+      return true;
+    }
+
+    const contact = record.contact;
+    if (!contact || typeof contact !== 'object') return false;
+    const contactRecord = contact as Record<string, unknown>;
+    return this.isPrimaryTrustLevelValue(contactRecord.trustLevel)
+      || this.isPrimaryTrustLevelValue(contactRecord.trust_level);
   }
 
   private async handleTelemetryIngest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -780,15 +941,16 @@ export class ApiServer implements ChannelAdapter {
     };
   }
 
-  private deriveChannelId(req: IncomingMessage): string {
-    const explicitChannelId = this.clampHeader(
-      this.singleHeader(req.headers['x-channel-id']),
-      256,
+  private deriveChannelId(req: IncomingMessage, principal: ApiAuthPrincipal): string {
+    const sessionId = this.clampHeader(
+      this.singleHeader(req.headers['x-session-id']),
+      128,
     );
-    if (explicitChannelId) return explicitChannelId;
+    if (sessionId) {
+      return `api:${principal.id}:${sessionId}`;
+    }
 
-    const sessionId = req.headers['x-session-id'] as string | undefined;
-    return sessionId ? `api:${sessionId}` : `api:${randomUUID()}`;
+    return `api:${principal.id}`;
   }
 
   private seedSession(
@@ -813,14 +975,11 @@ export class ApiServer implements ChannelAdapter {
     }
   }
 
-  private deriveAuthor(req: IncomingMessage): { authorId: string; authorName: string } {
-    const rawUserId = this.singleHeader(req.headers['x-user-id']);
-    const rawUserName = this.singleHeader(req.headers['x-user-name']);
-
-    const authorId = this.clampHeader(rawUserId, 128) || 'api-user';
-    const authorName = this.clampHeader(rawUserName, 80) || 'User';
-
-    return { authorId, authorName };
+  private deriveAuthor(principal: ApiAuthPrincipal): { authorId: string; authorName: string } {
+    return {
+      authorId: principal.id,
+      authorName: principal.mode === 'api_key' ? 'API Principal' : 'Local API Principal',
+    };
   }
 
   private singleHeader(value: string | string[] | undefined): string | undefined {
@@ -1163,6 +1322,7 @@ export class ApiServer implements ChannelAdapter {
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
+    principal: ApiAuthPrincipal,
   ): Promise<PendingTurn | null> {
     const routingOverrides = this.parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {
@@ -1170,8 +1330,8 @@ export class ApiServer implements ChannelAdapter {
       return null;
     }
 
-    const channelId = this.deriveChannelId(req);
-    const { authorId, authorName } = this.deriveAuthor(req);
+    const channelId = this.deriveChannelId(req, principal);
+    const { authorId, authorName } = this.deriveAuthor(principal);
     if (!this.enforceIdentityClaim(req, res, authorId)) {
       return null;
     }
@@ -1206,8 +1366,9 @@ export class ApiServer implements ChannelAdapter {
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
+    principal: ApiAuthPrincipal,
   ): Promise<PreparedTurn | null> {
-    const pending = await this.prepareTurn(request, req, res);
+    const pending = await this.prepareTurn(request, req, res, principal);
     if (!pending) return null;
     return this.beginPreparedTurn(pending);
   }
@@ -1294,8 +1455,9 @@ export class ApiServer implements ChannelAdapter {
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
+    principal: ApiAuthPrincipal,
   ): Promise<void> {
-    const turn = await this.startTurn(request, req, res);
+    const turn = await this.startTurn(request, req, res, principal);
     if (!turn) return;
 
     try {
@@ -1334,8 +1496,9 @@ export class ApiServer implements ChannelAdapter {
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
+    principal: ApiAuthPrincipal,
   ): Promise<void> {
-    const pendingTurn = await this.prepareTurn(request, req, res);
+    const pendingTurn = await this.prepareTurn(request, req, res, principal);
     if (!pendingTurn) return;
 
     const completionId = `chatcmpl-${randomUUID()}`;

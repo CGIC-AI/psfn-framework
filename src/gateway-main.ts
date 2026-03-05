@@ -9,8 +9,8 @@ import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { LLMClient } from './llm/client.js';
 import { createEmbeddingProviderFromEnv } from './memory/embedding.js';
-import { DiscordAdapter } from './channels/discord/adapter.js';
-import { TelegramAdapter } from './channels/telegram/adapter.js';
+import type { DiscordAdapter } from './channels/discord/adapter.js';
+import type { TelegramAdapter } from './channels/telegram/adapter.js';
 import {
   loadRuntimeChannelsConfig,
   type RuntimeChannelsConfigOverrides,
@@ -35,8 +35,7 @@ import { createWyomingServiceRegistry } from './channels/wyoming/services/index.
 import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/handle.js';
 import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
-import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
-import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
+import type { ChannelAdapter } from './channels/types.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
@@ -49,7 +48,11 @@ import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parsePositiveIntEnv } from './utils/env.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
-import { resolveRuntimeVoiceProviderGate } from './runtime/bootstrap-helpers.js';
+import {
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
+  resolveRuntimeVoiceProviderGate,
+} from './runtime/bootstrap-helpers.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
@@ -60,6 +63,16 @@ import {
   DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
 } from './gateway/discord-startup.js';
+import {
+  createDiscordChannelAdapterFactoryEntry,
+  createTelegramChannelAdapterFactoryEntry,
+  getOptionalChannelAdapter,
+  requireChannelAdapter,
+} from './bootstrap/channel-runtime.js';
+import {
+  buildChannelAdapterFactoryManifest,
+  loadChannelAdaptersFromManifest,
+} from './runtime/channel-lifecycle.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -398,10 +411,25 @@ async function main(): Promise<void> {
     repoRoot: workspaceRoot,
   });
 
-  const discord = new DiscordAdapter(config, eventBus);
-  const telegram = channelsConfig.telegram.enabled
-    ? new TelegramAdapter(channelsConfig.telegram, eventBus)
-    : null;
+  const gatewayChannelRegistry = new Map<string, ChannelAdapter>();
+  const gatewayChannelManifest = buildChannelAdapterFactoryManifest([
+    createDiscordChannelAdapterFactoryEntry({
+      config,
+      eventBus,
+    }),
+    createTelegramChannelAdapterFactoryEntry({
+      config: channelsConfig.telegram,
+      eventBus,
+    }),
+  ]);
+  await loadChannelAdaptersFromManifest(
+    gatewayChannelRegistry,
+    gatewayChannelManifest,
+    () => undefined,
+    log,
+  );
+  const discord = requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord');
+  const telegram = getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram');
   const capabilityRuntime = new CapabilityRuntime({
     dataDir: config.dataDir,
     envTier: config.capabilityTier,
@@ -528,14 +556,13 @@ async function main(): Promise<void> {
     const wyomingSttProvider = voiceProviderGate.sttProvider;
     const wyomingTtsProvider = voiceProviderGate.ttsProvider;
 
-    // ASR adapter — wired to Deepgram STT only when provider + credentials are enabled
-    if (voiceProviderGate.sttEnabled && wyomingSttProvider === 'deepgram') {
-      const sttConnector = createStreamingSttConnector('deepgram', {
-        apiKey: config.deepgramApiKey!,
-        model: config.deepgramModel,
-      });
-      wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
-      log.info('Wyoming ASR adapter enabled (deepgram)');
+    if (voiceProviderGate.sttEnabled) {
+      const runtimeStt = createRuntimeVoiceSttConnector(config);
+      if (!runtimeStt) {
+        throw new Error(`Expected runtime STT connector for provider "${wyomingSttProvider}"`);
+      }
+      wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: runtimeStt.connector }));
+      log.info('Wyoming ASR adapter enabled', { provider: runtimeStt.provider });
     } else {
       log.info('Wyoming ASR adapter disabled', {
         provider: wyomingSttProvider,
@@ -545,26 +572,15 @@ async function main(): Promise<void> {
 
     // TTS adapter — wired only when provider + credentials/config are enabled
     try {
-      let ttsConnector;
       if (voiceProviderGate.ttsEnabled) {
-        if (wyomingTtsProvider === 'echo') {
-          ttsConnector = createStreamingTtsConnector('echo', {
-            url: config.echoTtsUrl!,
-            voice: config.echoTtsVoice!,
-            ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
-            ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
-          });
-        } else if (wyomingTtsProvider === 'elevenlabs' && config.elevenLabsVoiceId) {
-          ttsConnector = createStreamingTtsConnector('elevenlabs', {
-            apiKey: config.elevenLabsApiKey!,
-            voiceId: config.elevenLabsVoiceId,
-            modelId: config.elevenLabsModelId,
-          });
+        const runtimeTts = createRuntimeVoiceTtsConnector(config, {
+          requireElevenLabsVoiceId: true,
+        });
+        if (!runtimeTts) {
+          throw new Error(`Expected runtime TTS connector for provider "${wyomingTtsProvider}"`);
         }
-      }
-      if (ttsConnector) {
-        wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: ttsConnector }));
-        log.info('Wyoming TTS adapter enabled', { provider: wyomingTtsProvider });
+        wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: runtimeTts.connector }));
+        log.info('Wyoming TTS adapter enabled', { provider: runtimeTts.provider });
       } else {
         log.info('Wyoming TTS adapter disabled', {
           provider: wyomingTtsProvider,
@@ -613,6 +629,9 @@ async function main(): Promise<void> {
   });
 
   if (telegram) {
+    if (typeof telegram.onMessage !== 'function') {
+      throw new Error('Telegram adapter is missing onMessage bootstrap hook');
+    }
     telegram.onMessage(async (msg) => {
       const result = await gateway.requestAgentVoiceStream(msg);
       return {

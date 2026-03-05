@@ -14,6 +14,7 @@ export interface StreamingSttConfigByProvider {
 export interface StreamingSttProviderRuntimeConfig {
   [key: string]: unknown;
   deepgramApiKey?: string;
+  deepgramModel?: string;
 }
 
 export interface StreamingSttProviderMetadata {
@@ -24,6 +25,7 @@ export interface StreamingSttProviderMetadata {
 export interface StreamingSttProviderRegistration<TConfig = unknown> {
   createConnector: (config: TConfig) => StreamingSttConnector;
   metadata: StreamingSttProviderMetadata;
+  resolveRuntimeConfig?: (config: StreamingSttProviderRuntimeConfig) => TConfig;
 }
 
 type AnyStreamingSttProviderRegistration = StreamingSttProviderRegistration<any>;
@@ -34,6 +36,23 @@ const providerRegistrations = new Map<string, AnyStreamingSttProviderRegistratio
     metadata: {
       canAutoEnable: true,
       isConfigured: (config) => Boolean(config.deepgramApiKey),
+    },
+    resolveRuntimeConfig: (config) => {
+      const apiKey = typeof config.deepgramApiKey === 'string'
+        ? config.deepgramApiKey.trim()
+        : '';
+      if (!apiKey) {
+        throw new Error('Deepgram STT provider selected but DEEPGRAM_API_KEY is not configured');
+      }
+
+      const model = typeof config.deepgramModel === 'string'
+        ? config.deepgramModel.trim()
+        : '';
+
+      return {
+        apiKey,
+        ...(model ? { model } : {}),
+      };
     },
   }],
 ]);
@@ -111,4 +130,19 @@ export function createStreamingSttConnector<TProvider extends StreamingSttProvid
   }
 
   throw new Error(`Unsupported streaming STT provider: ${provider}`);
+}
+
+export function resolveStreamingSttRuntimeConfig<TProvider extends StreamingSttProvider>(
+  provider: TProvider,
+  config: StreamingSttProviderRuntimeConfig,
+): StreamingSttConfigByProvider[TProvider] {
+  const registration = providerRegistrations.get(normalizeProviderId(provider));
+  if (!registration) {
+    throw new Error(`Unsupported streaming STT provider: ${provider}`);
+  }
+  if (!registration.resolveRuntimeConfig) {
+    throw new Error(`Streaming STT provider "${provider}" does not expose runtime bootstrap config`);
+  }
+
+  return registration.resolveRuntimeConfig(config);
 }

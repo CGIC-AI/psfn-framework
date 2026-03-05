@@ -6,15 +6,22 @@ import {
 } from '../backup/startup-checks.js';
 import type { RuntimeChannelsConfigOverrides } from '../channels/config.js';
 import {
+  createStreamingSttConnector,
   isStreamingSttProvider,
   isStreamingSttProviderConfigured,
   resolveDefaultStreamingSttProvider,
+  resolveStreamingSttRuntimeConfig,
+  type StreamingSttConnector,
   type StreamingSttProvider,
 } from '../voice/connectors/stt/index.js';
 import {
+  createStreamingTtsConnector,
   isStreamingTtsProvider,
   isStreamingTtsProviderConfigured,
+  listStreamingTtsProviders,
   resolveDefaultStreamingTtsProvider,
+  resolveStreamingTtsRuntimeConfig,
+  type StreamingTtsConnector,
   type StreamingTtsProvider,
 } from '../voice/connectors/tts/index.js';
 
@@ -31,6 +38,25 @@ export interface RuntimeVoiceProviderGate {
   ttsProvider: RuntimeVoiceTtsProvider;
   sttEnabled: boolean;
   ttsEnabled: boolean;
+}
+
+export interface RuntimeVoiceConnectorBinding<TProvider, TConnector> {
+  provider: TProvider;
+  connector: TConnector;
+}
+
+function hasExplicitRuntimeProviderSelection(provider: unknown): provider is string {
+  if (typeof provider !== 'string') return false;
+  const normalized = provider.trim().toLowerCase();
+  return normalized.length > 0 && normalized !== 'disabled';
+}
+
+export interface RuntimeVoiceSttConnectorOptions extends RuntimeVoiceProviderGateOptions {
+  provider?: RuntimeVoiceSttProvider;
+}
+
+export interface RuntimeVoiceTtsConnectorOptions extends RuntimeVoiceProviderGateOptions {
+  provider?: RuntimeVoiceTtsProvider;
 }
 
 export function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
@@ -83,6 +109,78 @@ export function resolveRuntimeVoiceProviderGate(
     sttEnabled,
     ttsEnabled,
   };
+}
+
+export function createRuntimeVoiceSttConnector(
+  config: SubstrateConfig,
+  options: RuntimeVoiceSttConnectorOptions = {},
+): RuntimeVoiceConnectorBinding<StreamingSttProvider, StreamingSttConnector> | null {
+  const provider = options.provider ?? resolveRuntimeVoiceSttProvider(config);
+  if (provider === 'disabled') {
+    return null;
+  }
+  const explicitlySelectedProvider = hasExplicitRuntimeProviderSelection(config.sttProvider)
+    ? resolveRuntimeVoiceSttProvider(config)
+    : null;
+  if (!isStreamingSttProviderConfigured(provider, config) && explicitlySelectedProvider !== provider) {
+    return null;
+  }
+
+  const connectorConfig = resolveStreamingSttRuntimeConfig(provider, config);
+  return {
+    provider,
+    connector: createStreamingSttConnector(provider, connectorConfig),
+  };
+}
+
+export function createRuntimeVoiceTtsConnector(
+  config: SubstrateConfig,
+  options: RuntimeVoiceTtsConnectorOptions = {},
+): RuntimeVoiceConnectorBinding<StreamingTtsProvider, StreamingTtsConnector> | null {
+  const provider = options.provider ?? resolveRuntimeVoiceTtsProvider(config);
+  if (provider === 'disabled') {
+    return null;
+  }
+  const explicitlySelectedProvider = hasExplicitRuntimeProviderSelection(config.ttsProvider)
+    ? resolveRuntimeVoiceTtsProvider(config)
+    : null;
+  if (
+    !isStreamingTtsProviderConfigured(provider, config, options)
+    && explicitlySelectedProvider !== provider
+  ) {
+    return null;
+  }
+
+  const connectorConfig = resolveStreamingTtsRuntimeConfig(provider, config);
+  return {
+    provider,
+    connector: createStreamingTtsConnector(provider, connectorConfig),
+  };
+}
+
+export function resolveRuntimeVoiceTtsProviderOrder(
+  config: SubstrateConfig,
+  preferredProvider?: StreamingTtsProvider,
+  options: RuntimeVoiceProviderGateOptions = {},
+): StreamingTtsProvider[] {
+  const resolvedPreferred = preferredProvider
+    ?? (() => {
+      const provider = resolveRuntimeVoiceTtsProvider(config);
+      return provider === 'disabled' ? null : provider;
+    })();
+
+  const orderedProviders: StreamingTtsProvider[] = [];
+  if (resolvedPreferred) {
+    orderedProviders.push(resolvedPreferred);
+  }
+
+  for (const provider of listStreamingTtsProviders()) {
+    if (provider === resolvedPreferred) continue;
+    if (!isStreamingTtsProviderConfigured(provider, config, options)) continue;
+    orderedProviders.push(provider);
+  }
+
+  return orderedProviders;
 }
 
 export function buildRuntimeChannelsConfigOverrides(

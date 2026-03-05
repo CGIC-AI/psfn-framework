@@ -1,12 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadSettings } from '../settings.js';
 import {
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
   installPromotedToolsPersistenceHook,
   resolveRuntimeVoiceProviderGate,
   resolveRuntimeVoiceSttProvider,
+  resolveRuntimeVoiceTtsProviderOrder,
   resolveRuntimeVoiceTtsProvider,
 } from './bootstrap-helpers.js';
 import { registerStreamingSttProvider } from '../voice/connectors/stt/index.js';
@@ -244,6 +247,190 @@ describe('resolveRuntimeVoiceProviderGate', () => {
         ttsProvider: 'plugin-test',
       } as any);
       expect(disabledGate.ttsEnabled).toBe(false);
+    } finally {
+      restoreProvider();
+    }
+  });
+});
+
+describe('createRuntimeVoiceSttConnector', () => {
+  it('returns null when the resolved provider is disabled or unconfigured', () => {
+    expect(createRuntimeVoiceSttConnector({} as any)).toBeNull();
+    expect(createRuntimeVoiceSttConnector({
+      sttProvider: 'disabled',
+      deepgramApiKey: 'deepgram-key',
+    } as any)).toBeNull();
+  });
+
+  it('creates a connector from registered runtime config without entrypoint switch logic', () => {
+    const connector = {
+      id: 'plugin-test',
+      startStream: vi.fn(async () => ({
+        transcripts: (async function* emptyTranscripts() {})(),
+        writeAudio: async () => {},
+        endInput: async () => {},
+        cancel: async () => {},
+      })),
+    };
+    const createConnector = vi.fn(() => connector);
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector,
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginSttEndpoint),
+      }),
+    });
+
+    try {
+      const binding = createRuntimeVoiceSttConnector({
+        sttProvider: 'plugin-test',
+        pluginSttToken: 'plugin-key',
+        pluginSttEndpoint: 'wss://plugin-stt.invalid',
+      } as any);
+
+      expect(binding?.provider).toBe('plugin-test');
+      expect(binding?.connector).toBe(connector);
+      expect(createConnector).toHaveBeenCalledWith({
+        endpoint: 'wss://plugin-stt.invalid',
+      });
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('fails closed when an explicitly selected provider is missing runtime config', () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        startStream: async () => ({
+          transcripts: (async function* emptyTranscripts() {})(),
+          writeAudio: async () => {},
+          endInput: async () => {},
+          cancel: async () => {},
+        }),
+      })),
+      metadata: {
+        isConfigured: () => false,
+      },
+      resolveRuntimeConfig: () => {
+        throw new Error('plugin STT runtime config missing');
+      },
+    });
+
+    try {
+      expect(() => createRuntimeVoiceSttConnector({
+        sttProvider: 'plugin-test',
+      } as any)).toThrow('plugin STT runtime config missing');
+    } finally {
+      restoreProvider();
+    }
+  });
+});
+
+describe('createRuntimeVoiceTtsConnector', () => {
+  it('returns null when the resolved provider is disabled or unconfigured', () => {
+    expect(createRuntimeVoiceTtsConnector({} as any)).toBeNull();
+    expect(createRuntimeVoiceTtsConnector({
+      ttsProvider: 'disabled',
+      elevenLabsApiKey: 'elevenlabs-key',
+      elevenLabsVoiceId: 'voice-id',
+    } as any)).toBeNull();
+  });
+
+  it('creates a connector from registered runtime config without entrypoint switch logic', () => {
+    const connector = {
+      id: 'plugin-test',
+      synthesizeStream: vi.fn(async () => ({
+        audio: (async function* emptyAudio() {})(),
+        cancel: async () => {},
+      })),
+      synthesizeBuffer: vi.fn(async () => Buffer.alloc(0)),
+    };
+    const createConnector = vi.fn(() => connector);
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector,
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginTtsEndpoint),
+      }),
+    });
+
+    try {
+      const binding = createRuntimeVoiceTtsConnector({
+        ttsProvider: 'plugin-test',
+        pluginTtsToken: 'plugin-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+      } as any);
+
+      expect(binding?.provider).toBe('plugin-test');
+      expect(binding?.connector).toBe(connector);
+      expect(createConnector).toHaveBeenCalledWith({
+        endpoint: 'https://plugin-tts.invalid',
+      });
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('fails closed when an explicitly selected provider is missing runtime config', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer: async () => Buffer.alloc(0),
+      })),
+      metadata: {
+        isConfigured: () => false,
+      },
+      resolveRuntimeConfig: () => {
+        throw new Error('plugin TTS runtime config missing');
+      },
+    });
+
+    try {
+      expect(() => createRuntimeVoiceTtsConnector({
+        ttsProvider: 'plugin-test',
+      } as any)).toThrow('plugin TTS runtime config missing');
+    } finally {
+      restoreProvider();
+    }
+  });
+});
+
+describe('resolveRuntimeVoiceTtsProviderOrder', () => {
+  it('keeps the preferred provider first and appends other configured providers', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer: async () => Buffer.alloc(0),
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginTtsEndpoint),
+      }),
+    });
+
+    try {
+      expect(resolveRuntimeVoiceTtsProviderOrder({
+        ttsProvider: 'plugin-test',
+        pluginTtsToken: 'plugin-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+        elevenLabsApiKey: 'elevenlabs-key',
+        elevenLabsVoiceId: 'voice-id',
+      } as any)).toEqual(['plugin-test', 'elevenlabs']);
     } finally {
       restoreProvider();
     }

@@ -455,6 +455,26 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('voiceProviderGate.ttsEnabled');
   });
 
+  it('routes channel adapter bootstrap through shared channel runtime helpers', () => {
+    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+    const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const gatewaySource = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+
+    expect(runtimeSource).toContain('createDiscordChannelAdapterFactoryEntry({');
+    expect(runtimeSource).toContain('createTelegramChannelAdapterFactoryEntry({');
+    expect(runtimeSource).toContain('createApiServerChannelAdapterFactoryEntry({');
+    expect(agentSource).toContain('createApiServerChannelAdapterFactoryEntry({');
+    expect(gatewaySource).toContain('createDiscordChannelAdapterFactoryEntry({');
+    expect(gatewaySource).toContain('createTelegramChannelAdapterFactoryEntry({');
+
+    expect(runtimeSource).not.toContain('new DiscordAdapter(');
+    expect(runtimeSource).not.toContain('new TelegramAdapter(');
+    expect(runtimeSource).not.toContain('new ApiServer(');
+    expect(agentSource).not.toContain('new ApiServer(');
+    expect(gatewaySource).not.toContain('new DiscordAdapter(');
+    expect(gatewaySource).not.toContain('new TelegramAdapter(');
+  });
+
   it('uses durable gateway shutdown sequencing in split mode', () => {
     const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
     expect(source).toContain('let stopPromise: Promise<void> | null = null;');

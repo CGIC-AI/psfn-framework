@@ -4,6 +4,8 @@ import type { EventBus } from '../../event-bus.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
 import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
+import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
 
 const {
   createStreamingSttConnectorMock,
@@ -57,7 +59,7 @@ function createStubTtsConnector(): StreamingTtsConnector {
 }
 
 type RuntimeVoiceTestOverrides = Partial<SubstrateConfig> & {
-  sttProvider?: 'deepgram' | 'disabled';
+  sttProvider?: SubstrateConfig['sttProvider'] | 'disabled';
   ttsProvider?: SubstrateConfig['ttsProvider'] | 'disabled';
 };
 
@@ -212,5 +214,51 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
       preset: 'normal',
       model: 'echo-v1',
     });
+  });
+
+  it('supports registered STT/TTS providers without built-in provider switches', () => {
+    const restoreStt = registerStreamingSttProvider('plugin-stt', {
+      createConnector: vi.fn(() => createStubSttConnector()),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginSttEndpoint),
+      }),
+    });
+    const restoreTts = registerStreamingTtsProvider('plugin-tts', {
+      createConnector: vi.fn(() => createStubTtsConnector()),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginTtsEndpoint),
+      }),
+    });
+
+    try {
+      const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+        sttProvider: 'plugin-stt',
+        ttsProvider: 'plugin-tts',
+        pluginSttToken: 'plugin-stt-key',
+        pluginSttEndpoint: 'wss://plugin-stt.invalid',
+        pluginTtsToken: 'plugin-tts-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+        deepgramApiKey: '',
+        elevenLabsApiKey: '',
+        elevenLabsVoiceId: '',
+      }));
+
+      expect(runtime).toBeDefined();
+      expect(createStreamingSttConnectorMock).toHaveBeenCalledWith('plugin-stt', {
+        endpoint: 'wss://plugin-stt.invalid',
+      });
+      expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('plugin-tts', {
+        endpoint: 'https://plugin-tts.invalid',
+      });
+    } finally {
+      restoreTts();
+      restoreStt();
+    }
   });
 });

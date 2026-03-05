@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubstrateConfig } from '../types.js';
 import { FallbackRunner } from './fallback.js';
+import { createEligibilityGate, EligibilityDeniedError } from '../capabilities/eligibility.js';
 
 const mocks = vi.hoisted(() => ({
   getModel: vi.fn(),
@@ -229,6 +230,54 @@ describe('LLMClient completion model hints', () => {
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(77);
+  });
+});
+
+describe('LLMClient eligibility gate', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: `${provider}:${modelId}`,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('denies background completions when required capability token is missing', async () => {
+    const gate = createEligibilityGate(() => ({
+      getTier: () => 'custom',
+      getGrantedTokens: () => new Set(),
+      has: () => false,
+    }));
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      eligibilityGate: gate,
+    });
+
+    await expect(client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Process memories' }],
+      },
+      'background',
+      { disableRetry: true },
+    )).rejects.toBeInstanceOf(EligibilityDeniedError);
+
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
   });
 });
 

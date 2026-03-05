@@ -230,10 +230,31 @@ export interface EventMap {
     superseded?: boolean;
     timestamp: number;
   };
+  'capability.eligibility': {
+    operationKind: 'tool.execute' | 'llm.purpose' | 'scheduler.task' | 'post_turn.action';
+    operationRef: string;
+    allowed: boolean;
+    reasonCode: string;
+    tier: string;
+    requiredTokens: string[];
+    missingTokens: string[];
+    minimumTier?: string;
+    timestamp: number;
+  };
   'session.created': { channelId: string };
   'session.compacted': { channelId: string; before: number; after: number };
   'schedule.tick': { timestamp: number };
   'schedule.task.run': { taskId: string; taskName: string; type: string } & EventCorrelationFields;
+  'schedule.task.denied': {
+    taskId: string;
+    taskName: string;
+    type: string;
+    reasonCode: string;
+    tier: string;
+    requiredTokens: string[];
+    missingTokens: string[];
+    minimumTier?: string;
+  } & EventCorrelationFields;
   'schedule.heartbeat': { timestamp: number; taskCount: number };
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };

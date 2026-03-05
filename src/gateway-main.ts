@@ -39,6 +39,10 @@ import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
 import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
+import {
+  createEligibilityGate,
+  type EligibilityDecision,
+} from './capabilities/eligibility.js';
 import { GitOps } from './git/ops.js';
 import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
@@ -74,6 +78,22 @@ const ALL_BEADS_ACTIONS: readonly BeadsAction[] = [
   'close',
   'sync',
 ];
+
+function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
+  eventBus.emit('capability.eligibility', {
+    operationKind: decision.operation.kind,
+    operationRef: JSON.stringify(decision.operation),
+    allowed: decision.allowed,
+    reasonCode: decision.reasonCode,
+    tier: decision.tier,
+    requiredTokens: decision.requiredTokens,
+    missingTokens: decision.missingTokens,
+    ...(decision.minimumTier ? { minimumTier: decision.minimumTier } : {}),
+    timestamp: Date.now(),
+  }).catch((error) => {
+    log.warn('Failed to emit capability eligibility telemetry', { error: String(error) });
+  });
+}
 
 interface GatewayVoiceModuleContext {
   gateway: GatewayServer;
@@ -369,9 +389,6 @@ async function main(): Promise<void> {
   const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(process.env, workspaceRoot);
 
   // ── Create providers (these hold secrets / have network access) ──
-
-  const llmClient = new LLMClient(config);
-
   const embeddingProvider = createEmbeddingProviderFromEnv(process.env);
   log.info('Embedding provider initialized', {
     provider: embeddingProvider.kind,
@@ -389,6 +406,11 @@ async function main(): Promise<void> {
     dataDir: config.dataDir,
     envTier: config.capabilityTier,
   });
+  const eligibilityGate = createEligibilityGate(
+    () => capabilityRuntime,
+    (decision) => emitEligibilityDecision(eventBus, decision),
+  );
+  const llmClient = new LLMClient(config, { eligibilityGate });
 
   // ── Audit database (separate from agent's runtime DB) ──
 

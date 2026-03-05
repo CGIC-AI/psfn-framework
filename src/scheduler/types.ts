@@ -1,3 +1,5 @@
+import type { EligibilityRequirements } from '../capabilities/eligibility.js';
+
 // ── Scheduler Types ──
 
 export type TaskType = 'every' | 'one-shot';
@@ -13,6 +15,8 @@ export interface ScheduledTask {
   runAt?: number;
   /** Handler called when the task fires */
   handler: () => void | Promise<void>;
+  /** Optional runtime eligibility requirements evaluated before handler execution. */
+  eligibility?: EligibilityRequirements;
   state: TaskState;
 }
 

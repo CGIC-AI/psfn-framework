@@ -113,6 +113,10 @@ import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
+  createEligibilityGate,
+  type EligibilityDecision,
+} from './capabilities/eligibility.js';
+import {
   createSafeguardAuditTrail,
   createIdentityCoolingOffManagerFromEnv,
   createLifecycleRestartSafeguardFromEnv,
@@ -145,6 +149,22 @@ export {
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
+
+function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
+  eventBus.emit('capability.eligibility', {
+    operationKind: decision.operation.kind,
+    operationRef: JSON.stringify(decision.operation),
+    allowed: decision.allowed,
+    reasonCode: decision.reasonCode,
+    tier: decision.tier,
+    requiredTokens: decision.requiredTokens,
+    missingTokens: decision.missingTokens,
+    ...(decision.minimumTier ? { minimumTier: decision.minimumTier } : {}),
+    timestamp: Date.now(),
+  }).catch((error) => {
+    log.warn('Failed to emit capability eligibility telemetry', { error: String(error) });
+  });
+}
 
 function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
@@ -466,6 +486,10 @@ export class SubstrateRuntime implements Lifecycle {
       envTier: this.config.capabilityTier,
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
+    const eligibilityGate = createEligibilityGate(
+      () => this.capabilityRuntime,
+      (decision) => emitEligibilityDecision(this.eventBus, decision),
+    );
 
     // Open database
     this.db = initDatabase(this.config.databasePath);
@@ -499,7 +523,9 @@ export class SubstrateRuntime implements Lifecycle {
     const cardProposalQueue = new ConfirmationQueue();
 
     // Initialize core components
-    this.llmClient = new LLMClient(this.config);
+    this.llmClient = new LLMClient(this.config, {
+      eligibilityGate,
+    });
     const sessionsDir = resolveSessionsDir(this.config.dataDir);
     const sessionHmacKeyring = buildSessionHmacKeyring({
       serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
@@ -655,6 +681,8 @@ export class SubstrateRuntime implements Lifecycle {
     this.scheduler = new Scheduler(this.eventBus, {
       tickIntervalMs: schedulerConfig.tickIntervalMs,
       heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,
+    }, {
+      eligibilityGate,
     });
     this.scheduler.register({
       id: 'salience-decay',
@@ -662,6 +690,7 @@ export class SubstrateRuntime implements Lifecycle {
       type: 'every',
       intervalMs: this.config.maintenanceIntervalMs,
       handler: () => this.salienceDecay.run(),
+      eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     });
     registerScheduledBackupTask({
@@ -685,6 +714,7 @@ export class SubstrateRuntime implements Lifecycle {
       eventBus: this.eventBus,
       scheduler: this.scheduler,
       agentLoop: this.agentLoop,
+      eligibilityGate,
     });
 
     log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via ${embeddingProvider.kind})`);

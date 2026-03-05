@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { EventBus } from '../event-bus.js';
+import { createEligibilityGate } from '../capabilities/eligibility.js';
 import { Scheduler } from './scheduler.js';
 import type { ScheduledTask } from './types.js';
 
@@ -236,6 +237,48 @@ describe('Scheduler', () => {
         taskName: 'Emitter',
         type: 'every',
       });
+    });
+
+    it('emits schedule.task.denied when eligibility blocks a task', async () => {
+      const deniedRuns: Array<{ taskId: string; reasonCode: string; missingTokens: string[] }> = [];
+      eventBus.on('schedule.task.denied', (data) => {
+        deniedRuns.push({
+          taskId: data.taskId,
+          reasonCode: data.reasonCode,
+          missingTokens: data.missingTokens,
+        });
+      });
+
+      const gate = createEligibilityGate(() => ({
+        getTier: () => 'custom',
+        getGrantedTokens: () => new Set(),
+        has: () => false,
+      }));
+      const gatedScheduler = new Scheduler(
+        eventBus,
+        { tickIntervalMs: 100, heartbeatIntervalMs: 500 },
+        { eligibilityGate: gate },
+      );
+
+      const handler = vi.fn();
+      gatedScheduler.register({
+        id: 'blocked-task',
+        name: 'Blocked Task',
+        type: 'every',
+        intervalMs: 1,
+        handler,
+        eligibility: { requiredTokens: ['memory.write'] },
+        state: 'idle',
+      });
+
+      await gatedScheduler.tick();
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(deniedRuns).toEqual([{
+        taskId: 'blocked-task',
+        reasonCode: 'missing_capability_tokens',
+        missingTokens: ['memory.write'],
+      }]);
     });
   });
 

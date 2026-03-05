@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../types.js';
 import { EventBus } from '../event-bus.js';
+import { createEligibilityGate } from '../capabilities/eligibility.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 
@@ -151,5 +152,47 @@ describe('wirePostTurnActionRuntime', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('blocks deferred actions when eligibility denies required capabilities', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const agentLoop = {
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => 'custom',
+      getGrantedTokens: () => new Set(),
+      has: () => false,
+    }));
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop,
+      eligibilityGate,
+      intervalMs: 10,
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    runtime.registerHandler('heartbeat.run_template', handler);
+
+    const phases: string[] = [];
+    eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
+      phases.push(phase);
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [makeAction({ id: 'blocked-action', dedupeKey: 'blocked:key' })],
+    });
+
+    await scheduler.tick();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(runtime.listQueued()).toHaveLength(0);
+    expect(phases).toContain('failed');
   });
 });

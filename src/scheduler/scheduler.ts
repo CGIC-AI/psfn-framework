@@ -6,21 +6,38 @@ import type { EventBus } from '../event-bus.js';
 import type { ScheduledTask, SchedulerConfig, TaskState } from './types.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../logger.js';
+import type {
+  EligibilityDecision,
+  EligibilityGate,
+} from '../capabilities/eligibility.js';
 
 const log = createComponentLogger('Scheduler');
+
+export interface SchedulerRuntimeOptions {
+  eligibilityGate?: EligibilityGate;
+  onEligibilityDecision?: (decision: EligibilityDecision) => void;
+}
 
 export class Scheduler {
   private eventBus: EventBus;
   private config: SchedulerConfig;
+  private eligibilityGate?: EligibilityGate;
+  private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private tasks = new Map<string, ScheduledTask & { lastRun: number }>();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private tickInFlight: Promise<void> | null = null;
   private stopDrainPromise: Promise<void> | null = null;
   private stopping = false;
 
-  constructor(eventBus: EventBus, config?: Partial<SchedulerConfig>) {
+  constructor(
+    eventBus: EventBus,
+    config?: Partial<SchedulerConfig>,
+    runtimeOptions: SchedulerRuntimeOptions = {},
+  ) {
     this.eventBus = eventBus;
     this.config = { ...DEFAULT_SCHEDULER_CONFIG, ...config };
+    this.eligibilityGate = runtimeOptions.eligibilityGate;
+    this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
   }
 
   updateConfig(config: Partial<SchedulerConfig>): void {
@@ -172,6 +189,36 @@ export class Scheduler {
 
       if (!isDue) continue;
 
+      const eligibilityDecision = this.evaluateTaskEligibility(id, entry);
+      if (eligibilityDecision && !eligibilityDecision.allowed) {
+        log.warn('Task blocked by eligibility gate', {
+          taskId: id,
+          taskName: entry.name,
+          reasonCode: eligibilityDecision.reasonCode,
+          tier: eligibilityDecision.tier,
+          missingTokens: eligibilityDecision.missingTokens,
+          requiredTokens: eligibilityDecision.requiredTokens,
+          minimumTier: eligibilityDecision.minimumTier,
+        });
+        entry.lastRun = now;
+        if (entry.type === 'one-shot') {
+          entry.state = 'complete';
+        }
+        await this.eventBus.emit('schedule.task.denied', {
+          taskId: id,
+          taskName: entry.name,
+          type: entry.type,
+          reasonCode: eligibilityDecision.reasonCode,
+          tier: eligibilityDecision.tier,
+          missingTokens: eligibilityDecision.missingTokens,
+          requiredTokens: eligibilityDecision.requiredTokens,
+          ...(eligibilityDecision.minimumTier
+            ? { minimumTier: eligibilityDecision.minimumTier }
+            : {}),
+        });
+        continue;
+      }
+
       entry.state = 'active';
       entry.lastRun = now;
       try {
@@ -193,14 +240,36 @@ export class Scheduler {
     }
   }
 
+  private evaluateTaskEligibility(
+    taskId: string,
+    task: ScheduledTask,
+  ): EligibilityDecision | null {
+    if (!this.eligibilityGate) return null;
+    const decision = this.eligibilityGate.evaluate(
+      {
+        kind: 'scheduler.task',
+        taskId,
+        taskName: task.name,
+        taskType: task.type,
+      },
+      task.eligibility ?? {},
+    );
+    this.onEligibilityDecision?.(decision);
+    return decision;
+  }
+
   /** Register the heartbeat as a special 'every' task */
-  registerHeartbeat(handler: () => void | Promise<void>): void {
+  registerHeartbeat(
+    handler: () => void | Promise<void>,
+    eligibility?: EligibilityRequirements,
+  ): void {
     this.register({
       id: 'heartbeat',
       name: 'Heartbeat',
       type: 'every',
       intervalMs: this.config.heartbeatIntervalMs,
       handler,
+      ...(eligibility ? { eligibility } : {}),
       state: 'idle',
     });
   }

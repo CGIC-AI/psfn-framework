@@ -100,6 +100,10 @@ import {
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
+  createEligibilityGate,
+  type EligibilityDecision,
+} from './capabilities/eligibility.js';
+import {
   createSafeguardAuditTrail,
   createIdentityCoolingOffManagerFromEnv,
   createLifecycleRestartSafeguardFromEnv,
@@ -132,6 +136,22 @@ const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
+
+function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
+  eventBus.emit('capability.eligibility', {
+    operationKind: decision.operation.kind,
+    operationRef: JSON.stringify(decision.operation),
+    allowed: decision.allowed,
+    reasonCode: decision.reasonCode,
+    tier: decision.tier,
+    requiredTokens: decision.requiredTokens,
+    missingTokens: decision.missingTokens,
+    ...(decision.minimumTier ? { minimumTier: decision.minimumTier } : {}),
+    timestamp: Date.now(),
+  }).catch((error) => {
+    log.warn('Failed to emit capability eligibility telemetry', { error: String(error) });
+  });
+}
 
 function isExplicitTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true';
@@ -344,6 +364,10 @@ async function main(): Promise<void> {
     envTier: config.capabilityTier,
   });
   config.capabilityTier = capabilityRuntime.getTier();
+  const eligibilityGate = createEligibilityGate(
+    () => capabilityRuntime,
+    (decision) => emitEligibilityDecision(eventBus, decision),
+  );
   const lifecycleRuntimeContract = resolveRuntimeModeContract({
     entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
     runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
@@ -562,6 +586,8 @@ async function main(): Promise<void> {
   const scheduler = new Scheduler(eventBus, {
     tickIntervalMs: schedulerConfig.tickIntervalMs,
     heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,
+  }, {
+    eligibilityGate,
   });
   scheduler.register({
     id: 'salience-decay',
@@ -569,6 +595,7 @@ async function main(): Promise<void> {
     type: 'every',
     intervalMs: config.maintenanceIntervalMs,
     handler: () => salienceDecay.run(),
+    eligibility: { requiredTokens: ['memory.write'] },
     state: 'idle',
   });
   registerScheduledBackupTask({
@@ -591,6 +618,7 @@ async function main(): Promise<void> {
     eventBus,
     scheduler,
     agentLoop,
+    eligibilityGate,
   });
   scheduler.start();
   log.info(`Memory system enabled (${gateway.dims}d embeddings via gateway)`);

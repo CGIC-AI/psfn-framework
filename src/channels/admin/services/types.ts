@@ -202,10 +202,23 @@ export interface SettingsConfigEditors {
   capabilities: CapabilityTierConfig;
 }
 
+export interface AdminVoiceProviderOption {
+  id: string;
+  configured: boolean;
+  canAutoEnable: boolean;
+  requiredTokens: string[];
+}
+
+export interface AdminVoiceProviderData {
+  stt: AdminVoiceProviderOption[];
+  tts: AdminVoiceProviderOption[];
+}
+
 export interface AdminSettingsData {
   config: SubstrateConfig;
   env: EnvInfo;
   editors: SettingsConfigEditors;
+  voiceProviders: AdminVoiceProviderData;
 }
 
 export interface SettingsValidationError {

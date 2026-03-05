@@ -1268,6 +1268,70 @@ describe('AdminServer JSON API routes', () => {
     }
   });
 
+  it('lists registered STT/TTS provider ids in admin settings payload for registry-backed Garden suggestions', async () => {
+    const restoreSttProvider = registerStreamingSttProvider('plugin-stt', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in admin settings payload');
+      }),
+      metadata: {
+        canAutoEnable: true,
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+    });
+    const restoreTtsProvider = registerStreamingTtsProvider('plugin-tts', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in admin settings payload');
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+    });
+
+    try {
+      (testConfig as SubstrateConfig & { pluginSttToken?: string; pluginTtsToken?: string }).pluginSttToken = 'stt-token';
+      (testConfig as SubstrateConfig & { pluginSttToken?: string; pluginTtsToken?: string }).pluginTtsToken = 'tts-token';
+
+      const res = await request(
+        port,
+        'GET',
+        '/api/admin/settings',
+        undefined,
+        authHeaders,
+      );
+
+      expect(res.status).toBe(200);
+      const payload = JSON.parse(res.body) as {
+        voiceProviders?: {
+          stt?: Array<{ id: string; configured: boolean; canAutoEnable: boolean; requiredTokens: string[] }>;
+          tts?: Array<{ id: string; configured: boolean; canAutoEnable: boolean; requiredTokens: string[] }>;
+        };
+      };
+      expect(payload.voiceProviders?.stt).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'plugin-stt',
+          configured: true,
+          canAutoEnable: true,
+          requiredTokens: ['external.web'],
+        }),
+      ]));
+      expect(payload.voiceProviders?.tts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'plugin-tts',
+          configured: true,
+          canAutoEnable: false,
+          requiredTokens: ['external.web'],
+        }),
+      ]));
+    } finally {
+      delete (testConfig as SubstrateConfig & { pluginSttToken?: string; pluginTtsToken?: string }).pluginSttToken;
+      delete (testConfig as SubstrateConfig & { pluginSttToken?: string; pluginTtsToken?: string }).pluginTtsToken;
+      restoreSttProvider();
+      restoreTtsProvider();
+    }
+  });
+
   it('accepts registered TTS provider ids through admin settings patch', async () => {
     const restoreProvider = registerStreamingTtsProvider('plugin-test', {
       createConnector: vi.fn(() => {

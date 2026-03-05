@@ -43,8 +43,7 @@
     { value: 'reuse_latest_session', label: 'Reuse latest session' },
     { value: 'new_session', label: 'Always start a new session' },
   ] as const;
-  const BUILTIN_TTS_PROVIDER_IDS = ['disabled', 'elevenlabs', 'echo'] as const;
-  const BUILTIN_STT_PROVIDER_IDS = ['disabled', 'deepgram'] as const;
+  const DISABLED_PROVIDER_ID = 'disabled';
 
   // ── Budget constants (from context-budget.ts) ──
   const SESSION_HISTORY_TOKENS_PER_MSG = 256;
@@ -438,11 +437,17 @@
 
   // ── Derived ──
   let slotKeys = $derived(catalogSlots.map(s => s.slotKey).filter(Boolean));
+  let availableTtsProviderIds = $derived(
+    data?.voiceProviders?.tts?.map(provider => provider.id) ?? [],
+  );
+  let availableSttProviderIds = $derived(
+    data?.voiceProviders?.stt?.map(provider => provider.id) ?? [],
+  );
   let ttsProviderOptions = $derived(
-    [...new Set([...BUILTIN_TTS_PROVIDER_IDS, ttsProvider].filter(Boolean))],
+    [...new Set([DISABLED_PROVIDER_ID, ...availableTtsProviderIds, ttsProvider].filter(Boolean))],
   );
   let sttProviderOptions = $derived(
-    [...new Set([...BUILTIN_STT_PROVIDER_IDS, sttProvider].filter(Boolean))],
+    [...new Set([DISABLED_PROVIDER_ID, ...availableSttProviderIds, sttProvider].filter(Boolean))],
   );
 
   function clamp(value: number, min: number, max: number): number {
@@ -1834,12 +1839,12 @@
               <div>
                 <label class={LABEL_CLS}>TTS Provider</label>
                 <input type="text" bind:value={ttsProvider} list="tts-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
-                <p class="text-sm text-shadow-500 mt-1">Built-ins are suggested, but any registered provider id is preserved and sent back to the backend unchanged.</p>
+                <p class="text-sm text-shadow-500 mt-1">Registered provider ids from the backend registry are suggested, and any current provider id is preserved and sent back unchanged.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>STT Provider</label>
                 <input type="text" bind:value={sttProvider} list="stt-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
-                <p class="text-sm text-shadow-500 mt-1">Built-ins are suggested, but plugin ids are preserved instead of being coerced to disabled.</p>
+                <p class="text-sm text-shadow-500 mt-1">Registered provider ids from the backend registry are suggested, and plugin ids are preserved instead of being coerced to disabled.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>ElevenLabs Voice ID</label>

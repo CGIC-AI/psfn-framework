@@ -1230,7 +1230,7 @@ describe('SubstrateAgent.handleMessage', () => {
     }
   });
 
-  it('recovers from empty vision replies by retrying on chat model with explicit image-failure guidance', async () => {
+  it('recovers from empty vision replies by replaying transport-normalized content without injected wording', async () => {
     const config = makeConfig({
       modelRoster: {
         chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
@@ -1259,7 +1259,7 @@ describe('SubstrateAgent.handleMessage', () => {
       mockAssistantErrorResponse(
         '400 litellm.BadRequestError: no healthy deployments for vision-model',
       );
-      mockAssistantResponse('I could not process that image this turn. Please resend it.');
+      mockAssistantResponse('Recovered with autonomous response.');
 
       const promptCallsBefore = promptSpy.mock.calls.length;
       const response = await agent.handleMessage(makeMessage({
@@ -1271,18 +1271,25 @@ describe('SubstrateAgent.handleMessage', () => {
         }],
       }));
 
-      expect(response.content).toBe('I could not process that image this turn. Please resend it.');
+      expect(response.content).toBe('Recovered with autonomous response.');
       expect(response.metadata.model).toBe('chat-model');
       expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(2);
       const recoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
-      expect(recoveryPrompt.content).toContain('previous vision reply produced no text');
-      expect(recoveryPrompt.content).toContain('ask for resend');
+      expect(recoveryPrompt.content).toBe('Hello, PSFN!');
+      expect(recoveryPrompt.content).not.toContain('Runtime note');
+      expect(recoveryPrompt.content).not.toContain('ask for resend');
+      expect(response.metadata.diagnostics?.fallback).toMatchObject({
+        code: 'vision_empty_response',
+        strategy: 'replay_transport_content',
+        attempts: 1,
+        finalContentEmpty: false,
+      });
     } finally {
       (globalThis as any).fetch = originalFetch;
     }
   });
 
-  it('retries vision recovery with strict non-empty instruction when first recovery is empty', async () => {
+  it('retries vision recovery by replaying transport content when first recovery is empty', async () => {
     const config = makeConfig({
       modelRoster: {
         chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
@@ -1312,7 +1319,7 @@ describe('SubstrateAgent.handleMessage', () => {
         '400 litellm.BadRequestError: no healthy deployments for vision-model',
       );
       mockAssistantResponse('');
-      mockAssistantResponse('I still could not process that image. Please resend it.');
+      mockAssistantResponse('Recovered on retry without injected guidance.');
 
       const promptCallsBefore = promptSpy.mock.calls.length;
       const response = await agent.handleMessage(makeMessage({
@@ -1324,12 +1331,83 @@ describe('SubstrateAgent.handleMessage', () => {
         }],
       }));
 
-      expect(response.content).toBe('I still could not process that image. Please resend it.');
+      expect(response.content).toBe('Recovered on retry without injected guidance.');
       expect(response.metadata.model).toBe('chat-model');
       expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(3);
-      const strictRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 2]?.[0] as { content: string };
-      expect(strictRecoveryPrompt.content).toContain('exactly one short sentence');
-      expect(strictRecoveryPrompt.content).toContain('ask for resend');
+      const firstRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
+      const secondRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 2]?.[0] as { content: string };
+      expect(firstRecoveryPrompt.content).toBe('Hello, PSFN!');
+      expect(secondRecoveryPrompt.content).toBe('Hello, PSFN!');
+      expect(firstRecoveryPrompt.content).not.toContain('Runtime note');
+      expect(secondRecoveryPrompt.content).not.toContain('Runtime note');
+      expect(response.metadata.diagnostics?.fallback).toMatchObject({
+        code: 'vision_empty_response',
+        strategy: 'replay_transport_content',
+        attempts: 2,
+        finalContentEmpty: false,
+      });
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('records fallback diagnostics when vision recovery remains empty without injecting canned guidance', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      mockAssistantErrorResponse(
+        '400 litellm.BadRequestError: no healthy deployments for vision-model',
+      );
+      mockAssistantResponse('');
+      mockAssistantResponse('');
+
+      const promptCallsBefore = promptSpy.mock.calls.length;
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.content).toBe('');
+      expect(response.metadata.model).toBe('chat-model');
+      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(3);
+      const firstRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
+      const secondRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 2]?.[0] as { content: string };
+      expect(firstRecoveryPrompt.content).toBe('Hello, PSFN!');
+      expect(secondRecoveryPrompt.content).toBe('Hello, PSFN!');
+      expect(firstRecoveryPrompt.content).not.toContain('Runtime note');
+      expect(secondRecoveryPrompt.content).not.toContain('Runtime note');
+      expect(response.metadata.diagnostics?.fallback).toMatchObject({
+        code: 'vision_empty_response',
+        strategy: 'replay_transport_content',
+        attempts: 2,
+        finalContentEmpty: true,
+      });
     } finally {
       (globalThis as any).fetch = originalFetch;
     }

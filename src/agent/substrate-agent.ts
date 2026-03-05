@@ -1835,6 +1835,7 @@ export class SubstrateAgent {
       let turnUsage: TurnUsage;
       let responseModel: string;
       let responseText: string;
+      let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
 
       const moaSettings = this.resolveMoaSettings();
       if (moaSettings) {
@@ -1935,15 +1936,15 @@ export class SubstrateAgent {
         responseText = this.extractResponseText();
         if (this.hasVisionAttachments(message) && responseText.trim().length === 0) {
           const assistantMessage = this.getLatestAssistantMessage();
-          log.warn('Vision turn produced empty assistant text; attempting recovery reply', {
+          log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
             channelId: message.channelId,
             model: this.agent.state.model?.id ?? null,
             stopReason: assistantMessage?.stopReason ?? null,
             errorMessage: assistantMessage?.errorMessage ?? null,
           });
 
-          // Recovery always falls back to chat slot so the user gets a response
-          // even when the configured vision deployment is unavailable.
+          // Recovery falls back to the chat slot, but replays transport-normalized
+          // user content instead of injecting synthetic assistant/user wording.
           try {
             const recoveryModel = resolveModel(this.config, 'chat');
             this.agent.setModel(recoveryModel);
@@ -1955,12 +1956,10 @@ export class SubstrateAgent {
             });
           }
 
-          const recoveryNote = assistantMessage?.errorMessage
-            ? `Runtime note: the previous vision reply produced no text (${assistantMessage.errorMessage}). Respond to the user's latest image turn now. If the image could not be processed, clearly say so and ask for resend.`
-            : 'Runtime note: the previous vision reply produced no text. Respond to the user\'s latest image turn now. If the image could not be processed, clearly say so and ask for resend.';
-
+          const replayTransportContent = message.content.trim();
+          let recoveryAttempts = 0;
           const runVisionRecoveryPrompt = async (
-            content: string,
+            content: UserMessage['content'],
             requestSuffix: string,
             originStage: string,
           ): Promise<void> => {
@@ -1988,37 +1987,62 @@ export class SubstrateAgent {
             }
           };
 
-          await runVisionRecoveryPrompt(
-            recoveryNote,
-            'vision-recovery',
-            'agent.turn.vision_recovery',
-          );
-
-          turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
-          turnUsage = this.accumulateTurnUsage(turnMessages);
-          responseModel = this.agent.state.model?.id ?? responseModel;
-          responseText = this.extractResponseText();
-
-          if (responseText.trim().length === 0) {
-            log.warn('Vision recovery reply was empty; attempting strict non-empty recovery reply', {
-              channelId: message.channelId,
-              model: this.agent.state.model?.id ?? null,
-            });
-
+          if (replayTransportContent.length > 0) {
             await runVisionRecoveryPrompt(
-              'Runtime note: the previous recovery reply was empty. Reply now with exactly one short sentence. If the image could not be processed, clearly say so and ask for resend.',
-              'vision-recovery-strict',
-              'agent.turn.vision_recovery_strict',
+              replayTransportContent,
+              'vision-recovery',
+              'agent.turn.vision_recovery',
             );
+            recoveryAttempts += 1;
 
             turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
             turnUsage = this.accumulateTurnUsage(turnMessages);
             responseModel = this.agent.state.model?.id ?? responseModel;
             responseText = this.extractResponseText();
+
+            if (responseText.trim().length === 0) {
+              log.warn('Vision recovery replay remained empty; retrying once with same transport content', {
+                channelId: message.channelId,
+                model: this.agent.state.model?.id ?? null,
+              });
+              await runVisionRecoveryPrompt(
+                replayTransportContent,
+                'vision-recovery-retry',
+                'agent.turn.vision_recovery_retry',
+              );
+              recoveryAttempts += 1;
+
+              turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
+              turnUsage = this.accumulateTurnUsage(turnMessages);
+              responseModel = this.agent.state.model?.id ?? responseModel;
+              responseText = this.extractResponseText();
+            }
+          } else {
+            log.warn('Vision recovery replay skipped because transport-normalized content was empty', {
+              channelId: message.channelId,
+            });
           }
 
-          if (responseText.trim().length === 0) {
-            log.warn('Vision turn remained empty after recovery attempts', {
+          const finalContentEmpty = responseText.trim().length === 0;
+          fallbackDiagnostics = {
+            fallback: {
+              code: 'vision_empty_response',
+              strategy: 'replay_transport_content',
+              attempts: recoveryAttempts,
+              finalContentEmpty,
+              ...(assistantMessage?.stopReason ? { previousStopReason: assistantMessage.stopReason } : {}),
+              ...(assistantMessage?.errorMessage ? { previousErrorMessage: assistantMessage.errorMessage } : {}),
+            },
+          };
+          this.emitTelemetry('agent.turn.fallback', {
+            channelId: message.channelId,
+            channelType: message.channelType,
+            ...fallbackDiagnostics.fallback,
+            ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.fallback'),
+          });
+
+          if (finalContentEmpty) {
+            log.warn('Vision turn remained empty after non-fabricating recovery replay', {
               channelId: message.channelId,
               model: this.agent.state.model?.id ?? null,
             });
@@ -2109,6 +2133,7 @@ export class SubstrateAgent {
           inputTokens: turnUsage.inputTokens,
           outputTokens: turnUsage.outputTokens,
           durationMs: Date.now() - startTime,
+          ...(fallbackDiagnostics ? { diagnostics: fallbackDiagnostics } : {}),
           ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         },
       };

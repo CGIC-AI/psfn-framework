@@ -35,6 +35,7 @@ import {
   type TurnContentionPhase,
   type TurnContentionPolicy,
 } from '../../lifecycle/turn-contention.js';
+import { toErrorMessage } from '../../utils/errors.js';
 
 const log = createComponentLogger('Discord');
 
@@ -448,12 +449,19 @@ export class DiscordAdapter implements ChannelAdapter {
       }
 
     } catch (error) {
-      log.error('Error processing message', { error: String(error) });
-      try {
-        await msg.reply('Something went wrong. Please try again.');
-      } catch {
-        // Ignore reply errors.
-      }
+      const errorText = toErrorMessage(error);
+      log.error('Error processing message', {
+        channelId,
+        messageId: substrateMsg.id,
+        error: errorText,
+      });
+      await this.eventBus.emit('channel.message.error', {
+        channelId,
+        channelType: 'discord',
+        messageId: substrateMsg.id,
+        phase: 'handler',
+        error: errorText,
+      }).catch(() => undefined);
     } finally {
       clearInterval(typingInterval);
       this.processing.delete(channelId);

@@ -137,6 +137,16 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  diagnostics?: {
+    fallback?: {
+      code: 'vision_empty_response';
+      strategy: 'replay_transport_content';
+      attempts: number;
+      finalContentEmpty: boolean;
+      previousStopReason?: string;
+      previousErrorMessage?: string;
+    };
+  };
   broadcastSafety?: {
     visibilityScope: 'public_only' | 'approved_private_context';
     operatorApproval: boolean;

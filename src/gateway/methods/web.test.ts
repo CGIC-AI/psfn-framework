@@ -165,6 +165,46 @@ describe('registerWebMethods', () => {
     });
   });
 
+  it('surfaces fetch failures as diagnostics without injected conversational wording', async () => {
+    const { server, url } = await listenHttp(() => ({
+      status: 500,
+      body: 'upstream exploded',
+    }));
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+
+    let thrown: any;
+    try {
+      await harness.invoke({
+        url: `${url}/fail`,
+        lane: 'local_crawler',
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    if (!thrown) {
+      throw new Error('Expected web.fetch to throw for HTTP 500');
+    }
+    expect(thrown).toMatchObject({
+      code: GatewayErrors.PROVIDER_ERROR,
+    });
+    const message = String(thrown?.message ?? '');
+    expect(message).toContain('Fetch failed: 500 Internal Server Error');
+    expect(message.toLowerCase()).not.toContain('please try again');
+    expect(message.toLowerCase()).not.toContain('ask for resend');
+  });
+
   it('fetches binary payloads for web.fetch_binary', async () => {
     const { server, url } = await listenHttp(() => ({
       body: Buffer.from([1, 2, 3]),

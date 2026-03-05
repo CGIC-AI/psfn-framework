@@ -19,6 +19,9 @@ import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore, EXTRACTION_PROMPT_KEY } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+import { applySettings, loadSettings, splitSettingsByDomain } from '../../settings.js';
+import { loadModelsConfig } from '../../config/models-config.js';
+import { loadCapabilityTierConfig } from '../../config/capability-tier-config.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
@@ -1935,9 +1938,40 @@ describe('AdminServer', () => {
 
       const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf-8')) as {
         sessionMessageLimit: number;
+        modelCatalog?: unknown;
+        modelRoleAssignments?: unknown;
+        capabilityTier?: string;
       };
       expect(persistedSettings.sessionMessageLimit).toBe(45);
+      expect(persistedSettings.modelCatalog).toBeUndefined();
+      expect(persistedSettings.modelRoleAssignments).toBeUndefined();
+      expect(persistedSettings.capabilityTier).toBeUndefined();
       expect(testConfig.sessionMessageLimit).toBe(45);
+
+      const restartedConfig: SubstrateConfig = {
+        ...testConfig,
+        primaryModel: 'test-model',
+        primaryProvider: 'test',
+        primaryMaxTokens: 16384,
+        extractionModel: 'test-extract',
+        extractionProvider: 'test',
+        extractionMaxTokens: 8192,
+        modelCatalog: undefined,
+        modelRoleAssignments: undefined,
+        modelRoster: {
+          chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+        },
+        capabilityTier: undefined,
+      };
+      const restartSettings = splitSettingsByDomain(loadSettings(tempDir));
+      applySettings(restartedConfig, restartSettings.runtime);
+      applySettings(restartedConfig, loadModelsConfig(tempDir, {
+        defaultContextWindow: restartedConfig.defaultContextWindow,
+      }));
+      restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
+      expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
+      expect(restartedConfig.modelRoleAssignments?.chat).toBe('jsonPrimary');
+      expect(restartedConfig.capabilityTier).toBe('custom');
     });
 
     it('updates capability tier via settings form POST', async () => {

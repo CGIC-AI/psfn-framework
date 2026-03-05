@@ -3,6 +3,7 @@
 // Run: npm run agent
 
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './types.js';
 import type {
@@ -25,9 +26,19 @@ import {
 } from './channels/api/active-health-probe.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { loadSettings, saveSettings, applySettings } from './settings.js';
-import { loadModelsConfig } from './config/models-config.js';
+import { applySettings, loadSettings, saveSettings, splitSettingsByDomain } from './settings.js';
+import { loadModelsConfigWithLegacyMigration } from './config/models-config.js';
 import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
+import {
+  CAPABILITY_TIER_FILE_NAME,
+  loadCapabilityTierConfig,
+  saveCapabilityTierConfig,
+} from './config/capability-tier-config.js';
+import {
+  SCHEDULER_FILE_NAME,
+  loadSchedulerConfig,
+  saveSchedulerConfig,
+} from './config/scheduler-config.js';
 import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
@@ -220,12 +231,91 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
 async function main(): Promise<void> {
   const config = loadConfig();
   const savedSettings = loadSettings(config.dataDir);
-  applySettings(config, savedSettings);
+  const settingsDomains = splitSettingsByDomain(savedSettings);
+  applySettings(config, settingsDomains.runtime);
   installPromotedToolsPersistenceHook(config);
-  const modelsConfig = loadModelsConfig(config.dataDir, {
+
+  const modelsLoadResult = loadModelsConfigWithLegacyMigration(config.dataDir, {
     defaultContextWindow: config.defaultContextWindow,
+    legacySettings: settingsDomains.models,
   });
-  applySettings(config, modelsConfig);
+  if (modelsLoadResult.migratedFromLegacySettings) {
+    log.warn('Migrated legacy model settings from settings.json to models.json');
+  } else if (modelsLoadResult.legacyDriftDetected) {
+    log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+  }
+  applySettings(config, modelsLoadResult.config);
+
+  if (settingsDomains.maintenanceIntervalMs !== undefined) {
+    try {
+      const schedulerPath = join(config.dataDir, SCHEDULER_FILE_NAME);
+      const schedulerFileExisted = existsSync(schedulerPath);
+      const persistedScheduler = loadSchedulerConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      if (!schedulerFileExisted) {
+        saveSchedulerConfig(config.dataDir, {
+          ...persistedScheduler,
+          salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
+        });
+        log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
+          maintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
+        });
+      } else if (persistedScheduler.salienceDecayIntervalMs !== settingsDomains.maintenanceIntervalMs) {
+        log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
+          settingsMaintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
+          schedulerMaintenanceIntervalMs: persistedScheduler.salienceDecayIntervalMs,
+        });
+      }
+    } catch (error) {
+      log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
+        error: String(error),
+      });
+    }
+  }
+
+  if (settingsDomains.capabilityTier !== undefined) {
+    try {
+      const capabilityPath = join(config.dataDir, CAPABILITY_TIER_FILE_NAME);
+      const capabilityFileExisted = existsSync(capabilityPath);
+      const persistedCapabilities = loadCapabilityTierConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      if (!capabilityFileExisted) {
+        saveCapabilityTierConfig(config.dataDir, {
+          ...persistedCapabilities,
+          tier: settingsDomains.capabilityTier,
+        });
+        log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
+          capabilityTier: settingsDomains.capabilityTier,
+        });
+      } else if (persistedCapabilities.tier !== settingsDomains.capabilityTier) {
+        log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
+          settingsCapabilityTier: settingsDomains.capabilityTier,
+          capabilityTier: persistedCapabilities.tier,
+        });
+      }
+    } catch (error) {
+      log.warn('Failed to migrate legacy capabilityTier from settings.json', {
+        error: String(error),
+      });
+    }
+  }
+
+  if (settingsDomains.legacyKeys.length > 0) {
+    try {
+      saveSettings(config.dataDir, settingsDomains.runtime);
+      log.warn('Removed legacy cross-domain keys from settings.json', {
+        keys: settingsDomains.legacyKeys,
+      });
+    } catch (error) {
+      log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
+        keys: settingsDomains.legacyKeys,
+        error: String(error),
+      });
+    }
+  }
+
   const trustPolicyConfig = loadTrustPolicyConfig(config.dataDir, {
     seedDir: process.env.CONFIG_DIR,
   });

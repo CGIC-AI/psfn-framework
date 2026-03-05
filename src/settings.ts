@@ -1,6 +1,7 @@
 // ── Persistent Editable Settings ──
 // Subset of SubstrateConfig that can be changed at runtime via admin GUI.
-// Persisted to data/settings.json. Loaded at startup, merged over env defaults.
+// Persisted to data/settings.json (runtime-owned domain fields only).
+// Loaded at startup, merged over env defaults.
 
 import { join } from 'node:path';
 import {
@@ -46,6 +47,32 @@ const SESSION_RESTART_BEHAVIOR_VALUES = new Set<SessionRestartBehavior>([
 ]);
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+const MODEL_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
+  'primaryModel',
+  'primaryProvider',
+  'primaryMaxTokens',
+  'extractionModel',
+  'extractionProvider',
+  'extractionMaxTokens',
+  'modelCatalog',
+  'modelRoleAssignments',
+  'modelRoster',
+];
+
+const NON_RUNTIME_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
+  ...MODEL_SETTINGS_KEYS,
+  'maintenanceIntervalMs',
+  'capabilityTier',
+];
+
+export interface SettingsDomainSplit {
+  runtime: EditableSettings;
+  models: EditableSettings;
+  maintenanceIntervalMs?: number;
+  capabilityTier?: CapabilityTier;
+  legacyKeys: string[];
+}
 
 export const DEFAULT_MODEL_ROLE_ASSIGNMENTS: Readonly<ModelRoleAssignments> = {
   chat: PRIMARY_MODEL_SLOT_KEY,
@@ -784,16 +811,48 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
   return normalized;
 }
 
-function hasModelSettings(settings: EditableSettings): boolean {
-  return settings.primaryModel !== undefined
-    || settings.primaryProvider !== undefined
-    || settings.primaryMaxTokens !== undefined
-    || settings.extractionModel !== undefined
-    || settings.extractionProvider !== undefined
-    || settings.extractionMaxTokens !== undefined
-    || settings.modelCatalog !== undefined
-    || settings.modelRoleAssignments !== undefined
-    || settings.modelRoster !== undefined;
+export function hasModelSettings(settings: EditableSettings): boolean {
+  return MODEL_SETTINGS_KEYS.some((key) => settings[key] !== undefined);
+}
+
+export function extractModelSettings(settings: EditableSettings): EditableSettings {
+  const modelSettings: EditableSettings = {};
+  for (const key of MODEL_SETTINGS_KEYS) {
+    const value = settings[key];
+    if (value === undefined) continue;
+    (modelSettings as Record<string, unknown>)[key] = value;
+  }
+  return modelSettings;
+}
+
+export function splitSettingsByDomain(settings: EditableSettings): SettingsDomainSplit {
+  const runtime: EditableSettings = { ...settings };
+  for (const key of NON_RUNTIME_SETTINGS_KEYS) {
+    delete runtime[key];
+  }
+
+  const legacyKeys: string[] = [];
+  for (const key of NON_RUNTIME_SETTINGS_KEYS) {
+    if (settings[key] !== undefined) {
+      legacyKeys.push(key);
+    }
+  }
+
+  return {
+    runtime,
+    models: extractModelSettings(settings),
+    ...(settings.maintenanceIntervalMs !== undefined
+      ? { maintenanceIntervalMs: settings.maintenanceIntervalMs }
+      : {}),
+    ...(settings.capabilityTier !== undefined
+      ? { capabilityTier: settings.capabilityTier }
+      : {}),
+    legacyKeys,
+  };
+}
+
+export function toRuntimeOwnedSettings(settings: EditableSettings): EditableSettings {
+  return splitSettingsByDomain(settings).runtime;
 }
 
 export function normalizeEditableSettings(
@@ -1113,7 +1172,13 @@ export function loadSettings(
 export function saveSettings(dataDir: string, settings: EditableSettings): void {
   const path = join(dataDir, SETTINGS_FILE);
   const normalized = normalizeEditableSettings(settings);
-  writeJsonAtomic(path, normalized);
+  const split = splitSettingsByDomain(normalized);
+  writeJsonAtomic(path, split.runtime);
+  if (split.legacyKeys.length > 0) {
+    log.warn('Dropped non-runtime keys while saving settings.json', {
+      keys: split.legacyKeys,
+    });
+  }
   log.info('Saved settings');
 }
 

@@ -2,8 +2,10 @@ import type { SubstrateConfig } from '../../../types.js';
 import {
   applySettings,
   type EditableSettings,
+  hasModelSettings,
   loadSettings,
   normalizeEditableSettings,
+  splitSettingsByDomain,
   SETTINGS_VALIDATION,
   saveSettings,
 } from '../../../settings.js';
@@ -16,6 +18,7 @@ import {
 } from '../../../config/skills-config.js';
 import {
   loadSchedulerConfig,
+  saveSchedulerConfig,
 } from '../../../config/scheduler-config.js';
 import {
   loadTrustPolicyConfig,
@@ -46,6 +49,62 @@ type SettingsMutationResult =
   | { ok: true }
   | { ok: false; message: string };
 
+function refreshModels(config: SubstrateConfig): void {
+  try {
+    config.runtimeHooks?.refreshModels?.();
+  } catch {
+    // Preserve successful save even when runtime model refresh fails.
+  }
+}
+
+function refreshCapabilities(config: SubstrateConfig): void {
+  try {
+    config.runtimeHooks?.refreshCapabilities?.();
+  } catch {
+    // Preserve successful save even when runtime capability refresh fails.
+  }
+}
+
+export function applyAdminModelsConfigMutation(options: {
+  config: SubstrateConfig;
+  payload: unknown;
+}): SettingsMutationResult {
+  const { config, payload } = options;
+  try {
+    const saved = saveModelsConfig(
+      config.dataDir,
+      payload,
+      { defaultContextWindow: config.defaultContextWindow },
+    );
+    applySettings(config, saved);
+    refreshModels(config);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message: toErrorMessage(error),
+    };
+  }
+}
+
+export function applyAdminCapabilityTierMutation(options: {
+  config: SubstrateConfig;
+  payload: unknown;
+}): SettingsMutationResult {
+  const { config, payload } = options;
+  try {
+    const saved = saveCapabilityTierConfig(config.dataDir, payload);
+    config.capabilityTier = saved.tier;
+    refreshCapabilities(config);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message: toErrorMessage(error),
+    };
+  }
+}
+
 export function applyAdminSettingsMutation(options: {
   config: SubstrateConfig;
   settings: EditableSettings;
@@ -53,56 +112,124 @@ export function applyAdminSettingsMutation(options: {
 }): SettingsMutationResult {
   const { config, settings, capabilityCustomTokens } = options;
 
-  const existing = loadSettings(config.dataDir);
-  const merged = normalizeEditableSettings(
-    { ...existing, ...settings },
+  const currentRuntimeSettings = splitSettingsByDomain(loadSettings(config.dataDir)).runtime;
+  const domainSplit = splitSettingsByDomain(settings);
+
+  const mergedRuntimeSettings = normalizeEditableSettings(
+    { ...currentRuntimeSettings, ...domainSplit.runtime },
     { defaultContextWindow: config.defaultContextWindow },
   );
 
-  saveSettings(config.dataDir, merged);
-  applySettings(config, merged);
+  saveSettings(config.dataDir, mergedRuntimeSettings);
+  applySettings(config, mergedRuntimeSettings);
 
-  if (config.modelCatalog && config.modelRoleAssignments) {
+  let modelsRefreshed = false;
+  if (hasModelSettings(domainSplit.models)) {
     try {
-      saveModelsConfig(
-        config.dataDir,
+      const currentModels = loadModelsConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+        defaultContextWindow: config.defaultContextWindow,
+      });
+      const modelPatch: EditableSettings = { ...domainSplit.models };
+      const hasPrimaryAliasPatch = modelPatch.primaryModel !== undefined
+        || modelPatch.primaryProvider !== undefined
+        || modelPatch.primaryMaxTokens !== undefined;
+      if (hasPrimaryAliasPatch) {
+        const currentPrimary = config.modelRoster?.chat ?? {
+          model: config.primaryModel,
+          provider: config.primaryProvider,
+          maxTokens: config.primaryMaxTokens,
+        };
+        modelPatch.primaryModel ??= currentPrimary.model;
+        modelPatch.primaryProvider ??= currentPrimary.provider;
+        modelPatch.primaryMaxTokens ??= currentPrimary.maxTokens;
+      }
+      const hasExtractionAliasPatch = modelPatch.extractionModel !== undefined
+        || modelPatch.extractionProvider !== undefined
+        || modelPatch.extractionMaxTokens !== undefined;
+      if (hasExtractionAliasPatch) {
+        const currentExtraction = config.modelRoster?.background ?? config.modelRoster?.extraction ?? {
+          model: config.extractionModel,
+          provider: config.extractionProvider,
+          maxTokens: config.extractionMaxTokens,
+        };
+        modelPatch.extractionModel ??= currentExtraction.model;
+        modelPatch.extractionProvider ??= currentExtraction.provider;
+        modelPatch.extractionMaxTokens ??= currentExtraction.maxTokens;
+      }
+
+      const mergedModelSettings = normalizeEditableSettings(
         {
-          modelCatalog: config.modelCatalog,
-          modelRoleAssignments: config.modelRoleAssignments,
+          modelCatalog: currentModels.modelCatalog,
+          modelRoleAssignments: currentModels.modelRoleAssignments,
+          ...modelPatch,
         },
         { defaultContextWindow: config.defaultContextWindow },
       );
+      const modelMutation = applyAdminModelsConfigMutation({
+        config,
+        payload: {
+          modelCatalog: mergedModelSettings.modelCatalog ?? currentModels.modelCatalog,
+          modelRoleAssignments: mergedModelSettings.modelRoleAssignments ?? currentModels.modelRoleAssignments,
+        },
+      });
+      if (!modelMutation.ok) {
+        return {
+          ok: false,
+          message: `Settings saved but models config update failed: ${modelMutation.message}`,
+        };
+      }
+      modelsRefreshed = true;
     } catch (error) {
       return {
         ok: false,
-        message: `Settings saved but models config write failed: ${toErrorMessage(error)}`,
+        message: `Settings saved but models config update failed: ${toErrorMessage(error)}`,
       };
     }
   }
 
-  try {
-    config.runtimeHooks?.refreshModels?.();
-  } catch {
-    // Preserve successful settings save even when runtime model refresh fails.
+  if (!modelsRefreshed) {
+    refreshModels(config);
   }
 
-  if (settings.capabilityTier !== undefined) {
+  if (domainSplit.maintenanceIntervalMs !== undefined) {
     try {
-      const current = loadCapabilityTierConfig(config.dataDir, {
+      const currentScheduler = loadSchedulerConfig(config.dataDir, {
         seedDir: process.env.CONFIG_DIR,
       });
-      const saved = saveCapabilityTierConfig(config.dataDir, {
-        ...current,
-        tier: settings.capabilityTier,
-        customTokens: settings.capabilityTier === 'custom'
-          ? [...(capabilityCustomTokens ?? [])]
-          : current.customTokens,
+      const savedScheduler = saveSchedulerConfig(config.dataDir, {
+        ...currentScheduler,
+        salienceDecayIntervalMs: domainSplit.maintenanceIntervalMs,
       });
-      config.capabilityTier = saved.tier;
-      try {
-        config.runtimeHooks?.refreshCapabilities?.();
-      } catch {
-        // Preserve successful settings save even when runtime capability refresh fails.
+      config.maintenanceIntervalMs = savedScheduler.salienceDecayIntervalMs;
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Settings saved but scheduler update failed: ${toErrorMessage(error)}`,
+      };
+    }
+  }
+
+  if (domainSplit.capabilityTier !== undefined) {
+    try {
+      const currentCapabilities = loadCapabilityTierConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      const capabilityMutation = applyAdminCapabilityTierMutation({
+        config,
+        payload: {
+          ...currentCapabilities,
+          tier: domainSplit.capabilityTier,
+          customTokens: domainSplit.capabilityTier === 'custom'
+            ? [...(capabilityCustomTokens ?? [])]
+            : currentCapabilities.customTokens,
+        },
+      });
+      if (!capabilityMutation.ok) {
+        return {
+          ok: false,
+          message: `Settings saved but capability tier update failed: ${capabilityMutation.message}`,
+        };
       }
     } catch (error) {
       return {

@@ -18,6 +18,9 @@ import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+import { applySettings, loadSettings, splitSettingsByDomain } from '../../settings.js';
+import { loadModelsConfig } from '../../config/models-config.js';
+import { loadCapabilityTierConfig } from '../../config/capability-tier-config.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
@@ -900,6 +903,16 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(persistedModels.modelCatalog.vision).toBeDefined();
     expect(persistedModels.modelRoleAssignments.vision).toBe('vision');
+    const persistedSettingsAfterModels = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
+      modelCatalog?: unknown;
+      modelRoleAssignments?: unknown;
+      primaryModel?: string;
+      extractionModel?: string;
+    };
+    expect(persistedSettingsAfterModels.modelCatalog).toBeUndefined();
+    expect(persistedSettingsAfterModels.modelRoleAssignments).toBeUndefined();
+    expect(persistedSettingsAfterModels.primaryModel).toBeUndefined();
+    expect(persistedSettingsAfterModels.extractionModel).toBeUndefined();
 
     const capabilityPatchRes = await request(
       port,
@@ -921,6 +934,37 @@ describe('AdminServer JSON API routes', () => {
     expect(persistedCapabilities.tier).toBe('custom');
     expect(persistedCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
     expect(testConfig.capabilityTier).toBe('custom');
+    const persistedSettingsAfterCapability = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
+      capabilityTier?: string;
+      sessionMessageLimit?: number;
+    };
+    expect(persistedSettingsAfterCapability.capabilityTier).toBeUndefined();
+    expect(persistedSettingsAfterCapability.sessionMessageLimit).toBe(55);
+
+    const restartedConfig: SubstrateConfig = {
+      ...testConfig,
+      primaryModel: 'test-model',
+      primaryProvider: 'test',
+      primaryMaxTokens: 16384,
+      extractionModel: 'test-extract',
+      extractionProvider: 'test',
+      extractionMaxTokens: 8192,
+      modelCatalog: undefined,
+      modelRoleAssignments: undefined,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+      },
+      capabilityTier: undefined,
+    };
+    const restartSettings = splitSettingsByDomain(loadSettings(tempDir));
+    applySettings(restartedConfig, restartSettings.runtime);
+    applySettings(restartedConfig, loadModelsConfig(tempDir, {
+      defaultContextWindow: restartedConfig.defaultContextWindow,
+    }));
+    restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
+    expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
+    expect(restartedConfig.modelRoleAssignments?.vision).toBe('vision');
+    expect(restartedConfig.capabilityTier).toBe('custom');
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);

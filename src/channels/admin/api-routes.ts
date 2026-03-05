@@ -241,6 +241,14 @@ export function buildAdminApiRoutes(options: {
     appendAuditTimelineEntry?.('identity_edit', decision, narrative, details, 'operator');
   };
 
+  const appendSettingsMutationAudit = (
+    decision: AdminAuditDecision,
+    narrative: string,
+    details: Array<string | null | undefined> = [],
+  ): void => {
+    appendAuditTimelineEntry?.('settings_change', decision, narrative, details, 'operator');
+  };
+
   const handleContactUpdate = (req: IncomingMessage, res: ServerResponse, id: string): void => {
     withBody(req, res, (body) => {
       const parsed = parseAdminJsonBody(body);
@@ -635,17 +643,36 @@ export function buildAdminApiRoutes(options: {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
+            appendSettingsMutationAudit(
+              'denied',
+              'Operator settings update via /api/admin/settings failed: invalid JSON payload.',
+            );
             sendJson(res, 400, { error: parsed.error });
             return;
           }
+          const changedFields = parsed.value && typeof parsed.value === 'object' && !Array.isArray(parsed.value)
+            ? Object.keys(parsed.value as Record<string, unknown>).sort()
+            : [];
           const result = settingsService.updateSettings(JSON.stringify(parsed.value));
           if (!result.ok) {
+            const safeMessage = toSanitizedMessage(result.message, 'Settings update failed');
+            appendSettingsMutationAudit(
+              'denied',
+              `Operator settings update via /api/admin/settings failed: ${safeMessage}`,
+              [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
+            );
             sendJson(res, 400, {
-              error: result.message,
+              error: safeMessage,
               ...result,
+              message: safeMessage,
             });
             return;
           }
+          appendSettingsMutationAudit(
+            'allowed',
+            'Operator updated runtime settings via /api/admin/settings.',
+            [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
+          );
           sendJson(res, 200, result);
         });
       },

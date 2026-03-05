@@ -161,12 +161,17 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
       const response = await agentLoop.handleMessage(message);
       await gateway.discordSend(message.channelId, response.content);
     } catch (err) {
-      log.error('Error handling message', { error: String(err) });
-      try {
-        await gateway.discordSend(message.channelId, 'Something went wrong. Please try again.');
-      } catch {
-        // ignore send errors
-      }
+      const errorText = toErrorMessage(err);
+      log.error('Error handling message', {
+        channelId: message.channelId,
+        messageId: message.id,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('discord.message.error', {
+        channelId: message.channelId,
+        messageId: message.id,
+        error: errorText,
+      });
     }
   });
 }

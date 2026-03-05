@@ -858,6 +858,17 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
     expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
+    const settingsAuditRes = await request(
+      port,
+      'GET',
+      '/legacy/events?actionType=settings_change&timeRange=all',
+      undefined,
+      authHeaders,
+    );
+    expect(settingsAuditRes.status).toBe(200);
+    expect(settingsAuditRes.body).toContain('data-action-type="settings_change"');
+    expect(settingsAuditRes.body).toContain('/api/admin/settings');
+    expect(settingsAuditRes.body).toContain('fields=sessionMessageLimit,sessionRestartBehavior');
 
     const rosterPatchRes = await request(
       port,
@@ -1125,6 +1136,15 @@ describe('AdminServer JSON API routes', () => {
     expect(JSON.parse(malformedPatch.body)).toEqual({
       error: 'Invalid JSON payload',
     });
+    const settingsAuditRes = await request(
+      port,
+      'GET',
+      '/legacy/events?actionType=settings_change&decision=denied&timeRange=all',
+      undefined,
+      authHeaders,
+    );
+    expect(settingsAuditRes.status).toBe(200);
+    expect(settingsAuditRes.body).toContain('/api/admin/settings failed: invalid JSON payload');
   });
 
   it('returns field-level validation details for invalid settings payloads', async () => {

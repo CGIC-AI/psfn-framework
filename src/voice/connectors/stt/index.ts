@@ -1,4 +1,5 @@
 import { createDeepgramStreamingSttConnector, type DeepgramStreamingSttConfig } from './deepgram-stream.js';
+import type { EligibilityRequirements } from '../../capabilities/eligibility.js';
 import type { StreamingSttConnector } from './types.js';
 
 export * from './types.js';
@@ -20,6 +21,7 @@ export interface StreamingSttProviderRuntimeConfig {
 export interface StreamingSttProviderMetadata {
   canAutoEnable?: boolean;
   isConfigured(config: StreamingSttProviderRuntimeConfig): boolean;
+  eligibility?: EligibilityRequirements;
 }
 
 export interface StreamingSttProviderRegistration<TConfig = unknown> {
@@ -36,6 +38,7 @@ const providerRegistrations = new Map<string, AnyStreamingSttProviderRegistratio
     metadata: {
       canAutoEnable: true,
       isConfigured: (config) => Boolean(config.deepgramApiKey),
+      eligibility: { requiredTokens: ['external.web'] },
     },
     resolveRuntimeConfig: (config) => {
       const apiKey = typeof config.deepgramApiKey === 'string'
@@ -106,6 +109,12 @@ export function isStreamingSttProviderConfigured(
 ): boolean {
   const metadata = getStreamingSttProviderMetadata(provider);
   return metadata?.isConfigured(config) ?? false;
+}
+
+export function getStreamingSttProviderEligibility(
+  provider: StreamingSttProvider,
+): EligibilityRequirements | null {
+  return getStreamingSttProviderMetadata(provider)?.eligibility ?? null;
 }
 
 export function resolveDefaultStreamingSttProvider(

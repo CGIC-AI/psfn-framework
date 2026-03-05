@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DeepgramStreamingSttConnector } from './deepgram-stream.js';
 import {
   createStreamingSttConnector,
+  getStreamingSttProviderEligibility,
   getStreamingSttProviderMetadata,
   registerStreamingSttProvider,
   resolveDefaultStreamingSttProvider,
@@ -63,11 +64,15 @@ describe('createStreamingSttConnector', () => {
       metadata: {
         canAutoEnable: true,
         isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: {},
       },
     });
 
     try {
       expect(getStreamingSttProviderMetadata('deepgram')?.isConfigured({ deepgramApiKey: 'test-key' })).toBe(true);
+      expect(getStreamingSttProviderEligibility('deepgram')).toEqual({
+        requiredTokens: ['external.web'],
+      });
       expect(resolveDefaultStreamingSttProvider({ pluginSttToken: 'plugin-key' })).toBe('plugin-test');
     } finally {
       restoreProvider();

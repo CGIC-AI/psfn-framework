@@ -1,5 +1,6 @@
 import { createElevenLabsStreamingTtsConnector, type ElevenLabsStreamingTtsConfig } from './elevenlabs-stream.js';
 import { createEchoStreamingTtsConnector } from './echo-stream.js';
+import type { EligibilityRequirements } from '../../capabilities/eligibility.js';
 import type { StreamingTtsConnector } from './types.js';
 
 export * from './types.js';
@@ -43,6 +44,7 @@ export interface StreamingTtsProviderMetadata {
     config: StreamingTtsProviderRuntimeConfig,
     options?: StreamingTtsProviderMetadataOptions,
   ): boolean;
+  eligibility?: EligibilityRequirements;
 }
 
 export interface StreamingTtsProviderRegistration<TConfig = unknown> {
@@ -63,6 +65,7 @@ const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistratio
           ? Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId)
           : Boolean(config.elevenLabsApiKey)
       ),
+      eligibility: { requiredTokens: ['external.web'] },
     },
     resolveRuntimeConfig: (config) => {
       const apiKey = typeof config.elevenLabsApiKey === 'string'
@@ -100,6 +103,7 @@ const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistratio
         options?.allowEchoDefaults === true
           || Boolean(config.echoTtsUrl && config.echoTtsVoice)
       ),
+      eligibility: { requiredTokens: ['external.web'] },
     },
     resolveRuntimeConfig: (config) => {
       const url = typeof config.echoTtsUrl === 'string'
@@ -195,6 +199,12 @@ export function getStreamingTtsProviderMetadata(
   provider: StreamingTtsProvider,
 ): StreamingTtsProviderMetadata | null {
   return providerRegistrations.get(normalizeProviderId(provider))?.metadata ?? null;
+}
+
+export function getStreamingTtsProviderEligibility(
+  provider: StreamingTtsProvider,
+): EligibilityRequirements | null {
+  return getStreamingTtsProviderMetadata(provider)?.eligibility ?? null;
 }
 
 export function isStreamingTtsProviderConfigured(

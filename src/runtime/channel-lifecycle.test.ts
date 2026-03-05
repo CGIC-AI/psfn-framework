@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChannelAdapter } from '../channels/types.js';
 import {
+  createEligibilityGate,
+  EligibilityDeniedError,
+  type EligibilityDecision,
+} from '../capabilities/eligibility.js';
+import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
   registerChannelAdapter,
@@ -13,13 +18,22 @@ function makeAdapter(
   behavior: {
     start?: () => Promise<void>;
     stop?: () => Promise<void>;
+    sendText?: () => Promise<void>;
+    sendTyping?: () => Promise<void>;
   } = {},
 ): ChannelAdapter {
   return {
     id,
+    outbound: {
+      textChunkLimit: 2_000,
+      sendText: behavior.sendText ?? vi.fn().mockResolvedValue(undefined),
+    },
     gateway: {
       start: behavior.start ?? vi.fn().mockResolvedValue(undefined),
       stop: behavior.stop ?? vi.fn().mockResolvedValue(undefined),
+    },
+    streaming: {
+      sendTyping: behavior.sendTyping ?? vi.fn().mockResolvedValue(undefined),
     },
   } as unknown as ChannelAdapter;
 }
@@ -29,6 +43,20 @@ function makeLogger() {
     error: vi.fn(),
     warn: vi.fn(),
   };
+}
+
+function makeEligibilityGate(
+  isAllowed: () => boolean,
+  decisions: EligibilityDecision[] = [],
+) {
+  return createEligibilityGate(
+    () => ({
+      getTier: () => 'autonomous',
+      getGrantedTokens: () => new Set(isAllowed() ? ['external.web'] : []),
+      has: () => isAllowed(),
+    }),
+    (decision) => decisions.push(decision),
+  );
 }
 
 describe('registerChannelAdapter', () => {
@@ -51,6 +79,7 @@ describe('buildChannelAdapterFactoryManifest', () => {
       manifest: {
         id: ' discord ',
         enabled: true,
+        eligibility: {},
       },
       create: async () => makeAdapter('discord'),
     }]);
@@ -62,11 +91,11 @@ describe('buildChannelAdapterFactoryManifest', () => {
   it('rejects duplicate manifest ids', () => {
     expect(() => buildChannelAdapterFactoryManifest([
       {
-        manifest: { id: 'discord', enabled: true },
+        manifest: { id: 'discord', enabled: true, eligibility: {} },
         create: async () => makeAdapter('discord'),
       },
       {
-        manifest: { id: 'discord', enabled: true },
+        manifest: { id: 'discord', enabled: true, eligibility: {} },
         create: async () => makeAdapter('discord'),
       },
     ])).toThrow('Duplicate channel adapter manifest entry "discord"');
@@ -80,11 +109,11 @@ describe('loadChannelAdaptersFromManifest', () => {
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([
       {
-        manifest: { id: 'discord', enabled: true, required: true },
+        manifest: { id: 'discord', enabled: true, required: true, eligibility: {} },
         create: async () => makeAdapter('discord'),
       },
       {
-        manifest: { id: 'telegram', enabled: false },
+        manifest: { id: 'telegram', enabled: false, eligibility: {} },
         create: async () => makeAdapter('telegram'),
       },
     ]);
@@ -105,7 +134,7 @@ describe('loadChannelAdaptersFromManifest', () => {
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([{
-      manifest: { id: 'discord', enabled: true, required: true },
+      manifest: { id: 'discord', enabled: true, required: true, eligibility: {} },
       create: async () => {
         throw new Error('init failed');
       },
@@ -121,7 +150,7 @@ describe('loadChannelAdaptersFromManifest', () => {
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([{
-      manifest: { id: 'discord', enabled: false, required: true },
+      manifest: { id: 'discord', enabled: false, required: true, eligibility: {} },
       create: async () => makeAdapter('discord'),
     }]);
 
@@ -139,11 +168,11 @@ describe('loadChannelAdaptersFromManifest', () => {
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([
       {
-        manifest: { id: 'discord', enabled: true, required: true },
+        manifest: { id: 'discord', enabled: true, required: true, eligibility: {} },
         create: async () => makeAdapter('discord'),
       },
       {
-        manifest: { id: 'telegram', enabled: true },
+        manifest: { id: 'telegram', enabled: true, eligibility: {} },
         create: async () => {
           throw new Error('telegram offline');
         },
@@ -160,6 +189,127 @@ describe('loadChannelAdaptersFromManifest', () => {
       'Optional channel adapter failed to initialize',
       expect.objectContaining({ adapterId: 'telegram' }),
     );
+  });
+
+  it('fails closed when a channel manifest omits eligibility requirements', async () => {
+    const channelRegistry = new Map<string, ChannelAdapter>();
+    const syncChannelRegistry = vi.fn();
+    const log = makeLogger();
+    const factories = buildChannelAdapterFactoryManifest([{
+      manifest: { id: 'discord', enabled: true, required: true },
+      create: async () => makeAdapter('discord'),
+    }]);
+
+    await expect(
+      loadChannelAdaptersFromManifest(channelRegistry, factories, syncChannelRegistry, log),
+    ).rejects.toThrow('Required channel adapter "discord" failed to initialize');
+  });
+
+  it('skips optional channel adapters when eligibility denies activation', async () => {
+    const decisions: EligibilityDecision[] = [];
+    const channelRegistry = new Map<string, ChannelAdapter>();
+    const syncChannelRegistry = vi.fn();
+    const log = makeLogger();
+    const factories = buildChannelAdapterFactoryManifest([
+      {
+        manifest: { id: 'discord', enabled: true, required: true, eligibility: {} },
+        create: async () => makeAdapter('discord'),
+      },
+      {
+        manifest: {
+          id: 'plugin-channel',
+          enabled: true,
+          required: false,
+          eligibility: { requiredTokens: ['external.web'] },
+        },
+        create: async () => makeAdapter('plugin-channel'),
+      },
+    ]);
+
+    await loadChannelAdaptersFromManifest(
+      channelRegistry,
+      factories,
+      syncChannelRegistry,
+      log,
+      makeEligibilityGate(() => false, decisions),
+    );
+
+    expect(channelRegistry.has('discord')).toBe(true);
+    expect(channelRegistry.has('plugin-channel')).toBe(false);
+    expect(decisions).toHaveLength(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      'Skipping channel adapter denied by eligibility gate',
+      expect.objectContaining({
+        adapterId: 'plugin-channel',
+        missingTokens: ['external.web'],
+      }),
+    );
+  });
+
+  it('fails required channel adapters closed when eligibility denies activation', async () => {
+    const channelRegistry = new Map<string, ChannelAdapter>();
+    const syncChannelRegistry = vi.fn();
+    const log = makeLogger();
+    const factories = buildChannelAdapterFactoryManifest([{
+      manifest: {
+        id: 'plugin-channel',
+        enabled: true,
+        required: true,
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      create: async () => makeAdapter('plugin-channel'),
+    }]);
+
+    await expect(
+      loadChannelAdaptersFromManifest(
+        channelRegistry,
+        factories,
+        syncChannelRegistry,
+        log,
+        makeEligibilityGate(() => false),
+      ),
+    ).rejects.toThrow('Required channel adapter "plugin-channel" denied by eligibility gate');
+  });
+
+  it('gates wrapped channel runtime actions through the eligibility gate', async () => {
+    const decisions: EligibilityDecision[] = [];
+    let allowed = true;
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    const channelRegistry = new Map<string, ChannelAdapter>();
+    const syncChannelRegistry = vi.fn();
+    const log = makeLogger();
+    const factories = buildChannelAdapterFactoryManifest([{
+      manifest: {
+        id: 'plugin-channel',
+        enabled: true,
+        required: true,
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      create: async () => makeAdapter('plugin-channel', { sendText, sendTyping }),
+    }]);
+
+    await loadChannelAdaptersFromManifest(
+      channelRegistry,
+      factories,
+      syncChannelRegistry,
+      log,
+      makeEligibilityGate(() => allowed, decisions),
+    );
+
+    const adapter = channelRegistry.get('plugin-channel');
+    expect(adapter).toBeDefined();
+
+    allowed = false;
+    await expect(
+      adapter!.outbound.sendText({ channelId: 'plugin-channel:1' }, 'hello'),
+    ).rejects.toBeInstanceOf(EligibilityDeniedError);
+    await expect(
+      adapter!.streaming!.sendTyping('plugin-channel:1'),
+    ).rejects.toBeInstanceOf(EligibilityDeniedError);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendTyping).not.toHaveBeenCalled();
+    expect(decisions.at(-1)?.operation.kind).toBe('plugin.action');
   });
 });
 

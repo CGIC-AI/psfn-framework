@@ -1,5 +1,6 @@
 import type { SubstrateConfig } from '../types.js';
 import { loadSettings, saveSettings, type EditableSettings } from '../settings.js';
+import type { EligibilityGate } from '../capabilities/eligibility.js';
 import {
   createEmbeddingDimensionMismatchWarning,
   type EmbeddingDimensionValidationResult,
@@ -7,6 +8,7 @@ import {
 import type { RuntimeChannelsConfigOverrides } from '../channels/config.js';
 import {
   createStreamingSttConnector,
+  getStreamingSttProviderMetadata,
   isStreamingSttProvider,
   isStreamingSttProviderConfigured,
   resolveDefaultStreamingSttProvider,
@@ -16,6 +18,7 @@ import {
 } from '../voice/connectors/stt/index.js';
 import {
   createStreamingTtsConnector,
+  getStreamingTtsProviderMetadata,
   isStreamingTtsProvider,
   isStreamingTtsProviderConfigured,
   listStreamingTtsProviders,
@@ -24,6 +27,11 @@ import {
   type StreamingTtsConnector,
   type StreamingTtsProvider,
 } from '../voice/connectors/tts/index.js';
+import {
+  requirePluginActivationEligibility,
+  wrapStreamingSttConnectorWithEligibility,
+  wrapStreamingTtsConnectorWithEligibility,
+} from './plugin-eligibility.js';
 
 export type RuntimeVoiceSttProvider = StreamingSttProvider | 'disabled';
 export type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
@@ -53,10 +61,12 @@ function hasExplicitRuntimeProviderSelection(provider: unknown): provider is str
 
 export interface RuntimeVoiceSttConnectorOptions extends RuntimeVoiceProviderGateOptions {
   provider?: RuntimeVoiceSttProvider;
+  eligibilityGate?: EligibilityGate;
 }
 
 export interface RuntimeVoiceTtsConnectorOptions extends RuntimeVoiceProviderGateOptions {
   provider?: RuntimeVoiceTtsProvider;
+  eligibilityGate?: EligibilityGate;
 }
 
 export function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
@@ -126,10 +136,31 @@ export function createRuntimeVoiceSttConnector(
     return null;
   }
 
+  const providerMetadata = getStreamingSttProviderMetadata(provider);
+  const shouldFailClosed = explicitlySelectedProvider === provider || options.provider === provider;
+  try {
+    requirePluginActivationEligibility(
+      options.eligibilityGate,
+      'stt',
+      provider,
+      providerMetadata?.eligibility,
+    );
+  } catch (error) {
+    if (shouldFailClosed) {
+      throw error;
+    }
+    return null;
+  }
+
   const connectorConfig = resolveStreamingSttRuntimeConfig(provider, config);
   return {
     provider,
-    connector: createStreamingSttConnector(provider, connectorConfig),
+    connector: wrapStreamingSttConnectorWithEligibility(
+      createStreamingSttConnector(provider, connectorConfig),
+      provider,
+      options.eligibilityGate,
+      providerMetadata?.eligibility,
+    ),
   };
 }
 
@@ -151,10 +182,31 @@ export function createRuntimeVoiceTtsConnector(
     return null;
   }
 
+  const providerMetadata = getStreamingTtsProviderMetadata(provider);
+  const shouldFailClosed = explicitlySelectedProvider === provider || options.provider === provider;
+  try {
+    requirePluginActivationEligibility(
+      options.eligibilityGate,
+      'tts',
+      provider,
+      providerMetadata?.eligibility,
+    );
+  } catch (error) {
+    if (shouldFailClosed) {
+      throw error;
+    }
+    return null;
+  }
+
   const connectorConfig = resolveStreamingTtsRuntimeConfig(provider, config);
   return {
     provider,
-    connector: createStreamingTtsConnector(provider, connectorConfig),
+    connector: wrapStreamingTtsConnectorWithEligibility(
+      createStreamingTtsConnector(provider, connectorConfig),
+      provider,
+      options.eligibilityGate,
+      providerMetadata?.eligibility,
+    ),
   };
 }
 

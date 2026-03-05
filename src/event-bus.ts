@@ -231,7 +231,7 @@ export interface EventMap {
     timestamp: number;
   };
   'capability.eligibility': {
-    operationKind: 'tool.execute' | 'llm.purpose' | 'scheduler.task' | 'post_turn.action';
+    operationKind: 'tool.execute' | 'llm.purpose' | 'scheduler.task' | 'post_turn.action' | 'plugin.activate' | 'plugin.action';
     operationRef: string;
     allowed: boolean;
     reasonCode: string;

@@ -266,12 +266,17 @@ export interface ToolCall {
 
 export type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 
+export interface ModelRouteConfig {
+  providerOrder?: string[];
+}
+
 export interface ModelSlot {
   model: string;
   provider: string;
   maxTokens: number;
   contextWindow?: number;
   contextBudget?: ModelContextBudgetConfig;
+  routing?: ModelRouteConfig;
 }
 
 export interface ModelSlotDefaults {
@@ -292,6 +297,7 @@ export interface ModelCatalogEntry {
   provider: string;
   defaults?: ModelSlotDefaults;
   overrides?: ModelSlotOverrides;
+  routing?: ModelRouteConfig;
 }
 
 export type ModelRoleAssignments = Record<string, string>;

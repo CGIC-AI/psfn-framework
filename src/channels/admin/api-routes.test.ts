@@ -882,6 +882,7 @@ describe('AdminServer JSON API routes', () => {
             model: 'z-ai/glm-5',
             provider: 'openrouter',
             defaults: { maxTokens: 16384, contextWindow: 128000 },
+            routing: { providerOrder: ['parasail', 'openai'] },
           },
           extraction: {
             model: 'deepseek/deepseek-v3.2',
@@ -892,6 +893,7 @@ describe('AdminServer JSON API routes', () => {
             model: 'moonshotai/kimi-k2.5',
             provider: 'openrouter',
             overrides: { maxTokens: 16384, contextWindow: 128000 },
+            routing: { providerOrder: ['anthropic'] },
           },
         },
         modelRoleAssignments: {
@@ -916,6 +918,12 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(persistedModels.modelCatalog.vision).toBeDefined();
     expect(persistedModels.modelRoleAssignments.vision).toBe('vision');
+    expect(persistedModels.modelCatalog.primary).toMatchObject({
+      routing: { providerOrder: ['parasail', 'openai'] },
+    });
+    expect(persistedModels.modelCatalog.vision).toMatchObject({
+      routing: { providerOrder: ['anthropic'] },
+    });
     const persistedSettingsAfterModels = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
       modelCatalog?: unknown;
       modelRoleAssignments?: unknown;
@@ -977,6 +985,15 @@ describe('AdminServer JSON API routes', () => {
     restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
     expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
     expect(restartedConfig.modelRoleAssignments?.vision).toBe('vision');
+    expect(restartedConfig.modelCatalog?.primary?.routing).toEqual({
+      providerOrder: ['parasail', 'openai'],
+    });
+    expect(restartedConfig.modelRoster.chat?.routing).toEqual({
+      providerOrder: ['parasail', 'openai'],
+    });
+    expect(restartedConfig.modelRoster.vision?.routing).toEqual({
+      providerOrder: ['anthropic'],
+    });
     expect(restartedConfig.capabilityTier).toBe('custom');
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);

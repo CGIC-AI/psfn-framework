@@ -223,6 +223,31 @@ describe('settings', () => {
       });
     });
 
+    it('preserves per-slot OpenRouter routing preferences through normalization', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'chat/model',
+            provider: 'openrouter',
+            defaults: { maxTokens: 6000, contextWindow: 128_000 },
+            routing: { providerOrder: ['parasail', 'openai'] },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelCatalog?.primary?.routing).toEqual({
+        providerOrder: ['parasail', 'openai'],
+      });
+      expect(normalized.modelRoster?.chat?.routing).toEqual({
+        providerOrder: ['parasail', 'openai'],
+      });
+    });
+
     it('keeps a dedicated vision slot when vision assignment is omitted', () => {
       const normalized = normalizeEditableSettings({
         modelCatalog: {
@@ -578,6 +603,37 @@ describe('settings', () => {
       expect(config.modelRoster.chat?.contextBudget).toEqual({
         sessionHistoryMinTokens: 3_000,
         memoryRetrievalMinTokens: 800,
+      });
+    });
+
+    it('preserves per-slot OpenRouter routing preferences from model catalog', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        modelCatalog: {
+          primary: {
+            model: 'openai/gpt-4.1-mini',
+            provider: 'openrouter',
+            defaults: { maxTokens: 2048, contextWindow: 8_000 },
+            routing: { providerOrder: ['parasail', 'openai'] },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 3072 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          extraction: 'extraction',
+          background: 'extraction',
+        },
+      });
+
+      expect(config.modelCatalog?.primary?.routing).toEqual({
+        providerOrder: ['parasail', 'openai'],
+      });
+      expect(config.modelRoster.chat?.routing).toEqual({
+        providerOrder: ['parasail', 'openai'],
       });
     });
 

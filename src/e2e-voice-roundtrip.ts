@@ -18,6 +18,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
+import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
 import { EventBus } from './event-bus.js';
 import { LLMClient } from './llm/client.js';
 import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from './bootstrap/composition.js';
@@ -332,7 +333,7 @@ async function runSystemVoiceTurn(params: {
 }
 
 async function main(): Promise<void> {
-  const config = loadConfig();
+  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
 
   assertConfigured('DEEPGRAM_API_KEY', config.deepgramApiKey);
   assertConfigured('ELEVENLABS_API_KEY', config.elevenLabsApiKey);

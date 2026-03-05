@@ -58,6 +58,7 @@ import {
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
 } from './runtime/bootstrap-helpers.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
@@ -307,6 +308,12 @@ function buildGatewayChannelsConfigOverrides(
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
+  if (ignoredMutableEnvKeys.length > 0) {
+    log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
+      keys: ignoredMutableEnvKeys,
+    });
+  }
   const systemDataDir = resolveConfiguredSystemDataDir(config);
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const savedSettings = loadSettings(systemDataDir);
@@ -425,7 +432,6 @@ async function main(): Promise<void> {
   });
   const capabilityRuntime = new CapabilityRuntime({
     dataDir: systemDataDir,
-    envTier: config.capabilityTier,
   });
   const eligibilityGate = createEligibilityGate(
     () => capabilityRuntime,

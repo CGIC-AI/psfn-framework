@@ -234,11 +234,11 @@
       knobs: [
         {
           name: 'Persistence',
-          description: 'Settings are saved to data/settings.json and take effect immediately -- no restart needed. They override environment variable defaults. Changes here mutate the live configuration object that all components (LLM client, memory retriever, extractor) read from per-call.',
+          description: 'Runtime config now lives in canonical system-data JSON files such as settings.json, models.json, scheduler.json, and capability-tier.json. Changes take effect immediately and mutate the live configuration object that components read from per-call.',
         },
         {
           name: 'Defaults',
-          description: 'Environment variables (.env) still set the initial defaults. Saved settings layer on top. Delete data/settings.json to reset everything to env defaults.',
+          description: '.env is now for secrets and process/bootstrap wiring only. Mutable runtime behavior belongs in the JSON config owners, and Garden writes to the correct owner file for you.',
         },
       ],
     },

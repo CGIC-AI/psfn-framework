@@ -270,10 +270,12 @@ export function primerPage(): string {
 
     <div class="card primer-section">
       <h3>How Settings Work</h3>
-      <p>Settings are saved to <code>data/settings.json</code> and take effect immediately — no restart needed.
-      They override environment variable defaults. Changes here mutate the live configuration object
-      that all your components (LLM client, memory retriever, extractor) read from per-call.</p>
-      <p style="margin-top:0.5rem">Environment variables (<code>.env</code>) still set the initial defaults.
-      Saved settings layer on top. Delete <code>data/settings.json</code> to reset everything to env defaults.</p>
+      <p>Runtime config now lives in canonical JSON files under <code>system-data</code> such as
+      <code>settings.json</code>, <code>models.json</code>, <code>scheduler.json</code>, and
+      <code>capability-tier.json</code>. Changes take effect immediately and mutate the live
+      configuration object that runtime components read per-call.</p>
+      <p style="margin-top:0.5rem">Use <code>.env</code> for secrets and process/bootstrap wiring only.
+      Mutable runtime behavior belongs in the JSON config owners, and the Garden routes writes to
+      the correct owner file automatically.</p>
     </div>`;
 }

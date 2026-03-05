@@ -14,6 +14,7 @@ import type { SubstrateAgent } from './agent/substrate-agent.js';
 import { MemoryStore } from './memory/store.js';
 import { SalienceDecay } from './memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
+import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
   console.log('=== PSFN Orientation Walkthrough ===');
   console.log('A gentle tour of her new capabilities in the PSFN framework.\n');
 
-  const config = loadConfig();
+  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
   const eventBus = new EventBus();
 
   // Database

@@ -52,7 +52,7 @@ export class AdminSettingsHandlers {
   private getEnvInfo(): EnvInfo {
     return {
       salienceFloor: MEMORY_CONFIG.salienceFloor,
-      maintenanceIntervalMs: MEMORY_CONFIG.maintenanceIntervalMs,
+      maintenanceIntervalMs: (this.legacy as any).config.maintenanceIntervalMs,
       discordToken: process.env.DISCORD_TOKEN ? 'configured' : 'not set',
       apiKey: process.env.API_KEY ? 'configured' : 'not set',
       adminToken: process.env.ADMIN_TOKEN ? 'configured' : 'not set',

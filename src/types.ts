@@ -1,8 +1,6 @@
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
-  MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
-  SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from './context-budget.js';
 import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
@@ -459,16 +457,60 @@ export interface SubstrateConfig {
   moaTimeoutMs?: number;
 }
 
+const DEFAULT_PRIMARY_MODEL = 'z-ai/glm-5';
+const DEFAULT_PRIMARY_PROVIDER = 'openrouter';
+const DEFAULT_PRIMARY_MAX_TOKENS = 16_384;
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+const DEFAULT_EXTRACTION_MODEL = 'deepseek/deepseek-v3.2';
+const DEFAULT_EXTRACTION_PROVIDER = 'openrouter';
+const DEFAULT_EXTRACTION_MAX_TOKENS = 8_192;
+const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
+  chat: 'primary',
+  background: 'extraction',
+  extraction: 'extraction',
+  summary: 'primary',
+  reasoning: 'primary',
+  longContext: 'primary',
+  vision: 'primary',
+  import_processing: 'extraction',
+};
+const DEFAULT_SESSION_MESSAGE_LIMIT = 30;
+const DEFAULT_MEMORY_RETRIEVAL_LIMIT = 15;
+const DEFAULT_EXTRACTION_INTERVAL = 5;
+const DEFAULT_MAINTENANCE_INTERVAL_MS = 300_000;
+const DEFAULT_MEMORY_BUDGET_PCT = 20;
+const DEFAULT_EXTRACTION_THRESHOLD_PCT = 30;
+const DEFAULT_COMPACTION_THRESHOLD_PCT = 70;
+const DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
+const DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE = 0.45;
+const DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE = 0.6;
+const DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY = 0.35;
+const DEFAULT_MEMORY_EXTRACTION_MAX_WRITES = 2;
+const DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS = 5 * 60 * 1000;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_WRITES = 1;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_IMPORTANCE = 0.65;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_CONFIDENCE = 0.7;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_NOVELTY = 0.12;
+const DEFAULT_PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT = 16;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES = 2;
+const DEFAULT_RETRY_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 2_000;
+const DEFAULT_IMPORT_PROCESSING_ROUTE_MODE: ImportProcessingRouteMode = 'background';
+const DEFAULT_DISCORD_TRIGGER_REACTIONS = ['👆'] as const;
+const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
+const DEFAULT_DEEPGRAM_MODEL = 'nova-3';
+const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
+const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
+
 export function loadConfig(): SubstrateConfig {
-  // Model defaults are provided by config/models.seed.json via loadModelsConfig().
-  // Env vars override if set; empty strings here are placeholders overwritten at boot.
-  const primaryModel = process.env.PRIMARY_MODEL ?? '';
-  const primaryProvider = process.env.PRIMARY_PROVIDER ?? '';
-  const primaryMaxTokens = parseInt(process.env.PRIMARY_MAX_TOKENS ?? '16384', 10);
-  const defaultContextWindow = parseInt(process.env.DEFAULT_CONTEXT_WINDOW ?? '128000', 10);
-  const extractionModel = process.env.EXTRACTION_MODEL ?? '';
-  const extractionProvider = process.env.EXTRACTION_PROVIDER ?? '';
-  const extractionMaxTokens = parseInt(process.env.EXTRACTION_MAX_TOKENS ?? '8192', 10);
+  const primaryModel = DEFAULT_PRIMARY_MODEL;
+  const primaryProvider = DEFAULT_PRIMARY_PROVIDER;
+  const primaryMaxTokens = DEFAULT_PRIMARY_MAX_TOKENS;
+  const defaultContextWindow = DEFAULT_CONTEXT_WINDOW;
+  const extractionModel = DEFAULT_EXTRACTION_MODEL;
+  const extractionProvider = DEFAULT_EXTRACTION_PROVIDER;
+  const extractionMaxTokens = DEFAULT_EXTRACTION_MAX_TOKENS;
   const modelCatalog = {
     primary: {
       model: primaryModel,
@@ -493,118 +535,28 @@ export function loadConfig(): SubstrateConfig {
     },
   } satisfies Record<string, ModelCatalogEntry>;
   const modelRoleAssignments: ModelRoleAssignments = {
-    chat: 'primary',
-    background: 'extraction',
-    extraction: 'extraction',
-    summary: 'primary',
-    reasoning: 'primary',
-    longContext: 'primary',
-    vision: 'primary',
-    import_processing: 'extraction',
+    ...DEFAULT_MODEL_ROLE_ASSIGNMENTS,
   };
-  const memoryExtractionMinImportance = parseNumberEnv(
-    process.env.MEMORY_EXTRACTION_MIN_IMPORTANCE,
-    0.45,
-  );
-  const memoryExtractionMinConfidence = parseNumberEnv(
-    process.env.MEMORY_EXTRACTION_MIN_CONFIDENCE,
-    0.6,
-  );
-  const memoryExtractionMinNovelty = parseNumberEnv(
-    process.env.MEMORY_EXTRACTION_MIN_NOVELTY,
-    0.35,
-  );
-  const memoryExtractionMaxWrites = parseIntegerEnv(
-    process.env.MEMORY_EXTRACTION_MAX_WRITES,
-    2,
-    0,
-  );
-  const memoryExtractionTelemetryEnabled = process.env.MEMORY_EXTRACTION_TELEMETRY_ENABLED !== 'false';
-  const memoryRetrievalTelemetryEnabled = process.env.MEMORY_RETRIEVAL_TELEMETRY_ENABLED !== 'false';
-  const profileSynthesisEnabled = process.env.PROFILE_SYNTHESIS_ENABLED !== 'false';
-  const profileSynthesisRefreshIntervalMs = parseInt(
-    process.env.PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS ?? String(6 * 60 * 60 * 1000),
-    10,
-  );
-  const profileSynthesisCooldownMs = parseInt(
-    process.env.PROFILE_SYNTHESIS_COOLDOWN_MS ?? String(5 * 60 * 1000),
-    10,
-  );
-  const profileSynthesisMinWrites = parseInt(process.env.PROFILE_SYNTHESIS_MIN_WRITES ?? '1', 10);
-  const profileSynthesisMinImportance = parseNumberEnv(process.env.PROFILE_SYNTHESIS_MIN_IMPORTANCE, 0.65);
-  const profileSynthesisMinConfidence = parseNumberEnv(process.env.PROFILE_SYNTHESIS_MIN_CONFIDENCE, 0.7);
-  const profileSynthesisMinNovelty = parseNumberEnv(process.env.PROFILE_SYNTHESIS_MIN_NOVELTY, 0.12);
-  const profileSynthesisSourceMemoryLimit = parseInt(process.env.PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT ?? '16', 10);
-  const profileSynthesisMinSourceMemories = parseInt(process.env.PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES ?? '2', 10);
-  const retryMaxAttempts = parseInt(process.env.RETRY_MAX_ATTEMPTS ?? '3', 10);
-  const retryBaseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS ?? '2000', 10);
-  const openRouterProviderOrder = parseStringListEnv(process.env.OPENROUTER_PROVIDER_ORDER);
   const responseStyleOverrides = parseResponseStyleOverridesEnv(process.env.RESPONSE_STYLE_OVERRIDES);
-  const importProcessingRouteMode = parseImportProcessingRouteMode(
-    process.env.IMPORT_PROCESSING_ROUTE_MODE,
-    'background',
-  );
-  const importProcessingStrictPolicy = parseOptionalBooleanEnv(process.env.IMPORT_PROCESSING_STRICT_POLICY) ?? false;
-  const importProcessingLocalEndpointUrl = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_ENDPOINT_URL);
-  const importProcessingLocalModel = parseOptionalStringEnv(process.env.IMPORT_PROCESSING_LOCAL_MODEL);
-  const webFetchAllowHttp = parseOptionalBooleanEnv(process.env.ALLOW_HTTP_FETCH) ?? false;
-  const webFetchDomainAllowlist = parseStringListEnv(process.env.FETCH_DOMAIN_ALLOWLIST);
-  const webFetchAllowInternalNetwork = parseOptionalBooleanEnv(process.env.ALLOW_INTERNAL_NETWORK) ?? false;
-  const webFetchLocalCrawlerEnabled = parseOptionalBooleanEnv(process.env.FETCH_LOCAL_CRAWLER_ENABLED) ?? false;
-  const webFetchLocalCrawlerAllowHttp = parseOptionalBooleanEnv(process.env.FETCH_LOCAL_CRAWLER_ALLOW_HTTP) ?? false;
-  const webFetchLocalCrawlerHostAllowlist = parseStringListEnv(process.env.FETCH_LOCAL_CRAWLER_HOST_ALLOWLIST);
-  const webFetchLocalCrawlerDomainAllowlist = parseStringListEnv(process.env.FETCH_LOCAL_CRAWLER_DOMAIN_ALLOWLIST);
-  const webFetchTlsCaCertPaths = parseStringListEnv(process.env.FETCH_TLS_CA_CERT_PATHS);
   const gatewayTlsCaPath = parseOptionalStringEnv(process.env.GATEWAY_TLS_CA_PATH);
   const gatewayTlsRejectUnauthorized = parseOptionalBooleanEnv(process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED);
   const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(process.env);
   const wyomingEnabled = parseOptionalBooleanEnv(process.env.WYOMING_ENABLED) ?? false;
   const wyomingHost = parseOptionalStringEnv(process.env.WYOMING_HOST) ?? '127.0.0.1';
   const wyomingPort = parseOptionalIntegerEnv(process.env.WYOMING_PORT, 1);
-  const capabilityTier = parseCapabilityTierEnv(process.env.CAPABILITY_TIER, 'nursery');
   const shardToolsets = parseShardToolsetEnv(process.env);
   const sessionMirrorEnabled = parseOptionalBooleanEnv(process.env.SESSION_MIRROR_ENABLED);
   const sessionMirrorMaxChars = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_MAX_CHARS, 32);
   const sessionMirrorActiveWindowMs = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS, 1_000);
   const sessionMirrorChannelOverrides = parseBooleanMapEnv(process.env.SESSION_MIRROR_CHANNEL_OVERRIDES);
-  const sessionMessageLimit = parseOptionalIntegerEnv(process.env.SESSION_MESSAGE_LIMIT, 1);
-  const sessionRestartBehavior = parseSessionRestartBehaviorEnv(
-    process.env.SESSION_RESTART_BEHAVIOR,
-    'reuse_latest_session',
-  );
   const continuityMessageLimit = parseOptionalIntegerEnv(process.env.CONTINUITY_MESSAGE_LIMIT, 1);
-  const memoryRetrievalLimit = parseOptionalIntegerEnv(process.env.MEMORY_RETRIEVAL_LIMIT, 1);
-  const sessionHistoryBudgetPct = parseBoundedIntegerEnv(
-    process.env.SESSION_HISTORY_BUDGET_PCT,
-    SESSION_HISTORY_BUDGET_PCT_DEFAULT,
-    SESSION_HISTORY_BUDGET_PCT_RANGE.min,
-    SESSION_HISTORY_BUDGET_PCT_RANGE.max,
-  );
-  const memoryRetrievalBudgetPct = parseBoundedIntegerEnv(
-    process.env.MEMORY_RETRIEVAL_BUDGET_PCT,
-    MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
-    MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
-    MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
-  );
   const voiceDaveEncryption = parseOptionalBooleanEnv(process.env.DISCORD_VOICE_DAVE_ENCRYPTION) ?? true;
   const voiceDecryptionFailureTolerance = parseIntegerEnv(
     process.env.DISCORD_VOICE_DECRYPTION_FAILURE_TOLERANCE,
     24,
     0,
   );
-  const sttProvider = parseRuntimeVoiceSttProviderEnv(
-    process.env.STT_PROVIDER ?? process.env.VOICE_STT_PROVIDER,
-  );
-  const ttsProvider = parseRuntimeVoiceTtsProviderEnv(
-    process.env.TTS_PROVIDER ?? process.env.VOICE_TTS_PROVIDER,
-  );
-  const echoTtsUrl = parseOptionalStringEnv(process.env.ECHO_TTS_URL);
-  const echoTtsVoice = parseOptionalStringEnv(process.env.ECHO_TTS_VOICE);
-  const echoTtsPreset = parseOptionalStringEnv(process.env.ECHO_TTS_PRESET);
   const echoTtsModel = parseOptionalStringEnv(process.env.ECHO_TTS_MODEL);
-  const telegramAuthorizedUsers = parseStringListEnv(
-    process.env.TELEGRAM_ALLOWED_USERS ?? process.env.TELEGRAM_AUTHORIZED_USERS,
-  );
   const persistenceRoots = resolvePersistenceRoots({
     systemDataDir: process.env.SYSTEM_DATA_DIR,
     companionDataDir: process.env.COMPANION_DATA_DIR,
@@ -630,43 +582,38 @@ export function loadConfig(): SubstrateConfig {
     companionDataDir,
     dataDir,
     databasePath,
-    ...(sessionMessageLimit !== undefined ? { sessionMessageLimit } : {}),
-    sessionRestartBehavior,
+    sessionMessageLimit: DEFAULT_SESSION_MESSAGE_LIMIT,
+    sessionRestartBehavior: 'reuse_latest_session',
     ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
-    ...(memoryRetrievalLimit !== undefined ? { memoryRetrievalLimit } : {}),
-    sessionHistoryBudgetPct,
-    memoryRetrievalBudgetPct,
-    extractionInterval: parseInt(process.env.EXTRACTION_INTERVAL ?? '5', 10),
-    maintenanceIntervalMs: parseInt(process.env.MAINTENANCE_INTERVAL_MS ?? '300000', 10),
+    memoryRetrievalLimit: DEFAULT_MEMORY_RETRIEVAL_LIMIT,
+    sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_DEFAULT,
+    memoryRetrievalBudgetPct: MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
+    extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
+    maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
     defaultContextWindow,
-    memoryBudgetPct: parseInt(process.env.MEMORY_BUDGET_PCT ?? '20', 10),
-    extractionThresholdPct: parseInt(process.env.EXTRACTION_THRESHOLD_PCT ?? '30', 10),
-    compactionThresholdPct: parseInt(process.env.COMPACTION_THRESHOLD_PCT ?? '70', 10),
-    compactionEmotionalSalienceThresholdPct: parseBoundedIntegerEnv(
-      process.env.COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT,
-      75,
-      0,
-      100,
-    ),
+    memoryBudgetPct: DEFAULT_MEMORY_BUDGET_PCT,
+    extractionThresholdPct: DEFAULT_EXTRACTION_THRESHOLD_PCT,
+    compactionThresholdPct: DEFAULT_COMPACTION_THRESHOLD_PCT,
+    compactionEmotionalSalienceThresholdPct: DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT,
     ...(sessionMirrorEnabled !== undefined ? { sessionMirrorEnabled } : {}),
     ...(sessionMirrorMaxChars !== undefined ? { sessionMirrorMaxChars } : {}),
     ...(sessionMirrorActiveWindowMs !== undefined ? { sessionMirrorActiveWindowMs } : {}),
     ...(sessionMirrorChannelOverrides ? { sessionMirrorChannelOverrides } : {}),
-    memoryExtractionMinImportance,
-    memoryExtractionMinConfidence,
-    memoryExtractionMinNovelty,
-    memoryExtractionMaxWrites,
-    memoryExtractionTelemetryEnabled,
-    memoryRetrievalTelemetryEnabled,
-    profileSynthesisEnabled,
-    profileSynthesisRefreshIntervalMs,
-    profileSynthesisCooldownMs,
-    profileSynthesisMinWrites,
-    profileSynthesisMinImportance,
-    profileSynthesisMinConfidence,
-    profileSynthesisMinNovelty,
-    profileSynthesisSourceMemoryLimit,
-    profileSynthesisMinSourceMemories,
+    memoryExtractionMinImportance: DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE,
+    memoryExtractionMinConfidence: DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE,
+    memoryExtractionMinNovelty: DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY,
+    memoryExtractionMaxWrites: DEFAULT_MEMORY_EXTRACTION_MAX_WRITES,
+    memoryExtractionTelemetryEnabled: true,
+    memoryRetrievalTelemetryEnabled: true,
+    profileSynthesisEnabled: true,
+    profileSynthesisRefreshIntervalMs: DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS,
+    profileSynthesisCooldownMs: DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS,
+    profileSynthesisMinWrites: DEFAULT_PROFILE_SYNTHESIS_MIN_WRITES,
+    profileSynthesisMinImportance: DEFAULT_PROFILE_SYNTHESIS_MIN_IMPORTANCE,
+    profileSynthesisMinConfidence: DEFAULT_PROFILE_SYNTHESIS_MIN_CONFIDENCE,
+    profileSynthesisMinNovelty: DEFAULT_PROFILE_SYNTHESIS_MIN_NOVELTY,
+    profileSynthesisSourceMemoryLimit: DEFAULT_PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT,
+    profileSynthesisMinSourceMemories: DEFAULT_PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES,
     modelCatalog,
     modelRoleAssignments,
     modelRoster: {
@@ -675,75 +622,42 @@ export function loadConfig(): SubstrateConfig {
     },
     voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
     discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
-    discordTriggerWords: parseStringListEnv(process.env.DISCORD_TRIGGER_WORDS),
-    discordTriggerReactions: (() => {
-      const configured = parseStringListEnv(process.env.DISCORD_TRIGGER_REACTIONS);
-      return configured.length > 0 ? configured : ['👆'];
-    })(),
-    discordTriggerListenWindowMs: parseBoundedIntegerEnv(
-      process.env.DISCORD_TRIGGER_LISTEN_WINDOW_MS,
-      120_000,
-      10_000,
-      600_000,
-    ),
+    discordTriggerWords: undefined,
+    discordTriggerReactions: [...DEFAULT_DISCORD_TRIGGER_REACTIONS],
+    discordTriggerListenWindowMs: DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS,
     characterName: '',
     voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
     voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
-    ...(sttProvider ? { sttProvider } : {}),
-    ...(ttsProvider ? { ttsProvider } : {}),
     deepgramApiKey: process.env.DEEPGRAM_API_KEY,
-    deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
+    deepgramModel: DEFAULT_DEEPGRAM_MODEL,
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
     elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
     elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
-    ...(echoTtsUrl ? { echoTtsUrl } : {}),
-    ...(echoTtsVoice ? { echoTtsVoice } : {}),
-    ...(echoTtsPreset ? { echoTtsPreset } : {}),
     ...(echoTtsModel ? { echoTtsModel } : {}),
-    retryMaxAttempts,
-    retryBaseDelayMs,
-    ...(openRouterProviderOrder.length > 0 ? { openRouterProviderOrder } : {}),
+    retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,
+    retryBaseDelayMs: DEFAULT_RETRY_BASE_DELAY_MS,
     ...(responseStyleOverrides ? { responseStyleOverrides } : {}),
-    importProcessingRouteMode,
-    importProcessingStrictPolicy,
-    ...(importProcessingLocalEndpointUrl ? { importProcessingLocalEndpointUrl } : {}),
-    ...(importProcessingLocalModel ? { importProcessingLocalModel } : {}),
-    webFetchAllowHttp,
-    ...(webFetchDomainAllowlist.length > 0 ? { webFetchDomainAllowlist } : {}),
-    webFetchAllowInternalNetwork,
-    webFetchLocalCrawlerEnabled,
-    webFetchLocalCrawlerAllowHttp,
-    ...(webFetchLocalCrawlerHostAllowlist.length > 0 ? { webFetchLocalCrawlerHostAllowlist } : {}),
-    ...(webFetchLocalCrawlerDomainAllowlist.length > 0 ? { webFetchLocalCrawlerDomainAllowlist } : {}),
-    ...(webFetchTlsCaCertPaths.length > 0 ? { webFetchTlsCaCertPaths } : {}),
+    importProcessingRouteMode: DEFAULT_IMPORT_PROCESSING_ROUTE_MODE,
+    importProcessingStrictPolicy: false,
+    webFetchAllowHttp: false,
+    webFetchAllowInternalNetwork: false,
+    webFetchLocalCrawlerEnabled: false,
+    webFetchLocalCrawlerAllowHttp: false,
     ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),
     ...(gatewayTlsRejectUnauthorized !== undefined ? { gatewayTlsRejectUnauthorized } : {}),
     wyomingShardRouting,
     wyomingEnabled,
     wyomingHost,
     ...(wyomingPort !== undefined ? { wyomingPort } : {}),
-    telegramEnabled: parseOptionalBooleanEnv(process.env.TELEGRAM_ENABLED) ?? false,
-    ...(telegramAuthorizedUsers.length > 0
-      ? { telegramAuthorizedUsers }
-      : {}),
-    capabilityTier,
+    telegramEnabled: false,
+    capabilityTier: DEFAULT_CAPABILITY_TIER,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
     // Obsidian vault
-    ...(parseOptionalStringEnv(process.env.OBSIDIAN_VAULT_NAME)
-      ? { obsidianVaultName: parseOptionalStringEnv(process.env.OBSIDIAN_VAULT_NAME) }
-      : {}),
-    ...(parseOptionalStringEnv(process.env.OBSIDIAN_CLI_PATH)
-      ? { obsidianCliPath: parseOptionalStringEnv(process.env.OBSIDIAN_CLI_PATH) }
-      : {}),
-    ...(parseOptionalBooleanEnv(process.env.OBSIDIAN_AUTO_PUBLISH) !== undefined
-      ? { obsidianAutoPublish: parseOptionalBooleanEnv(process.env.OBSIDIAN_AUTO_PUBLISH) }
-      : {}),
-    ...(parseOptionalIntegerEnv(process.env.OBSIDIAN_TIMEOUT_MS, 1000) !== undefined
-      ? { obsidianTimeoutMs: parseOptionalIntegerEnv(process.env.OBSIDIAN_TIMEOUT_MS, 1000) }
-      : {}),
+    obsidianAutoPublish: false,
+    obsidianTimeoutMs: DEFAULT_OBSIDIAN_TIMEOUT_MS,
   };
 }
 
@@ -765,11 +679,6 @@ export function parseWyomingShardRoutingConfigEnv(
     ...(siteAllowlist.length > 0 ? { siteAllowlist } : {}),
     ...(satelliteAllowlist.length > 0 ? { satelliteAllowlist } : {}),
   };
-}
-
-function parseNumberEnv(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function parseIntegerEnv(value: string | undefined, fallback: number, min: number): number {
@@ -797,80 +706,10 @@ function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined
   return undefined;
 }
 
-function parseSessionRestartBehaviorEnv(
-  value: string | undefined,
-  fallback: SessionRestartBehavior,
-): SessionRestartBehavior {
-  if (value === undefined) return fallback;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'reuse_latest_session' || normalized === 'new_session') {
-    return normalized;
-  }
-  return fallback;
-}
-
-function parseBoundedIntegerEnv(
-  value: string | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const parsed = Number.parseInt(value ?? '', 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(max, Math.max(min, parsed));
-}
-
 function parseOptionalStringEnv(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function parseRuntimeVoiceTtsProviderEnv(
-  value: string | undefined,
-): StreamingTtsProvider | 'disabled' | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return undefined;
-  return trimmed as StreamingTtsProvider | 'disabled';
-}
-
-function parseRuntimeVoiceSttProviderEnv(
-  value: string | undefined,
-): StreamingSttProvider | 'disabled' | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return undefined;
-  return trimmed as StreamingSttProvider | 'disabled';
-}
-
-function parseImportProcessingRouteMode(
-  value: string | undefined,
-  fallback: ImportProcessingRouteMode,
-): ImportProcessingRouteMode {
-  if (typeof value !== 'string') return fallback;
-  const trimmed = value.trim().toLowerCase();
-  if (trimmed === 'background' || trimmed === 'openrouter_zdr' || trimmed === 'local_endpoint') {
-    return trimmed;
-  }
-  return fallback;
-}
-
-function parseCapabilityTierEnv(
-  value: string | undefined,
-  fallback: CapabilityTier,
-): CapabilityTier {
-  if (typeof value !== 'string') return fallback;
-  const trimmed = value.trim().toLowerCase();
-  if (
-    trimmed === 'nursery'
-    || trimmed === 'apprentice'
-    || trimmed === 'autonomous'
-    || trimmed === 'custom'
-  ) {
-    return trimmed;
-  }
-  return fallback;
 }
 
 function parseShardToolsetEnv(

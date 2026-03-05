@@ -1,7 +1,7 @@
 // ── Persistent Editable Settings ──
 // Subset of SubstrateConfig that can be changed at runtime via admin GUI.
 // Persisted to data/settings.json (runtime-owned domain fields only).
-// Loaded at startup, merged over env defaults.
+// Loaded at startup from canonical system-data JSON owners.
 
 import { join } from 'node:path';
 import {

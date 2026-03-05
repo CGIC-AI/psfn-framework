@@ -121,7 +121,7 @@ export class LLMClient {
     }
     const model = resolveRegisteredModel(candidate.provider, modelId);
     if (!model) {
-      throw new Error(`Unknown model "${modelId}" for provider "${candidate.provider}". Set LITELLM_BASE_URL or check PRIMARY_MODEL / EXTRACTION_MODEL in .env`);
+      throw new Error(`Unknown model "${modelId}" for provider "${candidate.provider}". Set LITELLM_BASE_URL or update the canonical model config in models.json`);
     }
     return {
       model,

@@ -123,9 +123,10 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-bxvy.1` (`two-root persistence contract`) is integrated, with canonical `system-data` vs `companion-data` root resolution, fail-closed split-root env guards, companion-state path helpers, and runtime/admin/bootstrap rewiring so system-owned settings/config stay on the system root while character/session/prompt/notes/backup state uses the companion root.
   - `PSFN-bxvy.2` (`identity + prompt single-source-of-truth`) is integrated, with the canonical `Character Foundation` locked to character-card ownership across Garden API, legacy admin, and agent prompt tools while runtime prompt sync continues to derive that layer from card-backed identity data instead of writable prompt copies.
   - `PSFN-bxvy.3` (`subsystem config normalization`) is integrated, with `/api/admin/settings` now exposing runtime-owned settings only, explicit fail-closed wrong-owner validation for model/scheduler/capability fields, and Garden saving model catalog, scheduler, and capability-tier edits back through their canonical JSON files instead of the generic runtime settings patch path.
+  - `PSFN-bxvy.4` (`env scope reduction`) is integrated, with JSON-owned model/runtime/channel config no longer taking authority from `.env`, startup warnings for ignored legacy config env vars, canonical seed/default alignment for system-data config files, standalone CLI/E2E entrypoints hydrating from JSON-backed config owners, and operator/docs examples trimmed so `.env` is documented as secrets/bootstrap wiring only.
   - `PSFN-qyrl` plugin-seam epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Carry `PSFN-bxvy.4` and `PSFN-bxvy.5` to finish the config/data topology cutover by reducing `.env` scope and shipping the migration path.
+  - Carry `PSFN-s7s6` and `PSFN-bxvy.5` to finish the config/data topology cutover by removing remaining hardcoded companion identity drift and shipping the migration path.
   - Open the `PSFN-y2ac` implementation lane immediately after `PSFN-bxvy` resolves the remaining config/data ownership and migration contract.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 
@@ -174,4 +175,6 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-bxvy.2` build validation: `npm run build`
 - `PSFN-bxvy.3` targeted regressions: `npm test -- --run src/channels/admin/api-routes.test.ts src/channels/admin/services/prompts-service.test.ts`
 - `PSFN-bxvy.3` Garden/runtime validation: `npm --prefix admin-ui run check`, `npm run garden:build`, and `npm run build`
+- `PSFN-bxvy.4` targeted regressions: `npm test -- --run src/config/scheduler-runtime.test.ts src/capabilities/runtime.test.ts src/channels/config.test.ts src/types.test.ts src/gateway/server.test.ts src/gateway/methods/web.test.ts src/channels/wyoming/wiring.test.ts src/llm/client.test.ts`
+- `PSFN-bxvy.4` build validation: `npm run build`
 - `phase-v` build after integrated `PSFN-qyrl.*` / `PSFN-04dt.1` / `PSFN-04dt.5`: `npm run build`

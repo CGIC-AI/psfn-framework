@@ -68,7 +68,7 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
-  it('lets explicit env values override file values', () => {
+  it('keeps mutable telegram settings in file/override ownership while still allowing env secrets and webhook wiring', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
@@ -101,11 +101,11 @@ describe('loadRuntimeChannelsConfig', () => {
         TELEGRAM_WEBHOOK_PATH: '/telegram/live',
       });
 
-      expect(config.telegram.enabled).toBe(true);
+      expect(config.telegram.enabled).toBe(false);
       expect(config.telegram.token).toBe('token-from-env');
-      expect(config.telegram.allowedUsers).toEqual(['99', '@alpha']);
-      expect(config.telegram.mode).toBe('webhook');
-      expect(config.telegram.pollIntervalMs).toBe(5000);
+      expect(config.telegram.allowedUsers).toEqual(['1']);
+      expect(config.telegram.mode).toBe('polling');
+      expect(config.telegram.pollIntervalMs).toBe(1200);
       expect(config.telegram.webhook).toEqual({
         url: 'https://api.example.net/telegram/live',
         secret: 'env-secret',
@@ -142,7 +142,7 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
-  it('prioritizes explicit env telegram values over settings overrides', () => {
+  it('ignores legacy env telegram toggles and allowlists when settings overrides are present', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
@@ -162,14 +162,14 @@ describe('loadRuntimeChannelsConfig', () => {
         },
       });
 
-      expect(config.telegram.enabled).toBe(false);
-      expect(config.telegram.allowedUsers).toEqual(['env-1', '@env-two']);
+      expect(config.telegram.enabled).toBe(true);
+      expect(config.telegram.allowedUsers).toEqual(['from-settings']);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
   });
 
-  it('accepts TELEGRAM_AUTHORIZED_USERS as allowlist env alias', () => {
+  it('ignores TELEGRAM_AUTHORIZED_USERS legacy env alias for mutable allowlist settings', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
@@ -183,7 +183,7 @@ describe('loadRuntimeChannelsConfig', () => {
         TELEGRAM_AUTHORIZED_USERS: '5635268079,@primary-user',
       });
 
-      expect(config.telegram.allowedUsers).toEqual(['5635268079', '@primary-user']);
+      expect(config.telegram.allowedUsers).toEqual(['from-file']);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

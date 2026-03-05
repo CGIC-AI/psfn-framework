@@ -1204,6 +1204,41 @@ describe('AdminServer JSON API routes', () => {
     ]));
   });
 
+  it('rejects invalid model route providerOrder payloads instead of silently coercing them', async () => {
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            routing: {
+              providerOrder: 'parasail',
+            },
+          },
+        },
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as {
+      ok: boolean;
+      message: string;
+      validationErrors?: Array<{ field: string; message: string; code?: string }>;
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain('modelCatalog.primary.routing.providerOrder must be an array of strings');
+    expect(payload.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'modelCatalog.primary.routing.providerOrder',
+        message: 'modelCatalog.primary.routing.providerOrder must be an array of strings',
+      }),
+    ]));
+  });
+
   it('accepts registered STT provider ids through admin settings patch', async () => {
     const restoreProvider = registerStreamingSttProvider('plugin-test', {
       createConnector: vi.fn(() => {

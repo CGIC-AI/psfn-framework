@@ -71,6 +71,7 @@ describe('admin templates', () => {
             model: 'z-ai/glm-5',
             provider: 'openrouter',
             defaults: { maxTokens: 8192, contextWindow: 128_000 },
+            routing: { providerOrder: ['parasail', 'openai'] },
           },
         },
         modelRoleAssignments: {
@@ -151,12 +152,122 @@ describe('admin templates', () => {
 
     expect(html).toContain('id="settings-provider-list"');
     expect(html).toContain('data-provider-hint-copy');
+    expect(html).toContain('data-route-provider-order');
+    expect(html).toContain('value="parasail, openai"');
     expect(html).toContain('name="webFetchAllowHttp"');
     expect(html).toContain('name="webFetchLocalCrawlerEnabled"');
     expect(html).toContain('name="webFetchTlsCaCertPaths"');
     expect(html).toContain('data-purpose value="vision"');
     expect(html).toContain('&quot;providerHints&quot;:[&quot;openrouter&quot;,&quot;z-ai&quot;]');
     expect(html).toContain('&quot;pricing&quot;:{&quot;prompt&quot;:&quot;0.001&quot;,&quot;completion&quot;:&quot;0.002&quot;}');
+  });
+
+  it('renders per-slot routing order separately from the global OpenRouter order and keeps explicit clear semantics', () => {
+    const html = settingsPage(
+      {
+        primaryModel: 'z-ai/glm-5',
+        primaryProvider: 'openrouter',
+        extractionModel: 'deepseek/deepseek-v3.2',
+        extractionProvider: 'openrouter',
+        primaryMaxTokens: 8192,
+        extractionMaxTokens: 2048,
+        sessionHistoryBudgetPct: 6,
+        memoryRetrievalBudgetPct: 2,
+        extractionInterval: 5,
+        maintenanceIntervalMs: 300_000,
+        defaultContextWindow: 128_000,
+        memoryBudgetPct: 20,
+        extractionThresholdPct: 30,
+        compactionThresholdPct: 70,
+        dataDir: '/tmp/test',
+        databasePath: '/tmp/test.db',
+        characterCardPath: '/tmp/card.json',
+        discordToken: '',
+        discordBotId: '123',
+        openRouterProviderOrder: ['anthropic', 'together'],
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 8192, contextWindow: 128_000 },
+            routing: { providerOrder: ['parasail', 'openai'] },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 2048, contextWindow: 64_000 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          extraction: 'extraction',
+          background: 'primary',
+        },
+        modelRoster: {
+          chat: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            maxTokens: 8192,
+            contextWindow: 128_000,
+          },
+        },
+      } as SubstrateConfig,
+      {
+        salienceFloor: 0.45,
+        maintenanceIntervalMs: 300_000,
+        discordToken: '[not set]',
+        apiKey: '[not set]',
+        adminToken: '[not set]',
+        openrouterApiKey: '[set]',
+        litellmBaseUrl: '[set]',
+        litellmApiKey: '[set]',
+        ollamaUrl: '[set]',
+        importProcessingLocalApiKey: '[not set]',
+        telegramBotToken: '[not set]',
+      },
+      {
+        models: { modelCatalog: {}, modelRoleAssignments: {}, modelRoster: {} },
+        skills: { enabled: true, directories: ['skills'], maxLoadedSkills: 32, maxSkillChars: 24_000 },
+        scheduler: { tickIntervalMs: 1000, heartbeatIntervalMs: 1000, salienceDecayIntervalMs: 300_000 },
+        trustPolicy: {
+          trustCeiling: {
+            primary: ['public', 'personal', 'intimate', 'confidential'],
+            trusted: ['public', 'personal'],
+            regular: ['public'],
+            public: ['public'],
+          },
+          visibilityAllowed: {
+            private: ['public', 'personal', 'intimate', 'confidential'],
+            semi_private: ['public', 'personal'],
+            public: ['public'],
+            broadcast: ['public'],
+          },
+          channelClassification: {
+            privatePrefixes: [],
+            broadcastPrefixes: [],
+            defaultVisibility: 'private',
+            visibilityOverrides: {
+              exact: {},
+              prefix: {},
+            },
+          },
+        },
+        capabilities: {
+          tier: 'nursery',
+          customTokens: [],
+        },
+      },
+      [],
+    );
+
+    expect(html).toContain('Route Provider Order');
+    expect(html).toContain('data-route-provider-order value="parasail, openai"');
+    expect(html).not.toContain('data-route-provider-order value="anthropic, together"');
+    expect(html).toContain('name="openRouterProviderOrder"');
+    expect(html).toContain('value="anthropic, together"');
+    expect(html).toContain('<td><input type="text" data-route-provider-order placeholder="parasail, openai"></td>');
+    expect(html).toContain("const routeProviderOrder = parseCsvList(getInputValue(row, '[data-route-provider-order]'));");
+    expect(html).toContain('routing: { providerOrder: routeProviderOrder },');
   });
 
   it('renders confirmation queue fragments with review controls', () => {

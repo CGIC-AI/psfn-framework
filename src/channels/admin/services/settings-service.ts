@@ -453,6 +453,35 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateModelCatalogRouting(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('modelCatalog' in payload) || !this.isRecord(payload.modelCatalog)) return;
+
+    for (const [slotKey, rawEntry] of Object.entries(payload.modelCatalog)) {
+      if (!this.isRecord(rawEntry) || !('routing' in rawEntry)) continue;
+      const fieldPrefix = `modelCatalog.${slotKey}.routing`;
+      if (!this.isRecord(rawEntry.routing)) {
+        this.pushFieldError(errors, fieldPrefix, `${fieldPrefix} must be an object`, 'invalid_type');
+        continue;
+      }
+
+      if (!('providerOrder' in rawEntry.routing)) continue;
+      const providerOrder = rawEntry.routing.providerOrder;
+      const isValid = Array.isArray(providerOrder)
+        && providerOrder.every(entry => typeof entry === 'string');
+      if (!isValid) {
+        this.pushFieldError(
+          errors,
+          `${fieldPrefix}.providerOrder`,
+          `${fieldPrefix}.providerOrder must be an array of strings`,
+          'invalid_type',
+        );
+      }
+    }
+  }
+
   private validateSettingsPayload(
     payload: Record<string, unknown>,
     current: Partial<SubstrateConfig>,
@@ -487,6 +516,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     this.validateHttpUrlField(payload, 'importProcessingLocalEndpointUrl', errors);
     this.validateHttpUrlField(payload, 'chatApiBaseUrl', errors);
+    this.validateModelCatalogRouting(payload, errors);
 
     const effectiveRouteMode = typeof payload.importProcessingRouteMode === 'string'
       ? payload.importProcessingRouteMode

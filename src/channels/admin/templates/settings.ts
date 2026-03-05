@@ -55,6 +55,7 @@ interface CatalogRowView {
   slotKey: string;
   model: string;
   provider: string;
+  routeProviderOrder: string;
   defaultMaxTokens: string;
   defaultContextWindow: string;
   defaultSessionHistoryMinTokens: string;
@@ -156,6 +157,7 @@ function buildCatalogRows(config: SubstrateConfig): CatalogRowView[] {
     slotKey,
     model: entry.model,
     provider: entry.provider,
+    routeProviderOrder: (entry.routing?.providerOrder ?? []).join(', '),
     defaultMaxTokens: toTextNumber(entry.defaults?.maxTokens),
     defaultContextWindow: toTextNumber(entry.defaults?.contextWindow),
     defaultSessionHistoryMinTokens: toTextNumber(entry.defaults?.contextBudget?.sessionHistoryMinTokens),
@@ -223,6 +225,7 @@ function renderCatalogRow(
         <input type="text" data-provider value="${escapeHtml(row.provider)}" placeholder="openrouter"${providerListAttr}>
         <input type="text" data-provider-hint-copy value="" readonly placeholder="provider hint" style="${providerHintStyle}">
       </td>
+      <td><input type="text" data-route-provider-order value="${escapeHtml(row.routeProviderOrder)}" placeholder="parasail, openai"></td>
       <td><input type="number" data-default-max-tokens value="${escapeHtml(row.defaultMaxTokens)}" min="1" placeholder="metadata"></td>
       <td><input type="number" data-default-context-window value="${escapeHtml(row.defaultContextWindow)}" min="1" placeholder="metadata"></td>
       <td><input type="number" data-override-max-tokens value="${escapeHtml(row.overrideMaxTokens)}" min="1" placeholder="optional"></td>
@@ -449,12 +452,13 @@ export function settingsPage(
           <div style="overflow-x:auto">
             <datalist id="settings-model-list">${slotSelectOptions(availableModels, '')}</datalist>
             <datalist id="${escapeHtml(providerListId)}">${providerOptionsHtml}</datalist>
-            <table class="config-table" style="margin-bottom:0.75rem;min-width:980px">
+            <table class="config-table" style="margin-bottom:0.75rem;min-width:1180px">
               <thead>
                 <tr>
                   <th>Slot Key</th>
                   <th>Model</th>
                   <th>Provider</th>
+                  <th>Route Provider Order</th>
                   <th>Default Max Tokens</th>
                   <th>Default Context Window</th>
                   <th>Override Max Tokens</th>
@@ -848,6 +852,7 @@ export function settingsPage(
           <input type="text" data-provider placeholder="openrouter"${showProviderHintInput ? '' : ` list="${escapeHtml(providerListId)}"`}>
           <input type="text" data-provider-hint-copy value="" readonly placeholder="provider hint" style="${showProviderHintInput ? 'display:block;margin-top:0.35rem;font-size:0.75rem' : 'display:none'}">
         </td>
+        <td><input type="text" data-route-provider-order placeholder="parasail, openai"></td>
         <td><input type="number" data-default-max-tokens min="1" placeholder="metadata"></td>
         <td><input type="number" data-default-context-window min="1" placeholder="metadata"></td>
         <td><input type="number" data-override-max-tokens min="1" placeholder="optional"></td>
@@ -933,6 +938,13 @@ export function settingsPage(
           const parsed = Number.parseInt(String(raw || '').trim(), 10);
           if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
           return parsed;
+        };
+
+        const parseCsvList = (raw) => {
+          return [...new Set(String(raw || '')
+            .split(',')
+            .map((value) => String(value || '').trim())
+            .filter(Boolean))];
         };
 
         const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -1043,6 +1055,7 @@ export function settingsPage(
             const slotKey = getInputValue(row, '[data-slot-key]');
             const model = getInputValue(row, '[data-model-id]');
             const provider = getInputValue(row, '[data-provider]');
+            const routeProviderOrder = parseCsvList(getInputValue(row, '[data-route-provider-order]'));
             if (!slotKey || !model || !provider) continue;
 
             const defaults = {};
@@ -1077,6 +1090,7 @@ export function settingsPage(
             catalog[slotKey] = {
               model,
               provider,
+              routing: { providerOrder: routeProviderOrder },
               ...(Object.keys(defaults).length > 0 ? { defaults } : {}),
               ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
             };

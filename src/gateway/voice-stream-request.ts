@@ -38,13 +38,6 @@ const PRIMARY_REVERSE_VOICE_RPC_METHODS: ReverseVoiceRpcMethods = {
   cancel: 'voice.stream.cancel',
 };
 
-const LEGACY_REVERSE_VOICE_RPC_METHODS: ReverseVoiceRpcMethods = {
-  handleMessage: 'discord.handleMessage',
-  start: 'discord.voice.start',
-  chunk: 'discord.voice.chunk',
-  end: 'discord.voice.end',
-  cancel: 'discord.voice.cancel',
-};
 
 export interface VoiceStreamRequestOptions {
   timeoutMs?: number;
@@ -121,7 +114,7 @@ export async function requestAgentVoiceStream({
     ]);
   };
 
-  let reverseVoiceMethods = PRIMARY_REVERSE_VOICE_RPC_METHODS;
+  const reverseVoiceMethods = PRIMARY_REVERSE_VOICE_RPC_METHODS;
 
   const sendCancel = async (sequence: number, reason: string): Promise<void> => {
     const cancelPayload: VoiceStreamCancelParams = {
@@ -148,18 +141,9 @@ export async function requestAgentVoiceStream({
     await invokeWithTimeout(() => client.request(reverseVoiceMethods.start, startParams));
   } catch (error) {
     if (isMethodNotFoundError(error)) {
-      reverseVoiceMethods = LEGACY_REVERSE_VOICE_RPC_METHODS;
-      try {
-        await invokeWithTimeout(() => client.request(reverseVoiceMethods.start, startParams));
-      } catch (legacyError) {
-        if (isMethodNotFoundError(legacyError)) {
-          return requestAgentViaHandlePath(client, serializedMessage, timeoutMs);
-        }
-        throw legacyError;
-      }
-    } else {
-      throw error;
+      return requestAgentViaHandlePath(client, serializedMessage, timeoutMs);
     }
+    throw error;
   }
 
   let cancelled = false;
@@ -279,12 +263,5 @@ async function requestAgentViaHandlePath(
     return result as VoiceHandleMessageResult;
   };
 
-  try {
-    return await invokeHandle(PRIMARY_REVERSE_VOICE_RPC_METHODS.handleMessage);
-  } catch (error) {
-    if (!isMethodNotFoundError(error)) {
-      throw error;
-    }
-    return await invokeHandle(LEGACY_REVERSE_VOICE_RPC_METHODS.handleMessage);
-  }
+  return await invokeHandle(PRIMARY_REVERSE_VOICE_RPC_METHODS.handleMessage);
 }

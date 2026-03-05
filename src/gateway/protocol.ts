@@ -460,28 +460,12 @@ export interface VoiceStreamEndResult extends VoiceHandleMessageResult {
   droppedChunks: number;
 }
 
-// Backward-compatible aliases for Discord-specific reverse RPC naming.
-export type DiscordHandleMessageParams = VoiceHandleMessageParams;
-export type DiscordHandleMessageResult = VoiceHandleMessageResult;
-export type DiscordVoiceStreamStartParams = VoiceStreamStartParams;
-export type DiscordVoiceStreamChunkParams = VoiceStreamChunkParams;
-export type DiscordVoiceStreamEndParams = VoiceStreamEndParams;
-export type DiscordVoiceStreamCancelParams = VoiceStreamCancelParams;
-export type DiscordVoiceStreamAckResult = VoiceStreamAckResult;
-export type DiscordVoiceStreamCancelResult = VoiceStreamCancelResult;
-export type DiscordVoiceStreamEndResult = VoiceStreamEndResult;
-
 export interface AgentMethods {
   'voice.handleMessage': [VoiceHandleMessageParams, VoiceHandleMessageResult];
   'voice.stream.start': [VoiceStreamStartParams, VoiceStreamAckResult];
   'voice.stream.chunk': [VoiceStreamChunkParams, VoiceStreamAckResult];
   'voice.stream.end': [VoiceStreamEndParams, VoiceStreamEndResult];
   'voice.stream.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
-  'discord.handleMessage': [DiscordHandleMessageParams, DiscordHandleMessageResult];
-  'discord.voice.start': [DiscordVoiceStreamStartParams, DiscordVoiceStreamAckResult];
-  'discord.voice.chunk': [DiscordVoiceStreamChunkParams, DiscordVoiceStreamAckResult];
-  'discord.voice.end': [DiscordVoiceStreamEndParams, DiscordVoiceStreamEndResult];
-  'discord.voice.cancel': [DiscordVoiceStreamCancelParams, DiscordVoiceStreamCancelResult];
 }
 
 // ── Error codes (JSON-RPC custom range: -32000 to -32099) ──

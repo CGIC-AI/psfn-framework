@@ -256,8 +256,7 @@ function resolveDiscordNotificationChannel(session: LastActiveSessionData | null
     return rawChannelId.length > 0 ? rawChannelId : null;
   }
 
-  // Backward-compatible fallback for legacy payloads that did not include channelType.
-  return normalizedSessionId;
+  return null;
 }
 
 // ── Notifier implementation ──

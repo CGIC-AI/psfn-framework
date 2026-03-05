@@ -125,6 +125,3 @@ export function buildRLMSystemPrompt(metadata?: ThinkContextMetadata): string {
 
   return lines.join('\n');
 }
-
-/** @deprecated Use buildRLMSystemPrompt() instead. Kept for backward compatibility. */
-export const RLM_SYSTEM_PROMPT = RLM_BASE_PROMPT;

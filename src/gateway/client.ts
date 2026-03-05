@@ -957,14 +957,6 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       return;
     }
 
-    // Backward compat: if requestId is missing or '0', fall back to any single handler
-    if (!chunk.requestId || chunk.requestId === '0') {
-      const fallback = this.chunkHandlers.values().next().value;
-      if (fallback) {
-        fallback(chunk.text);
-        return;
-      }
-    }
   }
 
   private handleNotification(method: string, params: unknown): void {

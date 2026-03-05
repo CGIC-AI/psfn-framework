@@ -420,6 +420,3 @@ export function createEmbeddingProviderFromEnv(
       return resolveApiProvider(env);
   }
 }
-
-// Backward-compatible name for existing Ollama callers.
-export class EmbeddingProvider extends OllamaEmbeddingProvider {}

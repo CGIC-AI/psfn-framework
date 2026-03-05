@@ -17,6 +17,7 @@
     slotKey: string;
     model: string;
     provider: string;
+    routeProviderOrder: string;
     defaultMaxTokens: number | null;
     defaultContextWindow: number | null;
     overrideMaxTokens: number | null;
@@ -42,6 +43,8 @@
     { value: 'reuse_latest_session', label: 'Reuse latest session' },
     { value: 'new_session', label: 'Always start a new session' },
   ] as const;
+  const BUILTIN_TTS_PROVIDER_IDS = ['disabled', 'elevenlabs', 'echo'] as const;
+  const BUILTIN_STT_PROVIDER_IDS = ['disabled', 'deepgram'] as const;
 
   // ── Budget constants (from context-budget.ts) ──
   const SESSION_HISTORY_TOKENS_PER_MSG = 256;
@@ -155,12 +158,12 @@
   let webFetchTlsCaCertPaths = $state('');
 
   // ── Voice / TTS ──
-  let ttsProvider = $state<'elevenlabs' | 'echo' | 'disabled'>('disabled');
+  let ttsProvider = $state('disabled');
   let voiceId = $state('');
   let echoTtsUrl = $state('');
   let echoTtsVoice = $state('');
   let echoTtsPreset = $state('');
-  let sttProvider = $state<'deepgram' | 'disabled'>('disabled');
+  let sttProvider = $state('disabled');
   let deepgramModel = $state('nova-3');
 
   // ── Obsidian Vault ──
@@ -435,6 +438,12 @@
 
   // ── Derived ──
   let slotKeys = $derived(catalogSlots.map(s => s.slotKey).filter(Boolean));
+  let ttsProviderOptions = $derived(
+    [...new Set([...BUILTIN_TTS_PROVIDER_IDS, ttsProvider].filter(Boolean))],
+  );
+  let sttProviderOptions = $derived(
+    [...new Set([...BUILTIN_STT_PROVIDER_IDS, sttProvider].filter(Boolean))],
+  );
 
   function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
@@ -557,14 +566,14 @@
     thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 10);
 
     // Voice / TTS
-    const rawTts = String(config.ttsProvider ?? 'disabled');
-    ttsProvider = (rawTts === 'elevenlabs' || rawTts === 'echo') ? rawTts : 'disabled';
+    const rawTts = String(config.ttsProvider ?? 'disabled').trim();
+    ttsProvider = rawTts || 'disabled';
     voiceId = String(config.voiceId ?? config.elevenLabsVoiceId ?? '');
     echoTtsUrl = String(config.echoTtsUrl ?? '');
     echoTtsVoice = String(config.echoTtsVoice ?? '');
     echoTtsPreset = String(config.echoTtsPreset ?? '');
-    const rawStt = String(config.sttProvider ?? (config.deepgramApiKey ? 'deepgram' : 'disabled'));
-    sttProvider = rawStt === 'deepgram' ? 'deepgram' : 'disabled';
+    const rawStt = String(config.sttProvider ?? (config.deepgramApiKey ? 'deepgram' : 'disabled')).trim();
+    sttProvider = rawStt || 'disabled';
     deepgramModel = String(config.deepgramModel ?? 'nova-3');
 
     // Obsidian Vault
@@ -591,6 +600,10 @@
         slotKey: key,
         model: String(entry.model ?? ''),
         provider: String(entry.provider ?? ''),
+        routeProviderOrder: entry.routing && typeof entry.routing === 'object'
+          && Array.isArray((entry.routing as Record<string, unknown>).providerOrder)
+          ? ((entry.routing as Record<string, unknown>).providerOrder as string[]).join(', ')
+          : '',
         defaultMaxTokens: entry.defaults && typeof entry.defaults === 'object' ? Number((entry.defaults as Record<string, unknown>).maxTokens ?? 0) || null : null,
         defaultContextWindow: entry.defaults && typeof entry.defaults === 'object' ? Number((entry.defaults as Record<string, unknown>).contextWindow ?? 0) || null : null,
         overrideMaxTokens: entry.overrides && typeof entry.overrides === 'object' ? Number((entry.overrides as Record<string, unknown>).maxTokens ?? 0) || null : null,
@@ -598,8 +611,8 @@
       }));
     } else {
       catalogSlots = [
-        { slotKey: 'primary', model: String(config.primaryModel ?? ''), provider: String(config.primaryProvider ?? ''), defaultMaxTokens: Number(config.primaryMaxTokens ?? 4096), defaultContextWindow: Number(config.defaultContextWindow ?? 128000), overrideMaxTokens: null, overrideContextWindow: null },
-        { slotKey: 'extraction', model: String(config.extractionModel ?? ''), provider: String(config.extractionProvider ?? ''), defaultMaxTokens: Number(config.extractionMaxTokens ?? 4096), defaultContextWindow: null, overrideMaxTokens: null, overrideContextWindow: null },
+        { slotKey: 'primary', model: String(config.primaryModel ?? ''), provider: String(config.primaryProvider ?? ''), routeProviderOrder: '', defaultMaxTokens: Number(config.primaryMaxTokens ?? 4096), defaultContextWindow: Number(config.defaultContextWindow ?? 128000), overrideMaxTokens: null, overrideContextWindow: null },
+        { slotKey: 'extraction', model: String(config.extractionModel ?? ''), provider: String(config.extractionProvider ?? ''), routeProviderOrder: '', defaultMaxTokens: Number(config.extractionMaxTokens ?? 4096), defaultContextWindow: null, overrideMaxTokens: null, overrideContextWindow: null },
       ];
     }
 
@@ -696,7 +709,7 @@
   // ── Catalog actions ──
   function addCatalogSlot() {
     catalogSlots = [...catalogSlots, {
-      slotKey: '', model: '', provider: '',
+      slotKey: '', model: '', provider: '', routeProviderOrder: '',
       defaultMaxTokens: null, defaultContextWindow: null,
       overrideMaxTokens: null, overrideContextWindow: null,
     }];
@@ -722,6 +735,7 @@
       catalog[slot.slotKey] = {
         model: slot.model,
         provider: slot.provider,
+        routing: { providerOrder: splitCsv(slot.routeProviderOrder) },
         defaults: {
           ...(slot.defaultMaxTokens ? { maxTokens: slot.defaultMaxTokens } : {}),
           ...(slot.defaultContextWindow ? { contextWindow: slot.defaultContextWindow } : {}),
@@ -980,6 +994,18 @@
 <datalist id="model-list">
   {#each discoveredModels as m}
     <option value={m.id}>{m.description ?? m.id}</option>
+  {/each}
+</datalist>
+
+<datalist id="tts-provider-list">
+  {#each ttsProviderOptions as providerId}
+    <option value={providerId}></option>
+  {/each}
+</datalist>
+
+<datalist id="stt-provider-list">
+  {#each sttProviderOptions as providerId}
+    <option value={providerId}></option>
   {/each}
 </datalist>
 
@@ -1517,6 +1543,7 @@
                     <th class="text-left py-2 px-2 text-shadow-700 font-medium">Slot Key</th>
                     <th class="text-left py-2 px-2 text-shadow-700 font-medium">Model</th>
                     <th class="text-left py-2 px-2 text-shadow-700 font-medium">Provider</th>
+                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Route Provider Order</th>
                     <th class="text-right py-2 px-2 text-shadow-700 font-medium">Def. Max Tokens</th>
                     <th class="text-right py-2 px-2 text-shadow-700 font-medium">Def. Context</th>
                     <th class="text-right py-2 px-2 text-shadow-700 font-medium">Ovr. Max Tokens</th>
@@ -1538,6 +1565,10 @@
                       <td class="py-1.5 px-2">
                         <input type="text" bind:value={slot.provider} placeholder="openrouter"
                           class="w-28 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
+                      </td>
+                      <td class="py-1.5 px-2">
+                        <input type="text" bind:value={slot.routeProviderOrder} placeholder="parasail, openai"
+                          class="w-36 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
                       </td>
                       <td class="py-1.5 px-2 text-right">
                         <input type="number" min="1"
@@ -1718,6 +1749,7 @@
               <div>
                 <label class={LABEL_CLS}>OpenRouter Provider Order</label>
                 <input type="text" bind:value={openRouterProviderOrder} class={INPUT_CLS} placeholder="comma-separated providers" />
+                <p class="text-sm text-shadow-500 mt-1">Global/import fallback order. Per-slot route order is configured in the model catalog table above.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>Local Endpoint URL</label>
@@ -1801,20 +1833,13 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
                 <label class={LABEL_CLS}>TTS Provider</label>
-                <select bind:value={ttsProvider} class={INPUT_CLS}>
-                  <option value="disabled">disabled</option>
-                  <option value="elevenlabs">elevenlabs</option>
-                  <option value="echo">echo</option>
-                </select>
-                <p class="text-sm text-shadow-500 mt-1">Set to disabled to turn off voice synthesis connectors.</p>
+                <input type="text" bind:value={ttsProvider} list="tts-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
+                <p class="text-sm text-shadow-500 mt-1">Built-ins are suggested, but any registered provider id is preserved and sent back to the backend unchanged.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>STT Provider</label>
-                <select bind:value={sttProvider} class={INPUT_CLS}>
-                  <option value="disabled">disabled</option>
-                  <option value="deepgram">deepgram</option>
-                </select>
-                <p class="text-sm text-shadow-500 mt-1">Set to disabled to turn off speech-to-text connectors.</p>
+                <input type="text" bind:value={sttProvider} list="stt-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
+                <p class="text-sm text-shadow-500 mt-1">Built-ins are suggested, but plugin ids are preserved instead of being coerced to disabled.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>ElevenLabs Voice ID</label>

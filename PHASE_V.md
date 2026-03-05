@@ -118,11 +118,13 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-qyrl.4` (`runtime/bootstrap registry replacement`) is integrated, including shared channel runtime factory helpers for Discord/Telegram/API entrypoints plus runtime-config-driven STT/TTS bootstrap across Wyoming, API websocket voice, and Discord voice without hard-coded provider switch logic.
   - `PSFN-qyrl.5` (`EligibilityGate integration for plugin capabilities and fail-closed policy`) is integrated, including explicit eligibility metadata on channel/STT/TTS plugin seams plus fail-closed runtime gating/telemetry for registry activation and connector actions.
   - `PSFN-qyrl.6` (`plugin regression suite + sample external plugin fixture`) is integrated, including fail-closed plugin lifecycle/connector regression coverage across eligibility, runtime bootstrap, API voice, Discord voice, and provider registry seams.
+  - `PSFN-c0zl` (`model API routing and persistence overhaul`) is integrated, including slot-level routing metadata in the canonical model catalog contract, fail-closed admin validation for `routing.providerOrder`, lossless persistence across settings/admin APIs, and legacy/Garden settings controls that preserve explicit per-slot routing intent without rewriting global OpenRouter fallback order.
+  - `PSFN-nhtv` (`Garden voice provider picker hard-coding`) is integrated, with Garden preserving arbitrary STT/TTS provider ids from the registry-backed backend instead of coercing unknown values to `disabled`.
   - `PSFN-qyrl` plugin-seam epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Carry `PSFN-c0zl` to fix lossless model-route persistence and OpenRouter/upstream provider semantics before `PSFN-y2ac`.
-  - Carry `PSFN-nhtv` to remove Garden settings UI hard-coded STT/TTS provider pickers so plugin provider ids round-trip cleanly in the operator surface.
-  - Unblock `PSFN-bxvy.1` after the settings/UI path so the two-root persistence contract can open the `PSFN-y2ac` lane cleanly.
+  - Carry `PSFN-bxvy.1` to define and enforce the two-root persistence contract (`system-data` + `companion-data`) before broader topology migration work.
+  - Progress the remaining `PSFN-bxvy.*` topology tasks so `PSFN-y2ac` can enforce single-owner settings JSON boundaries against the new layout.
+  - Open the `PSFN-y2ac` implementation lane immediately after `PSFN-bxvy` resolves the config/data ownership contract.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 
 ## Work Process
@@ -162,4 +164,6 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-qyrl.4` targeted regressions: `npm test -- --run src/runtime/bootstrap-helpers.test.ts src/channels/api/voice-websocket-runtime.test.ts src/channels/discord/voice.test.ts`
 - `PSFN-qyrl.4` supporting bootstrap regressions: `npm test -- --run src/bootstrap/composition.test.ts src/voice/connectors/stt/index.test.ts src/voice/connectors/tts/index.test.ts`
 - `PSFN-qyrl.5` / `PSFN-qyrl.6` plugin regressions: `npm test -- --run src/capabilities/eligibility.test.ts src/runtime/channel-lifecycle.test.ts src/runtime/bootstrap-helpers.test.ts src/channels/api/voice-websocket-runtime.test.ts src/channels/discord/voice.test.ts src/voice/connectors/stt/index.test.ts src/voice/connectors/tts/index.test.ts`
+- `PSFN-c0zl` / `PSFN-nhtv` targeted regressions: `npm test -- --run src/channels/admin/templates.test.ts src/channels/admin/api-routes.test.ts src/settings.test.ts src/llm/routing.test.ts src/runtime.test.ts`
+- `PSFN-c0zl` / `PSFN-nhtv` Garden type/build validation: `npm --prefix admin-ui run check` and `npm run garden:build`
 - `phase-v` build after integrated `PSFN-qyrl.*` / `PSFN-04dt.1` / `PSFN-04dt.5`: `npm run build`

@@ -1,6 +1,7 @@
 import type { SubstrateConfig } from '../../../types.js';
 import {
   applySettings,
+  type EditableSettings,
   loadSettings,
   normalizeEditableSettings,
   SETTINGS_VALIDATION,
@@ -21,10 +22,12 @@ import {
 } from '../../../config/trust-policy-config.js';
 import {
   loadCapabilityTierConfig,
+  saveCapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
 import {
   CAPABILITY_TIER_VALUES,
 } from '../../../capabilities/tiers.js';
+import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
 import { toErrorMessage } from '../../../utils/errors.js';
 import type {
   AdminSettingsData,
@@ -38,6 +41,79 @@ const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local
 const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
 const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
 const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
+
+type SettingsMutationResult =
+  | { ok: true }
+  | { ok: false; message: string };
+
+export function applyAdminSettingsMutation(options: {
+  config: SubstrateConfig;
+  settings: EditableSettings;
+  capabilityCustomTokens?: readonly CapabilityToken[];
+}): SettingsMutationResult {
+  const { config, settings, capabilityCustomTokens } = options;
+
+  const existing = loadSettings(config.dataDir);
+  const merged = normalizeEditableSettings(
+    { ...existing, ...settings },
+    { defaultContextWindow: config.defaultContextWindow },
+  );
+
+  saveSettings(config.dataDir, merged);
+  applySettings(config, merged);
+
+  if (config.modelCatalog && config.modelRoleAssignments) {
+    try {
+      saveModelsConfig(
+        config.dataDir,
+        {
+          modelCatalog: config.modelCatalog,
+          modelRoleAssignments: config.modelRoleAssignments,
+        },
+        { defaultContextWindow: config.defaultContextWindow },
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Settings saved but models config write failed: ${toErrorMessage(error)}`,
+      };
+    }
+  }
+
+  try {
+    config.runtimeHooks?.refreshModels?.();
+  } catch {
+    // Preserve successful settings save even when runtime model refresh fails.
+  }
+
+  if (settings.capabilityTier !== undefined) {
+    try {
+      const current = loadCapabilityTierConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      const saved = saveCapabilityTierConfig(config.dataDir, {
+        ...current,
+        tier: settings.capabilityTier,
+        customTokens: settings.capabilityTier === 'custom'
+          ? [...(capabilityCustomTokens ?? [])]
+          : current.customTokens,
+      });
+      config.capabilityTier = saved.tier;
+      try {
+        config.runtimeHooks?.refreshCapabilities?.();
+      } catch {
+        // Preserve successful settings save even when runtime capability refresh fails.
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Settings saved but capability tier update failed: ${toErrorMessage(error)}`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
 
 const BOOLEAN_SETTINGS_FIELDS = new Set([
   'importProcessingStrictPolicy',
@@ -244,6 +320,14 @@ export class AdminSettingsDataService implements AdminSettingsService {
     return errors;
   }
 
+  private parseCapabilityCustomTokens(payload: Record<string, unknown>): CapabilityToken[] | undefined {
+    if (!Array.isArray(payload.customTokens)) return undefined;
+    return payload.customTokens
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map(entry => entry.trim())
+      .filter((entry): entry is CapabilityToken => isCapabilityToken(entry));
+  }
+
   async getSettingsData(): Promise<AdminSettingsData> {
     await loadSettings(this.deps.config.dataDir);
     const normalizedConfig = normalizeEditableSettings(this.deps.config);
@@ -282,22 +366,14 @@ export class AdminSettingsDataService implements AdminSettingsService {
         return this.buildValidationResult(validationErrors);
       }
 
-      const payload = parsed as Partial<SubstrateConfig>;
-      const next = {
-        ...current,
-        ...payload,
-      };
-      saveSettings(this.deps.config.dataDir, next);
-      applySettings(this.deps.config, next);
-      if (this.deps.config.modelCatalog && this.deps.config.modelRoleAssignments) {
-        saveModelsConfig(
-          this.deps.config.dataDir,
-          {
-            modelCatalog: this.deps.config.modelCatalog,
-            modelRoleAssignments: this.deps.config.modelRoleAssignments,
-          },
-          { defaultContextWindow: this.deps.config.defaultContextWindow },
-        );
+      const payload = parsed as EditableSettings;
+      const mutationResult = applyAdminSettingsMutation({
+        config: this.deps.config,
+        settings: payload,
+        capabilityCustomTokens: this.parseCapabilityCustomTokens(parsed),
+      });
+      if (!mutationResult.ok) {
+        return { ok: false, message: mutationResult.message };
       }
       return { ok: true, message: 'Settings updated' };
     } catch (error) {

@@ -403,12 +403,21 @@ describe('AdminServer', () => {
   let server: AdminServer;
   let port: number;
   let skillsRuntimeInvalidate: ReturnType<typeof vi.fn>;
+  let refreshModelsSpy: ReturnType<typeof vi.fn>;
+  let refreshCapabilitiesSpy: ReturnType<typeof vi.fn>;
   let confirmationEntries: ConfirmationQueueEntry[];
   let confirmationListMock: ReturnType<typeof vi.fn>;
   let confirmationResolveMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-test-'));
+    refreshModelsSpy = vi.fn();
+    refreshCapabilitiesSpy = vi.fn();
+    testConfig.runtimeHooks = {
+      refreshModels: refreshModelsSpy,
+      refreshCapabilities: refreshCapabilitiesSpy,
+    };
+    testConfig.capabilityTier = 'nursery';
     testConfig.dataDir = tempDir;
     testConfig.characterCardPath = join(tempDir, 'character.json');
     writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');
@@ -538,6 +547,8 @@ describe('AdminServer', () => {
     db.close();
     rmSync(tempDir, { recursive: true, force: true });
     resetRuntimeTrustPolicy();
+    testConfig.runtimeHooks = undefined;
+    testConfig.capabilityTier = undefined;
   });
 
   describe('Dashboard', () => {
@@ -1828,6 +1839,105 @@ describe('AdminServer', () => {
       // Reset for other tests
       testConfig.primaryMaxTokens = 16384;
       testConfig.sessionMessageLimit = 30;
+    });
+
+    it('applies identical save+refresh semantics for legacy and JSON settings endpoints', async () => {
+      const formPayload = new URLSearchParams();
+      formPayload.set('sessionMessageLimit', '44');
+      formPayload.set('capabilityTier', 'custom');
+      formPayload.append('customTokens', 'identity.read');
+      formPayload.append('customTokens', 'git.read');
+      formPayload.set('modelCatalogJson', JSON.stringify({
+        legacyPrimary: {
+          model: 'openai/gpt-4.1-mini',
+          provider: 'openrouter',
+          defaults: { maxTokens: 4096, contextWindow: 128000 },
+        },
+        legacyExtract: {
+          model: 'deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          defaults: { maxTokens: 2048 },
+        },
+      }));
+      formPayload.set('modelRoleAssignmentsJson', JSON.stringify({
+        chat: 'legacyPrimary',
+        extraction: 'legacyExtract',
+        background: 'legacyExtract',
+      }));
+
+      const legacyRes = await request(port, 'POST', '/api/settings', formPayload.toString(), {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(legacyRes.status).toBe(200);
+      expect(legacyRes.body).toContain('Settings saved');
+      expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+      expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
+
+      const legacyModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
+        modelCatalog: Record<string, unknown>;
+        modelRoleAssignments: Record<string, string>;
+      };
+      expect(legacyModels.modelCatalog.legacyPrimary).toBeDefined();
+      expect(legacyModels.modelRoleAssignments.chat).toBe('legacyPrimary');
+      const legacyCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8')) as {
+        tier: string;
+        customTokens: string[];
+      };
+      expect(legacyCapabilities.tier).toBe('custom');
+      expect(legacyCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
+      expect(testConfig.capabilityTier).toBe('custom');
+
+      const jsonRes = await request(
+        port,
+        'PATCH',
+        '/api/admin/settings',
+        JSON.stringify({
+          sessionMessageLimit: 45,
+          capabilityTier: 'custom',
+          customTokens: ['memory.write'],
+          modelCatalog: {
+            jsonPrimary: {
+              model: 'z-ai/glm-5',
+              provider: 'openrouter',
+              defaults: { maxTokens: 8192, contextWindow: 128000 },
+            },
+            jsonExtract: {
+              model: 'openai/gpt-4.1-mini',
+              provider: 'openrouter',
+              defaults: { maxTokens: 3072 },
+            },
+          },
+          modelRoleAssignments: {
+            chat: 'jsonPrimary',
+            extraction: 'jsonExtract',
+            background: 'jsonExtract',
+          },
+        }),
+        { 'Content-Type': 'application/json' },
+      );
+      expect(jsonRes.status).toBe(200);
+      expect(refreshModelsSpy).toHaveBeenCalledTimes(2);
+      expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(2);
+
+      const jsonModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
+        modelCatalog: Record<string, unknown>;
+        modelRoleAssignments: Record<string, string>;
+      };
+      expect(jsonModels.modelCatalog.jsonPrimary).toBeDefined();
+      expect(jsonModels.modelRoleAssignments.chat).toBe('jsonPrimary');
+      const jsonCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8')) as {
+        tier: string;
+        customTokens: string[];
+      };
+      expect(jsonCapabilities.tier).toBe('custom');
+      expect(jsonCapabilities.customTokens).toEqual(['memory.write']);
+      expect(testConfig.capabilityTier).toBe('custom');
+
+      const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf-8')) as {
+        sessionMessageLimit: number;
+      };
+      expect(persistedSettings.sessionMessageLimit).toBe(45);
+      expect(testConfig.sessionMessageLimit).toBe(45);
     });
 
     it('updates capability tier via settings form POST', async () => {

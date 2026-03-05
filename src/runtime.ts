@@ -112,6 +112,7 @@ import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,
+  EligibilityDeniedError,
   type EligibilityDecision,
 } from './capabilities/eligibility.js';
 import {
@@ -134,6 +135,7 @@ import {
   createRuntimeVoiceTtsConnector,
   createEmbeddingDimensionMismatchFatalMessage,
   installPromotedToolsPersistenceHook,
+  resolveRuntimeVoiceSttProvider,
 } from './runtime/bootstrap-helpers.js';
 import {
   buildChannelAdapterFactoryManifest,
@@ -796,6 +798,7 @@ export class SubstrateRuntime implements Lifecycle {
         eventBus: this.eventBus,
         sessionStore: this.sessionStore,
         agentLoop: this.agentLoop,
+        eligibilityGate,
       }),
       createTelegramChannelAdapterFactoryEntry({
         config: channelsConfig.telegram,
@@ -808,6 +811,7 @@ export class SubstrateRuntime implements Lifecycle {
       channelFactoryManifest,
       registry => this.agentLoop.setChannelRegistry(registry),
       log,
+      eligibilityGate,
     );
     this.discord = requireChannelAdapter<DiscordAdapter>(this.channelRegistry, 'discord');
     if (getOptionalChannelAdapter(this.channelRegistry, 'telegram')) {
@@ -909,6 +913,7 @@ export class SubstrateRuntime implements Lifecycle {
         agentLoop: this.agentLoop,
         eventBus: this.eventBus,
         config: this.config,
+        eligibilityGate,
       });
       const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
       const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
@@ -1083,6 +1088,7 @@ export class SubstrateRuntime implements Lifecycle {
         apiServerManifest,
         registry => this.agentLoop.setChannelRegistry(registry),
         log,
+        eligibilityGate,
       );
       log.info(`API server configured on port ${apiPort}`);
     }
@@ -1140,24 +1146,44 @@ export class SubstrateRuntime implements Lifecycle {
 
       const wyomingAdapters = [handleAdapter];
 
-      const runtimeStt = createRuntimeVoiceSttConnector(this.config);
-      if (runtimeStt) {
-        const { provider, connector } = runtimeStt;
-        const sttConnector = connector;
-        wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
-        log.info('Wyoming ASR adapter enabled', { provider });
+      try {
+        const runtimeStt = createRuntimeVoiceSttConnector(this.config, {
+          eligibilityGate,
+        });
+        if (runtimeStt) {
+          const { provider, connector } = runtimeStt;
+          const sttConnector = connector;
+          wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
+          log.info('Wyoming ASR adapter enabled', { provider });
+        }
+      } catch (error) {
+        if (!(error instanceof EligibilityDeniedError)) {
+          throw error;
+        }
+        log.info('Wyoming ASR adapter disabled by eligibility gate', {
+          provider: resolveRuntimeVoiceSttProvider(this.config),
+          error: error.message,
+        });
       }
 
       try {
         const runtimeTts = createRuntimeVoiceTtsConnector(this.config, {
           requireElevenLabsVoiceId: true,
+          eligibilityGate,
         });
         if (runtimeTts) {
           wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: runtimeTts.connector }));
           log.info('Wyoming TTS adapter enabled', { provider: runtimeTts.provider });
         }
       } catch (error) {
-        log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+        if (error instanceof EligibilityDeniedError) {
+          log.info('Wyoming TTS adapter disabled by eligibility gate', {
+            provider: resolveRuntimeVoiceTtsProvider(this.config),
+            error: error.message,
+          });
+        } else {
+          log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+        }
       }
 
       const serviceRegistry = createWyomingServiceRegistry(wyomingAdapters);

@@ -21,6 +21,14 @@ const connectorMocks = vi.hoisted(() => {
     createStreamingSttConnector: vi.fn(() => sttConnector),
     createStreamingTtsConnector: vi.fn(() => ttsConnector),
     isStreamingSttProvider: vi.fn((provider: string) => provider === 'deepgram'),
+    getStreamingSttProviderMetadata: vi.fn((provider: string) => (
+      provider === 'deepgram'
+        ? {
+          isConfigured: (config: Record<string, unknown>) => Boolean(config.deepgramApiKey),
+          eligibility: { requiredTokens: ['external.web'] },
+        }
+        : null
+    )),
     isStreamingSttProviderConfigured: vi.fn((provider: string, config: Record<string, unknown>) => (
       provider === 'deepgram' && Boolean(config.deepgramApiKey)
     )),
@@ -34,6 +42,28 @@ const connectorMocks = vi.hoisted(() => {
     isStreamingTtsProvider: vi.fn((provider: string) => (
       provider === 'elevenlabs' || provider === 'echo'
     )),
+    getStreamingTtsProviderMetadata: vi.fn((provider: string) => {
+      if (provider === 'echo') {
+        return {
+          isConfigured: (config: Record<string, unknown>) => Boolean(config.echoTtsUrl && config.echoTtsVoice),
+          eligibility: { requiredTokens: ['external.web'] },
+        };
+      }
+      if (provider === 'elevenlabs') {
+        return {
+          isConfigured: (
+            config: Record<string, unknown>,
+            options?: { requireElevenLabsVoiceId?: boolean },
+          ) => (
+            options?.requireElevenLabsVoiceId === true
+              ? Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId)
+              : Boolean(config.elevenLabsApiKey)
+          ),
+          eligibility: { requiredTokens: ['external.web'] },
+        };
+      }
+      return null;
+    }),
     isStreamingTtsProviderConfigured: vi.fn((
       provider: string,
       config: Record<string, unknown>,
@@ -179,6 +209,7 @@ vi.mock('prism-media', () => {
 vi.mock('../../voice/connectors/stt/index.js', () => {
   return {
     createStreamingSttConnector: connectorMocks.createStreamingSttConnector,
+    getStreamingSttProviderMetadata: connectorMocks.getStreamingSttProviderMetadata,
     isStreamingSttProvider: connectorMocks.isStreamingSttProvider,
     isStreamingSttProviderConfigured: connectorMocks.isStreamingSttProviderConfigured,
     resolveDefaultStreamingSttProvider: connectorMocks.resolveDefaultStreamingSttProvider,
@@ -189,6 +220,7 @@ vi.mock('../../voice/connectors/stt/index.js', () => {
 vi.mock('../../voice/connectors/tts/index.js', () => {
   return {
     createStreamingTtsConnector: connectorMocks.createStreamingTtsConnector,
+    getStreamingTtsProviderMetadata: connectorMocks.getStreamingTtsProviderMetadata,
     isStreamingTtsProvider: connectorMocks.isStreamingTtsProvider,
     isStreamingTtsProviderConfigured: connectorMocks.isStreamingTtsProviderConfigured,
     listStreamingTtsProviders: connectorMocks.listStreamingTtsProviders,

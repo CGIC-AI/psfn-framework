@@ -40,6 +40,7 @@ import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,
+  EligibilityDeniedError,
   type EligibilityDecision,
 } from './capabilities/eligibility.js';
 import { GitOps } from './git/ops.js';
@@ -410,12 +411,22 @@ async function main(): Promise<void> {
   const gitOps = new GitOps({
     repoRoot: workspaceRoot,
   });
+  const capabilityRuntime = new CapabilityRuntime({
+    dataDir: config.dataDir,
+    envTier: config.capabilityTier,
+  });
+  const eligibilityGate = createEligibilityGate(
+    () => capabilityRuntime,
+    (decision) => emitEligibilityDecision(eventBus, decision),
+  );
+  const llmClient = new LLMClient(config, { eligibilityGate });
 
   const gatewayChannelRegistry = new Map<string, ChannelAdapter>();
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([
     createDiscordChannelAdapterFactoryEntry({
       config,
       eventBus,
+      eligibilityGate,
     }),
     createTelegramChannelAdapterFactoryEntry({
       config: channelsConfig.telegram,
@@ -427,18 +438,10 @@ async function main(): Promise<void> {
     gatewayChannelManifest,
     () => undefined,
     log,
+    eligibilityGate,
   );
   const discord = requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord');
   const telegram = getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram');
-  const capabilityRuntime = new CapabilityRuntime({
-    dataDir: config.dataDir,
-    envTier: config.capabilityTier,
-  });
-  const eligibilityGate = createEligibilityGate(
-    () => capabilityRuntime,
-    (decision) => emitEligibilityDecision(eventBus, decision),
-  );
-  const llmClient = new LLMClient(config, { eligibilityGate });
 
   // ── Audit database (separate from agent's runtime DB) ──
 
@@ -557,12 +560,28 @@ async function main(): Promise<void> {
     const wyomingTtsProvider = voiceProviderGate.ttsProvider;
 
     if (voiceProviderGate.sttEnabled) {
-      const runtimeStt = createRuntimeVoiceSttConnector(config);
-      if (!runtimeStt) {
-        throw new Error(`Expected runtime STT connector for provider "${wyomingSttProvider}"`);
+      try {
+        const runtimeStt = createRuntimeVoiceSttConnector(config, {
+          eligibilityGate,
+        });
+        if (!runtimeStt) {
+          log.info('Wyoming ASR adapter disabled', {
+            provider: wyomingSttProvider,
+            reason: 'eligibility_or_runtime_binding_unavailable',
+          });
+        } else {
+          wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: runtimeStt.connector }));
+          log.info('Wyoming ASR adapter enabled', { provider: runtimeStt.provider });
+        }
+      } catch (error) {
+        if (!(error instanceof EligibilityDeniedError)) {
+          throw error;
+        }
+        log.info('Wyoming ASR adapter disabled by eligibility gate', {
+          provider: wyomingSttProvider,
+          error: error.message,
+        });
       }
-      wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: runtimeStt.connector }));
-      log.info('Wyoming ASR adapter enabled', { provider: runtimeStt.provider });
     } else {
       log.info('Wyoming ASR adapter disabled', {
         provider: wyomingSttProvider,
@@ -575,6 +594,7 @@ async function main(): Promise<void> {
       if (voiceProviderGate.ttsEnabled) {
         const runtimeTts = createRuntimeVoiceTtsConnector(config, {
           requireElevenLabsVoiceId: true,
+          eligibilityGate,
         });
         if (!runtimeTts) {
           throw new Error(`Expected runtime TTS connector for provider "${wyomingTtsProvider}"`);
@@ -589,7 +609,14 @@ async function main(): Promise<void> {
         });
       }
     } catch (error) {
-      log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+      if (error instanceof EligibilityDeniedError) {
+        log.info('Wyoming TTS adapter disabled by eligibility gate', {
+          provider: wyomingTtsProvider,
+          error: error.message,
+        });
+      } else {
+        log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+      }
     }
 
     const serviceRegistry = createWyomingServiceRegistry(wyomingAdapters);

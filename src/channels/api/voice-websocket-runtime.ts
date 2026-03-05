@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import {
+  EligibilityDeniedError,
+  type EligibilityGate,
+} from '../../capabilities/eligibility.js';
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
@@ -45,6 +49,7 @@ interface ApiVoiceWebSocketRuntimeConfig {
   config: SubstrateConfig;
   channelPrefix?: string;
   serverOptions?: Partial<WebSocketVoiceServerOptions>;
+  eligibilityGate?: EligibilityGate;
 }
 
 interface VoiceActor {
@@ -278,14 +283,30 @@ export function createApiVoiceWebSocketRuntime(
     return undefined;
   }
 
-  const sttBinding = createRuntimeVoiceSttConnector(options.config, {
-    ...providerGateOptions,
-    provider: sttProvider,
-  });
-  const ttsBinding = createRuntimeVoiceTtsConnector(options.config, {
-    ...providerGateOptions,
-    provider: ttsProvider,
-  });
+  let sttBinding;
+  let ttsBinding;
+  try {
+    sttBinding = createRuntimeVoiceSttConnector(options.config, {
+      ...providerGateOptions,
+      provider: sttProvider,
+      eligibilityGate: options.eligibilityGate,
+    });
+    ttsBinding = createRuntimeVoiceTtsConnector(options.config, {
+      ...providerGateOptions,
+      provider: ttsProvider,
+      eligibilityGate: options.eligibilityGate,
+    });
+  } catch (error) {
+    if (!(error instanceof EligibilityDeniedError)) {
+      throw error;
+    }
+    log.warn('API voice websocket runtime disabled by eligibility gate', {
+      sttProvider,
+      ttsProvider,
+      error: error.message,
+    });
+    return undefined;
+  }
   if (!sttBinding || !ttsBinding) {
     throw new Error('API voice websocket runtime resolved enabled providers without connector bindings');
   }

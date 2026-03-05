@@ -116,8 +116,9 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-qyrl.2` (`STT provider registry and pluggable provider contract`) is merged, including runtime/bootstrap gating plus backend settings/admin validation for registered provider ids.
   - `PSFN-qyrl.3` (`TTS provider registry and pluggable provider contract`) is merged, including registry-backed bootstrap gating plus backend settings/admin validation for registered provider ids.
   - `PSFN-qyrl.4` (`runtime/bootstrap registry replacement`) is integrated, including shared channel runtime factory helpers for Discord/Telegram/API entrypoints plus runtime-config-driven STT/TTS bootstrap across Wyoming, API websocket voice, and Discord voice without hard-coded provider switch logic.
+  - `PSFN-qyrl.5` (`EligibilityGate integration for plugin capabilities and fail-closed policy`) is integrated, including explicit eligibility metadata on channel/STT/TTS plugin seams plus fail-closed runtime gating/telemetry for registry activation and connector actions.
 - Next active Phase V focus:
-  - Continue `PSFN-qyrl.5` to gate plugin activation/actions through `EligibilityGate` with fail-closed denial telemetry.
+  - Continue `PSFN-qyrl.6` to add plugin regression coverage and a no-core-edit external plugin fixture path.
   - Carry `PSFN-c0zl` to fix lossless model-route persistence and OpenRouter/upstream provider semantics before `PSFN-y2ac`.
   - Carry `PSFN-nhtv` to remove Garden settings UI hard-coded STT/TTS provider pickers so plugin provider ids round-trip cleanly in the operator surface.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
@@ -158,4 +159,5 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-qyrl.3` targeted regressions: `npm test -- --run src/voice/connectors/tts/index.test.ts src/runtime/bootstrap-helpers.test.ts src/settings.test.ts src/channels/admin/api-routes.test.ts src/channels/api/voice-websocket-runtime.test.ts`
 - `PSFN-qyrl.4` targeted regressions: `npm test -- --run src/runtime/bootstrap-helpers.test.ts src/channels/api/voice-websocket-runtime.test.ts src/channels/discord/voice.test.ts`
 - `PSFN-qyrl.4` supporting bootstrap regressions: `npm test -- --run src/bootstrap/composition.test.ts src/voice/connectors/stt/index.test.ts src/voice/connectors/tts/index.test.ts`
-- `phase-v` build after integrated `PSFN-qyrl.1` / `PSFN-qyrl.2` / `PSFN-qyrl.3` / `PSFN-qyrl.4` / `PSFN-04dt.1` / `PSFN-04dt.5`: `npm run build`
+- `PSFN-qyrl.5` targeted regressions: `npm test -- --run src/capabilities/eligibility.test.ts src/runtime/channel-lifecycle.test.ts src/runtime/bootstrap-helpers.test.ts src/channels/api/voice-websocket-runtime.test.ts src/channels/discord/voice.test.ts src/voice/connectors/stt/index.test.ts src/voice/connectors/tts/index.test.ts src/bootstrap/composition.test.ts`
+- `phase-v` build after integrated `PSFN-qyrl.1` / `PSFN-qyrl.2` / `PSFN-qyrl.3` / `PSFN-qyrl.4` / `PSFN-qyrl.5` / `PSFN-04dt.1` / `PSFN-04dt.5`: `npm run build`

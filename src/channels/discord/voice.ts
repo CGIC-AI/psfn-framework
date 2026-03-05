@@ -15,6 +15,7 @@ import { Readable } from 'node:stream';
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
+import type { EligibilityGate } from '../../capabilities/eligibility.js';
 import {
   type StreamingTtsConnector,
   type StreamingTtsProvider,
@@ -185,6 +186,7 @@ interface DiscordVoiceRuntimeConfig {
   config: SubstrateConfig;
   eventBus: EventBus;
   getHandler: () => MessageHandler | null;
+  eligibilityGate?: EligibilityGate;
 }
 
 interface VoiceConnectionStateChange {
@@ -220,6 +222,7 @@ function hasTtsProviderConfig(provider: StreamingTtsProvider, config: SubstrateC
 function buildConfiguredTtsConnectors(
   config: SubstrateConfig,
   preferredProviderId: StreamingTtsProvider,
+  eligibilityGate?: EligibilityGate,
 ): StreamingTtsConnector[] {
   const providerOrder = resolveRuntimeVoiceTtsProviderOrder(
     config,
@@ -233,6 +236,7 @@ function buildConfiguredTtsConnectors(
       const binding = createRuntimeVoiceTtsConnector(config, {
         provider: providerId,
         requireElevenLabsVoiceId: true,
+        eligibilityGate,
       });
       if (binding) {
         connectors.push(binding.connector);
@@ -253,6 +257,7 @@ export class DiscordVoiceRuntime {
   private readonly config: SubstrateConfig;
   private readonly eventBus: EventBus;
   private readonly getHandler: () => MessageHandler | null;
+  private readonly eligibilityGate?: EligibilityGate;
 
   private readonly enabled: boolean;
   private readonly targetGuildId: string;
@@ -285,11 +290,12 @@ export class DiscordVoiceRuntime {
   /** Per-user stream error counters for isolation and graceful teardown. */
   private streamErrorCounts = new Map<string, number>();
 
-  constructor({ client, config, eventBus, getHandler }: DiscordVoiceRuntimeConfig) {
+  constructor({ client, config, eventBus, getHandler, eligibilityGate }: DiscordVoiceRuntimeConfig) {
     this.client = client;
     this.config = config;
     this.eventBus = eventBus;
     this.getHandler = getHandler;
+    this.eligibilityGate = eligibilityGate;
     this.reliabilityBudgets = resolveVoiceReliabilityBudgets();
     this.securityLimits = resolveVoiceSecurityLimits();
 
@@ -324,7 +330,9 @@ export class DiscordVoiceRuntime {
 
     let sttBinding: ReturnType<typeof createRuntimeVoiceSttConnector> = null;
     try {
-      sttBinding = createRuntimeVoiceSttConnector(config);
+      sttBinding = createRuntimeVoiceSttConnector(config, {
+        eligibilityGate: this.eligibilityGate,
+      });
     } catch (error) {
       log.warn('Discord voice STT connector initialization failed', {
         error: toErrorMessage(error),
@@ -356,7 +364,7 @@ export class DiscordVoiceRuntime {
 
     const ttsConnectors = ttsProviderDisabled
       ? []
-      : buildConfiguredTtsConnectors(config, this.preferredTtsProviderId);
+      : buildConfiguredTtsConnectors(config, this.preferredTtsProviderId, this.eligibilityGate);
     if (ttsConnectors.length === 0) {
       this.enabled = false;
       this.ttsConnectors = [];

@@ -716,6 +716,7 @@ async function main(): Promise<void> {
       agentLoop,
       eventBus,
       config,
+      eligibilityGate,
     });
     const voiceWebSocketPath = voiceWebSocketRuntime
       ? undefined
@@ -884,6 +885,7 @@ async function main(): Promise<void> {
       apiChannelManifest,
       () => undefined,
       log,
+      eligibilityGate,
     );
     apiServer = requireChannelAdapter<ApiServer>(apiChannelRegistry, 'api');
     await apiServer.start();

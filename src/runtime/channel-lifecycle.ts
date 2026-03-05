@@ -2,6 +2,14 @@ import type {
   ChannelAdapter,
   ChannelAdapterFactoryEntry,
 } from '../channels/types.js';
+import {
+  EligibilityDeniedError,
+  type EligibilityGate,
+} from '../capabilities/eligibility.js';
+import {
+  requirePluginActivationEligibility,
+  wrapChannelAdapterWithEligibility,
+} from './plugin-eligibility.js';
 
 export interface RuntimeChannelLifecycleLogger {
   error(message: string, meta?: Record<string, unknown>): void;
@@ -40,6 +48,7 @@ export async function loadChannelAdaptersFromManifest(
   entries: readonly ChannelAdapterFactoryEntry[],
   syncChannelRegistry: SyncChannelRegistry,
   log: RuntimeChannelLifecycleLogger,
+  eligibilityGate?: EligibilityGate,
 ): Promise<void> {
   for (const entry of entries) {
     const { manifest } = entry;
@@ -55,7 +64,17 @@ export async function loadChannelAdaptersFromManifest(
     }
 
     try {
-      const adapter = await entry.create();
+      requirePluginActivationEligibility(
+        eligibilityGate,
+        'channel',
+        manifest.id,
+        manifest.eligibility,
+      );
+      const adapter = wrapChannelAdapterWithEligibility(
+        await entry.create(),
+        eligibilityGate,
+        manifest.eligibility,
+      );
       if (adapter.id !== manifest.id) {
         throw new Error(
           `Manifest id "${manifest.id}" does not match adapter id "${adapter.id}"`,
@@ -63,6 +82,22 @@ export async function loadChannelAdaptersFromManifest(
       }
       registerChannelAdapter(channelRegistry, adapter, syncChannelRegistry);
     } catch (error) {
+      if (error instanceof EligibilityDeniedError) {
+        if (manifest.required) {
+          throw new Error(
+            `Required channel adapter "${manifest.id}" denied by eligibility gate: ${error.message}`,
+          );
+        }
+        log.warn('Skipping channel adapter denied by eligibility gate', {
+          adapterId: manifest.id,
+          reasonCode: error.decision.reasonCode,
+          tier: error.decision.tier,
+          requiredTokens: error.decision.requiredTokens,
+          missingTokens: error.decision.missingTokens,
+          minimumTier: error.decision.minimumTier,
+        });
+        continue;
+      }
       if (manifest.required) {
         throw new Error(
           `Required channel adapter "${manifest.id}" failed to initialize: ${String(error)}`,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import { createEligibilityGate } from '../../capabilities/eligibility.js';
 import type { EventBus } from '../../event-bus.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
@@ -221,6 +222,7 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
       createConnector: vi.fn(() => createStubSttConnector()),
       metadata: {
         isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: {},
       },
       resolveRuntimeConfig: (config) => ({
         endpoint: String(config.pluginSttEndpoint),
@@ -230,6 +232,7 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
       createConnector: vi.fn(() => createStubTtsConnector()),
       metadata: {
         isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: {},
       },
       resolveRuntimeConfig: (config) => ({
         endpoint: String(config.pluginTtsEndpoint),
@@ -260,5 +263,25 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
       restoreTts();
       restoreStt();
     }
+  });
+
+  it('fails closed when eligibility denies runtime voice provider activation', () => {
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => 'nursery',
+      getGrantedTokens: () => new Set(),
+      has: () => false,
+    }));
+
+    const runtime = createApiVoiceWebSocketRuntime({
+      ...createTestOptions({
+        sttProvider: 'deepgram',
+        ttsProvider: 'elevenlabs',
+      }),
+      eligibilityGate,
+    });
+
+    expect(runtime).toBeUndefined();
+    expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
+    expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import type { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
+import type { EligibilityGate } from '../capabilities/eligibility.js';
 import { ApiServer, type ApiServerConfig } from '../channels/api/server.js';
 import { DiscordAdapter } from '../channels/discord/adapter.js';
 import type { TelegramChannelConfig } from '../channels/config.js';
@@ -19,6 +20,7 @@ export interface DiscordChannelAdapterFactoryOptions {
   agentLoop?: SubstrateAgent | null;
   onMessage?: MessageHandler | null;
   onVoiceMessage?: MessageHandler | null;
+  eligibilityGate?: EligibilityGate;
 }
 
 export function createDiscordChannelAdapterFactoryEntry(
@@ -30,10 +32,12 @@ export function createDiscordChannelAdapterFactoryEntry(
       label: 'Discord',
       enabled: true,
       required: true,
+      eligibility: {},
     },
     create: async (): Promise<ChannelAdapter> => {
       const adapter = new DiscordAdapter(options.config, options.eventBus, {
         ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
+        ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
       });
       if (options.agentLoop) {
         adapter.setAgent(options.agentLoop);
@@ -64,6 +68,7 @@ export function createTelegramChannelAdapterFactoryEntry(
       label: 'Telegram',
       enabled: options.config.enabled,
       required: false,
+      eligibility: {},
     },
     create: async (): Promise<ChannelAdapter> => {
       const adapter = new TelegramAdapter(options.config, options.eventBus);
@@ -85,6 +90,7 @@ export function createApiServerChannelAdapterFactoryEntry(
       label: 'OpenAI-Compatible API',
       enabled: true,
       required: true,
+      eligibility: {},
     },
     create: async (): Promise<ChannelAdapter> => {
       const adapter = new ApiServer(config);

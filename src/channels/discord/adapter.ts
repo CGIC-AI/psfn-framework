@@ -27,6 +27,7 @@ import type {
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../event-bus.js';
 import type { SessionStore } from '../../session/store.js';
+import type { EligibilityGate } from '../../capabilities/eligibility.js';
 import { createComponentLogger } from '../../logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
 import {
@@ -76,6 +77,7 @@ type StatusKind = 'compaction' | 'retry' | 'long-running';
 
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
+  eligibilityGate?: EligibilityGate;
 }
 
 interface LongRunningToolState {
@@ -192,6 +194,7 @@ export class DiscordAdapter implements ChannelAdapter {
       config,
       eventBus,
       getHandler: () => this.voiceHandler ?? this.handler,
+      eligibilityGate: options.eligibilityGate,
     });
   }
 

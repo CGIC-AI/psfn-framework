@@ -3,9 +3,10 @@ import { ElevenLabsStreamingTtsConnector } from './elevenlabs-stream.js';
 import { EchoStreamingTtsConnector } from './echo-stream.js';
 import {
   createStreamingTtsConnector,
+  getStreamingTtsProviderEligibility,
+  getStreamingTtsProviderMetadata,
   registerStreamingTtsConnectorFactory,
   registerStreamingTtsProvider,
-  getStreamingTtsProviderMetadata,
   resolveDefaultStreamingTtsProvider,
   resolveStreamingTtsRuntimeConfig,
   type EchoStreamingTtsConfig,
@@ -111,6 +112,7 @@ describe('createStreamingTtsConnector', () => {
       metadata: {
         canAutoEnable: true,
         isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: {},
       },
     });
 
@@ -118,6 +120,9 @@ describe('createStreamingTtsConnector', () => {
       expect(getStreamingTtsProviderMetadata('elevenlabs')?.isConfigured({
         elevenLabsApiKey: 'elevenlabs-key',
       })).toBe(true);
+      expect(getStreamingTtsProviderEligibility('elevenlabs')).toEqual({
+        requiredTokens: ['external.web'],
+      });
       expect(resolveDefaultStreamingTtsProvider({ pluginTtsToken: 'plugin-key', elevenLabsApiKey: '' })).toBe('plugin-test');
     } finally {
       restoreProvider();

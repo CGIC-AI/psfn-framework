@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import type { CapabilityToken } from '../capabilities/tokens.js';
+import {
+  createEligibilityGate,
+  EligibilityDeniedError,
+} from '../capabilities/eligibility.js';
 import { loadSettings } from '../settings.js';
 import {
   createRuntimeVoiceSttConnector,
@@ -14,6 +19,20 @@ import {
 } from './bootstrap-helpers.js';
 import { registerStreamingSttProvider } from '../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../voice/connectors/tts/index.js';
+
+function createMutableEligibilityGate(initialTokens: CapabilityToken[]) {
+  let grantedTokens = new Set(initialTokens);
+  return {
+    gate: createEligibilityGate(() => ({
+      getTier: () => 'custom',
+      getGrantedTokens: () => grantedTokens,
+      has: (token) => grantedTokens.has(token),
+    })),
+    setTokens: (nextTokens: CapabilityToken[]) => {
+      grantedTokens = new Set(nextTokens);
+    },
+  };
+}
 
 describe('resolveRuntimeVoiceSttProvider', () => {
   it('uses explicit provider when configured', () => {
@@ -277,6 +296,7 @@ describe('createRuntimeVoiceSttConnector', () => {
       createConnector,
       metadata: {
         isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: {},
       },
       resolveRuntimeConfig: (config) => ({
         endpoint: String(config.pluginSttEndpoint),
@@ -313,6 +333,7 @@ describe('createRuntimeVoiceSttConnector', () => {
       })),
       metadata: {
         isConfigured: () => false,
+        eligibility: {},
       },
       resolveRuntimeConfig: () => {
         throw new Error('plugin STT runtime config missing');
@@ -323,6 +344,190 @@ describe('createRuntimeVoiceSttConnector', () => {
       expect(() => createRuntimeVoiceSttConnector({
         sttProvider: 'plugin-test',
       } as any)).toThrow('plugin STT runtime config missing');
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('fails closed when a STT provider omits eligibility metadata', () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        startStream: async () => ({
+          transcripts: (async function* emptyTranscripts() {})(),
+          writeAudio: async () => {},
+          endInput: async () => {},
+          cancel: async () => {},
+        }),
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginSttEndpoint),
+      }),
+    });
+
+    try {
+      expect(() => createRuntimeVoiceSttConnector({
+        sttProvider: 'plugin-test',
+        pluginSttToken: 'plugin-key',
+        pluginSttEndpoint: 'wss://plugin-stt.invalid',
+      } as any)).toThrow('stt plugin "plugin-test" is missing eligibility requirements');
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('re-checks STT eligibility on stream start', async () => {
+    let allowExternalWeb = true;
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => (allowExternalWeb ? 'apprentice' : 'nursery'),
+      getGrantedTokens: () => allowExternalWeb ? new Set(['external.web']) : new Set(),
+      has: (token) => allowExternalWeb && token === 'external.web',
+    }));
+    const startStream = vi.fn(async () => ({
+      transcripts: (async function* emptyTranscripts() {})(),
+      writeAudio: async () => {},
+      endInput: async () => {},
+      cancel: async () => {},
+    }));
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        startStream,
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginSttEndpoint),
+      }),
+    });
+
+    try {
+      const binding = createRuntimeVoiceSttConnector({
+        sttProvider: 'plugin-test',
+        pluginSttToken: 'plugin-key',
+        pluginSttEndpoint: 'wss://plugin-stt.invalid',
+      } as any, { eligibilityGate });
+
+      allowExternalWeb = false;
+      await expect(binding!.connector.startStream({
+        sampleRateHz: 16_000,
+        channels: 1,
+        encoding: 'pcm_s16le',
+      })).rejects.toThrow('Eligibility denied');
+      expect(startStream).not.toHaveBeenCalled();
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('returns null for auto-enabled providers denied by the eligibility gate', () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        startStream: async () => ({
+          transcripts: (async function* emptyTranscripts() {})(),
+          writeAudio: async () => {},
+          endInput: async () => {},
+          cancel: async () => {},
+        }),
+      })),
+      metadata: {
+        canAutoEnable: true,
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginSttEndpoint) }),
+    });
+
+    try {
+      const { gate } = createMutableEligibilityGate([]);
+      expect(createRuntimeVoiceSttConnector({
+        pluginSttToken: 'plugin-key',
+        pluginSttEndpoint: 'wss://plugin-stt.invalid',
+      } as any, {
+        eligibilityGate: gate,
+      })).toBeNull();
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('fails closed for explicitly selected providers denied by the eligibility gate', () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        startStream: async () => ({
+          transcripts: (async function* emptyTranscripts() {})(),
+          writeAudio: async () => {},
+          endInput: async () => {},
+          cancel: async () => {},
+        }),
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginSttEndpoint) }),
+    });
+
+    try {
+      const { gate } = createMutableEligibilityGate([]);
+      expect(() => createRuntimeVoiceSttConnector({
+        sttProvider: 'plugin-test',
+        pluginSttToken: 'plugin-key',
+        pluginSttEndpoint: 'wss://plugin-stt.invalid',
+      } as any, {
+        eligibilityGate: gate,
+      })).toThrow('Eligibility denied');
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('gates STT connector actions through the eligibility gate after activation', async () => {
+    const startStream = vi.fn(async () => ({
+      transcripts: (async function* emptyTranscripts() {})(),
+      writeAudio: async () => {},
+      endInput: async () => {},
+      cancel: async () => {},
+    }));
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        startStream,
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginSttEndpoint) }),
+    });
+
+    try {
+      const { gate, setTokens } = createMutableEligibilityGate(['external.web']);
+      const binding = createRuntimeVoiceSttConnector({
+        sttProvider: 'plugin-test',
+        pluginSttToken: 'plugin-key',
+        pluginSttEndpoint: 'wss://plugin-stt.invalid',
+      } as any, {
+        eligibilityGate: gate,
+      });
+      expect(binding).not.toBeNull();
+
+      setTokens([]);
+      await expect(
+        binding!.connector.startStream({
+          sampleRateHz: 16_000,
+          channels: 1,
+          encoding: 'pcm_s16le',
+        }),
+      ).rejects.toBeInstanceOf(EligibilityDeniedError);
+      expect(startStream).not.toHaveBeenCalled();
     } finally {
       restoreProvider();
     }
@@ -353,6 +558,7 @@ describe('createRuntimeVoiceTtsConnector', () => {
       createConnector,
       metadata: {
         isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: {},
       },
       resolveRuntimeConfig: (config) => ({
         endpoint: String(config.pluginTtsEndpoint),
@@ -388,6 +594,7 @@ describe('createRuntimeVoiceTtsConnector', () => {
       })),
       metadata: {
         isConfigured: () => false,
+        eligibility: {},
       },
       resolveRuntimeConfig: () => {
         throw new Error('plugin TTS runtime config missing');
@@ -398,6 +605,177 @@ describe('createRuntimeVoiceTtsConnector', () => {
       expect(() => createRuntimeVoiceTtsConnector({
         ttsProvider: 'plugin-test',
       } as any)).toThrow('plugin TTS runtime config missing');
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('fails closed when a TTS provider omits eligibility metadata', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer: async () => Buffer.alloc(0),
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginTtsEndpoint),
+      }),
+    });
+
+    try {
+      expect(() => createRuntimeVoiceTtsConnector({
+        ttsProvider: 'plugin-test',
+        pluginTtsToken: 'plugin-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+      } as any)).toThrow('tts plugin "plugin-test" is missing eligibility requirements');
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('re-checks TTS eligibility on synthesizeBuffer', async () => {
+    let allowExternalWeb = true;
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => (allowExternalWeb ? 'apprentice' : 'nursery'),
+      getGrantedTokens: () => allowExternalWeb ? new Set(['external.web']) : new Set(),
+      has: (token) => allowExternalWeb && token === 'external.web',
+    }));
+    const synthesizeBuffer = vi.fn(async () => Buffer.alloc(0));
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer,
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      resolveRuntimeConfig: (config) => ({
+        endpoint: String(config.pluginTtsEndpoint),
+      }),
+    });
+
+    try {
+      const binding = createRuntimeVoiceTtsConnector({
+        ttsProvider: 'plugin-test',
+        pluginTtsToken: 'plugin-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+      } as any, { eligibilityGate });
+
+      allowExternalWeb = false;
+      await expect(binding!.connector.synthesizeBuffer({ text: 'hello' })).rejects.toThrow('Eligibility denied');
+      expect(synthesizeBuffer).not.toHaveBeenCalled();
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('returns null for auto-enabled providers denied by the eligibility gate', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer: async () => Buffer.alloc(0),
+      })),
+      metadata: {
+        canAutoEnable: true,
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginTtsEndpoint) }),
+    });
+
+    try {
+      const { gate } = createMutableEligibilityGate([]);
+      expect(createRuntimeVoiceTtsConnector({
+        pluginTtsToken: 'plugin-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+      } as any, {
+        eligibilityGate: gate,
+      })).toBeNull();
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('fails closed for explicitly selected providers denied by the eligibility gate', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer: async () => Buffer.alloc(0),
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginTtsEndpoint) }),
+    });
+
+    try {
+      const { gate } = createMutableEligibilityGate([]);
+      expect(() => createRuntimeVoiceTtsConnector({
+        ttsProvider: 'plugin-test',
+        pluginTtsToken: 'plugin-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+      } as any, {
+        eligibilityGate: gate,
+      })).toThrow('Eligibility denied');
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('gates TTS connector actions through the eligibility gate after activation', async () => {
+    const synthesizeBuffer = vi.fn(async () => Buffer.from('ok'));
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer,
+      })),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginTtsEndpoint) }),
+    });
+
+    try {
+      const { gate, setTokens } = createMutableEligibilityGate(['external.web']);
+      const binding = createRuntimeVoiceTtsConnector({
+        ttsProvider: 'plugin-test',
+        pluginTtsToken: 'plugin-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+      } as any, {
+        eligibilityGate: gate,
+      });
+      expect(binding).not.toBeNull();
+
+      setTokens([]);
+      await expect(
+        binding!.connector.synthesizeBuffer({ text: 'hello' }),
+      ).rejects.toBeInstanceOf(EligibilityDeniedError);
+      expect(synthesizeBuffer).not.toHaveBeenCalled();
     } finally {
       restoreProvider();
     }

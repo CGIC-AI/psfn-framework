@@ -379,7 +379,7 @@ describe('ApiServer', () => {
       const body = JSON.parse(res.body);
       expect(body.object).toBe('list');
       expect(body.data).toHaveLength(1);
-      expect(body.data[0].id).toBe('purrsephone');
+      expect(body.data[0].id).toBe('companion');
       expect(body.data[0].object).toBe('model');
       expect(body.data[0].owned_by).toBe('psfn');
     });
@@ -475,7 +475,7 @@ describe('ApiServer', () => {
       const body = JSON.parse(res.body);
       expect(body.object).toBe('chat.completion');
       expect(body.id).toMatch(/^chatcmpl-/);
-      expect(body.model).toBe('purrsephone');
+      expect(body.model).toBe('companion');
       expect(body.choices).toHaveLength(1);
       expect(body.choices[0].message.role).toBe('assistant');
       expect(body.choices[0].message.content).toBe('Hello world');

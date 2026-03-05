@@ -56,7 +56,7 @@ export function mirrorMessageToActiveSessions(params: {
   trustLevel: TrustLevel;
   timestamp: number;
   mirrorEnabled: boolean;
-  /** Character name from identity card (e.g. 'Purrsephone'). Used for display labels. */
+  /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
 }): void {
   if (!params.mirrorEnabled) return;
@@ -100,7 +100,7 @@ export function mirrorMessageToActiveSessions(params: {
       type: 'mirror',
       sourceChannelId: params.sourceChannelId,
       sourceRole: params.sourceRole,
-      sourceAuthorName: params.sourceRole === 'user' ? sourceSpeaker : undefined,
+      sourceAuthorName: sourceSpeaker,
       sourceVisibility: params.sourceVisibility,
       trustLevel: params.trustLevel,
       mirroredAt: params.timestamp,

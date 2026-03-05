@@ -86,7 +86,11 @@ export class AdminPromptsHandlers {
     const legacy = this.legacy as any;
     const layers = legacy.promptStore?.getAll() ?? [];
     const prompts = legacy.promptRegistry?.list() ?? [];
-    return tpl.layout('Prompt Soil', tpl.promptsPage(layers, prompts), 'prompts');
+    return tpl.layout(
+      'Prompt Soil',
+      tpl.promptsPage(layers, prompts, legacy.resolveCompanionName()),
+      'prompts',
+    );
   }
 
   promptDetail(layerId: string): string | null {
@@ -177,7 +181,7 @@ export class AdminPromptsHandlers {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `Purrsephone edited ${updatedLayer.type} prompt layer "${updatedLayer.name}".`,
+        `${legacy.resolveCompanionName()} edited ${updatedLayer.type} prompt layer "${updatedLayer.name}".`,
         [`layerId=${updatedLayer.id}`, `version=${updatedLayer.version}`],
       );
       this.injectPromptEditSystemNote(
@@ -213,7 +217,7 @@ export class AdminPromptsHandlers {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `Purrsephone edited static prompt "${prompt.key}".`,
+        `${legacy.resolveCompanionName()} edited static prompt "${prompt.key}".`,
         [`version=${prompt.version}`],
       );
       return tpl.settingsFormResult(true, `Updated "${prompt.key}" to v${prompt.version}`);
@@ -265,7 +269,7 @@ export class AdminPromptsHandlers {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `Purrsephone toggled prompt layer "${updatedLayer?.name ?? layerId}".`,
+        `${legacy.resolveCompanionName()} toggled prompt layer "${updatedLayer?.name ?? layerId}".`,
         [updatedLayer ? `enabled=${updatedLayer.enabled}` : null],
       );
       if (updatedLayer) {
@@ -323,7 +327,7 @@ export class AdminPromptsHandlers {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `Purrsephone rolled prompt layer "${updatedLayer.name}" back to v${version}.`,
+        `${legacy.resolveCompanionName()} rolled prompt layer "${updatedLayer.name}" back to v${version}.`,
         [`layerId=${updatedLayer.id}`, `version=${updatedLayer.version}`],
       );
       this.injectPromptEditSystemNote(
@@ -359,7 +363,7 @@ export class AdminPromptsHandlers {
       legacy.appendAuditTimelineEntry(
         'identity_edit',
         'allowed',
-        `Purrsephone rolled static prompt "${prompt.key}" back to v${version}.`,
+        `${legacy.resolveCompanionName()} rolled static prompt "${prompt.key}" back to v${version}.`,
         [`version=${prompt.version}`],
       );
       return tpl.settingsFormResult(true, `Rolled back "${prompt.key}" to content from v${version}`);

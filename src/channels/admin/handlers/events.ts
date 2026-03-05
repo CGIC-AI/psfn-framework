@@ -16,7 +16,11 @@ export class AdminEventsHandlers {
     const legacy = this.legacy as any;
     const filters = legacy.auditTimeline.parseFilters(searchParams);
     const entries = legacy.auditTimeline.list(filters);
-    return tpl.layout('Audit Timeline', tpl.auditTimelinePage({ entries, filters }), 'events');
+    return tpl.layout(
+      'Audit Timeline',
+      tpl.auditTimelinePage({ entries, filters }, legacy.resolveCompanionName()),
+      'events',
+    );
   }
 
   setupSSE(res: ServerResponse): () => void {

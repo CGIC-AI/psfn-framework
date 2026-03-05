@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EmbeddingService } from '../../../agent/contracts.js';
 import type { ContactStore } from '../../../contacts/store.js';
+import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
 import { VALID_MEMORY_TYPES, type MemoryType, type PurrMemory } from '../../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../trust/types.js';
@@ -85,6 +86,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     memoryStore: MemoryStore;
     contactStore?: ContactStore | null;
     embeddingService?: EmbeddingService | null;
+    resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
       actionType: 'memory_mutation',
       decision: 'allowed' | 'denied',
@@ -92,6 +94,10 @@ export class AdminMemoryDataService implements AdminMemoryService {
       details?: Array<string | null | undefined>,
     ) => void;
   }) {}
+
+  private resolveCompanionName(): string {
+    return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
+  }
 
   private buildContactSummaryMap(): Map<string, { id: string; displayName: string }> {
     const contactStore = this.deps.contactStore;
@@ -194,7 +200,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',
-      `Purrsephone superseded memory "${memory.id}".`,
+      `${this.resolveCompanionName()} superseded memory "${memory.id}".`,
       [`source=${memory.sourceRef}`],
     );
     return { ok: true };

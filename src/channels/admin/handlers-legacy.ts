@@ -10,6 +10,7 @@ import type { ShardManager } from '../../shards/manager.js';
 import type { EventBus } from '../../event-bus.js';
 import type { EmbeddingService } from '../../agent/contracts.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
+import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
 import type { SubstrateConfig } from '../../types.js';
 import type {
   ThinkTraceView,
@@ -162,7 +163,12 @@ export class LegacyAdminHandlers {
       appendAuditTimelineEntry: (actionType, decision, narrative, details = [], actor) => {
         this.appendAuditTimelineEntry(actionType, decision, narrative, details, actor);
       },
+      resolveCompanionName: () => this.resolveCompanionName(),
     });
+  }
+
+  resolveCompanionName(): string {
+    return resolveCompanionNameFromConfig(this.config);
   }
 
   appendAuditTimelineEntry(

@@ -320,7 +320,7 @@ describe('GitOps', () => {
       const commitCall = mockedExecSync.mock.calls[1][0] as string;
       expect(commitCall).toContain('[Intent] add feature');
       expect(commitCall).toContain('[Scope] module');
-      expect(commitCall).toContain('[Agent] Purrsephone');
+      expect(commitCall).toContain('[Agent] Companion');
     });
 
     it('blocks on protected branch', () => {

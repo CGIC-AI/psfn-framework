@@ -1,4 +1,4 @@
-export type SkillSource = 'purrsephone' | 'bundled' | 'extra' | 'custom';
+export type SkillSource = 'companion' | 'bundled' | 'extra' | 'custom';
 
 export interface SkillRequirementSpec {
   binaries: string[];

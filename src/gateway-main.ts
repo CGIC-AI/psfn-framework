@@ -28,6 +28,7 @@ import {
   resolveModuleRegistryPathFromWorkspace,
 } from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
+import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
 import type { SubstrateMessage } from './types.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
@@ -53,6 +54,10 @@ import {
   resolveConfiguredCompanionDataDir,
   resolveConfiguredSystemDataDir,
 } from './persistence/layout.js';
+import {
+  assertPersistenceCutoverReady,
+  buildPersistenceCutoverOptionsFromConfig,
+} from './persistence/cutover.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -316,6 +321,7 @@ async function main(): Promise<void> {
   }
   const systemDataDir = resolveConfiguredSystemDataDir(config);
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config));
   const savedSettings = loadSettings(systemDataDir);
   applySettings(config, savedSettings);
   const modelsConfig = loadModelsConfig(systemDataDir, {
@@ -649,9 +655,9 @@ async function main(): Promise<void> {
 
     wyomingRuntime = new WyomingRuntime({
       info: {
-        name: 'purrsephone',
+        name: DEFAULT_COMPANION_ID,
         version: '1.0.0',
-        description: 'Purrsephone Substrate Framework — Wyoming voice bridge',
+        description: 'Companion Substrate Framework — Wyoming voice bridge',
         services: serviceRegistry.services,
       } as WyomingInfoData,
       emitFrame: (session, frame) => wyomingTcpServer!.send(session, frame),

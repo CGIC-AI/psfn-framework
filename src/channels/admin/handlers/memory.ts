@@ -93,7 +93,7 @@ export class AdminMemoryHandlers {
     legacy.appendAuditTimelineEntry(
       'memory_mutation',
       'allowed',
-      `Purrsephone superseded memory "${memory.id}".`,
+      `${legacy.resolveCompanionName()} superseded memory "${memory.id}".`,
       [`source=${memory.sourceRef}`],
     );
     return '';

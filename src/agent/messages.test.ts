@@ -15,6 +15,7 @@ import {
   type ContinuityMessage,
   type MirrorMessage,
 } from './messages.js';
+import { DEFAULT_COMPANION_NAME } from '../identity/companion-naming.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 
 const NOW = Date.now();
@@ -156,6 +157,12 @@ describe('convertToLlm', () => {
     expect(text.endsWith('...')).toBe(true);
   });
 
+  it('uses the neutral companion label for assistant mirrors without a source author name', () => {
+    const result = convertToLlm([makeMirror('hello from another channel')]);
+    expect(result).toHaveLength(1);
+    expect((result[0] as UserMessage).content).toContain(`${DEFAULT_COMPANION_NAME}: hello from another channel`);
+  });
+
   it('handles empty message array', () => {
     expect(convertToLlm([])).toEqual([]);
   });
@@ -200,7 +207,7 @@ describe('sessionEntryToMessage', () => {
       id: 4,
       channelId: 'api:target',
       role: 'system',
-      content: 'Purrsephone [from api:origin]: hi',
+      content: `${DEFAULT_COMPANION_NAME} [from api:origin]: hi`,
       timestamp: NOW,
       metadata: JSON.stringify({
         type: 'mirror',

@@ -1,7 +1,7 @@
 // ── Heartbeat Policy ──
 // Policy-driven multi-template reflection system.
 // Stores reflection templates (prompts, intervals, flags) in a JSON file.
-// Purrsephone can read, edit, and extend her own reflection schedule.
+// The companion can read, edit, and extend its own reflection schedule.
 
 import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../logger.js';

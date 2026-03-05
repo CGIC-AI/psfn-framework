@@ -69,6 +69,7 @@ import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
 import { MemoryWriter } from './memory/writer.js';
+import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
 import {
   createMemoryWriteTool,
   createMemoryImportTool,
@@ -116,6 +117,7 @@ import {
   EligibilityDeniedError,
   type EligibilityDecision,
 } from './capabilities/eligibility.js';
+import { REPO_ALLOWED_PATHS } from './security/policy-constants.js';
 import {
   createSafeguardAuditTrail,
   createIdentityCoolingOffManagerFromEnv,
@@ -133,6 +135,10 @@ import {
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
+import {
+  assertPersistenceCutoverReady,
+  buildPersistenceCutoverOptionsFromConfig,
+} from './persistence/cutover.js';
 import {
   buildRuntimeChannelsConfigOverrides,
   createRuntimeVoiceSttConnector,
@@ -378,6 +384,7 @@ export class SubstrateRuntime implements Lifecycle {
     }
     const systemDataDir = resolveConfiguredSystemDataDir(this.config);
     const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
+    assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(this.config));
     const lifecycleRuntimeContract = resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SINGLE,
       runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
@@ -689,7 +696,7 @@ export class SubstrateRuntime implements Lifecycle {
 
     this.salienceDecay = new SalienceDecay(this.memoryStore);
 
-    // Scheduler — Purrsephone's internal clock
+    // Scheduler — the companion's internal clock
     this.scheduler = new Scheduler(this.eventBus, {
       tickIntervalMs: schedulerConfig.tickIntervalMs,
       heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,
@@ -731,7 +738,7 @@ export class SubstrateRuntime implements Lifecycle {
 
     log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via ${embeddingProvider.kind})`);
 
-    // Shard manager — allows Purrsephone to spawn parallel sub-agents
+    // Shard manager — allows the companion to spawn parallel sub-agents
     this.moduleLoader = new ModuleLoader({
       eventBus: this.eventBus,
       registerTool: (tool, category) => this.agentLoop.registerTool(tool, category),
@@ -771,7 +778,7 @@ export class SubstrateRuntime implements Lifecycle {
     // Git tools — self-modification via git
     wireGitRuntime(this.agentLoop, {
       repoRoot: process.cwd(),
-      allowedPaths: ['src/', 'docs/', 'purrsephone/'],
+      allowedPaths: [...REPO_ALLOWED_PATHS],
     });
     log.info('Git self-modification tools enabled');
 
@@ -1111,7 +1118,7 @@ export class SubstrateRuntime implements Lifecycle {
       ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY)
       : null;
 
-    // Admin GUI — Purrsephone's Garden
+    // Admin GUI — Garden management surfaces
     const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
     if (adminPort) {
       this.adminServer = new AdminServer({
@@ -1210,9 +1217,9 @@ export class SubstrateRuntime implements Lifecycle {
 
       this.wyomingRuntime = new WyomingRuntime({
         info: {
-          name: 'purrsephone',
+          name: DEFAULT_COMPANION_ID,
           version: '1.0.0',
-          description: 'Purrsephone Substrate Framework — Wyoming voice bridge',
+          description: 'Companion Substrate Framework — Wyoming voice bridge',
           services: serviceRegistry.services,
         } as WyomingInfoData,
         emitFrame: (session, frame) => this.wyomingTcpServer!.send(session, frame),

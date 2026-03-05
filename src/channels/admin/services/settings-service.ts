@@ -153,7 +153,6 @@ export function applyAdminSettingsMutation(options: {
   saveSettings(config.dataDir, mergedRuntimeSettings);
   applySettings(config, mergedRuntimeSettings);
 
-  let modelsRefreshed = false;
   if (hasModelSettings(domainSplit.models)) {
     try {
       const currentModels = loadModelsConfig(config.dataDir, {
@@ -209,17 +208,12 @@ export function applyAdminSettingsMutation(options: {
           message: `Settings saved but models config update failed: ${modelMutation.message}`,
         };
       }
-      modelsRefreshed = true;
     } catch (error) {
       return {
         ok: false,
         message: `Settings saved but models config update failed: ${toErrorMessage(error)}`,
       };
     }
-  }
-
-  if (!modelsRefreshed) {
-    refreshModels(config);
   }
 
   if (domainSplit.maintenanceIntervalMs !== undefined) {

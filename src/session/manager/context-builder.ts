@@ -36,7 +36,7 @@ interface BuildSessionContextParams {
   promptRegistry: PromptRegistryStore | null;
   preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   continuityStore: UserContinuityStore | null;
-  /** Character name from identity card (e.g. 'Purrsephone'). Used for display labels. */
+  /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
 }
 

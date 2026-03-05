@@ -141,6 +141,10 @@ import {
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
+import {
+  assertPersistenceCutoverReady,
+  buildPersistenceCutoverOptionsFromConfig,
+} from './persistence/cutover.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -273,6 +277,7 @@ async function main(): Promise<void> {
   }
   const systemDataDir = resolveConfiguredSystemDataDir(config);
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config));
   const savedSettings = loadSettings(systemDataDir);
   const settingsDomains = splitSettingsByDomain(savedSettings);
   applySettings(config, settingsDomains.runtime);
@@ -602,7 +607,7 @@ async function main(): Promise<void> {
 
   const salienceDecay = new SalienceDecay(memoryStore);
 
-  // Scheduler — Purrsephone's internal clock
+  // Scheduler — the companion's internal clock
   const scheduler = new Scheduler(eventBus, {
     tickIntervalMs: schedulerConfig.tickIntervalMs,
     heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,

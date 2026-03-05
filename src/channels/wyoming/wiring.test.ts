@@ -50,7 +50,7 @@ describe('Wyoming production wiring', () => {
 
     const runtime = new WyomingRuntime({
       info: {
-        name: 'purrsephone',
+        name: 'companion',
         version: '1.0.0',
         description: 'test',
         services: [],

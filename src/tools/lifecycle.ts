@@ -1,5 +1,5 @@
 // ── Lifecycle tools ──
-// self_restart and self_rebuild tools for Purrsephone to trigger her own restarts.
+// self_restart and self_rebuild tools for the companion to trigger its own restarts.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';

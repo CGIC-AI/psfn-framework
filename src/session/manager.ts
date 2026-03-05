@@ -115,7 +115,7 @@ export class SessionManager {
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private activeContextSessionId: string | null = null;
   continuityStore: UserContinuityStore | null = null;
-  /** Character name from identity card (e.g. 'Purrsephone'). Used for display labels in context. */
+  /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
 
   constructor(

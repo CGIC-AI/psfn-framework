@@ -1,5 +1,5 @@
 // ── Prompt Layer Agent Tools ──
-// Tools that let Purrsephone inspect and modify her own prompt stack.
+// Tools that let the companion inspect and modify its own prompt stack.
 // Policy: read access is always available; writes are tier-gated by capabilities.
 
 import { Type } from '@sinclair/typebox';

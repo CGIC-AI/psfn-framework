@@ -3,6 +3,7 @@ import type { PromptLayer, PromptHistoryEntry } from '../../../identity/prompt-t
 import { LAYER_TYPE_ORDER, PROMPT_LAYER_ROLES } from '../../../identity/prompt-types.js';
 import type { PromptRegistryEntry, PromptRegistryHistoryEntry } from '../../../identity/prompt-registry.js';
 import { PROMPT_RUNTIME_MACRO_HINTS, PROMPT_RUNTIME_TOKEN_HINT } from '../../../identity/prompt-runtime.js';
+import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import {
   STRUCTURED_PROMPT_FORMAT,
   STRUCTURED_PROMPT_SECTION_KEYS,
@@ -91,9 +92,13 @@ function promptMetadataFields(layer: PromptLayer): string {
     </div>`;
 }
 
-export function promptsPage(layers: PromptLayer[], prompts: PromptRegistryEntry[]): string {
+export function promptsPage(
+  layers: PromptLayer[],
+  prompts: PromptRegistryEntry[],
+  companionName = DEFAULT_COMPANION_NAME,
+): string {
   return `
-    <p class="description" style="color:var(--text-muted);margin-bottom:1rem">The layered foundation that shapes Purrsephone's voice. Base &rarr; Operator &rarr; Runtime &rarr; Channel &rarr; Task.</p>
+    <p class="description" style="color:var(--text-muted);margin-bottom:1rem">The layered foundation that shapes ${escapeHtml(companionName)}'s voice. Base &rarr; Operator &rarr; Runtime &rarr; Channel &rarr; Task.</p>
 
     ${promptMacroCatalogFragment()}
 

@@ -1,11 +1,21 @@
 // ── Security / Policy Constants ──
 // Canonical values reused across runtime, gateway, git, and REPL policy surfaces.
 
-export const REPO_ALLOWED_PATHS = ['src/', 'docs/', 'purrsephone/'] as const;
+import {
+  DEFAULT_COMPANION_SKILLS_DIRECTORY,
+  LEGACY_COMPANION_SKILLS_DIRECTORY,
+} from '../identity/companion-naming.js';
+
+export const REPO_ALLOWED_PATHS = [
+  'src/',
+  'docs/',
+  DEFAULT_COMPANION_SKILLS_DIRECTORY.replace(/skills$/, ''),
+  LEGACY_COMPANION_SKILLS_DIRECTORY.replace(/skills$/, ''),
+] as const;
 
 export const DEFAULT_GATEWAY_SOCKET_PATH = '/run/psfn/gateway.sock';
 
-export const WEB_FETCH_USER_AGENT = 'PurrsePhone-Substrate/0.1';
+export const WEB_FETCH_USER_AGENT = 'Companion-Substrate/0.1';
 export const WEB_FETCH_TIMEOUT_MS = 15_000;
 
 /**

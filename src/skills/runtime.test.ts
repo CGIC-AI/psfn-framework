@@ -29,7 +29,7 @@ describe('skills runtime', () => {
 
     writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify({
       enabled: true,
-      directories: ['purrsephone/skills', 'skills'],
+      directories: ['companion/skills', 'skills'],
       extraDirectories: [],
       maxLoadedSkills: 32,
       maxSkillChars: 100_000,

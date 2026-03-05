@@ -403,12 +403,14 @@ export interface SubstrateConfig {
 }
 
 export function loadConfig(): SubstrateConfig {
-  const primaryModel = process.env.PRIMARY_MODEL ?? 'z-ai/glm-5';
-  const primaryProvider = process.env.PRIMARY_PROVIDER ?? 'openrouter';
+  // Model defaults are provided by config/models.seed.json via loadModelsConfig().
+  // Env vars override if set; empty strings here are placeholders overwritten at boot.
+  const primaryModel = process.env.PRIMARY_MODEL ?? '';
+  const primaryProvider = process.env.PRIMARY_PROVIDER ?? '';
   const primaryMaxTokens = parseInt(process.env.PRIMARY_MAX_TOKENS ?? '16384', 10);
   const defaultContextWindow = parseInt(process.env.DEFAULT_CONTEXT_WINDOW ?? '128000', 10);
-  const extractionModel = process.env.EXTRACTION_MODEL ?? 'deepseek/deepseek-v3.2';
-  const extractionProvider = process.env.EXTRACTION_PROVIDER ?? 'openrouter';
+  const extractionModel = process.env.EXTRACTION_MODEL ?? '';
+  const extractionProvider = process.env.EXTRACTION_PROVIDER ?? '';
   const extractionMaxTokens = parseInt(process.env.EXTRACTION_MAX_TOKENS ?? '8192', 10);
   const modelCatalog = {
     primary: {
@@ -624,10 +626,10 @@ export function loadConfig(): SubstrateConfig {
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
     ttsProvider,
-    deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
+    deepgramApiKey: process.env.DEEPGRAM_API_KEY,
     deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
-    elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? '',
-    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID ?? '',
+    elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
+    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
     elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
     ...(echoTtsUrl ? { echoTtsUrl } : {}),
     ...(echoTtsVoice ? { echoTtsVoice } : {}),

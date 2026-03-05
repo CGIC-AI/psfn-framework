@@ -281,7 +281,11 @@ async function main(): Promise<void> {
     buildGatewayChannelsConfigOverrides(config, savedSettings),
   );
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
-  const workspacePath = process.env.WORKSPACE_PATH ?? './workspace';
+  const workspacePathEnv = process.env.WORKSPACE_PATH;
+  const workspacePath = workspacePathEnv ?? './workspace';
+  if (!workspacePathEnv) {
+    log.warn('WORKSPACE_PATH not set, defaulting to ./workspace');
+  }
   const ntfyBaseUrl = process.env.NTFY_BASE_URL?.trim() || undefined;
   const ntfyTopic = process.env.NTFY_TOPIC?.trim() || undefined;
   const ntfyToken = process.env.NTFY_TOKEN?.trim() || undefined;
@@ -525,7 +529,7 @@ async function main(): Promise<void> {
           ttsConnector = createStreamingTtsConnector('echo', {
             url: config.echoTtsUrl!,
             voice: config.echoTtsVoice!,
-            preset: config.echoTtsPreset ?? 'normal',
+            ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
             ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
           });
         } else if (wyomingTtsProvider === 'elevenlabs' && config.elevenLabsVoiceId) {

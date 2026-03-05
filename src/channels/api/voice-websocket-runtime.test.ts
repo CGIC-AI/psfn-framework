@@ -23,9 +23,7 @@ vi.mock('../../voice/connectors/tts/index.js', () => ({
 
 import { createApiVoiceWebSocketRuntime } from './voice-websocket-runtime.js';
 
-const DEFAULT_ECHO_TTS_URL = 'http://localhost:8001';
-const DEFAULT_ECHO_TTS_VOICE = '11labs-Allison';
-const DEFAULT_ECHO_TTS_PRESET = 'Independent-High-Speaker-CFG';
+// Echo TTS no longer has silent defaults — requires explicit config
 
 function createStubSttConnector(): StreamingSttConnector {
   return {
@@ -176,24 +174,16 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     });
   });
 
-  it('allows echo provider to start without explicit Echo overrides', () => {
-    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+  it('throws when echo provider selected without explicit Echo config', () => {
+    expect(() => createApiVoiceWebSocketRuntime(createTestOptions({
       ttsProvider: 'echo',
-      elevenLabsApiKey: '',
-      elevenLabsVoiceId: '',
+      elevenLabsApiKey: undefined,
+      elevenLabsVoiceId: undefined,
       echoTtsUrl: undefined,
       echoTtsVoice: undefined,
       echoTtsPreset: undefined,
       echoTtsModel: undefined,
-    }));
-
-    expect(runtime).toBeDefined();
-    expect(createStreamingTtsConnectorMock).toHaveBeenCalledTimes(1);
-    expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('echo', {
-      url: DEFAULT_ECHO_TTS_URL,
-      voice: DEFAULT_ECHO_TTS_VOICE,
-      preset: DEFAULT_ECHO_TTS_PRESET,
-    });
+    }))).toThrow('Echo TTS provider selected but ECHO_TTS_URL and ECHO_TTS_VOICE are not configured');
   });
 
   it('passes explicit echo provider overrides through to connector config', () => {

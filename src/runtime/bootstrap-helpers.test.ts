@@ -9,9 +9,11 @@ import {
   resolveRuntimeVoiceSttProvider,
   resolveRuntimeVoiceTtsProvider,
 } from './bootstrap-helpers.js';
+import { registerStreamingSttProvider } from '../voice/connectors/stt/index.js';
 
 describe('resolveRuntimeVoiceSttProvider', () => {
   it('uses explicit provider when configured', () => {
+    expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'deepgram' } as any)).toBe('deepgram');
     expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'disabled' } as any)).toBe('disabled');
   });
 
@@ -21,6 +23,36 @@ describe('resolveRuntimeVoiceSttProvider', () => {
 
   it('falls back to disabled when not configured and no api key is set', () => {
     expect(resolveRuntimeVoiceSttProvider({} as any)).toBe('disabled');
+  });
+
+  it('throws for unsupported configured providers instead of falling back', () => {
+    expect(() => resolveRuntimeVoiceSttProvider({
+      sttProvider: 'invalid-provider',
+      deepgramApiKey: 'key',
+    } as any)).toThrow('Unsupported runtime voice STT provider: invalid-provider');
+  });
+
+  it('accepts registered providers without core switch edits', () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: () => ({
+        id: 'plugin-test',
+        startStream: async () => ({
+          transcripts: (async function* emptyTranscripts() {})(),
+          writeAudio: async () => {},
+          endInput: async () => {},
+          cancel: async () => {},
+        }),
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+    });
+
+    try {
+      expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'plugin-test' } as any)).toBe('plugin-test');
+    } finally {
+      restoreProvider();
+    }
   });
 });
 
@@ -100,6 +132,46 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       } as any,
     );
     expect(relaxedGate.ttsEnabled).toBe(true);
+  });
+
+  it('uses registered STT provider metadata to determine enablement', () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: () => ({
+        id: 'plugin-test',
+        startStream: async () => ({
+          transcripts: (async function* emptyTranscripts() {})(),
+          writeAudio: async () => {},
+          endInput: async () => {},
+          cancel: async () => {},
+        }),
+      }),
+      metadata: {
+        canAutoEnable: true,
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+    });
+
+    try {
+      const enabledGate = resolveRuntimeVoiceProviderGate({
+        sttProvider: 'plugin-test',
+        pluginSttToken: 'plugin-key',
+      } as any);
+      expect(enabledGate.sttEnabled).toBe(true);
+      expect(enabledGate.sttProvider).toBe('plugin-test');
+
+      const defaultGate = resolveRuntimeVoiceProviderGate({
+        pluginSttToken: 'plugin-key',
+      } as any);
+      expect(defaultGate.sttEnabled).toBe(true);
+      expect(defaultGate.sttProvider).toBe('plugin-test');
+
+      const disabledGate = resolveRuntimeVoiceProviderGate({
+        sttProvider: 'plugin-test',
+      } as any);
+      expect(disabledGate.sttEnabled).toBe(false);
+    } finally {
+      restoreProvider();
+    }
   });
 });
 

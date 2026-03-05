@@ -4,9 +4,111 @@ import type { StreamingSttConnector } from './types.js';
 export * from './types.js';
 export * from './deepgram-stream.js';
 
-export function createStreamingSttConnector(
-  provider: 'deepgram',
-  config: DeepgramStreamingSttConfig,
+export type StreamingSttProvider = 'deepgram' | (string & {});
+
+export interface StreamingSttConfigByProvider {
+  deepgram: DeepgramStreamingSttConfig;
+  [provider: string]: unknown;
+}
+
+export interface StreamingSttProviderRuntimeConfig {
+  [key: string]: unknown;
+  deepgramApiKey?: string;
+}
+
+export interface StreamingSttProviderMetadata {
+  canAutoEnable?: boolean;
+  isConfigured(config: StreamingSttProviderRuntimeConfig): boolean;
+}
+
+export interface StreamingSttProviderRegistration<TConfig = unknown> {
+  createConnector: (config: TConfig) => StreamingSttConnector;
+  metadata: StreamingSttProviderMetadata;
+}
+
+type AnyStreamingSttProviderRegistration = StreamingSttProviderRegistration<any>;
+
+const providerRegistrations = new Map<string, AnyStreamingSttProviderRegistration>([
+  ['deepgram', {
+    createConnector: createDeepgramStreamingSttConnector,
+    metadata: {
+      canAutoEnable: true,
+      isConfigured: (config) => Boolean(config.deepgramApiKey),
+    },
+  }],
+]);
+
+function normalizeProviderId(provider: string): string {
+  const normalized = provider.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('Streaming STT provider id must be a non-empty string');
+  }
+  if (normalized === 'disabled') {
+    throw new Error('Streaming STT provider id "disabled" is reserved');
+  }
+  return normalized;
+}
+
+export function listStreamingSttProviders(): StreamingSttProvider[] {
+  return [...providerRegistrations.keys()] as StreamingSttProvider[];
+}
+
+export function isStreamingSttProvider(provider: string): provider is StreamingSttProvider {
+  if (provider.trim().length === 0) return false;
+  return providerRegistrations.has(provider.trim().toLowerCase());
+}
+
+export function registerStreamingSttProvider<TProvider extends StreamingSttProvider>(
+  provider: TProvider,
+  registration: StreamingSttProviderRegistration<StreamingSttConfigByProvider[TProvider]>,
+): () => void {
+  const providerId = normalizeProviderId(provider);
+  const previousRegistration = providerRegistrations.get(providerId);
+  providerRegistrations.set(providerId, registration as AnyStreamingSttProviderRegistration);
+
+  return () => {
+    if (previousRegistration) {
+      providerRegistrations.set(providerId, previousRegistration);
+      return;
+    }
+    providerRegistrations.delete(providerId);
+  };
+}
+
+export function getStreamingSttProviderMetadata(
+  provider: StreamingSttProvider,
+): StreamingSttProviderMetadata | null {
+  return providerRegistrations.get(normalizeProviderId(provider))?.metadata ?? null;
+}
+
+export function isStreamingSttProviderConfigured(
+  provider: StreamingSttProvider,
+  config: StreamingSttProviderRuntimeConfig,
+): boolean {
+  const metadata = getStreamingSttProviderMetadata(provider);
+  return metadata?.isConfigured(config) ?? false;
+}
+
+export function resolveDefaultStreamingSttProvider(
+  config: StreamingSttProviderRuntimeConfig,
+): StreamingSttProvider | null {
+  for (const [provider, registration] of providerRegistrations.entries()) {
+    if (registration.metadata.canAutoEnable !== true) continue;
+    if (registration.metadata.isConfigured(config)) {
+      return provider as StreamingSttProvider;
+    }
+  }
+  return null;
+}
+
+export function createStreamingSttConnector<TProvider extends StreamingSttProvider>(
+  provider: TProvider,
+  config: StreamingSttConfigByProvider[TProvider],
 ): StreamingSttConnector {
-  return createDeepgramStreamingSttConnector(config);
+  const registration = providerRegistrations.get(normalizeProviderId(provider));
+  if (registration) {
+    return registration.createConnector(config);
+  }
+
+  throw new Error(`Unsupported streaming STT provider: ${provider}`);
 }

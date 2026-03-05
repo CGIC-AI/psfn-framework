@@ -5,9 +5,15 @@ import {
   type EmbeddingDimensionValidationResult,
 } from '../backup/startup-checks.js';
 import type { RuntimeChannelsConfigOverrides } from '../channels/config.js';
+import {
+  isStreamingSttProvider,
+  isStreamingSttProviderConfigured,
+  resolveDefaultStreamingSttProvider,
+  type StreamingSttProvider,
+} from '../voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from '../voice/connectors/tts/index.js';
 
-export type RuntimeVoiceSttProvider = 'deepgram' | 'disabled';
+export type RuntimeVoiceSttProvider = StreamingSttProvider | 'disabled';
 export type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
 
 export interface RuntimeVoiceProviderGateOptions {
@@ -23,9 +29,20 @@ export interface RuntimeVoiceProviderGate {
 }
 
 export function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
-  const configured = (config as SubstrateConfig & { sttProvider?: RuntimeVoiceSttProvider }).sttProvider;
-  if (configured === 'deepgram' || configured === 'disabled') return configured;
-  return config.deepgramApiKey ? 'deepgram' : 'disabled';
+  const configured = config.sttProvider;
+  if (configured === 'disabled') return configured;
+  if (typeof configured === 'string') {
+    const normalized = configured.trim().toLowerCase();
+    if (!normalized) {
+      throw new Error('Invalid runtime voice STT provider: provider id cannot be empty');
+    }
+    if (!isStreamingSttProvider(normalized)) {
+      throw new Error(`Unsupported runtime voice STT provider: ${configured}`);
+    }
+    return normalized;
+  }
+
+  return resolveDefaultStreamingSttProvider(config) ?? 'disabled';
 }
 
 export function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
@@ -41,7 +58,7 @@ export function resolveRuntimeVoiceProviderGate(
 ): RuntimeVoiceProviderGate {
   const sttProvider = resolveRuntimeVoiceSttProvider(config);
   const ttsProvider = resolveRuntimeVoiceTtsProvider(config);
-  const sttEnabled = sttProvider === 'deepgram' && Boolean(config.deepgramApiKey);
+  const sttEnabled = sttProvider !== 'disabled' && isStreamingSttProviderConfigured(sttProvider, config);
 
   const allowEchoDefaults = options.allowEchoDefaults === true;
   const requireElevenLabsVoiceId = options.requireElevenLabsVoiceId === true;

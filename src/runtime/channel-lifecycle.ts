@@ -44,6 +44,9 @@ export async function loadChannelAdaptersFromManifest(
   for (const entry of entries) {
     const { manifest } = entry;
     if (!manifest.enabled) {
+      if (manifest.required) {
+        throw new Error(`Required channel adapter "${manifest.id}" is disabled in manifest`);
+      }
       log.warn('Skipping disabled channel adapter manifest entry', {
         adapterId: manifest.id,
         required: manifest.required === true,

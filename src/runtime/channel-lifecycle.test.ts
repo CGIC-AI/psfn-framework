@@ -116,6 +116,23 @@ describe('loadChannelAdaptersFromManifest', () => {
     ).rejects.toThrow('Required channel adapter "discord" failed to initialize');
   });
 
+  it('throws when a required adapter is disabled in the manifest', async () => {
+    const channelRegistry = new Map<string, ChannelAdapter>();
+    const syncChannelRegistry = vi.fn();
+    const log = makeLogger();
+    const factories = buildChannelAdapterFactoryManifest([{
+      manifest: { id: 'discord', enabled: false, required: true },
+      create: async () => makeAdapter('discord'),
+    }]);
+
+    await expect(
+      loadChannelAdaptersFromManifest(channelRegistry, factories, syncChannelRegistry, log),
+    ).rejects.toThrow('Required channel adapter "discord" is disabled in manifest');
+
+    expect(syncChannelRegistry).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   it('continues when optional adapter fails and at least one loads', async () => {
     const channelRegistry = new Map<string, ChannelAdapter>();
     const syncChannelRegistry = vi.fn();

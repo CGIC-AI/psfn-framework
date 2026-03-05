@@ -80,6 +80,7 @@ import {
   wireStaticPromptRegistry,
   wireSettingsRuntime,
   wireSessionToolsRuntime,
+  buildCharacterPromptVariablesProvider,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
@@ -94,7 +95,6 @@ import {
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import {
-  buildCharacterPromptTemplateVariables,
   composeSystemPromptTemplate,
 } from './identity/loader.js';
 import { ModuleLoader } from './modules/loader.js';
@@ -387,7 +387,7 @@ async function main(): Promise<void> {
     sessionManager,
     systemPrompt,
     characterName: card.data.name,
-    characterPromptVariablesProvider: () => buildCharacterPromptTemplateVariables(card),
+    characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
   });
   agentLoop.scratchpadProvider = memoryStore;

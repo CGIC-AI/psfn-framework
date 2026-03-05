@@ -5,7 +5,6 @@ import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import {
-  buildCharacterPromptTemplateVariables,
   composeSystemPromptTemplate,
 } from './identity/loader.js';
 import { LLMClient } from './llm/client.js';
@@ -85,6 +84,7 @@ import {
   wireStaticPromptRegistry,
   wireSettingsRuntime,
   wireSessionToolsRuntime,
+  buildCharacterPromptVariablesProvider,
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
@@ -482,7 +482,7 @@ export class SubstrateRuntime implements Lifecycle {
       sessionManager: this.sessionManager,
       systemPrompt,
       characterName: card.data.name,
-      characterPromptVariablesProvider: () => buildCharacterPromptTemplateVariables(card),
+      characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       config: this.config,
     });
     this.agentLoop.scratchpadProvider = this.memoryStore;

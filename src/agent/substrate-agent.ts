@@ -2811,6 +2811,24 @@ export class SubstrateAgent {
     return candidate && candidate.length > 0 ? candidate : 'Assistant';
   }
 
+  private resolveRuntimeCharacterName(characterPromptVariables: Record<string, string>): string {
+    const candidates = [
+      characterPromptVariables.char,
+      characterPromptVariables.char_name,
+      characterPromptVariables.character,
+      characterPromptVariables.character_name,
+      characterPromptVariables['character.name'],
+      characterPromptVariables.name,
+    ];
+    for (const candidate of candidates) {
+      const trimmed = candidate?.trim();
+      if (trimmed && trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+    return this.characterName;
+  }
+
   private buildPromptTemplateVariables(
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -2822,16 +2840,18 @@ export class SubstrateAgent {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
     const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
     const characterPromptVariables = this.resolveCharacterPromptVariables();
+    const runtimeCharacterName = this.resolveRuntimeCharacterName(characterPromptVariables);
+    this.characterName = runtimeCharacterName;
 
     return {
       ...characterPromptVariables,
       user: resolvedUserName,
       user_name: resolvedUserName,
       user_id: message.authorId,
-      char: this.characterName,
-      char_name: this.characterName,
-      character: this.characterName,
-      character_name: this.characterName,
+      char: runtimeCharacterName,
+      char_name: runtimeCharacterName,
+      character: runtimeCharacterName,
+      character_name: runtimeCharacterName,
       channel: message.channelId,
       channel_id: message.channelId,
       channel_type: channelType ?? 'unknown',

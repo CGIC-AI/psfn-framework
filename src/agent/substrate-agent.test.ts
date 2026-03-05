@@ -1698,6 +1698,51 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).not.toContain('{{user}}');
   });
 
+  it('resolves character macros from current provider variables on each turn', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const runtimeCard = {
+      name: 'Companion',
+      description: '{{char}} helps {{user}} with focus.',
+    };
+    const characterPromptVariablesProvider = vi.fn(() => ({
+      name: runtimeCard.name,
+      description: runtimeCard.description,
+      'character.name': runtimeCard.name,
+    }));
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Foundation:\n{{description}}',
+      config,
+      {
+        characterName: runtimeCard.name,
+        characterPromptVariablesProvider,
+      },
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'runtime-card-turn-1',
+      authorName: 'PrimaryUser',
+    }));
+
+    runtimeCard.name = 'Companion Prime';
+    runtimeCard.description = '{{char}} now aligns with {{user}} in every turn.';
+
+    await agent.handleMessage(makeMessage({
+      id: 'runtime-card-turn-2',
+      authorName: 'PrimaryUser',
+    }));
+
+    expect(characterPromptVariablesProvider).toHaveBeenCalledTimes(2);
+    const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    expect(firstPrompt).toContain('Foundation:\nCompanion helps PrimaryUser with focus.');
+    expect(secondPrompt).toContain('Foundation:\nCompanion Prime now aligns with PrimaryUser in every turn.');
+    expect(secondPrompt).not.toContain('Companion helps PrimaryUser with focus.');
+  });
+
   it('prefers contact nickname for {{user}} across mapped channel identities', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

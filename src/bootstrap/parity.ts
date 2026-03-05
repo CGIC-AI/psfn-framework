@@ -43,6 +43,7 @@ import {
   type CharacterCardUpdateToolOptions,
   type CharacterCardVersionStore,
 } from '../identity/card-versioning.js';
+import { buildCharacterPromptTemplateVariables } from '../identity/loader.js';
 import {
   createPromptLayerListTool,
   createPromptLayerGetTool,
@@ -123,6 +124,12 @@ export interface PromptRuntimeTarget extends ToolRegistrarTarget {
 }
 
 export type CharacterCardRuntimeTarget = ToolRegistrarTarget;
+
+export function buildCharacterPromptVariablesProvider(
+  cardStore: Pick<CharacterCardVersionStore, 'getCurrent'>,
+): () => Record<string, string> {
+  return () => buildCharacterPromptTemplateVariables(cardStore.getCurrent().card);
+}
 
 export interface ExtendedToolAutoloadRuntimeTarget {
   setExtendedToolAutoloadPolicy: (policy: ExtendedToolAutoloadPolicy | null) => void;

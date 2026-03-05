@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { composeSystemPromptTemplate } from './loader.js';
 import { PromptLayerStore } from './prompt-store.js';
 
 describe('PromptLayerStore', () => {
@@ -321,27 +322,32 @@ describe('PromptLayerStore', () => {
 
   describe('seedFromCharacterCard()', () => {
     it('seeds when store is empty', () => {
-      store.seedFromCharacterCard('You are Purrsephone.');
+      const foundationTemplate = composeSystemPromptTemplate();
+      store.seedFromCharacterCard(foundationTemplate);
 
       const layers = store.getAll();
       expect(layers).toHaveLength(1);
       expect(layers[0].type).toBe('base');
       expect(layers[0].name).toBe('Character Foundation');
-      expect(layers[0].content).toBe('You are Purrsephone.');
+      expect(layers[0].content).toBe(foundationTemplate);
+      expect(layers[0].content).toContain('{{description}}');
+      expect(layers[0].content).not.toContain('Purrsephone');
       expect(layers[0].identifier).toBe('main');
       expect(layers[0].role).toBe('system');
       expect(layers[0].promptOrder).toBe(0);
     });
 
     it('skips seeding when layers already exist', () => {
+      const foundationTemplate = composeSystemPromptTemplate();
       store.create({ type: 'base', name: 'Existing', content: 'existing' });
-      store.seedFromCharacterCard('You are Purrsephone.');
+      store.seedFromCharacterCard(foundationTemplate);
 
       expect(store.getAll()).toHaveLength(1);
       expect(store.getAll()[0].name).toBe('Existing');
     });
 
     it('refreshes untouched system Character Foundation when current card prompt differs', () => {
+      const foundationTemplate = composeSystemPromptTemplate();
       const base = store.create({
         type: 'base',
         name: 'Character Foundation',
@@ -349,10 +355,12 @@ describe('PromptLayerStore', () => {
         updatedBy: 'system',
       });
 
-      store.seedFromCharacterCard('You are Companion.');
+      store.seedFromCharacterCard(foundationTemplate);
 
       const refreshed = store.getById(base.id)!;
-      expect(refreshed.content).toBe('You are Companion.');
+      expect(refreshed.content).toBe(foundationTemplate);
+      expect(refreshed.content).toContain('{{description}}');
+      expect(refreshed.content).not.toContain('Purrsephone');
       expect(refreshed.updatedBy).toBe('system:seed-sync');
       expect(refreshed.version).toBe(2);
 

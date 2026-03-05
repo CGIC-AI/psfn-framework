@@ -822,6 +822,82 @@ describe('GatewayClient git RPC wrappers', () => {
   });
 });
 
+describe('GatewayClient beads RPC wrappers', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('routes beads methods with typed payloads', async () => {
+    const readyPromise = client.beadsReady({ actor: 'agent' });
+    const readyReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+    expect(readyReq.method).toBe('beads.ready');
+    expect(readyReq.params).toEqual({ actor: 'agent' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: readyReq.id,
+      result: {
+        actor: 'agent',
+        action: 'ready',
+        target: 'ready',
+        result: 'success',
+        payload: [{ id: 'PSFN-1' }],
+      },
+    });
+    await expect(readyPromise).resolves.toMatchObject({ action: 'ready' });
+
+    const createPromise = client.beadsCreate({
+      title: 'New issue',
+      issueType: 'task',
+      priority: 2,
+      actor: 'agent',
+    });
+    const createReq = conn.sent[1] as { id: number; method: string; params: Record<string, unknown> };
+    expect(createReq.method).toBe('beads.create');
+    expect(createReq.params).toEqual({
+      title: 'New issue',
+      issueType: 'task',
+      priority: 2,
+      actor: 'agent',
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: createReq.id,
+      result: {
+        actor: 'agent',
+        action: 'create',
+        target: 'new',
+        result: 'success',
+        payload: { id: 'PSFN-2' },
+      },
+    });
+    await expect(createPromise).resolves.toMatchObject({ action: 'create' });
+
+    const closePromise = client.beadsClose({
+      id: 'PSFN-2',
+      reason: 'done',
+    });
+    const closeReq = conn.sent[2] as { id: number; method: string; params: Record<string, unknown> };
+    expect(closeReq.method).toBe('beads.close');
+    expect(closeReq.params).toEqual({ id: 'PSFN-2', reason: 'done' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: closeReq.id,
+      result: {
+        actor: 'runtime-agent',
+        action: 'close',
+        target: 'PSFN-2',
+        result: 'success',
+        payload: { closed: true },
+      },
+    });
+    await expect(closePromise).resolves.toMatchObject({ action: 'close' });
+  });
+});
+
 describe('GatewayClient connection lifecycle', () => {
   let conn: ReturnType<typeof createMockConnection>;
   let client: GatewayClient;

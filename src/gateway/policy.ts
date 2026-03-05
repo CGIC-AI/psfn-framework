@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
-import type { PolicyContext, PolicyDecision } from './protocol.js';
+import type { BeadsAction, PolicyContext, PolicyDecision } from './protocol.js';
 import { evaluateUrlPolicy, type UrlPolicyConfig, type UrlPolicyLane } from './url-policy.js';
 import {
   normalizeWorkspaceRelativeGlob,
@@ -18,6 +18,11 @@ export interface ShellExecPolicyConfig {
   maxOutputChars?: number;
 }
 
+export interface BeadsPolicyConfig {
+  enabled?: boolean;
+  allowActions?: BeadsAction[];
+}
+
 export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
@@ -25,7 +30,17 @@ export interface PolicyConfig {
   urlPolicy?: UrlPolicyConfig;
   webFetchTlsCaCertPaths?: string[];
   shellExec?: ShellExecPolicyConfig;
+  beads?: BeadsPolicyConfig;
 }
+
+const BEADS_ACTION_BY_METHOD: Readonly<Record<string, BeadsAction>> = {
+  'beads.ready': 'ready',
+  'beads.show': 'show',
+  'beads.create': 'create',
+  'beads.update': 'update',
+  'beads.close': 'close',
+  'beads.sync': 'sync',
+};
 
 /** Check whether a resolved path falls inside any of the allowed prefixes */
 export function isInsideAllowedPaths(resolvedPath: string, allowedPrefixes: string[]): boolean {
@@ -103,6 +118,27 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
     case 'shell.exec': {
       if (!policyConfig.shellExec?.enabled) {
+        return 'DENY';
+      }
+      return 'ALLOW';
+    }
+
+    case 'beads.ready':
+    case 'beads.show':
+    case 'beads.create':
+    case 'beads.update':
+    case 'beads.close':
+    case 'beads.sync': {
+      const beadsPolicy = policyConfig.beads;
+      if (!beadsPolicy?.enabled) {
+        return 'DENY';
+      }
+      const action = BEADS_ACTION_BY_METHOD[method];
+      if (!action) {
+        return 'DENY';
+      }
+      const allowedActions = new Set(beadsPolicy.allowActions ?? []);
+      if (!allowedActions.has(action)) {
         return 'DENY';
       }
       return 'ALLOW';

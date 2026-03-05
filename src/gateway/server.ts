@@ -238,6 +238,11 @@ export class GatewayServer {
       resolveConfirmation: (params) => this.confirmationQueue.resolve(params),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
+      recordAuditEvent: (entry) => {
+        if (this.options.auditStore) {
+          this.options.auditStore.recordSummary(entry);
+        }
+      },
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
       gated: (method, handler, paramsSummary, approvalAction, approvalScope, approvalReason) =>
         this.gated(

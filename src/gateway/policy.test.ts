@@ -164,6 +164,49 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('denies beads methods when beads policy is disabled', () => {
+    expect(evaluatePolicy(
+      { method: 'beads.ready', params: {} },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows beads read methods when explicitly allowlisted', () => {
+    const configWithBeads: PolicyConfig = {
+      ...policyConfig,
+      beads: {
+        enabled: true,
+        allowActions: ['ready', 'show'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'beads.ready', params: {} },
+      configWithBeads,
+    )).toBe('ALLOW');
+    expect(evaluatePolicy(
+      { method: 'beads.show', params: { id: 'PSFN-1' } },
+      configWithBeads,
+    )).toBe('ALLOW');
+  });
+
+  it('denies beads write methods when action is not allowlisted', () => {
+    const configWithReadOnlyBeads: PolicyConfig = {
+      ...policyConfig,
+      beads: {
+        enabled: true,
+        allowActions: ['ready', 'show'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'beads.create', params: { title: 'Blocked' } },
+      configWithReadOnlyBeads,
+    )).toBe('DENY');
+    expect(evaluatePolicy(
+      { method: 'beads.close', params: { id: 'PSFN-1', reason: 'done' } },
+      configWithReadOnlyBeads,
+    )).toBe('DENY');
+  });
+
   // ── Filesystem: workspace paths ──
 
   it('allows fs.read inside workspace', () => {

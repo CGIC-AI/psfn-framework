@@ -11,7 +11,7 @@ export interface ExtendedToolAutoloadPolicy {
   getCandidatesForIntent: (intent: TurnIntent) => readonly string[];
 }
 
-const DEV_PATTERN = /\b(git|repo|branch|commit|diff|patch|pr|pull request|code|test|build|lint|debug|bug|refactor|typescript|javascript|python|npm|pnpm|yarn)\b/i;
+const DEV_PATTERN = /\b(git|repo|branch|commit|diff|patch|pr|pull request|code|test|build|lint|debug|bug|issue|ticket|beads|refactor|typescript|javascript|python|npm|pnpm|yarn)\b/i;
 const MEMORY_PATTERN = /\b(memory|remember|recall|journal|scratchpad|profile|contact|trust|archive|history)\b/i;
 const OPS_PATTERN = /\b(schedule|heartbeat|policy|runtime|settings|restart|rebuild|maintenance|incident|ops|operation)\b/i;
 const OPS_TASK_KINDS = new Set(['heartbeat', 'reflection', 'planning', 'maintenance']);
@@ -26,6 +26,12 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'repo_commit',
     'repo_create_branch',
     'repo_open_pr',
+    'issue_ready',
+    'issue_show',
+    'issue_create',
+    'issue_update',
+    'issue_close',
+    'issue_sync',
   ],
   memory: [
     'session_list',
@@ -41,6 +47,9 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'heartbeat_run_template',
     'schedule_task',
     'session_list',
+    'issue_ready',
+    'issue_show',
+    'issue_sync',
   ],
   social: [],
 };

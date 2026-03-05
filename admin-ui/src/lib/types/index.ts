@@ -482,7 +482,7 @@ export interface AdminModelRoomBootstrapResponse {
     apiKey?: string;
   };
   defaultRoomId: string;
-  psfn: {
+  companion: {
     id: string;
     displayName: string;
     defaultSystemPromptMode: 'default';

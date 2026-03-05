@@ -12,6 +12,7 @@
     ensureAuthResolved,
     clearToken,
   } from '$lib/stores/auth.svelte';
+  import { ensureCompanionNameLoaded } from '$lib/stores/companion.svelte';
   import { getToasts, removeToast } from '$lib/stores/toast.svelte';
 
   let { children } = $props();
@@ -33,7 +34,9 @@
     }
     if (!isAuthenticated()) {
       goto(`${base}/login`);
+      return;
     }
+    void ensureCompanionNameLoaded(true);
   });
 
   async function handleLogout() {

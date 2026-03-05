@@ -13,13 +13,21 @@ const {
   createStreamingTtsConnectorMock: vi.fn(),
 }));
 
-vi.mock('../../voice/connectors/stt/index.js', () => ({
-  createStreamingSttConnector: createStreamingSttConnectorMock,
-}));
+vi.mock('../../voice/connectors/stt/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../voice/connectors/stt/index.js')>();
+  return {
+    ...actual,
+    createStreamingSttConnector: createStreamingSttConnectorMock,
+  };
+});
 
-vi.mock('../../voice/connectors/tts/index.js', () => ({
-  createStreamingTtsConnector: createStreamingTtsConnectorMock,
-}));
+vi.mock('../../voice/connectors/tts/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../voice/connectors/tts/index.js')>();
+  return {
+    ...actual,
+    createStreamingTtsConnector: createStreamingTtsConnectorMock,
+  };
+});
 
 import { createApiVoiceWebSocketRuntime } from './voice-websocket-runtime.js';
 

@@ -32,6 +32,10 @@ import {
   isStreamingSttProvider,
   resolveDefaultStreamingSttProvider,
 } from './voice/connectors/stt/index.js';
+import {
+  isStreamingTtsProvider,
+  resolveDefaultStreamingTtsProvider,
+} from './voice/connectors/tts/index.js';
 
 const log = createComponentLogger('Settings');
 
@@ -157,7 +161,7 @@ export interface EditableSettings {
   chatApiBaseUrl?: string;
 
   // Voice / TTS (non-secret config only — API keys stay in .env)
-  ttsProvider?: 'elevenlabs' | 'echo' | 'disabled';
+  ttsProvider?: SubstrateConfig['ttsProvider'];
   voiceId?: string;
   echoTtsUrl?: string;
   echoTtsVoice?: string;
@@ -318,15 +322,21 @@ function toBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
-const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
-type RuntimeVoiceTtsProvider = 'elevenlabs' | 'echo' | 'disabled';
+type RuntimeVoiceTtsProvider = Exclude<SubstrateConfig['ttsProvider'], undefined>;
 type RuntimeVoiceSttProvider = Exclude<SubstrateConfig['sttProvider'], undefined>;
 
-function toTtsProvider(value: unknown): 'elevenlabs' | 'echo' | 'disabled' | undefined {
+function normalizeTtsProvider(value: unknown): RuntimeVoiceTtsProvider | undefined {
   if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim().toLowerCase();
-  if (!TTS_PROVIDER_VALUES.has(trimmed)) return undefined;
-  return trimmed as 'elevenlabs' | 'echo' | 'disabled';
+  return value.trim().toLowerCase() as RuntimeVoiceTtsProvider;
+}
+
+function toConfiguredTtsProvider(value: unknown): RuntimeVoiceTtsProvider | undefined {
+  const normalized = normalizeTtsProvider(value);
+  if (!normalized) return undefined;
+  if (normalized === 'disabled' || isStreamingTtsProvider(normalized)) {
+    return normalized;
+  }
+  return undefined;
 }
 
 function normalizeSttProvider(value: unknown): RuntimeVoiceSttProvider | undefined {
@@ -344,9 +354,9 @@ function toConfiguredSttProvider(value: unknown): RuntimeVoiceSttProvider | unde
 }
 
 function resolveRuntimeTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
-  const provider = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
-  if (provider === 'elevenlabs' || provider === 'echo') return provider;
-  return 'disabled';
+  const configured = normalizeTtsProvider(config.ttsProvider);
+  if (configured !== undefined) return configured;
+  return resolveDefaultStreamingTtsProvider(config) ?? 'disabled';
 }
 
 function resolveRuntimeSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
@@ -744,7 +754,12 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
 
   // Voice / TTS
   if ('ttsProvider' in settings) {
-    normalized.ttsProvider = toTtsProvider(settings.ttsProvider) ?? 'disabled';
+    const provider = normalizeTtsProvider(settings.ttsProvider);
+    if (provider !== undefined) {
+      normalized.ttsProvider = provider;
+    } else {
+      delete normalized.ttsProvider;
+    }
   }
   if ('voiceId' in settings) {
     normalized.voiceId = typeof settings.voiceId === 'string' ? settings.voiceId.trim() : '';
@@ -1284,13 +1299,7 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
 
   // Voice / TTS
   if ('ttsProvider' in settings) {
-    const provider = settings.ttsProvider;
-    const voiceConfig = config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider };
-    if (provider === 'elevenlabs' || provider === 'echo' || provider === 'disabled') {
-      voiceConfig.ttsProvider = provider;
-    } else {
-      voiceConfig.ttsProvider = undefined;
-    }
+    config.ttsProvider = normalizeTtsProvider(settings.ttsProvider);
   }
   if ('voiceId' in settings) {
     const trimmed = settings.voiceId?.trim() ?? '';
@@ -1603,9 +1612,9 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   // Voice / TTS
   const ttsProviderRaw = params.get('ttsProvider');
   if (ttsProviderRaw !== null) {
-    const provider = toTtsProvider(ttsProviderRaw);
+    const provider = toConfiguredTtsProvider(ttsProviderRaw);
     if (!provider) {
-      errors.push('ttsProvider must be one of: elevenlabs, echo, disabled');
+      errors.push('ttsProvider must be "disabled" or a registered TTS provider id');
     } else {
       settings.ttsProvider = provider;
     }

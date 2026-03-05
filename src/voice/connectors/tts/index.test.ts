@@ -4,6 +4,9 @@ import { EchoStreamingTtsConnector } from './echo-stream.js';
 import {
   createStreamingTtsConnector,
   registerStreamingTtsConnectorFactory,
+  registerStreamingTtsProvider,
+  getStreamingTtsProviderMetadata,
+  resolveDefaultStreamingTtsProvider,
   type EchoStreamingTtsConfig,
 } from './index.js';
 import type { StreamingTtsConnector, TtsAudioChunk } from './types.js';
@@ -74,5 +77,49 @@ describe('createStreamingTtsConnector', () => {
     expect(() => createStreamingTtsConnector('invalid-provider' as never, {} as never)).toThrow(
       'Unsupported streaming TTS provider: invalid-provider',
     );
+  });
+
+  it('dispatches to a registered provider without core switch edits', () => {
+    const connector = createStubConnector('plugin-test');
+    const factory = vi.fn((config: { endpoint: string }) => {
+      expect(config).toEqual({ endpoint: 'https://plugin-tts.invalid' });
+      return connector;
+    });
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: factory,
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+    });
+
+    try {
+      const result = createStreamingTtsConnector('plugin-test', {
+        endpoint: 'https://plugin-tts.invalid',
+      });
+
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(result).toBe(connector);
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('exposes provider metadata for default provider selection', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => createStubConnector('plugin-test')),
+      metadata: {
+        canAutoEnable: true,
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+    });
+
+    try {
+      expect(getStreamingTtsProviderMetadata('elevenlabs')?.isConfigured({
+        elevenLabsApiKey: 'elevenlabs-key',
+      })).toBe(true);
+      expect(resolveDefaultStreamingTtsProvider({ pluginTtsToken: 'plugin-key', elevenLabsApiKey: '' })).toBe('plugin-test');
+    } finally {
+      restoreProvider();
+    }
   });
 });

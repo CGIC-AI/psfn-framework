@@ -31,6 +31,8 @@ import {
   CAPABILITY_TIER_VALUES,
 } from '../../../capabilities/tiers.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
+import { MEMORY_CONFIG } from '../../../memory/types.js';
+import { createComponentLogger } from '../../../logger.js';
 import { toErrorMessage } from '../../../utils/errors.js';
 import type {
   AdminSettingsData,
@@ -44,6 +46,7 @@ const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local
 const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
 const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
 const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
+const log = createComponentLogger('AdminSettingsService');
 
 type SettingsMutationResult =
   | { ok: true }
@@ -52,16 +55,20 @@ type SettingsMutationResult =
 function refreshModels(config: SubstrateConfig): void {
   try {
     config.runtimeHooks?.refreshModels?.();
-  } catch {
-    // Preserve successful save even when runtime model refresh fails.
+  } catch (error) {
+    log.warn('Runtime model refresh hook failed after settings mutation', {
+      error: toErrorMessage(error),
+    });
   }
 }
 
 function refreshCapabilities(config: SubstrateConfig): void {
   try {
     config.runtimeHooks?.refreshCapabilities?.();
-  } catch {
-    // Preserve successful save even when runtime capability refresh fails.
+  } catch (error) {
+    log.warn('Runtime capability refresh hook failed after settings mutation', {
+      error: toErrorMessage(error),
+    });
   }
 }
 
@@ -271,7 +278,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
   private getEnvInfo() {
     return {
-      salienceFloor: Number(process.env.SALIENCE_FLOOR ?? 0.45),
+      salienceFloor: Number(process.env.SALIENCE_FLOOR ?? MEMORY_CONFIG.salienceFloor),
       maintenanceIntervalMs: Number(process.env.MAINTENANCE_INTERVAL_MS ?? this.deps.config.maintenanceIntervalMs),
       discordToken: process.env.DISCORD_TOKEN ? '[set]' : '[not set]',
       apiKey: process.env.API_KEY ? '[set]' : '[not set]',
@@ -281,6 +288,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       litellmApiKey: process.env.LITELLM_API_KEY ? '[set]' : '[not set]',
       ollamaUrl: process.env.OLLAMA_URL ? '[set]' : '[not set]',
       importProcessingLocalApiKey: process.env.IMPORT_PROCESSING_LOCAL_API_KEY ? '[set]' : '[not set]',
+      telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ? '[set]' : '[not set]',
     };
   }
 

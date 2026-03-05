@@ -4,7 +4,6 @@
   "sessionMessageLimit": 30,
   "memoryRetrievalLimit": 15,
   "extractionInterval": 5,
-  "maintenanceIntervalMs": 300000,
   "defaultContextWindow": 128000,
   "memoryBudgetPct": 20,
   "extractionThresholdPct": 30,

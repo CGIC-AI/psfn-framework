@@ -1012,6 +1012,7 @@ async function main(): Promise<void> {
     {
       eventBus,
       llmProvider: gateway,
+      characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
       postTurnActions,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),

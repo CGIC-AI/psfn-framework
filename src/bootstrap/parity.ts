@@ -96,6 +96,7 @@ interface HeartbeatAgent {
 interface HeartbeatRuntimeOptions {
   eventBus?: EventBus;
   llmProvider?: LLMProvider;
+  characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   postTurnActions?: PostTurnActionRuntime;
   vaultAutoPublisher?: { publishReflection(input: {
@@ -453,6 +454,31 @@ export function wireHeartbeatRuntime(
     return Boolean(runtimeOptions.llmProvider);
   };
 
+  const resolveDeliberationAppearanceContext = (): string | undefined => {
+    const provider = runtimeOptions.characterPromptVariablesProvider;
+    if (!provider) return undefined;
+    try {
+      const variables = provider();
+      const candidates = [
+        variables['character.visual_description'],
+        variables.visual_description,
+        variables.extensions_visual_description,
+      ];
+      for (const candidate of candidates) {
+        if (typeof candidate !== 'string') continue;
+        const trimmed = candidate.trim();
+        if (trimmed.length > 0) {
+          return trimmed;
+        }
+      }
+    } catch (error) {
+      log.warn('Failed to resolve appearance context for deliberation heartbeat', {
+        error: String(error),
+      });
+    }
+    return undefined;
+  };
+
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
   ): Promise<{ reflection: string; metadata: ValuesDeliberationMetadata }> => {
@@ -460,9 +486,13 @@ export function wireHeartbeatRuntime(
     if (!llmProvider) {
       throw new Error('Deliberation mode requested without llmProvider');
     }
+    const appearanceContext = resolveDeliberationAppearanceContext();
+    const deliberationPrompt = appearanceContext
+      ? `${template.prompt}\n\nAppearance context:\n${appearanceContext}`
+      : template.prompt;
     const result = await runDeliberation(
       llmProvider,
-      template.prompt,
+      deliberationPrompt,
       {
         ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
         caps: {

@@ -301,6 +301,9 @@ describe('wireHeartbeatRuntime', () => {
         undefined,
         {
           llmProvider,
+          characterPromptVariablesProvider: () => ({
+            'character.visual_description': 'hands with cat ears and tail',
+          }),
           memoryWriter,
         },
       );
@@ -315,6 +318,12 @@ describe('wireHeartbeatRuntime', () => {
         .map(call => call[0]?.channelId);
       expect(handledChannels).not.toContain('internal:reflection:values-reflection');
       expect(purposes).toEqual(['reasoning', 'background', 'reasoning']);
+      const firstDeliberationCall = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        | { messages?: Array<{ content?: string }> }
+        | undefined;
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain(
+        'Appearance context:\nhands with cat ears and tail',
+      );
       expect(memoryWriter.write).toHaveBeenCalledTimes(1);
 
       const raw = readFileSync(join(tempDir, 'notes', 'values.jsonl'), 'utf-8').trim();

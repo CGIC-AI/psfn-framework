@@ -6,6 +6,10 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { PromptLayer, PromptHistoryEntry } from './prompt-types.js';
+import {
+  CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
+  isCanonicalCharacterFoundationLayer,
+} from './canonical-foundation.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { withCapabilityRequirement } from '../capabilities/requirements.js';
 import {
@@ -471,6 +475,9 @@ export function createPromptLayerUpdateTool(
 
           const layer = store.getById(committed.stage.layerId);
           if (!layer) return textResultWithError(`Layer not found: ${committed.stage.layerId}`, true);
+          if (isCanonicalCharacterFoundationLayer(layer)) {
+            return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+          }
 
           const reason = normalizeReason(params.reason) ?? 'Committed staged prompt-layer update via prompt_layer_update';
           const updated = store.update(
@@ -492,6 +499,9 @@ export function createPromptLayerUpdateTool(
 
         const layer = resolvePromptLayerById(store, layerId);
         if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+        if (isCanonicalCharacterFoundationLayer(layer)) {
+          return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+        }
 
         const tier = getCapabilityTier();
         const needsCoolingOff = (
@@ -554,6 +564,9 @@ export function createPromptLayerToggleTool(store: PromptLayerStore): AgentTool<
         const layers = store.getAll();
         const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
         if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
+        if (isCanonicalCharacterFoundationLayer(layer)) {
+          return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+        }
 
         const toggled = store.toggle(layer.id);
         return textResult(`Layer "${toggled.name}" is now ${toggled.enabled ? 'enabled' : 'disabled'}`);

@@ -12,6 +12,10 @@ import type {
 } from '../../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../../identity/prompt-registry.js';
 import {
+  CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
+  isCanonicalCharacterFoundationLayer,
+} from '../../../identity/canonical-foundation.js';
+import {
   containsStructuredPromptSections,
   getMalformedStructuredPromptErrors,
   parseStructuredPromptForm,
@@ -241,6 +245,17 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? params.get('id') ?? '';
+    const layer = promptStore.getById(layerId);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      this.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'denied',
+        `Prompt layer edit was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`],
+      );
+      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
+    }
+
     const resolved = this.resolvePromptLayerContent(params);
     if ('error' in resolved) {
       return { ok: false, message: resolved.error };
@@ -386,13 +401,24 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
+    const layer = promptStore.getById(layerId);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      this.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'denied',
+        `Prompt layer toggle was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`],
+      );
+      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
+    }
+
     try {
       promptStore.toggle(layerId);
-      const layer = promptStore.getById(layerId);
+      const toggledLayer = promptStore.getById(layerId);
       return {
         ok: true,
-        message: `Toggled "${layer?.name ?? layerId}"`,
-        layer: layer ?? undefined,
+        message: `Toggled "${toggledLayer?.name ?? layerId}"`,
+        layer: toggledLayer ?? undefined,
       };
     } catch (error) {
       return {
@@ -410,16 +436,27 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
+    const layer = promptStore.getById(layerId);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      this.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'denied',
+        `Prompt layer rollback was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`],
+      );
+      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
+    }
+
     const version = parseInt(params.get('version') ?? '0', 10);
     try {
-      const layer = promptStore.rollback(layerId, version);
+      const rolledBackLayer = promptStore.rollback(layerId, version);
       this.injectPromptEditSystemNote(
-        `Admin rolled back ${layer.type} prompt layer "${layer.name}" using v${version} content (now v${layer.version}).`,
+        `Admin rolled back ${rolledBackLayer.type} prompt layer "${rolledBackLayer.name}" using v${version} content (now v${rolledBackLayer.version}).`,
       );
       return {
         ok: true,
-        message: `Rolled back "${layer.name}" to content from v${version}`,
-        layer,
+        message: `Rolled back "${rolledBackLayer.name}" to content from v${version}`,
+        layer: rolledBackLayer,
       };
     } catch (error) {
       return {

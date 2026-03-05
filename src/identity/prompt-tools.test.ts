@@ -10,6 +10,7 @@ import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities
 import { resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import { IdentityCoolingOffManager } from '../capabilities/safeguards.js';
 import { PromptLayerStore } from './prompt-store.js';
+import { CARD_BACKED_FOUNDATION_PROMPT_MESSAGE } from './canonical-foundation.js';
 import {
   createPromptLayerListTool,
   createPromptLayerGetTool,
@@ -42,6 +43,28 @@ function accessForTier(
 describe('Prompt Layer Tools', () => {
   let tmpDir: string;
   let store: PromptLayerStore;
+
+  function createCanonicalFoundationLayer() {
+    return store.create({
+      type: 'base',
+      name: 'Character Foundation',
+      identifier: 'main',
+      role: 'system',
+      promptOrder: 0,
+      content: 'original foundation',
+    });
+  }
+
+  function createNonFoundationBaseLayer(name = 'Character Foundation', identifier = 'alternate-base') {
+    return store.create({
+      type: 'base',
+      name,
+      identifier,
+      role: 'system',
+      promptOrder: 1,
+      content: 'original',
+    });
+  }
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'psfn-tools-'));
@@ -216,7 +239,7 @@ describe('Prompt Layer Tools', () => {
 
   describe('prompt_layer_update', () => {
     it('denies base layer updates in nursery tier', async () => {
-      const layer = store.create({ type: 'base', name: 'Base', content: 'original' });
+      const layer = createNonFoundationBaseLayer('Base', 'base-nursery');
       const tool = gateToolWithCapabilities(
         createPromptLayerUpdateTool(store),
         () => accessForTier('nursery'),
@@ -230,9 +253,28 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.content).toBe('original');
     });
 
-    it('allows base layer updates in apprentice and autonomous tiers', async () => {
+    it('rejects canonical Character Foundation updates in apprentice and autonomous tiers', async () => {
       for (const tier of ['apprentice', 'autonomous'] as const) {
-        const layer = store.create({ type: 'base', name: `Base-${tier}`, content: 'original' });
+        const layer = createCanonicalFoundationLayer();
+        const tool = gateToolWithCapabilities(
+          createPromptLayerUpdateTool(store),
+          () => accessForTier(tier),
+        );
+
+        const result = await tool.execute(`canonical-${tier}`, {
+          layer_id: layer.id,
+          content: `blocked-${tier}`,
+        });
+
+        expect(resultText(result)).toContain(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE);
+        expect(result.details?.isError).toBe(true);
+        expect(store.getById(layer.id)?.content).toBe('original foundation');
+      }
+    });
+
+    it('allows non-foundation base layer updates in apprentice and autonomous tiers', async () => {
+      for (const tier of ['apprentice', 'autonomous'] as const) {
+        const layer = createNonFoundationBaseLayer('Character Foundation', `alternate-${tier}`);
         const tool = gateToolWithCapabilities(
           createPromptLayerUpdateTool(store),
           () => accessForTier(tier),
@@ -257,7 +299,7 @@ describe('Prompt Layer Tools', () => {
         defaultCooldownMs: 5_000,
         idFactory: () => 'stage-1',
       });
-      const layer = store.create({ type: 'base', name: 'Base', content: 'original' });
+      const layer = createNonFoundationBaseLayer('Character Foundation', 'alternate-stage');
       const tool = gateToolWithCapabilities(
         createPromptLayerUpdateTool(store, {
           identityCoolingOff: manager,
@@ -295,7 +337,7 @@ describe('Prompt Layer Tools', () => {
         defaultCooldownMs: 5_000,
         idFactory: () => `stage-${++sequence}`,
       });
-      const layer = store.create({ type: 'base', name: 'Base', content: 'original' });
+      const layer = createNonFoundationBaseLayer('Character Foundation', 'alternate-cancel');
       const tool = gateToolWithCapabilities(
         createPromptLayerUpdateTool(store, {
           identityCoolingOff: manager,
@@ -417,7 +459,7 @@ describe('Prompt Layer Tools', () => {
 
   describe('prompt_layer_toggle', () => {
     it('denies base toggles in nursery tier', async () => {
-      const layer = store.create({ type: 'base', name: 'Base', content: 'base' });
+      const layer = createNonFoundationBaseLayer('Base', 'toggle-nursery');
       const tool = gateToolWithCapabilities(
         createPromptLayerToggleTool(store),
         () => accessForTier('nursery'),
@@ -431,10 +473,27 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.enabled).toBe(true);
     });
 
-    it('allows base toggles in apprentice and autonomous tiers', async () => {
+    it('rejects canonical Character Foundation toggles in apprentice and autonomous tiers', async () => {
       for (const tier of ['apprentice', 'autonomous'] as const) {
-        const baseA = store.create({ type: 'base', name: `Base-A-${tier}`, content: 'a' });
-        store.create({ type: 'base', name: `Base-B-${tier}`, content: 'b' });
+        createNonFoundationBaseLayer('Fallback Base', `fallback-${tier}`);
+        const layer = createCanonicalFoundationLayer();
+        const tool = gateToolWithCapabilities(
+          createPromptLayerToggleTool(store),
+          () => accessForTier(tier),
+        );
+
+        const result = await tool.execute(`toggle-canonical-${tier}`, { layer_id: layer.id });
+
+        expect(resultText(result)).toContain(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE);
+        expect(result.details?.isError).toBe(true);
+        expect(store.getById(layer.id)?.enabled).toBe(true);
+      }
+    });
+
+    it('allows non-foundation base toggles in apprentice and autonomous tiers', async () => {
+      for (const tier of ['apprentice', 'autonomous'] as const) {
+        const baseA = createNonFoundationBaseLayer('Character Foundation', `main-clone-${tier}`);
+        createNonFoundationBaseLayer(`Base-B-${tier}`, `support-${tier}`);
         const tool = gateToolWithCapabilities(
           createPromptLayerToggleTool(store),
           () => accessForTier(tier),

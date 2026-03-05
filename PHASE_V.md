@@ -112,8 +112,11 @@ Any new setting merged in Phase V must satisfy all of the following:
 - Completed child-stream work ready for fresh-session review/integration:
   - `PSFN-04dt.1` on `phase-v-04dt1` at `092fa78` (`canonical TurnRecord + TurnID provenance`)
   - `PSFN-04dt.5` on `phase-v-04dt5` at `591a4cf` + `88eeab4` (`evidence-aware retrieval scoring + regression coverage`)
-- Existing in-progress child stream:
-  - `PSFN-qyrl.1` on `phase-v-qyrl1` at `1cfd5ae` (`channel adapter manifest registry loader`) still needs fresh-worker validation before merge/close.
+- Integrated on `phase-v` in this session:
+  - `PSFN-qyrl.1` (`channel adapter manifest registry loader`) is now merged into `phase-v`, with an additional fail-closed guard so a manifest cannot silently skip a `required` channel by marking it disabled.
+- Next active Phase V focus:
+  - Review/integrate `PSFN-04dt.1` and `PSFN-04dt.5` child streams onto `phase-v`.
+  - Continue plugin seam work with `PSFN-qyrl.2` (STT registry) and `PSFN-qyrl.3` (TTS registry) after the channel registry checkpoint is closed.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 
 ## Work Process
@@ -142,3 +145,8 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
    - settings schema/ownership/UI contract
    - compositional pipeline correctness and diagnostics
 4. Manual companion validation before `phase-v` -> `main` merge.
+
+## Latest Validation Snapshot
+
+- `PSFN-qyrl.1` targeted regression: `npm test -- --run src/runtime/channel-lifecycle.test.ts`
+- `phase-v` build after channel registry integration: `npm run build`

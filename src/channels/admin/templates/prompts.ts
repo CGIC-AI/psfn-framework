@@ -150,10 +150,21 @@ export function promptLayersFragment(layers: PromptLayer[]): string {
     return a.priority - b.priority;
   });
 
+  const isCardBackedFoundationLayer = (layer: PromptLayer): boolean =>
+    layer.type === 'base' && (layer.identifier === 'main' || layer.name === 'Character Foundation');
+
   const rows = sorted.map(layer => {
     const color = LAYER_TYPE_COLORS[layer.type] ?? '#666';
     const statusClass = layer.enabled ? 'form-success' : 'form-error';
     const status = layer.enabled ? 'ON' : 'OFF';
+    const actions = isCardBackedFoundationLayer(layer)
+      ? '<span style="font-size:0.75rem;color:var(--text-muted)">Managed via Identity</span>'
+      : `
+          <form hx-post="/api/prompts/toggle" hx-target="#prompt-layers" hx-swap="innerHTML" style="display:inline">
+            <input type="hidden" name="layerId" value="${layer.id}">
+            <button type="submit" class="btn" style="font-size:0.75rem;padding:0.25rem 0.5rem">${layer.enabled ? 'Disable' : 'Enable'}</button>
+          </form>
+        `;
     return `
       <tr>
         <td><span class="badge" style="background:${color};color:white">${escapeHtml(layer.type)}</span></td>
@@ -163,12 +174,7 @@ export function promptLayersFragment(layers: PromptLayer[]): string {
         <td>v${layer.version}</td>
         <td>${escapeHtml(layer.updatedBy)}</td>
         <td>${new Date(layer.updatedAt).toLocaleDateString()}</td>
-        <td>
-          <form hx-post="/api/prompts/toggle" hx-target="#prompt-layers" hx-swap="innerHTML" style="display:inline">
-            <input type="hidden" name="layerId" value="${layer.id}">
-            <button type="submit" class="btn" style="font-size:0.75rem;padding:0.25rem 0.5rem">${layer.enabled ? 'Disable' : 'Enable'}</button>
-          </form>
-        </td>
+        <td>${actions}</td>
       </tr>`;
   }).join('');
 
@@ -244,6 +250,8 @@ export function promptDiffFragment(oldContent: string, newContent: string): stri
 export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry[]): string {
   const color = LAYER_TYPE_COLORS[layer.type] ?? '#666';
   const parsedContent = decomposePromptContent(layer.content);
+  const isCardBackedFoundationLayer =
+    layer.type === 'base' && (layer.identifier === 'main' || layer.name === 'Character Foundation');
 
   const historyRows = [...history].reverse().slice(0, 20).map(h => `
     <tr>
@@ -252,11 +260,15 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
       <td>${new Date(h.timestamp).toLocaleString()}</td>
       <td>${escapeHtml(h.previousChecksum)}</td>
       <td>
-        <form hx-post="/api/prompts/rollback" hx-target="#prompt-result" hx-swap="innerHTML" style="display:inline">
-          <input type="hidden" name="layerId" value="${layer.id}">
-          <input type="hidden" name="version" value="${h.version}">
-          <button type="submit" class="btn" style="font-size:0.75rem;padding:0.25rem 0.5rem">Restore</button>
-        </form>
+        ${isCardBackedFoundationLayer
+          ? '<span style="font-size:0.75rem;color:var(--text-muted)">Managed via Identity</span>'
+          : `
+            <form hx-post="/api/prompts/rollback" hx-target="#prompt-result" hx-swap="innerHTML" style="display:inline">
+              <input type="hidden" name="layerId" value="${layer.id}">
+              <input type="hidden" name="version" value="${h.version}">
+              <button type="submit" class="btn" style="font-size:0.75rem;padding:0.25rem 0.5rem">Restore</button>
+            </form>
+          `}
       </td>
     </tr>
   `).join('');
@@ -285,7 +297,19 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
     </div>
   `).join('');
 
-  const editorForm = parsedContent.errors.length > 0
+  const editorForm = isCardBackedFoundationLayer
+    ? `
+      <div style="background:rgba(77, 124, 15, 0.08);border:1px solid rgba(77, 124, 15, 0.25);border-radius:8px;padding:0.85rem 1rem;margin-bottom:1rem">
+        <p style="margin:0 0 0.5rem 0;font-weight:600">Character Foundation is card-backed</p>
+        <p style="margin:0 0 0.5rem 0;font-size:0.8rem;font-weight:600;color:var(--text-muted)">Managed via Identity</p>
+        <p style="margin:0;font-size:0.9rem;color:var(--text-muted)">
+          This layer is derived from the character card and cannot be edited or rolled back from Prompt Soil.
+          Update companion identity fields on the <a href="/legacy/identity">Identity page</a>; imports and card edits will refresh this layer automatically.
+        </p>
+      </div>
+      <pre style="margin:0;font-family:monospace;font-size:0.9rem;padding:0.75rem;border:1px solid var(--border);border-radius:6px;overflow:auto;white-space:pre-wrap">${escapeHtml(layer.content)}</pre>
+    `
+    : parsedContent.errors.length > 0
     ? `
       <form hx-post="/api/prompts/update" hx-target="#prompt-result" hx-swap="innerHTML">
         <input type="hidden" name="layerId" value="${layer.id}">
@@ -339,7 +363,7 @@ export function promptDetailPage(layer: PromptLayer, history: PromptHistoryEntry
       ${parseWarnings}
       ${parseErrors}
       ${editorForm}
-      <div id="prompt-diff-preview"></div>
+      ${isCardBackedFoundationLayer ? '' : '<div id="prompt-diff-preview"></div>'}
     </div>
 
     ${history.length > 0 ? `

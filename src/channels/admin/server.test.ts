@@ -2354,28 +2354,32 @@ describe('AdminServer', () => {
       expect(res.body).toContain(EXTRACTION_PROMPT_KEY);
     });
 
-    it('returns prompt layer detail page with structured section editors', async () => {
+    it('returns Character Foundation prompt detail page as read-only and points operators to Identity editing', async () => {
       const layer = promptStore.getAll()[0];
       const res = await request(port, 'GET', `/legacy/prompts/${encodeURIComponent(layer.id)}`);
       expect(res.status).toBe(200);
-      expect(res.body).toContain('name="description"');
-      expect(res.body).toContain('name="personality"');
-      expect(res.body).toContain('name="system_prompt"');
-      expect(res.body).toContain('name="post_history_instructions"');
-      expect(res.body).toContain('name="scenario"');
-      expect(res.body).toContain('name="mes_example"');
-      expect(res.body).toContain('name="first_mes"');
-      expect(res.body).toContain('name="identifier"');
-      expect(res.body).toContain('name="role"');
-      expect(res.body).toContain('name="promptOrder"');
-      expect(res.body).toContain('value="main"');
-      expect(res.body).toContain('value="0"');
-      expect(res.body).toContain('name="prompt_format" value="ccv3_sections_v1"');
+      expect(res.body).toContain('Character Foundation is card-backed');
+      expect(res.body).toContain('href="/legacy/identity"');
+      expect(res.body).toContain('Managed via Identity');
+      expect(res.body).not.toContain('name="description"');
+      expect(res.body).not.toContain('name="identifier"');
+      expect(res.body).not.toContain('name="prompt_format" value="ccv3_sections_v1"');
+      expect(res.body).not.toContain('/api/prompts/update');
       expect(res.body).toContain('Base test system prompt');
     });
 
     it('updates prompt layer via structured section form and persists composed content + metadata', async () => {
-      const layer = promptStore.getAll()[0];
+      const layer = promptStore.create({
+        type: 'runtime',
+        name: 'Runtime Prompt Editor',
+        content: [
+          '### description',
+          'Original description',
+          '',
+          '### personality',
+          'Original personality',
+        ].join('\n'),
+      });
       const body = new URLSearchParams({
         layerId: layer.id,
         identifier: 'garden.main',
@@ -2412,7 +2416,11 @@ describe('AdminServer', () => {
     });
 
     it('injects session system notes when admin updates prompt layers', async () => {
-      const layer = promptStore.getAll()[0];
+      const layer = promptStore.create({
+        type: 'runtime',
+        name: 'Runtime Session Note Layer',
+        content: 'Original runtime prompt body',
+      });
       sessionManager.recordUserMessage(
         'discord:identity-note',
         'hello',
@@ -2439,8 +2447,53 @@ describe('AdminServer', () => {
       expect(notes.some(note => note.includes(layer.name))).toBe(true);
     });
 
-    it('rejects invalid role metadata updates', async () => {
+    it('rejects Character Foundation prompt mutations through legacy prompt routes', async () => {
       const layer = promptStore.getAll()[0];
+      const before = promptStore.getById(layer.id);
+
+      const updateBody = new URLSearchParams({
+        layerId: layer.id,
+        content: 'Attempted override',
+      }).toString();
+      const updateRes = await request(port, 'POST', '/api/prompts/update', updateBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body).toContain('Character Foundation is derived from the character card and must be edited through Identity.');
+
+      const toggleBody = new URLSearchParams({
+        layerId: layer.id,
+      }).toString();
+      const toggleRes = await request(port, 'POST', '/api/prompts/toggle', toggleBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(toggleRes.status).toBe(200);
+      expect(toggleRes.body).toContain('Character Foundation is derived from the character card and must be edited through Identity.');
+
+      const rollbackBody = new URLSearchParams({
+        layerId: layer.id,
+        version: '1',
+      }).toString();
+      const rollbackRes = await request(port, 'POST', '/api/prompts/rollback', rollbackBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(rollbackRes.status).toBe(200);
+      expect(rollbackRes.body).toContain('Character Foundation is derived from the character card and must be edited through Identity.');
+
+      const after = promptStore.getById(layer.id);
+      expect(after).toMatchObject({
+        content: before?.content,
+        enabled: before?.enabled,
+        version: before?.version,
+      });
+    });
+
+    it('rejects invalid role metadata updates', async () => {
+      const layer = promptStore.create({
+        type: 'runtime',
+        name: 'Runtime Role Validation',
+        content: 'Runtime role validation body',
+      });
       const before = promptStore.getById(layer.id);
 
       const body = new URLSearchParams({
@@ -2462,7 +2515,11 @@ describe('AdminServer', () => {
     });
 
     it('rejects non-integer or negative promptOrder updates', async () => {
-      const layer = promptStore.getAll()[0];
+      const layer = promptStore.create({
+        type: 'runtime',
+        name: 'Runtime Prompt Order Validation',
+        content: 'Runtime prompt order validation body',
+      });
 
       const badDecimal = new URLSearchParams({
         layerId: layer.id,
@@ -2490,7 +2547,14 @@ describe('AdminServer', () => {
     });
 
     it('rejects malformed structured prompt content updates', async () => {
-      const layer = promptStore.getAll()[0];
+      const layer = promptStore.create({
+        type: 'runtime',
+        name: 'Runtime Structured Validation',
+        content: [
+          '### description',
+          'Runtime structured validation',
+        ].join('\n'),
+      });
       const before = promptStore.getById(layer.id);
       const beforeVersion = before?.version;
       const beforeContent = before?.content;
@@ -2513,7 +2577,11 @@ describe('AdminServer', () => {
     });
 
     it('shows malformed structured prompt errors on prompt detail page', async () => {
-      const layer = promptStore.getAll()[0];
+      const layer = promptStore.create({
+        type: 'runtime',
+        name: 'Runtime Malformed Structured Prompt',
+        content: 'Initial content',
+      });
       promptStore.update(
         layer.id,
         ['### description', 'A good start', '', '### unknown_section', 'Broken block'].join('\n'),
@@ -2639,7 +2707,11 @@ describe('AdminServer', () => {
     });
 
     it('shows unified audit timeline entries for tool, identity, external, and memory actions', async () => {
-      const layer = promptStore.getAll()[0];
+      const layer = promptStore.create({
+        type: 'runtime',
+        name: 'Runtime Audit Layer',
+        content: 'Original audit prompt body',
+      });
 
       await eventBus.emit('agent.tool.start', {
         channelId: 'timeline-ch',

@@ -106,6 +106,16 @@ Any new setting merged in Phase V must satisfy all of the following:
 - Do not push or merge Phase V changes to `main` before explicit manual validation sign-off.
 - Use `phase-v` for integration commits and test cycles until release approval.
 
+## Current Execution State
+
+- Top-level integration branch remains `phase-v`.
+- Completed child-stream work ready for fresh-session review/integration:
+  - `PSFN-04dt.1` on `phase-v-04dt1` at `092fa78` (`canonical TurnRecord + TurnID provenance`)
+  - `PSFN-04dt.5` on `phase-v-04dt5` at `591a4cf` + `88eeab4` (`evidence-aware retrieval scoring + regression coverage`)
+- Existing in-progress child stream:
+  - `PSFN-qyrl.1` on `phase-v-qyrl1` at `1cfd5ae` (`channel adapter manifest registry loader`) still needs fresh-worker validation before merge/close.
+- Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
+
 ## Work Process
 
 1. Use up to three parallel streams (worktrees + sub-agents).
@@ -113,6 +123,15 @@ Any new setting merged in Phase V must satisfy all of the following:
 3. Merge by dependency order only; blocker-unlocking work first.
 4. Resolve merge conflicts at orchestrator level.
 5. Keep beads updated continuously (status + dependencies + close evidence).
+
+### Fresh-Session Resume Rule
+
+When restarting Phase V orchestration after a thread-cap or stale-session failure:
+1. Start a brand-new top-level Codex session in `/mnt/samesung/ai/psfn-framework`.
+2. Reuse the existing `phase-v-*` worktrees/branches unless there is a concrete reason to recreate them.
+3. Confirm worker spawning is healthy before assigning new streams.
+4. Merge only validated child branches back into `phase-v`.
+5. Do not mark new work complete from a contaminated orchestration session that can no longer spawn/close workers reliably.
 
 ## Verification Gates
 

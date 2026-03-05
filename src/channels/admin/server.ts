@@ -43,6 +43,7 @@ import { AdminSchedulerService } from './services/scheduler-service.js';
 import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service.js';
 import { ValuesJournalStore } from '../../values/store.js';
 import {
+  resolveConfiguredCompanionDataDir,
   resolveLegacyValuesJournalPath,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
@@ -313,8 +314,9 @@ export class AdminServer implements Lifecycle {
       eventBus: config.eventBus,
       stateProvider: config.adaptiveToolsStateProvider ?? null,
     });
-    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(config.config.dataDir), {
-      legacyFilePaths: [resolveLegacyValuesJournalPath(config.config.dataDir)],
+    const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
+    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
+      legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
     });
     this.scheduler = config.scheduler;
     this.schedulerService = new AdminSchedulerService(config.scheduler, config.config.dataDir);

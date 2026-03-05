@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { resolveBackupsDir } from '../persistence/layout.js';
 
 export const DEFAULT_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_BACKUP_RETENTION_COUNT = 7;
@@ -31,7 +31,7 @@ export function resolveBackupRuntimeConfig(
   options: ResolveBackupRuntimeConfigOptions,
 ): BackupRuntimeConfig {
   const env = options.env ?? process.env;
-  const rootDir = env.BACKUP_ROOT_DIR?.trim() || join(options.dataDir, 'backups');
+  const rootDir = env.BACKUP_ROOT_DIR?.trim() || resolveBackupsDir(options.dataDir);
 
   return {
     intervalMs: parseIntegerEnv(

@@ -4,7 +4,7 @@
 
 import 'dotenv/config';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { LLMClient } from './llm/client.js';
@@ -49,6 +49,10 @@ import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
 import { parsePositiveIntEnv } from './utils/env.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
+import {
+  resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
+} from './persistence/layout.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -303,14 +307,16 @@ function buildGatewayChannelsConfigOverrides(
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const savedSettings = loadSettings(config.dataDir);
+  const systemDataDir = resolveConfiguredSystemDataDir(config);
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const savedSettings = loadSettings(systemDataDir);
   applySettings(config, savedSettings);
-  const modelsConfig = loadModelsConfig(config.dataDir, {
+  const modelsConfig = loadModelsConfig(systemDataDir, {
     defaultContextWindow: config.defaultContextWindow,
   });
   applySettings(config, modelsConfig);
   const channelsConfig = loadRuntimeChannelsConfig(
-    config.dataDir,
+    systemDataDir,
     process.env,
     buildGatewayChannelsConfigOverrides(config, savedSettings),
   );
@@ -375,6 +381,12 @@ async function main(): Promise<void> {
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
   log.info('Initializing...');
+  if (systemDataDir !== companionDataDir) {
+    log.info('Configured split persistence roots', {
+      systemDataDir,
+      companionDataDir,
+    });
+  }
 
   // Ensure gateway socket directory exists
   mkdirSync(dirname(socketPath), { recursive: true });
@@ -412,7 +424,7 @@ async function main(): Promise<void> {
     repoRoot: workspaceRoot,
   });
   const capabilityRuntime = new CapabilityRuntime({
-    dataDir: config.dataDir,
+    dataDir: systemDataDir,
     envTier: config.capabilityTier,
   });
   const eligibilityGate = createEligibilityGate(
@@ -445,7 +457,7 @@ async function main(): Promise<void> {
 
   // ── Audit database (separate from agent's runtime DB) ──
 
-  const auditDbPath = process.env.AUDIT_DB_PATH ?? './data/gateway-audit.db';
+  const auditDbPath = process.env.AUDIT_DB_PATH ?? join(systemDataDir, 'gateway-audit.db');
   const auditDb = initDatabase(auditDbPath, { foreignKeys: false });
   const auditStore = new AuditStore(auditDb);
   log.info(`Audit log: ${auditDbPath}`);

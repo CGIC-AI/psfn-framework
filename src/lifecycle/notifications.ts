@@ -4,8 +4,9 @@
 
 import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
+import { resolveLastActiveSessionPath } from '../persistence/layout.js';
 import { inferSessionChannelType, isInternalSessionId } from '../session/session-id.js';
 
 const log = createComponentLogger('Lifecycle');
@@ -31,8 +32,6 @@ export interface LifecycleNotifierConfig {
 }
 
 // ── Last-active session tracking ──
-
-const LAST_ACTIVE_FILE = 'last_active_channel.json';
 
 export interface LastActiveSessionData {
   sessionId: string;
@@ -152,7 +151,7 @@ function normalizeComputedLatestSession(
 }
 
 export function readLastActiveSession(dataDir: string): LastActiveSessionData | null {
-  const path = join(dataDir, LAST_ACTIVE_FILE);
+  const path = resolveLastActiveSessionPath(dataDir);
   const pending = pendingLastActiveWrites.get(path);
   if (pending?.latest.sessionId) {
     return { ...pending.latest };
@@ -170,7 +169,7 @@ export function readLastActiveSession(dataDir: string): LastActiveSessionData | 
 export function writeLastActiveSession(dataDir: string, input: LastActiveSessionWriteInput): void {
   const latest = toLastActiveSessionData(input);
   if (!latest) return;
-  const path = join(dataDir, LAST_ACTIVE_FILE);
+  const path = resolveLastActiveSessionPath(dataDir);
 
   const state = pendingLastActiveWrites.get(path) ?? {
     latest,

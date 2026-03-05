@@ -7,6 +7,7 @@ import {
 import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
+import { resolvePersistenceRoots } from './persistence/layout.js';
 
 // ── Channel-agnostic message types ──
 
@@ -342,6 +343,8 @@ export interface SubstrateConfig {
   discordToken: string;
   discordBotId: string;
   characterCardPath: string;
+  systemDataDir?: string;
+  companionDataDir?: string;
   dataDir: string;
   databasePath: string;
   sessionMessageLimit?: number;
@@ -602,10 +605,16 @@ export function loadConfig(): SubstrateConfig {
   const telegramAuthorizedUsers = parseStringListEnv(
     process.env.TELEGRAM_ALLOWED_USERS ?? process.env.TELEGRAM_AUTHORIZED_USERS,
   );
-  const dataDir = process.env.DATA_DIR ?? './data';
-  const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${dataDir}/character.json`;
+  const persistenceRoots = resolvePersistenceRoots({
+    systemDataDir: process.env.SYSTEM_DATA_DIR,
+    companionDataDir: process.env.COMPANION_DATA_DIR,
+    legacyDataDir: process.env.DATA_DIR,
+  });
+  const dataDir = persistenceRoots.systemDataDir;
+  const companionDataDir = persistenceRoots.companionDataDir;
+  const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${companionDataDir}/character.json`;
   const databaseBasename = sanitizeDatabaseBasename(process.env.DATABASE_BASENAME);
-  const databasePath = process.env.DATABASE_PATH ?? `${dataDir}/${databaseBasename}.db`;
+  const databasePath = process.env.DATABASE_PATH ?? `${companionDataDir}/${databaseBasename}.db`;
 
   return {
     primaryModel,
@@ -617,6 +626,8 @@ export function loadConfig(): SubstrateConfig {
     discordToken: process.env.DISCORD_TOKEN ?? '',
     discordBotId: process.env.DISCORD_BOT_ID ?? '',
     characterCardPath,
+    systemDataDir: persistenceRoots.systemDataDir,
+    companionDataDir,
     dataDir,
     databasePath,
     ...(sessionMessageLimit !== undefined ? { sessionMessageLimit } : {}),

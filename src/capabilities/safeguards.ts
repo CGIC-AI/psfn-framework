@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier } from '../types.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
+import { resolveSafeguardAuditTrailPath } from '../persistence/layout.js';
 import { parsePositiveIntEnv } from '../utils/env.js';
 
 export type ToolReversibility = 'reversible' | 'irreversible';
@@ -135,7 +136,9 @@ export function createSafeguardAuditTrail(
   fileName = 'safeguards-audit.jsonl',
 ): SafeguardAuditTrail {
   return new SafeguardAuditTrail({
-    filePath: join(dataDir, fileName),
+    filePath: fileName === 'safeguards-audit.jsonl'
+      ? resolveSafeguardAuditTrailPath(dataDir)
+      : join(dataDir, fileName),
   });
 }
 

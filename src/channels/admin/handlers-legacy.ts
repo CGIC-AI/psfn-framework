@@ -29,6 +29,7 @@ import type { SkillsRuntime } from '../../skills/runtime.js';
 import { AdminAuditTimelineStore } from './audit-timeline.js';
 import { ValuesJournalStore } from '../../values/store.js';
 import {
+  resolveConfiguredCompanionDataDir,
   resolveLegacyValuesJournalPath,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
@@ -109,8 +110,9 @@ export class LegacyAdminHandlers {
     this.promptRegistry = deps.promptRegistry ?? null;
     this.skillsRuntime = deps.skillsRuntime ?? null;
     this.confirmationQueueApi = deps.confirmationQueueApi ?? null;
-    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(this.config.dataDir), {
-      legacyFilePaths: [resolveLegacyValuesJournalPath(this.config.dataDir)],
+    const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
+    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
+      legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
     });
 
     this.eventBus.on('agent.turn.usage', ({ usage }) => {

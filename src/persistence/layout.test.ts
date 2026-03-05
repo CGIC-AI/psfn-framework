@@ -13,12 +13,25 @@ import { tmpdir } from 'node:os';
 import {
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
+  resolveBackupsDir,
+  resolveCharacterCardHistoryPath,
+  resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
   resolveContactsDir,
   resolveContinuityDir,
+  resolveHeartbeatPolicyPath,
+  resolveIdentityAssetsDir,
   resolveLegacyValuesJournalPath,
+  resolveLastActiveSessionPath,
   resolveNotesDir,
+  resolvePersistenceRoots,
+  resolvePromptHistoryPath,
+  resolvePromptLayersPath,
+  resolvePromptRegistryHistoryPath,
+  resolvePromptRegistryPath,
   resolveReflectionJournalPath,
   resolveReflectionNotesDir,
+  resolveSafeguardAuditTrailPath,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
   resolveValuesJournalPath,
@@ -51,8 +64,8 @@ describe('persistence layout', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('resolves canonical paths under a data directory', () => {
-    const dataDir = join(tempDir, 'data');
+  it('resolves canonical companion-state paths under a companion data directory', () => {
+    const dataDir = join(tempDir, 'companion');
 
     expect(resolveSessionsDir(dataDir)).toBe(join(dataDir, 'sessions'));
     expect(resolveNotesDir(dataDir)).toBe(join(dataDir, 'notes'));
@@ -63,6 +76,72 @@ describe('persistence layout', () => {
     expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'notes', 'reflections'));
     expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'journal.jsonl'));
     expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'notes', 'scratchpad.json'));
+    expect(resolveCharacterCardHistoryPath(dataDir)).toBe(join(dataDir, 'character-card-history.jsonl'));
+    expect(resolvePromptLayersPath(dataDir)).toBe(join(dataDir, 'prompt-layers.json'));
+    expect(resolvePromptHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-history.jsonl'));
+    expect(resolvePromptRegistryPath(dataDir)).toBe(join(dataDir, 'prompt-registry.json'));
+    expect(resolvePromptRegistryHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-registry-history.jsonl'));
+    expect(resolveHeartbeatPolicyPath(dataDir)).toBe(join(dataDir, 'heartbeat-policy.json'));
+    expect(resolveSafeguardAuditTrailPath(dataDir)).toBe(join(dataDir, 'safeguards-audit.jsonl'));
+    expect(resolveIdentityAssetsDir(dataDir)).toBe(join(dataDir, 'identity-assets'));
+    expect(resolveBackupsDir(dataDir)).toBe(join(dataDir, 'backups'));
+    expect(resolveLastActiveSessionPath(dataDir)).toBe(join(dataDir, 'last_active_channel.json'));
+  });
+
+  it('uses the legacy shared data root when split roots are not configured', () => {
+    expect(resolvePersistenceRoots()).toEqual({
+      systemDataDir: './data',
+      companionDataDir: './data',
+      usesLegacySharedDataDir: true,
+    });
+    expect(resolvePersistenceRoots({ legacyDataDir: '/tmp/shared-root' })).toEqual({
+      systemDataDir: '/tmp/shared-root',
+      companionDataDir: '/tmp/shared-root',
+      usesLegacySharedDataDir: true,
+    });
+  });
+
+  it('resolves explicit system/companion split roots', () => {
+    expect(resolvePersistenceRoots({
+      systemDataDir: '/tmp/system-data',
+      companionDataDir: '/tmp/companion-data',
+    })).toEqual({
+      systemDataDir: '/tmp/system-data',
+      companionDataDir: '/tmp/companion-data',
+      usesLegacySharedDataDir: false,
+    });
+  });
+
+  it('rejects ambiguous or invalid split-root configuration', () => {
+    expect(() => resolvePersistenceRoots({
+      systemDataDir: '/tmp/system-data',
+    })).toThrow('SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together');
+    expect(() => resolvePersistenceRoots({
+      companionDataDir: '/tmp/companion-data',
+    })).toThrow('SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together');
+    expect(() => resolvePersistenceRoots({
+      systemDataDir: '/tmp/shared',
+      companionDataDir: '/tmp/shared',
+    })).toThrow('SYSTEM_DATA_DIR and COMPANION_DATA_DIR must point to different roots');
+  });
+
+  it('resolves configured system and companion dirs from config-style objects', () => {
+    expect(resolveConfiguredSystemDataDir({
+      dataDir: '/tmp/legacy',
+    })).toBe('/tmp/legacy');
+    expect(resolveConfiguredCompanionDataDir({
+      dataDir: '/tmp/legacy',
+    })).toBe('/tmp/legacy');
+    expect(resolveConfiguredSystemDataDir({
+      dataDir: '/tmp/legacy',
+      systemDataDir: '/tmp/system',
+      companionDataDir: '/tmp/companion',
+    })).toBe('/tmp/system');
+    expect(resolveConfiguredCompanionDataDir({
+      dataDir: '/tmp/legacy',
+      systemDataDir: '/tmp/system',
+      companionDataDir: '/tmp/companion',
+    })).toBe('/tmp/companion');
   });
 
   it('creates all expected persistence directories', () => {

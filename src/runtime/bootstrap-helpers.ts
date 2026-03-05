@@ -11,7 +11,12 @@ import {
   resolveDefaultStreamingSttProvider,
   type StreamingSttProvider,
 } from '../voice/connectors/stt/index.js';
-import type { StreamingTtsProvider } from '../voice/connectors/tts/index.js';
+import {
+  isStreamingTtsProvider,
+  isStreamingTtsProviderConfigured,
+  resolveDefaultStreamingTtsProvider,
+  type StreamingTtsProvider,
+} from '../voice/connectors/tts/index.js';
 
 export type RuntimeVoiceSttProvider = StreamingSttProvider | 'disabled';
 export type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
@@ -46,10 +51,20 @@ export function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): Runtime
 }
 
 export function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
-  const configured = (config as SubstrateConfig & { ttsProvider?: RuntimeVoiceTtsProvider }).ttsProvider;
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 'disabled' is valid at runtime via settings
-  if (configured === 'elevenlabs' || configured === 'echo' || configured === 'disabled') return configured;
-  return 'elevenlabs';
+  const configured = config.ttsProvider;
+  if (configured === 'disabled') return configured;
+  if (typeof configured === 'string') {
+    const normalized = configured.trim().toLowerCase();
+    if (!normalized) {
+      throw new Error('Invalid runtime voice TTS provider: provider id cannot be empty');
+    }
+    if (!isStreamingTtsProvider(normalized)) {
+      throw new Error(`Unsupported runtime voice TTS provider: ${configured}`);
+    }
+    return normalized;
+  }
+
+  return resolveDefaultStreamingTtsProvider(config) ?? 'disabled';
 }
 
 export function resolveRuntimeVoiceProviderGate(
@@ -59,18 +74,8 @@ export function resolveRuntimeVoiceProviderGate(
   const sttProvider = resolveRuntimeVoiceSttProvider(config);
   const ttsProvider = resolveRuntimeVoiceTtsProvider(config);
   const sttEnabled = sttProvider !== 'disabled' && isStreamingSttProviderConfigured(sttProvider, config);
-
-  const allowEchoDefaults = options.allowEchoDefaults === true;
-  const requireElevenLabsVoiceId = options.requireElevenLabsVoiceId === true;
-
-  let ttsEnabled = false;
-  if (ttsProvider === 'echo') {
-    ttsEnabled = allowEchoDefaults || Boolean(config.echoTtsUrl && config.echoTtsVoice);
-  } else if (ttsProvider === 'elevenlabs') {
-    ttsEnabled = requireElevenLabsVoiceId
-      ? Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId)
-      : Boolean(config.elevenLabsApiKey);
-  }
+  const ttsEnabled = ttsProvider !== 'disabled'
+    && isStreamingTtsProviderConfigured(ttsProvider, config, options);
 
   return {
     sttProvider,

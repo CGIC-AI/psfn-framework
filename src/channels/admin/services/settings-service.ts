@@ -35,6 +35,7 @@ import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
 import { toErrorMessage } from '../../../utils/errors.js';
 import { isStreamingSttProvider } from '../../../voice/connectors/stt/index.js';
+import { isStreamingTtsProvider } from '../../../voice/connectors/tts/index.js';
 import type {
   AdminSettingsData,
   AdminSettingsService,
@@ -45,7 +46,6 @@ import type {
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local_endpoint']);
 const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
-const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
 const log = createComponentLogger('AdminSettingsService');
 
 type SettingsMutationResult =
@@ -384,6 +384,38 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateTtsProviderField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('ttsProvider' in payload)) return;
+    const value = payload.ttsProvider;
+    if (typeof value !== 'string') {
+      this.pushFieldError(errors, 'ttsProvider', 'ttsProvider must be a string', 'invalid_type');
+      return;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      this.pushFieldError(
+        errors,
+        'ttsProvider',
+        'ttsProvider must be "disabled" or a registered TTS provider id',
+        'invalid_tts_provider',
+      );
+      return;
+    }
+
+    if (normalized !== 'disabled' && !isStreamingTtsProvider(normalized)) {
+      this.pushFieldError(
+        errors,
+        'ttsProvider',
+        'ttsProvider must be "disabled" or a registered TTS provider id',
+        'invalid_tts_provider',
+      );
+    }
+  }
+
   private validateStringArrayField(
     payload: Record<string, unknown>,
     field: string,
@@ -446,7 +478,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     this.validateEnumField(payload, 'importProcessingRouteMode', IMPORT_ROUTE_MODE_VALUES, errors);
     this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES, errors);
     this.validateEnumField(payload, 'capabilityTier', new Set(CAPABILITY_TIER_VALUES), errors);
-    this.validateEnumField(payload, 'ttsProvider', TTS_PROVIDER_VALUES, errors);
+    this.validateTtsProviderField(payload, errors);
     this.validateSttProviderField(payload, errors);
 
     for (const field of STRING_ARRAY_SETTINGS_FIELDS) {

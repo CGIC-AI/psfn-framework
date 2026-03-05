@@ -25,6 +25,7 @@ import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
 
 function request(
   port: number,
@@ -1210,6 +1211,35 @@ describe('AdminServer JSON API routes', () => {
       expect(res.status).toBe(200);
       expect(loadSettings(tempDir).sttProvider).toBe('plugin-test');
       expect((testConfig as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('plugin-test');
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('accepts registered TTS provider ids through admin settings patch', async () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in admin settings validation');
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+    });
+
+    try {
+      const res = await request(
+        port,
+        'PATCH',
+        '/api/admin/settings',
+        JSON.stringify({
+          ttsProvider: 'plugin-test',
+        }),
+        authHeaders,
+      );
+
+      expect(res.status).toBe(200);
+      expect(loadSettings(tempDir).ttsProvider).toBe('plugin-test');
+      expect((testConfig as SubstrateConfig & { ttsProvider?: string }).ttsProvider).toBe('plugin-test');
     } finally {
       restoreProvider();
     }

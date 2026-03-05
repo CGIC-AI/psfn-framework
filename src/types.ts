@@ -390,7 +390,7 @@ export interface SubstrateConfig {
   voiceDaveEncryption?: boolean;
   voiceDecryptionFailureTolerance?: number;
   sttProvider?: StreamingSttProvider | 'disabled';
-  ttsProvider?: StreamingTtsProvider;
+  ttsProvider?: StreamingTtsProvider | 'disabled';
   deepgramApiKey?: string;
   deepgramModel?: string;
   elevenLabsApiKey?: string;
@@ -586,9 +586,8 @@ export function loadConfig(): SubstrateConfig {
   const sttProvider = parseRuntimeVoiceSttProviderEnv(
     process.env.STT_PROVIDER ?? process.env.VOICE_STT_PROVIDER,
   );
-  const ttsProvider = parseStreamingTtsProviderEnv(
+  const ttsProvider = parseRuntimeVoiceTtsProviderEnv(
     process.env.TTS_PROVIDER ?? process.env.VOICE_TTS_PROVIDER,
-    'elevenlabs',
   );
   const echoTtsUrl = parseOptionalStringEnv(process.env.ECHO_TTS_URL);
   const echoTtsVoice = parseOptionalStringEnv(process.env.ECHO_TTS_VOICE);
@@ -677,7 +676,7 @@ export function loadConfig(): SubstrateConfig {
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
     ...(sttProvider ? { sttProvider } : {}),
-    ttsProvider,
+    ...(ttsProvider ? { ttsProvider } : {}),
     deepgramApiKey: process.env.DEEPGRAM_API_KEY,
     deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
@@ -810,16 +809,13 @@ function parseOptionalStringEnv(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function parseStreamingTtsProviderEnv(
+function parseRuntimeVoiceTtsProviderEnv(
   value: string | undefined,
-  fallback: StreamingTtsProvider,
-): StreamingTtsProvider {
-  if (typeof value !== 'string') return fallback;
+): StreamingTtsProvider | 'disabled' | undefined {
+  if (typeof value !== 'string') return undefined;
   const trimmed = value.trim().toLowerCase();
-  if (trimmed === 'elevenlabs' || trimmed === 'echo') {
-    return trimmed;
-  }
-  return fallback;
+  if (!trimmed) return undefined;
+  return trimmed as StreamingTtsProvider | 'disabled';
 }
 
 function parseRuntimeVoiceSttProviderEnv(

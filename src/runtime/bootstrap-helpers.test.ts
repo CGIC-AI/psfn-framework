@@ -10,6 +10,7 @@ import {
   resolveRuntimeVoiceTtsProvider,
 } from './bootstrap-helpers.js';
 import { registerStreamingSttProvider } from '../voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../voice/connectors/tts/index.js';
 
 describe('resolveRuntimeVoiceSttProvider', () => {
   it('uses explicit provider when configured', () => {
@@ -59,10 +60,44 @@ describe('resolveRuntimeVoiceSttProvider', () => {
 describe('resolveRuntimeVoiceTtsProvider', () => {
   it('uses explicit provider when configured', () => {
     expect(resolveRuntimeVoiceTtsProvider({ ttsProvider: 'echo' } as any)).toBe('echo');
+    expect(resolveRuntimeVoiceTtsProvider({ ttsProvider: 'disabled' } as any)).toBe('disabled');
   });
 
-  it('defaults to elevenlabs when provider is not configured', () => {
-    expect(resolveRuntimeVoiceTtsProvider({} as any)).toBe('elevenlabs');
+  it('falls back to elevenlabs when api key is present', () => {
+    expect(resolveRuntimeVoiceTtsProvider({ elevenLabsApiKey: 'elevenlabs-key' } as any)).toBe('elevenlabs');
+  });
+
+  it('falls back to disabled when not configured and no TTS credentials are set', () => {
+    expect(resolveRuntimeVoiceTtsProvider({} as any)).toBe('disabled');
+  });
+
+  it('throws for unsupported configured providers instead of falling back', () => {
+    expect(() => resolveRuntimeVoiceTtsProvider({
+      ttsProvider: 'invalid-provider',
+      elevenLabsApiKey: 'elevenlabs-key',
+    } as any)).toThrow('Unsupported runtime voice TTS provider: invalid-provider');
+  });
+
+  it('accepts registered providers without core switch edits', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: () => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer: async () => Buffer.alloc(0),
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+    });
+
+    try {
+      expect(resolveRuntimeVoiceTtsProvider({ ttsProvider: 'plugin-test' } as any)).toBe('plugin-test');
+    } finally {
+      restoreProvider();
+    }
   });
 });
 
@@ -169,6 +204,46 @@ describe('resolveRuntimeVoiceProviderGate', () => {
         sttProvider: 'plugin-test',
       } as any);
       expect(disabledGate.sttEnabled).toBe(false);
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('uses registered TTS provider metadata to determine enablement', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: () => ({
+        id: 'plugin-test',
+        synthesizeStream: async () => ({
+          audio: (async function* emptyAudio() {})(),
+          cancel: async () => {},
+        }),
+        synthesizeBuffer: async () => Buffer.alloc(0),
+      }),
+      metadata: {
+        canAutoEnable: true,
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+    });
+
+    try {
+      const enabledGate = resolveRuntimeVoiceProviderGate({
+        ttsProvider: 'plugin-test',
+        pluginTtsToken: 'plugin-key',
+      } as any);
+      expect(enabledGate.ttsEnabled).toBe(true);
+      expect(enabledGate.ttsProvider).toBe('plugin-test');
+
+      const defaultGate = resolveRuntimeVoiceProviderGate({
+        pluginTtsToken: 'plugin-key',
+        elevenLabsApiKey: '',
+      } as any);
+      expect(defaultGate.ttsEnabled).toBe(true);
+      expect(defaultGate.ttsProvider).toBe('plugin-test');
+
+      const disabledGate = resolveRuntimeVoiceProviderGate({
+        ttsProvider: 'plugin-test',
+      } as any);
+      expect(disabledGate.ttsEnabled).toBe(false);
     } finally {
       restoreProvider();
     }

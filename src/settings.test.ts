@@ -14,6 +14,7 @@ import {
 } from './settings.js';
 import type { SubstrateConfig } from './types.js';
 import { registerStreamingSttProvider } from './voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from './voice/connectors/tts/index.js';
 
 function makeConfig(): SubstrateConfig {
   return {
@@ -600,6 +601,15 @@ describe('settings', () => {
       expect((config as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('plugin-test');
     });
 
+    it('preserves plugin TTS provider ids without core switch edits', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        ttsProvider: 'plugin-test',
+      });
+
+      expect((config as SubstrateConfig & { ttsProvider?: string }).ttsProvider).toBe('plugin-test');
+    });
+
     it('clears voice override fields when empty strings are provided', () => {
       const config = makeConfig();
       applySettings(config, {
@@ -695,6 +705,19 @@ describe('settings', () => {
       const config = makeConfig();
       applySettings(config, loaded);
       expect((config as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('plugin-test');
+    });
+
+    it('save → load → apply preserves plugin TTS provider ids', () => {
+      saveSettings(tempDir, {
+        ttsProvider: 'plugin-test',
+      });
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.ttsProvider).toBe('plugin-test');
+
+      const config = makeConfig();
+      applySettings(config, loaded);
+      expect((config as SubstrateConfig & { ttsProvider?: string }).ttsProvider).toBe('plugin-test');
     });
   });
 
@@ -911,6 +934,32 @@ describe('settings', () => {
       }
     });
 
+    it('accepts registered TTS provider ids', () => {
+      const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+        createConnector: () => ({
+          id: 'plugin-test',
+          synthesizeStream: async () => ({
+            audio: (async function* emptyAudio() {})(),
+            cancel: async () => {},
+          }),
+          synthesizeBuffer: async () => Buffer.alloc(0),
+        }),
+        metadata: {
+          isConfigured: (config) => Boolean(config.pluginTtsToken),
+        },
+      });
+
+      try {
+        const [settings, errors] = parseSettingsForm(new URLSearchParams({
+          ttsProvider: 'plugin-test',
+        }));
+        expect(errors).toEqual([]);
+        expect(settings.ttsProvider).toBe('plugin-test');
+      } finally {
+        restoreProvider();
+      }
+    });
+
     it('rejects invalid capabilityTier value', () => {
       const params = new URLSearchParams({
         capabilityTier: 'invalid_tier',
@@ -1034,6 +1083,38 @@ describe('settings', () => {
         runtimeConfig.pluginSttToken = 'plugin-key';
         config.deepgramApiKey = '';
         expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('plugin-test');
+      } finally {
+        restoreProvider();
+      }
+    });
+
+    it('surfaces plugin TTS providers in snapshot and default resolution', () => {
+      const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+        createConnector: () => ({
+          id: 'plugin-test',
+          synthesizeStream: async () => ({
+            audio: (async function* emptyAudio() {})(),
+            cancel: async () => {},
+          }),
+          synthesizeBuffer: async () => Buffer.alloc(0),
+        }),
+        metadata: {
+          canAutoEnable: true,
+          isConfigured: (config) => Boolean(config.pluginTtsToken),
+        },
+      });
+
+      try {
+        const config = makeConfig();
+        const runtimeConfig = config as SubstrateConfig & { ttsProvider?: string; pluginTtsToken?: string };
+
+        runtimeConfig.ttsProvider = 'plugin-test';
+        expect(getRuntimeSettingsSnapshot(config).ttsProvider).toBe('plugin-test');
+
+        runtimeConfig.ttsProvider = undefined;
+        runtimeConfig.pluginTtsToken = 'plugin-key';
+        config.elevenLabsApiKey = '';
+        expect(getRuntimeSettingsSnapshot(config).ttsProvider).toBe('plugin-test');
       } finally {
         restoreProvider();
       }

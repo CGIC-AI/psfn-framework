@@ -362,6 +362,78 @@ describe('MemoryRetriever trust-gated filtering', () => {
     );
   });
 
+  it('downranks low-confidence single-source memory unless explicitly queried', async () => {
+    const fragileMemory = makeMemory({
+      text: 'Nebularkite protocol keyphrase marker',
+      sensitivity: 'public',
+      sourceRef: 'api:single',
+      provenanceRefs: [],
+      similarity: 0.99,
+      importance: 0.95,
+      salience: 0.95,
+      confidence: 0.2,
+    });
+    const stableMemory = makeMemory({
+      text: 'Stable corroborated memory',
+      sensitivity: 'public',
+      sourceRef: 'api:stable',
+      provenanceRefs: ['discord:stable', 'telegram:stable'],
+      similarity: 0.62,
+      importance: 0.9,
+      salience: 0.9,
+      confidence: 0.92,
+    });
+    const memories = [fragileMemory, stableMemory];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const genericResult = await retriever.retrieve('general checkin question', 'api:test', 'primary');
+    expect(genericResult.indexOf('Stable corroborated memory')).toBeLessThan(
+      genericResult.indexOf('Nebularkite protocol keyphrase marker'),
+    );
+
+    const explicitResult = await retriever.retrieve(
+      'can you recall nebularkite protocol keyphrase?',
+      'api:test',
+      'primary',
+    );
+    expect(explicitResult.indexOf('Nebularkite protocol keyphrase marker')).toBeLessThan(
+      explicitResult.indexOf('Stable corroborated memory'),
+    );
+  });
+
+  it('downranks contradicted memories relative to supported alternatives', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Contradicted memory candidate',
+        sensitivity: 'public',
+        tags: ['contradicted'],
+        similarity: 0.97,
+        confidence: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+      makeMemory({
+        text: 'Supported stable memory candidate',
+        sensitivity: 'public',
+        provenanceRefs: ['discord:stable', 'telegram:stable'],
+        similarity: 0.9,
+        confidence: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('memory check', 'api:test', 'primary');
+    expect(result.indexOf('Supported stable memory candidate')).toBeLessThan(
+      result.indexOf('Contradicted memory candidate'),
+    );
+  });
+
   it('returns empty string when all memories are filtered out by trust', async () => {
     const memories = [
       makeMemory({ text: 'Secret stuff', sensitivity: 'confidential', similarity: 0.95 }),
@@ -1099,6 +1171,8 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(typeof telemetry.topScore).toBe('number');
     expect(typeof telemetry.bottomScore).toBe('number');
     expect((telemetry.topScore as number)).toBeGreaterThan(0);
+    expect(typeof telemetry.evidenceSupportAverage).toBe('number');
+    expect(telemetry.contradictionAdjustedCount).toBe(0);
   });
 
   it('emits scoreGuaranteedCount in telemetry when memories are rescued', async () => {
@@ -1124,6 +1198,37 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(calls).toHaveLength(1);
     const telemetry = calls[0][1] as Record<string, unknown>;
     expect(telemetry.scoreGuaranteedCount).toBeGreaterThan(0);
+  });
+
+  it('emits contradiction/suppression diagnostics in telemetry', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Contradicted memory with low confidence',
+        sensitivity: 'public',
+        similarity: 0.98,
+        confidence: 0.2,
+        tags: ['contradicted'],
+      }),
+      makeMemory({
+        text: 'Stable memory with stronger support',
+        sensitivity: 'public',
+        similarity: 0.85,
+        confidence: 0.9,
+        provenanceRefs: ['discord:stable', 'telegram:stable'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await retriever.retrieve('general status', 'api:test', 'primary');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    const telemetry = calls[0][1] as Record<string, unknown>;
+    expect(telemetry.contradictionAdjustedCount).toBeGreaterThanOrEqual(1);
+    expect(telemetry.lowConfidenceSuppressedCount).toBeGreaterThanOrEqual(1);
   });
 
   it('emits telemetry with pipeline stage counts for trust-filtered scenario', async () => {

@@ -45,6 +45,11 @@ const SCORE_GUARANTEE_FLOOR = 0.01;
 interface ScoredMemory {
   memory: PurrMemory & { similarity: number };
   baseScore: number;
+  evidenceSupport: number;
+  contradictionPenaltyMultiplier: number;
+  explicitlyQueried: boolean;
+  lowConfidenceSingleSourceSuppressed: boolean;
+  evidenceSourceCount: number;
   privacyRisk: number;
   privacyPenalty: number;
   privacyBreakdown: MemoryPrivacyRiskBreakdown;
@@ -63,10 +68,17 @@ interface RetrievalDecisionDiagnostics {
     id: string;
     score: number;
     baseScore: number;
+    evidenceSupport: number;
+    contradictionPenaltyMultiplier: number;
+    lowConfidenceSingleSourceSuppressed: boolean;
+    explicitlyQueried: boolean;
     privacyRisk: number;
     privacyPenalty: number;
     sensitivity: SensitivityLevel;
   }>;
+  contradictionAdjustedCount: number;
+  lowConfidenceSuppressedCount: number;
+  explicitQueryOverrideCount: number;
 }
 
 interface RetrievalTelemetry {
@@ -91,6 +103,10 @@ interface RetrievalTelemetry {
   policyRejectedCount?: number;
   scoreRejectedCount?: number;
   scoreGuaranteedCount?: number;
+  evidenceSupportAverage?: number;
+  contradictionAdjustedCount?: number;
+  lowConfidenceSuppressedCount?: number;
+  explicitQueryOverrideCount?: number;
   visibilityScope: BroadcastVisibilityScope | 'non_broadcast';
   operatorApproval: boolean;
   provenanceRefs: string[];
@@ -331,6 +347,9 @@ export class MemoryRetriever implements MemoryProvider {
         rejectedByScore: 0,
         selectedCount: 0,
         topSelected: [],
+        contradictionAdjustedCount: 0,
+        lowConfidenceSuppressedCount: 0,
+        explicitQueryOverrideCount: 0,
       };
       const policyAllowed: Array<PurrMemory & { similarity: number }> = [];
 
@@ -385,6 +404,27 @@ export class MemoryRetriever implements MemoryProvider {
       const allScored = policyAllowed
         .map(memory => ({ memory, ...computeRetrievalScore(memory, contextText) }))
         .sort((a, b) => b.score - a.score);
+
+      diagnostics.contradictionAdjustedCount = allScored
+        .filter(item => item.contradictionPenaltyMultiplier < 1)
+        .length;
+      diagnostics.lowConfidenceSuppressedCount = allScored
+        .filter(item => item.lowConfidenceSingleSourceSuppressed)
+        .length;
+      diagnostics.explicitQueryOverrideCount = allScored
+        .filter(item => item.explicitlyQueried && item.evidenceSupport < 0.5)
+        .length;
+      telemetry.evidenceSupportAverage = allScored.length > 0
+        ? Number(
+          (
+            allScored.reduce((sum, item) => sum + item.evidenceSupport, 0)
+            / allScored.length
+          ).toFixed(4),
+        )
+        : 0;
+      telemetry.contradictionAdjustedCount = diagnostics.contradictionAdjustedCount;
+      telemetry.lowConfidenceSuppressedCount = diagnostics.lowConfidenceSuppressedCount;
+      telemetry.explicitQueryOverrideCount = diagnostics.explicitQueryOverrideCount;
 
       const positiveScored = allScored.filter(c => c.score > 0);
       const zeroScored = allScored.filter(c => c.score <= 0);
@@ -448,6 +488,10 @@ export class MemoryRetriever implements MemoryProvider {
         id: item.memory.id,
         score: Number(item.score.toFixed(4)),
         baseScore: Number(item.baseScore.toFixed(4)),
+        evidenceSupport: Number(item.evidenceSupport.toFixed(4)),
+        contradictionPenaltyMultiplier: Number(item.contradictionPenaltyMultiplier.toFixed(4)),
+        lowConfidenceSingleSourceSuppressed: item.lowConfidenceSingleSourceSuppressed,
+        explicitlyQueried: item.explicitlyQueried,
         privacyRisk: Number(item.privacyRisk.toFixed(4)),
         privacyPenalty: Number(item.privacyPenalty.toFixed(4)),
         sensitivity: item.memory.sensitivity,
@@ -467,6 +511,10 @@ export class MemoryRetriever implements MemoryProvider {
         rejectedByPolicy: diagnostics.rejectedByPolicy,
         rejectedByScore: diagnostics.rejectedByScore,
         scoreGuaranteedCount,
+        evidenceSupportAverage: telemetry.evidenceSupportAverage,
+        contradictionAdjustedCount: diagnostics.contradictionAdjustedCount,
+        lowConfidenceSuppressedCount: diagnostics.lowConfidenceSuppressedCount,
+        explicitQueryOverrideCount: diagnostics.explicitQueryOverrideCount,
         budgetMode: budget.mode,
         tokenBudget: budget.tokenBudget,
       });
@@ -730,6 +778,11 @@ function computeRetrievalScore(
 ): {
   score: number;
   baseScore: number;
+  evidenceSupport: number;
+  contradictionPenaltyMultiplier: number;
+  explicitlyQueried: boolean;
+  lowConfidenceSingleSourceSuppressed: boolean;
+  evidenceSourceCount: number;
   privacyRisk: number;
   privacyPenalty: number;
   privacyBreakdown: MemoryPrivacyRiskBreakdown;
@@ -741,7 +794,7 @@ function computeRetrievalScore(
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
     : 1;
-  const baseScore = (
+  const rawBaseScore = (
     memory.similarity *
     recencyBoost *
     emotionalWeight *
@@ -750,16 +803,123 @@ function computeRetrievalScore(
     typePriorityBoost *
     boundarySimilarityBoost
   );
+  const evidence = deriveEvidenceSupport(memory);
+  const contradictionPenaltyMultiplier = deriveContradictionPenalty(memory);
+  const explicitlyQueried = hasExplicitMemoryMention(contextText, memory.text);
+  const lowConfidenceSingleSourceSuppressed = (
+    evidence.sourceCount <= 1
+    && memory.confidence < 0.45
+    && !explicitlyQueried
+  );
+  const evidenceBoost = 0.45 + (evidence.support * 0.55);
+  const baseScore = rawBaseScore * evidenceBoost * contradictionPenaltyMultiplier;
   const privacyEvaluation = evaluateMemoryPrivacyRisk(memory);
   const privacyPenalty = baseScore * privacyEvaluation.risk * MEMORY_CONFIG.privacyRiskPenaltyWeight;
-  const score = Math.max(0, baseScore - privacyPenalty);
+  let score = Math.max(0, baseScore - privacyPenalty);
+  if (lowConfidenceSingleSourceSuppressed) {
+    // Keep weak single-source memories available for rescue/explicit retrieval,
+    // but prevent them from dominating ranked outputs by default.
+    const dominanceCap = memory.similarity * 0.02;
+    score = Math.min(score, dominanceCap);
+  }
   return {
     score,
     baseScore,
+    evidenceSupport: evidence.support,
+    contradictionPenaltyMultiplier,
+    explicitlyQueried,
+    lowConfidenceSingleSourceSuppressed,
+    evidenceSourceCount: evidence.sourceCount,
     privacyRisk: privacyEvaluation.risk,
     privacyPenalty,
     privacyBreakdown: privacyEvaluation.breakdown,
   };
+}
+
+function deriveEvidenceSupport(
+  memory: Pick<PurrMemory, 'confidence' | 'sourceRef' | 'provenanceRefs' | 'accessCount'>,
+): { support: number; sourceCount: number } {
+  const confidence = clamp(memory.confidence, 0, 1);
+  const sourceCount = countDistinctEvidenceSources(memory);
+  const sourceSupport = clamp(0.25 + (Math.min(4, sourceCount) / 4) * 0.75, 0, 1);
+  const reinforcement = clamp(memory.accessCount / 8, 0, 1);
+  const support = clamp(
+    (confidence * 0.6)
+    + (sourceSupport * 0.3)
+    + (reinforcement * 0.1),
+    0.05,
+    1,
+  );
+  return { support, sourceCount };
+}
+
+function deriveContradictionPenalty(
+  memory: Pick<PurrMemory, 'supersededBy' | 'tags'>,
+): number {
+  const normalizedTags = new Set(memory.tags.map(tag => tag.trim().toLowerCase()).filter(Boolean));
+  const hasContradictionHint = [...normalizedTags].some(tag => (
+    tag === 'contradicted'
+    || tag === 'contradiction'
+    || tag === 'disputed'
+    || tag === 'retracted'
+    || tag === 'hallucinated'
+    || tag.includes('contradict')
+    || tag.includes('disput')
+  ));
+  if (memory.supersededBy) return 0.25;
+  if (hasContradictionHint) return 0.55;
+  return 1;
+}
+
+function countDistinctEvidenceSources(
+  memory: Pick<PurrMemory, 'sourceRef' | 'provenanceRefs'>,
+): number {
+  const sourceSet = new Set<string>();
+  const normalizedSourceRef = normalizeEvidenceSource(memory.sourceRef);
+  if (normalizedSourceRef) sourceSet.add(normalizedSourceRef);
+  for (const ref of memory.provenanceRefs ?? []) {
+    const normalized = normalizeEvidenceSource(ref);
+    if (normalized) sourceSet.add(normalized);
+  }
+  return sourceSet.size;
+}
+
+function normalizeEvidenceSource(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return '';
+  const firstSeparator = trimmed.indexOf(':');
+  if (firstSeparator <= 0) return trimmed;
+  return trimmed.slice(0, firstSeparator + 1);
+}
+
+function hasExplicitMemoryMention(contextText: string, memoryText: string): boolean {
+  const contextTokens = tokenizeForExplicitMatch(contextText);
+  if (contextTokens.length === 0) return false;
+
+  const memoryTokenSet = new Set(tokenizeForExplicitMatch(memoryText));
+  if (memoryTokenSet.size === 0) return false;
+
+  let overlap = 0;
+  let hasLongOverlap = false;
+  for (const token of contextTokens) {
+    if (!memoryTokenSet.has(token)) continue;
+    overlap++;
+    if (token.length >= 6) {
+      hasLongOverlap = true;
+    }
+  }
+
+  if (overlap >= 2 && hasLongOverlap) return true;
+  return overlap >= 3;
+}
+
+function tokenizeForExplicitMatch(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map(token => token.trim())
+    .filter(token => token.length >= 4);
 }
 
 function estimateMemoryPromptTokens(memory: PurrMemory): number {

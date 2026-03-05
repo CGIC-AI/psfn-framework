@@ -1,4 +1,5 @@
 import { composeSystemPromptTemplate } from './loader.js';
+import { isCanonicalCharacterFoundationLayer } from './canonical-foundation.js';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { CharacterCardV2 } from './types.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -14,9 +15,7 @@ function resolveCharacterFoundationLayer(
 ): ReturnType<PromptLayerStore['getByType']>[number] | undefined {
   const baseLayers = promptStore.getByType('base');
   if (baseLayers.length === 0) return undefined;
-  return baseLayers.find(layer => layer.identifier === 'main')
-    ?? baseLayers.find(layer => layer.name === 'Character Foundation')
-    ?? baseLayers[0];
+  return baseLayers.find(layer => isCanonicalCharacterFoundationLayer(layer)) ?? baseLayers[0];
 }
 
 export function syncCharacterFoundationPromptFromCard(

@@ -2488,6 +2488,36 @@ describe('AdminServer', () => {
       });
     });
 
+    it('keeps non-canonical base layers editable in legacy prompt routes', async () => {
+      const layer = promptStore.create({
+        type: 'base',
+        name: 'Character Foundation',
+        identifier: 'alternate-base',
+        content: 'Editable base content',
+      });
+
+      const detailRes = await request(port, 'GET', `/legacy/prompts/${encodeURIComponent(layer.id)}`);
+      expect(detailRes.status).toBe(200);
+      expect(detailRes.body).toContain('/api/prompts/update');
+      expect(detailRes.body).toContain('name="identifier"');
+      expect(detailRes.body).not.toContain('Managed via Identity');
+
+      const updateBody = new URLSearchParams({
+        layerId: layer.id,
+        content: 'Editable base override',
+      }).toString();
+      const updateRes = await request(port, 'POST', '/api/prompts/update', updateBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body).toContain('Updated');
+      expect(updateRes.body).not.toContain(
+        'Character Foundation is derived from the character card and must be edited through Identity.',
+      );
+      expect(promptStore.getById(layer.id)?.content).toBe('Editable base override');
+    });
+
     it('rejects invalid role metadata updates', async () => {
       const layer = promptStore.create({
         type: 'runtime',

@@ -161,7 +161,7 @@ export function voicePreflight(config: SubstrateConfig): VoicePreflightResult {
 }
 
 /** Default ElevenLabs voice ID used when no explicit voice ID is configured. */
-export const DISCORD_VOICE_DEFAULT_VOICE_ID = 'YOUR_VOICE_ID';
+export const DISCORD_VOICE_DEFAULT_VOICE_ID = 'rPQ6h200dfjiuYAy0JDA';
 
 type VoiceTurnErrorStage = 'ingest' | 'stt' | 'llm' | 'tts' | 'unknown';
 type VoiceTurnObservationKind = 'silence' | 'empty-transcript' | 'empty-response' | 'playback-error';

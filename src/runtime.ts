@@ -925,7 +925,7 @@ export class SubstrateRuntime implements Lifecycle {
         } else if (wyomingTtsProvider === 'elevenlabs' && this.config.elevenLabsApiKey) {
           ttsConnector = createStreamingTtsConnector('elevenlabs', {
             apiKey: this.config.elevenLabsApiKey,
-            voiceId: this.config.elevenLabsVoiceId ?? 'YOUR_VOICE_ID',
+            voiceId: this.config.elevenLabsVoiceId ?? 'rPQ6h200dfjiuYAy0JDA',
             modelId: this.config.elevenLabsModelId,
           });
         }

@@ -14,7 +14,7 @@ services:
       # Purrsephone's playground — self-authored modules, notes (RW)
       - ../workspace:/app/workspace
       # Character card + identity (RO)
-      - ${CHARACTER_CARD_DIR:-/path/to/your/character-dir}:/app/identity:ro
+      - ${CHARACTER_CARD_DIR:-/home/vega/.openclaw/agents/main}:/app/identity:ro
     environment:
       GATEWAY_SOCKET: /run/psfn/gateway.sock
       DATABASE_PATH: /app/data/purrsephone.db

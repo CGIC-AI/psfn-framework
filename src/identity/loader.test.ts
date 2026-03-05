@@ -57,7 +57,7 @@ describe('composeSystemPrompt', () => {
 
 describe('loadCharacterCard', () => {
   it('loads the real character card', () => {
-    const card = loadCharacterCard('/path/to/your/character.json');
+    const card = loadCharacterCard('/home/vega/.openclaw/agents/main/character.json');
     expect(card.data.name).toBe('Purrsephone');
     expect(card.spec).toBe('chara_card_v2');
   });

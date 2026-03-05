@@ -1404,4 +1404,36 @@ describe('DiscordAdapter status visibility', () => {
 
     expect(interactive.sent).toHaveLength(0);
   });
+
+  it('emits channel.message.error diagnostics without sending canned fallback text when handler throws', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-handler-error';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const diagnostics: any[] = [];
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
+
+    adapter.onMessage(async () => {
+      throw new Error('discord handler exploded');
+    });
+
+    const incoming = makeDiscordIncomingMessage(channelId, interactive.channel, { id: 'msg-error-1' });
+    await (adapter as any).onDiscordMessage(incoming);
+
+    expect(interactive.sent).toHaveLength(0);
+    expect((incoming.reply as any).mock.calls.length).toBe(0);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      channelId,
+      channelType: 'discord',
+      messageId: 'msg-error-1',
+      phase: 'handler',
+      error: expect.stringContaining('discord handler exploded'),
+    }));
+  });
 });

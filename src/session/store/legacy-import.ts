@@ -151,7 +151,7 @@ export function runLegacyChatImport(params: RunLegacyChatImportParams): LegacyCh
     importedRecordCount += 1;
     lastImportedSourceIndex = Math.max(lastImportedSourceIndex, sourceRecord.sourceIndex + 1);
 
-    const previousRange = entryRanges[entryRanges.length - 1];
+    const previousRange = entryRanges.at(-1);
     const canExtend = previousRange
       && sourceRecord.sourceIndex === previousRange.sourceEndIndex + 1
       && importedEntry.id === previousRange.lastEntryId + 1;

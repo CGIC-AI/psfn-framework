@@ -51,7 +51,7 @@ class HttpNtfyNotifier implements NtfyNotifier {
       throw new Error('ntfy is not configured (set NTFY_BASE_URL and NTFY_TOPIC)');
     }
 
-    const message = params.message?.trim();
+    const message = params.message.trim();
     if (!message) {
       throw new Error('message is required');
     }
@@ -205,7 +205,7 @@ export function createNotifyOperatorTool(
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const message = params.message?.trim();
+      const message = params.message.trim();
       if (!message) {
         return textResultWithError('notify_operator: failure (message is required).', true);
       }

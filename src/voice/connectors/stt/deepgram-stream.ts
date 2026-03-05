@@ -413,7 +413,7 @@ export class DeepgramStreamingSttConnector implements StreamingSttConnector {
         if (signal?.aborted) throw new Error('Deepgram STT stream aborted');
         if (cancelled) throw new Error('Deepgram STT stream cancelled');
         if (closed) throw new Error('Deepgram STT stream already closed');
-        if (!chunk || chunk.byteLength === 0) return;
+        if (chunk.byteLength === 0) return;
 
         socket.send(chunk);
       },

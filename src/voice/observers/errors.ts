@@ -84,11 +84,7 @@ function classifyVoiceObservationKind(kind: string): {
   if (normalizedKind === 'empty-response') {
     return { stage: 'llm', category: 'empty_response' };
   }
-  if (normalizedKind === 'playback-error') {
-    return { stage: 'tts', category: 'playback_error' };
-  }
-
-  return { stage: 'unknown', category: 'unknown' };
+  return { stage: 'tts', category: 'playback_error' };
 }
 
 export function attachVoiceErrorsObserver(

@@ -512,7 +512,7 @@ export class SubstrateAgent {
     const override = this.normalizeTurnModelOverride(message);
     const purpose = override ? null : this.resolveTurnModelPurpose(message);
     const nextSignature = this.getTurnModelSignature(message);
-    if (this.modelResolved && this.modelSignature === nextSignature && this.agent.state.model) {
+    if (this.modelResolved && this.modelSignature === nextSignature) {
       return;
     }
 
@@ -539,19 +539,13 @@ export class SubstrateAgent {
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      if (this.agent.state.model) {
-        this.modelResolved = true;
-        log.warn('Model refresh failed; keeping previous chat model', {
-          reason,
-          error: err.message,
-          currentModel: this.agent.state.model.id,
-        });
-        return;
-      }
-
-      this.modelResolved = false;
-      this.modelSignature = null;
-      throw err;
+      this.modelResolved = true;
+      log.warn('Model refresh failed; keeping previous chat model', {
+        reason,
+        error: err.message,
+        currentModel: this.agent.state.model.id,
+      });
+      return;
     }
   }
 
@@ -744,7 +738,7 @@ export class SubstrateAgent {
       else if (entry.source === 'promoted') counts.promoted += 1;
       else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
       else if (entry.source === 'autoload') counts.autoload += 1;
-      else if (entry.source === 'deferred') counts.deferred += 1;
+      else counts.deferred += 1;
     }
 
     return {
@@ -1496,7 +1490,7 @@ export class SubstrateAgent {
           lane: 'default',
           maxBytes: VISION_ATTACHMENT_MAX_BYTES,
         });
-        const responseMimeType = (fetched.mimeType ?? inferredContentType)
+        const responseMimeType = fetched.mimeType
           .split(';')[0]
           .trim()
           .toLowerCase();
@@ -1915,6 +1909,7 @@ export class SubstrateAgent {
           this.bridge.clearChannel();
           this.activeTurnCorrelation = null;
         }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
         if (streamFirstTokenAt == null) {
           streamFirstTokenAt = Date.now();
           this.emitTurnStage(message, startTime, 'first-token', turnCallType, {
@@ -1929,7 +1924,7 @@ export class SubstrateAgent {
 
         turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
         turnUsage = this.accumulateTurnUsage(turnMessages);
-        responseModel = this.agent.state.model?.id ?? 'unknown';
+        responseModel = this.agent.state.model.id;
         firstTokenAt = streamFirstTokenAt;
 
         // Extract response from agent state (last assistant message)
@@ -1938,7 +1933,7 @@ export class SubstrateAgent {
           const assistantMessage = this.getLatestAssistantMessage();
           log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
             channelId: message.channelId,
-            model: this.agent.state.model?.id ?? null,
+            model: this.agent.state.model.id,
             stopReason: assistantMessage?.stopReason ?? null,
             errorMessage: assistantMessage?.errorMessage ?? null,
           });
@@ -1997,13 +1992,13 @@ export class SubstrateAgent {
 
             turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
             turnUsage = this.accumulateTurnUsage(turnMessages);
-            responseModel = this.agent.state.model?.id ?? responseModel;
+            responseModel = this.agent.state.model.id;
             responseText = this.extractResponseText();
 
             if (responseText.trim().length === 0) {
               log.warn('Vision recovery replay remained empty; retrying once with same transport content', {
                 channelId: message.channelId,
-                model: this.agent.state.model?.id ?? null,
+                model: this.agent.state.model.id,
               });
               await runVisionRecoveryPrompt(
                 replayTransportContent,
@@ -2014,7 +2009,7 @@ export class SubstrateAgent {
 
               turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
               turnUsage = this.accumulateTurnUsage(turnMessages);
-              responseModel = this.agent.state.model?.id ?? responseModel;
+              responseModel = this.agent.state.model.id;
               responseText = this.extractResponseText();
             }
           } else {
@@ -2044,7 +2039,7 @@ export class SubstrateAgent {
           if (finalContentEmpty) {
             log.warn('Vision turn remained empty after non-fabricating recovery replay', {
               channelId: message.channelId,
-              model: this.agent.state.model?.id ?? null,
+              model: this.agent.state.model.id,
             });
           }
         }
@@ -2308,10 +2303,8 @@ export class SubstrateAgent {
       ? Math.min(100, (peakInputTokens / contextWindow) * 100)
       : 0;
     const lastRound = deliberation.rounds[deliberation.rounds.length - 1];
-    const model = lastRound?.aggregatorModel
-      ?? lastRound?.voices[lastRound.voices.length - 1]?.model
-      ?? this.config.modelRoster.chat?.model
-      ?? this.config.primaryModel;
+    const model = lastRound.aggregatorModel
+      ?? lastRound.voices[lastRound.voices.length - 1].model;
 
     const turnUsage: TurnUsage = {
       inputTokens: deliberation.totalInputTokens,
@@ -2846,6 +2839,7 @@ export class SubstrateAgent {
       characterPromptVariables.name,
     ];
     for (const candidate of candidates) {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
       const trimmed = candidate?.trim();
       if (trimmed && trimmed.length > 0) {
         return trimmed;
@@ -2863,7 +2857,7 @@ export class SubstrateAgent {
     now: Date,
   ): Record<string, string> {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
-    const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
+    const modelId = this.agent.state.model.id;
     const characterPromptVariables = this.resolveCharacterPromptVariables();
     const runtimeCharacterName = this.resolveRuntimeCharacterName(characterPromptVariables);
     this.characterName = runtimeCharacterName;
@@ -2902,7 +2896,7 @@ export class SubstrateAgent {
     templateVariables?: Record<string, string>,
   ): string {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
-    const modelId = this.agent.state.model?.id ?? this.config.primaryModel;
+    const modelId = this.agent.state.model.id;
     const contextWindow = this.resolveContextWindow();
     const extendedCount = this.extendedTools.length;
     const activeResolution = this.resolveActiveTools();
@@ -3108,7 +3102,7 @@ export class SubstrateAgent {
   private resolveIdentityChannel(message: SubstrateMessage): string {
     if (message.channelType === 'discord') return 'discord';
     if (message.channelType === 'api') return 'api';
-    if (message.channelType && message.channelType !== 'terminal') return message.channelType;
+    if (message.channelType !== 'terminal') return message.channelType;
     if (message.channelId.startsWith('discord-voice:')) return 'discord';
     if (message.channelId.startsWith('api:')) return 'api';
     if (message.channelId.startsWith('internal:')) return 'internal';
@@ -3139,10 +3133,11 @@ export class SubstrateAgent {
     const nickname = contact?.nickname?.trim();
     if (nickname) return nickname;
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Contact from mocks may lack displayName
     const displayName = contact?.displayName?.trim();
     if (displayName) return displayName;
 
-    const authorName = message.authorName?.trim();
+    const authorName = message.authorName.trim();
     if (authorName) return authorName;
 
     return 'User';
@@ -3176,7 +3171,7 @@ export class SubstrateAgent {
       const contact = typeof maybeChannelResolver.resolveChannelIdentity === 'function'
         ? maybeChannelResolver.resolveChannelIdentity(channel, message.authorId, message.authorName)
         : this.contactStore.resolveUserId(message.authorId);
-      const canonicalContactKey = contact?.id;
+      const canonicalContactKey = contact.id;
 
       const maybeActivityRecorder = this.contactStore as ContactStore & {
         recordChannelActivity?: (contactId: string, channel: string, channelId: string) => void;
@@ -3189,7 +3184,7 @@ export class SubstrateAgent {
       }
 
       return {
-        trustLevel: contact?.trustLevel ?? 'regular',
+        trustLevel: contact.trustLevel,
         resolvedUserName: this.resolvePromptUserName(message, contact),
         canonicalContactKey,
         continuityFallbackKeys: canonicalContactKey

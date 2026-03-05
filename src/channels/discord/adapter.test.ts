@@ -1170,9 +1170,9 @@ describe('DiscordAdapter status visibility', () => {
     expect(adapter.capabilities.promptChannelType).toBe('discord_text');
     expect(adapter.gateway).toBe(adapter);
     expect(adapter.outbound.textChunkLimit).toBe(2000);
-    expect(adapter.security?.requiresMentionForChannelMessages).toBe(true);
+    expect(adapter.security.requiresMentionForChannelMessages).toBe(true);
 
-    const promptTextType = adapter.prompt?.resolveChannelType({
+    const promptTextType = adapter.prompt.resolveChannelType({
       id: 'msg-1',
       channelId: '123456789012345678',
       channelType: 'discord',
@@ -1181,7 +1181,7 @@ describe('DiscordAdapter status visibility', () => {
       content: 'hello',
       timestamp: new Date(),
     } satisfies SubstrateMessage);
-    const promptVoiceType = adapter.prompt?.resolveChannelType({
+    const promptVoiceType = adapter.prompt.resolveChannelType({
       id: 'msg-2',
       channelId: 'discord-voice:guild-1',
       channelType: 'discord',
@@ -1199,7 +1199,7 @@ describe('DiscordAdapter status visibility', () => {
     discordMock.channelsById.set(channelId, interactive.channel);
 
     await adapter.outbound.sendText({ channelId }, 'facet reply');
-    await adapter.streaming?.sendTyping(channelId);
+    await adapter.streaming.sendTyping(channelId);
 
     expect(interactive.sent).toContain('facet reply');
     expect(interactive.typingCalls).toBeGreaterThan(0);

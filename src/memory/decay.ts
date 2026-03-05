@@ -35,7 +35,7 @@ export class SalienceDecay {
 
     this.memoryStore.runInTransaction(() => {
       let offset = 0;
-      while (true) {
+      for (;;) {
         const memories = this.memoryStore.listActiveMemories({
           limit: this.batchSize,
           offset,

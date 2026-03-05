@@ -56,7 +56,7 @@ const reliabilityMocks = vi.hoisted(() => {
     })),
     buildFallbackOrder: vi.fn((_preferredId: string, providerIds: string[]) => providerIds),
     selectFallbackCandidate: vi.fn((preferredId: string, candidates: Array<{ id: string }>) => {
-      return candidates.find((candidate) => candidate.id === preferredId) ?? candidates[0] ?? null;
+      return candidates.find((candidate) => candidate.id === preferredId) ?? (candidates[0] as { id: string } | undefined) ?? null;
     }),
   };
 });
@@ -1183,7 +1183,7 @@ describe('DiscordVoiceRuntime', () => {
     const { runtime } = makeRuntimeHarness(eventBus, handler);
     (runtime as any).decodeOpusToPcm = vi.fn(async () => Buffer.alloc(40_000, 1));
     (runtime as any).playReadableAudio = vi.fn(async (_audio: unknown, turn: { abortController?: AbortController }) => {
-      const signal = turn?.abortController?.signal;
+      const signal = turn.abortController?.signal;
       await new Promise<void>((resolve) => {
         if (!signal || signal.aborted) {
           resolve();

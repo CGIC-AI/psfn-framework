@@ -107,16 +107,8 @@ export class VoicePipelineRunner<TInput, TOutput> {
 
       let stageOutputs: ReadonlyArray<unknown> = [sourceItem];
       for (const processor of this.definition.processors) {
-        if (context.signal.aborted) {
-          break;
-        }
-
         const nextOutputs: unknown[] = [];
         for (const stageOutput of stageOutputs) {
-          if (context.signal.aborted) {
-            break;
-          }
-
           const result = await processor(stageOutput, context);
           nextOutputs.push(...toPipelineOutputs(result));
         }
@@ -127,15 +119,7 @@ export class VoicePipelineRunner<TInput, TOutput> {
         }
       }
 
-      if (context.signal.aborted) {
-        break;
-      }
-
       for (const output of stageOutputs) {
-        if (context.signal.aborted) {
-          break;
-        }
-
         await this.definition.sink(output as TOutput, context);
       }
     }

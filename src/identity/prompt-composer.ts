@@ -72,7 +72,7 @@ function splitCompactionSummaryParts(summary: string): CompactionSummaryParts {
   if (recordMatch) {
     const stripped = `${normalized.slice(0, recordMatch.index)}${normalized.slice(recordMatch.index + recordMatch[0].length)}`.trim();
     return {
-      summaryText: stripControlCharacters(recordMatch[1] ?? ''),
+      summaryText: stripControlCharacters(recordMatch[1]),
       metadata: stripped,
     };
   }
@@ -364,12 +364,8 @@ export class PromptComposer {
       return layer.channelType === ctx.channelType;
     }
 
-    if (layer.type === 'task') {
-      if (!layer.taskKind || !ctx?.taskKind) return false;
-      return layer.taskKind === ctx.taskKind;
-    }
-
-    return false;
+    if (!layer.taskKind || !ctx?.taskKind) return false;
+    return layer.taskKind === ctx.taskKind;
   }
 
   private resolvePromptSection(layer: PromptLayer | undefined): 'static' | 'dynamic' {

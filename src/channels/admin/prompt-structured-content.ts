@@ -149,7 +149,7 @@ export function composePromptContent(sections: StructuredPromptSections): string
   const chunks: string[] = [];
 
   for (const key of STRUCTURED_PROMPT_SECTION_KEYS) {
-    const value = normalizeLineEndings(sections[key] ?? '').trim();
+    const value = normalizeLineEndings(sections[key]).trim();
     if (!value) continue;
     chunks.push(`### ${key}\n${value}`);
   }

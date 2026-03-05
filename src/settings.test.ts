@@ -110,8 +110,8 @@ describe('settings', () => {
       }), 'utf-8');
 
       const result = loadSettings(tempDir);
-      expect(result.modelCatalog?.primary?.model).toBe('legacy/chat');
-      expect(result.modelCatalog?.extraction?.model).toBe('legacy/extract');
+      expect(result.modelCatalog.primary.model).toBe('legacy/chat');
+      expect(result.modelCatalog.extraction.model).toBe('legacy/extract');
       expect(result.modelRoleAssignments?.chat).toBe('primary');
       expect(result.modelRoleAssignments?.extraction).toBe('extraction');
     });
@@ -331,7 +331,7 @@ describe('settings', () => {
         defaultContextWindow: 128_000,
       });
 
-      expect(normalized.modelCatalog?.vision?.model).toBe('google/gemini-3-flash-preview');
+      expect(normalized.modelCatalog.vision.model).toBe('google/gemini-3-flash-preview');
       expect(normalized.modelRoster?.vision?.model).toBe('google/gemini-3-flash-preview');
     });
   });
@@ -712,7 +712,7 @@ describe('settings', () => {
       expect(settings.memoryRetrievalBudgetPct).toBe(3);
       expect(settings.sessionMessageLimit).toBe(50);
       expect(settings.retryMaxAttempts).toBe(4);
-      expect(settings.modelCatalog?.primary?.model).toBe('test-model');
+      expect(settings.modelCatalog.primary.model).toBe('test-model');
     });
 
     it('parses roster-v2 catalog and role assignment JSON', () => {
@@ -740,7 +740,7 @@ describe('settings', () => {
 
       const [settings, errors] = parseSettingsForm(params);
       expect(errors).toEqual([]);
-      expect(settings.modelCatalog?.fast?.overrides?.maxTokens).toBe(1536);
+      expect(settings.modelCatalog.fast.overrides.maxTokens).toBe(1536);
       expect(settings.modelRoleAssignments?.chat).toBe('fast');
       expect(settings.primaryModel).toBe('openai/gpt-4.1-mini');
       expect(settings.extractionModel).toBe('deepseek/deepseek-v3.2');

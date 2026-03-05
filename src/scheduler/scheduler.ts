@@ -166,7 +166,7 @@ export class Scheduler {
 
       if (entry.type === 'every') {
         isDue = entry.lastRun === 0 || (now - entry.lastRun >= entry.intervalMs);
-      } else if (entry.type === 'one-shot') {
+      } else {
         isDue = entry.runAt !== undefined && now >= entry.runAt;
       }
 

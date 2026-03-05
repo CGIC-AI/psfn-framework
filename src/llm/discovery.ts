@@ -43,7 +43,7 @@ interface OpenRouterModelEntry {
 
 function providerFromModelId(modelId: string): string | undefined {
   const [prefix] = modelId.split('/');
-  const trimmed = prefix?.trim();
+  const trimmed = prefix.trim();
   return trimmed ? trimmed : undefined;
 }
 
@@ -57,7 +57,7 @@ function normalizeProviderHints(values: Array<string | undefined>): string[] {
 
 function providerHintsFromLiteLLM(entry: LiteLLMModelEntry): string[] {
   const modelInfoProviders = Array.isArray(entry.model_info?.providers)
-    ? entry.model_info?.providers
+    ? entry.model_info.providers
     : [];
   return normalizeProviderHints([
     entry.provider,

@@ -386,7 +386,7 @@ describe('wireHeartbeatRuntime', () => {
       );
 
       const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
-      const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool?.name === 'heartbeat_run_template');
+      const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
       expect(runTemplateTool).toBeDefined();
 
       const runResult = await runTemplateTool.execute(
@@ -489,7 +489,7 @@ describe('wireHeartbeatRuntime', () => {
     }]);
 
     const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
-    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool?.name === 'heartbeat_run_template');
+    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
     expect(runTemplateTool).toBeDefined();
 
     const runResult = await runTemplateTool.execute(

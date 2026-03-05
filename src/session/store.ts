@@ -376,7 +376,7 @@ export class SessionStore {
       messageCount,
       lastRole: lastEntry.role,
       lastAuthorName: lastEntry.authorName,
-      lastMessagePreview: toMessagePreview(lastEntry.content ?? ''),
+      lastMessagePreview: toMessagePreview(lastEntry.content),
     };
   }
   listSessionsByRecentActivity(limit = 20): SessionActivitySummary[] {
@@ -408,6 +408,7 @@ export class SessionStore {
   }
   getLatestSessionByTimestamp(): LatestSessionSummary | null {
     const latest = this.listSessionsByRecentActivity(1)[0];
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- array index may be undefined at runtime
     if (!latest) return null;
     return {
       sessionId: latest.sessionId,

@@ -593,8 +593,8 @@ export class MemoryRetriever implements MemoryProvider {
     if (!contact?.emotionalBaseline) return undefined;
 
     const baselineRaw = contact.emotionalBaseline;
-    const baselineValence = clamp(baselineRaw.valenceBaseline ?? baselineRaw.moodBaseline ?? 0, -1, 1);
-    const moodValence = clamp(baselineRaw.moodValence ?? baselineRaw.sessionMoodValence ?? baselineValence, -1, 1);
+    const baselineValence = clamp(baselineRaw.valenceBaseline, -1, 1);
+    const moodValence = clamp(baselineRaw.moodValence, -1, 1);
     const moodDrift = Number.isFinite(baselineRaw.moodDrift)
       ? clamp(baselineRaw.moodDrift, -1, 1)
       : clamp(moodValence - baselineValence, -1, 1);
@@ -713,7 +713,7 @@ function collectSelectedProvenanceRefs(
     refs.add('retrieval:lexical_fallback');
   }
   for (const item of scored) {
-    if (item.memory.sourceRef?.trim()) {
+    if (item.memory.sourceRef.trim()) {
       refs.add(item.memory.sourceRef.trim());
     }
     for (const provenanceRef of item.memory.provenanceRefs ?? []) {

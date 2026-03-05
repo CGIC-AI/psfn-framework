@@ -379,7 +379,7 @@ export class LifecycleRestartSafeguard {
 
     this.pruneHistory(now);
 
-    const last = this.restartHistory[this.restartHistory.length - 1];
+    const last = this.restartHistory[this.restartHistory.length - 1] as number | undefined;
     if (last !== undefined && (now - last) < this.cooldownMs) {
       const retryAfterMs = this.cooldownMs - (now - last);
       this.auditTrail?.append('lifecycle.restart.denied', {
@@ -396,7 +396,7 @@ export class LifecycleRestartSafeguard {
     }
 
     if (this.restartHistory.length >= this.maxPerHour) {
-      const oldest = this.restartHistory[0];
+      const oldest = this.restartHistory[0] as number | undefined;
       const retryAfterMs = oldest === undefined
         ? ONE_HOUR_MS
         : Math.max(1, ONE_HOUR_MS - (now - oldest));
@@ -504,7 +504,7 @@ export class ExternalCommunicationRateLimiter {
     const active = history.filter(timestamp => timestamp >= windowStart);
 
     if (active.length >= limit) {
-      const oldest = active[0];
+      const oldest = active[0] as number | undefined;
       const retryAfterMs = oldest === undefined
         ? ONE_HOUR_MS
         : Math.max(1, ONE_HOUR_MS - (now - oldest));

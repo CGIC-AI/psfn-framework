@@ -31,7 +31,7 @@ const TRUST_BADGE_COLORS: Record<TrustLevel, string> = {
 };
 
 function trustBadge(level: TrustLevel): string {
-  const color = TRUST_BADGE_COLORS[level] ?? '#9e9e9e';
+  const color = TRUST_BADGE_COLORS[level];
   const textColor = level === 'primary' ? '#3A3226' : 'white';
   return `<span class="badge" style="background:${color};color:${textColor}">${escapeHtml(level)}</span>`;
 }
@@ -111,7 +111,7 @@ function contactNicknameLabel(displayName: string, nickname?: string): string {
 }
 
 function channelPrivacyBadge(level: ChannelPrivacyLevel): string {
-  const color = CHANNEL_PRIVACY_COLORS[level] ?? '#8A7E72';
+  const color = CHANNEL_PRIVACY_COLORS[level];
   return `<span class="channel-privacy" style="background:${color}">${escapeHtml(level)}</span>`;
 }
 

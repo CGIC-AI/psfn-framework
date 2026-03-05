@@ -562,7 +562,7 @@ export function buildAdminApiRoutes(options: {
           }
           const result = contactsService.mergeContacts(id, JSON.stringify(parsed.value));
           if (!result.ok) {
-            sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
             return;
           }
           sendJson(res, 200, result);
@@ -581,7 +581,7 @@ export function buildAdminApiRoutes(options: {
           }
           const result = contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value));
           if (!result.ok) {
-            sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
             return;
           }
           sendJson(res, 200, result);
@@ -606,7 +606,7 @@ export function buildAdminApiRoutes(options: {
       handle: (_req, res, { id }) => {
         const result = contactsService.deleteContact(id);
         if (!result.ok) {
-          sendJson(res, result.message?.includes('not found') ? 404 : 400, { error: result.message });
+          sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
           return;
         }
         sendJson(res, 200, result);
@@ -1228,7 +1228,7 @@ export function buildAdminApiRoutes(options: {
           }
           try {
             const { name } = parsed.value as { name: string };
-            if (!name?.trim()) {
+            if (!name.trim()) {
               sendJson(res, 400, { error: 'Skill name is required' });
               return;
             }

@@ -133,7 +133,7 @@ export class AdminSchedulerService {
     if (!input.name || typeof input.name !== 'string') {
       return { ok: false, message: 'name is required' };
     }
-    if (input.type !== 'every' && input.type !== 'one-shot') {
+    if (!(['every', 'one-shot'] as string[]).includes(input.type)) {
       return { ok: false, message: 'type must be "every" or "one-shot"' };
     }
 

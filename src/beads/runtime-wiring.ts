@@ -51,9 +51,7 @@ export function registerBeadsTools(
   for (const tool of tools) {
     if (options?.gatewayMode) {
       const methods = BEADS_TOOL_GATEWAY_METHODS[tool.name];
-      if (methods) {
-        attachWiringMeta(tool, { requiredGatewayMethods: methods });
-      }
+      attachWiringMeta(tool, { requiredGatewayMethods: methods });
     }
     target.registerTool(tool, 'extended');
   }

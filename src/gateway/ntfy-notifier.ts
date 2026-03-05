@@ -38,7 +38,7 @@ export class GatewayNtfyNotifier {
       throw new JSONRPCErrorException('ntfy is not configured', GatewayErrors.PROVIDER_ERROR);
     }
 
-    const message = params.message?.trim();
+    const message = params.message.trim();
     if (!message) {
       throw new JSONRPCErrorException('notify.ntfy requires a non-empty message', GatewayErrors.PROVIDER_ERROR);
     }

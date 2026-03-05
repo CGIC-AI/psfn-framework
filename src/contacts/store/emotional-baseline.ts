@@ -48,10 +48,10 @@ export function parseMoodSnapshot(
 ): EmotionalSnapshot {
   const baselineRecord = baseline ?? {};
   const baselineValence = clampUnit(
-    baselineRecord.valenceBaseline ?? baselineRecord.moodBaseline ?? 0,
+    baselineRecord.valenceBaseline,
   );
   const moodValence = clampUnit(
-    baselineRecord.moodValence ?? baselineRecord.sessionMoodValence ?? baselineValence,
+    baselineRecord.moodValence,
   );
   const moodDrift = Number.isFinite(baselineRecord.moodDrift)
     ? clampUnit(baselineRecord.moodDrift)

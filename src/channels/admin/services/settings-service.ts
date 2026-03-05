@@ -142,7 +142,7 @@ export function applyAdminSettingsMutation(options: {
         || modelPatch.primaryProvider !== undefined
         || modelPatch.primaryMaxTokens !== undefined;
       if (hasPrimaryAliasPatch) {
-        const currentPrimary = config.modelRoster?.chat ?? {
+        const currentPrimary = config.modelRoster.chat ?? {
           model: config.primaryModel,
           provider: config.primaryProvider,
           maxTokens: config.primaryMaxTokens,
@@ -155,7 +155,7 @@ export function applyAdminSettingsMutation(options: {
         || modelPatch.extractionProvider !== undefined
         || modelPatch.extractionMaxTokens !== undefined;
       if (hasExtractionAliasPatch) {
-        const currentExtraction = config.modelRoster?.background ?? config.modelRoster?.extraction ?? {
+        const currentExtraction = config.modelRoster.background ?? config.modelRoster.extraction ?? {
           model: config.extractionModel,
           provider: config.extractionProvider,
           maxTokens: config.extractionMaxTokens,

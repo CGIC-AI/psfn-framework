@@ -56,9 +56,7 @@ export function registerGitTools(
   for (const tool of tools) {
     if (options?.gatewayMode) {
       const methods = GIT_TOOL_GATEWAY_METHODS[tool.name];
-      if (methods) {
-        attachWiringMeta(tool, { requiredGatewayMethods: methods });
-      }
+      attachWiringMeta(tool, { requiredGatewayMethods: methods });
     }
     target.registerTool(tool, 'extended');
   }

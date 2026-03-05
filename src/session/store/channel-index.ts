@@ -76,11 +76,9 @@ export function loadChannelIndex(
   try {
     const raw = readFileSync(channelIndexPath, 'utf-8');
     const parsed = JSON.parse(raw) as ChannelIndexFile;
-    const version = typeof parsed === 'object' && parsed !== null
-      ? (parsed as { version?: unknown }).version
-      : undefined;
+    const version = (parsed as { version?: unknown }).version;
 
-    if (!parsed || (version !== 1 && version !== CHANNEL_INDEX_VERSION) || typeof parsed.channels !== 'object') {
+    if ((version !== 1 && version !== CHANNEL_INDEX_VERSION) || typeof parsed.channels !== 'object') {
       log.warn('Ignoring invalid channel index payload', {
         path: channelIndexPath,
         version,
@@ -327,7 +325,7 @@ export function migrateLegacyFilenames(params: {
     if (!firstEntry || !firstEntry.channelId) continue;
 
     const channelId = firstEntry.channelId;
-    const timestamp = firstEntry.timestamp ?? Date.now();
+    const timestamp = firstEntry.timestamp;
     const authorId = firstEntry.authorId;
     const authorName = firstEntry.authorName;
 

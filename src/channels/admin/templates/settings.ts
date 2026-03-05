@@ -285,7 +285,7 @@ function renderCustomTokenCheckboxes(
   const isCustom = currentTier === 'custom';
   const rows = CAPABILITY_TOKENS.map((token) => {
     const checked = selectedSet.has(token) ? ' checked' : '';
-    const label = CAPABILITY_TOKEN_LABELS[token] ?? token;
+    const label = CAPABILITY_TOKEN_LABELS[token];
     // Show which preset tiers include this token
     const includedIn: string[] = [];
     for (const [tier, tokens] of Object.entries(CAPABILITY_TIER_DEFAULTS)) {

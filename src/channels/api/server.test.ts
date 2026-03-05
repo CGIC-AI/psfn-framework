@@ -337,7 +337,7 @@ describe('ApiServer', () => {
       expect(server.meta.label).toBe('API Server');
       expect(server.capabilities.promptChannelType).toBe('api');
       expect(server.gateway).toBe(server);
-      expect(server.prompt?.resolveChannelType({
+      expect(server.prompt.resolveChannelType({
         id: 'msg-1',
         channelId: 'api:session-1',
         channelType: 'api',

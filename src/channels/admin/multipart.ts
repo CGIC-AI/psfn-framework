@@ -78,7 +78,7 @@ export function parseMultipartBody(body: Buffer, boundary: string): MultipartPar
   let searchFrom = 0;
   const parts: Buffer[] = [];
 
-  while (true) {
+  for (;;) {
     const delimStart = body.indexOf(delimiter, searchFrom);
     if (delimStart === -1) break;
 
@@ -287,7 +287,7 @@ export function validateAndParseCharacterCardFile(
       containerFormat: parsed.containerFormat,
       sourceFormat: parsed.sourceFormat,
       spec: parsed.spec,
-      warnings: parsed.warnings ?? [],
+      warnings: parsed.warnings,
     };
   } catch (error) {
     return {

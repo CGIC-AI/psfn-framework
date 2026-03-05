@@ -163,7 +163,7 @@ function makeScriptedMoaProvider(steps: ScriptedCompletionStep[]): {
     purpose: ScriptedCompletionStep['purpose'],
     _options?: Record<string, unknown>,
   ) => {
-    const step = steps[index++];
+    const step = steps[index++] as ScriptedCompletionStep | undefined;
     if (!step) {
       throw new Error(`No scripted completion for purpose "${purpose}"`);
     }

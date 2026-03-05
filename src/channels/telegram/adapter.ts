@@ -167,7 +167,7 @@ export function parseTelegramCommand(content: string): TelegramCommand | null {
 
   return {
     command: match[1].toLowerCase(),
-    args: (match[2] ?? '').trim(),
+    args: (((match[2] as string | undefined) ?? '')).trim(),
     raw: normalized,
   };
 }

@@ -50,9 +50,7 @@ export function registerVaultTools(
   for (const tool of tools) {
     if (options?.gatewayMode) {
       const methods = VAULT_TOOL_GATEWAY_METHODS[tool.name];
-      if (methods) {
-        attachWiringMeta(tool, { requiredGatewayMethods: methods });
-      }
+      attachWiringMeta(tool, { requiredGatewayMethods: methods });
     }
     target.registerTool(tool, 'extended');
   }

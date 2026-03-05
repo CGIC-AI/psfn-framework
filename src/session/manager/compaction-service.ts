@@ -63,7 +63,7 @@ export function shouldCompact(params: {
 
   const chatSlot = params.config.modelRoster.chat;
   const contextWindow = chatSlot?.contextWindow ?? params.config.defaultContextWindow;
-  const thresholdPct = params.config.compactionThresholdPct ?? 70;
+  const thresholdPct = params.config.compactionThresholdPct;
   const tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
 
   const messageTokens = countMessageTokens(
@@ -135,7 +135,7 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
   }
 
   let tokensAfter = totalTokens;
-  let sawRetry = false;
+  let sawRetry = false as boolean;
   let lastRetryAttempt = 1;
   const retryMaxRetries = 2;
   const retryMaxAttempts = retryMaxRetries + 1;

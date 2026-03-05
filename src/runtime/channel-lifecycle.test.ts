@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChannelAdapter } from '../channels/types.js';
 import {
+  buildChannelAdapterFactoryManifest,
+  loadChannelAdaptersFromManifest,
   registerChannelAdapter,
   startChannelAdapters,
   stopChannelAdapters,
@@ -40,6 +42,107 @@ describe('registerChannelAdapter', () => {
     expect(channelRegistry.get('discord')).toBe(adapter);
     expect(syncChannelRegistry).toHaveBeenCalledTimes(1);
     expect(syncChannelRegistry).toHaveBeenCalledWith(channelRegistry);
+  });
+});
+
+describe('buildChannelAdapterFactoryManifest', () => {
+  it('normalizes and validates manifest ids', () => {
+    const manifest = buildChannelAdapterFactoryManifest([{
+      manifest: {
+        id: ' discord ',
+        enabled: true,
+      },
+      create: async () => makeAdapter('discord'),
+    }]);
+
+    expect(manifest).toHaveLength(1);
+    expect(manifest[0]?.manifest.id).toBe('discord');
+  });
+
+  it('rejects duplicate manifest ids', () => {
+    expect(() => buildChannelAdapterFactoryManifest([
+      {
+        manifest: { id: 'discord', enabled: true },
+        create: async () => makeAdapter('discord'),
+      },
+      {
+        manifest: { id: 'discord', enabled: true },
+        create: async () => makeAdapter('discord'),
+      },
+    ])).toThrow('Duplicate channel adapter manifest entry "discord"');
+  });
+});
+
+describe('loadChannelAdaptersFromManifest', () => {
+  it('loads enabled adapters and skips disabled manifest entries', async () => {
+    const channelRegistry = new Map<string, ChannelAdapter>();
+    const syncChannelRegistry = vi.fn();
+    const log = makeLogger();
+    const factories = buildChannelAdapterFactoryManifest([
+      {
+        manifest: { id: 'discord', enabled: true, required: true },
+        create: async () => makeAdapter('discord'),
+      },
+      {
+        manifest: { id: 'telegram', enabled: false },
+        create: async () => makeAdapter('telegram'),
+      },
+    ]);
+
+    await loadChannelAdaptersFromManifest(channelRegistry, factories, syncChannelRegistry, log);
+
+    expect(channelRegistry.has('discord')).toBe(true);
+    expect(channelRegistry.has('telegram')).toBe(false);
+    expect(syncChannelRegistry).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      'Skipping disabled channel adapter manifest entry',
+      expect.objectContaining({ adapterId: 'telegram' }),
+    );
+  });
+
+  it('throws when a required adapter fails to initialize', async () => {
+    const channelRegistry = new Map<string, ChannelAdapter>();
+    const syncChannelRegistry = vi.fn();
+    const log = makeLogger();
+    const factories = buildChannelAdapterFactoryManifest([{
+      manifest: { id: 'discord', enabled: true, required: true },
+      create: async () => {
+        throw new Error('init failed');
+      },
+    }]);
+
+    await expect(
+      loadChannelAdaptersFromManifest(channelRegistry, factories, syncChannelRegistry, log),
+    ).rejects.toThrow('Required channel adapter "discord" failed to initialize');
+  });
+
+  it('continues when optional adapter fails and at least one loads', async () => {
+    const channelRegistry = new Map<string, ChannelAdapter>();
+    const syncChannelRegistry = vi.fn();
+    const log = makeLogger();
+    const factories = buildChannelAdapterFactoryManifest([
+      {
+        manifest: { id: 'discord', enabled: true, required: true },
+        create: async () => makeAdapter('discord'),
+      },
+      {
+        manifest: { id: 'telegram', enabled: true },
+        create: async () => {
+          throw new Error('telegram offline');
+        },
+      },
+    ]);
+
+    await expect(
+      loadChannelAdaptersFromManifest(channelRegistry, factories, syncChannelRegistry, log),
+    ).resolves.toBeUndefined();
+
+    expect(channelRegistry.has('discord')).toBe(true);
+    expect(channelRegistry.has('telegram')).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(
+      'Optional channel adapter failed to initialize',
+      expect.objectContaining({ adapterId: 'telegram' }),
+    );
   });
 });
 

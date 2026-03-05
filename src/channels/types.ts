@@ -80,6 +80,18 @@ export interface ChannelAdapter extends Lifecycle {
   send?(channelId: string, content: string): Promise<void>;
 }
 
+export interface ChannelAdapterManifestEntry {
+  id: string;
+  enabled: boolean;
+  required?: boolean;
+  label?: string;
+}
+
+export interface ChannelAdapterFactoryEntry {
+  manifest: ChannelAdapterManifestEntry;
+  create: () => Promise<ChannelAdapter> | ChannelAdapter;
+}
+
 // Lightweight docks for shared call sites that only need a focused channel facet.
 export interface ChannelOutboundDock {
   id: string;

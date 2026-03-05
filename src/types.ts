@@ -5,6 +5,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from './context-budget.js';
 import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
+import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 
 // ── Channel-agnostic message types ──
@@ -388,6 +389,7 @@ export interface SubstrateConfig {
   voiceReadyCueText?: string;
   voiceDaveEncryption?: boolean;
   voiceDecryptionFailureTolerance?: number;
+  sttProvider?: StreamingSttProvider | 'disabled';
   ttsProvider?: StreamingTtsProvider;
   deepgramApiKey?: string;
   deepgramModel?: string;
@@ -581,6 +583,9 @@ export function loadConfig(): SubstrateConfig {
     24,
     0,
   );
+  const sttProvider = parseRuntimeVoiceSttProviderEnv(
+    process.env.STT_PROVIDER ?? process.env.VOICE_STT_PROVIDER,
+  );
   const ttsProvider = parseStreamingTtsProviderEnv(
     process.env.TTS_PROVIDER ?? process.env.VOICE_TTS_PROVIDER,
     'elevenlabs',
@@ -671,6 +676,7 @@ export function loadConfig(): SubstrateConfig {
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
+    ...(sttProvider ? { sttProvider } : {}),
     ttsProvider,
     deepgramApiKey: process.env.DEEPGRAM_API_KEY,
     deepgramModel: process.env.DEEPGRAM_MODEL ?? 'nova-3',
@@ -814,6 +820,15 @@ function parseStreamingTtsProviderEnv(
     return trimmed;
   }
   return fallback;
+}
+
+function parseRuntimeVoiceSttProviderEnv(
+  value: string | undefined,
+): StreamingSttProvider | 'disabled' | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  return trimmed as StreamingSttProvider | 'disabled';
 }
 
 function parseImportProcessingRouteMode(

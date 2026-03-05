@@ -200,6 +200,13 @@ Forbidden without user approval:
 - ✅ Before closing work, verify no newly introduced orphan/unreachable production modules
 - ✅ Prove wiring with either a smoke test or an import/reachability check, and include the result in handoff notes
 
+## Coding Standards
+
+1. **Security: Fail Closed** — deny by default, no catch-and-continue on auth/trust/policy
+2. **Error Handling: No Swallowing** — every catch must log/rethrow/return error, empty catches are bugs
+3. **No Legacy Code** — no shims, no migration paths, no dead re-exports, one way to do things
+4. **No Fallbacks** — missing config = throw, unavailable service = fail loud, no hardcoded fallback values on security-sensitive config
+
 ## Code Structure Requirements
 
 - Do **not** create or expand god files.

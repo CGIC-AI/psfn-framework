@@ -50,7 +50,6 @@ const DECRYPT_RECOVERY_COOLDOWN_MS = 1_500;
 const DECRYPT_RECOVERY_MAX_REJOINS = 3;
 const DECRYPT_RECOVERY_WINDOW_MS = 5 * 60_000;
 const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
-const DEFAULT_ECHO_TTS_PRESET = 'normal';
 
 /**
  * Maximum number of consecutive stream errors per user before tearing down
@@ -220,7 +219,7 @@ function createConfiguredTtsConnector(
     return createStreamingTtsConnector('echo', {
       url,
       voice,
-      preset: config.echoTtsPreset ?? DEFAULT_ECHO_TTS_PRESET,
+      ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
       ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
     });
   }

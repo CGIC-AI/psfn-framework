@@ -11,7 +11,7 @@ export type StreamingTtsProvider = 'elevenlabs' | 'echo';
 export interface EchoStreamingTtsConfig {
   url: string;
   voice: string;
-  preset: string;
+  preset?: string;
   model?: string;
 }
 

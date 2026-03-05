@@ -351,8 +351,12 @@ async function main(): Promise<void> {
   });
   const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
-  const workspacePath = process.env.WORKSPACE_PATH ?? './workspace';
+  const workspacePathEnv = process.env.WORKSPACE_PATH;
+  const workspacePath = workspacePathEnv ?? './workspace';
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
+  if (!workspacePathEnv) {
+    log.warn('WORKSPACE_PATH not set, defaulting to ./workspace', { resolved: workspaceRoot });
+  }
   const moduleRegistryPath = resolveModuleRegistryPathFromWorkspace(
     workspaceRoot,
     process.env.MODULE_REGISTRY_PATH,

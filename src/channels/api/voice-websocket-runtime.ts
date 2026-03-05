@@ -36,9 +36,7 @@ import { resolveRuntimeVoiceProviderGate } from '../../runtime/bootstrap-helpers
 const log = createComponentLogger('ApiVoiceRuntime');
 
 const DEFAULT_CHANNEL_PREFIX = 'api-voice';
-const DEFAULT_ECHO_TTS_URL = 'http://localhost:8001';
-const DEFAULT_ECHO_TTS_VOICE = '11labs-Allison';
-const DEFAULT_ECHO_TTS_PRESET = 'Independent-High-Speaker-CFG';
+// Echo TTS requires explicit config — no silent localhost defaults
 
 interface ApiVoiceWebSocketRuntimeConfig {
   agentLoop: SubstrateAgent;
@@ -127,18 +125,24 @@ function createVoiceTtsConnector(
   ttsProvider: 'echo' | 'elevenlabs',
 ) {
   if (ttsProvider === 'echo') {
+    if (!config.echoTtsUrl || !config.echoTtsVoice) {
+      throw new Error('Echo TTS provider selected but ECHO_TTS_URL and ECHO_TTS_VOICE are not configured');
+    }
     const model = config.echoTtsModel;
     return createStreamingTtsConnector('echo', {
-      url: config.echoTtsUrl ?? DEFAULT_ECHO_TTS_URL,
-      voice: config.echoTtsVoice ?? DEFAULT_ECHO_TTS_VOICE,
-      preset: config.echoTtsPreset ?? DEFAULT_ECHO_TTS_PRESET,
+      url: config.echoTtsUrl,
+      voice: config.echoTtsVoice,
+      ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
       ...(model ? { model } : {}),
     });
   }
 
+  if (!config.elevenLabsApiKey || !config.elevenLabsVoiceId) {
+    throw new Error('ElevenLabs TTS provider selected but ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID are not configured');
+  }
   return createStreamingTtsConnector('elevenlabs', {
-    apiKey: config.elevenLabsApiKey!,
-    voiceId: config.elevenLabsVoiceId!,
+    apiKey: config.elevenLabsApiKey,
+    voiceId: config.elevenLabsVoiceId,
     modelId: config.elevenLabsModelId,
   });
 }

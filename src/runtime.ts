@@ -27,7 +27,10 @@ import {
   resolveActiveHealthProbeConfig,
   toActiveProbeMeta,
 } from './channels/api/active-health-probe.js';
-import type { ChannelAdapter } from './channels/types.js';
+import type {
+  ChannelAdapter,
+  ChannelAdapterFactoryEntry,
+} from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
@@ -138,7 +141,8 @@ import {
   resolveRuntimeVoiceTtsProvider,
 } from './runtime/bootstrap-helpers.js';
 import {
-  registerChannelAdapter as registerRuntimeChannelAdapter,
+  buildChannelAdapterFactoryManifest,
+  loadChannelAdaptersFromManifest,
   startChannelAdapters,
   stopChannelAdapters,
 } from './runtime/channel-lifecycle.js';
@@ -214,14 +218,6 @@ export class SubstrateRuntime implements Lifecycle {
     this.stopVoiceObservers = attachVoiceObservers(this.eventBus);
     this.stopDebugObserver = attachTerminalDebugObserver(this.eventBus, { scope: 'runtime' });
     this.startTime = Date.now();
-  }
-
-  private registerChannelAdapter(adapter: ChannelAdapter): void {
-    registerRuntimeChannelAdapter(
-      this.channelRegistry,
-      adapter,
-      registry => this.agentLoop.setChannelRegistry(registry),
-    );
   }
 
   private async startChannels(): Promise<void> {
@@ -792,24 +788,49 @@ export class SubstrateRuntime implements Lifecycle {
       buildRuntimeChannelsConfigOverrides(this.config, savedSettings),
     );
 
-    // Discord adapter — setAgent enables steering (mid-stream message injection)
-    this.discord = new DiscordAdapter(this.config, this.eventBus, {
-      sessionStore: this.sessionStore,
-    });
-    this.discord.setAgent(this.agentLoop);
-    await this.discord.init();
-    this.registerChannelAdapter(this.discord);
-
-    if (channelsConfig.telegram.enabled) {
-      const telegram = new TelegramAdapter(channelsConfig.telegram, this.eventBus);
-      telegram.onMessage((message) => this.agentLoop.handleMessage(message));
-      await telegram.init();
-      this.registerChannelAdapter(telegram);
-      log.info('Telegram adapter configured', {
-        mode: channelsConfig.telegram.mode,
-        allowlistSize: channelsConfig.telegram.allowedUsers.length,
-      });
-    }
+    const channelFactoryManifest = buildChannelAdapterFactoryManifest([
+      {
+        manifest: {
+          id: 'discord',
+          label: 'Discord',
+          enabled: true,
+          required: true,
+        },
+        create: async (): Promise<ChannelAdapter> => {
+          const adapter = new DiscordAdapter(this.config, this.eventBus, {
+            sessionStore: this.sessionStore,
+          });
+          adapter.setAgent(this.agentLoop);
+          await adapter.init();
+          this.discord = adapter;
+          return adapter;
+        },
+      },
+      {
+        manifest: {
+          id: 'telegram',
+          label: 'Telegram',
+          enabled: channelsConfig.telegram.enabled,
+          required: false,
+        },
+        create: async (): Promise<ChannelAdapter> => {
+          const adapter = new TelegramAdapter(channelsConfig.telegram, this.eventBus);
+          adapter.onMessage((message) => this.agentLoop.handleMessage(message));
+          await adapter.init();
+          log.info('Telegram adapter configured', {
+            mode: channelsConfig.telegram.mode,
+            allowlistSize: channelsConfig.telegram.allowedUsers.length,
+          });
+          return adapter;
+        },
+      },
+    ] satisfies ChannelAdapterFactoryEntry[]);
+    await loadChannelAdaptersFromManifest(
+      this.channelRegistry,
+      channelFactoryManifest,
+      registry => this.agentLoop.setChannelRegistry(registry),
+      log,
+    );
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
     const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
@@ -908,18 +929,26 @@ export class SubstrateRuntime implements Lifecycle {
       const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
       const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
 
-      const apiServer = new ApiServer({
-        port: apiPort,
-        host: apiHost,
-        agentLoop: this.agentLoop,
-        eventBus: this.eventBus,
-        sessionManager: this.sessionManager,
-        contactStore,
-        apiKey: process.env.API_KEY || undefined,
-        allowInsecureWithoutAuth,
-        corsAllowedOrigins,
-        modelName: process.env.API_MODEL_NAME,
-        healthChecks: {
+      const apiServerManifest = buildChannelAdapterFactoryManifest([{
+        manifest: {
+          id: 'api',
+          label: 'OpenAI-Compatible API',
+          enabled: true,
+          required: true,
+        },
+        create: async (): Promise<ChannelAdapter> => {
+          const adapter = new ApiServer({
+            port: apiPort,
+            host: apiHost,
+            agentLoop: this.agentLoop,
+            eventBus: this.eventBus,
+            sessionManager: this.sessionManager,
+            contactStore,
+            apiKey: process.env.API_KEY || undefined,
+            allowInsecureWithoutAuth,
+            corsAllowedOrigins,
+            modelName: process.env.API_MODEL_NAME,
+            healthChecks: {
           memory: () => {
             const stats = this.memoryStore.getStats();
             return {
@@ -1069,9 +1098,17 @@ export class SubstrateRuntime implements Lifecycle {
           },
         },
         voiceWebSocketRuntime,
-      });
-      await apiServer.init();
-      this.registerChannelAdapter(apiServer);
+          });
+          await adapter.init();
+          return adapter;
+        },
+      } satisfies ChannelAdapterFactoryEntry]);
+      await loadChannelAdaptersFromManifest(
+        this.channelRegistry,
+        apiServerManifest,
+        registry => this.agentLoop.setChannelRegistry(registry),
+        log,
+      );
       log.info(`API server configured on port ${apiPort}`);
     }
 

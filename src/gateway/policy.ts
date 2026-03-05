@@ -62,13 +62,12 @@ export function isInsideAllowedPaths(resolvedPath: string, allowedPrefixes: stri
  * For writes to new files, resolves the parent directory if it exists.
  * Returns null only if a symlink explicitly resolves outside allowed paths.
  */
-function resolveCanonicalPath(normalized: string, isWrite: boolean): string {
+function resolveCanonicalPath(normalized: string, isWrite: boolean): string | null {
   try {
     return realpathSync(normalized);
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
     // ENOENT = path doesn't exist at all (not a symlink issue) — safe to use normalized
-    // ELOOP = too many symlinks (suspicious, but ENOENT for broken symlink targets too)
     if (code === 'ENOENT') {
       // For writes, try to resolve the parent directory to catch symlinked parents
       if (isWrite) {
@@ -82,8 +81,8 @@ function resolveCanonicalPath(normalized: string, isWrite: boolean): string {
       }
       return normalized;
     }
-    // For any other error (EACCES, ELOOP, etc.), use normalized path
-    return normalized;
+    // ELOOP, EACCES, or any other error — refuse to resolve (caller should DENY)
+    return null;
   }
 }
 
@@ -107,11 +106,15 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       const lane: UrlPolicyLane = laneValue === 'local_crawler'
         ? 'local_crawler'
         : 'default';
-      if (url && policyConfig.urlPolicy) {
-        const urlCheck = evaluateUrlPolicy(url, policyConfig.urlPolicy, lane);
-        if (!urlCheck.allowed) {
-          return 'DENY';
-        }
+      if (!url || typeof url !== 'string') {
+        return 'DENY';
+      }
+      if (!policyConfig.urlPolicy) {
+        return 'DENY';
+      }
+      const urlCheck = evaluateUrlPolicy(url, policyConfig.urlPolicy, lane);
+      if (!urlCheck.allowed) {
+        return 'DENY';
       }
       return 'ALLOW';
     }
@@ -178,6 +181,11 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       const isWrite = method === 'fs.write';
       const canonical = resolveCanonicalPath(normalizedPath, isWrite);
 
+      // null = resolution failed (ELOOP, EACCES, etc.) — deny access
+      if (canonical === null) {
+        return 'DENY';
+      }
+
       // If canonical differs from normalized (symlink), re-check against allowed prefixes
       if (canonical !== normalizedPath && !isInsideAllowedPaths(canonical, allowedPrefixes)) {
         return 'DENY';
@@ -209,6 +217,18 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
       return 'ALLOW';
     }
+
+    // Git read operations — ALLOW (GitOps has its own path allowlisting)
+    case 'git.status':
+    case 'git.diff':
+      return 'ALLOW';
+
+    // Git write operations — require approval gate
+    case 'git.create_branch':
+    case 'git.apply_patch':
+    case 'git.commit':
+    case 'git.open_pr':
+      return 'NEEDS_APPROVAL';
 
     default:
       return 'DENY';

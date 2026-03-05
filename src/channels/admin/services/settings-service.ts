@@ -515,7 +515,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     payload: Record<string, unknown>,
     errors: SettingsValidationError[],
   ): void {
-    if ('modelCatalog' in payload) return;
+    if (!('modelCatalog' in payload)) return;
     if (!this.isRecord(payload.modelCatalog)) return;
 
     for (const [slotKey, rawEntry] of Object.entries(payload.modelCatalog)) {

@@ -70,6 +70,15 @@
   // ── Dirty tracking ──
   let initialSnapshot = $state('');
   let dirty = $state(false);
+  type RawEditorKey = 'settings' | 'models' | 'skills' | 'scheduler' | 'trust-policy' | 'capabilities';
+  let initialRawJsonByKey = $state<Record<RawEditorKey, string>>({
+    settings: '',
+    models: '',
+    skills: '',
+    scheduler: '',
+    'trust-policy': '',
+    capabilities: '',
+  });
 
   function computeSnapshot(): string {
     return JSON.stringify({
@@ -115,7 +124,7 @@
 
   $effect(() => {
     if (initialSnapshot) {
-      dirty = computeSnapshot() !== initialSnapshot;
+      dirty = computeSnapshot() !== initialSnapshot || dirtyRawEditorKeys().length > 0;
     }
   });
 
@@ -721,9 +730,6 @@
         slotKey: p === 'chat' || p === 'summary' || p === 'reasoning' || p === 'longContext' ? 'primary' : 'extraction',
       }));
     }
-
-    // Set initial snapshot for dirty tracking
-    initialSnapshot = computeSnapshot();
   }
 
   function tryPrettyPrint(raw: string): string {
@@ -789,6 +795,59 @@
       case 'trust-policy': trustPolicyJson = val; break;
       case 'capabilities': capabilitiesJson = val; break;
     }
+  }
+
+  function currentRawJsonByKey(): Record<RawEditorKey, string> {
+    return {
+      settings: settingsJson,
+      models: modelsJson,
+      skills: skillsJson,
+      scheduler: schedulerJson,
+      'trust-policy': trustPolicyJson,
+      capabilities: capabilitiesJson,
+    };
+  }
+
+  function dirtyRawEditorKeys(): RawEditorKey[] {
+    const current = currentRawJsonByKey();
+    return (Object.keys(current) as RawEditorKey[]).filter(
+      key => current[key] !== initialRawJsonByKey[key],
+    );
+  }
+
+  function rawEditorLabel(key: RawEditorKey): string {
+    switch (key) {
+      case 'settings': return 'settings.json';
+      case 'models': return 'models.json';
+      case 'skills': return 'skills.json';
+      case 'scheduler': return 'scheduler.json';
+      case 'trust-policy': return 'trust-policy.json';
+      case 'capabilities': return 'capabilities.json';
+    }
+  }
+
+  function resetDirtyTracking(): void {
+    initialSnapshot = computeSnapshot();
+    initialRawJsonByKey = currentRawJsonByKey();
+  }
+
+  function markRawEditorsCommitted(keys: RawEditorKey[]): void {
+    const current = currentRawJsonByKey();
+    const next = { ...initialRawJsonByKey };
+    for (const key of keys) {
+      next[key] = current[key];
+    }
+    initialRawJsonByKey = next;
+  }
+
+  function ensureNoDirtyRawEditorsForGeneralSave(): boolean {
+    const dirtyKeys = dirtyRawEditorKeys();
+    if (dirtyKeys.length === 0) return true;
+    flash(
+      false,
+      `Unsaved raw editor changes in ${dirtyKeys.map(rawEditorLabel).join(', ')}; save or discard them before using the general settings save.`,
+    );
+    return false;
   }
 
   function fmtTokens(n: number): string {
@@ -992,6 +1051,7 @@
     schedulerJson = tryPrettyPrint(schConf);
     trustPolicyJson = tryPrettyPrint(tpConf);
     capabilitiesJson = tryPrettyPrint(capConf);
+    resetDirtyTracking();
   }
 
   async function saveSettingsContract(
@@ -999,6 +1059,23 @@
   ): Promise<{ ok: boolean; invalidFieldCount: number; message: string }> {
     const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
     let invalidFieldCount = 0;
+    const ownerConfigSaves = [
+      {
+        key: 'models' as const,
+        nextJson: JSON.stringify(buildCatalogPayload(), null, 2),
+        currentJson: tryPrettyPrint(modelsJson),
+      },
+      {
+        key: 'scheduler' as const,
+        nextJson: JSON.stringify(buildSchedulerPayload(), null, 2),
+        currentJson: tryPrettyPrint(schedulerJson),
+      },
+      {
+        key: 'capabilities' as const,
+        nextJson: JSON.stringify(buildCapabilitiesPayload(), null, 2),
+        currentJson: tryPrettyPrint(capabilitiesJson),
+      },
+    ].filter(entry => entry.nextJson !== entry.currentJson);
 
     if (hasRuntimePayload) {
       const runtimeResult = await updateSettings(runtimePayload);
@@ -1015,9 +1092,9 @@
     }
 
     try {
-      await saveSubConfig('models', JSON.stringify(buildCatalogPayload(), null, 2));
-      await saveSubConfig('scheduler', JSON.stringify(buildSchedulerPayload(), null, 2));
-      await saveSubConfig('capabilities', JSON.stringify(buildCapabilitiesPayload(), null, 2));
+      for (const entry of ownerConfigSaves) {
+        await saveSubConfig(entry.key, entry.nextJson);
+      }
     } catch (error) {
       return {
         ok: false,
@@ -1039,6 +1116,7 @@
   async function saveSimple() {
     saving = true;
     try {
+      if (!ensureNoDirtyRawEditorsForGeneralSave()) return;
       const result = await saveSettingsContract(collectSimplePayload());
       flash(result.ok, result.message);
       if (!result.ok && result.invalidFieldCount > 0) {
@@ -1055,6 +1133,7 @@
     if (!data) return;
     saving = true;
     try {
+      if (!ensureNoDirtyRawEditorsForGeneralSave()) return;
       const result = await saveSettingsContract(data.config as Record<string, unknown>);
       flash(result.ok, result.message);
       if (!result.ok && result.invalidFieldCount > 0) {
@@ -1106,6 +1185,8 @@
       applyValidationErrors({ ok: true, message: '' });
       if (key === 'models' || key === 'scheduler' || key === 'capabilities') {
         await reloadSettingsState();
+      } else {
+        markRawEditorsCommitted([key as RawEditorKey]);
       }
       flashRaw(key, true, `${label} saved`);
     } catch (e) {
@@ -1153,6 +1234,7 @@
       schedulerJson = tryPrettyPrint(schConf);
       trustPolicyJson = tryPrettyPrint(tpConf);
       capabilitiesJson = tryPrettyPrint(capConf);
+      resetDirtyTracking();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load settings';
     } finally {

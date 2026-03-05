@@ -190,6 +190,19 @@ Forbidden without user approval:
 
 **Always ask first. No exceptions.**
 
+### Orchestration Shutdown Hygiene
+
+When using worktrees + spawned subagents, the session is not cleanly finished until the agent handles are explicitly closed.
+
+Required shutdown sequence:
+1. Wait for each spawned subagent to finish, or interrupt it intentionally.
+2. Call `close_agent` for every spawned agent after completion/interruption so the handle is not left logically open.
+3. Record each worker's final state before closing it: assigned bead, commit hash, tests run, build result, and whether it merged.
+4. Verify no intentionally active spawned workers remain before ending the orchestration session.
+5. If `spawn_agent` starts failing with thread/session-cap errors, stop spawning more workers in that contaminated top-level session and resume from a fresh top-level orchestration session.
+
+Do not treat "worker reported done" as equivalent to "worker cleaned up". Explicit close is required.
+
 ### Important Rules
 
 - ✅ Use bd for ALL task tracking
@@ -232,8 +245,9 @@ Forbidden without user approval:
    git status  # MUST show "up to date with origin"
    ```
 5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+6. **Close orchestration handles** - Close every spawned subagent/worker handle and verify no intentional worker remains active in the current top-level session
+7. **Verify** - All changes committed AND pushed
+8. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
 

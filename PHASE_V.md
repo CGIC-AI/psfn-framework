@@ -109,14 +109,15 @@ Any new setting merged in Phase V must satisfy all of the following:
 ## Current Execution State
 
 - Top-level integration branch remains `phase-v`.
-- Completed child-stream work ready for fresh-session review/integration:
-  - `PSFN-04dt.1` on `phase-v-04dt1` at `092fa78` (`canonical TurnRecord + TurnID provenance`)
-  - `PSFN-04dt.5` on `phase-v-04dt5` at `591a4cf` + `88eeab4` (`evidence-aware retrieval scoring + regression coverage`)
 - Integrated on `phase-v` in this session:
-  - `PSFN-qyrl.1` (`channel adapter manifest registry loader`) is now merged into `phase-v`, with an additional fail-closed guard so a manifest cannot silently skip a `required` channel by marking it disabled.
+  - `PSFN-04dt.1` (`canonical TurnRecord + TurnID provenance`) is merged from `phase-v-04dt1` at `092fa78`.
+  - `PSFN-04dt.5` (`evidence-aware retrieval scoring + regression coverage`) is merged from `phase-v-04dt5` at `591a4cf` + `88eeab4`.
+  - `PSFN-qyrl.1` (`channel adapter manifest registry loader`) is merged, with an additional fail-closed guard so a manifest cannot silently skip a `required` channel by marking it disabled.
+  - `PSFN-qyrl.2` (`STT provider registry and pluggable provider contract`) is merged, including runtime/bootstrap gating plus backend settings/admin validation for registered provider ids.
+  - `PSFN-qyrl.3` (`TTS provider registry and pluggable provider contract`) is merged, including registry-backed bootstrap gating plus backend settings/admin validation for registered provider ids.
 - Next active Phase V focus:
-  - Review/integrate `PSFN-04dt.1` and `PSFN-04dt.5` child streams onto `phase-v`.
-  - Continue plugin seam work with `PSFN-qyrl.2` (STT registry) and `PSFN-qyrl.3` (TTS registry) after the channel registry checkpoint is closed.
+  - Continue `PSFN-qyrl.4` runtime bootstrap replacement to remove the remaining hard-coded STT/TTS construction paths from runtime entrypoints.
+  - Carry `PSFN-nhtv` to remove Garden settings UI hard-coded STT/TTS provider pickers so plugin provider ids round-trip cleanly in the operator surface.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 
 ## Work Process
@@ -149,4 +150,8 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 ## Latest Validation Snapshot
 
 - `PSFN-qyrl.1` targeted regression: `npm test -- --run src/runtime/channel-lifecycle.test.ts`
-- `phase-v` build after channel registry integration: `npm run build`
+- `PSFN-04dt.5` targeted regression: `npm test -- --run src/memory/retrieval.test.ts`
+- `PSFN-04dt.1` targeted regression: `npm test -- --run src/agent/substrate-agent.test.ts src/memory/extraction.test.ts src/session/store.test.ts`
+- `PSFN-qyrl.2` targeted regressions: `npm test -- --run src/voice/connectors/stt/index.test.ts src/runtime/bootstrap-helpers.test.ts src/settings.test.ts src/channels/admin/api-routes.test.ts`
+- `PSFN-qyrl.3` targeted regressions: `npm test -- --run src/voice/connectors/tts/index.test.ts src/runtime/bootstrap-helpers.test.ts src/settings.test.ts src/channels/admin/api-routes.test.ts src/channels/api/voice-websocket-runtime.test.ts`
+- `phase-v` build after integrated `PSFN-qyrl.1` / `PSFN-qyrl.2` / `PSFN-qyrl.3` / `PSFN-04dt.1` / `PSFN-04dt.5`: `npm run build`

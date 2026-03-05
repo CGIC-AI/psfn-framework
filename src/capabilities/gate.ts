@@ -1,16 +1,12 @@
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { CapabilityTier } from '../types.js';
+import type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
 import type { CapabilityToken } from './tokens.js';
 import { resolveToolRequiredCapabilities } from './requirements.js';
+import { evaluateEligibilityDecision } from './eligibility.js';
 
-export interface CapabilityAccess {
-  getTier(): CapabilityTier;
-  getGrantedTokens(): ReadonlySet<CapabilityToken>;
-  has(token: CapabilityToken): boolean;
-}
-
-export type CapabilityAccessProvider = () => CapabilityAccess;
+export type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
 
 export interface ToolCapabilityEligibility {
   allowed: boolean;
@@ -24,11 +20,15 @@ export function evaluateToolCapabilityEligibility(
   access: CapabilityAccess,
 ): ToolCapabilityEligibility {
   const requiredTokens = resolveToolRequiredCapabilities(tool, params);
-  const missingTokens = requiredTokens.filter(token => !access.has(token));
+  const decision = evaluateEligibilityDecision(
+    access,
+    { kind: 'tool.execute', toolName: tool.name },
+    { requiredTokens },
+  );
   return {
-    allowed: missingTokens.length === 0,
+    allowed: decision.allowed,
     requiredTokens,
-    missingTokens,
+    missingTokens: decision.missingTokens,
   };
 }
 

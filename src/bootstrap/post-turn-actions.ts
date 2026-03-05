@@ -2,6 +2,10 @@ import type { InferredPostTurnAction } from '../types.js';
 import type { EventBus } from '../event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
+import type {
+  EligibilityDecision,
+  EligibilityGate,
+} from '../capabilities/eligibility.js';
 
 const log = createComponentLogger('PostTurnActions');
 
@@ -34,6 +38,8 @@ export interface WirePostTurnActionRuntimeOptions {
   eventBus: EventBus;
   scheduler: Scheduler;
   agentLoop: PostTurnActionAgent;
+  eligibilityGate?: EligibilityGate;
+  onEligibilityDecision?: (decision: EligibilityDecision) => void;
   taskId?: string;
   intervalMs?: number;
   defaultMaxRetries?: number;
@@ -50,6 +56,8 @@ export function wirePostTurnActionRuntime(
     eventBus,
     scheduler,
     agentLoop,
+    eligibilityGate,
+    onEligibilityDecision,
     taskId = DEFAULT_TASK_ID,
     intervalMs = 250,
     defaultMaxRetries = 2,
@@ -140,6 +148,32 @@ export function wirePostTurnActionRuntime(
       return true;
     }
 
+    if (eligibilityGate) {
+      const decision = eligibilityGate.evaluate(
+        {
+          kind: 'post_turn.action',
+          actionKind: entry.action.kind,
+          actionId: entry.action.id,
+        },
+        { requiredTokens: ['memory.write'] },
+      );
+      onEligibilityDecision?.(decision);
+      if (!decision.allowed) {
+        queue.delete(entry.action.dedupeKey);
+        const denialError = `Eligibility denied (${decision.reasonCode})`;
+        log.warn('Deferred action blocked by eligibility gate', {
+          actionId: entry.action.id,
+          actionKind: entry.action.kind,
+          reasonCode: decision.reasonCode,
+          tier: decision.tier,
+          requiredTokens: decision.requiredTokens,
+          missingTokens: decision.missingTokens,
+        });
+        emitTelemetry('failed', entry, { error: denialError });
+        return true;
+      }
+    }
+
     entry.attempt += 1;
     emitTelemetry('started', entry);
 
@@ -212,6 +246,7 @@ export function wirePostTurnActionRuntime(
       handler: async () => {
         await processQueue();
       },
+      eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     });
   }

@@ -30,6 +30,11 @@ import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from '
 import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
 import { resolveRegisteredModel } from './models.js';
 import {
+  EligibilityDeniedError,
+  type EligibilityDecision,
+  type EligibilityGate,
+} from '../capabilities/eligibility.js';
+import {
   type ResolvedCorrelationMetadata,
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
@@ -55,6 +60,12 @@ export interface LLMCompletionOptions {
   correlation?: Partial<CorrelationMetadata>;
 }
 
+export interface LLMClientRuntimeOptions {
+  litellmBaseUrl?: string;
+  eligibilityGate?: EligibilityGate;
+  onEligibilityDecision?: (decision: EligibilityDecision) => void;
+}
+
 export class SensitiveImportRoutePolicyError extends Error {
   readonly code = 'sensitive_import_route_rejected';
   readonly audit: ImportPolicyAuditRecord;
@@ -72,11 +83,21 @@ export class LLMClient {
   private config: SubstrateConfig;
   private litellmBaseUrl: string | null;
   private fallbackRunner: FallbackRunner;
+  private eligibilityGate?: EligibilityGate;
+  private onEligibilityDecision?: (decision: EligibilityDecision) => void;
 
-  constructor(config: SubstrateConfig, litellmBaseUrl?: string) {
+  constructor(
+    config: SubstrateConfig,
+    litellmBaseUrlOrOptions?: string | LLMClientRuntimeOptions,
+  ) {
+    const runtimeOptions = typeof litellmBaseUrlOrOptions === 'string'
+      ? { litellmBaseUrl: litellmBaseUrlOrOptions }
+      : (litellmBaseUrlOrOptions ?? {});
     this.config = config;
-    this.litellmBaseUrl = litellmBaseUrl ?? process.env.LITELLM_BASE_URL ?? null;
+    this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? process.env.LITELLM_BASE_URL ?? null;
     this.fallbackRunner = new FallbackRunner();
+    this.eligibilityGate = runtimeOptions.eligibilityGate;
+    this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
   }
 
   private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
@@ -530,6 +551,32 @@ export class LLMClient {
     execute: (candidate: RoutingCandidate, attempt: number) => Promise<T>,
     options: { modelHint?: LLMCompletionModelHint; correlation?: ResolvedCorrelationMetadata } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
+    if (this.eligibilityGate) {
+      const decision = this.eligibilityGate.evaluate({
+        kind: 'llm.purpose',
+        purpose,
+      });
+      this.onEligibilityDecision?.(decision);
+      if (!decision.allowed) {
+        log.warn('LLM purpose denied by eligibility gate', {
+          purpose,
+          reasonCode: decision.reasonCode,
+          tier: decision.tier,
+          requiredTokens: decision.requiredTokens,
+          missingTokens: decision.missingTokens,
+          minimumTier: decision.minimumTier,
+          ...options.correlation,
+        });
+        throw new EligibilityDeniedError(decision);
+      }
+      log.debug('LLM purpose allowed by eligibility gate', {
+        purpose,
+        tier: decision.tier,
+        reasonCode: decision.reasonCode,
+        ...options.correlation,
+      });
+    }
+
     const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
       this.enforceImportRoutingPolicy(purpose, candidate);

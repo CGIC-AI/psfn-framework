@@ -1,5 +1,7 @@
 export * from './tokens.js';
 export * from './tiers.js';
+export * from './access.js';
+export * from './eligibility.js';
 export * from './requirements.js';
 export * from './gate.js';
 export * from './runtime.js';

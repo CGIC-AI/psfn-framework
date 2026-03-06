@@ -16,17 +16,20 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
+      const shardRouting = resolveShardChannelRouting(params.channelId);
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
+      const callType = params.callType ?? (shardRouting ? 'tool' : 'chat');
+      const purpose = normalizePurpose(params.purpose) ?? (shardRouting ? 'shard.execution' : 'chat');
       const correlation = buildCorrelation({
         turnId: params.turnId,
         requestId,
         channelId: params.channelId,
-        callType: params.callType ?? 'chat',
+        callType,
         originType: params.originType,
         originStage: params.originStage,
         toolName: params.toolName,
         toolCallId: params.toolCallId,
-        purpose: params.purpose ?? 'chat',
+        purpose,
       });
       const response = await runtime.llmProvider.stream(
         {
@@ -53,29 +56,34 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       };
     },
     summary: (p: LLMChatParams) => ({
+      ...toShardRoutingSummary(resolveShardChannelRouting(p.channelId)),
       model: p.model,
       stream: p.stream,
       ...toSummaryCorrelation(buildCorrelation({
         turnId: p.turnId,
         requestId: p.requestId,
         channelId: p.channelId,
-        callType: p.callType ?? 'chat',
+        callType: p.callType ?? (resolveShardChannelRouting(p.channelId) ? 'tool' : 'chat'),
         originType: p.originType,
         originStage: p.originStage,
         toolName: p.toolName,
         toolCallId: p.toolCallId,
-        purpose: p.purpose ?? 'chat',
+        purpose: normalizePurpose(p.purpose) ?? (resolveShardChannelRouting(p.channelId) ? 'shard.execution' : 'chat'),
       })),
     }),
   },
   {
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
+      const shardRouting = resolveShardChannelRouting(params.channelId);
+      const inferredCallType = inferCallType(params.purpose, params.channelId);
       const correlation = buildCorrelation({
         turnId: params.turnId,
         requestId: params.requestId ?? params.turnId,
         channelId: params.channelId,
-        callType: params.callType ?? inferCallType(params.purpose, params.channelId),
+        callType: params.callType ?? (shardRouting && inferredCallType === 'chat'
+          ? 'tool'
+          : inferredCallType),
         originType: params.originType,
         originStage: params.originStage,
         toolName: params.toolName,
@@ -100,12 +108,18 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       };
     },
     summary: (p: LLMCompleteParams) => ({
+      ...toShardRoutingSummary(resolveShardChannelRouting(p.channelId)),
       purpose: p.purpose,
       ...toSummaryCorrelation(buildCorrelation({
         turnId: p.turnId,
         requestId: p.requestId ?? p.turnId,
         channelId: p.channelId,
-        callType: p.callType ?? inferCallType(p.purpose, p.channelId),
+        callType: p.callType ?? (() => {
+          const shardRouting = resolveShardChannelRouting(p.channelId);
+          const inferred = inferCallType(p.purpose, p.channelId);
+          if (shardRouting && inferred === 'chat') return 'tool';
+          return inferred;
+        })(),
         originType: p.originType,
         originStage: p.originStage,
         toolName: p.toolName,
@@ -177,4 +191,39 @@ function toSummaryCorrelation(
     ...(correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
     purpose: correlation.purpose,
   };
+}
+
+function resolveShardChannelRouting(
+  channelId: string | undefined,
+): { shardId: string } | null {
+  const normalized = channelId?.trim();
+  if (!normalized || !normalized.startsWith('shard:')) {
+    return null;
+  }
+
+  const shardId = normalized.slice('shard:'.length).trim();
+  if (!shardId) {
+    throw new Error('Shard channel routing requires a non-empty shard identifier.');
+  }
+  return { shardId };
+}
+
+function toShardRoutingSummary(
+  shardRouting: { shardId: string } | null,
+): Record<string, string> {
+  if (!shardRouting) {
+    return {};
+  }
+  return {
+    routingTarget: 'shard',
+    shardId: shardRouting.shardId,
+  };
+}
+
+function normalizePurpose(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

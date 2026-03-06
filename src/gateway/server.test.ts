@@ -882,6 +882,57 @@ describe('GatewayServer', () => {
       // Now requestAgent should throw "No agent connected"
       await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
     });
+
+    it('fails closed when connected agents are present but none are ready', async () => {
+      const server = new GatewayServer(createMinimalOptions());
+
+      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      mockedCreateSocketServer.mockImplementation((_path, cb) => {
+        onConnectionCb = cb;
+        return { close: vi.fn(), listen: vi.fn() } as any;
+      });
+
+      server.start();
+
+      const mockConn = createMockConnection();
+      onConnectionCb!(mockConn.conn);
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
+      const status = statuses.get(mockConn.conn);
+      expect(status).toBeDefined();
+      status.state = 'degraded';
+      status.health = 'failed';
+      status.stateReason = 'test_degraded';
+
+      await expect(server.requestAgent('test', {})).rejects.toThrow('No ready agent connected');
+    });
+
+    it('marks stale connections degraded and blocks routing until healthy', async () => {
+      const server = new GatewayServer(createMinimalOptions());
+
+      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      mockedCreateSocketServer.mockImplementation((_path, cb) => {
+        onConnectionCb = cb;
+        return { close: vi.fn(), listen: vi.fn() } as any;
+      });
+
+      server.start();
+
+      const mockConn = createMockConnection();
+      onConnectionCb!(mockConn.conn);
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
+      const status = statuses.get(mockConn.conn);
+      expect(status).toBeDefined();
+      status.lastHeartbeatAt = Date.now() - status.heartbeatStaleAfterMs - 5;
+
+      await expect(server.requestAgent('test', {})).rejects.toThrow('No ready agent connected');
+      expect(status.state).toBe('degraded');
+      expect(status.health).toBe('stale');
+      expect(status.stateReason).toBe('heartbeat_stale');
+    });
   });
 
   describe('notify.ntfy', () => {

@@ -153,6 +153,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.config,
       options.eventBus,
       options.contactStore ?? null,
+      options.llmProvider,
     )
     : new MemoryRetriever(
       options.memoryStore,
@@ -160,6 +161,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       undefined,
       options.eventBus,
       options.contactStore ?? null,
+      options.llmProvider,
     );
 
   const memoryExtractor = options.config

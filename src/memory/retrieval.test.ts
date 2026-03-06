@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRetriever, __retrieval_internals } from './retrieval.js';
 import type { MemoryStore } from './store.js';
-import type { EmbeddingService } from '../agent/contracts.js';
+import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
@@ -59,6 +59,19 @@ function makeMockEventBus(): EventBus {
   return {
     emit: vi.fn().mockResolvedValue(undefined),
   } as unknown as EventBus;
+}
+
+function makeMockLLMProvider(responses: Array<{ content: string }>): LLMProvider {
+  return {
+    stream: vi.fn(),
+    complete: vi.fn().mockImplementation(async () => {
+      const next = responses.shift();
+      if (!next) {
+        throw new Error('No mocked LLM response available');
+      }
+      return next;
+    }),
+  };
 }
 
 function makeRuntimeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -1356,6 +1369,159 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(telemetry.candidateCount).toBe(2);
     expect(telemetry.sensitivityRejectedCount).toBe(1);
     expect(telemetry.returnedCount).toBe(1);
+  });
+});
+
+describe('MemoryRetriever compositional retrieval rerank', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('uses batch-evaluate-and-compose reranking when compositional retrieval policy allows it', async () => {
+    const memories = [
+      makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.92, importance: 0.8 }),
+      makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
+      makeMemory({ id: 'mem-charlie', text: 'Charlie filler detail', similarity: 0.8, importance: 0.7 }),
+      makeMemory({ id: 'mem-delta', text: 'Delta best continuity anchor', similarity: 0.8, importance: 0.85 }),
+      makeMemory({ id: 'mem-echo', text: 'Echo low-value detail', similarity: 0.7, importance: 0.6 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const llmProvider = makeMockLLMProvider([
+      {
+        content: `<response>
+<candidate><id>mem-alpha</id><relevance>0.2</relevance></candidate>
+<candidate><id>mem-bravo</id><relevance>0.95</relevance></candidate>
+<candidate><id>mem-charlie</id><relevance>0.05</relevance></candidate>
+<candidate><id>mem-delta</id><relevance>0.7</relevance></candidate>
+</response>`,
+      },
+      {
+        content: `<response>
+<candidate><id>mem-echo</id><relevance>0.1</relevance></candidate>
+</response>`,
+      },
+      {
+        content: `<response>
+<ranking>
+<id>mem-delta</id>
+<id>mem-bravo</id>
+<id>mem-alpha</id>
+<id>mem-charlie</id>
+<id>mem-echo</id>
+</ranking>
+</response>`,
+      },
+    ]);
+    const runtimeConfig = makeRuntimeConfig({
+      capabilityTier: 'autonomous',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['retrieval'],
+      },
+    });
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      runtimeConfig,
+      undefined,
+      null,
+      llmProvider,
+    );
+
+    const result = await retriever.retrieve('which memory best answers the question?', 'api:test', 'primary');
+
+    expect(result.indexOf('Delta best continuity anchor')).toBeLessThan(
+      result.indexOf('Alpha baseline memory'),
+    );
+    expect(result.indexOf('Bravo directly answers the question')).toBeLessThan(
+      result.indexOf('Alpha baseline memory'),
+    );
+    expect(llmProvider.complete).toHaveBeenCalledTimes(3);
+    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt).toContain('Alpha baseline memory');
+    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[2][0].systemPrompt).toContain('Delta best continuity anchor');
+  });
+
+  it('fails closed to deterministic retrieval when compositional retrieval is not allowed by policy', async () => {
+    const memories = [
+      makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.98, importance: 0.95 }),
+      makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const llmProvider = makeMockLLMProvider([
+      { content: '<response></response>' },
+    ]);
+    const runtimeConfig = makeRuntimeConfig({
+      capabilityTier: 'autonomous',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['extraction'],
+      },
+    });
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      runtimeConfig,
+      undefined,
+      null,
+      llmProvider,
+    );
+
+    const result = await retriever.retrieve('which memory best answers the question?', 'api:test', 'primary');
+
+    expect(result.indexOf('Alpha baseline memory')).toBeLessThan(
+      result.indexOf('Bravo directly answers the question'),
+    );
+    expect(llmProvider.complete).not.toHaveBeenCalled();
+  });
+
+  it('fails closed to deterministic retrieval when compositional rerank responses are malformed', async () => {
+    const memories = [
+      makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.98, importance: 0.95 }),
+      makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
+      makeMemory({ id: 'mem-delta', text: 'Delta best continuity anchor', similarity: 0.74, importance: 0.7 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const llmProvider = makeMockLLMProvider([
+      { content: '<response><candidate><id>unknown</id><relevance>0.9</relevance></candidate></response>' },
+    ]);
+    const runtimeConfig = makeRuntimeConfig({
+      capabilityTier: 'autonomous',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['retrieval'],
+      },
+    });
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      runtimeConfig,
+      undefined,
+      null,
+      llmProvider,
+    );
+
+    const result = await retriever.retrieve('which memory best answers the question?', 'api:test', 'primary');
+
+    expect(result.indexOf('Alpha baseline memory')).toBeLessThan(
+      result.indexOf('Bravo directly answers the question'),
+    );
+    expect(result.indexOf('Bravo directly answers the question')).toBeLessThan(
+      result.indexOf('Delta best continuity anchor'),
+    );
+    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
   });
 });
 

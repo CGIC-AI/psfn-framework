@@ -59,7 +59,7 @@ The Five Aggregates vision in `docs/PHASE_V_VISION.md` remains the product direc
 - `PSFN-y2ac` settings contract (blocked by `PSFN-bxvy` and `PSFN-c0zl`).
 
 ### Stage 3
-- `PSFN-x92u` compositional kernel (now active on `phase-v`; `PSFN-x92u.1` and `PSFN-x92u.2` integrated, `PSFN-x92u.3` next).
+- `PSFN-x92u` compositional kernel (now active on `phase-v`; `PSFN-x92u.1`, `.2`, and `.3` integrated, `PSFN-x92u.4` next).
 
 ### Stage 4 (Feature Epics on Top)
 - `PSFN-domy` depends on `PSFN-x92u` and `PSFN-y2ac`.
@@ -133,12 +133,13 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-y2ac.5` (`Contract tests: PATCH/GET round-trip lossless by subsystem JSON file`) is integrated, with dedicated subsystem config round-trip tests, admin JSON/legacy endpoint regressions for runtime + subsystem owner payloads, and `AdminSettingsDataService` now reading runtime settings from the canonical JSON owner instead of stale in-memory config.
   - `PSFN-x92u.1` (`compositional policy config + default-OFF gating`) is integrated, including canonical JSON-backed `compositionalPolicy` schema/persistence, fail-closed backend validation, runtime snapshot wiring, and Garden advanced-mode controls that preserve JSON-for-config / env-for-secrets separation.
   - `PSFN-x92u.2` (`memory extraction chunk-and-compose pipeline`) is integrated, including channel-id-aware compositional policy gating, chunked extraction prompt fan-out for long pre-compaction transcripts, stable compose/dedup merging before acceptance/writes, and regression coverage proving fail-closed fallback to the legacy one-shot path when policy does not allow compositional extraction.
+  - `PSFN-x92u.3` (`retrieval rerank batch-evaluate-and-compose pipeline`) is integrated, including fail-closed compositional rerank helpers, runtime LLM wiring into `MemoryRetriever`, policy-gated retrieval compose/rerank on allowed channel/tier/purpose combinations, and regression coverage proving deterministic fallback when policy or helper output denies the path.
   - `PSFN-qyrl` plugin-seam epic is closed on `phase-v`.
   - `PSFN-bxvy` config/persistence-topology epic is closed on `phase-v`.
   - `PSFN-y2ac` settings-governance epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Continue Stage 3 on `PSFN-x92u.3`: retrieval rerank batch-evaluate-and-compose pipeline.
-  - Queue `PSFN-x92u.4`, `PSFN-x92u.5`, and `PSFN-x92u.6` behind the active retrieval lane, with `PSFN-x92u.7` remaining the final telemetry/diagnostics pass after the compositional sub-pipelines land.
+  - Continue Stage 3 on `PSFN-x92u.4`: post-turn intention appraisal with signal-wise reasoning and composed action decisions.
+  - Queue `PSFN-x92u.5` and `PSFN-x92u.6` behind the active appraisal lane, with `PSFN-x92u.7` remaining the final telemetry/diagnostics pass after the compositional sub-pipelines land.
   - Keep `PSFN-04dt.4` open as the remaining Stage 1 foundation lane for tombstone/redaction replay semantics; it does not block `PSFN-x92u`.
   - Keep `PSFN-eg59` as the residual de-hardcode test-fixture cleanup lane where remaining `Purrsephone` hits are intentional branding/legacy cases versus generic fixture drift.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
@@ -201,3 +202,5 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-x92u.1` Garden/runtime validation: `npm --prefix admin-ui run check`, `npm run garden:build`, and `npm run build`
 - `PSFN-x92u.2` targeted regressions: `npm test -- --cache=false --run src/compositional/policy.test.ts src/memory/extraction.test.ts src/session/manager.test.ts`
 - `PSFN-x92u.2` build validation: `npm run build`
+- `PSFN-x92u.3` targeted regressions: `npm test -- --cache=false --run src/memory/retrieval.test.ts src/bootstrap/composition.test.ts src/compositional/policy.test.ts`
+- `PSFN-x92u.3` build validation: `npm run build`

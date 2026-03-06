@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyExtendedToolForTurn,
+  classifyToolForTurn,
   classifyTurnIntent,
   createDefaultExtendedToolAutoloadPolicy,
   DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS,
@@ -76,6 +77,13 @@ describe('extended-tool-autoload-policy', () => {
     expect(DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS.has('schedule_task')).toBe(true);
   });
 
+  it('classifies tools with explicit core, overlay, and background semantics', () => {
+    expect(classifyToolForTurn('repo_status', { coreToolNames: ['repo_status'] })).toBe('core');
+    expect(classifyToolForTurn('schedule_task')).toBe('background');
+    expect(classifyToolForTurn('repo_diff')).toBe('overlay');
+    expect(classifyToolForTurn('   ')).toBe('background');
+  });
+
   it('selects bounded overlay tools deterministically from registered candidates', () => {
     const selection = selectBoundedOverlayCandidates(
       ['repo_status', 'repo_diff', 'repo_apply_patch', 'repo_commit'],
@@ -115,6 +123,22 @@ describe('extended-tool-autoload-policy', () => {
       {
         toolName: 'repo_status',
         reason: 'duplicate_candidate',
+      },
+    ]);
+  });
+
+  it('fails closed by excluding core-classified tools from overlay selection', () => {
+    const selection = selectBoundedOverlayCandidates(
+      ['repo_status', 'repo_diff'],
+      ['repo_status', 'repo_diff'],
+      2,
+      { coreToolNames: ['repo_status'] },
+    );
+    expect(selection.selected).toEqual(['repo_diff']);
+    expect(selection.skipped).toEqual([
+      {
+        toolName: 'repo_status',
+        reason: 'not_overlay_eligible',
       },
     ]);
   });

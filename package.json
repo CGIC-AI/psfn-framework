@@ -38,6 +38,8 @@
     "garden:build": "cd admin-ui && npm run build",
     "garden:preview": "cd admin-ui && npm run preview",
     "verify:public-sanitize": "node scripts/public-sanitize-check.mjs",
+    "verify:identity-literals": "node scripts/identity-literal-scan.mjs",
+    "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:identity-literals",
     "verify:settings-contract": "tsx scripts/verify-settings-contract.ts"
   },
   "dependencies": {

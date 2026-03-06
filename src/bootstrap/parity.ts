@@ -33,6 +33,7 @@ import {
   type PromotedExtendedToolsManager,
 } from '../settings-tools.js';
 import type { SessionManager } from '../session/manager.js';
+import type { CoreMemoryStore } from '../core-memory/store.js';
 import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
 import { createCompleteFocusTool, createStartFocusTool } from '../tools/focus.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
@@ -90,6 +91,10 @@ import {
   inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages,
 } from './deferred-post-turn-inference.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
+import {
+  SleeptimeMemoryAgent,
+  SLEEPTIME_MEMORY_ACTION_KIND,
+} from '../memory/sleeptime-agent.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
@@ -111,6 +116,9 @@ interface HeartbeatRuntimeOptions {
   compositionalPolicy?: CompositionalPolicyConfig;
   characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
+  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
+  coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
+  sleeptimeCadenceTurns?: number;
   postTurnActions?: PostTurnActionRuntime;
   vaultAutoPublisher?: { publishReflection(input: {
     templateId: string;
@@ -301,6 +309,21 @@ export function wireHeartbeatRuntime(
       purpose: 'appraisal',
     }).allowed
   );
+  const sleeptimeAgent = (
+    runtimeOptions.postTurnActions
+    && runtimeOptions.llmProvider
+    && runtimeOptions.memoryWriter
+    && runtimeOptions.sessionManager
+    && runtimeOptions.coreMemoryStore
+  )
+    ? new SleeptimeMemoryAgent({
+      llmProvider: runtimeOptions.llmProvider,
+      sessionManager: runtimeOptions.sessionManager,
+      coreMemoryStore: runtimeOptions.coreMemoryStore,
+      memoryWriter: runtimeOptions.memoryWriter,
+      cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
+    })
+    : null;
 
   type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
 
@@ -949,11 +972,28 @@ export function wireHeartbeatRuntime(
         }
       },
     );
+    if (sleeptimeAgent) {
+      runtimeOptions.postTurnActions.registerHandler(
+        SLEEPTIME_MEMORY_ACTION_KIND,
+        async (action) => {
+          await sleeptimeAgent.execute(action);
+        },
+        { executionMode: 'background' },
+      );
+    } else {
+      log.info('Sleeptime memory agent wiring skipped: missing post-turn dependencies', {
+        hasPostTurnActions: Boolean(runtimeOptions.postTurnActions),
+        hasLLMProvider: Boolean(runtimeOptions.llmProvider),
+        hasMemoryWriter: Boolean(runtimeOptions.memoryWriter),
+        hasSessionManager: Boolean(runtimeOptions.sessionManager),
+        hasCoreMemoryStore: Boolean(runtimeOptions.coreMemoryStore),
+      });
+    }
 
     if (agentLoop.registerPostTurnActionInferer) {
-      const inferDeferredPostTurnActions: PostTurnActionInferer = async ({ message, turnMessages }) => (
-        shouldUseCompositionalAppraisal(message.channelId)
-          ? inferComposedDeferredPostTurnActions({
+      const inferDeferredPostTurnActions: PostTurnActionInferer = async ({ message, turnMessages }) => {
+        const inferred = shouldUseCompositionalAppraisal(message.channelId)
+          ? await inferComposedDeferredPostTurnActions({
             message,
             turnMessages,
             deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
@@ -968,8 +1008,12 @@ export function wireHeartbeatRuntime(
             onDeferredToolHandoffPayload: (dedupeKey, payload) => {
               deferredToolHandoffPayloads.set(dedupeKey, payload);
             },
-          })
-      );
+          });
+        if (sleeptimeAgent) {
+          inferred.push(...sleeptimeAgent.inferPostTurnActions({ message }));
+        }
+        return inferred;
+      };
       agentLoop.registerPostTurnActionInferer(inferDeferredPostTurnActions);
     } else {
       log.warn('Post-turn action runtime enabled but inferer registration is unavailable');

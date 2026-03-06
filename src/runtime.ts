@@ -656,7 +656,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
     wireSettingsRuntime(this.agentLoop, this.config);
     wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir, this.llmClient);
-    wireCoreMemoryRuntime({
+    const coreMemoryStore = wireCoreMemoryRuntime({
       agentLoop: this.agentLoop,
       sessionManager: this.sessionManager,
       config: this.config,
@@ -926,6 +926,8 @@ export class SubstrateRuntime implements Lifecycle {
         compositionalPolicy: this.config.compositionalPolicy,
         characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
         memoryWriter,
+        sessionManager: this.sessionManager,
+        coreMemoryStore,
         postTurnActions,
         ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
       },

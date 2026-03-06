@@ -344,6 +344,85 @@ describe('ShardManager', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('tracks explicit lifecycle and health metadata for active and completed shards', async () => {
+    mockShardDelayMs = 40;
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const pending = manager.spawn({ name: 'lifecycle', task: 'check lifecycle metadata' });
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    const active = manager.getActiveShards();
+    expect(active).toHaveLength(1);
+    expect(active[0].name).toBe('lifecycle');
+    expect(['registering', 'ready']).toContain(active[0].state);
+    expect(active[0].health).toBe('healthy');
+    expect(active[0].lastHeartbeatAt).toBeGreaterThan(0);
+
+    const result = await pending;
+    expect(result.lifecycleState).toBe('offline');
+    expect(result.health).toBe('healthy');
+    expect(result.capabilities).toContain('general');
+  });
+
+  it('fails closed when required shard capabilities are missing', async () => {
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    await expect(
+      manager.spawn({
+        name: 'missing-capability',
+        task: 'test',
+        requiredCapabilities: ['wyoming:ha-main'],
+      }),
+    ).rejects.toThrow('missing required capability');
+    expect(manager.getActiveCount()).toBe(0);
+  });
+
+  it('evicts stale shards from active routing and frees execution slots', async () => {
+    mockShardDelayMs = 120;
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      maxConcurrent: 1,
+      heartbeatStaleAfterMs: 20,
+    });
+
+    const staleShard = manager.spawn({ name: 'stale', task: 'long-running task' });
+    await new Promise(resolve => setTimeout(resolve, 40));
+
+    // Health sweep happens on accessors; stale shard should be evicted from active routing.
+    expect(manager.getActiveCount()).toBe(0);
+    expect(manager.getActiveShards()).toHaveLength(0);
+
+    await expect(
+      manager.spawn({ name: 'replacement', task: 'new task after stale eviction' }),
+    ).resolves.toMatchObject({
+      name: 'replacement',
+      lifecycleState: 'offline',
+    });
+    await staleShard;
+  });
+
   it('wires memory provider for read access', async () => {
     const memory = mockMemoryProvider();
     const manager = new ShardManager({
@@ -744,6 +823,16 @@ describe('ShardManager', () => {
 
     expect(result.shardId).toMatch(/^wyoming-shard-/);
     expect(result.content.length).toBeGreaterThan(0);
+    expect(result.capabilities).toEqual(expect.arrayContaining([
+      'wyoming',
+      'wyoming:ha-main',
+      'wyoming:ha-main:voice-pe-kitchen',
+    ]));
+    expect(result.requiredCapabilities).toEqual(expect.arrayContaining([
+      'wyoming',
+      'wyoming:ha-main',
+      'wyoming:ha-main:voice-pe-kitchen',
+    ]));
     const delegatedEntries = sessionStore.getRecent('api:wyoming:ha-main:voice-pe-kitchen', 10);
     expect(delegatedEntries).toHaveLength(2);
     expect(delegatedEntries[0]).toMatchObject({
@@ -910,6 +999,10 @@ describe('createSpawnShardTool', () => {
       outputTokens: 0,
       durationMs: 1,
       turns: 1,
+      lifecycleState: 'offline' as const,
+      health: 'healthy' as const,
+      capabilities: ['general'],
+      requiredCapabilities: [],
     }));
     const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
 

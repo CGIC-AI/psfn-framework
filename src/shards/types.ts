@@ -3,6 +3,9 @@ import type { SessionEntry } from '../session/types.js';
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
 
+export type ShardLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';
+export type ShardHealthState = 'healthy' | 'stale' | 'failed';
+
 export interface ShardSourceContext {
   channelId: string;
   requestId?: string;
@@ -31,6 +34,9 @@ export interface ShardConfig {
   maxTurns?: number;               // Max conversation turns (default: 1)
   sourceContext?: ShardSourceContext;
   contextPack?: ShardContextPack;
+  capabilities?: string[];         // Declared capability tokens for routing diagnostics
+  requiredCapabilities?: string[]; // Required capability tokens to route this workload
+  heartbeatStaleAfterMs?: number;  // Optional override for stale heartbeat threshold
 }
 
 export interface ShardResult {
@@ -42,6 +48,10 @@ export interface ShardResult {
   outputTokens: number;
   durationMs: number;
   turns: number;
+  lifecycleState: ShardLifecycleState;
+  health: ShardHealthState;
+  capabilities: string[];
+  requiredCapabilities: string[];
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';

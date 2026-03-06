@@ -50,8 +50,31 @@ import {
 import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
 
 const log = createComponentLogger('Gateway');
+const DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS = 90_000;
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
+
+type GatewayConnectionState = 'registering' | 'ready' | 'degraded' | 'offline';
+type GatewayConnectionHealth = 'healthy' | 'stale' | 'failed';
+
+interface GatewayConnectionStatus {
+  state: GatewayConnectionState;
+  stateReason: string;
+  health: GatewayConnectionHealth;
+  connectedAt: number;
+  lastHeartbeatAt: number;
+  lastTransitionAt: number;
+  heartbeatStaleAfterMs: number;
+  failureReason?: string;
+}
+
+const GATEWAY_CONNECTION_STATE_TRANSITIONS:
+Readonly<Record<GatewayConnectionState, readonly GatewayConnectionState[]>> = {
+  registering: ['ready', 'degraded', 'offline'],
+  ready: ['degraded', 'offline'],
+  degraded: ['ready', 'offline'],
+  offline: [],
+};
 
 export interface GatewayConfirmationConfig {
   expiryMs: number;
@@ -82,6 +105,7 @@ export class GatewayServer {
   private netServer: net.Server | null = null;
   private readonly connections = new Set<NdjsonConnection>();
   private readonly rpcClients = new Map<NdjsonConnection, JSONRPCServerAndClient>();
+  private readonly connectionStatuses = new Map<NdjsonConnection, GatewayConnectionStatus>();
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
@@ -256,6 +280,16 @@ export class GatewayServer {
     this.netServer = createSocketServer(this.options.socketPath, (conn) => {
       log.info('Agent connected');
       this.connections.add(conn);
+      this.connectionStatuses.set(conn, {
+        state: 'registering',
+        stateReason: 'connection_opened',
+        health: 'healthy',
+        connectedAt: Date.now(),
+        lastHeartbeatAt: Date.now(),
+        lastTransitionAt: Date.now(),
+        heartbeatStaleAfterMs: DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS,
+      });
+      this.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
 
       const serverAndClient = new JSONRPCServerAndClient(
         new JSONRPCServer(),
@@ -263,23 +297,38 @@ export class GatewayServer {
       );
       this.registerMethods(serverAndClient);
       this.rpcClients.set(conn, serverAndClient);
+      this.transitionConnectionState(conn, 'ready', 'rpc_registered');
 
       conn.onMessage(async (message) => {
+        this.touchConnectionHeartbeat(conn);
+        this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
         // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await serverAndClient.receiveAndSend(message as any);
+        try {
+          await serverAndClient.receiveAndSend(message as any);
+        } catch (error) {
+          const messageText = toErrorMessage(error);
+          this.transitionConnectionState(conn, 'degraded', 'rpc_receive_error', messageText);
+          log.error('RPC receive/send failed for gateway connection', { error: messageText });
+        }
       });
 
       conn.on('close', () => {
         log.info('Agent disconnected');
+        this.transitionConnectionState(conn, 'offline', 'connection_closed');
         this.connections.delete(conn);
         this.rpcClients.delete(conn);
+        this.connectionStatuses.delete(conn);
       });
 
       conn.on('error', (err) => {
-        log.error('Connection error', { error: err.message });
+        const messageText = err instanceof Error ? err.message : String(err);
+        log.error('Connection error', { error: messageText });
+        this.transitionConnectionState(conn, 'degraded', 'connection_error', messageText);
+        this.transitionConnectionState(conn, 'offline', 'connection_error', messageText);
         this.connections.delete(conn);
         this.rpcClients.delete(conn);
+        this.connectionStatuses.delete(conn);
       });
     });
   }
@@ -311,8 +360,7 @@ export class GatewayServer {
     params: unknown,
     timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
   ): Promise<T> {
-    const first = this.rpcClients.values().next().value;
-    if (!first) throw new Error('No agent connected');
+    const first = this.resolveReadyRpcClient();
 
     const result = await Promise.race([
       first.request(method, params),
@@ -327,10 +375,7 @@ export class GatewayServer {
     message: SubstrateMessage,
     options: VoiceStreamRequestOptions = {},
   ): Promise<VoiceHandleMessageResult> {
-    const client = this.rpcClients.values().next().value as JSONRPCServerAndClient | undefined;
-    if (!client) {
-      throw new Error('No agent connected');
-    }
+    const client = this.resolveReadyRpcClient();
 
     return requestAgentVoiceStream({
       client,
@@ -338,6 +383,111 @@ export class GatewayServer {
       options,
       wyomingShardRouting: this.wyomingShardRouting,
       nextRequestCounter: () => ++this.streamRequestCounter,
+    });
+  }
+
+  private resolveReadyRpcClient(): JSONRPCServerAndClient {
+    this.refreshConnectionHealth();
+    if (this.rpcClients.size === 0) {
+      throw new Error('No agent connected');
+    }
+
+    for (const [conn, client] of this.rpcClients.entries()) {
+      const status = this.connectionStatuses.get(conn);
+      if (!status) {
+        continue;
+      }
+      if (status.state === 'ready' && status.health === 'healthy') {
+        return client;
+      }
+    }
+
+    throw new Error('No ready agent connected');
+  }
+
+  private refreshConnectionHealth(now = Date.now()): void {
+    for (const [conn, status] of this.connectionStatuses.entries()) {
+      if (status.state !== 'ready' && status.state !== 'registering') {
+        continue;
+      }
+
+      const staleForMs = now - status.lastHeartbeatAt;
+      if (staleForMs <= status.heartbeatStaleAfterMs) {
+        continue;
+      }
+
+      const reason = `No heartbeat observed for ${staleForMs}ms (limit ${status.heartbeatStaleAfterMs}ms).`;
+      this.transitionConnectionState(conn, 'degraded', 'heartbeat_stale', reason);
+    }
+  }
+
+  private touchConnectionHeartbeat(conn: NdjsonConnection): void {
+    const status = this.connectionStatuses.get(conn);
+    if (!status || status.state === 'offline') {
+      return;
+    }
+    status.lastHeartbeatAt = Date.now();
+    if (status.state === 'degraded' && status.stateReason === 'heartbeat_stale') {
+      this.transitionConnectionState(conn, 'ready', 'heartbeat_recovered');
+    }
+  }
+
+  private transitionConnectionState(
+    conn: NdjsonConnection,
+    nextState: GatewayConnectionState,
+    reason: string,
+    failureReason?: string,
+  ): void {
+    const status = this.connectionStatuses.get(conn);
+    if (!status) {
+      return;
+    }
+
+    const currentState = status.state;
+    if (currentState === nextState && status.stateReason === reason && !failureReason) {
+      return;
+    }
+    if (currentState !== nextState) {
+      const allowedTransitions = GATEWAY_CONNECTION_STATE_TRANSITIONS[currentState];
+      if (!allowedTransitions.includes(nextState)) {
+        throw new Error(
+          `Invalid gateway connection transition: ${currentState} -> ${nextState}.`,
+        );
+      }
+      status.state = nextState;
+      status.lastTransitionAt = Date.now();
+    }
+    status.stateReason = reason;
+
+    if (nextState === 'ready') {
+      status.health = 'healthy';
+      delete status.failureReason;
+    } else if (nextState === 'degraded') {
+      status.health = reason === 'heartbeat_stale' ? 'stale' : 'failed';
+      if (failureReason) {
+        status.failureReason = failureReason;
+      }
+    } else if (nextState === 'offline' && failureReason) {
+      status.failureReason = failureReason;
+    }
+
+    this.appendConnectionTransition(conn, currentState, nextState, reason, failureReason);
+  }
+
+  private appendConnectionTransition(
+    conn: NdjsonConnection,
+    from: GatewayConnectionState | 'none',
+    to: GatewayConnectionState,
+    reason: string,
+    failureReason?: string,
+  ): void {
+    const status = this.connectionStatuses.get(conn);
+    log.info('Gateway connection lifecycle transition', {
+      from,
+      to,
+      reason,
+      health: status?.health,
+      ...(failureReason ? { failureReason } : {}),
     });
   }
 
@@ -356,6 +506,7 @@ export class GatewayServer {
     }
     this.connections.clear();
     this.rpcClients.clear();
+    this.connectionStatuses.clear();
 
     if (this.netServer) {
       await new Promise<void>((resolve) => {

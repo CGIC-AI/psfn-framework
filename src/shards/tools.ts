@@ -23,10 +23,30 @@ export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
       systemPrompt: Type.Optional(
         Type.String({ description: 'Optional system prompt override (default: inherit parent prompt)' }),
       ),
+      maxTurns: Type.Optional(
+        Type.Number({ minimum: 1, maximum: 8, description: 'Optional max turns for the shard loop (default: 1)' }),
+      ),
+      capabilities: Type.Optional(
+        Type.Array(Type.String({ minLength: 1 }), {
+          description: 'Optional capability tokens this shard should advertise for routing diagnostics.',
+        }),
+      ),
+      requiredCapabilities: Type.Optional(
+        Type.Array(Type.String({ minLength: 1 }), {
+          description: 'Optional capability tokens that must be present before this shard executes.',
+        }),
+      ),
     }),
     execute: async (
       _toolCallId: string,
-      params: { name: string; task: string; systemPrompt?: string },
+      params: {
+        name: string;
+        task: string;
+        systemPrompt?: string;
+        maxTurns?: number;
+        capabilities?: string[];
+        requiredCapabilities?: string[];
+      },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
@@ -35,6 +55,11 @@ export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
           name: params.name,
           task: params.task,
           systemPrompt: params.systemPrompt,
+          ...(params.maxTurns !== undefined ? { maxTurns: params.maxTurns } : {}),
+          ...(params.capabilities?.length ? { capabilities: params.capabilities } : {}),
+          ...(params.requiredCapabilities?.length
+            ? { requiredCapabilities: params.requiredCapabilities }
+            : {}),
           sourceContext: requestContext?.channelId
             ? {
               channelId: requestContext.channelId,
@@ -50,7 +75,14 @@ export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
             text:
               `[Shard "${result.name}" completed in ${result.durationMs}ms, ` +
               `${result.turns} turn(s), ` +
-              `${result.inputTokens + result.outputTokens} tokens]\n\n` +
+              `${result.inputTokens + result.outputTokens} tokens, ` +
+              `state=${result.lifecycleState}, health=${result.health}]\n` +
+              `${result.capabilities.length > 0
+                ? `[Capabilities: ${result.capabilities.join(', ')}]\n`
+                : ''}` +
+              `${result.requiredCapabilities.length > 0
+                ? `[Required capabilities: ${result.requiredCapabilities.join(', ')}]\n`
+                : ''}\n` +
               result.content,
           }] satisfies TextContent[],
           details: {},

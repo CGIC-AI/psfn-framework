@@ -23,6 +23,8 @@ import type {
   ShardConfig,
   ShardContextPack,
   ShardContextPackEntry,
+  ShardHealthState,
+  ShardLifecycleState,
   ShardResult,
   ShardSourceContext,
 } from './types.js';
@@ -30,10 +32,12 @@ import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
+const DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS = 60_000;
 const CONTEXT_PACK_SESSION_SCAN_LIMIT = 12;
 const CONTEXT_PACK_SESSION_ENTRY_LIMIT = 6;
 const CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS = 600;
 const CONTEXT_PACK_MEMORY_MAX_CHARS = 4_000;
+const DEFAULT_SHARD_CAPABILITIES = ['general'] as const;
 const SHARD_TOOLSET_ALL = '*';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'load_tools']);
@@ -55,6 +59,13 @@ const DEFAULT_SHARD_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly s
   custom: [SHARD_TOOLSET_ALL],
 };
 
+const SHARD_STATE_TRANSITIONS: Readonly<Record<ShardLifecycleState, readonly ShardLifecycleState[]>> = {
+  registering: ['ready', 'degraded', 'offline'],
+  ready: ['degraded', 'offline'],
+  degraded: ['ready', 'offline'],
+  offline: [],
+};
+
 export interface ShardToolCatalog {
   core: readonly AgentTool<any>[];
   extended: readonly AgentTool<any>[];
@@ -73,6 +84,7 @@ export interface ShardManagerDeps {
   config: SubstrateConfig;
   parentSystemPrompt: string;
   maxConcurrent?: number;
+  heartbeatStaleAfterMs?: number;
   shardToolsets?: ShardToolsetConfig;
   toolCatalogProvider?: () => ShardToolCatalog;
   auditTrail?: ShardAuditTrail;
@@ -90,6 +102,15 @@ export interface ActiveShard {
   task: string;
   startedAt: number;
   channelId: string;
+  state: ShardLifecycleState;
+  stateReason: string;
+  health: ShardHealthState;
+  lastTransitionAt: number;
+  lastHeartbeatAt: number;
+  heartbeatStaleAfterMs: number;
+  capabilities: string[];
+  requiredCapabilities: string[];
+  failureReason?: string;
 }
 
 export class ShardManager {
@@ -97,17 +118,23 @@ export class ShardManager {
   private auditTrail: ShardAuditTrail | null;
   private activeCount = 0;
   private maxConcurrent: number;
+  private heartbeatStaleAfterMs: number;
   private activeShards = new Map<string, ActiveShard>();
   private activeShardChannels = new Map<string, Set<string>>();
 
   constructor(deps: ShardManagerDeps) {
     this.deps = deps;
     this.maxConcurrent = deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+    this.heartbeatStaleAfterMs = normalizeHeartbeatStaleAfterMs(
+      deps.heartbeatStaleAfterMs,
+      DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS,
+    );
     this.auditTrail = deps.auditTrail ?? null;
     this.installAuditHooks();
   }
 
   async spawn(shardConfig: ShardConfig): Promise<ShardResult> {
+    this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
     const contextPack = shardConfig.contextPack ?? await this.buildContextPack(shardConfig);
@@ -127,6 +154,7 @@ export class ShardManager {
   }
 
   async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {
+    this.refreshShardHealth();
     const content = request.message.content.trim();
     if (!content) {
       throw new Error('Wyoming shard delegation requires non-empty message content.');
@@ -134,12 +162,15 @@ export class ShardManager {
 
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
+    const routeCapabilities = this.resolveWyomingRouteCapabilities(routing);
     const shardName = request.shardName?.trim()
       || this.resolveWyomingShardName(routing);
     const shardConfig: ShardConfig = {
       name: shardName,
       task: request.message.content,
       maxTurns: 1,
+      capabilities: routeCapabilities,
+      requiredCapabilities: routeCapabilities,
     };
     this.auditTrail?.append('wyoming.shard.delegate.start', {
       shardId,
@@ -192,6 +223,7 @@ export class ShardManager {
     shardConfig: ShardConfig,
     baseMessage: SubstrateMessage,
   ): Promise<ShardResult> {
+    this.refreshShardHealth();
     if (this.activeCount >= this.maxConcurrent) {
       throw new Error(
         `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
@@ -200,6 +232,16 @@ export class ShardManager {
 
     const startTime = Date.now();
     const maxTurns = shardConfig.maxTurns ?? DEFAULT_MAX_TURNS;
+    const capabilities = this.resolveAdvertisedCapabilities(shardConfig.capabilities);
+    const requiredCapabilities = this.resolveRequiredCapabilities(shardConfig.requiredCapabilities);
+    const missingCapabilities = requiredCapabilities.filter(capability => !capabilities.includes(capability));
+    if (missingCapabilities.length > 0) {
+      throw new Error(
+        `Shard routing denied: "${shardConfig.name}" is missing required capability tokens `
+        + `(${missingCapabilities.join(', ')}).`,
+      );
+    }
+    const heartbeatStaleAfterMs = this.resolveHeartbeatStaleAfterMs(shardConfig.heartbeatStaleAfterMs);
 
     this.activeCount++;
     this.activeShards.set(shardId, {
@@ -208,13 +250,31 @@ export class ShardManager {
       task: shardConfig.task,
       startedAt: startTime,
       channelId,
+      state: 'registering',
+      stateReason: 'spawn_requested',
+      health: 'healthy',
+      lastTransitionAt: startTime,
+      lastHeartbeatAt: startTime,
+      heartbeatStaleAfterMs,
+      capabilities,
+      requiredCapabilities,
     });
     this.registerActiveShardChannel(channelId, shardId);
+    this.auditTrail?.append('shard.lifecycle.transition', {
+      shardId,
+      from: 'none',
+      to: 'registering',
+      reason: 'spawn_requested',
+      health: 'healthy',
+      channelId,
+    });
     this.auditTrail?.append('shard.spawn.start', {
       shardId,
       name: shardConfig.name,
       maxTurns,
       channelId,
+      capabilities,
+      requiredCapabilities,
     });
     try {
       // Each shard gets its own SessionManager wrapping the shared store
@@ -249,6 +309,8 @@ export class ShardManager {
         tier: this.resolveCapabilityTier(),
         tools: injectedTools.map(tool => tool.name),
       });
+      this.transitionShardState(shardId, 'ready', 'agent_initialized');
+      this.touchShardHeartbeat(shardId);
       // No memoryExtractor — shards don't run L1 extraction/archive jobs.
 
       // Execute (single-turn by default)
@@ -259,6 +321,9 @@ export class ShardManager {
       let turns = 0;
 
       for (let turn = 0; turn < maxTurns; turn++) {
+        this.refreshShardHealth();
+        this.assertShardRoutable(shardId, requiredCapabilities);
+        this.touchShardHeartbeat(shardId);
         const turnMessage = turn === 0 ? baseMessage : {
           ...baseMessage,
           id: `${shardId}-turn-${turn}`,
@@ -272,12 +337,15 @@ export class ShardManager {
         lastModel = response.metadata.model;
         lastContent = response.content;
         turns++;
+        this.touchShardHeartbeat(shardId);
 
         // For single-turn (default), we break after one turn
         // For multi-turn, we continue only if the response suggests more work
         if (turn === 0 && maxTurns === 1) break;
       }
 
+      this.transitionShardState(shardId, 'offline', 'completed');
+      const finishedShard = this.activeShards.get(shardId);
       const result: ShardResult = {
         shardId,
         name: shardConfig.name,
@@ -287,16 +355,24 @@ export class ShardManager {
         outputTokens: totalOutput,
         durationMs: Date.now() - startTime,
         turns,
+        lifecycleState: finishedShard?.state ?? 'offline',
+        health: finishedShard?.health ?? 'healthy',
+        capabilities: [...capabilities],
+        requiredCapabilities: [...requiredCapabilities],
       };
       this.auditTrail?.append('shard.spawn.end', {
         shardId,
         status: 'completed',
         durationMs: result.durationMs,
         turns: result.turns,
+        lifecycleState: result.lifecycleState,
+        health: result.health,
       });
       return result;
     } catch (error) {
       const msg = toErrorMessage(error);
+      this.transitionShardState(shardId, 'degraded', 'execution_failed', msg);
+      this.transitionShardState(shardId, 'offline', 'execution_failed', msg);
       this.auditTrail?.append('shard.spawn.end', {
         shardId,
         status: 'failed',
@@ -305,24 +381,152 @@ export class ShardManager {
       });
       throw error;
     } finally {
-      this.activeCount--;
-      this.activeShards.delete(shardId);
-      this.unregisterActiveShardChannel(channelId, shardId);
+      this.releaseActiveShard(shardId, channelId);
     }
   }
 
   getActiveCount(): number {
+    this.refreshShardHealth();
     return this.activeCount;
   }
 
   getActiveShards(): ActiveShard[] {
-    return [...this.activeShards.values()];
+    this.refreshShardHealth();
+    return [...this.activeShards.values()].map(shard => ({
+      ...shard,
+      capabilities: [...shard.capabilities],
+      requiredCapabilities: [...shard.requiredCapabilities],
+    }));
+  }
+
+  private resolveHeartbeatStaleAfterMs(value: number | undefined): number {
+    return normalizeHeartbeatStaleAfterMs(value, this.heartbeatStaleAfterMs);
+  }
+
+  private resolveAdvertisedCapabilities(tokens: readonly string[] | undefined): string[] {
+    return normalizeCapabilityTokens(tokens, DEFAULT_SHARD_CAPABILITIES);
+  }
+
+  private resolveRequiredCapabilities(tokens: readonly string[] | undefined): string[] {
+    return normalizeCapabilityTokens(tokens);
+  }
+
+  private touchShardHeartbeat(shardId: string): void {
+    const shard = this.activeShards.get(shardId);
+    if (!shard) return;
+    shard.lastHeartbeatAt = Date.now();
+  }
+
+  private refreshShardHealth(now = Date.now()): void {
+    const activeShards = [...this.activeShards.values()];
+    for (const shard of activeShards) {
+      if (shard.state !== 'registering' && shard.state !== 'ready') {
+        continue;
+      }
+
+      const staleForMs = now - shard.lastHeartbeatAt;
+      if (staleForMs <= shard.heartbeatStaleAfterMs) {
+        continue;
+      }
+
+      const reason = `No heartbeat observed for ${staleForMs}ms (limit ${shard.heartbeatStaleAfterMs}ms).`;
+      this.transitionShardState(shard.id, 'degraded', 'heartbeat_stale', reason);
+      this.transitionShardState(shard.id, 'offline', 'heartbeat_stale', reason);
+      this.releaseActiveShard(shard.id, shard.channelId);
+      this.auditTrail?.append('shard.health.evict', {
+        shardId: shard.id,
+        state: 'offline',
+        reason: 'heartbeat_stale',
+        staleForMs,
+        heartbeatStaleAfterMs: shard.heartbeatStaleAfterMs,
+      });
+    }
+  }
+
+  private assertShardRoutable(shardId: string, requiredCapabilities: readonly string[]): void {
+    const shard = this.activeShards.get(shardId);
+    if (!shard) {
+      throw new Error(`Shard routing denied: "${shardId}" is offline.`);
+    }
+    if (shard.state !== 'ready' || shard.health !== 'healthy') {
+      const detail = shard.failureReason
+        ? `${shard.stateReason}; ${shard.failureReason}`
+        : shard.stateReason;
+      throw new Error(
+        `Shard routing denied: "${shard.name}" is ${shard.state}/${shard.health} (${detail}).`,
+      );
+    }
+
+    const missing = requiredCapabilities.filter(capability => !shard.capabilities.includes(capability));
+    if (missing.length > 0) {
+      throw new Error(
+        `Shard routing denied: "${shard.name}" is missing required capability tokens `
+        + `(${missing.join(', ')}).`,
+      );
+    }
+  }
+
+  private releaseActiveShard(shardId: string, channelId: string): void {
+    const deleted = this.activeShards.delete(shardId);
+    this.unregisterActiveShardChannel(channelId, shardId);
+    if (!deleted) {
+      return;
+    }
+    this.activeCount = Math.max(0, this.activeCount - 1);
+  }
+
+  private transitionShardState(
+    shardId: string,
+    nextState: ShardLifecycleState,
+    reason: string,
+    failureReason?: string,
+  ): void {
+    const shard = this.activeShards.get(shardId);
+    if (!shard) {
+      return;
+    }
+
+    const now = Date.now();
+    const currentState = shard.state;
+    if (currentState !== nextState) {
+      const allowedTransitions = SHARD_STATE_TRANSITIONS[currentState];
+      if (!allowedTransitions.includes(nextState)) {
+        throw new Error(
+          `Invalid shard lifecycle transition for ${shardId}: ${currentState} -> ${nextState}.`,
+        );
+      }
+      shard.state = nextState;
+      shard.lastTransitionAt = now;
+    }
+    shard.stateReason = reason;
+
+    if (nextState === 'ready') {
+      shard.health = 'healthy';
+      delete shard.failureReason;
+    } else if (nextState === 'degraded') {
+      shard.health = reason === 'heartbeat_stale' ? 'stale' : 'failed';
+      if (failureReason) {
+        shard.failureReason = failureReason;
+      }
+    } else if (nextState === 'offline' && failureReason) {
+      shard.failureReason = failureReason;
+    }
+
+    this.auditTrail?.append('shard.lifecycle.transition', {
+      shardId,
+      from: currentState,
+      to: nextState,
+      reason,
+      health: shard.health,
+      ...(failureReason ? { failureReason } : {}),
+    });
   }
 
   private installAuditHooks(): void {
     this.deps.eventBus.on('agent.tool.start', (event) => {
       const shardId = this.resolveShardId(event.channelId);
       if (!shardId) return;
+      this.touchShardHeartbeat(shardId);
       this.auditTrail?.append('shard.tool.start', {
         shardId,
         channelId: event.channelId,
@@ -334,6 +538,7 @@ export class ShardManager {
     this.deps.eventBus.on('agent.tool.end', (event) => {
       const shardId = this.resolveShardId(event.channelId);
       if (!shardId) return;
+      this.touchShardHeartbeat(shardId);
       this.auditTrail?.append('shard.tool.end', {
         shardId,
         channelId: event.channelId,
@@ -616,6 +821,16 @@ export class ShardManager {
     return `wyoming:${siteId}:${satelliteId}`;
   }
 
+  private resolveWyomingRouteCapabilities(routing: WyomingRoutingMetadata | undefined): string[] {
+    const siteId = routing?.siteId?.trim() || 'unknown-site';
+    const satelliteId = routing?.satelliteId?.trim() || 'unknown-satellite';
+    return normalizeCapabilityTokens([
+      'wyoming',
+      `wyoming:${siteId}`,
+      `wyoming:${siteId}:${satelliteId}`,
+    ]);
+  }
+
   private registerActiveShardChannel(channelId: string, shardId: string): void {
     const active = this.activeShardChannels.get(channelId) ?? new Set<string>();
     active.add(shardId);
@@ -655,4 +870,24 @@ function normalizeToolNames(
       .map(item => item.trim())
       .filter(Boolean),
   )];
+}
+
+function normalizeCapabilityTokens(
+  configured: readonly string[] | undefined,
+  fallback: readonly string[] = [],
+): string[] {
+  const source = configured && configured.length > 0 ? configured : fallback;
+  return [...new Set(
+    source
+      .map(item => item.trim())
+      .filter(Boolean),
+  )];
+}
+
+function normalizeHeartbeatStaleAfterMs(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || value === undefined) {
+    return fallback;
+  }
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : fallback;
 }

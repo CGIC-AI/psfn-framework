@@ -146,6 +146,13 @@ interface HeartbeatRuntimeOptions {
     canonicalContactKey?: string;
     sourceMessageId: string;
   }) => Promise<void> | void;
+  onBehavioralPatternOutcome?: (input: {
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    emotionSnapshot: EmotionStateSnapshot;
+    observedAtMs?: number;
+  }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
   postTurnActions?: PostTurnActionRuntime;
@@ -923,6 +930,23 @@ export function wireHeartbeatRuntime(
         }
 
         const currentEmotion = runtimeOptions.emotionState?.getState() ?? null;
+        if (currentEmotion && runtimeOptions.onBehavioralPatternOutcome) {
+          try {
+            await runtimeOptions.onBehavioralPatternOutcome({
+              channelId: resolvedSessionId,
+              canonicalContactKey: context.canonicalContactKey,
+              sourceMessageId: context.message.id,
+              emotionSnapshot: currentEmotion,
+              observedAtMs: context.completedAt,
+            });
+          } catch (error) {
+            log.warn('Behavioral pattern outcome hook failed', {
+              channelId: context.message.channelId,
+              messageId: context.message.id,
+              error: String(error),
+            });
+          }
+        }
         const contactEmotionalSnapshot = (
           context.canonicalContactKey
           && runtimeOptions.contactStore?.getEmotionalSnapshot

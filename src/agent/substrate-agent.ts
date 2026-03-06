@@ -1536,16 +1536,18 @@ export class SubstrateAgent {
       ? Math.max(0, Math.floor(policy.maxPreloadCount))
       : 0;
     const intent = policy.classifyIntent(message, taskKind);
-    const overlaySelection = policy.selectOverlayCandidates(
-      intent,
+    const candidateNames = policy.getCandidatesForIntent(intent).slice(0, boundedMax);
+    const overlayCandidateNames = candidateNames.filter(
+      toolName => this.classifyExtendedToolForTurn(toolName) === 'overlay',
+    );
+    const skippedBackgroundOnly = candidateNames.filter(
+      toolName => this.classifyExtendedToolForTurn(toolName) !== 'overlay',
+    );
+    const overlaySelection = selectBoundedOverlayCandidates(
+      candidateNames,
       this.extendedTools.map(tool => tool.name),
       boundedMax,
     );
-    const candidateNames = overlaySelection.candidates;
-    const overlayCandidateNames = overlaySelection.selected;
-    const skippedBackgroundOnly = overlaySelection.skipped
-      .filter(entry => entry.reason === 'not_overlay_eligible')
-      .map(entry => entry.toolName);
     if (candidateNames.length === 0) {
       this.emitTelemetry('agent.tools.autoload', {
         channelId: message.channelId,
@@ -1575,29 +1577,18 @@ export class SubstrateAgent {
     const skippedDenied: Array<{ toolName: string; missingTokens: CapabilityToken[] }> = [];
     const skipped: AdaptiveToolSnapshotSkip[] = [];
 
-    const skippedBackgroundOnly: string[] = [];
-    for (const selectionSkip of overlaySelection.skipped) {
-      const toolName = selectionSkip.toolName;
-      const reason = selectionSkip.reason === 'not_overlay_eligible'
-        ? 'background_only'
-        : selectionSkip.reason;
-      if (selectionSkip.reason === 'not_registered') {
-        unavailable.push(toolName);
-      }
-      if (selectionSkip.reason === 'not_overlay_eligible') {
-        skippedBackgroundOnly.push(toolName);
-      }
+    for (const toolName of skippedBackgroundOnly) {
       skipped.push({
         toolName,
         source: 'autoload',
-        reason,
+        reason: 'background_only',
       });
       this.emitTelemetry('agent.tools.autoload.skipped', {
         channelId: message.channelId,
         intent,
         taskKind: taskKind ?? null,
         toolName,
-        reason,
+        reason: 'background_only',
         ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
       });
       this.emitAdaptiveToolDecision({
@@ -1605,7 +1596,7 @@ export class SubstrateAgent {
         toolName,
         source: 'autoload',
         decision: 'skipped',
-        reason,
+        reason: 'background_only',
         taskKind: taskKind ?? null,
         intent,
       });

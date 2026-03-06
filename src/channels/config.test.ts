@@ -207,4 +207,28 @@ describe('loadRuntimeChannelsConfig', () => {
       rmSync(dataDir, { recursive: true, force: true });
     }
   });
+
+  it('accepts canonical boolean string forms for telegram enabled from channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: 'YES',
+        },
+      }));
+
+      const truthyConfig = loadRuntimeChannelsConfig(dataDir, {});
+      expect(truthyConfig.telegram.enabled).toBe(true);
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: '0',
+        },
+      }));
+      const falseyConfig = loadRuntimeChannelsConfig(dataDir, {});
+      expect(falseyConfig.telegram.enabled).toBe(false);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });

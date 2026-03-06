@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { delimiter as pathDelimiter } from 'node:path';
 import {
   resolveAllowedReadPathsFromEnv,
   resolveFullCodebaseReadRootFromEnv,
@@ -14,7 +15,7 @@ describe('resolveAllowedReadPathsFromEnv', () => {
 
   it('parses ALLOWED_READ_PATHS and trims empties', () => {
     const value = resolveAllowedReadPathsFromEnv({
-      ALLOWED_READ_PATHS: ' /app/identity : :/app/shared ',
+      ALLOWED_READ_PATHS: [' /app/identity ', '', '/app/shared '].join(pathDelimiter),
     }, workspacePath);
 
     expect(value).toEqual(['/app/identity', '/app/shared']);
@@ -46,6 +47,26 @@ describe('resolveAllowedReadPathsFromEnv', () => {
     }, workspacePath);
 
     expect(value).toBe('/app/workspace/companion/modules/repl-registry.json');
+  });
+
+  it('accepts canonical truthy env variants for trusted module registry reads', () => {
+    const withOne = resolveTrustedModuleRegistryPathFromEnv({
+      MODULE_REGISTRY_TRUSTED_READ: '1',
+      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+    }, workspacePath);
+    expect(withOne).toBe('/app/workspace/companion/modules/repl-registry.json');
+
+    const withYes = resolveTrustedModuleRegistryPathFromEnv({
+      MODULE_REGISTRY_TRUSTED_READ: 'YES',
+      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+    }, workspacePath);
+    expect(withYes).toBe('/app/workspace/companion/modules/repl-registry.json');
+
+    const withOn = resolveTrustedModuleRegistryPathFromEnv({
+      MODULE_REGISTRY_TRUSTED_READ: 'on',
+      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+    }, workspacePath);
+    expect(withOn).toBe('/app/workspace/companion/modules/repl-registry.json');
   });
 
   it('throws when trusted read is enabled without MODULE_REGISTRY_PATH', () => {

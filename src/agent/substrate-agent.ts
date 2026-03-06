@@ -133,6 +133,13 @@ import {
 import { buildEmotionalAffectSection } from '../emotion/persona-adaptation.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import {
+  buildMetacognitivePersonaHint,
+  cloneMetacognitiveFlags,
+  formatMetacognitiveNotesContextBlock,
+  MetacognitiveMonitor,
+  type MetacognitiveFlag,
+} from '../self-model/metacognition.js';
+import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
   INTERNAL_STATE_NEUTRAL_EMOTION,
@@ -391,8 +398,10 @@ export class SubstrateAgent {
   private emotionStateSessionId: string | null = null;
   private emotionStateUpdatedAtMs: number | null = null;
   private readonly internalStateComputer = new InternalStateComputer();
+  private readonly metacognitiveMonitor = new MetacognitiveMonitor();
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
+  private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -1780,6 +1789,10 @@ export class SubstrateAgent {
     return this.currentInternalStateSnapshotRef;
   }
 
+  getCurrentMetacognitiveFlags(): MetacognitiveFlag[] {
+    return cloneMetacognitiveFlags(this.currentMetacognitiveFlags);
+  }
+
   registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
     this.postTurnActionInferers.push(inferer);
     return () => {
@@ -2373,6 +2386,14 @@ export class SubstrateAgent {
       this.currentInternalState = internalState;
       const internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
       this.currentInternalStateSnapshotRef = internalStateSnapshotRef;
+      const metacognitiveFlags = this.computeMetacognitiveFlagsForTurn({
+        internalState,
+        responseText,
+        turnUsage,
+        sessionChannelId: emotionSessionId,
+        retrievalProvenanceRefs,
+      });
+      this.currentMetacognitiveFlags = metacognitiveFlags;
 
       this.recordToolObservations(
         message,
@@ -2415,6 +2436,7 @@ export class SubstrateAgent {
           durationMs: completedAt - startTime,
           internalState: cloneInternalState(internalState),
           internalStateSnapshotRef,
+          metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
           ...(fallbackDiagnostics ? { diagnostics: fallbackDiagnostics } : {}),
           ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         },
@@ -2726,6 +2748,24 @@ export class SubstrateAgent {
     });
   }
 
+  private computeMetacognitiveFlagsForTurn(input: {
+    internalState: InternalState;
+    responseText: string;
+    turnUsage: TurnUsage;
+    sessionChannelId: string;
+    retrievalProvenanceRefs: readonly string[];
+  }): MetacognitiveFlag[] {
+    const recentResponses = this.resolveRecentAssistantResponses(input.sessionChannelId);
+    return this.metacognitiveMonitor.detectFlags({
+      internalState: input.internalState,
+      recentResponses,
+      latestResponse: input.responseText,
+      toolCallCount: input.turnUsage.toolCalls,
+      contradictoryMemorySignalCount: this.countContradictoryMemorySignals(input.retrievalProvenanceRefs),
+      supportingMemoryCount: this.countSupportingMemoryEvidenceRefs(input.retrievalProvenanceRefs),
+    });
+  }
+
   private resolveInternalStateActiveConcerns(canonicalContactKey?: string): ActiveConcern[] {
     if (!this.activeConcernProvider) return [];
     const concerns = this.activeConcernProvider.getActiveConcerns(canonicalContactKey);
@@ -2778,6 +2818,53 @@ export class SubstrateAgent {
       throw new Error('SessionManager.getRecentMessages returned an invalid payload for InternalState computation');
     }
     return recentMessages.length;
+  }
+
+  private resolveRecentAssistantResponses(sessionChannelId: string): string[] {
+    const manager = this.sessionManager as SessionManager & {
+      getRecentMessages?: (channelId: string, limit?: number) => Array<{
+        role: 'user' | 'assistant' | 'system' | 'tool';
+        content: string;
+        timestamp: number;
+      }>;
+    };
+    if (typeof manager.getRecentMessages !== 'function') {
+      return [];
+    }
+    const recentMessages = manager.getRecentMessages(sessionChannelId, 6);
+    if (!Array.isArray(recentMessages)) {
+      throw new Error('SessionManager.getRecentMessages returned an invalid payload for metacognitive monitoring');
+    }
+    const responses: string[] = [];
+    for (const entry of recentMessages) {
+      if (entry.role !== 'assistant') continue;
+      const normalized = entry.content.replace(/\s+/g, ' ').trim();
+      if (!normalized) continue;
+      responses.push(normalized);
+    }
+    return responses;
+  }
+
+  private countSupportingMemoryEvidenceRefs(retrievalProvenanceRefs: readonly string[]): number {
+    let count = 0;
+    for (const ref of retrievalProvenanceRefs) {
+      if (ref.startsWith('memory:')) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private countContradictoryMemorySignals(retrievalProvenanceRefs: readonly string[]): number {
+    let count = 0;
+    for (const ref of retrievalProvenanceRefs) {
+      if (!ref.startsWith('memory:')) continue;
+      const lower = ref.toLowerCase();
+      if (lower.includes('contradict') || lower.includes('conflict')) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   private normalizeEmotionObservation(
@@ -3981,6 +4068,12 @@ export class SubstrateAgent {
       }
     }
 
+    const metacognitiveNotesBlock = this.buildMetacognitiveNotesContextBlock();
+    if (metacognitiveNotesBlock) {
+      lines.push('');
+      lines.push(metacognitiveNotesBlock);
+    }
+
     const activeConcernsBlock = this.buildActiveConcernsContextBlock(canonicalContactKey);
     if (activeConcernsBlock) {
       lines.push('');
@@ -4016,6 +4109,14 @@ export class SubstrateAgent {
       });
       return '';
     }
+  }
+
+  private buildMetacognitiveNotesContextBlock(): string {
+    if (this.currentMetacognitiveFlags.length === 0) return '';
+    return formatMetacognitiveNotesContextBlock(this.currentMetacognitiveFlags, {
+      minConfidence: 0.4,
+      maxFlags: 2,
+    });
   }
 
   private buildBehavioralNotesContextBlock(canonicalContactKey?: string): string {
@@ -4172,8 +4273,10 @@ export class SubstrateAgent {
       promptVariables: templateVariables,
       config: this.config as unknown as Record<string, unknown>,
     });
+    const metacognitiveHint = buildMetacognitivePersonaHint(this.currentMetacognitiveFlags);
 
-    const sections = [trustHint, affectHint].filter((section): section is string => Boolean(section?.trim()));
+    const sections = [trustHint, affectHint, metacognitiveHint]
+      .filter((section): section is string => Boolean(section?.trim()));
     if (sections.length === 0) return null;
     return sections.join('\n\n');
   }

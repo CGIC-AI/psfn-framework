@@ -3383,6 +3383,86 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(agent.getCurrentInternalStateSnapshotRef()).toBe(response.metadata.internalStateSnapshotRef);
   });
 
+  it('derives metacognitive flags from internal state and injects compact notes on subsequent turns', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    (sessionManager.getRecentMessages as ReturnType<typeof vi.fn>).mockReturnValue([
+      {
+        role: 'assistant',
+        content: 'The migration status update is complete and stable.',
+        timestamp: 1_700_000_001_000,
+      },
+      {
+        role: 'assistant',
+        content: 'The migration status update is complete and stable.',
+        timestamp: 1_700_000_002_000,
+      },
+      {
+        role: 'user',
+        content: 'Please share the rollback owner.',
+        timestamp: 1_700_000_003_000,
+      },
+    ]);
+
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+      {
+        emotionRuntime: {
+          observer: {
+            observe: vi.fn().mockResolvedValue({
+              vad: { valence: 0.2, arousal: 0.1, dominance: 0.1 },
+              discrete: {},
+              confidence: 0,
+            }),
+          } as any,
+          state: new EmotionState(),
+        },
+      },
+    );
+    agent.activeConcernProvider = {
+      getActiveConcerns: vi.fn().mockReturnValue([
+        {
+          id: 'concern-rollbacks',
+          text: 'Confirm rollback owner and escalation path',
+          priority: 'high',
+          source: 'agent',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2026-01-02T00:00:00.000Z',
+        },
+      ]),
+    } as any;
+
+    mockAssistantResponse('The migration status update is complete and stable.');
+    const firstResponse = await agent.handleMessage(makeMessage({
+      id: 'msg-metacognitive-1',
+      content: 'Who owns rollback escalation?',
+    }));
+
+    expect(firstResponse.metadata.metacognitiveFlags).toBeDefined();
+    expect(firstResponse.metadata.metacognitiveFlags?.map(flag => flag.flag)).toEqual(expect.arrayContaining([
+      'uncertainty',
+      'avoidance',
+      'repetition',
+      'confabulation_risk',
+    ]));
+    expect(agent.getCurrentMetacognitiveFlags()).toEqual(firstResponse.metadata.metacognitiveFlags);
+
+    mockAssistantResponse('I can confirm that now.');
+    await agent.handleMessage(makeMessage({
+      id: 'msg-metacognitive-2',
+      content: 'Any update?',
+    }));
+
+    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    expect(secondPrompt).toContain('[Metacognitive Notes]');
+    expect(secondPrompt).toContain('uncertainty');
+    expect(secondPrompt).toContain('[Metacognitive Persona Guidance]');
+  });
+
   it('runs post-turn emotion appraisal and injects appraisal chain on the next turn', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

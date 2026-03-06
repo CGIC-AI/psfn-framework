@@ -190,6 +190,7 @@ export interface ResponseMetadata {
   durationMs: number;
   internalState?: import('./self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;
+  metacognitiveFlags?: import('./self-model/metacognition.js').MetacognitiveFlag[];
   diagnostics?: {
     fallback?: {
       code: 'vision_empty_response';

@@ -269,6 +269,10 @@ export function resolveSafeguardAuditTrailPath(companionDataDir: string): string
   return join(companionDataDir, 'safeguards-audit.jsonl');
 }
 
+export function resolveShardSessionMemorySyncAuditPath(companionDataDir: string): string {
+  return join(companionDataDir, 'shard-session-memory-sync-audit.jsonl');
+}
+
 export function resolveIdentityAssetsDir(companionDataDir: string): string {
   return join(companionDataDir, 'identity-assets');
 }

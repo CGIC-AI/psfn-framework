@@ -36,6 +36,45 @@ export interface PolicyConfig {
   beads?: BeadsPolicyConfig;
 }
 
+export type ShardSessionMemorySyncClass = 'transcript_fact' | 'derived_memory' | 'runtime_state';
+export type ShardSessionMemorySyncDirection = 'prime_to_shard' | 'shard_to_prime';
+export type ShardSessionMemorySyncAuthority = 'prime' | 'shard' | 'runtime';
+export type ShardSessionMemorySyncOperation =
+  | 'context_pack_session'
+  | 'context_pack_memory'
+  | 'memory_write'
+  | 'memory_import_batch'
+  | 'memory_redact';
+
+export interface ShardSessionMemorySyncEnvelope {
+  version: 1;
+  syncClass: ShardSessionMemorySyncClass;
+  direction: ShardSessionMemorySyncDirection;
+  authority: ShardSessionMemorySyncAuthority;
+  operation: ShardSessionMemorySyncOperation;
+  shardId: string;
+  sourceId: string;
+  targetId: string;
+  idempotencyKey: string;
+  requestedAt: number;
+}
+
+export type ShardSessionMemorySyncDecisionReason =
+  | 'allowed_prime_transcript_fact'
+  | 'allowed_prime_memory_seed'
+  | 'allowed_shard_memory_write'
+  | 'allowed_shard_memory_import'
+  | 'denied_invalid_envelope'
+  | 'denied_runtime_state_sync'
+  | 'denied_direction_class'
+  | 'denied_authority'
+  | 'denied_operation';
+
+export interface ShardSessionMemorySyncDecision {
+  allowed: boolean;
+  reason: ShardSessionMemorySyncDecisionReason;
+}
+
 const BEADS_ACTION_BY_METHOD: Readonly<Record<string, BeadsAction>> = {
   'beads.ready': 'ready',
   'beads.show': 'show',
@@ -88,6 +127,72 @@ function resolveCanonicalPath(normalized: string, isWrite: boolean): string | nu
     // ELOOP, EACCES, or any other error — refuse to resolve (caller should DENY)
     return null;
   }
+}
+
+const PRIME_TO_SHARD_SYNC_OPERATIONS: Readonly<Record<ShardSessionMemorySyncClass, readonly ShardSessionMemorySyncOperation[]>> = {
+  transcript_fact: ['context_pack_session'],
+  derived_memory: ['context_pack_memory'],
+  runtime_state: [],
+};
+
+const SHARD_TO_PRIME_SYNC_OPERATIONS: Readonly<Record<ShardSessionMemorySyncClass, readonly ShardSessionMemorySyncOperation[]>> = {
+  transcript_fact: [],
+  derived_memory: ['memory_write', 'memory_import_batch'],
+  runtime_state: [],
+};
+
+function hasText(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function evaluateShardSessionMemorySyncPolicy(
+  envelope: ShardSessionMemorySyncEnvelope,
+): ShardSessionMemorySyncDecision {
+  if (
+    envelope.version !== 1
+    || !Number.isFinite(envelope.requestedAt)
+    || envelope.requestedAt <= 0
+    || !hasText(envelope.shardId)
+    || !hasText(envelope.sourceId)
+    || !hasText(envelope.targetId)
+    || !hasText(envelope.idempotencyKey)
+    || envelope.idempotencyKey.trim().length > 200
+  ) {
+    return { allowed: false, reason: 'denied_invalid_envelope' };
+  }
+
+  if (envelope.syncClass === 'runtime_state') {
+    return { allowed: false, reason: 'denied_runtime_state_sync' };
+  }
+
+  const allowedOperations = envelope.direction === 'prime_to_shard'
+    ? PRIME_TO_SHARD_SYNC_OPERATIONS[envelope.syncClass]
+    : SHARD_TO_PRIME_SYNC_OPERATIONS[envelope.syncClass];
+  if (allowedOperations.length === 0) {
+    return { allowed: false, reason: 'denied_direction_class' };
+  }
+
+  if (envelope.direction === 'prime_to_shard' && envelope.authority !== 'prime') {
+    return { allowed: false, reason: 'denied_authority' };
+  }
+  if (envelope.direction === 'shard_to_prime' && envelope.authority !== 'shard') {
+    return { allowed: false, reason: 'denied_authority' };
+  }
+
+  if (!allowedOperations.includes(envelope.operation)) {
+    return { allowed: false, reason: 'denied_operation' };
+  }
+
+  if (envelope.operation === 'context_pack_session') {
+    return { allowed: true, reason: 'allowed_prime_transcript_fact' };
+  }
+  if (envelope.operation === 'context_pack_memory') {
+    return { allowed: true, reason: 'allowed_prime_memory_seed' };
+  }
+  if (envelope.operation === 'memory_write') {
+    return { allowed: true, reason: 'allowed_shard_memory_write' };
+  }
+  return { allowed: true, reason: 'allowed_shard_memory_import' };
 }
 
 export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): PolicyDecision {

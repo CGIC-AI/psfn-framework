@@ -218,11 +218,58 @@ function summarizeParams(params: Record<string, unknown>): string {
       summary[key] = `(${value.length} chars)`;
     } else if (key === 'texts' && Array.isArray(value)) {
       summary[key] = `[${value.length} texts]`;
+    } else if (key === 'syncEnvelope' && isRecord(value)) {
+      summary[key] = summarizeSyncEnvelope(value);
+    } else if (key === 'syncDecision' && isRecord(value)) {
+      summary[key] = summarizeSyncDecision(value);
     } else {
       summary[key] = value;
     }
   }
   return JSON.stringify(summary);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function summarizeSyncEnvelope(envelope: Record<string, unknown>): Record<string, unknown> {
+  const summarized: Record<string, unknown> = {};
+  for (const key of [
+    'version',
+    'syncClass',
+    'direction',
+    'authority',
+    'operation',
+    'shardId',
+    'sourceId',
+    'targetId',
+    'requestedAt',
+  ]) {
+    const value = envelope[key];
+    if (value !== undefined) {
+      summarized[key] = value;
+    }
+  }
+
+  const idempotency = envelope.idempotencyKey;
+  if (typeof idempotency === 'string') {
+    summarized.idempotencyKey = idempotency.length > 96
+      ? `${idempotency.slice(0, 96)}... (${idempotency.length} chars)`
+      : idempotency;
+  }
+  return summarized;
+}
+
+function summarizeSyncDecision(decision: Record<string, unknown>): Record<string, unknown> {
+  const summarized: Record<string, unknown> = {};
+  for (const key of ['allowed', 'reason']) {
+    const value = decision[key];
+    if (value !== undefined) {
+      summarized[key] = value;
+    }
+  }
+  return summarized;
 }
 
 function resolveRotationConfig(overrides?: Partial<AuditRotationConfig>): AuditRotationConfig {

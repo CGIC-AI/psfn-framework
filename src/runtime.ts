@@ -797,6 +797,7 @@ export class SubstrateRuntime implements Lifecycle {
       sessionManager: this.sessionManager,
       config: this.config,
       parentSystemPrompt: systemPrompt,
+      companionDataDir,
       scheduler: this.scheduler,
       replConfig,
       shardAuditTrail: safeguardAuditTrail,

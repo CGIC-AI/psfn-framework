@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Agent } from '@mariozechner/pi-agent-core';
@@ -562,6 +562,82 @@ describe('ShardManager', () => {
     expect(sessionStore.getRecent(sourceChannelId, 10)).toEqual(sourceEntriesBefore);
   });
 
+  it('audits and persists allow decisions for source-to-shard context-pack sync', async () => {
+    const sourceTurnId = createTurnId();
+    const sourceChannelId = 'api:sync-parent';
+    sessionStore.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'Carry only the last blocker into the shard.',
+      authorId: 'user-1',
+      authorName: 'PrimaryUser',
+      timestamp: Date.now() - 100,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: sourceTurnId,
+        requestId: 'req-sync-parent',
+        role: 'user',
+      }),
+    });
+    const auditTrail = { append: vi.fn() };
+    const syncAuditPath = join(dir, 'audit', 'shard-session-memory-sync-audit.jsonl');
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: mockMemoryProvider('Carry over: deployment is blocked by DNS cutover.'),
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'autonomous',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['shard_context'],
+        },
+      },
+      parentSystemPrompt: 'test',
+      auditTrail,
+      shardSessionMemorySyncAuditPath: syncAuditPath,
+    });
+
+    await manager.spawn({
+      name: 'sync-audit',
+      task: 'Extract only blockers.',
+      sourceContext: {
+        channelId: sourceChannelId,
+        requestId: 'req-sync-parent',
+        turnId: sourceTurnId,
+      },
+    });
+
+    const syncAuditCalls = auditTrail.append.mock.calls
+      .filter(([event]) => event === 'shard.sync.policy')
+      .map(([, details]) => details);
+    expect(syncAuditCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        operation: 'context_pack_session',
+        decision: 'ALLOW',
+        reason: 'allowed_prime_transcript_fact',
+      }),
+      expect.objectContaining({
+        operation: 'context_pack_memory',
+        decision: 'ALLOW',
+        reason: 'allowed_prime_memory_seed',
+      }),
+    ]));
+
+    expect(existsSync(syncAuditPath)).toBe(true);
+    const persistedEntries = readFileSync(syncAuditPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(persistedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operation: 'context_pack_session', decision: 'ALLOW' }),
+      expect.objectContaining({ operation: 'context_pack_memory', decision: 'ALLOW' }),
+    ]));
+  });
+
   it('injects default nursery shard toolset and blocks recursion tools', async () => {
     const memoryWrite = makeTestTool('memory_write');
     const contactLookup = makeTestTool('contact_lookup');
@@ -780,6 +856,51 @@ describe('ShardManager', () => {
         __psfnShardSource: `shard:${result.shardId}`,
       }),
       undefined,
+    );
+  });
+
+  it('denies disallowed shard-to-prime memory sync operations and audits the denial', async () => {
+    const memoryRedact = makeTestTool('memory_redact');
+    const auditTrail = { append: vi.fn() };
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryRedact.tool],
+        extended: [],
+      }),
+      auditTrail,
+    });
+
+    const result = await manager.spawn({ name: 'policy-deny', task: 'test' });
+    const tools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{
+      name: string;
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const wrappedMemoryRedact = tools.find((tool) => tool.name === 'memory_redact');
+    expect(wrappedMemoryRedact).toBeDefined();
+    if (!wrappedMemoryRedact) {
+      throw new Error('Expected wrapped memory_redact tool to be present');
+    }
+
+    await expect(
+      wrappedMemoryRedact.execute('redact-call', { memory_id: 'mem-1' }),
+    ).rejects.toThrow('denied_operation');
+    expect(memoryRedact.execute).not.toHaveBeenCalled();
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'shard.sync.policy',
+      expect.objectContaining({
+        shardId: result.shardId,
+        operation: 'memory_redact',
+        decision: 'DENY',
+        reason: 'denied_operation',
+      }),
     );
   });
 

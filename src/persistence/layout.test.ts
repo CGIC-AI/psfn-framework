@@ -33,6 +33,7 @@ import {
   resolveReflectionJournalPath,
   resolveReflectionNotesDir,
   resolveSafeguardAuditTrailPath,
+  resolveShardSessionMemorySyncAuditPath,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
   resolveValuesJournalPath,
@@ -85,6 +86,9 @@ describe('persistence layout', () => {
     expect(resolvePromptRegistryHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-registry-history.jsonl'));
     expect(resolveHeartbeatPolicyPath(dataDir)).toBe(join(dataDir, 'heartbeat-policy.json'));
     expect(resolveSafeguardAuditTrailPath(dataDir)).toBe(join(dataDir, 'safeguards-audit.jsonl'));
+    expect(resolveShardSessionMemorySyncAuditPath(dataDir)).toBe(
+      join(dataDir, 'shard-session-memory-sync-audit.jsonl'),
+    );
     expect(resolveIdentityAssetsDir(dataDir)).toBe(join(dataDir, 'identity-assets'));
     expect(resolveBackupsDir(dataDir)).toBe(join(dataDir, 'backups'));
     expect(resolveLastActiveSessionPath(dataDir)).toBe(join(dataDir, 'last_active_channel.json'));

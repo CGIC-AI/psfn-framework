@@ -19,6 +19,12 @@ import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy
 import type { SessionStore } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
 import type { SessionEntry } from '../session/types.js';
+import {
+  evaluateShardSessionMemorySyncPolicy,
+  type ShardSessionMemorySyncDecision,
+  type ShardSessionMemorySyncEnvelope,
+} from '../gateway/policy.js';
+import { appendShardSessionMemorySyncAudit } from '../persistence/jsonl.js';
 import type {
   ShardConfig,
   ShardContextPack,
@@ -40,6 +46,8 @@ const CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS = 600;
 const CONTEXT_PACK_MEMORY_MAX_CHARS = 4_000;
 const DEFAULT_SHARD_CAPABILITIES = ['general'] as const;
 const SHARD_TOOLSET_ALL = '*';
+const SHARD_SYNC_POLICY_VERSION = 1;
+const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'load_tools']);
 const APPRENTICE_SHARD_TOOL_EXTRAS = [
@@ -90,6 +98,7 @@ export interface ShardManagerDeps {
   shardToolsets?: ShardToolsetConfig;
   toolCatalogProvider?: () => ShardToolCatalog;
   auditTrail?: ShardAuditTrail;
+  shardSessionMemorySyncAuditPath?: string;
 }
 
 export interface WyomingShardDelegationRequest {
@@ -146,7 +155,11 @@ export class ShardManager {
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
-    const contextPack = shardConfig.contextPack ?? await this.buildContextPack(shardConfig);
+    const contextPack = shardConfig.contextPack ?? await this.buildContextPack(
+      shardId,
+      channelId,
+      shardConfig,
+    );
     const preparedConfig = contextPack
       ? { ...shardConfig, contextPack }
       : shardConfig;
@@ -639,7 +652,11 @@ export class ShardManager {
     return normalizeCapabilityTier(this.deps.config.capabilityTier);
   }
 
-  private async buildContextPack(shardConfig: ShardConfig): Promise<ShardContextPack | null> {
+  private async buildContextPack(
+    shardId: string,
+    shardChannelId: string,
+    shardConfig: ShardConfig,
+  ): Promise<ShardContextPack | null> {
     const source = this.normalizeSourceContext(shardConfig.sourceContext);
     if (!source) {
       return null;
@@ -655,8 +672,52 @@ export class ShardManager {
       return null;
     }
 
-    const sessionEntries = this.buildContextPackEntries(source);
-    const memoryBlock = await this.buildContextPackMemoryBlock(shardConfig.task, source.channelId);
+    const sessionSyncEnvelope: ShardSessionMemorySyncEnvelope = {
+      version: SHARD_SYNC_POLICY_VERSION,
+      syncClass: 'transcript_fact',
+      direction: 'prime_to_shard',
+      authority: 'prime',
+      operation: 'context_pack_session',
+      shardId,
+      sourceId: source.channelId,
+      targetId: shardChannelId,
+      idempotencyKey: this.buildSyncIdempotencyKey([
+        'context_pack_session',
+        shardId,
+        source.channelId,
+        source.requestId,
+        source.turnId,
+      ]),
+      requestedAt: Date.now(),
+    };
+    const sessionSyncDecision = this.evaluateSyncPolicy(sessionSyncEnvelope);
+    const sessionEntries = sessionSyncDecision.allowed
+      ? this.buildContextPackEntries(source)
+      : [];
+
+    const memorySyncEnvelope: ShardSessionMemorySyncEnvelope = {
+      version: SHARD_SYNC_POLICY_VERSION,
+      syncClass: 'derived_memory',
+      direction: 'prime_to_shard',
+      authority: 'prime',
+      operation: 'context_pack_memory',
+      shardId,
+      sourceId: source.channelId,
+      targetId: shardChannelId,
+      idempotencyKey: this.buildSyncIdempotencyKey([
+        'context_pack_memory',
+        shardId,
+        source.channelId,
+        source.requestId,
+        source.turnId,
+        shardConfig.task,
+      ]),
+      requestedAt: Date.now(),
+    };
+    const memorySyncDecision = this.evaluateSyncPolicy(memorySyncEnvelope);
+    const memoryBlock = memorySyncDecision.allowed
+      ? await this.buildContextPackMemoryBlock(shardConfig.task, source.channelId)
+      : '';
     if (sessionEntries.length === 0 && memoryBlock.length === 0) {
       return null;
     }
@@ -668,6 +729,67 @@ export class ShardManager {
       sessionEntries,
       ...(memoryBlock ? { memoryBlock } : {}),
     };
+  }
+
+  private evaluateSyncPolicy(
+    envelope: ShardSessionMemorySyncEnvelope,
+  ): ShardSessionMemorySyncDecision {
+    const decision = evaluateShardSessionMemorySyncPolicy(envelope);
+    this.recordSyncPolicyDecision(envelope, decision);
+    return decision;
+  }
+
+  private recordSyncPolicyDecision(
+    envelope: ShardSessionMemorySyncEnvelope,
+    decision: ShardSessionMemorySyncDecision,
+  ): void {
+    const policyEvent = {
+      shardId: envelope.shardId,
+      syncClass: envelope.syncClass,
+      direction: envelope.direction,
+      authority: envelope.authority,
+      operation: envelope.operation,
+      sourceId: envelope.sourceId,
+      targetId: envelope.targetId,
+      idempotencyKey: envelope.idempotencyKey,
+      decision: decision.allowed ? 'ALLOW' : 'DENY',
+      reason: decision.reason,
+      requestedAt: envelope.requestedAt,
+    } as const;
+    this.auditTrail?.append('shard.sync.policy', policyEvent);
+
+    const path = this.deps.shardSessionMemorySyncAuditPath?.trim();
+    if (!path) {
+      return;
+    }
+
+    appendShardSessionMemorySyncAudit(path, {
+      timestamp: Date.now(),
+      shardId: envelope.shardId,
+      syncClass: envelope.syncClass,
+      direction: envelope.direction,
+      authority: envelope.authority,
+      operation: envelope.operation,
+      sourceId: envelope.sourceId,
+      targetId: envelope.targetId,
+      idempotencyKey: envelope.idempotencyKey,
+      decision: decision.allowed ? 'ALLOW' : 'DENY',
+      reason: decision.reason,
+    });
+  }
+
+  private buildSyncIdempotencyKey(parts: Array<string | undefined>): string {
+    const normalized = parts
+      .map(part => part?.trim())
+      .filter((part): part is string => Boolean(part))
+      .join('|');
+    if (normalized.length === 0) {
+      return `sync:${Date.now()}`;
+    }
+    if (normalized.length > 200) {
+      return normalized.slice(0, 200);
+    }
+    return normalized;
   }
 
   private normalizeSourceContext(
@@ -827,12 +949,57 @@ export class ShardManager {
     return {
       ...tool,
       execute: async (toolCallId, params, signal) => {
+        this.enforceShardToolSyncPolicy(tool.name, shardId, toolCallId);
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
         // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return tool.execute(toolCallId, scopedParams as any, signal);
       },
     };
+  }
+
+  private enforceShardToolSyncPolicy(toolName: string, shardId: string, toolCallId: string): void {
+    const operation = this.resolveShardToolSyncOperation(toolName);
+    if (!operation) {
+      return;
+    }
+
+    const envelope: ShardSessionMemorySyncEnvelope = {
+      version: SHARD_SYNC_POLICY_VERSION,
+      syncClass: 'derived_memory',
+      direction: 'shard_to_prime',
+      authority: 'shard',
+      operation,
+      shardId,
+      sourceId: `shard:${shardId}`,
+      targetId: SHARD_SYNC_MEMORY_TARGET,
+      idempotencyKey: this.buildSyncIdempotencyKey([
+        'shard_tool_sync',
+        shardId,
+        toolCallId,
+        operation,
+      ]),
+      requestedAt: Date.now(),
+    };
+    const decision = this.evaluateSyncPolicy(envelope);
+    if (!decision.allowed) {
+      throw new Error(
+        `Shard session/memory sync denied for ${toolName} (${decision.reason}).`,
+      );
+    }
+  }
+
+  private resolveShardToolSyncOperation(
+    toolName: string,
+  ): ShardSessionMemorySyncEnvelope['operation'] | null {
+    if (
+      toolName !== 'memory_write'
+      && toolName !== 'memory_import_batch'
+      && toolName !== 'memory_redact'
+    ) {
+      return null;
+    }
+    return toolName;
   }
 
   private applyShardSourceParams(

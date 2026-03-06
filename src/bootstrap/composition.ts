@@ -45,6 +45,7 @@ import {
   resolveConfiguredCompanionDataDir,
   resolveCoreMemoryPath,
   resolveContinuityDir,
+  resolveShardSessionMemorySyncAuditPath,
   resolveSessionsDir,
 } from '../persistence/layout.js';
 
@@ -235,6 +236,7 @@ export interface ToolRuntimeOptions {
   sessionManager: SessionManager;
   config: SubstrateConfig;
   parentSystemPrompt: string;
+  companionDataDir?: string;
   scheduler?: Scheduler | null;
   replConfig?: REPLConfig;
   shardAuditTrail?: ShardAuditTrail | null;
@@ -255,6 +257,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     parentSystemPrompt: options.parentSystemPrompt,
     toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
     auditTrail: options.shardAuditTrail ?? undefined,
+    shardSessionMemorySyncAuditPath: options.companionDataDir
+      ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
+      : undefined,
   });
   options.agentLoop.registerTool(createSpawnShardTool(shardManager));
 

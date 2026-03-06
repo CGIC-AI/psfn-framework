@@ -53,7 +53,7 @@ const SETTINGS_FILE = SETTINGS_FILE_NAME;
 const SETTINGS_SEED_FILE = 'settings.seed.json';
 const PRIMARY_MODEL_SLOT_KEY = 'primary';
 const EXTRACTION_MODEL_SLOT_KEY = 'extraction';
-const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'reasoning', 'longContext', 'vision'];
+const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'context', 'reasoning', 'longContext', 'vision'];
 const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
   'background',
   'openrouter_zdr',
@@ -95,6 +95,7 @@ export interface SettingsDomainSplit {
 export const DEFAULT_MODEL_ROLE_ASSIGNMENTS: Readonly<ModelRoleAssignments> = {
   chat: PRIMARY_MODEL_SLOT_KEY,
   background: EXTRACTION_MODEL_SLOT_KEY,
+  context: EXTRACTION_MODEL_SLOT_KEY,
   extraction: EXTRACTION_MODEL_SLOT_KEY,
   summary: PRIMARY_MODEL_SLOT_KEY,
   reasoning: PRIMARY_MODEL_SLOT_KEY,
@@ -594,7 +595,7 @@ function mergeCatalogSlot(
 }
 
 function defaultSlotKeyForPurpose(purpose: string): string {
-  if (purpose === 'background' || purpose === 'extraction') {
+  if (purpose === 'background' || purpose === 'context' || purpose === 'extraction') {
     return EXTRACTION_MODEL_SLOT_KEY;
   }
   if (purpose === 'chat' || purpose === 'summary' || purpose === 'reasoning' || purpose === 'longContext') {
@@ -611,6 +612,8 @@ function resolveCatalogSlotKey(
 ): string | undefined {
   const candidates = [
     assignments[purpose],
+    purpose === 'context' ? assignments.background : undefined,
+    purpose === 'context' ? assignments.extraction : undefined,
     purpose === 'background' ? assignments.extraction : undefined,
     purpose === 'extraction' ? assignments.background : undefined,
     fallbackSlotKey,
@@ -1021,6 +1024,7 @@ export function normalizeEditableSettings(
   assignments.longContext ||= assignments.chat;
   assignments.background ||= EXTRACTION_MODEL_SLOT_KEY;
   assignments.extraction ||= assignments.background;
+  assignments.context ||= assignments.background;
   assignments.import_processing ||= assignments.background;
   if (!assignments.vision) {
     assignments.vision = 'vision';
@@ -1065,6 +1069,23 @@ export function normalizeEditableSettings(
     assignments.extraction,
   );
 
+  const contextSlot = resolvePurposeSlot(
+    catalog,
+    assignments,
+    'context',
+    {
+      maxTokens: backgroundSlot?.maxTokens
+        ?? extractionSlot?.maxTokens
+        ?? normalizedInput.extractionMaxTokens
+        ?? normalizedInput.primaryMaxTokens,
+      contextWindow: backgroundSlot?.contextWindow
+        ?? chatSlot?.contextWindow
+        ?? options?.defaultContextWindow,
+      contextBudget: backgroundSlot?.contextBudget ?? chatSlot?.contextBudget,
+    },
+    assignments.background ?? assignments.extraction,
+  );
+
   const reasoningSlot = resolvePurposeSlot(
     catalog,
     assignments,
@@ -1106,6 +1127,7 @@ export function normalizeEditableSettings(
   };
   if (chatSlot) nextRoster.chat = chatSlot;
   if (backgroundSlot) nextRoster.background = backgroundSlot;
+  if (contextSlot) nextRoster.context = contextSlot;
   if (reasoningSlot) nextRoster.reasoning = reasoningSlot;
   if (longContextSlot) nextRoster.longContext = longContextSlot;
   if (visionSlot) nextRoster.vision = visionSlot;

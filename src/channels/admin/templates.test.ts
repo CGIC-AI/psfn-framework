@@ -77,6 +77,7 @@ describe('admin templates', () => {
         },
         modelRoleAssignments: {
           chat: 'primary',
+          context: 'primary',
           extraction: 'primary',
           background: 'primary',
         },
@@ -158,7 +159,9 @@ describe('admin templates', () => {
     expect(html).toContain('name="webFetchAllowHttp"');
     expect(html).toContain('name="webFetchLocalCrawlerEnabled"');
     expect(html).toContain('name="webFetchTlsCaCertPaths"');
+    expect(html).toContain('data-purpose value="context"');
     expect(html).toContain('data-purpose value="vision"');
+    expect(html).toContain('Extraction Alias (extraction/background/context)');
     expect(html).toContain('&quot;providerHints&quot;:[&quot;openrouter&quot;,&quot;z-ai&quot;]');
     expect(html).toContain('&quot;pricing&quot;:{&quot;prompt&quot;:&quot;0.001&quot;,&quot;completion&quot;:&quot;0.002&quot;}');
   });

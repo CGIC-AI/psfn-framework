@@ -162,6 +162,89 @@ describe('resolveRoutingCandidates(background)', () => {
   });
 });
 
+describe('resolveRoutingCandidates(context)', () => {
+  it('prefers a dedicated context slot before background fallbacks', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      modelCatalog: {
+        primary: {
+          model: 'catalog/primary',
+          provider: 'openrouter',
+          overrides: { maxTokens: 6144, contextWindow: 128_000 },
+        },
+        extraction: {
+          model: 'catalog/extract',
+          provider: 'openrouter',
+          overrides: { maxTokens: 2048 },
+        },
+        helper: {
+          model: 'catalog/helper',
+          provider: 'openrouter',
+          overrides: { maxTokens: 1024, contextWindow: 64_000 },
+        },
+      },
+      modelRoleAssignments: {
+        chat: 'primary',
+        background: 'extraction',
+        context: 'helper',
+        extraction: 'extraction',
+      },
+      modelRoster: {},
+    }), 'context');
+
+    expect(candidates[0]).toMatchObject({
+      slotKey: 'helper',
+      model: 'catalog/helper',
+      provider: 'openrouter',
+      maxTokens: 1024,
+      contextWindow: 64_000,
+    });
+  });
+
+  it('falls back from context to background and then chat', () => {
+    const backgroundCandidates = resolveRoutingCandidates(makeConfig({
+      modelRoster: {
+        background: {
+          model: 'background/model',
+          provider: 'openrouter',
+          maxTokens: 2048,
+        },
+      },
+    }), 'context');
+    expect(backgroundCandidates[0]).toMatchObject({
+      model: 'background/model',
+      provider: 'openrouter',
+      maxTokens: 2048,
+    });
+
+    const chatCandidates = resolveRoutingCandidates(makeConfig({
+      modelRoster: {
+        chat: {
+          model: 'primary/model',
+          provider: 'openrouter',
+          maxTokens: 4096,
+          contextWindow: 128_000,
+        },
+      },
+      modelCatalog: {
+        primary: {
+          model: 'catalog/primary',
+          provider: 'openrouter',
+          overrides: { maxTokens: 4096, contextWindow: 128_000 },
+        },
+      },
+      modelRoleAssignments: {
+        chat: 'primary',
+      },
+    }), 'context');
+    expect(chatCandidates[0]).toMatchObject({
+      slotKey: 'primary',
+      model: 'catalog/primary',
+      provider: 'openrouter',
+      maxTokens: 4096,
+    });
+  });
+});
+
 describe('resolveRoutingCandidates(import_processing)', () => {
   it('enforces openrouter_zdr mode for import processing', () => {
     const candidates = resolveRoutingCandidates(makeConfig({

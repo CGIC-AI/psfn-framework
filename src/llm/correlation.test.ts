@@ -39,6 +39,7 @@ describe('correlation helpers', () => {
       expect(inferCallType('reasoning')).toBe('tool');
       expect(inferCallType('extraction')).toBe('memory');
       expect(inferCallType('summary')).toBe('summary');
+      expect(inferCallType('context')).toBe('background');
       expect(inferCallType('background')).toBe('background');
       expect(inferCallType('import_processing')).toBe('background');
     });

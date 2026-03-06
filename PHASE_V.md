@@ -143,14 +143,17 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-domy.1` (`persist structured tool observations in session history for context masking`) is integrated, with first-class `tool` session entries, strict tool-observation metadata, context/snapshot round-tripping, and fail-closed recording of tool results before assistant archival.
   - `PSFN-20kl` (`observation masking in buildContext()`) is integrated, with a pre-compaction masking pass over stale tool observations, JSON-backed `observationMaskingWindow` runtime settings governance, and placeholder rendering that preserves recent tool observations while collapsing older ones to `[Tool result: name — see earlier context]`.
   - `PSFN-fihj` (`context manifest for debugging`) is integrated, with `buildContext()` now emitting/logging a structured context manifest covering section budgets, session inclusion/masking/compaction counts, and retrieval-source memory inclusion/exclusion diagnostics carried from turn-scoped retrieval telemetry.
+  - `PSFN-p3ub` (`stable prefix optimization for KV-cache`) is integrated, with static prompt freezing now scoped to stable `base` + `operator` layers while per-turn/channel layers stay in the dynamic suffix ahead of runtime context injection.
   - `PSFN-17lw.1.1` (`first non-blocking deferred-action runtime slice`) is integrated, with explicit background-capable deferred action handling that preserves fail-closed idle-wait defaults while allowing deferred tool-handoff continuation to run without foreground idle gating.
+  - `PSFN-17lw.1.2` (`background continuation completion signaling + post-turn delivery`) is integrated, with explicit completion events, buffered background result delivery, and background session isolation guards preventing foreground session leakage.
+  - `PSFN-17lw.2.1` (`shard lifecycle + fail-closed gateway routing hardening`) is integrated, with explicit shard lifecycle/health transitions, stale-connection degradation, and fail-closed routing that rejects non-ready shards for gateway RPC delegation.
   - `PSFN-qyrl` plugin-seam epic is closed on `phase-v`.
   - `PSFN-bxvy` config/persistence-topology epic is closed on `phase-v`.
   - `PSFN-y2ac` settings-governance epic is closed on `phase-v`.
   - `PSFN-x92u` compositional-kernel epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Continue Stage 4 on `PSFN-domy` after `PSFN-fihj` by advancing the remaining context-composition feature beads (`PSFN-3pxm`, `PSFN-bb43`, `PSFN-c9z2`, `PSFN-du0t`, `PSFN-jl9r`, `PSFN-jvl4`, `PSFN-z3li`) in dependency order.
-  - Continue `PSFN-17lw.1` beyond the initial runtime slice, then advance `PSFN-17lw.2`, `PSFN-17lw.4`, `PSFN-17lw.5`, and `PSFN-17lw.3` in parallel-safe order on the autonomy lane.
+  - Continue Stage 4 on `PSFN-domy` after `PSFN-fihj` + `PSFN-p3ub` by advancing the remaining context-composition feature beads (`PSFN-3pxm`, `PSFN-bb43`, `PSFN-c9z2`, `PSFN-du0t`, `PSFN-jl9r`, `PSFN-jvl4`, `PSFN-z3li`) in dependency order.
+  - Continue `PSFN-17lw.1` and `PSFN-17lw.2` beyond landed child slices (`.1.1`, `.1.2`, `.2.1`), then advance `PSFN-17lw.4`, `PSFN-17lw.5`, and `PSFN-17lw.3` in parallel-safe order on the autonomy lane.
   - Keep `PSFN-bu5f` queued behind `PSFN-domy`, then advance `PSFN-8e3t`, with `PSFN-be11` remaining the final self-model lane behind emotion + intention.
   - Keep `PSFN-04dt.4` open as the remaining Stage 1 foundation lane for tombstone/redaction replay semantics; it does not block Stage 4.
   - Keep `PSFN-eg59` as the residual de-hardcode test-fixture cleanup lane where remaining `PSFN` hits are intentional branding/legacy cases versus generic fixture drift.
@@ -226,5 +229,8 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-domy.1` / `PSFN-20kl` targeted regressions: `npm test -- --run src/agent/messages.test.ts src/agent/substrate-agent.test.ts src/session/manager.test.ts src/settings.test.ts src/config/subsystem-config.test.ts src/channels/admin/api-routes.test.ts src/config/settings-contract-guard.test.ts`
 - `PSFN-domy.1` / `PSFN-20kl` build validation: `npm run build`
 - `PSFN-fihj` targeted regressions: `npm test -- --run src/session/manager.test.ts src/memory/retrieval.test.ts src/agent/substrate-agent.test.ts`
+- `PSFN-p3ub` targeted regressions: `npx vitest run src/identity/prompt-composer.test.ts src/agent/substrate-agent.test.ts`
 - `PSFN-17lw.1.1` targeted regressions: `npm test -- --run src/bootstrap/post-turn-actions.test.ts src/bootstrap/parity.test.ts`
-- `phase-v` build after integrating `PSFN-fihj` + `PSFN-17lw.1.1`: `npm run build`
+- `PSFN-17lw.1.2` targeted regressions: `npm test -- --run src/agent/substrate-agent.test.ts src/agent/event-bridge.test.ts src/tools/session.test.ts`
+- `PSFN-17lw.2.1` targeted regressions: `npm test -- --run src/shards/manager.test.ts src/gateway/server.test.ts src/gateway/methods/llm.test.ts`
+- `phase-v` build after integrating `PSFN-fihj` + `PSFN-p3ub` + `PSFN-17lw.1.*` + `PSFN-17lw.2.1`: `npm run build`

@@ -1,8 +1,13 @@
-import type { MemoryProvider, EmbeddingService, LLMProvider } from '../agent/contracts.js';
+import type {
+  MemoryProvider,
+  EmbeddingService,
+  LLMProvider,
+  RetrievalVADInput,
+} from '../agent/contracts.js';
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
 import type { PurrMemory, MemoryPrivacyRiskBreakdown } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
-import type { SubstrateConfig } from '../types.js';
+import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
 import type { TrustLevel, ChannelVisibility, SensitivityLevel } from '../trust/types.js';
 import { countTokens } from '../llm/tokens.js';
@@ -162,6 +167,7 @@ export interface MemoryRetrieverConfig {
   retrievalBudgetPct?: number;
   contextWindow?: number;
   retrievalThreshold?: number;
+  moodCongruenceWeight?: number;
   telemetryEnabled?: boolean;
   proactiveRecallProbability?: number;
   proactiveRecallMinTurnsBetween?: number;
@@ -186,6 +192,7 @@ export class MemoryRetriever implements MemoryProvider {
   private contactStore: ContactStore | null;
   private telemetryEnabled: boolean;
   private llmProvider: LLMProvider | null;
+  private moodCongruenceWeight: number;
   private proactiveRecallProbability: number;
   private proactiveRecallMinTurnsBetween: number;
   private proactiveTurnCounter: number;
@@ -206,6 +213,7 @@ export class MemoryRetriever implements MemoryProvider {
       this.runtimeConfig = config;
       this.fallbackBudgetConfig = null;
       this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
+      this.moodCongruenceWeight = resolveMoodCongruenceWeight(config.moodCongruenceWeight);
       this.telemetryEnabled = config.memoryRetrievalTelemetryEnabled ?? true;
       const proactiveConfig = config as ProactiveRecallRuntimeConfig;
       this.proactiveRecallProbability = clampProbability(proactiveConfig.memoryProactiveRecallProbability ?? 0);
@@ -224,6 +232,7 @@ export class MemoryRetriever implements MemoryProvider {
           : {}),
       };
       this.retrievalThreshold = retrieverConfig?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
+      this.moodCongruenceWeight = resolveMoodCongruenceWeight(retrieverConfig?.moodCongruenceWeight);
       this.telemetryEnabled = retrieverConfig?.telemetryEnabled ?? true;
       this.proactiveRecallProbability = clampProbability(retrieverConfig?.proactiveRecallProbability ?? 0);
       this.proactiveRecallMinTurnsBetween = clampTurnFrequency(retrieverConfig?.proactiveRecallMinTurnsBetween ?? 2);
@@ -332,6 +341,7 @@ export class MemoryRetriever implements MemoryProvider {
     canonicalContactId?: string,
     turnSnapshot?: TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    currentVAD?: RetrievalVADInput,
   ): Promise<string> {
     const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
       channelId,
@@ -524,7 +534,13 @@ export class MemoryRetriever implements MemoryProvider {
       // memories surface even when privacy penalties zero their composite score.
       // This prevents "water in the well, bucket has holes" retrieval gaps.
       const allScored = policyAllowed
-        .map(memory => ({ memory, ...computeRetrievalScore(memory, contextText) }))
+        .map(memory => ({
+          memory,
+          ...computeRetrievalScore(memory, contextText, {
+            currentVAD,
+            moodCongruenceWeight: this.moodCongruenceWeight,
+          }),
+        }))
         .sort((a, b) => b.score - a.score);
       const rerankDecision = await this.applyCompositionalRetrievalRanking(
         contextText,
@@ -1050,6 +1066,10 @@ function collectSelectedProvenanceRefs(
 function computeRetrievalScore(
   memory: PurrMemory & { similarity: number },
   contextText: string,
+  options?: {
+    currentVAD?: RetrievalVADInput;
+    moodCongruenceWeight: number;
+  },
 ): {
   score: number;
   baseScore: number;
@@ -1065,6 +1085,11 @@ function computeRetrievalScore(
   const ageDays = (Date.now() - memory.extractedAt) / (1000 * 60 * 60 * 24);
   const recencyBoost = 1 / (1 + ageDays / 30);
   const emotionalWeight = 1 + Math.abs(memory.emotionalValence) * 0.5;
+  const moodCongruenceFactor = computeMoodCongruenceFactor(
+    memory.formationVAD,
+    options?.currentVAD,
+    options?.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
+  );
   const typePriorityBoost = isBoundaryMemory(memory) ? 1.6 : 1;
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
@@ -1075,6 +1100,7 @@ function computeRetrievalScore(
     emotionalWeight *
     memory.importance *
     memory.salience *
+    moodCongruenceFactor *
     typePriorityBoost *
     boundarySimilarityBoost
   );
@@ -1109,6 +1135,40 @@ function computeRetrievalScore(
     privacyPenalty,
     privacyBreakdown: privacyEvaluation.breakdown,
   };
+}
+
+function computeMoodCongruenceFactor(
+  formationVAD: RetrievalVADInput | undefined,
+  currentVAD: RetrievalVADInput | undefined,
+  moodCongruenceWeight: number,
+): number {
+  if (moodCongruenceWeight <= 0) return 1;
+  if (!isFiniteRetrievalVAD(formationVAD) || !isFiniteRetrievalVAD(currentVAD)) return 1;
+  const similarity = computeVADSimilarity(formationVAD, currentVAD);
+  return 1 + (moodCongruenceWeight * similarity);
+}
+
+function computeVADSimilarity(
+  left: RetrievalVADInput,
+  right: RetrievalVADInput,
+): number {
+  const deltaValence = clamp(left.valence, -1, 1) - clamp(right.valence, -1, 1);
+  const deltaArousal = clamp(left.arousal, -1, 1) - clamp(right.arousal, -1, 1);
+  const deltaDominance = clamp(left.dominance, -1, 1) - clamp(right.dominance, -1, 1);
+  const distance = Math.sqrt(
+    (deltaValence ** 2)
+    + (deltaArousal ** 2)
+    + (deltaDominance ** 2),
+  );
+  const maxDistance = 2 * Math.sqrt(3);
+  return clamp(1 - (distance / maxDistance), 0, 1);
+}
+
+function isFiniteRetrievalVAD(vad: RetrievalVADInput | undefined): vad is RetrievalVADInput {
+  if (!vad) return false;
+  return Number.isFinite(vad.valence)
+    && Number.isFinite(vad.arousal)
+    && Number.isFinite(vad.dominance);
 }
 
 function deriveEvidenceSupport(
@@ -1319,6 +1379,14 @@ function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
 function clamp(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return (min + max) / 2;
   return Math.max(min, Math.min(max, val));
+}
+
+function resolveMoodCongruenceWeight(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_MOOD_CONGRUENCE_WEIGHT;
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`moodCongruenceWeight must be a finite number between 0 and 1; received ${String(value)}`);
+  }
+  return value;
 }
 
 function clampProbability(value: number): number {

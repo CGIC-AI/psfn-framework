@@ -47,6 +47,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   defaultContextWindow: { sectionId: 'models', surface: 'advanced' },
   sessionHistoryBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   memoryRetrievalBudgetPct: { sectionId: 'budget', surface: 'advanced' },
+  moodCongruenceWeight: { sectionId: 'budget', surface: 'advanced' },
   adaptiveContextBudgetsEnabled: { sectionId: 'budget', surface: 'advanced' },
   sessionMessageLimit: { sectionId: 'budget', surface: 'advanced' },
   memoryRetrievalLimit: { sectionId: 'budget', surface: 'advanced' },

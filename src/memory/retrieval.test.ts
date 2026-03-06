@@ -1781,3 +1781,85 @@ describe('MemoryRetriever low-salience but high-similarity surfacing', () => {
     expect(result.length).toBeGreaterThan(0);
   });
 });
+
+describe('MemoryRetriever mood-congruent retrieval bias', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('boosts memories formed in a congruent mood when currentVAD is provided', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Higher baseline similarity but mood-incongruent memory',
+        similarity: 0.9,
+        formationVAD: { valence: 1, arousal: 1, dominance: 1 },
+      }),
+      makeMemory({
+        text: 'Lower baseline similarity but mood-congruent memory',
+        similarity: 0.8,
+        formationVAD: { valence: -1, arousal: -1, dominance: -1 },
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, makeRuntimeConfig({
+      moodCongruenceWeight: 0.15,
+    }));
+
+    const result = await retriever.retrieve(
+      'which memory should lead?',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { valence: -1, arousal: -1, dominance: -1 },
+    );
+
+    expect(result.indexOf('Lower baseline similarity but mood-congruent memory')).toBeLessThan(
+      result.indexOf('Higher baseline similarity but mood-incongruent memory'),
+    );
+  });
+
+  it('keeps baseline ranking neutral when currentVAD is omitted', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Higher baseline similarity but mood-incongruent memory',
+        similarity: 0.9,
+        formationVAD: { valence: 1, arousal: 1, dominance: 1 },
+      }),
+      makeMemory({
+        text: 'Lower baseline similarity but mood-congruent memory',
+        similarity: 0.8,
+        formationVAD: { valence: -1, arousal: -1, dominance: -1 },
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, makeRuntimeConfig({
+      moodCongruenceWeight: 0.15,
+    }));
+
+    const result = await retriever.retrieve('which memory should lead?', 'api:test', 'primary');
+
+    expect(result.indexOf('Higher baseline similarity but mood-incongruent memory')).toBeLessThan(
+      result.indexOf('Lower baseline similarity but mood-congruent memory'),
+    );
+  });
+
+  it('fails closed when moodCongruenceWeight is outside [0, 1]', () => {
+    const store = makeMockStore([]);
+    const embedding = makeMockEmbedding();
+
+    expect(() => {
+      new MemoryRetriever(store, embedding, makeRuntimeConfig({
+        moodCongruenceWeight: 1.5,
+      }));
+    }).toThrow('moodCongruenceWeight must be a finite number between 0 and 1');
+  });
+});

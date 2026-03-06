@@ -32,6 +32,7 @@ function makeConfig(): SubstrateConfig {
     databasePath: '',
     sessionHistoryBudgetPct: 6,
     memoryRetrievalBudgetPct: 2,
+    moodCongruenceWeight: 0.15,
     sessionMessageLimit: 30,
     memoryRetrievalLimit: 15,
     extractionInterval: 5,
@@ -102,6 +103,7 @@ describe('settings', () => {
       const result = loadSettings(tempDir);
       expect(result.sessionHistoryBudgetPct).toBe(6);
       expect(result.memoryRetrievalBudgetPct).toBe(2);
+      expect(result.moodCongruenceWeight).toBe(0.15);
       expect(result.extractionInterval).toBe(5);
       expect(result.observationMaskingWindow).toBe(10);
       expect(result.compositionalPolicy).toEqual(createDefaultCompositionalPolicyConfig());
@@ -434,6 +436,7 @@ describe('settings', () => {
       applySettings(config, {
         sessionHistoryBudgetPct: 8,
         memoryRetrievalBudgetPct: 3,
+        moodCongruenceWeight: 0.4,
         adaptiveContextBudgetsEnabled: true,
         sessionMessageLimit: 50,
         sessionRestartBehavior: 'new_session',
@@ -445,6 +448,7 @@ describe('settings', () => {
       });
       expect(config.sessionHistoryBudgetPct).toBe(8);
       expect(config.memoryRetrievalBudgetPct).toBe(3);
+      expect(config.moodCongruenceWeight).toBe(0.4);
       expect(config.adaptiveContextBudgetsEnabled).toBe(true);
       expect(config.sessionMessageLimit).toBe(50);
       expect(config.sessionRestartBehavior).toBe('new_session');
@@ -965,6 +969,7 @@ describe('settings', () => {
         primaryMaxTokens: '4096',
         sessionHistoryBudgetPct: '7',
         memoryRetrievalBudgetPct: '3',
+        moodCongruenceWeight: '0.35',
         sessionMessageLimit: '50',
         retryMaxAttempts: '4',
       });
@@ -974,6 +979,7 @@ describe('settings', () => {
       expect(settings.primaryMaxTokens).toBe(4096);
       expect(settings.sessionHistoryBudgetPct).toBe(7);
       expect(settings.memoryRetrievalBudgetPct).toBe(3);
+      expect(settings.moodCongruenceWeight).toBe(0.35);
       expect(settings.sessionMessageLimit).toBe(50);
       expect(settings.retryMaxAttempts).toBe(4);
       expect(settings.modelCatalog.primary.model).toBe('test-model');
@@ -1109,13 +1115,15 @@ describe('settings', () => {
         sessionHistoryBudgetPct: '0',
         sessionMessageLimit: '999',
         retryBaseDelayMs: '100',
+        moodCongruenceWeight: '1.2',
       });
       const [, errors] = parseSettingsForm(params);
-      expect(errors.length).toBe(4);
+      expect(errors.length).toBe(5);
       expect(errors.some(err => err.includes('primaryMaxTokens'))).toBe(true);
       expect(errors.some(err => err.includes('sessionHistoryBudgetPct'))).toBe(true);
       expect(errors.some(err => err.includes('sessionMessageLimit'))).toBe(true);
       expect(errors.some(err => err.includes('retryBaseDelayMs'))).toBe(true);
+      expect(errors.some(err => err.includes('moodCongruenceWeight'))).toBe(true);
     });
 
     it('ignores empty string fields', () => {
@@ -1231,6 +1239,7 @@ describe('settings', () => {
       const config = makeConfig();
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.adaptiveContextBudgetsEnabled).toBe(false);
+      expect(snapshot.moodCongruenceWeight).toBe(0.15);
       expect(snapshot.thinkMaxTokens).toBeNull();
       expect(snapshot.thinkMaxWallTimeMs).toBeNull();
       expect(snapshot.thinkMaxSubQueries).toBeNull();

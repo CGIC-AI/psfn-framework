@@ -5,6 +5,7 @@
 
 import { join } from 'node:path';
 import {
+  DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
   type CapabilityTier,
   type CompositionalPolicyConfig,
@@ -63,6 +64,10 @@ const SESSION_RESTART_BEHAVIOR_VALUES = new Set<SessionRestartBehavior>([
   'reuse_latest_session',
   'new_session',
 ]);
+export const MOOD_CONGRUENCE_WEIGHT_RANGE = {
+  min: 0,
+  max: 1,
+} as const;
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -116,6 +121,7 @@ export interface EditableSettings {
   modelRoster?: Partial<Record<ModelPurpose, ModelSlot>>;
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
+  moodCongruenceWeight?: number;
   adaptiveContextBudgetsEnabled?: boolean;
   sessionMessageLimit?: number;
   sessionRestartBehavior?: SessionRestartBehavior;
@@ -216,6 +222,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'extractionMaxTokens',
   'sessionHistoryBudgetPct',
   'memoryRetrievalBudgetPct',
+  'moodCongruenceWeight',
   'adaptiveContextBudgetsEnabled',
   'sessionMessageLimit',
   'sessionRestartBehavior',
@@ -327,6 +334,21 @@ function toIntegerInRange(value: unknown, min: number, max: number): number | un
     if (!trimmed) return undefined;
     const candidate = Number.parseInt(trimmed, 10);
     parsed = Number.isInteger(candidate) ? candidate : undefined;
+  }
+
+  if (parsed === undefined) return undefined;
+  return parsed >= min && parsed <= max ? parsed : undefined;
+}
+
+function toNumberInRange(value: unknown, min: number, max: number): number | undefined {
+  let parsed: number | undefined;
+  if (typeof value === 'number') {
+    parsed = Number.isFinite(value) ? value : undefined;
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const candidate = Number.parseFloat(trimmed);
+    parsed = Number.isFinite(candidate) ? candidate : undefined;
   }
 
   if (parsed === undefined) return undefined;
@@ -714,6 +736,17 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.memoryRetrievalBudgetPct = retrievalBudgetPct;
   } else {
     delete normalized.memoryRetrievalBudgetPct;
+  }
+
+  const moodCongruenceWeight = toNumberInRange(
+    settings.moodCongruenceWeight,
+    MOOD_CONGRUENCE_WEIGHT_RANGE.min,
+    MOOD_CONGRUENCE_WEIGHT_RANGE.max,
+  );
+  if (moodCongruenceWeight !== undefined) {
+    normalized.moodCongruenceWeight = moodCongruenceWeight;
+  } else {
+    delete normalized.moodCongruenceWeight;
   }
 
   if ('adaptiveContextBudgetsEnabled' in settings) {
@@ -1215,6 +1248,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     extractionMaxTokens: config.extractionMaxTokens,
     sessionHistoryBudgetPct: sessionBudgetPct,
     memoryRetrievalBudgetPct: retrievalBudgetPct,
+    moodCongruenceWeight: config.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled: config.adaptiveContextBudgetsEnabled ?? false,
     sessionMessageLimit: config.sessionMessageLimit ?? null,
     sessionRestartBehavior: config.sessionRestartBehavior ?? 'reuse_latest_session',
@@ -1344,6 +1378,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
   if (settings.memoryRetrievalBudgetPct !== undefined) {
     config.memoryRetrievalBudgetPct = settings.memoryRetrievalBudgetPct;
+  }
+  if (settings.moodCongruenceWeight !== undefined) {
+    config.moodCongruenceWeight = settings.moodCongruenceWeight;
   }
   if (settings.adaptiveContextBudgetsEnabled !== undefined) {
     config.adaptiveContextBudgetsEnabled = settings.adaptiveContextBudgetsEnabled;
@@ -1676,6 +1713,22 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
       errors.push('adaptiveContextBudgetsEnabled must be true or false');
     } else {
       settings.adaptiveContextBudgetsEnabled = enabled;
+    }
+  }
+
+  const moodCongruenceWeightRaw = params.get('moodCongruenceWeight');
+  if (moodCongruenceWeightRaw !== null && moodCongruenceWeightRaw !== '') {
+    const parsed = Number.parseFloat(moodCongruenceWeightRaw);
+    if (
+      !Number.isFinite(parsed)
+      || parsed < MOOD_CONGRUENCE_WEIGHT_RANGE.min
+      || parsed > MOOD_CONGRUENCE_WEIGHT_RANGE.max
+    ) {
+      errors.push(
+        `moodCongruenceWeight must be ${MOOD_CONGRUENCE_WEIGHT_RANGE.min}-${MOOD_CONGRUENCE_WEIGHT_RANGE.max}`,
+      );
+    } else {
+      settings.moodCongruenceWeight = parsed;
     }
   }
 

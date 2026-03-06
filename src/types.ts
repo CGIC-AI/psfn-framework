@@ -381,6 +381,7 @@ export interface SubstrateConfig {
   memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
+  moodCongruenceWeight?: number;
   adaptiveContextBudgetsEnabled?: boolean;
   extractionInterval: number;
   maintenanceIntervalMs: number;
@@ -510,6 +511,7 @@ const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
 };
 const DEFAULT_SESSION_MESSAGE_LIMIT = 30;
 const DEFAULT_MEMORY_RETRIEVAL_LIMIT = 15;
+export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 const DEFAULT_EXTRACTION_INTERVAL = 5;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 300_000;
 const DEFAULT_MEMORY_BUDGET_PCT = 20;
@@ -623,6 +625,7 @@ export function loadConfig(): SubstrateConfig {
     memoryRetrievalLimit: DEFAULT_MEMORY_RETRIEVAL_LIMIT,
     sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_DEFAULT,
     memoryRetrievalBudgetPct: MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
+    moodCongruenceWeight: DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled: false,
     extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
     maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,

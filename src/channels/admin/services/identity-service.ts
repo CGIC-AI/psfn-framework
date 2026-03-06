@@ -214,15 +214,18 @@ export class AdminIdentityDataService implements AdminIdentityService {
     try {
       const snapshot = cardVersionStore.rollback(version, 'admin:api');
       Object.assign(this.deps.characterCard, snapshot.card);
-      syncCharacterFoundationPromptFromCard(
+      const promptSync = syncCharacterFoundationPromptFromCard(
         this.deps.promptStore,
         snapshot.card,
         'admin:rollback',
         `Sync Character Foundation prompt after rollback to version ${version}`,
       );
+      const promptWarning = !promptSync.ok
+        ? ` (Character Foundation sync warning: ${promptSync.error})`
+        : '';
       return {
         ok: true,
-        message: `Rolled back to version ${version}`,
+        message: `Rolled back to version ${version}${promptWarning}`,
         snapshot,
       };
     } catch (error) {

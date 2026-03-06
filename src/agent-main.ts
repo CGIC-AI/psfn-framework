@@ -84,7 +84,10 @@ import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
-import { wireIntentionRuntime } from './intention/runtime-wiring.js';
+import {
+  createIntentionAppraisalHooks,
+  wireIntentionRuntime,
+} from './intention/runtime-wiring.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -611,7 +614,8 @@ async function main(): Promise<void> {
       : {}),
   },
 );
-  wireIntentionRuntime(agentLoop, db);
+  const intentionConcernStore = wireIntentionRuntime(agentLoop, db);
+  const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionConcernStore);
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
   const memoryExtractor = wireMemoryRuntime({
@@ -1152,6 +1156,8 @@ async function main(): Promise<void> {
       sessionManager,
       emotionState,
       contactStore,
+      getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
+      onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
       coreMemoryStore,
       postTurnActions,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),

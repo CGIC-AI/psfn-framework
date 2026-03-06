@@ -697,6 +697,35 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(captured[0].contextManifest).toEqual(manifest);
   });
 
+  it('runs registered intention post-turn hooks without blocking turn completion', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    const failingHook = vi.fn(() => {
+      throw new Error('intentional test failure');
+    });
+    const successfulHook = vi.fn().mockResolvedValue(undefined);
+    agent.registerIntentionPostTurnHook(failingHook);
+    agent.registerIntentionPostTurnHook(successfulHook);
+
+    const response = await agent.handleMessage(makeMessage({ id: 'turn-intention-hook-1' }));
+    expect(response.content).toBe('Mock response from Purrsephone');
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(failingHook).toHaveBeenCalledTimes(1);
+    expect(successfulHook).toHaveBeenCalledTimes(1);
+    expect(successfulHook.mock.calls[0]?.[0]).toMatchObject({
+      message: expect.objectContaining({ id: 'turn-intention-hook-1' }),
+      response: expect.objectContaining({ channelId: 'test-channel' }),
+    });
+    expect(isTurnId(successfulHook.mock.calls[0]?.[0]?.turnId)).toBe(true);
+  });
+
   it('emits explicit background continuation completion and delivers queued results after a foreground turn ends', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();
@@ -3083,7 +3112,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    agent.activeConcernProvider = {
+    agent.setActiveConcernProvider({
       getActiveConcerns: vi.fn().mockReturnValue([{
         id: 'concern-1',
         text: 'Check whether V ate today.',
@@ -3093,7 +3122,7 @@ describe('SubstrateAgent.handleMessage', () => {
         expiresAt: '2026-02-03T10:00:00.000Z',
         contactId: 'user-123',
       }]),
-    } as any;
+    } as any);
 
     await agent.handleMessage(makeMessage({
       authorId: 'user-123',

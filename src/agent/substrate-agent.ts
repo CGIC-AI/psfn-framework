@@ -206,6 +206,19 @@ export type PostTurnActionInferer = (
   context: PostTurnInferenceContext,
 ) => PostTurnActionCandidate[] | Promise<PostTurnActionCandidate[]>;
 
+export interface IntentionPostTurnHookContext {
+  message: SubstrateMessage;
+  response: AgentResponse;
+  turnMessages: AgentMessage[];
+  turnId: TurnID;
+  completedAt: number;
+  canonicalContactKey?: string;
+}
+
+export type IntentionPostTurnHook = (
+  context: IntentionPostTurnHookContext,
+) => void | Promise<void>;
+
 export interface ExtendedToolActivationResult {
   requestedTools: string[];
   activatedTools: string[];
@@ -357,6 +370,7 @@ export class SubstrateAgent {
   private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
   private reflectionNudge = new ReflectionNudgeTracker();
   private postTurnActionInferers: PostTurnActionInferer[] = [];
+  private intentionPostTurnHooks: IntentionPostTurnHook[] = [];
   private activeTurnCorrelation: CorrelationMetadata | null = null;
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
   private pendingBackgroundContinuationDeliveries = new Map<string, PendingBackgroundContinuationDelivery[]>();
@@ -1735,12 +1749,26 @@ export class SubstrateAgent {
     return this.agent.waitForIdle();
   }
 
+  setActiveConcernProvider(provider: ActiveConcernContextProvider | null): void {
+    this.activeConcernProvider = provider;
+  }
+
   registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
     this.postTurnActionInferers.push(inferer);
     return () => {
       const index = this.postTurnActionInferers.indexOf(inferer);
       if (index !== -1) {
         this.postTurnActionInferers.splice(index, 1);
+      }
+    };
+  }
+
+  registerIntentionPostTurnHook(hook: IntentionPostTurnHook): () => void {
+    this.intentionPostTurnHooks.push(hook);
+    return () => {
+      const index = this.intentionPostTurnHooks.indexOf(hook);
+      if (index !== -1) {
+        this.intentionPostTurnHooks.splice(index, 1);
       }
     };
   }
@@ -2448,6 +2476,22 @@ export class SubstrateAgent {
         turnId,
       ).catch(err => {
         log.error('Memory extraction error', { error: String(err) });
+      });
+
+      void this.runIntentionPostTurnHooks({
+        message,
+        response: agentResponse,
+        turnMessages,
+        turnId,
+        completedAt,
+        ...(authorContext.canonicalContactKey
+          ? { canonicalContactKey: authorContext.canonicalContactKey }
+          : {}),
+      }).catch((error) => {
+        log.error('Intention post-turn hook dispatch error', {
+          channelId: message.channelId,
+          error: toErrorMessage(error),
+        });
       });
 
       void this.triggerEmotionAppraisal({
@@ -3478,6 +3522,25 @@ export class SubstrateAgent {
     }
 
     return inferred;
+  }
+
+  private async runIntentionPostTurnHooks(
+    context: IntentionPostTurnHookContext,
+  ): Promise<void> {
+    if (this.intentionPostTurnHooks.length === 0) {
+      return;
+    }
+    for (const hook of this.intentionPostTurnHooks) {
+      try {
+        await hook(context);
+      } catch (error) {
+        log.warn('Intention post-turn hook failed', {
+          channelId: context.message.channelId,
+          messageId: context.message.id,
+          error: toErrorMessage(error),
+        });
+      }
+    }
   }
 
   private normalizePostTurnActionCandidate(

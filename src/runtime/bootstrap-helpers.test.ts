@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { CapabilityToken } from '../capabilities/tokens.js';
+import type { SubstrateConfig } from '../types.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,
 } from '../capabilities/eligibility.js';
-import { loadSettings } from '../settings.js';
+import { loadSettings, saveSettings } from '../settings.js';
+import { saveModelsConfig } from '../config/models-config.js';
+import { loadCapabilityTierConfig } from '../config/capability-tier-config.js';
+import { loadSchedulerConfig, saveSchedulerConfig } from '../config/scheduler-config.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
+  hydrateCanonicalStartupConfig,
   installPromotedToolsPersistenceHook,
   resolveRuntimeVoiceProviderGate,
   resolveRuntimeVoiceSttProvider,
@@ -30,6 +35,48 @@ function createMutableEligibilityGate(initialTokens: CapabilityToken[]) {
     })),
     setTokens: (nextTokens: CapabilityToken[]) => {
       grantedTokens = new Set(nextTokens);
+    },
+  };
+}
+
+function makeStartupHydrationConfig(
+  systemDataDir: string,
+  companionDataDir: string,
+): SubstrateConfig {
+  return {
+    primaryModel: 'openrouter/deepseek/deepseek-v3.2',
+    primaryProvider: 'openrouter',
+    extractionModel: 'openrouter/deepseek/deepseek-v3.2',
+    extractionProvider: 'openrouter',
+    primaryMaxTokens: 8192,
+    extractionMaxTokens: 4096,
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: join(companionDataDir, 'character.json'),
+    systemDataDir,
+    companionDataDir,
+    dataDir: systemDataDir,
+    databasePath: join(companionDataDir, 'companion.db'),
+    sessionMessageLimit: 30,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    memoryBudgetPct: 20,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    modelRoster: {
+      chat: {
+        model: 'openrouter/deepseek/deepseek-v3.2',
+        provider: 'openrouter',
+        maxTokens: 8192,
+        contextWindow: 128_000,
+      },
+      background: {
+        model: 'openrouter/deepseek/deepseek-v3.2',
+        provider: 'openrouter',
+        maxTokens: 4096,
+      },
     },
   };
 }
@@ -853,5 +900,114 @@ describe('installPromotedToolsPersistenceHook', () => {
 
     expect(config.runtimeHooks.existingHook).toBe(existingHook);
     expect(typeof config.runtimeHooks.persistPromotedExtendedTools).toBe('function');
+  });
+});
+
+describe('hydrateCanonicalStartupConfig', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('hydrates settings/models/trust/scheduler from canonical owners in one helper', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    saveSettings(systemDataDir, {
+      sessionMessageLimit: 44,
+      memoryRetrievalLimit: 11,
+    });
+    saveModelsConfig(systemDataDir, {
+      modelCatalog: {
+        chatslot: {
+          model: 'openai/gpt-4.1-mini',
+          provider: 'openrouter',
+          defaults: {
+            maxTokens: 2048,
+            contextWindow: 65_536,
+          },
+        },
+      },
+    });
+    saveSchedulerConfig(systemDataDir, {
+      tickIntervalMs: 2_000,
+      heartbeatIntervalMs: 8_000,
+      salienceDecayIntervalMs: 123_000,
+    });
+
+    const result = hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    });
+
+    expect(result.systemDataDir).toBe(systemDataDir);
+    expect(result.companionDataDir).toBe(companionDataDir);
+    expect(result.runtimePathLayout.systemDataDir).toBe(systemDataDir);
+    expect(config.sessionMessageLimit).toBe(44);
+    expect(config.memoryRetrievalLimit).toBe(11);
+    expect(config.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
+    expect(result.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
+    expect(config.maintenanceIntervalMs).toBe(123_000);
+    expect(result.trustPolicyConfig.channelClassification.defaultVisibility).toBeTruthy();
+    expect(result.diagnostics.modelsMigratedFromLegacySettings).toBe(false);
+    expect(result.diagnostics.modelsLegacyDriftDetected).toBe(false);
+    expect(result.diagnostics.removedLegacyKeys).toEqual([]);
+  });
+
+  it('reports and applies legacy scheduler/capability migration diagnostics', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    writeFileSync(
+      join(systemDataDir, 'settings.json'),
+      `${JSON.stringify({
+        sessionMessageLimit: 51,
+        maintenanceIntervalMs: 222_000,
+        capabilityTier: 'apprentice',
+      }, null, 2)}\n`,
+      'utf-8',
+    );
+
+    const result = hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    });
+
+    expect(result.diagnostics.maintenanceIntervalMigration.state).toBe('migrated');
+    expect(result.diagnostics.capabilityTierMigration.state).toBe('migrated');
+    expect(result.diagnostics.removedLegacyKeys).toEqual(
+      expect.arrayContaining(['maintenanceIntervalMs', 'capabilityTier']),
+    );
+    expect(loadSchedulerConfig(systemDataDir).salienceDecayIntervalMs).toBe(222_000);
+    expect(loadCapabilityTierConfig(systemDataDir).tier).toBe('apprentice');
+    const rewrittenSettings = loadSettings(systemDataDir);
+    expect(rewrittenSettings.maintenanceIntervalMs).toBeUndefined();
+    expect(rewrittenSettings.capabilityTier).toBeUndefined();
+    expect(config.maintenanceIntervalMs).toBe(222_000);
   });
 });

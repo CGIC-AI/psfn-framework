@@ -34,6 +34,7 @@ import {
 } from '../settings-tools.js';
 import type { SessionManager } from '../session/manager.js';
 import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
+import { createCompleteFocusTool, createStartFocusTool } from '../tools/focus.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -243,6 +244,7 @@ export function wireSessionToolsRuntime(
   target: ToolRegistrarTarget,
   sessionManager: SessionManager,
   dataDir: string,
+  llmProvider: LLMProvider,
 ): void {
   target.registerTool(createSessionNewTool({
     dataDir,
@@ -256,6 +258,8 @@ export function wireSessionToolsRuntime(
   }), 'extended');
   target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'extended');
   target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
+  target.registerTool(createStartFocusTool(sessionManager), 'extended');
+  target.registerTool(createCompleteFocusTool(sessionManager, llmProvider), 'extended');
 }
 
 /**

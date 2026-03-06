@@ -565,7 +565,7 @@ async function main(): Promise<void> {
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config);
-  wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir);
+  wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir, gateway);
   wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,

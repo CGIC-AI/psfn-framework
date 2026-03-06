@@ -655,7 +655,7 @@ export class SubstrateRuntime implements Lifecycle {
       confirmationQueue: cardProposalQueue,
     });
     wireSettingsRuntime(this.agentLoop, this.config);
-    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir);
+    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir, this.llmClient);
     wireCoreMemoryRuntime({
       agentLoop: this.agentLoop,
       sessionManager: this.sessionManager,

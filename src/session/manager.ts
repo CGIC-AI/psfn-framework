@@ -65,6 +65,17 @@ import {
   type ToolObservationInput,
 } from './tool-observation.js';
 import type { ContextManifestMemorySeed } from './context-manifest.js';
+import {
+  applyFocusCompactionRanges,
+  FocusKnowledgeStore,
+  normalizeFocusEvidence,
+  type FocusEvidenceRecord,
+  type FocusKnowledgeBlock,
+} from './focus-knowledge.js';
+import {
+  resolveConfiguredCompanionDataDir,
+  resolveFocusKnowledgePath,
+} from '../persistence/layout.js';
 
 export type {
   ImportedHistoryBootstrapChunk,
@@ -131,15 +142,53 @@ export interface SessionCoreMemoryProvider {
   formatForContext(): string;
 }
 
+interface ActiveFocusSession {
+  focusId: string;
+  channelId: string;
+  scope: string;
+  startedAt: number;
+  startEntryId: number;
+  evidence: FocusEvidenceRecord[];
+}
+
+export interface FocusSessionSnapshot {
+  focusId: string;
+  channelId: string;
+  scope: string;
+  startedAt: number;
+  startEntryId: number;
+  evidenceCount: number;
+}
+
+export interface FocusSessionContextSnapshot {
+  session: FocusSessionSnapshot;
+  rangeStartId: number;
+  rangeEndId: number;
+  entries: SessionEntry[];
+  evidence: FocusEvidenceRecord[];
+}
+
+export interface FocusSessionCompletionResult {
+  focusId: string;
+  channelId: string;
+  scope: string;
+  rangeStartId: number | null;
+  rangeEndId: number | null;
+  knowledgeBlock: FocusKnowledgeBlock;
+}
+
+const MAX_ACTIVE_FOCUS_EVIDENCE_ITEMS = 64;
 export class SessionManager {
   private store: SessionStore;
   private compactionBoundaryStore: SessionStore;
   private config: SubstrateConfig;
   private eventBus: EventBus | null;
   private promptRegistry: PromptRegistryStore | null;
+  private focusKnowledgeStore: FocusKnowledgeStore;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
   private activeContextSessionId: string | null = null;
+  private activeFocusSessions: Map<string, ActiveFocusSession> = new Map();
   continuityStore: UserContinuityStore | null = null;
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
@@ -155,6 +204,8 @@ export class SessionManager {
     this.config = config;
     this.eventBus = eventBus ?? null;
     this.promptRegistry = promptRegistry ?? null;
+    const companionDataDir = resolveConfiguredCompanionDataDir(config);
+    this.focusKnowledgeStore = new FocusKnowledgeStore(resolveFocusKnowledgePath(companionDataDir));
     this.preCompactionExtractionHandler = null;
     this.coreMemoryProvider = null;
   }
@@ -187,6 +238,160 @@ export class SessionManager {
 
   getSessionActivity(sessionId: string): SessionActivitySummary | null {
     return this.store.getSessionActivity(sessionId);
+  }
+
+  private toFocusSessionSnapshot(session: ActiveFocusSession): FocusSessionSnapshot {
+    return {
+      focusId: session.focusId,
+      channelId: session.channelId,
+      scope: session.scope,
+      startedAt: session.startedAt,
+      startEntryId: session.startEntryId,
+      evidenceCount: session.evidence.length,
+    };
+  }
+
+  private resolveFocusChannelId(channelId: string): string {
+    const normalized = channelId.trim();
+    if (!normalized) {
+      throw new Error('focus session requires a non-empty channelId');
+    }
+    return this.resolveSessionChannelId(normalized);
+  }
+
+  private normalizeFocusScope(scope: string): string {
+    const normalized = scope.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      throw new Error('focus scope must be non-empty');
+    }
+    return normalized;
+  }
+
+  private getFocusKnowledgeTexts(channelId: string): string[] {
+    return this.focusKnowledgeStore
+      .listByChannel(channelId)
+      .map(block => `[${block.scope}] ${block.knowledge}`);
+  }
+
+  private getFocusCompactionRanges(channelId: string) {
+    return this.focusKnowledgeStore.getCompactionRanges(channelId);
+  }
+
+  startFocusSession(channelId: string, scope: string): FocusSessionSnapshot {
+    const resolvedChannelId = this.resolveFocusChannelId(channelId);
+    if (this.activeFocusSessions.has(resolvedChannelId)) {
+      throw new Error(`focus session already active for channel "${resolvedChannelId}"`);
+    }
+
+    const normalizedScope = this.normalizeFocusScope(scope);
+    const now = Date.now();
+    const startEntryId = this.store.getLastEntry(resolvedChannelId)?.id ?? 0;
+    const session: ActiveFocusSession = {
+      focusId: `focus-${now.toString(36)}-${randomUUID().slice(0, 8)}`,
+      channelId: resolvedChannelId,
+      scope: normalizedScope,
+      startedAt: now,
+      startEntryId,
+      evidence: [],
+    };
+    this.activeFocusSessions.set(resolvedChannelId, session);
+    return this.toFocusSessionSnapshot(session);
+  }
+
+  getActiveFocusSession(channelId: string): FocusSessionSnapshot | null {
+    const resolvedChannelId = this.resolveFocusChannelId(channelId);
+    const active = this.activeFocusSessions.get(resolvedChannelId);
+    return active ? this.toFocusSessionSnapshot(active) : null;
+  }
+
+  recordFocusEvidence(channelId: string, evidence: ReadonlyArray<unknown>): number {
+    const resolvedChannelId = this.resolveFocusChannelId(channelId);
+    const active = this.activeFocusSessions.get(resolvedChannelId);
+    if (!active || evidence.length === 0) {
+      return 0;
+    }
+
+    const remainingSlots = Math.max(0, MAX_ACTIVE_FOCUS_EVIDENCE_ITEMS - active.evidence.length);
+    if (remainingSlots === 0) {
+      return 0;
+    }
+
+    const normalized = evidence
+      .map((item) => normalizeFocusEvidence(item))
+      .filter((item): item is FocusEvidenceRecord => item !== null)
+      .slice(0, remainingSlots);
+    if (normalized.length === 0) {
+      return 0;
+    }
+
+    active.evidence.push(...normalized);
+    return normalized.length;
+  }
+
+  getFocusSessionContext(channelId: string): FocusSessionContextSnapshot | null {
+    const resolvedChannelId = this.resolveFocusChannelId(channelId);
+    const active = this.activeFocusSessions.get(resolvedChannelId);
+    if (!active) return null;
+
+    const rangeStartId = active.startEntryId + 1;
+    const rangeEndId = this.store.getLastEntry(resolvedChannelId)?.id ?? active.startEntryId;
+    const entries = rangeEndId >= rangeStartId
+      ? this.store.getEntriesInRange(resolvedChannelId, rangeStartId, rangeEndId)
+      : [];
+
+    return {
+      session: this.toFocusSessionSnapshot(active),
+      rangeStartId,
+      rangeEndId,
+      entries,
+      evidence: [...active.evidence],
+    };
+  }
+
+  completeFocusSession(channelId: string, knowledge: string): FocusSessionCompletionResult {
+    const resolvedChannelId = this.resolveFocusChannelId(channelId);
+    const active = this.activeFocusSessions.get(resolvedChannelId);
+    if (!active) {
+      throw new Error(`no active focus session for channel "${resolvedChannelId}"`);
+    }
+
+    const normalizedKnowledge = knowledge.replace(/\s+/g, ' ').trim();
+    if (!normalizedKnowledge) {
+      throw new Error('focus knowledge summary must be non-empty');
+    }
+
+    const context = this.getFocusSessionContext(resolvedChannelId);
+    if (!context) {
+      throw new Error(`no active focus session for channel "${resolvedChannelId}"`);
+    }
+
+    const rangeIsValid = context.rangeEndId >= context.rangeStartId;
+    const knowledgeBlock = this.focusKnowledgeStore.append({
+      channelId: resolvedChannelId,
+      focusId: active.focusId,
+      scope: active.scope,
+      knowledge: normalizedKnowledge,
+      startedAt: active.startedAt,
+      completedAt: Date.now(),
+      ...(rangeIsValid
+        ? {
+          rangeStartId: context.rangeStartId,
+          rangeEndId: context.rangeEndId,
+        }
+        : {}),
+      evidenceCount: active.evidence.length,
+      evidence: active.evidence,
+    });
+
+    this.activeFocusSessions.delete(resolvedChannelId);
+    return {
+      focusId: active.focusId,
+      channelId: resolvedChannelId,
+      scope: active.scope,
+      rangeStartId: rangeIsValid ? context.rangeStartId : null,
+      rangeEndId: rangeIsValid ? context.rangeEndId : null,
+      knowledgeBlock,
+    };
   }
 
   recordUserMessage(
@@ -384,6 +589,11 @@ export class SessionManager {
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext()
       : '';
+    const focusKnowledgeTexts = turnSnapshot?.focusKnowledgeTexts
+      ?? this.getFocusKnowledgeTexts(resolvedChannelId);
+    const focusCompactionRanges = turnSnapshot
+      ? []
+      : this.getFocusCompactionRanges(resolvedChannelId);
     return buildSessionContext({
       channelId: resolvedChannelId,
       systemPrompt,
@@ -401,6 +611,8 @@ export class SessionManager {
       continuityStore: this.continuityStore,
       characterName: this.characterName,
       turnSnapshot,
+      focusKnowledgeTexts,
+      focusCompactionRanges,
       memoryManifestSeed,
       turnBudgetCharacteristics,
     });
@@ -425,6 +637,12 @@ export class SessionManager {
     if (historyBudget.mode === 'budget') {
       recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
     }
+    const focusCompaction = applyFocusCompactionRanges(
+      recent,
+      this.getFocusCompactionRanges(resolvedChannelId),
+    );
+    recent = focusCompaction.entries;
+    const focusKnowledgeTexts = this.getFocusKnowledgeTexts(resolvedChannelId);
 
     const continuityEntries = userId && this.continuityStore
       ? getMergedContinuity({
@@ -446,6 +664,7 @@ export class SessionManager {
       channelId: resolvedChannelId,
       recentEntries: recent.map(cloneSessionEntry),
       compactionSummaryTexts: [...compactionSummaryTexts],
+      focusKnowledgeTexts: [...focusKnowledgeTexts],
       continuityEntries: continuityEntries.map(cloneSessionEntry),
       compactionPromptText,
       versionPointer: buildSnapshotVersionPointer([
@@ -453,6 +672,8 @@ export class SessionManager {
         recent.at(-1)?.id,
         recent.at(-1)?.timestamp,
         compactionSummaryTexts.join('\n'),
+        focusKnowledgeTexts.join('\n'),
+        focusCompaction.compactedCount,
         continuityEntries.at(-1)?.id,
         continuityEntries.at(-1)?.timestamp,
         compactionPromptText,

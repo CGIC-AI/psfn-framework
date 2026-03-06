@@ -17,6 +17,7 @@ export interface TurnSessionContextSnapshot {
   channelId: string;
   recentEntries: SessionEntry[];
   compactionSummaryTexts: string[];
+  focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
   compactionPromptText?: string;
   versionPointer: string;

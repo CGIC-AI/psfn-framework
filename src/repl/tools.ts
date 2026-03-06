@@ -93,6 +93,11 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
           });
         }
 
+        const requestContext = getRequestContext();
+        if (requestContext?.channelId && effectiveDeps.sessionManager && result.evidence.length > 0) {
+          effectiveDeps.sessionManager.recordFocusEvidence(requestContext.channelId, result.evidence);
+        }
+
         const totalTokens = result.totalInputTokens + result.totalOutputTokens;
         const tokenBudget = effectiveDeps.config.budget.maxTokens ?? 100_000;
         const evidenceCount = result.evidence.length;

@@ -1027,6 +1027,7 @@ describe('SubstrateAgent.handleMessage', () => {
       channelId: 'test-channel',
       recentEntries: [],
       compactionSummaryTexts: [],
+      focusKnowledgeTexts: [],
       continuityEntries: [],
       compactionPromptText: 'Compaction prompt snapshot',
       versionPointer: 'session-snapshot-v1',

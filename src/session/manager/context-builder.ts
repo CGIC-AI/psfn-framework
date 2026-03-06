@@ -37,6 +37,7 @@ import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages, getMergedContinuity } from './context-support.js';
 import { runAutoCompaction } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
+import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 
 const log = createComponentLogger('ContextBuilder');
 
@@ -58,6 +59,8 @@ interface BuildSessionContextParams {
   /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
   turnSnapshot?: TurnSessionContextSnapshot;
+  focusKnowledgeTexts: string[];
+  focusCompactionRanges: FocusCompactionRange[];
   memoryManifestSeed?: ContextManifestMemorySeed;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
 }
@@ -81,6 +84,11 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   if (!params.turnSnapshot && historyBudget.mode === 'budget') {
     recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
   }
+  const focusCompaction = applyFocusCompactionRanges(
+    recent,
+    params.focusCompactionRanges,
+  );
+  recent = focusCompaction.entries;
   const trimmedEntryCount = Math.max(0, sourceEntryCount - recent.length);
   const masking = applyObservationMasking(
     recent,
@@ -90,6 +98,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   let compactionSummaryTexts = params.turnSnapshot
     ? [...params.turnSnapshot.compactionSummaryTexts]
     : params.store.getCompactionSummaries(params.channelId).map(summary => summary.summary);
+  const focusKnowledgeTexts = params.turnSnapshot
+    ? [...params.turnSnapshot.focusKnowledgeTexts]
+    : [...params.focusKnowledgeTexts];
   const baseSystemTokenCount = countTokens(params.systemPrompt);
   const hasCoreMemorySection = params.coreMemoryBlock.trim().length > 0;
   const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
@@ -166,6 +177,12 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     const summaryBlock = compactionSummaryTexts.join('\n\n');
     compactionSummarySectionText = '[Previous conversation summary]\n' + summaryBlock;
     fullSystem += '\n\n' + compactionSummarySectionText;
+  }
+
+  let focusKnowledgeSectionText = '';
+  if (focusKnowledgeTexts.length > 0) {
+    focusKnowledgeSectionText = '[Focus knowledge]\n' + focusKnowledgeTexts.join('\n');
+    fullSystem += '\n\n' + focusKnowledgeSectionText;
   }
 
   // Cross-channel continuity: include recent activity from other channels
@@ -280,7 +297,10 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         { section: 'system_prompt', tokenCount: baseSystemTokenCount },
         { section: 'core_memory', tokenCount: coreMemoryTokenCount },
         { section: 'memories', tokenCount: memoryTokenCount },
-        { section: 'compaction_summary', tokenCount: countTokens(compactionSummarySectionText) },
+        {
+          section: 'compaction_summary',
+          tokenCount: countTokens(compactionSummarySectionText) + countTokens(focusKnowledgeSectionText),
+        },
         { section: 'continuity', tokenCount: countTokens(continuitySectionText) },
         { section: 'session_history', tokenCount: sessionMessageTokenCount },
       ],

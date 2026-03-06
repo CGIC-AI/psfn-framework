@@ -221,6 +221,10 @@ export function resolveReflectionJournalPath(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'journal.jsonl');
 }
 
+export function resolveFocusKnowledgePath(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'focus-knowledge.jsonl');
+}
+
 export function resolveScratchpadMirrorPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'scratchpad.json');
 }

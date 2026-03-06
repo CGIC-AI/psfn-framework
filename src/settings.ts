@@ -214,6 +214,21 @@ export const RUNTIME_SETTINGS_KEYS = [
   'extractionThresholdPct',
   'compactionThresholdPct',
   'compactionEmotionalSalienceThresholdPct',
+  'memoryExtractionMinImportance',
+  'memoryExtractionMinConfidence',
+  'memoryExtractionMinNovelty',
+  'memoryExtractionMaxWrites',
+  'memoryExtractionTelemetryEnabled',
+  'memoryRetrievalTelemetryEnabled',
+  'profileSynthesisEnabled',
+  'profileSynthesisRefreshIntervalMs',
+  'profileSynthesisCooldownMs',
+  'profileSynthesisMinWrites',
+  'profileSynthesisMinImportance',
+  'profileSynthesisMinConfidence',
+  'profileSynthesisMinNovelty',
+  'profileSynthesisSourceMemoryLimit',
+  'profileSynthesisMinSourceMemories',
   'thinkMaxTokens',
   'thinkMaxWallTimeMs',
   'thinkMaxSubQueries',
@@ -1144,6 +1159,21 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     extractionThresholdPct: config.extractionThresholdPct,
     compactionThresholdPct: config.compactionThresholdPct,
     compactionEmotionalSalienceThresholdPct: config.compactionEmotionalSalienceThresholdPct ?? 75,
+    memoryExtractionMinImportance: config.memoryExtractionMinImportance ?? null,
+    memoryExtractionMinConfidence: config.memoryExtractionMinConfidence ?? null,
+    memoryExtractionMinNovelty: config.memoryExtractionMinNovelty ?? null,
+    memoryExtractionMaxWrites: config.memoryExtractionMaxWrites ?? null,
+    memoryExtractionTelemetryEnabled: config.memoryExtractionTelemetryEnabled ?? true,
+    memoryRetrievalTelemetryEnabled: config.memoryRetrievalTelemetryEnabled ?? true,
+    profileSynthesisEnabled: config.profileSynthesisEnabled ?? true,
+    profileSynthesisRefreshIntervalMs: config.profileSynthesisRefreshIntervalMs ?? null,
+    profileSynthesisCooldownMs: config.profileSynthesisCooldownMs ?? null,
+    profileSynthesisMinWrites: config.profileSynthesisMinWrites ?? null,
+    profileSynthesisMinImportance: config.profileSynthesisMinImportance ?? null,
+    profileSynthesisMinConfidence: config.profileSynthesisMinConfidence ?? null,
+    profileSynthesisMinNovelty: config.profileSynthesisMinNovelty ?? null,
+    profileSynthesisSourceMemoryLimit: config.profileSynthesisSourceMemoryLimit ?? null,
+    profileSynthesisMinSourceMemories: config.profileSynthesisMinSourceMemories ?? null,
     thinkMaxTokens: config.thinkMaxTokens ?? null,
     thinkMaxWallTimeMs: config.thinkMaxWallTimeMs ?? null,
     thinkMaxSubQueries: config.thinkMaxSubQueries ?? null,
@@ -1253,6 +1283,51 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
   if (settings.compactionEmotionalSalienceThresholdPct !== undefined) {
     config.compactionEmotionalSalienceThresholdPct = settings.compactionEmotionalSalienceThresholdPct;
+  }
+  if (settings.memoryExtractionMinImportance !== undefined) {
+    config.memoryExtractionMinImportance = settings.memoryExtractionMinImportance;
+  }
+  if (settings.memoryExtractionMinConfidence !== undefined) {
+    config.memoryExtractionMinConfidence = settings.memoryExtractionMinConfidence;
+  }
+  if (settings.memoryExtractionMinNovelty !== undefined) {
+    config.memoryExtractionMinNovelty = settings.memoryExtractionMinNovelty;
+  }
+  if (settings.memoryExtractionMaxWrites !== undefined) {
+    config.memoryExtractionMaxWrites = settings.memoryExtractionMaxWrites;
+  }
+  if (settings.memoryExtractionTelemetryEnabled !== undefined) {
+    config.memoryExtractionTelemetryEnabled = settings.memoryExtractionTelemetryEnabled;
+  }
+  if (settings.memoryRetrievalTelemetryEnabled !== undefined) {
+    config.memoryRetrievalTelemetryEnabled = settings.memoryRetrievalTelemetryEnabled;
+  }
+  if (settings.profileSynthesisEnabled !== undefined) {
+    config.profileSynthesisEnabled = settings.profileSynthesisEnabled;
+  }
+  if (settings.profileSynthesisRefreshIntervalMs !== undefined) {
+    config.profileSynthesisRefreshIntervalMs = settings.profileSynthesisRefreshIntervalMs;
+  }
+  if (settings.profileSynthesisCooldownMs !== undefined) {
+    config.profileSynthesisCooldownMs = settings.profileSynthesisCooldownMs;
+  }
+  if (settings.profileSynthesisMinWrites !== undefined) {
+    config.profileSynthesisMinWrites = settings.profileSynthesisMinWrites;
+  }
+  if (settings.profileSynthesisMinImportance !== undefined) {
+    config.profileSynthesisMinImportance = settings.profileSynthesisMinImportance;
+  }
+  if (settings.profileSynthesisMinConfidence !== undefined) {
+    config.profileSynthesisMinConfidence = settings.profileSynthesisMinConfidence;
+  }
+  if (settings.profileSynthesisMinNovelty !== undefined) {
+    config.profileSynthesisMinNovelty = settings.profileSynthesisMinNovelty;
+  }
+  if (settings.profileSynthesisSourceMemoryLimit !== undefined) {
+    config.profileSynthesisSourceMemoryLimit = settings.profileSynthesisSourceMemoryLimit;
+  }
+  if (settings.profileSynthesisMinSourceMemories !== undefined) {
+    config.profileSynthesisMinSourceMemories = settings.profileSynthesisMinSourceMemories;
   }
   if (settings.thinkMaxTokens !== undefined) config.thinkMaxTokens = settings.thinkMaxTokens;
   if (settings.thinkMaxWallTimeMs !== undefined) config.thinkMaxWallTimeMs = settings.thinkMaxWallTimeMs;

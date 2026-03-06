@@ -16,6 +16,13 @@
     SettingsContractData,
     SettingsContractField,
   } from '$lib/types';
+  import {
+    SETTINGS_GARDEN_SECTION_FIELDS,
+    SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY,
+    SETTINGS_GARDEN_RAW_EDITOR_KEYS,
+    SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
+    type GardenSettingsRawEditorKey,
+  } from '$lib/settings-garden-contract';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -41,22 +48,6 @@
   ];
 
   const DISABLED_PROVIDER_ID = 'disabled';
-  const RAW_EDITOR_KEYS = ['models', 'skills', 'scheduler', 'trust-policy', 'capabilities'] as const;
-  const RAW_EDITOR_SUBSYSTEM_BY_KEY = {
-    models: 'models',
-    skills: 'skills',
-    scheduler: 'scheduler',
-    'trust-policy': 'trustPolicy',
-    capabilities: 'capabilities',
-  } as const;
-  const RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<RawEditorKey, string> = {
-    settings: 'settings.json',
-    models: 'models.json',
-    skills: 'skills.json',
-    scheduler: 'scheduler.json',
-    'trust-policy': 'trust-policy.json',
-    capabilities: 'capability-tier.json',
-  };
   const ENUM_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
     importProcessingRouteMode: {
       background: 'Background Routing (default)',
@@ -95,7 +86,7 @@
   // ── Dirty tracking ──
   let initialSnapshot = $state('');
   let dirty = $state(false);
-  type RawEditorKey = 'settings' | 'models' | 'skills' | 'scheduler' | 'trust-policy' | 'capabilities';
+  type RawEditorKey = GardenSettingsRawEditorKey;
   let initialRawJsonByKey = $state<Record<RawEditorKey, string>>({
     settings: '',
     models: '',
@@ -277,11 +268,7 @@
   const SECTIONS: SectionDef[] = [
     {
       id: 'models', title: 'Models & Routing', icon: 'M',
-      keys: [
-        'primaryModel', 'primaryProvider', 'primaryMaxTokens',
-        'extractionModel', 'extractionProvider', 'extractionMaxTokens',
-        'defaultContextWindow',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.models,
       summary: () => {
         const slots = catalogSlots.filter(s => s.slotKey && s.model);
         if (slots.length === 0) return 'No models configured';
@@ -290,23 +277,17 @@
     },
     {
       id: 'budget', title: 'Context Budget', icon: 'B',
-      keys: [
-        'sessionHistoryBudgetPct', 'memoryRetrievalBudgetPct',
-        'sessionMessageLimit', 'memoryRetrievalLimit',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.budget,
       summary: () => `Session ${sessionHistoryBudgetPct}%, Memory ${memoryRetrievalBudgetPct}%`,
     },
     {
       id: 'memory', title: 'Memory & Extraction', icon: 'E',
-      keys: [
-        'memoryBudgetPct', 'extractionThresholdPct',
-        'extractionInterval', 'compactionEmotionalSalienceThresholdPct',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.memory,
       summary: () => `Budget ${memoryBudgetPct}%, Extract at ${extractionThresholdPct}%`,
     },
     {
       id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
-      keys: ['compactionThresholdPct', 'maintenanceIntervalMs', 'sessionRestartBehavior'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.sessions,
       summary: () => (
         `Compaction at ${compactionThresholdPct}%, ` +
         `Maintenance ${Math.round(maintenanceIntervalMs / 1000)}s, ` +
@@ -315,54 +296,37 @@
     },
     {
       id: 'extraction-tuning', title: 'Memory Extraction Tuning', icon: 'X',
-      keys: [
-        'memoryExtractionMinImportance', 'memoryExtractionMinConfidence',
-        'memoryExtractionMinNovelty', 'memoryExtractionMaxWrites',
-        'memoryExtractionTelemetryEnabled', 'memoryRetrievalTelemetryEnabled',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS['extraction-tuning'],
       summary: () => `Min importance: ${memoryExtractionMinImportance}, Max writes: ${memoryExtractionMaxWrites}`,
     },
     {
       id: 'profile', title: 'Profile Synthesis', icon: 'P',
-      keys: [
-        'profileSynthesisEnabled', 'profileSynthesisRefreshIntervalMs',
-        'profileSynthesisCooldownMs', 'profileSynthesisMinWrites',
-        'profileSynthesisMinImportance', 'profileSynthesisMinConfidence',
-        'profileSynthesisMinNovelty', 'profileSynthesisSourceMemoryLimit',
-        'profileSynthesisMinSourceMemories',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.profile,
       summary: () => profileSynthesisEnabled ? `Enabled, refresh ${Math.round(profileSynthesisRefreshIntervalMs / 60000)}min` : 'Disabled',
     },
     {
       id: 'think', title: 'Think Tool', icon: 'R',
-      keys: ['thinkMaxTokens', 'thinkMaxWallTimeMs', 'thinkMaxSubQueries'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.think,
       summary: () => `Max tokens: ${thinkMaxTokens.toLocaleString()}, Wall time: ${Math.round(thinkMaxWallTimeMs / 1000)}s`,
     },
     {
       id: 'trust', title: 'Trust & Capabilities', icon: 'T',
-      keys: ['capabilityTier', 'customTokens'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.trust,
       summary: () => `Tier: ${capabilityTier}`,
     },
     {
       id: 'llm', title: 'LLM Retries & Behavior', icon: 'L',
-      keys: ['retryMaxAttempts', 'retryBaseDelayMs'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.llm,
       summary: () => `Max retries: ${retryMaxAttempts}, Base delay: ${retryBaseDelayMs}ms`,
     },
     {
       id: 'import', title: 'Import Processing', icon: 'I',
-      keys: [
-        'importProcessingRouteMode', 'importProcessingStrictPolicy',
-        'importProcessingLocalEndpointUrl', 'importProcessingLocalModel',
-        'openRouterProviderOrder',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.import,
       summary: () => `Route: ${importRouteMode}${importStrictPolicy ? ' (strict)' : ''}`,
     },
     {
       id: 'fetch', title: 'Web Fetch Policy', icon: 'W',
-      keys: [
-        'webFetchAllowHttp', 'webFetchDomainAllowlist',
-        'webFetchAllowInternalNetwork', 'webFetchTlsCaCertPaths',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.fetch,
       summary: () => {
         const parts: string[] = [];
         parts.push(webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only');
@@ -372,25 +336,17 @@
     },
     {
       id: 'voice', title: 'Voice & Speech', icon: 'V',
-      keys: [
-        'ttsProvider', 'voiceId', 'echoTtsUrl', 'echoTtsVoice', 'echoTtsPreset',
-        'sttProvider', 'deepgramModel',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.voice,
       summary: () => `TTS: ${ttsProvider}, STT: ${sttProvider}`,
     },
     {
       id: 'obsidian', title: 'Obsidian Vault', icon: 'O',
-      keys: ['obsidianVaultName', 'obsidianCliPath', 'obsidianAutoPublish', 'obsidianTimeoutMs'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.obsidian,
       summary: () => obsidianVaultName ? `Vault: ${obsidianVaultName}${obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
     },
     {
       id: 'channels', title: 'Channels', icon: 'C',
-      keys: [
-        'discordEnabled', 'discordHeartbeatChannel',
-        'discordTriggerWords', 'discordTriggerReactions',
-        'discordTriggerListenWindowMs',
-        'telegramEnabled', 'telegramAuthorizedUsers',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.channels,
       summary: () => {
         const wordsCount = splitCsv(discordTriggerWords).length;
         const reactionsCount = splitCsv(discordTriggerReactions).length;
@@ -406,7 +362,9 @@
     },
   ];
 
-  const RAW_EDITORS = RAW_EDITOR_KEYS.map((key) => ({ key }));
+  const RAW_EDITORS = SETTINGS_GARDEN_RAW_EDITOR_KEYS
+    .filter((key): key is Exclude<RawEditorKey, 'settings'> => key !== 'settings')
+    .map((key) => ({ key }));
 
   type ModelsEditorConfig = {
     modelCatalog?: Record<string, Record<string, unknown>>;
@@ -519,11 +477,8 @@
   }
 
   function rawEditorOwnerFile(key: RawEditorKey): string {
-    if (key === 'settings') {
-      return subsystemOwnerFile('runtime') ?? RAW_EDITOR_FALLBACK_FILE_BY_KEY.settings;
-    }
-    const subsystemId = RAW_EDITOR_SUBSYSTEM_BY_KEY[key as keyof typeof RAW_EDITOR_SUBSYSTEM_BY_KEY];
-    return subsystemOwnerFile(subsystemId) ?? RAW_EDITOR_FALLBACK_FILE_BY_KEY[key];
+    const subsystemId = SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY[key];
+    return subsystemOwnerFile(subsystemId) ?? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY[key];
   }
 
   function getSource(key: string): SettingSource {
@@ -531,7 +486,7 @@
     const ownerFile = fieldOwnerFile(key);
     if (ownerFile) return ownerFile;
     const config = data.config as Record<string, unknown>;
-    return config[key] !== undefined ? RAW_EDITOR_FALLBACK_FILE_BY_KEY.settings : 'default';
+    return config[key] !== undefined ? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY.settings : 'default';
   }
 
   function fieldEditorType(

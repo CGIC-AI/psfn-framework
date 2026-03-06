@@ -128,12 +128,14 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-y2ac.1` (`backend settings schema endpoints and ownership map by subsystem`) is integrated, with a canonical settings contract module, `/api/admin/settings/schema`, dynamic owner metadata, and admin regressions proving schema exposure for subsystem files and provider enums.
   - `PSFN-y2ac.2` (`Garden schema renderer for common controls`) is integrated, with Garden fetching typed schema metadata and driving advanced-mode common field rendering from backend-declared types/enums/ownership instead of local hardcoded field semantics.
   - `PSFN-y2ac.3` (`bind complex settings blocks to schema ownership`) is integrated, with Garden complex model/scheduler/capability editors using canonical owner-file labels, preserving JSON-for-config / env-for-secrets separation, and exposing capability-tier custom tokens in the structured UI instead of raw-only.
+  - `PSFN-y2ac.4` (`CI guard: reject new settings without schema + UX exposure + owner file`) is integrated, with a shared Garden settings-contract manifest, a fail-closed `verify:settings-contract` guard, backend schema coverage for model object fields, and regression tests that fail on missing Garden exposure or owner drift.
+  - `PSFN-y2ac.5` (`Contract tests: PATCH/GET round-trip lossless by subsystem JSON file`) is integrated, with dedicated subsystem config round-trip tests, admin JSON/legacy endpoint regressions for runtime + subsystem owner payloads, and `AdminSettingsDataService` now reading runtime settings from the canonical JSON owner instead of stale in-memory config.
   - `PSFN-qyrl` plugin-seam epic is closed on `phase-v`.
   - `PSFN-bxvy` config/persistence-topology epic is closed on `phase-v`.
+  - `PSFN-y2ac` settings-governance epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Open `PSFN-y2ac.4` immediately: CI guard enforcing schema + UI exposure + owner-file coverage for settings changes.
-  - Follow `PSFN-y2ac.4` with `PSFN-y2ac.5` round-trip/losslessness coverage across subsystem JSON owners.
-  - Close `PSFN-y2ac` after `.4` and `.5`, then move to `PSFN-x92u.1`.
+  - Open `PSFN-x92u.1` immediately: compositional policy config (tier/channel/purpose flags) with default-OFF gating.
+  - Follow `PSFN-x92u.1` with `PSFN-x92u.2` / `.3` to land the first compositional extraction and retrieval pipelines.
   - Keep `PSFN-eg59` as the residual de-hardcode test-fixture cleanup lane where remaining `Purrsephone` hits are intentional branding/legacy cases versus generic fixture drift.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 
@@ -187,3 +189,5 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-bxvy.5` targeted regressions: `npm test -- --run src/persistence/cutover.test.ts src/runtime.test.ts src/bootstrap/parity.test.ts src/channels/admin/server.test.ts`
 - `PSFN-bxvy.5` migration CLI validation: `npm run migrate:persistence-layout -- --help`
 - `phase-v` build after integrated `PSFN-qyrl.*` / `PSFN-04dt.1` / `PSFN-04dt.5`: `npm run build`
+- `PSFN-y2ac.4` guard validation: `npm run verify:settings-contract`, `npm test -- --run src/config/settings-contract-guard.test.ts src/channels/admin/api-routes.test.ts src/settings.test.ts`, `npm --prefix admin-ui run check`, `npm run garden:build`, and `npm run build`
+- `PSFN-y2ac.5` round-trip validation: `npm test -- --run src/config/subsystem-config.test.ts src/channels/admin/api-routes.test.ts src/channels/admin/server.test.ts src/settings.test.ts`

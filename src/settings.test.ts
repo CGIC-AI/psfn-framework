@@ -775,6 +775,88 @@ describe('settings', () => {
       applySettings(config, loaded);
       expect((config as SubstrateConfig & { ttsProvider?: string }).ttsProvider).toBe('plugin-test');
     });
+
+    it('save → load preserves the runtime owner file without drifting fields across subsystems', () => {
+      const expected = {
+        sessionHistoryBudgetPct: 9,
+        memoryRetrievalBudgetPct: 4,
+        sessionMessageLimit: 42,
+        sessionRestartBehavior: 'new_session' as const,
+        memoryRetrievalLimit: 11,
+        extractionInterval: 6,
+        defaultContextWindow: 196_000,
+        memoryBudgetPct: 24,
+        extractionThresholdPct: 34,
+        compactionThresholdPct: 76,
+        compactionEmotionalSalienceThresholdPct: 83,
+        memoryExtractionMinImportance: 0.35,
+        memoryExtractionMinConfidence: 0.45,
+        memoryExtractionMinNovelty: 0.25,
+        memoryExtractionMaxWrites: 8,
+        memoryExtractionTelemetryEnabled: true,
+        memoryRetrievalTelemetryEnabled: true,
+        profileSynthesisEnabled: true,
+        profileSynthesisRefreshIntervalMs: 600_000,
+        profileSynthesisCooldownMs: 90_000,
+        profileSynthesisMinWrites: 6,
+        profileSynthesisMinImportance: 0.4,
+        profileSynthesisMinConfidence: 0.5,
+        profileSynthesisMinNovelty: 0.3,
+        profileSynthesisSourceMemoryLimit: 18,
+        profileSynthesisMinSourceMemories: 4,
+        thinkMaxTokens: 8_192,
+        thinkMaxWallTimeMs: 45_000,
+        thinkMaxSubQueries: 5,
+        retryMaxAttempts: 4,
+        retryBaseDelayMs: 2_500,
+        openRouterProviderOrder: ['parasail', 'openai'],
+        importProcessingRouteMode: 'local_endpoint' as const,
+        importProcessingStrictPolicy: true,
+        importProcessingLocalEndpointUrl: 'http://127.0.0.1:4000/v1',
+        importProcessingLocalModel: 'llama.cpp/local',
+        webFetchAllowHttp: true,
+        webFetchDomainAllowlist: ['example.com', 'internal.local'],
+        webFetchAllowInternalNetwork: true,
+        webFetchTlsCaCertPaths: ['/tmp/root-ca.pem'],
+        promotedExtendedTools: ['memory.search', 'contacts.lookup'],
+        chatApiBaseUrl: 'https://admin.example.test/api',
+        ttsProvider: 'disabled' as const,
+        voiceId: '',
+        echoTtsUrl: 'http://127.0.0.1:8001/v1/audio/speech',
+        echoTtsVoice: 'allison',
+        echoTtsPreset: 'wide',
+        sttProvider: 'disabled' as const,
+        deepgramModel: '',
+        discordEnabled: true,
+        discordHeartbeatChannel: '1234567890',
+        discordTriggerWords: 'pixie, hello companion',
+        discordTriggerReactions: '👆, 🔥',
+        discordTriggerListenWindowMs: 180_000,
+        telegramEnabled: true,
+        telegramAuthorizedUsers: '123, 456',
+        obsidianVaultName: 'companion',
+        obsidianCliPath: '/usr/local/bin/obsidian',
+        obsidianAutoPublish: true,
+        obsidianTimeoutMs: 12_000,
+        moaEnabled: true,
+        moaReferenceModels: ['openai/gpt-4.1-mini', 'moonshotai/kimi-k2.5'],
+        moaAggregatorModel: 'openai/gpt-4.1-mini',
+        moaMaxRounds: 3,
+        moaMaxTokensPerRound: 2_048,
+        moaTimeoutMs: 30_000,
+      };
+
+      saveSettings(tempDir, expected);
+
+      const persisted = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf-8'));
+      const loaded = loadSettings(tempDir);
+
+      expect(persisted).toEqual(expected);
+      expect(loaded).toEqual(expected);
+      expect(persisted.primaryModel).toBeUndefined();
+      expect(persisted.maintenanceIntervalMs).toBeUndefined();
+      expect(persisted.capabilityTier).toBeUndefined();
+    });
   });
 
   describe('voice settings normalization', () => {

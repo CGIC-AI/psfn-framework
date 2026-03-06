@@ -113,6 +113,7 @@ import { contextMessagesToPiMessages } from '../llm/message-conversion.js';
 import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
 import { buildSnapshotVersionPointer } from '../turns/snapshot.js';
+import type { ContextManifestMemorySeed } from '../session/context-manifest.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -1691,8 +1692,30 @@ export class SubstrateAgent {
     const channelVisibility = classifyChannel(message.channelId, channelMeta);
     const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
     let retrievalProvenanceRefs: string[] = [];
+    let memoryManifestSeed: ContextManifestMemorySeed | undefined;
     const unsubscribeRetrieval = this.eventBus.on('memory.retrieval', (telemetry) => {
       if (telemetry.channelId !== message.channelId) return;
+      if (telemetry.requestId && telemetry.requestId !== requestId) return;
+      memoryManifestSeed = {
+        ...(telemetry.reason ? { reason: telemetry.reason } : {}),
+        ...(telemetry.retrievalSource ? { retrievalSource: telemetry.retrievalSource } : {}),
+        ...(telemetry.candidateCount !== undefined ? { candidateCount: telemetry.candidateCount } : {}),
+        ...(telemetry.policyAllowedCount !== undefined ? { policyAllowedCount: telemetry.policyAllowedCount } : {}),
+        ...(telemetry.rankedCount !== undefined ? { rankedCount: telemetry.rankedCount } : {}),
+        ...(telemetry.returnedCount !== undefined ? { returnedCount: telemetry.returnedCount } : {}),
+        ...(telemetry.retrievalLimit !== undefined ? { retrievalLimit: telemetry.retrievalLimit } : {}),
+        ...(telemetry.retrievalBudgetPct !== undefined ? { retrievalBudgetPct: telemetry.retrievalBudgetPct } : {}),
+        ...(telemetry.retrievalTokenBudget !== undefined ? { retrievalTokenBudget: telemetry.retrievalTokenBudget } : {}),
+        ...(telemetry.retrievalLimitMode ? { retrievalLimitMode: telemetry.retrievalLimitMode } : {}),
+        ...(telemetry.sensitivityRejectedCount !== undefined
+          ? { sensitivityRejectedCount: telemetry.sensitivityRejectedCount }
+          : {}),
+        ...(telemetry.policyRejectedCount !== undefined ? { policyRejectedCount: telemetry.policyRejectedCount } : {}),
+        ...(telemetry.scoreRejectedCount !== undefined ? { scoreRejectedCount: telemetry.scoreRejectedCount } : {}),
+        ...(telemetry.budgetCappedCount !== undefined ? { budgetCappedCount: telemetry.budgetCappedCount } : {}),
+        ...(telemetry.selectedTypes ? { selectedTypes: { ...telemetry.selectedTypes } } : {}),
+        ...(telemetry.compositionalMode ? { compositionalMode: telemetry.compositionalMode } : {}),
+      };
       const refs = telemetry.provenanceRefs ?? [];
       if (refs.length === 0) return;
       retrievalProvenanceRefs = [...new Set(refs.map(ref => ref.trim()).filter(Boolean))];
@@ -1752,55 +1775,61 @@ export class SubstrateAgent {
         capturedAt: Date.now(),
         trustLevel,
         ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
-        ...(promptSnapshot ? { prompt: promptSnapshot } : {}),
+        prompt: promptSnapshot,
         ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
         ...(memorySnapshot ? { memory: memorySnapshot } : {}),
       };
 
       // Retrieve relevant memories (empty string if no memory provider)
       const memoryStageStart = Date.now();
-      const memoriesBlock = memoryProvider
-        ? memorySnapshot
-          ? await memoryProvider.retrieve(
-            message.content,
-            message.channelId,
-            trustLevel,
-            channelMeta,
-            authorContext.canonicalContactKey,
-            memorySnapshot,
-          )
-          : await memoryProvider.retrieve(
-            message.content,
-            message.channelId,
-            trustLevel,
-            channelMeta,
-            authorContext.canonicalContactKey,
-          )
-        : '';
-      let proactiveRecallBlock = '';
-      if (memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function') {
-        try {
-          proactiveRecallBlock = memorySnapshot
-            ? await memoryProvider.retrieveProactiveRecall(
-              message.channelId,
-              trustLevel,
-              channelMeta,
-              authorContext.canonicalContactKey,
-              memorySnapshot,
-            )
-            : await memoryProvider.retrieveProactiveRecall(
-              message.channelId,
-              trustLevel,
-              channelMeta,
-              authorContext.canonicalContactKey,
-            );
-        } catch (error) {
-          log.debug('Proactive recall skipped due to provider error', {
-            channelId: message.channelId,
-            error: toErrorMessage(error),
-          });
-        }
-      }
+      const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
+        this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.memory'),
+        async () => {
+          const memoriesBlock = memoryProvider
+            ? memorySnapshot
+              ? await memoryProvider.retrieve(
+                message.content,
+                message.channelId,
+                trustLevel,
+                channelMeta,
+                authorContext.canonicalContactKey,
+                memorySnapshot,
+              )
+              : await memoryProvider.retrieve(
+                message.content,
+                message.channelId,
+                trustLevel,
+                channelMeta,
+                authorContext.canonicalContactKey,
+              )
+            : '';
+          let proactiveRecallBlock = '';
+          if (memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function') {
+            try {
+              proactiveRecallBlock = memorySnapshot
+                ? await memoryProvider.retrieveProactiveRecall(
+                  message.channelId,
+                  trustLevel,
+                  channelMeta,
+                  authorContext.canonicalContactKey,
+                  memorySnapshot,
+                )
+                : await memoryProvider.retrieveProactiveRecall(
+                  message.channelId,
+                  trustLevel,
+                  channelMeta,
+                  authorContext.canonicalContactKey,
+                );
+            } catch (error) {
+              log.debug('Proactive recall skipped due to provider error', {
+                channelId: message.channelId,
+                error: toErrorMessage(error),
+              });
+            }
+          }
+          return { memoriesBlock, proactiveRecallBlock };
+        },
+      );
       const memoryContextBlock = [memoriesBlock, proactiveRecallBlock]
         .map(section => section.trim())
         .filter(section => section.length > 0)
@@ -1892,6 +1921,7 @@ export class SubstrateAgent {
           channelMeta,
           authorContext.continuityFallbackKeys,
           turnSnapshot.sessionContext,
+          memoryManifestSeed,
         ),
       );
       this.emitTurnStage(message, startTime, turnId, requestId, 'context', turnCallType, {

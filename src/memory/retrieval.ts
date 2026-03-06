@@ -26,6 +26,7 @@ import { createComponentLogger } from '../logger.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
+import { getRequestContext } from '../llm/request-context.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import {
   buildSnapshotVersionPointer,
@@ -134,6 +135,8 @@ interface RetrievalTelemetry {
   bottomSimilarity?: number;
   topScore?: number;
   bottomScore?: number;
+  budgetCappedCount?: number;
+  selectedTypes?: Record<string, number>;
   compositionalMode?: 'disabled_policy' | 'llm_unavailable' | 'insufficient_candidates' | 'malformed_or_failed' | 'applied';
   compositionalCandidateCount?: number;
   compositionalEvaluationBatchCount?: number;
@@ -592,6 +595,10 @@ export class MemoryRetriever implements MemoryProvider {
         : selectWithinTokenBudget(ranked, budget.tokenBudget);
 
       telemetry.returnedCount = selected.length;
+      telemetry.budgetCappedCount = budget.mode === 'hard_limit'
+        ? Math.max(0, scored.length - selected.length)
+        : Math.max(0, ranked.length - selected.length);
+      telemetry.selectedTypes = countSelectedMemoryTypes(selected);
       diagnostics.selectedCount = selected.length;
       diagnostics.topSelected = selected.slice(0, 3).map((item) => ({
         id: item.memory.id,
@@ -959,17 +966,28 @@ export class MemoryRetriever implements MemoryProvider {
     if (!this.eventBus) return;
 
     try {
-      if (!this.isTelemetryEnabled()) {
-        await this.eventBus.emit('memory.retrieval', {
-          channelId: telemetry.channelId,
-          count: telemetry.count,
-        });
-        return;
-      }
-
+      const requestContext = getRequestContext();
+      const correlation = requestContext
+        ? {
+          ...(requestContext.turnId ? { turnId: requestContext.turnId } : {}),
+          ...(requestContext.requestId ? { requestId: requestContext.requestId } : {}),
+          callType: requestContext.callType ?? 'memory',
+          purpose: 'memory.retrieval',
+          originType: requestContext.originType ?? requestContext.callType ?? 'memory',
+          originStage: requestContext.originStage ?? 'memory.retrieval',
+          ...(requestContext.toolName ? { toolName: requestContext.toolName } : {}),
+          ...(requestContext.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
+        }
+        : {};
       await this.eventBus.emit(
         'memory.retrieval',
-        telemetry as { channelId: string; count: number },
+        {
+          ...telemetry,
+          candidates: telemetry.candidateCount,
+          ranked: telemetry.rankedCount,
+          returned: telemetry.returnedCount,
+          ...correlation,
+        } as { channelId: string; count: number },
       );
     } catch (err) {
       log.error('Failed to emit retrieval telemetry', {
@@ -978,6 +996,14 @@ export class MemoryRetriever implements MemoryProvider {
       });
     }
   }
+}
+
+function countSelectedMemoryTypes(scored: ScoredMemory[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of scored) {
+    counts[item.memory.type] = (counts[item.memory.type] ?? 0) + 1;
+  }
+  return counts;
 }
 
 function collectSelectedProvenanceRefs(

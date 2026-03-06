@@ -60,6 +60,7 @@ import {
   normalizeToolObservation,
   type ToolObservationInput,
 } from './tool-observation.js';
+import type { ContextManifestMemorySeed } from './context-manifest.js';
 
 export type {
   ImportedHistoryBootstrapChunk,
@@ -366,6 +367,7 @@ export class SessionManager {
     channelMeta?: ChannelMeta,
     continuityFallbackUserIds: string[] = [],
     turnSnapshot?: TurnSessionContextSnapshot,
+    memoryManifestSeed?: ContextManifestMemorySeed,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return buildSessionContext({
@@ -384,6 +386,7 @@ export class SessionManager {
       continuityStore: this.continuityStore,
       characterName: this.characterName,
       turnSnapshot,
+      memoryManifestSeed,
     });
   }
 

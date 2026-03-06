@@ -38,13 +38,39 @@ describe('wireSessionToolsRuntime', () => {
       getSessionActivity: vi.fn(() => null),
       setActiveContextSession: vi.fn(),
       getActiveContextSession: vi.fn(() => null),
+      startFocusSession: vi.fn((channelId: string, scope: string) => ({
+        focusId: 'focus-test',
+        channelId,
+        scope,
+        startedAt: 1_700_000_000_000,
+        startEntryId: 0,
+      })),
+      getFocusSessionContext: vi.fn(() => null),
+      completeFocusSession: vi.fn(),
+    } as any;
+    const llmProvider = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => ({
+        content: 'focus summary',
+        toolCalls: [],
+        model: 'mock-context',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
     } as any;
 
-    wireSessionToolsRuntime(target, sessionManager, tempDir);
+    wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls).toHaveLength(3);
-    expect(calls.map(([tool]) => tool.name).sort()).toEqual(['session_list', 'session_new', 'session_resume']);
+    expect(calls).toHaveLength(5);
+    expect(calls.map(([tool]) => tool.name).sort()).toEqual([
+      'complete_focus',
+      'session_list',
+      'session_new',
+      'session_resume',
+      'start_focus',
+    ]);
     expect(calls.every(([, category]) => category === 'extended')).toBe(true);
 
     const sessionNewTool = calls.find(([tool]) => tool.name === 'session_new')?.[0] as {

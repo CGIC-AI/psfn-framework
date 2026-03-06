@@ -81,8 +81,45 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] [Restart] $*"
 }
 
+normalize_relative_path() {
+  local path="$1"
+  while [[ "$path" == ./* ]]; do
+    path="${path#./}"
+  done
+  printf '%s' "$path"
+}
+
+validate_mode_guards() {
+  local pid_path_rel
+  pid_path_rel="$(normalize_relative_path "$PID_FILE")"
+
+  case "$RUNTIME_MODE" in
+    production)
+      if [[ "$pid_path_rel" == data/* || "$pid_path_rel" == workspace/* ]]; then
+        echo "Production mode cannot use continuous PID path '$PID_FILE'." >&2
+        exit 1
+      fi
+      if [[ "$START_CMD" != *"PSFN_RUNTIME_LAYOUT_MODE=production"* ]]; then
+        echo "Production mode restart requires start_command to include PSFN_RUNTIME_LAYOUT_MODE=production." >&2
+        exit 1
+      fi
+      ;;
+    continuous)
+      if [[ "$pid_path_rel" == runtime/production/* ]]; then
+        echo "Continuous mode cannot use production PID path '$PID_FILE'." >&2
+        exit 1
+      fi
+      if [[ "$START_CMD" == *"PSFN_RUNTIME_LAYOUT_MODE=production"* ]]; then
+        echo "Continuous mode restart cannot use a production layout start command." >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
 log "Runtime mode: $RUNTIME_MODE"
 log "PID file: $PID_FILE"
+validate_mode_guards
 
 # Find the process
 if [ -f "$PID_FILE" ]; then

@@ -48,6 +48,14 @@ import {
   resolveLegacyValuesJournalPath,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
+import {
+  exactPath,
+  prefixedParamPath,
+  wrappedParamPath,
+  type RouteMatcher,
+  type RouteParams,
+} from './route-matchers.js';
+import { parseRequestUrl, resolveRequestOrigin } from './request-url.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -111,9 +119,6 @@ const LEGACY_REDIRECT_PREFIXES = [
   '/prompts/',
 ];
 
-type RouteParams = Record<string, string>;
-type RouteMatcher = (path: string) => RouteParams | null;
-
 interface AdminRoute {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
@@ -129,33 +134,6 @@ interface StaticAsset {
 interface ModuleAssetDescriptor {
   filePath: string;
   contentType: string;
-}
-
-function exactPath(expected: string): RouteMatcher {
-  return (path) => (path === expected ? {} : null);
-}
-
-function prefixedParamPath(
-  prefix: string,
-  paramName: string,
-  options?: { exclude?: (path: string) => boolean },
-): RouteMatcher {
-  return (path) => {
-    if (!path.startsWith(prefix)) return null;
-    if (options?.exclude?.(path)) return null;
-    const raw = path.slice(prefix.length);
-    if (!raw) return null;
-    return { [paramName]: decodeURIComponent(raw) };
-  };
-}
-
-function wrappedParamPath(prefix: string, suffix: string, paramName: string): RouteMatcher {
-  return (path) => {
-    if (!path.startsWith(prefix) || !path.endsWith(suffix)) return null;
-    const raw = path.slice(prefix.length, path.length - suffix.length);
-    if (!raw) return null;
-    return { [paramName]: decodeURIComponent(raw) };
-  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -405,7 +383,7 @@ export class AdminServer implements Lifecycle {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    const url = parseRequestUrl(req);
     const requestPath = url.pathname;
     const {
       path: routedPath,
@@ -790,7 +768,7 @@ export class AdminServer implements Lifecycle {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    const url = parseRequestUrl(req);
     if (url.pathname !== '/api/admin/events') {
       socket.write('HTTP/1.1 404 Not Found\\r\\n\\r\\n');
       socket.destroy();
@@ -936,7 +914,7 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/memory'),
         handle: (req, res) => {
-          const url = new URL(req.url ?? '/memory', `http://${req.headers.host ?? 'localhost'}`);
+          const url = parseRequestUrl(req, '/memory');
           this.sendHtml(res, this.handlers.domains.memory.memoryList(url.searchParams));
         },
       },
@@ -1039,7 +1017,7 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/events'),
         handle: (req, res) => {
-          const url = new URL(req.url ?? '/events', `http://${req.headers.host ?? 'localhost'}`);
+          const url = parseRequestUrl(req, '/events');
           this.sendHtml(res, this.handlers.domains.events.eventsPageHtml(url.searchParams));
         },
       },
@@ -1049,7 +1027,7 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/api/memory/list'),
         handle: (req, res) => {
-          const url = new URL(req.url ?? '/api/memory/list', `http://${req.headers.host ?? 'localhost'}`);
+          const url = parseRequestUrl(req, '/api/memory/list');
           this.sendFragment(res, this.handlers.domains.memory.memoryListFragment(url.searchParams));
         },
       },
@@ -1086,7 +1064,7 @@ export class AdminServer implements Lifecycle {
         handle: (req, res) => sendJson(
           res,
           200,
-          this.handlers.domains.chat.chatBootstrap(this.resolveRequestOrigin(req)),
+          this.handlers.domains.chat.chatBootstrap(resolveRequestOrigin(req)),
         ),
       },
       {
@@ -1095,14 +1073,14 @@ export class AdminServer implements Lifecycle {
         handle: (req, res) => sendJson(
           res,
           200,
-          this.handlers.domains.chat.chatModelRoomBootstrap(this.resolveRequestOrigin(req)),
+          this.handlers.domains.chat.chatModelRoomBootstrap(resolveRequestOrigin(req)),
         ),
       },
       {
         method: 'GET',
         match: exactPath('/api/chat/events/stream'),
         handle: (req, res) => {
-          const url = new URL(req.url ?? '/api/chat/events/stream', `http://${req.headers.host ?? 'localhost'}`);
+          const url = parseRequestUrl(req, '/api/chat/events/stream');
           const channelId = url.searchParams.get('channelId') ?? undefined;
           const cleanup = this.handlers.domains.chat.setupChatDebugSSE(res, { channelId });
           req.on('close', cleanup);
@@ -1117,7 +1095,7 @@ export class AdminServer implements Lifecycle {
               const payload = this.handlers.domains.chat.updateChatBootstrap(
                 body,
                 req.headers['content-type'],
-                this.resolveRequestOrigin(req),
+                resolveRequestOrigin(req),
               );
               sendJson(res, 200, payload);
             } catch (error) {
@@ -1159,7 +1137,7 @@ export class AdminServer implements Lifecycle {
         method: 'GET',
         match: exactPath('/api/contacts/mutations'),
         handle: (req, res) => {
-          const url = new URL(req.url ?? '/api/contacts/mutations', `http://${req.headers.host ?? 'localhost'}`);
+          const url = parseRequestUrl(req, '/api/contacts/mutations');
           this.sendFragment(res, this.handlers.domains.contacts.contactMutationAuditFragment(url.searchParams));
         },
       },
@@ -1453,28 +1431,6 @@ export class AdminServer implements Lifecycle {
       },
       (err) => this.send500('Request body read error', err, res),
     );
-  }
-
-  private resolveRequestOrigin(req: IncomingMessage): string | undefined {
-    const forwardedHost = req.headers['x-forwarded-host'];
-    const rawHost = (
-      Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost
-    ) ?? req.headers.host;
-    const host = rawHost?.split(',')[0]?.trim();
-    if (!host) {
-      return undefined;
-    }
-
-    const forwardedProto = req.headers['x-forwarded-proto'];
-    const rawProto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
-    const protoToken = rawProto?.split(',')[0]?.trim().toLowerCase();
-    const protocol = protoToken === 'https' ? 'https' : 'http';
-
-    try {
-      return new URL(`${protocol}://${host}`).origin;
-    } catch {
-      return undefined;
-    }
   }
 
   private send500(context: string, err: unknown, res: ServerResponse): void {

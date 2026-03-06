@@ -126,7 +126,6 @@ import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,
-  type EligibilityDecision,
 } from './capabilities/eligibility.js';
 import { REPO_ALLOWED_PATHS } from './security/policy-constants.js';
 import {
@@ -159,11 +158,18 @@ import {
   resolveRuntimeVoiceSttProvider,
 } from './runtime/bootstrap-helpers.js';
 import {
+  isExplicitTrue,
+  parseCommaSeparatedEnv,
+  parseExtractionDrainTimeoutMs,
+} from './runtime/env-parsing.js';
+import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
   startChannelAdapters,
   stopChannelAdapters,
 } from './runtime/channel-lifecycle.js';
+import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
+import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
 import {
   createApiServerChannelAdapterFactoryEntry,
   createDiscordChannelAdapterFactoryEntry,
@@ -180,35 +186,6 @@ export {
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
-
-function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
-  eventBus.emit('capability.eligibility', {
-    operationKind: decision.operation.kind,
-    operationRef: JSON.stringify(decision.operation),
-    allowed: decision.allowed,
-    reasonCode: decision.reasonCode,
-    tier: decision.tier,
-    requiredTokens: decision.requiredTokens,
-    missingTokens: decision.missingTokens,
-    ...(decision.minimumTier ? { minimumTier: decision.minimumTier } : {}),
-    timestamp: Date.now(),
-  }).catch((error) => {
-    log.warn('Failed to emit capability eligibility telemetry', { error: String(error) });
-  });
-}
-
-function isExplicitTrue(value: string | undefined): boolean {
-  return value?.trim().toLowerCase() === 'true';
-}
-
-function parseCommaSeparatedEnv(value: string | undefined): string[] {
-  if (!value) return [];
-  const entries = value
-    .split(',')
-    .map(entry => entry.trim())
-    .filter(Boolean);
-  return [...new Set(entries)];
-}
 
 export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;
@@ -257,16 +234,6 @@ export class SubstrateRuntime implements Lifecycle {
 
   private async stopChannels(): Promise<void> {
     await stopChannelAdapters(this.channelRegistry);
-  }
-
-  private resolveExtractionDrainTimeoutMs(): number {
-    const raw = process.env.EXTRACTION_DRAIN_TIMEOUT_MS;
-    if (!raw) return DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS;
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS;
-    }
-    return parsed;
   }
 
   private seedCrashRecoveryRetryBacklog(candidates: CrashRecoveryExtractionCandidate[]): void {
@@ -520,7 +487,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.config.capabilityTier = this.capabilityRuntime.getTier();
     const eligibilityGate = createEligibilityGate(
       () => this.capabilityRuntime,
-      (decision) => emitEligibilityDecision(this.eventBus, decision),
+      (decision) => emitEligibilityDecisionTelemetry(this.eventBus, decision, log),
     );
 
     // Open database
@@ -1369,7 +1336,10 @@ export class SubstrateRuntime implements Lifecycle {
     });
     await this.runShutdownStep('stop scheduler', () => this.scheduler.stop());
 
-    const timeoutMs = this.resolveExtractionDrainTimeoutMs();
+    const timeoutMs = parseExtractionDrainTimeoutMs(
+      process.env,
+      DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+    );
     await this.runShutdownStep('drain memory extractor', async () => {
       const drained = await this.memoryExtractor.stop({ timeoutMs });
       if (drained === false) {
@@ -1409,35 +1379,6 @@ export class SubstrateRuntime implements Lifecycle {
     action: () => void | Promise<void>,
     maxAttempts = 2,
   ): Promise<void> {
-    const attempts = Math.max(1, Math.floor(maxAttempts));
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      try {
-        await action();
-        if (attempt > 1) {
-          log.info('Shutdown step recovered after retry', {
-            step,
-            attempt,
-            maxAttempts: attempts,
-          });
-        }
-        return;
-      } catch (error) {
-        if (attempt < attempts) {
-          log.warn('Shutdown step failed; retrying', {
-            step,
-            attempt,
-            maxAttempts: attempts,
-            error: String(error),
-          });
-          continue;
-        }
-        log.error('Shutdown step failed; continuing shutdown', {
-          step,
-          attempt,
-          maxAttempts: attempts,
-          error: String(error),
-        });
-      }
-    }
+    await runShutdownStepWithRetry(step, action, log, maxAttempts);
   }
 }

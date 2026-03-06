@@ -1,8 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { parseJsonBody, sendJson } from '../http/primitives.js';
+import { sendJson } from '../http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
 import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';
+import { parseAdminJsonBody } from './request-body.js';
+import { parseRequestUrl } from './request-url.js';
+import {
+  exactPath,
+  paramWithSuffix,
+  prefixedParamPath,
+  type RouteMatcher,
+  type RouteParams,
+} from './route-matchers.js';
 import type {
   AdminAdaptiveToolsService,
   AdminContactsService,
@@ -90,43 +99,10 @@ export interface AdminValuesJournalApi {
   list(options?: { limit?: number }): ValuesJournalEntry[];
 }
 
-type RouteParams = Record<string, string>;
-type RouteMatcher = (path: string) => RouteParams | null;
-
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
   handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
-}
-
-function exactPath(expected: string): RouteMatcher {
-  return (path) => (path === expected ? {} : null);
-}
-
-function prefixedParamPath(prefix: string, paramName: string): RouteMatcher {
-  return (path) => {
-    if (!path.startsWith(prefix)) return null;
-    const raw = path.slice(prefix.length);
-    if (!raw) return null;
-    return { [paramName]: decodeURIComponent(raw) };
-  };
-}
-
-function paramWithSuffix(prefix: string, paramName: string, suffix: string): RouteMatcher {
-  return (path) => {
-    if (!path.startsWith(prefix) || !path.endsWith(suffix)) return null;
-    const raw = path.slice(prefix.length, path.length - suffix.length);
-    if (!raw) return null;
-    return { [paramName]: decodeURIComponent(raw) };
-  };
-}
-
-function parseAdminJsonBody(body: string): { ok: true; value: unknown } | { ok: false; error: string } {
-  const trimmed = body.trim();
-  if (!trimmed) return { ok: true, value: {} };
-  const result = parseJsonBody(trimmed);
-  if (!result.ok) return { ok: false, error: 'Invalid JSON payload' };
-  return { ok: true, value: result.value };
 }
 
 function escapeHtmlPayloadText(value: string): string {
@@ -291,7 +267,7 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/memory'),
       handle: (req, res) => {
-        const url = new URL(req.url ?? '/api/admin/memory', `http://${req.headers.host ?? 'localhost'}`);
+        const url = parseRequestUrl(req, '/api/admin/memory');
         const typeFilter = toMemoryType(url.searchParams.get('type'));
         if (url.searchParams.get('type') && !typeFilter) {
           sendJson(res, 400, { error: 'Invalid memory type filter' });
@@ -327,7 +303,7 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/memory/search'),
       handle: (req, res) => {
-        const url = new URL(req.url ?? '/api/admin/memory/search', `http://${req.headers.host ?? 'localhost'}`);
+        const url = parseRequestUrl(req, '/api/admin/memory/search');
         const query = url.searchParams.get('q')?.trim() ?? '';
         if (!query) {
           sendJson(res, 400, { error: 'Missing q query parameter' });
@@ -521,7 +497,7 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/contacts'),
       handle: (req, res) => {
-        const url = new URL(req.url ?? '/api/admin/contacts', `http://${req.headers.host ?? 'localhost'}`);
+        const url = parseRequestUrl(req, '/api/admin/contacts');
         const data = contactsService.listContacts(url.searchParams);
         sendJson(res, 200, {
           ...data,

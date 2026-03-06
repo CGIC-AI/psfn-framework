@@ -1182,6 +1182,7 @@ describe('ApiServer', () => {
       expect(res.headers['access-control-allow-origin']).toBe('https://console.example');
       expect(res.headers['access-control-allow-methods']).toContain('POST');
       expect(res.headers['access-control-allow-headers']).toContain('X-Session-ID');
+      expect(res.headers.vary).toContain('Origin');
     });
   });
 

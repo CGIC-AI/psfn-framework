@@ -7,7 +7,6 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './types.js';
 import type {
-  SubstrateConfig,
   SubstrateMessage,
 } from './types.js';
 import { createComponentLogger } from './logger.js';
@@ -113,7 +112,6 @@ import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,
-  type EligibilityDecision,
 } from './capabilities/eligibility.js';
 import {
   createSafeguardAuditTrail,
@@ -156,7 +154,11 @@ import {
   assertPersistenceCutoverReady,
   buildPersistenceCutoverOptionsFromConfig,
 } from './persistence/cutover.js';
+import { installPromotedToolsPersistenceHook } from './runtime/bootstrap-helpers.js';
 import { wireContextFeedbackRuntime } from './context-feedback/runtime.js';
+import { isExplicitTrue, parseCommaSeparatedEnv } from './runtime/env-parsing.js';
+import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
+import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -167,84 +169,12 @@ const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
 const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
 
-function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
-  eventBus.emit('capability.eligibility', {
-    operationKind: decision.operation.kind,
-    operationRef: JSON.stringify(decision.operation),
-    allowed: decision.allowed,
-    reasonCode: decision.reasonCode,
-    tier: decision.tier,
-    requiredTokens: decision.requiredTokens,
-    missingTokens: decision.missingTokens,
-    ...(decision.minimumTier ? { minimumTier: decision.minimumTier } : {}),
-    timestamp: Date.now(),
-  }).catch((error) => {
-    log.warn('Failed to emit capability eligibility telemetry', { error: String(error) });
-  });
-}
-
-function isExplicitTrue(value: string | undefined): boolean {
-  return value?.trim().toLowerCase() === 'true';
-}
-
-function parseCommaSeparatedEnv(value: string | undefined): string[] {
-  if (!value) return [];
-  const entries = value
-    .split(',')
-    .map(entry => entry.trim())
-    .filter(Boolean);
-  return [...new Set(entries)];
-}
-
 async function runShutdownStep(
   step: string,
   action: () => void | Promise<void>,
   maxAttempts = 2,
 ): Promise<void> {
-  const attempts = Math.max(1, Math.floor(maxAttempts));
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      await action();
-      if (attempt > 1) {
-        log.info('Shutdown step recovered after retry', {
-          step,
-          attempt,
-          maxAttempts: attempts,
-        });
-      }
-      return;
-    } catch (error) {
-      if (attempt < attempts) {
-        log.warn('Shutdown step failed; retrying', {
-          step,
-          attempt,
-          maxAttempts: attempts,
-          error: String(error),
-        });
-        continue;
-      }
-      log.error('Shutdown step failed; continuing shutdown', {
-        step,
-        attempt,
-        maxAttempts: attempts,
-        error: String(error),
-      });
-    }
-  }
-}
-
-function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
-  const existingHooks = config.runtimeHooks ?? {};
-  config.runtimeHooks = {
-    ...existingHooks,
-    persistPromotedExtendedTools: (toolNames) => {
-      const current = loadSettings(config.dataDir);
-      saveSettings(config.dataDir, {
-        ...current,
-        promotedExtendedTools: [...toolNames],
-      });
-    },
-  };
+  await runShutdownStepWithRetry(step, action, log, maxAttempts);
 }
 
 async function enforceNetworkIsolationOnStartup(): Promise<void> {
@@ -404,7 +334,7 @@ async function main(): Promise<void> {
   config.capabilityTier = capabilityRuntime.getTier();
   const eligibilityGate = createEligibilityGate(
     () => capabilityRuntime,
-    (decision) => emitEligibilityDecision(eventBus, decision),
+    (decision) => emitEligibilityDecisionTelemetry(eventBus, decision, log),
   );
   const lifecycleRuntimeContract = resolveRuntimeModeContract({
     entrypoint: RUNTIME_MODE.GATEWAY_AGENT,

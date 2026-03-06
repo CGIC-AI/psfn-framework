@@ -617,6 +617,35 @@ describe('runRLMLoop', () => {
     expect(autonomous.iterations).toBe(15);
   });
 
+  it('clamps configured wall-time budget to active tier wall-time ceiling', async () => {
+    const llm: LLMProvider = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => {
+        await new Promise(resolve => setTimeout(resolve, 45));
+        return mockResponse('FINAL("too late")');
+      }),
+    };
+
+    const config = makeConfig({ maxWallTimeMs: 500_000 });
+    config.tierBudgets = {
+      ...config.tierBudgets,
+      nursery: {
+        ...config.tierBudgets.nursery,
+        maxWallTimeMs: 25,
+      },
+    };
+
+    const result = await runRLMLoop('tier wall-time clamp', makeDeps(llm, {
+      config,
+      getCapabilityTier: () => 'nursery',
+    }));
+
+    expect(result.truncated).toBe(true);
+    expect(result.iterations).toBe(0);
+    expect(result.budgetStatus.exceeded).toBe('wall time');
+    expect(result.answer).toBe('[No response generated]');
+  });
+
   it('enforces invocation rate limits across think calls', async () => {
     const llm = sequentialLLM(['FINAL("first")', 'FINAL("second")']);
     const cfg = makeConfig();

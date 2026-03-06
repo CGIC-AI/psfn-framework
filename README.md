@@ -175,8 +175,12 @@ API_KEY=your-key       # Required unless ALLOW_INSECURE_LOCAL_API=true
 ALLOW_INSECURE_LOCAL_API=false  # Explicitly allow keyless local-only mode
 API_CORS_ALLOWLIST=http://127.0.0.1:3001  # Comma-separated browser origin allowlist
 API_MODEL_NAME=psfn
-API_REQUEST_TIMEOUT_MS=90000
+API_REQUEST_TIMEOUT_MS=90000  # Keep above effective think wall-time budget
 ```
+
+Effective think wall-time is `min(settings.json thinkMaxWallTimeMs, tier cap)`.
+Default alignment is: `think=30000ms` (nursery cap), `API_REQUEST_TIMEOUT_MS=90000`,
+`proxy/litellm_config.yaml request_timeout=120s`.
 
 **Voice (Discord):**
 ```bash

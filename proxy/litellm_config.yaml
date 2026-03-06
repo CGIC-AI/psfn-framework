@@ -36,7 +36,7 @@ model_list:
 litellm_settings:
   # Drop any requests that include real API keys in message content
   drop_params: true
-  # Request timeout
+  # Request timeout (seconds). Keep above API timeout / think budget ceilings.
   request_timeout: 120
   # Enable streaming
   stream: true

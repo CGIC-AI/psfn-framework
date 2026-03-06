@@ -154,6 +154,28 @@ export interface ShellExecParams {
   maxOutputChars?: number;
 }
 
+export type VaultWriteMode = 'create' | 'append' | 'prepend';
+
+export interface VaultWriteParams extends GatewayCorrelationParams {
+  name: string;
+  content: string;
+  folder?: string;
+  mode?: VaultWriteMode;
+}
+
+export interface VaultReadParams extends GatewayCorrelationParams {
+  name: string;
+}
+
+export interface VaultSearchParams extends GatewayCorrelationParams {
+  query: string;
+  limit?: number;
+}
+
+export interface VaultDailyParams extends GatewayCorrelationParams {
+  content?: string;
+}
+
 export interface ApprovalRequestParams {
   action: string;
   scope: string;
@@ -322,6 +344,28 @@ export interface ShellExecResult {
   durationMs: number;
 }
 
+export interface VaultWriteResult {
+  name: string;
+  folder?: string;
+  mode: VaultWriteMode;
+}
+
+export interface VaultReadResult {
+  name: string;
+  content: string;
+}
+
+export interface VaultSearchResult {
+  query: string;
+  results: Array<{ path: string; snippet?: string }>;
+}
+
+export interface VaultDailyResult {
+  date: string;
+  content?: string;
+  mode: 'read' | 'append';
+}
+
 export interface ApprovalResult {
   granted: boolean;
   capabilityToken?: string;
@@ -355,6 +399,10 @@ export interface GatewayMethods {
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
+  'vault.write': [VaultWriteParams, VaultWriteResult];
+  'vault.read': [VaultReadParams, VaultReadResult];
+  'vault.search': [VaultSearchParams, VaultSearchResult];
+  'vault.daily': [VaultDailyParams, VaultDailyResult];
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];
   'fs.list': [FsListParams, FsListResult];

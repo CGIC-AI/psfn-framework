@@ -701,6 +701,91 @@ describe('GatewayClient git RPC wrappers', () => {
   });
 });
 
+describe('GatewayClient vault RPC wrappers', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('routes vault methods with typed payloads', async () => {
+    const writePromise = client.vaultWrite('Inbox', 'entry', {
+      folder: 'Journal',
+      mode: 'append',
+    });
+    const writeReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+    expect(writeReq.method).toBe('vault.write');
+    expect(writeReq.params).toEqual({
+      name: 'Inbox',
+      content: 'entry',
+      folder: 'Journal',
+      mode: 'append',
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: writeReq.id,
+      result: { name: 'Inbox', folder: 'Journal', mode: 'append' },
+    });
+    await expect(writePromise).resolves.toEqual({ name: 'Inbox', folder: 'Journal', mode: 'append' });
+
+    const readPromise = client.vaultRead('Inbox.md');
+    const readReq = conn.sent[1] as { id: number; method: string; params: Record<string, unknown> };
+    expect(readReq.method).toBe('vault.read');
+    expect(readReq.params).toEqual({ name: 'Inbox.md' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: readReq.id,
+      result: { name: 'Inbox.md', content: 'hello' },
+    });
+    await expect(readPromise).resolves.toEqual({ name: 'Inbox.md', content: 'hello' });
+
+    const searchPromise = client.vaultSearch('focus', 5);
+    const searchReq = conn.sent[2] as { id: number; method: string; params: Record<string, unknown> };
+    expect(searchReq.method).toBe('vault.search');
+    expect(searchReq.params).toEqual({ query: 'focus', limit: 5 });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: searchReq.id,
+      result: { query: 'focus', results: [{ path: 'Notes/Focus.md' }] },
+    });
+    await expect(searchPromise).resolves.toEqual({
+      query: 'focus',
+      results: [{ path: 'Notes/Focus.md' }],
+    });
+
+    const dailyReadPromise = client.vaultDaily();
+    const dailyReadReq = conn.sent[3] as { id: number; method: string; params: Record<string, unknown> };
+    expect(dailyReadReq.method).toBe('vault.daily');
+    expect(dailyReadReq.params).toEqual({});
+    conn._emit({
+      jsonrpc: '2.0',
+      id: dailyReadReq.id,
+      result: { date: '2026-03-06', content: 'daily', mode: 'read' },
+    });
+    await expect(dailyReadPromise).resolves.toEqual({ date: '2026-03-06', content: 'daily', mode: 'read' });
+
+    const dailyAppendPromise = client.vaultDaily('entry');
+    const dailyAppendReq = conn.sent[4] as { id: number; method: string; params: Record<string, unknown> };
+    expect(dailyAppendReq.method).toBe('vault.daily');
+    expect(dailyAppendReq.params).toEqual({ content: 'entry' });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: dailyAppendReq.id,
+      result: { date: '2026-03-06', mode: 'append' },
+    });
+    await expect(dailyAppendPromise).resolves.toEqual({ date: '2026-03-06', mode: 'append' });
+  });
+
+  it('exposes RPC-name aliases for tool wiring validation', () => {
+    expect(typeof (client as any)['vault.write']).toBe('function');
+    expect(typeof (client as any)['vault.read']).toBe('function');
+    expect(typeof (client as any)['vault.search']).toBe('function');
+    expect(typeof (client as any)['vault.daily']).toBe('function');
+  });
+});
+
 describe('GatewayClient beads RPC wrappers', () => {
   let conn: ReturnType<typeof createMockConnection>;
   let client: GatewayClient;

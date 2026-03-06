@@ -161,6 +161,7 @@ import {
   getOptionalChannelAdapter,
   requireChannelAdapter,
 } from './bootstrap/channel-runtime.js';
+import { wireContextFeedbackRuntime } from './context-feedback/runtime.js';
 export {
   buildRuntimeChannelsConfigOverrides,
   createEmbeddingDimensionMismatchFatalMessage,
@@ -816,6 +817,14 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.registerTool(createUndoMemoryDeleteTool(this.memoryStore));
     this.agentLoop.registerTool(createScratchpadReadTool(this.memoryStore));
     this.agentLoop.registerTool(createScratchpadWriteTool(this.memoryStore));
+    wireContextFeedbackRuntime({
+      agentLoop: this.agentLoop,
+      postTurnActions,
+      llmProvider: this.llmClient,
+      memoryWriter,
+      sessionStore: this.sessionStore,
+      eventBus: this.eventBus,
+    });
 
     // Git tools — self-modification via git
     wireGitRuntime(this.agentLoop, {

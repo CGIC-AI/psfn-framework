@@ -5,6 +5,7 @@ import type { MemoryProvider, MemoryExtractor, LLMProvider } from './substrate-a
 import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
+import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ChannelPromptDock } from '../channels/types.js';
 import { isTurnId } from '../turns/id.js';
@@ -163,6 +164,76 @@ function makeMockLLMProvider(): LLMProvider {
   return {
     stream: vi.fn<any>().mockResolvedValue(response),
     complete: vi.fn<any>().mockResolvedValue(response),
+  };
+}
+
+function makeContextManifest(): ContextManifest {
+  return {
+    channelId: 'test-channel',
+    generatedAt: 1_700_000_000_000,
+    session: {
+      sourceEntryCount: 4,
+      trimmedEntryCount: 0,
+      maskedEntryCount: 0,
+      compactedEntryCount: 0,
+      finalEntryCount: 4,
+      finalMessageCount: 4,
+      compactionSummaryCount: 0,
+      continuityEntryCount: 0,
+    },
+    memory: {
+      includedCount: 1,
+      includedTypes: { semantic: 1 },
+      includedTokenCount: 120,
+      reason: 'test',
+      candidateCount: 1,
+      policyAllowedCount: 1,
+      rankedCount: 1,
+      returnedCount: 1,
+      excluded: {
+        sensitivityRejectedCount: 0,
+        policyRejectedCount: 0,
+        scoreRejectedCount: 0,
+        budgetCappedCount: 0,
+      },
+      retrieval: {
+        mode: 'budget',
+        budgetPct: 2,
+        tokenBudget: 500,
+        limit: 3,
+      },
+    },
+    budgets: {
+      contextWindow: 128_000,
+      sessionHistory: {
+        mode: 'budget',
+        budgetPct: 6,
+        tokenBudget: 8_000,
+        estimatedCount: 24,
+        actualCount: 4,
+        actualTokenCount: 420,
+      },
+      memoryRetrieval: {
+        mode: 'budget',
+        budgetPct: 2,
+        tokenBudget: 500,
+        estimatedCount: 3,
+        actualCount: 1,
+        actualTokenCount: 120,
+      },
+      sections: [
+        { section: 'system_prompt', tokenCount: 250 },
+        { section: 'memories', tokenCount: 120 },
+        { section: 'session_history', tokenCount: 420 },
+      ],
+    },
+    compaction: {
+      triggered: false,
+      thresholdPct: 70,
+      tokenBudget: 90_000,
+      totalTokensBefore: 790,
+      totalTokensAfter: 790,
+    },
   };
 }
 
@@ -584,6 +655,36 @@ describe('SubstrateAgent.handleMessage', () => {
       'heartbeat.run_template:shared',
       'heartbeat.run_template:daily',
     ]);
+  });
+
+  it('passes turn metadata and context manifest into post-turn inferers', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const manifest = makeContextManifest();
+    (sessionManager.buildContext as any).mockResolvedValue({
+      systemPrompt: 'You are PSFN.',
+      messages: [
+        { role: 'user', content: 'Hello' },
+      ],
+      manifest,
+    } satisfies LLMContext);
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    const captured: any[] = [];
+    agent.registerPostTurnActionInferer((context) => {
+      captured.push(context);
+      return [];
+    });
+
+    await agent.handleMessage(makeMessage({ id: 'turn-manifest-1' }));
+
+    expect(captured).toHaveLength(1);
+    expect(isTurnId(captured[0].turnId)).toBe(true);
+    expect(captured[0].completedAt).toBeGreaterThan(0);
+    expect(captured[0].contextManifest).toEqual(manifest);
   });
 
   it('emits explicit background continuation completion and delivers queued results after a foreground turn ends', async () => {

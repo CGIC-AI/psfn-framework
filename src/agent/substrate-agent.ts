@@ -115,7 +115,7 @@ import { contextMessagesToPiMessages } from '../llm/message-conversion.js';
 import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
 import { buildSnapshotVersionPointer } from '../turns/snapshot.js';
-import type { ContextManifestMemorySeed } from '../session/context-manifest.js';
+import type { ContextManifest, ContextManifestMemorySeed } from '../session/context-manifest.js';
 import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -184,6 +184,10 @@ interface PostTurnInferenceContext {
   message: SubstrateMessage;
   response: AgentResponse;
   turnMessages: AgentMessage[];
+  turnId: TurnID;
+  completedAt: number;
+  contextManifest?: ContextManifest;
+  canonicalContactKey?: string;
 }
 
 export type PostTurnActionInferer = (
@@ -2280,6 +2284,7 @@ export class SubstrateAgent {
         }
       }
 
+      const completedAt = Date.now();
       const agentResponse: AgentResponse = {
         content: safeResponseText,
         channelId: message.channelId,
@@ -2287,7 +2292,7 @@ export class SubstrateAgent {
           model: responseModel,
           inputTokens: turnUsage.inputTokens,
           outputTokens: turnUsage.outputTokens,
-          durationMs: Date.now() - startTime,
+          durationMs: completedAt - startTime,
           ...(fallbackDiagnostics ? { diagnostics: fallbackDiagnostics } : {}),
           ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         },
@@ -2296,6 +2301,10 @@ export class SubstrateAgent {
         message,
         response: agentResponse,
         turnMessages,
+        turnId,
+        completedAt,
+        contextManifest: context.manifest,
+        ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
       });
       this.sessionManager.recordTurn(
         this.buildTurnRecord({
@@ -2303,7 +2312,7 @@ export class SubstrateAgent {
           turnId,
           requestId,
           startedAt: startTime,
-          completedAt: Date.now(),
+          completedAt,
           userSessionEntryId,
           assistantSessionEntryId,
           response: agentResponse,
@@ -2374,7 +2383,7 @@ export class SubstrateAgent {
         ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
       });
       this.emitTurnStage(message, startTime, turnId, requestId, 'end', turnCallType, {
-        durationMs: Date.now() - startTime,
+        durationMs: completedAt - startTime,
         ttftMs: firstTokenAt - startTime,
         inputTokens: turnUsage.inputTokens,
         outputTokens: turnUsage.outputTokens,

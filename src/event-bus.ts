@@ -60,6 +60,24 @@ export interface EventMap {
     delayMs?: number;
     error?: string;
   };
+  'context.feedback.telemetry': {
+    actionId: string;
+    turnId: string;
+    channelId: string;
+    phase: 'started' | 'scored' | 'persisted' | 'failed';
+    score?: number;
+    scoreBucket?: 'low' | 'medium' | 'high';
+    signals?: {
+      confabulation: boolean;
+      missed_context: boolean;
+      wasted_tokens: boolean;
+      good: boolean;
+    };
+    followUpIncluded?: boolean;
+    memoryId?: string;
+    error?: string;
+    timestamp: number;
+  };
   'agent.tool_handoff.telemetry': {
     actionId: string;
     dedupeKey: string;

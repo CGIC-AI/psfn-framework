@@ -7,6 +7,8 @@ import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import { cloneSessionEntry } from '../../turns/snapshot.js';
+import type { SessionEntry } from '../types.js';
+import { resolveSessionEntryTurnContext } from '../turn-provenance.js';
 import {
   classifyChannel,
   type ChannelMeta,
@@ -24,6 +26,7 @@ import {
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages, getMergedContinuity } from './context-support.js';
 import { runAutoCompaction } from './compaction-service.js';
+import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 
 interface BuildSessionContextParams {
   channelId: string;
@@ -53,6 +56,10 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   if (!params.turnSnapshot && historyBudget.mode === 'budget') {
     recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
   }
+  recent = applyObservationMasking(
+    recent,
+    params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
+  );
   let compactionSummaryTexts = params.turnSnapshot
     ? [...params.turnSnapshot.compactionSummaryTexts]
     : params.store.getCompactionSummaries(params.channelId).map(summary => summary.summary);
@@ -136,4 +143,38 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     systemPrompt: fullSystem,
     messages,
   };
+}
+
+const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
+
+function applyObservationMasking(entries: SessionEntry[], window: number): SessionEntry[] {
+  const normalizedWindow = Number.isFinite(window)
+    ? Math.max(0, Math.floor(window))
+    : DEFAULT_OBSERVATION_MASKING_WINDOW;
+  if (entries.length === 0) return entries;
+
+  const unmaskedTurnIds = new Set<string>();
+  if (normalizedWindow > 0) {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry.role === 'system') continue;
+      const turnContext = resolveSessionEntryTurnContext(entry);
+      unmaskedTurnIds.add(turnContext.turnId);
+      if (unmaskedTurnIds.size >= normalizedWindow) {
+        break;
+      }
+    }
+  }
+
+  return entries.map((entry) => {
+    if (entry.role !== 'tool') return entry;
+    const turnContext = resolveSessionEntryTurnContext(entry);
+    if (unmaskedTurnIds.has(turnContext.turnId)) {
+      return entry;
+    }
+    return {
+      ...entry,
+      content: MASKED_TOOL_OBSERVATION_CONTENT,
+    };
+  });
 }

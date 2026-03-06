@@ -385,6 +385,7 @@ export interface SubstrateConfig {
   memoryBudgetPct: number;
   extractionThresholdPct: number;
   compactionThresholdPct: number;
+  observationMaskingWindow?: number;
   compactionEmotionalSalienceThresholdPct?: number;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
@@ -511,6 +512,7 @@ const DEFAULT_MAINTENANCE_INTERVAL_MS = 300_000;
 const DEFAULT_MEMORY_BUDGET_PCT = 20;
 const DEFAULT_EXTRACTION_THRESHOLD_PCT = 30;
 const DEFAULT_COMPACTION_THRESHOLD_PCT = 70;
+const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
 const DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
 const DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE = 0.45;
 const DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE = 0.6;
@@ -624,6 +626,7 @@ export function loadConfig(): SubstrateConfig {
     memoryBudgetPct: DEFAULT_MEMORY_BUDGET_PCT,
     extractionThresholdPct: DEFAULT_EXTRACTION_THRESHOLD_PCT,
     compactionThresholdPct: DEFAULT_COMPACTION_THRESHOLD_PCT,
+    observationMaskingWindow: DEFAULT_OBSERVATION_MASKING_WINDOW,
     compactionEmotionalSalienceThresholdPct: DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT,
     ...(sessionMirrorEnabled !== undefined ? { sessionMirrorEnabled } : {}),
     ...(sessionMirrorMaxChars !== undefined ? { sessionMirrorMaxChars } : {}),

@@ -13,6 +13,7 @@ import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/
 import { MemoryStore } from '../memory/store.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
+import { createTurnId } from '../turns/id.js';
 import {
   buildCompactionSourceBlock,
   computeCompactionSourceSha256,
@@ -100,6 +101,85 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('ch1', 'System', 'Memory block');
     expect(ctx.systemPrompt).toContain('Memory block');
+  });
+
+  it('persists tool observations and renders them as distinct context blocks', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Search for the latest log', 'u1', 'User');
+    mgr.recordToolObservation('ch1', {
+      toolName: 'search_logs',
+      toolCallId: 'tool-1',
+      content: 'Found 3 matching log entries.',
+    });
+    mgr.recordAssistantMessage('ch1', 'I found the relevant logs.');
+
+    const reloadedStore = new SessionStore(dir);
+    const reloadedManager = new SessionManager(reloadedStore, config);
+    const entries = reloadedStore.getRecent('ch1', 3);
+    expect(entries.map(entry => entry.role)).toEqual(['user', 'tool', 'assistant']);
+
+    const ctx = await reloadedManager.buildContext('ch1', 'System prompt', '');
+    expect(ctx.messages).toHaveLength(3);
+    expect(ctx.messages[0]).toEqual({ role: 'user', content: 'Search for the latest log' });
+    expect(ctx.messages[1]).toEqual({
+      role: 'user',
+      content: '[Tool result: search_logs] Found 3 matching log entries.',
+    });
+    expect(ctx.messages[2]).toEqual({ role: 'assistant', content: 'I found the relevant logs.' });
+  });
+
+  it('masks tool observations outside the configured rolling turn window', async () => {
+    const config = makeConfig({ observationMaskingWindow: 1 });
+    const mgr = new SessionManager(store, config);
+    const firstTurnId = createTurnId();
+    const secondTurnId = createTurnId();
+
+    mgr.recordUserMessage('ch1', 'First tool turn', 'u1', 'User', undefined, undefined, {
+      turnId: firstTurnId,
+      requestId: 'req-1',
+      sourceMessageId: 'msg-1',
+    });
+    mgr.recordToolObservation('ch1', {
+      toolName: 'search_logs',
+      toolCallId: 'tool-1',
+      content: 'Older tool output should be masked.',
+    }, undefined, {
+      turnId: firstTurnId,
+      requestId: 'req-1',
+      sourceMessageId: 'msg-1',
+    });
+    mgr.recordAssistantMessage('ch1', 'First turn complete.', undefined, undefined, undefined, {
+      turnId: firstTurnId,
+      requestId: 'req-1',
+      sourceMessageId: 'msg-1',
+    });
+
+    mgr.recordUserMessage('ch1', 'Second tool turn', 'u1', 'User', undefined, undefined, {
+      turnId: secondTurnId,
+      requestId: 'req-2',
+      sourceMessageId: 'msg-2',
+    });
+    mgr.recordToolObservation('ch1', {
+      toolName: 'search_logs',
+      toolCallId: 'tool-2',
+      content: 'Newest tool output should remain visible.',
+    }, undefined, {
+      turnId: secondTurnId,
+      requestId: 'req-2',
+      sourceMessageId: 'msg-2',
+    });
+    mgr.recordAssistantMessage('ch1', 'Second turn complete.', undefined, undefined, undefined, {
+      turnId: secondTurnId,
+      requestId: 'req-2',
+      sourceMessageId: 'msg-2',
+    });
+
+    const ctx = await mgr.buildContext('ch1', 'System prompt', '');
+    const allContent = ctx.messages.map(message => message.content).join('\n');
+    expect(allContent).toContain('[Tool result: search_logs — see earlier context]');
+    expect(allContent).not.toContain('Older tool output should be masked.');
+    expect(allContent).toContain('[Tool result: search_logs] Newest tool output should remain visible.');
   });
 
   it('does not persist internal reflection channels to session journals', () => {

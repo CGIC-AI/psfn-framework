@@ -125,6 +125,7 @@ export interface EditableSettings {
   memoryBudgetPct?: number;
   extractionThresholdPct?: number;
   compactionThresholdPct?: number;
+  observationMaskingWindow?: number;
   compactionEmotionalSalienceThresholdPct?: number;
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
@@ -223,6 +224,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryBudgetPct',
   'extractionThresholdPct',
   'compactionThresholdPct',
+  'observationMaskingWindow',
   'compactionEmotionalSalienceThresholdPct',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
@@ -723,6 +725,17 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     delete normalized.compactionEmotionalSalienceThresholdPct;
   }
 
+  const observationMaskingWindow = toIntegerInRange(
+    settings.observationMaskingWindow,
+    0,
+    200,
+  );
+  if (observationMaskingWindow !== undefined) {
+    normalized.observationMaskingWindow = observationMaskingWindow;
+  } else {
+    delete normalized.observationMaskingWindow;
+  }
+
   if ('openRouterProviderOrder' in settings) {
     normalized.openRouterProviderOrder = toStringList(settings.openRouterProviderOrder) ?? [];
   }
@@ -1200,6 +1213,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     memoryBudgetPct: config.memoryBudgetPct,
     extractionThresholdPct: config.extractionThresholdPct,
     compactionThresholdPct: config.compactionThresholdPct,
+    observationMaskingWindow: config.observationMaskingWindow ?? 10,
     compactionEmotionalSalienceThresholdPct: config.compactionEmotionalSalienceThresholdPct ?? 75,
     memoryExtractionMinImportance: config.memoryExtractionMinImportance ?? null,
     memoryExtractionMinConfidence: config.memoryExtractionMinConfidence ?? null,
@@ -1326,6 +1340,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
   if (settings.memoryRetrievalLimit !== undefined) config.memoryRetrievalLimit = settings.memoryRetrievalLimit;
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
+  if (settings.observationMaskingWindow !== undefined) {
+    config.observationMaskingWindow = settings.observationMaskingWindow;
+  }
   if (settings.compactionEmotionalSalienceThresholdPct !== undefined) {
     config.compactionEmotionalSalienceThresholdPct = settings.compactionEmotionalSalienceThresholdPct;
   }
@@ -1574,6 +1591,7 @@ export const SETTINGS_VALIDATION = {
   sessionMessageLimit: { min: 5, max: 200 },
   memoryRetrievalLimit: { min: 1, max: 50 },
   extractionInterval: { min: 1, max: 50 },
+  observationMaskingWindow: { min: 0, max: 200 },
   compactionEmotionalSalienceThresholdPct: { min: 0, max: 100 },
   thinkMaxTokens: { min: 1000, max: 1000000 },
   thinkMaxWallTimeMs: { min: 5000, max: 600000 },

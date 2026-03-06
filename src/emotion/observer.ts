@@ -33,6 +33,9 @@ export interface EmotionObserverAudioObservation {
 export interface EmotionObserverModalityObservations {
   text: EmotionObservation;
   audio?: EmotionObserverAudioObservation;
+  observation: EmotionObservation;
+  fusedLabel: string | null;
+  fusedLabelConfidence: number;
 }
 
 export interface EmotionObserverConfig {
@@ -96,6 +99,17 @@ interface CategoricalSignal {
 interface LexiconSignal {
   vad: VADVector;
   confidence: number;
+}
+
+interface ModalityObservationInput {
+  modality: string;
+  observation: EmotionObservation;
+}
+
+interface NormalizedModalitySignal {
+  confidence: number;
+  vad: VADVector | null;
+  categorical: CategoricalSignal | null;
 }
 
 export class EmotionObserver {
@@ -185,11 +199,20 @@ export class EmotionObserver {
     audio?: EmotionObserverAudioInput | null;
   }): Promise<EmotionObserverModalityObservations> {
     const text = await this.buildObservation(input.text);
-    if (!input.audio) {
-      return { text };
+    const audio = input.audio ? await this.buildAudioObservation(input.audio) : undefined;
+    const modalities: ModalityObservationInput[] = [{ modality: 'text', observation: text }];
+    if (audio) {
+      modalities.push({ modality: 'audio', observation: audio.observation });
     }
-    const audio = await this.buildAudioObservation(input.audio);
-    return { text, audio };
+    const observation = fuseModalityObservations(modalities);
+
+    return {
+      text,
+      audio,
+      observation,
+      fusedLabel: resolveFusedLabel(observation.discrete),
+      fusedLabelConfidence: clampUnit(observation.confidence ?? 0),
+    };
   }
 
   private scoreLexiconSignal(text: string): LexiconSignal {
@@ -270,6 +293,194 @@ function chooseStrongerCategoricalSignal(
     return right.confidence > left.confidence ? right : left;
   }
   return right.label.localeCompare(left.label) < 0 ? right : left;
+}
+
+function fuseModalityObservations(
+  modalityInputs: readonly ModalityObservationInput[],
+): EmotionObservation {
+  if (!Array.isArray(modalityInputs) || modalityInputs.length === 0) {
+    throw new Error('at least one modality observation is required');
+  }
+
+  const fusedVadAccumulator: VADVector = {
+    valence: 0,
+    arousal: 0,
+    dominance: 0,
+  };
+  let strongestCategorical: CategoricalSignal | null = null;
+  let strongestConfidence = 0;
+  let fusedVadWeight = 0;
+  let modalitySignalCount = 0;
+
+  for (let index = 0; index < modalityInputs.length; index += 1) {
+    const signal = normalizeModalitySignal(modalityInputs[index], index);
+    if (!signal) continue;
+
+    modalitySignalCount += 1;
+    strongestConfidence = Math.max(strongestConfidence, signal.confidence);
+
+    if (signal.categorical) {
+      strongestCategorical = chooseStrongerCategoricalSignal(strongestCategorical, signal.categorical);
+    }
+
+    if (!signal.vad) continue;
+
+    fusedVadWeight += signal.confidence;
+    for (const key of VAD_KEYS) {
+      fusedVadAccumulator[key] += signal.vad[key] * signal.confidence;
+    }
+  }
+
+  if (modalitySignalCount === 0) {
+    throw new Error('modality observations must include at least one signal with positive confidence');
+  }
+  if (fusedVadWeight <= SIGNAL_EPSILON) {
+    throw new Error('modality observations must include at least one VAD signal with positive confidence');
+  }
+
+  return {
+    vad: {
+      valence: clampSigned(fusedVadAccumulator.valence / fusedVadWeight),
+      arousal: clampSigned(fusedVadAccumulator.arousal / fusedVadWeight),
+      dominance: clampSigned(fusedVadAccumulator.dominance / fusedVadWeight),
+    },
+    discrete: strongestCategorical ? { [strongestCategorical.label]: 1 } : undefined,
+    confidence: clampUnit(strongestConfidence),
+  };
+}
+
+function normalizeModalitySignal(
+  input: ModalityObservationInput,
+  index: number,
+): NormalizedModalitySignal | null {
+  if (!isRecord(input)) {
+    throw new TypeError(`modalityInputs[${index}] must be an object`);
+  }
+  const modality = normalizeModalityName(input.modality, index);
+  const observation = input.observation;
+
+  if (!isRecord(observation)) {
+    throw new TypeError(`${modality}.observation must be an object`);
+  }
+
+  const confidence = normalizeConfidence(
+    observation.confidence ?? 0,
+    `${modality}.observation.confidence`,
+  );
+  if (confidence <= SIGNAL_EPSILON) {
+    return null;
+  }
+
+  const categorical = resolveObservationCategoricalSignal(
+    observation.discrete,
+    `${modality}.observation.discrete`,
+  );
+  const vad = normalizeObservationVad(
+    observation.vad,
+    `${modality}.observation.vad`,
+  );
+
+  if (!categorical && !vad) {
+    throw new Error(
+      `${modality}.observation must include vad or discrete emotion when confidence is positive`,
+    );
+  }
+
+  return {
+    confidence,
+    vad,
+    categorical: categorical
+      ? {
+        label: categorical.label,
+        confidence,
+        vad: categorical.vad,
+      }
+      : null,
+  };
+}
+
+function normalizeModalityName(modality: unknown, index: number): string {
+  if (typeof modality !== 'string') {
+    throw new TypeError(`modalityInputs[${index}].modality must be a string`);
+  }
+  const normalized = modality.trim().toLowerCase();
+  if (!normalized) {
+    throw new RangeError(`modalityInputs[${index}].modality must be non-empty`);
+  }
+  return normalized;
+}
+
+function resolveObservationCategoricalSignal(
+  discrete: Record<string, number> | undefined,
+  fieldName: string,
+): CategoricalSignal | null {
+  if (discrete === undefined) {
+    return null;
+  }
+  if (!isRecord(discrete)) {
+    throw new TypeError(`${fieldName} must be an object`);
+  }
+
+  let bestLabel: string | null = null;
+  let bestScore = 0;
+  for (const [rawLabel, rawScore] of Object.entries(discrete)) {
+    const label = normalizeEmotionLabel(rawLabel, `${fieldName}.${rawLabel}.label`);
+    const score = normalizeConfidence(rawScore, `${fieldName}.${label}.score`);
+    if (score <= SIGNAL_EPSILON) continue;
+
+    if (!bestLabel || score > bestScore) {
+      bestLabel = label;
+      bestScore = score;
+      continue;
+    }
+    if (score === bestScore && label.localeCompare(bestLabel) < 0) {
+      bestLabel = label;
+    }
+  }
+
+  if (!bestLabel) {
+    return null;
+  }
+
+  return {
+    label: bestLabel,
+    confidence: bestScore,
+    vad: cloneVad(deriveVadFromLabel(bestLabel)),
+  };
+}
+
+function normalizeObservationVad(vad: Partial<VADVector> | undefined, fieldName: string): VADVector | null {
+  if (vad === undefined) {
+    return null;
+  }
+  if (!isRecord(vad)) {
+    throw new TypeError(`${fieldName} must be an object`);
+  }
+
+  const valence = normalizeOptionalVadComponent(vad.valence, `${fieldName}.valence`);
+  const arousal = normalizeOptionalVadComponent(vad.arousal, `${fieldName}.arousal`);
+  const dominance = normalizeOptionalVadComponent(vad.dominance, `${fieldName}.dominance`);
+
+  if (valence === null && arousal === null && dominance === null) {
+    return null;
+  }
+  if (valence === null || arousal === null || dominance === null) {
+    throw new Error(`${fieldName} must include valence, arousal, and dominance`);
+  }
+
+  return {
+    valence,
+    arousal,
+    dominance,
+  };
+}
+
+function normalizeOptionalVadComponent(value: unknown, fieldName: string): number | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`${fieldName} must be a finite number`);
+  }
+  return clampSigned(value);
 }
 
 function resolveNearestEmotionLabel(vad: VADVector): string {
@@ -413,4 +624,8 @@ function clampSigned(value: number): number {
 function clampUnit(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

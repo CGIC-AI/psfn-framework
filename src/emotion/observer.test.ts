@@ -179,6 +179,93 @@ describe('EmotionObserver', () => {
     expect(audio.events).toEqual(['laughter']);
   });
 
+  it('fuses text and audio modalities by confidence for multimodal observations', async () => {
+    const { classifier: textClassifier } = createClassifier([
+      { label: 'joy', score: 0.4 },
+      { label: 'neutral', score: 0.2 },
+    ]);
+    const { classifier: audioClassifier } = createAudioClassifier([
+      { label: 'anger', score: 0.9, source: 'emotion' },
+      { label: 'event:laughter', score: 1, source: 'event' },
+    ]);
+
+    const observer = new EmotionObserver({
+      textClassifier,
+      audioClassifier,
+      vadLexicon: createLexicon({}),
+    });
+
+    const result = await observer.buildModalityObservations({
+      text: 'unmatched-token',
+      audio: {
+        audioBuffer: Buffer.from([0, 0]),
+        sampleRate: 16_000,
+      },
+    });
+
+    expect(result.fusedLabel).toBe('anger');
+    expect(result.fusedLabelConfidence).toBeCloseTo(0.9, 6);
+    expect(result.observation.discrete).toEqual({ anger: 1 });
+    expect(result.audio?.events).toEqual(['laughter']);
+
+    const joyVad = TEXT_EMOTION_LABEL_VAD_MAP.joy;
+    const angerVad = TEXT_EMOTION_LABEL_VAD_MAP.anger;
+    expect(result.observation.vad?.valence).toBeCloseTo(
+      ((joyVad.valence * 0.4) + (angerVad.valence * 0.9)) / 1.3,
+      6,
+    );
+    expect(result.observation.vad?.arousal).toBeCloseTo(
+      ((joyVad.arousal * 0.4) + (angerVad.arousal * 0.9)) / 1.3,
+      6,
+    );
+    expect(result.observation.vad?.dominance).toBeCloseTo(
+      ((joyVad.dominance * 0.4) + (angerVad.dominance * 0.9)) / 1.3,
+      6,
+    );
+  });
+
+  it('preserves text-only behavior in multimodal fusion path when audio is absent', async () => {
+    const { classifier } = createClassifier([
+      { label: 'neutral', score: 1 },
+    ]);
+    const observer = new EmotionObserver({
+      textClassifier: classifier,
+      vadLexicon: createLexicon({}),
+    });
+
+    const result = await observer.buildModalityObservations({
+      text: 'just-text',
+    });
+
+    expect(result.audio).toBeUndefined();
+    expect(result.fusedLabel).toBe('neutral');
+    expect(result.fusedLabelConfidence).toBeCloseTo(1, 6);
+    expect(result.observation).toEqual(result.text);
+  });
+
+  it('fails closed when modality observations contain no positive-confidence signals', async () => {
+    const { classifier: textClassifier } = createClassifier([
+      { label: 'neutral', score: 0 },
+      { label: 'joy', score: 0 },
+    ]);
+    const { classifier: audioClassifier } = createAudioClassifier([
+      { label: 'event:laughter', score: 1, source: 'event' },
+    ]);
+    const observer = new EmotionObserver({
+      textClassifier,
+      audioClassifier,
+      vadLexicon: createLexicon({}),
+    });
+
+    await expect(observer.buildModalityObservations({
+      text: 'unknown-token',
+      audio: {
+        audioBuffer: Buffer.from([0, 0]),
+        sampleRate: 16_000,
+      },
+    })).rejects.toThrow('modality observations must include at least one signal with positive confidence');
+  });
+
   it('fails closed when audio modality is requested without an audio classifier', async () => {
     const { classifier } = createClassifier([{ label: 'neutral', score: 1 }]);
     const observer = new EmotionObserver({

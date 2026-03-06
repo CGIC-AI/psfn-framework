@@ -257,12 +257,17 @@ export interface EmotionRuntimeWiring {
   requireWiring?: boolean;
 }
 
+export interface SelfModelRuntimeWiring {
+  requireWiring?: boolean;
+}
+
 export interface SubstrateAgentOptions {
   streamFn?: StreamFn;
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
   emotionRuntime?: EmotionRuntimeWiring;
+  selfModelRuntime?: SelfModelRuntimeWiring;
 }
 
 export type PromotedToolMutationErrorCode =
@@ -397,6 +402,7 @@ export class SubstrateAgent {
   private emotionRuntimeRequired = false;
   private emotionStateSessionId: string | null = null;
   private emotionStateUpdatedAtMs: number | null = null;
+  private selfModelRuntimeRequired = false;
   private readonly internalStateComputer = new InternalStateComputer();
   private readonly metacognitiveMonitor = new MetacognitiveMonitor();
   private currentInternalState: InternalState | null = null;
@@ -443,6 +449,7 @@ export class SubstrateAgent {
         ? new EmotionAppraisal({ llmProvider: this.llmClient })
         : null);
     this.emotionRuntimeRequired = options?.emotionRuntime?.requireWiring ?? false;
+    this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.assertEmotionRuntimeConfigured();
 
     this.agent = new Agent({
@@ -1780,6 +1787,10 @@ export class SubstrateAgent {
     this.behavioralPatternProvider = provider;
   }
 
+  setSelfModelRuntimeRequired(required: boolean): void {
+    this.selfModelRuntimeRequired = required;
+  }
+
   getCurrentInternalState(): InternalState | null {
     if (!this.currentInternalState) return null;
     return cloneInternalState(this.currentInternalState);
@@ -1881,6 +1892,8 @@ export class SubstrateAgent {
       trustLevel: authorContext.trustLevel,
       canonicalContactKey: authorContext.canonicalContactKey ?? null,
     });
+
+    this.assertSelfModelRuntimeConfigured();
 
     // Record user message in session (JSONL append = L0 archival)
     const userSessionEntryId = this.recordUserMessage(
@@ -2019,6 +2032,26 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         runtimeNow,
       );
+      const preTurnInternalState = this.computeInternalStateForTurn({
+        message,
+        responseText: '',
+        trustLevel,
+        canonicalContactKey: authorContext.canonicalContactKey,
+        emotionSnapshot,
+        toolCallCount: 0,
+        sessionChannelId: emotionSessionId,
+      });
+      const preTurnInternalStateSnapshotRef = buildInternalStateSnapshotRef(preTurnInternalState);
+      const preTurnMetacognitiveFlags = this.computeMetacognitiveFlagsForTurn({
+        internalState: preTurnInternalState,
+        responseText: '',
+        toolCallCount: 0,
+        sessionChannelId: emotionSessionId,
+        retrievalProvenanceRefs,
+      });
+      this.currentInternalState = preTurnInternalState;
+      this.currentInternalStateSnapshotRef = preTurnInternalStateSnapshotRef;
+      this.currentMetacognitiveFlags = preTurnMetacognitiveFlags;
       const runtimeContext = this.buildRuntimeContext(
         message,
         authorContext.resolvedUserName,
@@ -2029,7 +2062,8 @@ export class SubstrateAgent {
         runtimeNow,
         taskKind,
         templateVariables,
-        emotionSnapshot,
+        preTurnInternalState,
+        preTurnMetacognitiveFlags,
         emotionAppraisalChain,
       );
       let fullPrompt = '';
@@ -2049,7 +2083,12 @@ export class SubstrateAgent {
           now: runtimeNow,
           variables: templateVariables,
         });
-        const personaHint = this.getPersonaAdaptation(trustLevel, emotionSnapshot, templateVariables);
+        const personaHint = this.getPersonaAdaptation(
+          trustLevel,
+          preTurnInternalState,
+          preTurnMetacognitiveFlags,
+          templateVariables,
+        );
         const dynamicSuffixTemplate = [turnSnapshot.prompt?.dynamicSuffixTemplate ?? '', personaHint]
           .map(section => section?.trim() ?? '')
           .filter(section => section.length > 0)
@@ -2380,7 +2419,7 @@ export class SubstrateAgent {
         trustLevel: authorContext.trustLevel,
         canonicalContactKey: authorContext.canonicalContactKey,
         emotionSnapshot,
-        turnUsage,
+        toolCallCount: turnUsage.toolCalls,
         sessionChannelId: emotionSessionId,
       });
       this.currentInternalState = internalState;
@@ -2389,7 +2428,7 @@ export class SubstrateAgent {
       const metacognitiveFlags = this.computeMetacognitiveFlagsForTurn({
         internalState,
         responseText,
-        turnUsage,
+        toolCallCount: turnUsage.toolCalls,
         sessionChannelId: emotionSessionId,
         retrievalProvenanceRefs,
       });
@@ -2562,7 +2601,7 @@ export class SubstrateAgent {
       void this.triggerEmotionAppraisal({
         sessionChannelId: emotionSessionId,
         turnId,
-        emotionSnapshot,
+        internalState,
         templateVariables,
       }).catch((error) => {
         log.error('Emotion appraisal error', {
@@ -2647,6 +2686,24 @@ export class SubstrateAgent {
     }
   }
 
+  private assertSelfModelRuntimeConfigured(): void {
+    if (!this.selfModelRuntimeRequired) {
+      return;
+    }
+    if (!this.activeConcernProvider) {
+      throw new Error('Self-model runtime wiring is required but ActiveConcernProvider is not configured');
+    }
+    if (!this.contactStore) {
+      throw new Error('Self-model runtime wiring is required but ContactStore is not configured');
+    }
+    const manager = this.sessionManager as SessionManager & {
+      getRecentMessages?: (channelId: string, limit?: number) => Array<unknown>;
+    };
+    if (typeof manager.getRecentMessages !== 'function') {
+      throw new Error('Self-model runtime wiring requires SessionManager.getRecentMessages');
+    }
+  }
+
   private hydrateEmotionStateForSession(sessionChannelId: string): void {
     if (!this.emotionState) return;
     if (this.emotionStateSessionId === sessionChannelId) return;
@@ -2720,7 +2777,7 @@ export class SubstrateAgent {
     trustLevel: TrustLevel;
     canonicalContactKey?: string;
     emotionSnapshot: EmotionStateSnapshot | null;
-    turnUsage: TurnUsage;
+    toolCallCount: number;
     sessionChannelId: string;
   }): InternalState {
     const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
@@ -2741,7 +2798,7 @@ export class SubstrateAgent {
       sessionMetrics: {
         userMessageText: input.message.content,
         responseText: input.responseText,
-        toolCallCount: input.turnUsage.toolCalls,
+        toolCallCount: input.toolCallCount,
         recentTurnCount,
         ...(lastSeenDeltaSeconds === null ? {} : { lastSeenDeltaSeconds }),
       },
@@ -2751,7 +2808,7 @@ export class SubstrateAgent {
   private computeMetacognitiveFlagsForTurn(input: {
     internalState: InternalState;
     responseText: string;
-    turnUsage: TurnUsage;
+    toolCallCount: number;
     sessionChannelId: string;
     retrievalProvenanceRefs: readonly string[];
   }): MetacognitiveFlag[] {
@@ -2760,7 +2817,7 @@ export class SubstrateAgent {
       internalState: input.internalState,
       recentResponses,
       latestResponse: input.responseText,
-      toolCallCount: input.turnUsage.toolCalls,
+      toolCallCount: input.toolCallCount,
       contradictoryMemorySignalCount: this.countContradictoryMemorySignals(input.retrievalProvenanceRefs),
       supportingMemoryCount: this.countSupportingMemoryEvidenceRefs(input.retrievalProvenanceRefs),
     });
@@ -2931,10 +2988,10 @@ export class SubstrateAgent {
   private async triggerEmotionAppraisal(params: {
     sessionChannelId: string;
     turnId: TurnID;
-    emotionSnapshot: EmotionStateSnapshot | null;
+    internalState: InternalState;
     templateVariables: Record<string, string> | undefined;
   }): Promise<void> {
-    if (!this.emotionAppraisal || !params.emotionSnapshot) return;
+    if (!this.emotionAppraisal) return;
 
     const manager = this.sessionManager as SessionManager & {
       getRecentMessages?: (channelId: string, limit?: number) => Array<{
@@ -2959,7 +3016,7 @@ export class SubstrateAgent {
     const result = await this.emotionAppraisal.maybeAppraise({
       sessionId: params.sessionChannelId,
       turnId: params.turnId,
-      currentEmotion: params.emotionSnapshot,
+      internalState: params.internalState,
       recentMessages,
       personalityTraits: this.resolveEmotionPersonalityTraits(params.templateVariables),
     });
@@ -3960,7 +4017,8 @@ export class SubstrateAgent {
     now: Date = new Date(),
     taskKind?: string,
     templateVariables?: Record<string, string>,
-    emotionSnapshot?: EmotionStateSnapshot | null,
+    internalState?: InternalState,
+    metacognitiveFlags: readonly MetacognitiveFlag[] = [],
     emotionAppraisalChain: readonly EmotionAppraisalEntry[] = [],
   ): string {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
@@ -4042,21 +4100,47 @@ export class SubstrateAgent {
     lines.push('[Response Style Guidance]');
     lines.push(responseStyleGuidance);
 
-    if (emotionSnapshot) {
+    if (internalState) {
       lines.push('');
-      lines.push('[Emotional State]');
+      lines.push('[Internal State]');
       lines.push(
-        `Current VAD: valence=${formatSignedDecimal(emotionSnapshot.vad.valence)},`
-        + ` arousal=${formatSignedDecimal(emotionSnapshot.vad.arousal)},`
-        + ` dominance=${formatSignedDecimal(emotionSnapshot.vad.dominance)}`,
+        `VAD: valence=${formatSignedDecimal(internalState.emotional.vad.valence)},`
+        + ` arousal=${formatSignedDecimal(internalState.emotional.vad.arousal)},`
+        + ` dominance=${formatSignedDecimal(internalState.emotional.vad.dominance)}`,
       );
       lines.push(
-        `Mood VAD: valence=${formatSignedDecimal(emotionSnapshot.mood.valence)},`
-        + ` arousal=${formatSignedDecimal(emotionSnapshot.mood.arousal)},`
-        + ` dominance=${formatSignedDecimal(emotionSnapshot.mood.dominance)}`,
+        `Mood VAD: valence=${formatSignedDecimal(internalState.emotional.mood.valence)},`
+        + ` arousal=${formatSignedDecimal(internalState.emotional.mood.arousal)},`
+        + ` dominance=${formatSignedDecimal(internalState.emotional.mood.dominance)}`,
       );
-      lines.push(`Top emotions: ${this.formatTopEmotions(emotionSnapshot.discrete)}`);
-      lines.push(`Confidence: ${emotionSnapshot.confidence.toFixed(3)}`);
+      lines.push(`Top emotions: ${this.formatTopEmotions(internalState.emotional.discreteEmotions)}`);
+      lines.push(`Signal confidence: ${internalState.emotional.confidence.toFixed(3)}`);
+      lines.push(
+        `Cognitive: certainty=${internalState.cognitive.certaintyLevel.toFixed(3)},`
+        + ` engagement=${internalState.cognitive.topicEngagement.toFixed(3)},`
+        + ` processing=${internalState.cognitive.processingQuality}`,
+      );
+      lines.push(
+        `Attention: trajectory=${internalState.attention.conversationTrajectory},`
+        + ` salient_entities=${internalState.attention.salientEntities.length},`
+        + ` active_concerns=${internalState.attention.activeConcerns.length}`,
+      );
+      const concernRefs = internalState.attention.activeConcerns
+        .slice(0, 3)
+        .map((concern) => `${concern.id}:${concern.priority}`);
+      lines.push(`Active concern refs: ${concernRefs.length > 0 ? concernRefs.join(', ') : 'none'}`);
+      const metacognitiveSummary = cloneMetacognitiveFlags(metacognitiveFlags)
+        .slice(0, 3)
+        .map((flag) => `${flag.flag}(${flag.confidence.toFixed(3)})`);
+      lines.push(`Metacognitive flags: ${metacognitiveSummary.length > 0 ? metacognitiveSummary.join(', ') : 'none'}`);
+      lines.push(
+        `Relationship: trust=${internalState.relational.trustLevel},`
+        + ` contact=${internalState.relational.contactId ?? 'none'},`
+        + ` baseline_valence=${formatSignedDecimal(internalState.relational.baselineValence)},`
+        + ` mood_drift=${formatSignedDecimal(internalState.relational.moodDrift)},`
+        + ` interaction_frequency=${internalState.relational.recentInteractionFrequency.toFixed(3)},`
+        + ` last_seen_delta_seconds=${internalState.relational.lastSeenDeltaSeconds ?? 'none'}`,
+      );
     }
 
     if (emotionAppraisalChain.length > 0) {
@@ -4066,12 +4150,6 @@ export class SubstrateAgent {
         const summary = entry.summary.replace(/\s+/g, ' ').trim();
         lines.push(`- ${new Date(entry.timestamp).toISOString()} (${entry.trigger}): ${summary}`);
       }
-    }
-
-    const metacognitiveNotesBlock = this.buildMetacognitiveNotesContextBlock();
-    if (metacognitiveNotesBlock) {
-      lines.push('');
-      lines.push(metacognitiveNotesBlock);
     }
 
     const activeConcernsBlock = this.buildActiveConcernsContextBlock(canonicalContactKey);
@@ -4248,9 +4326,19 @@ export class SubstrateAgent {
     };
   }
 
+  private toEmotionSnapshotFromInternalState(internalState: InternalState): EmotionStateSnapshot {
+    return {
+      vad: { ...internalState.emotional.vad },
+      mood: { ...internalState.emotional.mood },
+      discrete: { ...internalState.emotional.discreteEmotions },
+      confidence: internalState.emotional.confidence,
+    };
+  }
+
   private getPersonaAdaptation(
     trustLevel: TrustLevel,
-    emotionSnapshot?: EmotionStateSnapshot | null,
+    internalState: InternalState,
+    metacognitiveFlags: readonly MetacognitiveFlag[],
     templateVariables?: Record<string, string>,
   ): string | null {
     const trustHint = (() => {
@@ -4269,11 +4357,11 @@ export class SubstrateAgent {
     })();
     const affectHint = buildEmotionalAffectSection({
       trustLevel,
-      emotionSnapshot,
+      emotionSnapshot: this.toEmotionSnapshotFromInternalState(internalState),
       promptVariables: templateVariables,
       config: this.config as unknown as Record<string, unknown>,
     });
-    const metacognitiveHint = buildMetacognitivePersonaHint(this.currentMetacognitiveFlags);
+    const metacognitiveHint = buildMetacognitivePersonaHint(metacognitiveFlags);
 
     const sections = [trustHint, affectHint, metacognitiveHint]
       .filter((section): section is string => Boolean(section?.trim()));

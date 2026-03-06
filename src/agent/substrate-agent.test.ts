@@ -3274,9 +3274,10 @@ describe('SubstrateAgent.handleMessage', () => {
 
       const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
       const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-      expect(firstPrompt).toContain('[Emotional State]');
+      expect(firstPrompt).toContain('[Internal State]');
       expect(firstPrompt).toContain('Top emotions: joy=');
       expect(secondPrompt).toContain('Top emotions: anger=');
+      expect(secondPrompt).toContain('Metacognitive flags:');
 
       const firstAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[0][5] as { metadata?: string };
       const secondAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[1][5] as { metadata?: string };
@@ -3381,6 +3382,11 @@ describe('SubstrateAgent.handleMessage', () => {
     );
     expect(agent.getCurrentInternalState()).toEqual(response.metadata.internalState);
     expect(agent.getCurrentInternalStateSnapshotRef()).toBe(response.metadata.internalStateSnapshotRef);
+
+    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    expect(prompt).toContain('[Internal State]');
+    expect(prompt).toContain('Active concern refs: concern-1:high');
+    expect(prompt).toContain('Relationship: trust=trusted, contact=contact-123');
   });
 
   it('derives metacognitive flags from internal state and injects compact notes on subsequent turns', async () => {
@@ -3458,7 +3464,8 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-    expect(secondPrompt).toContain('[Metacognitive Notes]');
+    expect(secondPrompt).toContain('[Internal State]');
+    expect(secondPrompt).toContain('Metacognitive flags:');
     expect(secondPrompt).toContain('uncertainty');
     expect(secondPrompt).toContain('[Metacognitive Persona Guidance]');
   });
@@ -3602,6 +3609,22 @@ describe('SubstrateAgent.handleMessage', () => {
         },
       },
     )).toThrow('Emotion runtime wiring is required');
+  });
+
+  it('fails closed when strict self-model wiring is requested without concern/contact providers', async () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+    agent.setSelfModelRuntimeRequired(true);
+
+    await expect(agent.handleMessage(makeMessage())).rejects.toThrow(
+      'Self-model runtime wiring is required but ActiveConcernProvider is not configured',
+    );
   });
 
   it('emits agent.error on handleMessage failure', async () => {

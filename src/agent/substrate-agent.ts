@@ -121,6 +121,10 @@ import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from
 import { EmotionObserver, type EmotionObserverResult } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
 import {
+  formatActiveConcernsContextBlock,
+  type ActiveConcernContextProvider,
+} from '../intention/concerns.js';
+import {
   buildSessionMetadataWithEmotionState,
   parseSessionEmotionState,
 } from '../emotion/session-metadata.js';
@@ -367,6 +371,7 @@ export class SubstrateAgent {
   memoryProvider: MemoryProvider | null = null;
   memoryExtractor: MemoryExtractor | null = null;
   scratchpadProvider: ScratchpadProvider | null = null;
+  activeConcernProvider: ActiveConcernContextProvider | null = null;
 
   // Trust resolution — null until contacts are wired
   contactStore: ContactStore | null = null;
@@ -3780,6 +3785,12 @@ export class SubstrateAgent {
       }
     }
 
+    const activeConcernsBlock = this.buildActiveConcernsContextBlock(canonicalContactKey);
+    if (activeConcernsBlock) {
+      lines.push('');
+      lines.push(activeConcernsBlock);
+    }
+
     if (skillsContext) {
       lines.push('');
       lines.push('[Skills Index]');
@@ -3788,6 +3799,21 @@ export class SubstrateAgent {
     }
 
     return lines.join('\n');
+  }
+
+  private buildActiveConcernsContextBlock(canonicalContactKey?: string): string {
+    if (!this.activeConcernProvider) return '';
+
+    try {
+      const concerns = this.activeConcernProvider.getActiveConcerns(canonicalContactKey);
+      if (concerns.length === 0) return '';
+      return formatActiveConcernsContextBlock(concerns);
+    } catch (error) {
+      log.warn('Active concerns context injection skipped due to provider error', {
+        error: toErrorMessage(error),
+      });
+      return '';
+    }
   }
 
   private buildScratchpadContextBlock(): string {

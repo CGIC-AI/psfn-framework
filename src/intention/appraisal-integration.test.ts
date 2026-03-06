@@ -146,4 +146,148 @@ describe('intention appraisal runtime integration', () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('forces appraisal on sustained primary-contact negative mood via motivation bridge', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-motivation-'));
+    try {
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 50,
+        heartbeatIntervalMs: 1_000,
+      });
+      const inferers: PostTurnActionInferer[] = [];
+      const agentLoop = {
+        handleMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
+        followUp: vi.fn(),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        registerPostTurnActionInferer: vi.fn((inferer: PostTurnActionInferer) => {
+          inferers.push(inferer);
+          return () => {};
+        }),
+      };
+      const sender = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      const llmProvider = {
+        stream: vi.fn(),
+        complete: vi.fn().mockResolvedValue({
+          content: JSON.stringify({
+            decisions: [{
+              type: 'followUp',
+              priority: 'medium',
+              reason: 'Sustained negative mood requires a proactive check-in.',
+              timing: 'soon',
+              followUp: {
+                content: 'Checking in because your mood has stayed low.',
+              },
+            }],
+          }),
+          model: 'background-model',
+          toolCalls: [],
+          inputTokens: 44,
+          outputTokens: 29,
+          stopReason: 'stop',
+        }),
+      };
+      const emotionSnapshots = [{
+        vad: { valence: -0.2, arousal: 0.1, dominance: -0.1 },
+        mood: { valence: -0.28, arousal: 0.05, dominance: -0.1 },
+        discrete: { sadness: 0.6 },
+        confidence: 0.9,
+      }, {
+        vad: { valence: -0.22, arousal: 0.09, dominance: -0.1 },
+        mood: { valence: -0.29, arousal: 0.04, dominance: -0.1 },
+        discrete: { sadness: 0.62 },
+        confidence: 0.9,
+      }];
+      let emotionIndex = 0;
+      const emotionState = {
+        getState: vi.fn(() => {
+          const snapshot = emotionSnapshots[Math.min(emotionIndex, emotionSnapshots.length - 1)];
+          emotionIndex += 1;
+          return snapshot;
+        }),
+      };
+
+      const postTurnActions = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop,
+        intervalMs: 1,
+      });
+
+      wireHeartbeatRuntime(
+        { registerTool: vi.fn() },
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+        undefined,
+        {
+          eventBus,
+          postTurnActions,
+          llmProvider: llmProvider as any,
+          sessionManager: {
+            resolveSessionChannelId: (channelId: string) => channelId,
+            getRecentMessages: vi.fn().mockReturnValue([]),
+          } as any,
+          emotionState,
+          contactStore: {
+            getById: () => ({ trustLevel: 'primary' }),
+          },
+        },
+      );
+
+      expect(inferers).toHaveLength(1);
+      const inferer = inferers[0]!;
+      const firstMessage = {
+        ...makeMessage(),
+        id: 'msg-intention-motivation-1',
+        content: 'I am feeling a bit off.',
+      };
+      const secondMessage = {
+        ...makeMessage(),
+        id: 'msg-intention-motivation-2',
+        content: 'Still feeling the same low mood.',
+      };
+      const response = makeResponse();
+
+      await inferer({
+        message: firstMessage,
+        response,
+        turnMessages: [],
+        canonicalContactKey: 'contact-primary',
+        turnId: 'turn-intention-motivation-1' as any,
+        completedAt: Date.now(),
+      } as any);
+      await Promise.resolve();
+      await Promise.resolve();
+      await scheduler.tick();
+
+      expect(llmProvider.complete).toHaveBeenCalledTimes(0);
+      expect(agentLoop.followUp).toHaveBeenCalledTimes(0);
+
+      await inferer({
+        message: secondMessage,
+        response,
+        turnMessages: [],
+        canonicalContactKey: 'contact-primary',
+        turnId: 'turn-intention-motivation-2' as any,
+        completedAt: Date.now(),
+      } as any);
+      await new Promise(resolve => setTimeout(resolve, 60));
+      for (let index = 0; index < 3; index += 1) {
+        await Promise.resolve();
+        await scheduler.tick();
+      }
+
+      expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+      expect(agentLoop.followUp).toHaveBeenCalledTimes(1);
+      expect(agentLoop.followUp).toHaveBeenCalledWith(expect.objectContaining({
+        content: 'Checking in because your mood has stayed low.',
+      }));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -467,6 +467,72 @@ describe('TelegramAdapter', () => {
     expect(sendCalls[1]?.body.reply_to_message_id).toBe(11);
   });
 
+  it('keeps ingress responsive across chats while one chat turn is in flight', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 701 }),
+    });
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    const handled: string[] = [];
+    const firstTurnStarted = createDeferred<void>();
+    const releaseFirstTurn = createDeferred<void>();
+
+    adapter.onMessage(async (message) => {
+      handled.push(`${message.channelId}:${message.content}`);
+      if (message.channelId === 'telegram:600') {
+        firstTurnStarted.resolve();
+        await releaseFirstTurn.promise;
+      }
+      return okResponse(message.channelId);
+    });
+
+    const firstTurn = (adapter as any).handleUpdate({
+      update_id: 10,
+      message: {
+        message_id: 30,
+        date: 1_700_000_010,
+        text: 'first',
+        chat: { id: 600, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'user' },
+      },
+    });
+    await firstTurnStarted.promise;
+
+    await (adapter as any).handleUpdate({
+      update_id: 11,
+      message: {
+        message_id: 31,
+        date: 1_700_000_011,
+        text: 'second',
+        chat: { id: 601, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'user' },
+      },
+    });
+
+    expect(handled).toEqual([
+      'telegram:600:first',
+      'telegram:601:second',
+    ]);
+
+    let sendCalls = calls.filter(call => call.method === 'sendMessage');
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]?.body.chat_id).toBe('601');
+    expect(sendCalls[0]?.body.reply_to_message_id).toBe(31);
+
+    releaseFirstTurn.resolve();
+    await firstTurn;
+
+    for (let i = 0; i < 40; i += 1) {
+      sendCalls = calls.filter(call => call.method === 'sendMessage');
+      if (sendCalls.length >= 2) break;
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+
+    expect(sendCalls).toHaveLength(2);
+    expect(sendCalls[1]?.body.chat_id).toBe('600');
+    expect(sendCalls[1]?.body.reply_to_message_id).toBe(30);
+  });
+
   it('registers webhook mode lifecycle and routes incoming updates through listener', async () => {
     const webhookPort = await reservePort();
     const { fetchImpl, calls } = makeFetchMock({

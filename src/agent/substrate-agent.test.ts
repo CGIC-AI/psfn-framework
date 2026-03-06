@@ -659,6 +659,81 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
+  it('keeps normal chat replies responsive while a long-running background continuation is still in flight', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    let releaseBackgroundTurn: (() => void) | null = null;
+    let backgroundPromptStarted = false;
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      backgroundPromptStarted = true;
+      await new Promise<void>((resolve) => {
+        releaseBackgroundTurn = resolve;
+      });
+      this.appendMessage({
+        role: 'assistant',
+        content: [{ type: 'text' as const, text: 'background done' }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    });
+    mockAssistantResponse('foreground done');
+
+    const endOrder: string[] = [];
+    eventBus.on('agent.turn.end', ({ requestId }) => {
+      endOrder.push(requestId);
+    });
+
+    const backgroundTurn = agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-700',
+      channelId: 'terminal:shared-session',
+      channelType: 'terminal',
+      content: 'continue deferred task',
+    }));
+
+    await vi.waitFor(() => {
+      expect(backgroundPromptStarted).toBe(true);
+    });
+
+    const foregroundResponse = await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-700',
+      channelId: 'terminal:shared-session',
+      channelType: 'terminal',
+      content: 'quick foreground check',
+    }));
+    expect(foregroundResponse.content).toBe('foreground done');
+
+    let backgroundSettled = false;
+    void backgroundTurn.finally(() => {
+      backgroundSettled = true;
+    });
+    await Promise.resolve();
+    expect(backgroundSettled).toBe(false);
+
+    releaseBackgroundTurn?.();
+    const backgroundResponse = await backgroundTurn;
+    expect(backgroundResponse.content).toBe('background done');
+    expect(endOrder).toEqual([
+      'foreground-turn-700',
+      'deferred-tool-handoff:action-700',
+    ]);
+  });
+
   it('keeps deferred background completions isolated from an unrelated active foreground session', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

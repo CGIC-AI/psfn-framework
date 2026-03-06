@@ -7,6 +7,7 @@ import type { SessionStore } from '../session/store.js';
 import type { SessionEntry } from '../session/types.js';
 import type { SubstrateConfig, TurnID } from '../types.js';
 import { createComponentLogger } from '../logger.js';
+import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import type { MemoryStore } from './store.js';
 import type { ExtractedFact } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
@@ -284,6 +285,7 @@ export class MemoryExtractor {
       }),
       maxWrites: resolveMaxWrites(this.runtimeConfig, this.maxWrites),
       telemetryEnabled: this.isTelemetryEnabled(),
+      useCompositionalExtraction: this.shouldUseCompositionalExtraction(channelId),
       isAcceptingExtractions: () => this.acceptingExtractions,
       processFact: (fact, sourceRef, maybeContactId) => this.processFact(fact, sourceRef, maybeContactId),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
@@ -308,6 +310,17 @@ export class MemoryExtractor {
         acceptedWrites,
       ) => this.maybeRefreshContactProfile(extractionChannelId, reason, contactId, acceptedWrites),
     });
+  }
+
+  private shouldUseCompositionalExtraction(channelId: string): boolean {
+    if (!this.runtimeConfig) return false;
+
+    return evaluateCompositionalPolicyForChannelId({
+      policy: this.runtimeConfig.compositionalPolicy,
+      capabilityTier: this.runtimeConfig.capabilityTier,
+      channelId,
+      purpose: 'extraction',
+    }).allowed;
   }
 
   private async processFact(

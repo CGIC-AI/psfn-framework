@@ -17,6 +17,11 @@ import type { ExtractedFact } from '../types.js';
 import type { WriteResult } from '../writer.js';
 import { parseFactsXml } from './parser.js';
 import {
+  buildExtractionEntryChunks,
+  formatExtractionTranscript,
+  mergeExtractedFactGroups,
+} from './chunk-compose.js';
+import {
   applyChannelImportanceCaps,
   buildExtractionSourceRef,
   compareAcceptedFactCandidates,
@@ -48,6 +53,7 @@ export interface ExtractionRunOptions {
   gateConfig: ExtractionGateConfig;
   maxWrites: number;
   telemetryEnabled: boolean;
+  useCompositionalExtraction: boolean;
   isAcceptingExtractions: () => boolean;
   processFact: (fact: ExtractedFact, sourceRef: string, canonicalContactId?: string) => Promise<WriteResult>;
   emitExtractionStart: (
@@ -84,9 +90,6 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
     const channelVisibility = classifyChannel(options.channelId);
     const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility, turnId);
-    const recentMessages = recentEntries
-      .map(e => `${e.authorName ?? e.role}: ${e.content}`)
-      .join('\n');
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
 
     const existing = options.memoryStore.getMemoriesByChannel(options.channelId, 30);
@@ -97,28 +100,38 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
     const extractionPrompt = options.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
       ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
-    const prompt = injectPromptRuntimeTokens(extractionPrompt)
-      .replace('{existing_facts}', existingFacts)
-      .replace('{recent_messages}', recentMessages);
+    const entryChunks = options.useCompositionalExtraction
+      ? buildExtractionEntryChunks(recentEntries)
+      : [recentEntries];
+    const parsedFactGroups: ExtractedFact[][] = [];
+    for (const [index, chunkEntries] of entryChunks.entries()) {
+      const prompt = injectPromptRuntimeTokens(extractionPrompt)
+        .replace('{existing_facts}', existingFacts)
+        .replace('{recent_messages}', formatExtractionTranscript(chunkEntries));
+      const chunkRequestId = entryChunks.length > 1
+        ? `${requestId}:chunk:${index + 1}`
+        : requestId;
 
-    const response = await options.llmClient.complete(
-      {
-        systemPrompt: prompt,
-        messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
-        correlation: {
-          requestId,
-          ...(turnId ? { turnId } : {}),
-          channelId: options.channelId,
-          callType: 'memory',
-          purpose: 'memory.extraction',
+      const response = await options.llmClient.complete(
+        {
+          systemPrompt: prompt,
+          messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
+          correlation: {
+            requestId: chunkRequestId,
+            ...(turnId ? { turnId } : {}),
+            channelId: options.channelId,
+            callType: 'memory',
+            purpose: 'memory.extraction',
+          },
         },
-      },
-      'background',
-    );
+        'background',
+      );
 
-    const parsedFacts = parseFactsXml(response.content);
+      parsedFactGroups.push(parseFactsXml(response.content));
+    }
+    const parsedFacts = mergeExtractedFactGroups(parsedFactGroups);
     const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
-    const facts = [...parsedFacts, ...inferredBoundaryFacts]
+    const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts])
       .map(fact => applyChannelImportanceCaps(fact, channelVisibility));
 
     if (inferredBoundaryFacts.length > 0 && options.telemetryEnabled) {

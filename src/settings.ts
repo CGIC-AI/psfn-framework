@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import {
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
   type CapabilityTier,
+  type CompositionalPolicyConfig,
   type ImportProcessingRouteMode,
   type ModelCatalogEntry,
   type ModelContextBudgetConfig,
@@ -19,6 +20,11 @@ import {
   type ModelSlotOverrides,
   type SubstrateConfig,
 } from './types.js';
+import {
+  createDefaultCompositionalPolicyConfig,
+  cloneCompositionalPolicyConfig,
+  normalizeCompositionalPolicyConfig,
+} from './compositional/policy.js';
 import { createComponentLogger } from './logger.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
@@ -37,6 +43,8 @@ import {
   isStreamingTtsProvider,
   resolveDefaultStreamingTtsProvider,
 } from './voice/connectors/tts/index.js';
+
+export { createDefaultCompositionalPolicyConfig } from './compositional/policy.js';
 
 const log = createComponentLogger('Settings');
 
@@ -142,6 +150,7 @@ export interface EditableSettings {
   importProcessingStrictPolicy?: boolean;
   importProcessingLocalEndpointUrl?: string;
   importProcessingLocalModel?: string;
+  compositionalPolicy?: CompositionalPolicyConfig;
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
@@ -239,6 +248,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'importProcessingStrictPolicy',
   'importProcessingLocalEndpointUrl',
   'importProcessingLocalModel',
+  'compositionalPolicy',
   'webFetchAllowHttp',
   'webFetchDomainAllowlist',
   'webFetchAllowInternalNetwork',
@@ -281,7 +291,13 @@ export const RUNTIME_SETTINGS_KEYS = [
 ] as const;
 
 export type RuntimeSettingKey = typeof RUNTIME_SETTINGS_KEYS[number];
-export type RuntimeSettingValue = string | number | boolean | null | string[];
+export type RuntimeSettingValue =
+  | string
+  | number
+  | boolean
+  | null
+  | string[]
+  | CompositionalPolicyConfig;
 export type RuntimeSettingsSnapshot = Record<RuntimeSettingKey, RuntimeSettingValue>;
 
 function toPositiveInteger(value: unknown): number | undefined {
@@ -728,6 +744,10 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
       typeof settings.importProcessingLocalModel === 'string'
         ? settings.importProcessingLocalModel.trim()
         : '';
+  }
+
+  if ('compositionalPolicy' in settings) {
+    normalized.compositionalPolicy = normalizeCompositionalPolicyConfig(settings.compositionalPolicy);
   }
 
   if ('webFetchAllowHttp' in settings) {
@@ -1184,6 +1204,9 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     importProcessingStrictPolicy: config.importProcessingStrictPolicy ?? false,
     importProcessingLocalEndpointUrl: config.importProcessingLocalEndpointUrl ?? null,
     importProcessingLocalModel: config.importProcessingLocalModel ?? null,
+    compositionalPolicy: cloneCompositionalPolicyConfig(
+      config.compositionalPolicy ?? createDefaultCompositionalPolicyConfig(),
+    ),
     webFetchAllowHttp: config.webFetchAllowHttp ?? false,
     webFetchDomainAllowlist: config.webFetchDomainAllowlist ?? [],
     webFetchAllowInternalNetwork: config.webFetchAllowInternalNetwork
@@ -1352,6 +1375,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if ('importProcessingLocalModel' in settings) {
     const trimmed = settings.importProcessingLocalModel?.trim() ?? '';
     config.importProcessingLocalModel = trimmed || undefined;
+  }
+  if ('compositionalPolicy' in settings) {
+    config.compositionalPolicy = cloneCompositionalPolicyConfig(settings.compositionalPolicy);
   }
   if ('webFetchAllowHttp' in settings) {
     config.webFetchAllowHttp = settings.webFetchAllowHttp ?? false;

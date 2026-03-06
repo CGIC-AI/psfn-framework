@@ -33,4 +33,14 @@ describe('resolveBackupRuntimeConfig', () => {
     expect(config.retentionCount).toBe(MIN_BACKUP_RETENTION_COUNT);
     expect(config.rootDir).toBe('/tmp/custom-backups');
   });
+
+  it('uses layout-provided backup root when env override is absent', () => {
+    const config = resolveBackupRuntimeConfig({
+      dataDir: '/tmp/psfn-backup-layout',
+      defaultRootDir: '/srv/psfn/runtime/production/backups',
+      env: {},
+    });
+
+    expect(config.rootDir).toBe('/srv/psfn/runtime/production/backups');
+  });
 });

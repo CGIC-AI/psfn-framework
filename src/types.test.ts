@@ -21,6 +21,12 @@ function clearRuntimePathEnv(): void {
   delete process.env.DATABASE_PATH;
   delete process.env.DATABASE_BASENAME;
   delete process.env.CHARACTER_CARD_PATH;
+  delete process.env.PSFN_RUNTIME_LAYOUT_MODE;
+  delete process.env.PSFN_RUNTIME_ROOT;
+  delete process.env.WORKSPACE_PATH;
+  delete process.env.PSFN_LOGS_DIR;
+  delete process.env.PSFN_TEMP_DIR;
+  delete process.env.BACKUP_ROOT_DIR;
 }
 
 afterEach(() => {
@@ -85,6 +91,26 @@ describe('loadConfig path defaults', () => {
     expect(config.dataDir).toBe('./system-data');
     expect(config.characterCardPath).toBe('./companion-data/character.json');
     expect(config.databasePath).toBe('./companion-data/companion.db');
+  });
+
+  it('resolves isolated production-mode defaults when runtime layout mode is production', () => {
+    clearRuntimePathEnv();
+    process.env.PSFN_RUNTIME_LAYOUT_MODE = 'production';
+
+    const config = loadConfig();
+    expect(config.systemDataDir).toBe('./runtime/production/system-data');
+    expect(config.companionDataDir).toBe('./runtime/production/companion-data');
+    expect(config.dataDir).toBe('./runtime/production/system-data');
+    expect(config.characterCardPath).toBe('./runtime/production/companion-data/character.json');
+    expect(config.databasePath).toBe('./runtime/production/companion-data/companion.db');
+  });
+
+  it('rejects shared DATA_DIR fallback when runtime layout mode resolves to production', () => {
+    clearRuntimePathEnv();
+    process.env.NODE_ENV = 'production';
+    process.env.DATA_DIR = './shared-data';
+
+    expect(() => loadConfig()).toThrow('DATA_DIR shared-root mode is forbidden');
   });
 
   it('rejects partial split-root configuration', () => {

@@ -13,6 +13,7 @@ export interface BackupRuntimeConfig {
 
 interface ResolveBackupRuntimeConfigOptions {
   dataDir: string;
+  defaultRootDir?: string;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -31,7 +32,8 @@ export function resolveBackupRuntimeConfig(
   options: ResolveBackupRuntimeConfigOptions,
 ): BackupRuntimeConfig {
   const env = options.env ?? process.env;
-  const rootDir = env.BACKUP_ROOT_DIR?.trim() || resolveBackupsDir(options.dataDir);
+  const defaultRootDir = options.defaultRootDir?.trim() || resolveBackupsDir(options.dataDir);
+  const rootDir = env.BACKUP_ROOT_DIR?.trim() || defaultRootDir;
 
   return {
     intervalMs: parseIntegerEnv(

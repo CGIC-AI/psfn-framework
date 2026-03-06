@@ -6,7 +6,7 @@ import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 import type { ContextManifest } from './session/context-manifest.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
-import { resolvePersistenceRoots } from './persistence/layout.js';
+import { resolveRuntimePathLayout } from './persistence/layout.js';
 
 // ── Channel-agnostic message types ──
 
@@ -599,13 +599,20 @@ export function loadConfig(): SubstrateConfig {
     0,
   );
   const echoTtsModel = parseOptionalStringEnv(process.env.ECHO_TTS_MODEL);
-  const persistenceRoots = resolvePersistenceRoots({
+  const runtimePathLayout = resolveRuntimePathLayout({
+    mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
+    nodeEnv: process.env.NODE_ENV,
+    runtimeRootDir: process.env.PSFN_RUNTIME_ROOT,
     systemDataDir: process.env.SYSTEM_DATA_DIR,
     companionDataDir: process.env.COMPANION_DATA_DIR,
     legacyDataDir: process.env.DATA_DIR,
+    workspacePath: process.env.WORKSPACE_PATH,
+    logsDir: process.env.PSFN_LOGS_DIR,
+    tempDir: process.env.PSFN_TEMP_DIR,
+    backupsDir: process.env.BACKUP_ROOT_DIR,
   });
-  const dataDir = persistenceRoots.systemDataDir;
-  const companionDataDir = persistenceRoots.companionDataDir;
+  const dataDir = runtimePathLayout.systemDataDir;
+  const companionDataDir = runtimePathLayout.companionDataDir;
   const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${companionDataDir}/character.json`;
   const databaseBasename = sanitizeDatabaseBasename(process.env.DATABASE_BASENAME);
   const databasePath = process.env.DATABASE_PATH ?? `${companionDataDir}/${databaseBasename}.db`;
@@ -620,7 +627,7 @@ export function loadConfig(): SubstrateConfig {
     discordToken: process.env.DISCORD_TOKEN ?? '',
     discordBotId: process.env.DISCORD_BOT_ID ?? '',
     characterCardPath,
-    systemDataDir: persistenceRoots.systemDataDir,
+    systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
     dataDir,
     databasePath,

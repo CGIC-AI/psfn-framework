@@ -58,6 +58,7 @@ import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveConfiguredSystemDataDir,
+  resolveRuntimePathLayout,
 } from './persistence/layout.js';
 import {
   assertPersistenceCutoverReady,
@@ -337,6 +338,18 @@ async function main(): Promise<void> {
   }
   const systemDataDir = resolveConfiguredSystemDataDir(config);
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const runtimePathLayout = resolveRuntimePathLayout({
+    mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
+    nodeEnv: process.env.NODE_ENV,
+    runtimeRootDir: process.env.PSFN_RUNTIME_ROOT,
+    systemDataDir,
+    companionDataDir,
+    legacyDataDir: process.env.DATA_DIR,
+    workspacePath: process.env.WORKSPACE_PATH,
+    logsDir: process.env.PSFN_LOGS_DIR,
+    tempDir: process.env.PSFN_TEMP_DIR,
+    backupsDir: process.env.BACKUP_ROOT_DIR,
+  });
   assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config));
   const savedSettings = loadSettings(systemDataDir);
   applySettings(config, savedSettings);
@@ -351,9 +364,12 @@ async function main(): Promise<void> {
   );
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const workspacePathEnv = process.env.WORKSPACE_PATH;
-  const workspacePath = workspacePathEnv ?? './workspace';
+  const workspacePath = runtimePathLayout.workspacePath;
   if (!workspacePathEnv) {
-    log.warn('WORKSPACE_PATH not set, defaulting to ./workspace');
+    log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
+      mode: runtimePathLayout.mode,
+      workspacePath,
+    });
   }
   const ntfyBaseUrl = process.env.NTFY_BASE_URL?.trim() || undefined;
   const ntfyTopic = process.env.NTFY_TOPIC?.trim() || undefined;

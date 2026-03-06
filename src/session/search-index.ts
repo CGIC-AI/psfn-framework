@@ -10,7 +10,7 @@ const MAX_SEARCH_LIMIT = 100;
 interface IndexedSearchRow {
   channel_id: string;
   message_id: number;
-  role: 'user' | 'assistant' | 'system';
+  role: SessionEntry['role'];
   author_id: string | null;
   author_name: string | null;
   content: string;
@@ -23,7 +23,7 @@ interface IndexedSearchRow {
 export interface SessionSearchHit {
   channelId: string;
   messageId: number;
-  role: 'user' | 'assistant' | 'system';
+  role: SessionEntry['role'];
   authorId?: string;
   authorName?: string;
   content: string;

@@ -258,7 +258,7 @@ function scanCompactionSafetyEntries(entries: SessionEntry[]): TaggedCompactionE
   const seen = new Set<string>();
 
   for (const entry of entries) {
-    if (entry.role === 'user') continue;
+    if (entry.role === 'user' || entry.role === 'tool') continue;
 
     const normalizedContent = normalizeTaggedContent(entry.content);
     if (!normalizedContent) continue;
@@ -290,6 +290,7 @@ function scanCompactionEmotionalEntries(
   const seen = new Set<string>();
 
   for (const entry of entries) {
+    if (entry.role === 'tool') continue;
     const verbatimContent = entry.content.trim();
     if (!verbatimContent) continue;
 

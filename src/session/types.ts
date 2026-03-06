@@ -1,7 +1,9 @@
+export type SessionEntryRole = 'user' | 'assistant' | 'system' | 'tool';
+
 export interface SessionEntry {
   id: number;
   channelId: string;
-  role: 'user' | 'assistant' | 'system';
+  role: SessionEntryRole;
   content: string;
   authorId?: string;
   authorName?: string;
@@ -28,7 +30,7 @@ export interface JournalEntry {
   id: number;
   channelId: string;
   // message fields
-  role?: 'user' | 'assistant' | 'system';
+  role?: SessionEntryRole;
   content?: string;
   authorId?: string;
   authorName?: string;

@@ -12,7 +12,7 @@ import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
 import { createHash } from 'node:crypto';
-import type { AssistantMessage, ImageContent, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type {
@@ -2179,6 +2179,14 @@ export class SubstrateAgent {
         log.info('Broadcast provenance', provenancePayload);
       }
 
+      this.recordToolObservations(
+        message,
+        turnId,
+        requestId,
+        turnMessages,
+        authorContext.trustLevel,
+      );
+
       // Record assistant message (JSONL append = L0 archival)
       if (!broadcastSafetyMeta?.approvalRequired) {
         assistantSessionEntryId = this.recordAssistantMessage(
@@ -2724,6 +2732,34 @@ export class SubstrateAgent {
     );
   }
 
+  private recordToolObservations(
+    message: SubstrateMessage,
+    turnId: TurnID,
+    requestId: string,
+    turnMessages: AgentMessage[],
+    trustLevel: TrustLevel,
+  ): void {
+    for (const entry of turnMessages) {
+      if (!this.isToolResultAgentMessage(entry)) continue;
+      this.sessionManager.recordToolObservation(
+        message.channelId,
+        {
+          toolName: entry.toolName,
+          content: this.extractToolResultText(entry),
+          ...(entry.toolCallId ? { toolCallId: entry.toolCallId } : {}),
+          ...(typeof entry.isError === 'boolean' ? { isError: entry.isError } : {}),
+        },
+        message.isDirectMessage,
+        {
+          trustLevel,
+          turnId,
+          requestId,
+          sourceMessageId: message.id,
+        },
+      );
+    }
+  }
+
   private buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] {
     const toolCalls: TurnRecordToolCall[] = [];
     for (const entry of turnMessages) {
@@ -2878,6 +2914,31 @@ export class SubstrateAgent {
 
   private isToolResultAgentMessage(message: AgentMessage): message is ToolResultMessage {
     return (message as { role?: string }).role === 'toolResult';
+  }
+
+  private extractToolResultText(message: ToolResultMessage): string {
+    const content = message.content;
+    if (typeof content === 'string') {
+      return content;
+    }
+
+    if (Array.isArray(content)) {
+      const textParts = content
+        .filter((block): block is TextContent => block.type === 'text' && typeof block.text === 'string')
+        .map(block => block.text)
+        .join('');
+      if (textParts.trim()) {
+        return textParts;
+      }
+
+      try {
+        return JSON.stringify(content);
+      } catch {
+        return '';
+      }
+    }
+
+    return '';
   }
 
   private buildTurnToolSummary(turnMessages: AgentMessage[]): TurnToolSummary {

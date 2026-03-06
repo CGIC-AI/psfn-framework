@@ -1,3 +1,5 @@
+import type { SessionEntry } from '../session/types.js';
+
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
 
@@ -8,7 +10,7 @@ export interface ShardSourceContext {
 }
 
 export interface ShardContextPackEntry {
-  role: 'user' | 'assistant' | 'system';
+  role: SessionEntry['role'];
   content: string;
   authorName?: string;
   timestamp: number;

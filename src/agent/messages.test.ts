@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { UserMessage, AssistantMessage } from '@mariozechner/pi-ai';
+import type { UserMessage, AssistantMessage, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import {
   convertToLlm,
@@ -221,6 +221,31 @@ describe('sessionEntryToMessage', () => {
     const mirror = msg as MirrorMessage;
     expect(mirror.originChannelId).toBe('api:origin');
     expect(mirror.sourceRole).toBe('assistant');
+  });
+
+  it('converts tool entry to ToolResultMessage', () => {
+    const entry: SessionEntry = {
+      id: 5,
+      channelId: 'ch1',
+      role: 'tool',
+      content: 'matched 2 files',
+      timestamp: NOW,
+      metadata: JSON.stringify({
+        toolObservation: {
+          schemaVersion: 1,
+          toolName: 'search_files',
+          toolCallId: 'tool-1',
+          truncated: false,
+          originalCharLength: 15,
+        },
+      }),
+    };
+    const msg = sessionEntryToMessage(entry) as ToolResultMessage;
+    expect(msg.role).toBe('toolResult');
+    expect(msg.toolName).toBe('search_files');
+    expect(msg.toolCallId).toBe('tool-1');
+    expect(msg.content).toEqual([{ type: 'text', text: 'matched 2 files' }]);
+    expect(msg.isError).toBe(false);
   });
 });
 

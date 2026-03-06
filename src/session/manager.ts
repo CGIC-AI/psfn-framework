@@ -55,6 +55,11 @@ import {
   cloneSessionEntry,
 } from '../turns/snapshot.js';
 import { getMergedContinuity } from './manager/context-support.js';
+import {
+  buildToolObservationMetadata,
+  normalizeToolObservation,
+  type ToolObservationInput,
+} from './tool-observation.js';
 
 export type {
   ImportedHistoryBootstrapChunk,
@@ -289,6 +294,43 @@ export class SessionManager {
       mirrorEnabled: options.mirror !== false,
     });
     return entryId;
+  }
+
+  recordToolObservation(
+    channelId: string,
+    observation: ToolObservationInput,
+    isDirectMessage?: boolean,
+    options: SessionMessageRecordOptions = {},
+  ): number | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
+    const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
+    const channelVisibility = classifyChannel(resolvedChannelId, meta);
+    const timestamp = Date.now();
+    const turnMetadata = options.turnId
+      ? buildSessionMetadataWithTurn(undefined, {
+        turnId: options.turnId,
+        requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
+        sourceMessageId: options.sourceMessageId,
+        role: 'tool',
+      })
+      : undefined;
+    const normalizedObservation = normalizeToolObservation(observation);
+    const metadata = buildToolObservationMetadata(
+      turnMetadata,
+      normalizedObservation.metadata,
+    );
+
+    return this.store.append({
+      channelId: resolvedChannelId,
+      role: 'tool',
+      content: normalizedObservation.content,
+      authorId: `tool:${normalizedObservation.metadata.toolName}`,
+      authorName: normalizedObservation.metadata.toolName,
+      timestamp,
+      channelVisibility,
+      metadata,
+    });
   }
 
   recordTurn(record: TurnRecord): void {

@@ -3,10 +3,16 @@
 // via TypeScript declaration merging. These are first-class in our session
 // pipeline but get flattened to standard Messages before hitting the LLM.
 
-import type { Message, UserMessage, AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
+import type {
+  Message,
+  UserMessage,
+  AssistantMessage as PiAssistantMessage,
+  ToolResultMessage,
+} from '@mariozechner/pi-ai';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import { DEFAULT_COMPANION_NAME } from '../identity/companion-naming.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
+import { parseToolObservationMetadata } from '../session/tool-observation.js';
 
 // ── Custom message types ──
 
@@ -177,6 +183,21 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
       content: entry.content,
       timestamp: ts,
     } satisfies UserMessage;
+  }
+
+  if (entry.role === 'tool') {
+    const toolObservation = parseToolObservationMetadata(entry.metadata);
+    if (!toolObservation) {
+      throw new Error(`Tool session entry ${entry.channelId}:${entry.id} is missing tool observation metadata`);
+    }
+    return {
+      role: 'toolResult',
+      toolCallId: toolObservation.toolCallId,
+      toolName: toolObservation.toolName,
+      content: [{ type: 'text', text: entry.content }],
+      isError: toolObservation.isError ?? false,
+      timestamp: ts,
+    } satisfies ToolResultMessage;
   }
 
   // assistant

@@ -163,6 +163,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'memoryBudgetPct',
   'extractionThresholdPct',
   'compactionThresholdPct',
+  'observationMaskingWindow',
   'compactionEmotionalSalienceThresholdPct',
   'memoryExtractionMaxWrites',
   'profileSynthesisRefreshIntervalMs',

@@ -119,6 +119,7 @@ function makeMessage(overrides?: Partial<SubstrateMessage>): SubstrateMessage {
 function makeMockSessionManager(): SessionManager {
   return {
     recordUserMessage: vi.fn().mockReturnValue(101),
+    recordToolObservation: vi.fn().mockReturnValue(102),
     recordAssistantMessage: vi.fn().mockReturnValue(102),
     recordTurn: vi.fn(),
     appendSystemNote: vi.fn(),
@@ -750,6 +751,81 @@ describe('SubstrateAgent.handleMessage', () => {
         sourceMessageId: 'msg-1',
       }),
     );
+  });
+
+  it('records tool observations before the final assistant message', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      this.appendMessage({
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'tool-1', name: 'think', arguments: { task: 'loop' } }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: {
+          input: 10,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 12,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'toolUse' as any,
+        timestamp: Date.now(),
+      });
+      this.appendMessage({
+        role: 'toolResult',
+        toolCallId: 'tool-1',
+        toolName: 'think',
+        content: [{ type: 'text', text: 'sandbox conclusion' }],
+        isError: false,
+        timestamp: Date.now(),
+      } as any);
+      this.appendMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Final response' }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: {
+          input: 12,
+          output: 3,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    });
+
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    await agent.handleMessage(makeMessage());
+
+    expect(sessionManager.recordToolObservation).toHaveBeenCalledWith(
+      'test-channel',
+      {
+        toolName: 'think',
+        toolCallId: 'tool-1',
+        content: 'sandbox conclusion',
+        isError: false,
+      },
+      undefined,
+      expect.objectContaining({
+        trustLevel: 'regular',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
+    );
+    const toolObservationCallOrder = vi.mocked(sessionManager.recordToolObservation).mock.invocationCallOrder[0];
+    const assistantCallOrder = vi.mocked(sessionManager.recordAssistantMessage).mock.invocationCallOrder[0];
+    expect(toolObservationCallOrder).toBeLessThan(assistantCallOrder);
   });
 
   it('generates TurnID once per turn and persists a canonical TurnRecord', async () => {

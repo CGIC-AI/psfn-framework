@@ -53,6 +53,15 @@ function parseJournalLine(line: string): JournalEntry {
     }
   }
 
+  if (entry.type === 'message') {
+    if (entry.role !== 'user' && entry.role !== 'assistant' && entry.role !== 'system' && entry.role !== 'tool') {
+      throw new Error('message entry role must be "user", "assistant", "system", or "tool"');
+    }
+    if (typeof entry.content !== 'string') {
+      throw new Error('message entry content must be a string');
+    }
+  }
+
   return entry as JournalEntry;
 }
 

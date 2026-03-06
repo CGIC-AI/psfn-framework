@@ -54,6 +54,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   extractionInterval: { sectionId: 'memory', surface: 'advanced' },
   compactionEmotionalSalienceThresholdPct: { sectionId: 'memory', surface: 'advanced' },
   compactionThresholdPct: { sectionId: 'sessions', surface: 'advanced' },
+  observationMaskingWindow: { sectionId: 'sessions', surface: 'advanced' },
   maintenanceIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   sessionRestartBehavior: { sectionId: 'sessions', surface: 'advanced' },
   compositionalPolicy: { sectionId: 'compositional', surface: 'advanced' },

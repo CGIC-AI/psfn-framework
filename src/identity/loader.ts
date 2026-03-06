@@ -2,13 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { CharacterCardV2 } from './types.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
+import { renderPromptRuntimeTokens } from './prompt-runtime.js';
 
-const PLACEHOLDER_PATTERNS = [
-  /^sytem prompt$/i,
-  /^system prompt$/i,
-  /^post history$/i,
-  /^post history instructions$/i,
-];
 const LEGACY_BOOTSTRAP_NAME = 'Purrsephone';
 const LEGACY_BOOTSTRAP_DESCRIPTION = 'A gentle, curious, and supportive AI companion.';
 const LEGACY_BOOTSTRAP_PERSONALITY = 'Warm, emotionally intelligent, and precise when helping with technical work.';
@@ -27,17 +22,6 @@ const SYSTEM_PROMPT_TEMPLATE = [
   '',
   '{{post_history_instructions}}',
 ].join('\n');
-
-function isPlaceholder(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed === '' || PLACEHOLDER_PATTERNS.some(p => p.test(trimmed));
-}
-
-function replaceTokens(text: string, charName: string, userName: string): string {
-  return text
-    .replace(/\{\{char\s*\}\}/gi, charName)
-    .replace(/\{\{user\s*\}\}/gi, userName);
-}
 
 export function loadCharacterCard(path: string): CharacterCardV2 {
   const raw = readFileSync(path, 'utf-8');
@@ -88,17 +72,19 @@ function writeCharacterCard(path: string, card: CharacterCardV2): void {
   writeFileSync(path, `${JSON.stringify(card, null, 2)}\n`, 'utf-8');
 }
 
-function cleanField(value: string | undefined): string {
-  if (!value) return '';
-  return isPlaceholder(value) ? '' : value;
-}
-
 export function composeSystemPromptTemplate(): string {
   return SYSTEM_PROMPT_TEMPLATE;
 }
 
 export function buildCharacterPromptTemplateVariables(card: CharacterCardV2): Record<string, string> {
   return buildCharacterMacroMap(card);
+}
+
+function renderWithCharacterMacros(
+  template: string,
+  variables: Record<string, string>,
+): string {
+  return renderPromptRuntimeTokens(template, { variables }).text.trim();
 }
 
 /**
@@ -143,38 +129,41 @@ export function assertValidCharacterCard(card: CharacterCardV2, pathHint = 'char
 }
 
 export function composeSystemPrompt(card: CharacterCardV2, userName = '{{user}}'): string {
-  const d = card.data;
-  const name = d.name;
+  const characterVariables = buildCharacterPromptTemplateVariables(card);
+  const runtimeCharacterName = characterVariables.char?.trim() || card.data.name;
+  const runtimeVariables = {
+    ...characterVariables,
+    user: userName,
+    user_name: userName,
+    char: runtimeCharacterName,
+    char_name: runtimeCharacterName,
+    character: runtimeCharacterName,
+    character_name: runtimeCharacterName,
+  };
 
   const sections: string[] = [];
+  sections.push(`You are ${runtimeCharacterName}.`);
 
-  sections.push(`You are ${name}.`);
+  const appendRenderedMacro = (macroValue: string | undefined): void => {
+    if (!macroValue) return;
+    const rendered = renderWithCharacterMacros(macroValue, runtimeVariables);
+    if (rendered.length > 0) sections.push(rendered);
+  };
 
-  if (d.description && !isPlaceholder(d.description)) {
-    sections.push(replaceTokens(d.description, name, userName).trim());
+  appendRenderedMacro(characterVariables.description);
+  appendRenderedMacro(characterVariables.personality);
+  appendRenderedMacro(characterVariables.scenario);
+  appendRenderedMacro(characterVariables.system_prompt);
+
+  const messageExample = renderWithCharacterMacros(
+    characterVariables['character.mes_example'] ?? '',
+    runtimeVariables,
+  );
+  if (messageExample.length > 0) {
+    sections.push(`Example dialogue style:\n${messageExample}`);
   }
 
-  if (d.personality && !isPlaceholder(d.personality)) {
-    sections.push(replaceTokens(d.personality, name, userName).trim());
-  }
-
-  if (d.scenario && !isPlaceholder(d.scenario)) {
-    sections.push(replaceTokens(d.scenario, name, userName).trim());
-  }
-
-  if (d.system_prompt && !isPlaceholder(d.system_prompt)) {
-    sections.push(replaceTokens(d.system_prompt, name, userName).trim());
-  }
-
-  if (d.mes_example && !isPlaceholder(d.mes_example)) {
-    sections.push(
-      'Example dialogue style:\n' + replaceTokens(d.mes_example, name, userName).trim(),
-    );
-  }
-
-  if (d.post_history_instructions && !isPlaceholder(d.post_history_instructions)) {
-    sections.push(replaceTokens(d.post_history_instructions, name, userName).trim());
-  }
+  appendRenderedMacro(characterVariables.post_history_instructions);
 
   return sections.join('\n\n');
 }

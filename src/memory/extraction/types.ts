@@ -7,6 +7,7 @@ export interface MemoryExtractorConfig {
   minConfidence?: number;
   minNovelty?: number;
   maxWrites?: number;
+  emotionalIntensityImportanceWeight?: number;
   telemetryEnabled?: boolean;
 }
 
@@ -106,6 +107,7 @@ export const DEFAULT_MIN_IMPORTANCE = 0.45;
 export const DEFAULT_MIN_CONFIDENCE = 0.6;
 export const DEFAULT_MIN_NOVELTY = 0.35;
 export const DEFAULT_MAX_WRITES = 2;
+export const DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT = 0.2;
 
 export const DEFAULT_PROFILE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const DEFAULT_PROFILE_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;

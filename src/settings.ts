@@ -137,6 +137,7 @@ export interface EditableSettings {
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
+  memoryExtractionEmotionalIntensityWeight?: number;
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
@@ -238,6 +239,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',
+  'memoryExtractionEmotionalIntensityWeight',
   'memoryExtractionMaxWrites',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
@@ -1264,6 +1266,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     memoryExtractionMinImportance: config.memoryExtractionMinImportance ?? null,
     memoryExtractionMinConfidence: config.memoryExtractionMinConfidence ?? null,
     memoryExtractionMinNovelty: config.memoryExtractionMinNovelty ?? null,
+    memoryExtractionEmotionalIntensityWeight: config.memoryExtractionEmotionalIntensityWeight ?? null,
     memoryExtractionMaxWrites: config.memoryExtractionMaxWrites ?? null,
     memoryExtractionTelemetryEnabled: config.memoryExtractionTelemetryEnabled ?? true,
     memoryRetrievalTelemetryEnabled: config.memoryRetrievalTelemetryEnabled ?? true,
@@ -1406,6 +1409,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
   if (settings.memoryExtractionMinNovelty !== undefined) {
     config.memoryExtractionMinNovelty = settings.memoryExtractionMinNovelty;
+  }
+  if (settings.memoryExtractionEmotionalIntensityWeight !== undefined) {
+    config.memoryExtractionEmotionalIntensityWeight = settings.memoryExtractionEmotionalIntensityWeight;
   }
   if (settings.memoryExtractionMaxWrites !== undefined) {
     config.memoryExtractionMaxWrites = settings.memoryExtractionMaxWrites;

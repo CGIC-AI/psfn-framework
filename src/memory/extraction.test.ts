@@ -949,6 +949,7 @@ describe('MemoryExtractor refusal boundary extraction', () => {
       }),
       expect.stringContaining('visibility:private'),
       undefined,
+      undefined,
     );
     expect(processFact.mock.calls[0][0].text.toLowerCase()).toContain('paywall');
 
@@ -1018,6 +1019,12 @@ describe('MemoryExtractor provenance and trust caps', () => {
       emit: vi.fn().mockResolvedValue(undefined),
     } as any;
 
+    const getFormationVAD = vi.fn(() => ({
+      valence: 1,
+      arousal: 1,
+      dominance: 0,
+    }));
+
     const extractor = new MemoryExtractor(
       llmClient,
       sessionManager,
@@ -1025,6 +1032,10 @@ describe('MemoryExtractor provenance and trust caps', () => {
       embeddingService,
       eventBus,
       { extractionInterval: 5 },
+      null,
+      null,
+      null,
+      { getFormationVAD },
     );
 
     const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-public-1' } }));
@@ -1033,6 +1044,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
     await extractor.extract('discord:public-room');
 
     expect(write).toHaveBeenCalledTimes(1);
+    expect(getFormationVAD).toHaveBeenCalledTimes(1);
     expect(write).toHaveBeenCalledWith(expect.objectContaining({
       importance: 0.5,
       sourceRef: expect.stringContaining('visibility:public'),
@@ -1196,6 +1208,83 @@ describe('MemoryExtractor provenance and trust caps', () => {
         dominance: -0.25,
       },
     }));
+  });
+
+  it('applies emotional intensity multiplier to extracted importance before writing', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User is excited about the launch</text>
+<type>emotional</type>
+<importance>0.8</importance>
+<emotional_valence>0.6</emotional_valence>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+      }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { id: 1, role: 'user', authorName: 'user', content: 'I am excited for launch day', timestamp: 1_000 },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const getFormationVAD = vi.fn(() => ({
+      valence: 1,
+      arousal: 1,
+      dominance: 0,
+    }));
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        emotionalIntensityImportanceWeight: 0.1,
+      },
+      null,
+      null,
+      null,
+      { getFormationVAD },
+    );
+
+    const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-vad-importance-1' } }));
+    (extractor as any).writer = { write };
+
+    await extractor.extract('api:emotion-formation');
+
+    expect(getFormationVAD).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    const writeInput = write.mock.calls[0][0] as {
+      importance: number;
+      formationVAD: { valence: number; arousal: number; dominance: number };
+    };
+    expect(writeInput.importance).toBeCloseTo(0.88);
+    expect(writeInput.formationVAD).toEqual({
+      valence: 1,
+      arousal: 1,
+      dominance: 0,
+    });
   });
 });
 

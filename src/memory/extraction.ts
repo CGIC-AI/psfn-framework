@@ -13,6 +13,7 @@ import type { ExtractedFact, MemoryFormationVAD } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
 import {
+  DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT,
   DEFAULT_MAX_WRITES,
   DEFAULT_MIN_CONFIDENCE,
   DEFAULT_MIN_IMPORTANCE,
@@ -25,6 +26,7 @@ import {
 } from './extraction/types.js';
 import {
   normalizeMaxWrites,
+  resolveEmotionalIntensityImportanceWeight,
   resolveGateConfig,
   resolveMaxWrites,
   resolveProfileConfig,
@@ -42,6 +44,7 @@ import {
   resolveCoveredUpToMessageId as resolveCoveredMarker,
   scheduleProfileRefresh,
 } from './extraction/runtime-helpers.js';
+import { applyEmotionalIntensityImportanceMultiplier } from './extraction/importance.js';
 import {
   computeNoveltyScore,
   computeProfileNovelty,
@@ -68,6 +71,7 @@ export class MemoryExtractor {
   private minConfidence: number;
   private minNovelty: number;
   private maxWrites: number;
+  private emotionalIntensityImportanceWeight: number;
   private telemetryEnabled: boolean;
   private promptRegistry: PromptRegistryStore | null;
   private sessionStore: SessionStore | null;
@@ -104,6 +108,7 @@ export class MemoryExtractor {
       this.minConfidence = config.memoryExtractionMinConfidence ?? DEFAULT_MIN_CONFIDENCE;
       this.minNovelty = config.memoryExtractionMinNovelty ?? DEFAULT_MIN_NOVELTY;
       this.maxWrites = normalizeMaxWrites(config.memoryExtractionMaxWrites, DEFAULT_MAX_WRITES);
+      this.emotionalIntensityImportanceWeight = DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT;
       this.telemetryEnabled = config.memoryExtractionTelemetryEnabled ?? true;
     } else {
       const extractorConfig = config as MemoryExtractorConfig | undefined;
@@ -113,6 +118,8 @@ export class MemoryExtractor {
       this.minConfidence = extractorConfig?.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
       this.minNovelty = extractorConfig?.minNovelty ?? DEFAULT_MIN_NOVELTY;
       this.maxWrites = normalizeMaxWrites(extractorConfig?.maxWrites, DEFAULT_MAX_WRITES);
+      this.emotionalIntensityImportanceWeight = extractorConfig?.emotionalIntensityImportanceWeight
+        ?? DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT;
       this.telemetryEnabled = extractorConfig?.telemetryEnabled ?? true;
     }
 
@@ -275,6 +282,20 @@ export class MemoryExtractor {
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
   ): Promise<void> {
+    let cachedFormationVAD: MemoryFormationVAD | undefined;
+    let didResolveFormationVAD = false;
+    const resolveFormationVAD = (): MemoryFormationVAD | undefined => {
+      if (!didResolveFormationVAD) {
+        cachedFormationVAD = this.getFormationVAD?.();
+        didResolveFormationVAD = true;
+      }
+      return cachedFormationVAD;
+    };
+    const intensityWeight = resolveEmotionalIntensityImportanceWeight(
+      this.runtimeConfig,
+      this.emotionalIntensityImportanceWeight,
+    );
+
     await runExtractionOrchestration({
       channelId,
       triggerReason,
@@ -294,7 +315,12 @@ export class MemoryExtractor {
       telemetryEnabled: this.isTelemetryEnabled(),
       useCompositionalExtraction: this.shouldUseCompositionalExtraction(channelId),
       isAcceptingExtractions: () => this.acceptingExtractions,
-      processFact: (fact, sourceRef, maybeContactId) => this.processFact(fact, sourceRef, maybeContactId),
+      adjustFactForWrite: fact => (
+        this.adjustFactImportanceByEmotion(fact, resolveFormationVAD(), intensityWeight)
+      ),
+      processFact: (fact, sourceRef, maybeContactId) => (
+        this.processFact(fact, sourceRef, maybeContactId, resolveFormationVAD())
+      ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
         emitExtractionStartEvent(this.eventBus, this.isTelemetryEnabled(), extractionChannelId, reason, extractionTurnId)
       ),
@@ -334,8 +360,8 @@ export class MemoryExtractor {
     fact: ExtractedFact,
     sourceRef: string,
     canonicalContactId?: string,
+    formationVAD?: MemoryFormationVAD,
   ): Promise<WriteResult> {
-    const formationVAD = this.getFormationVAD?.();
     return this.writer.write({
       text: fact.text,
       type: fact.type,
@@ -348,6 +374,23 @@ export class MemoryExtractor {
       sensitivity: fact.sensitivity,
       contactId: canonicalContactId,
     });
+  }
+
+  private adjustFactImportanceByEmotion(
+    fact: ExtractedFact,
+    formationVAD: MemoryFormationVAD | undefined,
+    intensityWeight: number,
+  ): ExtractedFact {
+    const adjustedImportance = applyEmotionalIntensityImportanceMultiplier({
+      baseImportance: fact.importance,
+      formationVAD,
+      intensityWeight,
+    });
+    if (adjustedImportance === fact.importance) return fact;
+    return {
+      ...fact,
+      importance: adjustedImportance,
+    };
   }
 
   private maybeRefreshContactProfile(

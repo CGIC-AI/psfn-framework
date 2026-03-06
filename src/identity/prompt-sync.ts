@@ -10,6 +10,7 @@ export interface PromptSyncResult {
   ok: boolean;
   updated: boolean;
   error?: string;
+  errorCode?: 'missing_required_fields' | 'unsupported_unresolved_macros' | 'prompt_store_update_failed';
 }
 
 const ALLOWED_RUNTIME_UNRESOLVED_TOKENS = new Set([
@@ -36,6 +37,7 @@ const ALLOWED_RUNTIME_UNRESOLVED_TOKENS = new Set([
   'unix_timestamp',
   'timestamp',
 ]);
+const REQUIRED_CHARACTER_MACRO_FIELDS = ['name', 'personality'] as const;
 
 function resolveCharacterFoundationLayer(
   promptStore: PromptLayerStore,
@@ -62,6 +64,18 @@ export function syncCharacterFoundationPromptFromCard(
 
   const nextPrompt = composeSystemPromptTemplate();
   const macroVariables = buildCharacterMacroMap(card);
+  const missingRequiredFields = REQUIRED_CHARACTER_MACRO_FIELDS.filter((field) => {
+    const value = macroVariables[field];
+    return typeof value !== 'string' || value.trim().length === 0;
+  });
+  if (missingRequiredFields.length > 0) {
+    return {
+      ok: false,
+      updated: false,
+      error: `Missing required identity fields for prompt sync: ${missingRequiredFields.join(', ')}`,
+      errorCode: 'missing_required_fields',
+    };
+  }
   const macroValidation = renderPromptRuntimeTokens(nextPrompt, { variables: macroVariables });
   const unsupportedUnresolved = macroValidation.unresolvedTokens.filter(
     token => !ALLOWED_RUNTIME_UNRESOLVED_TOKENS.has(token),
@@ -71,6 +85,7 @@ export function syncCharacterFoundationPromptFromCard(
       ok: false,
       updated: false,
       error: `Unsupported unresolved prompt macros: ${unsupportedUnresolved.join(', ')}`,
+      errorCode: 'unsupported_unresolved_macros',
     };
   }
   if (foundation.content === nextPrompt) {
@@ -85,6 +100,7 @@ export function syncCharacterFoundationPromptFromCard(
       ok: false,
       updated: false,
       error: toErrorMessage(error),
+      errorCode: 'prompt_store_update_failed',
     };
   }
 }

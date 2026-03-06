@@ -97,6 +97,186 @@ function buildMultipartBody(
   return Buffer.concat(chunks);
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function schemaMetadataCandidates(entry: Record<string, unknown>): Record<string, unknown>[] {
+  const candidates = [entry];
+  for (const key of ['schema', 'metadata', 'validation', 'ownership']) {
+    const nested = entry[key];
+    if (isObjectRecord(nested)) {
+      candidates.push(nested);
+    }
+  }
+  return candidates;
+}
+
+function entryNameMatches(entry: Record<string, unknown>, name: string): boolean {
+  return ['id', 'name', 'key', 'slug', 'field'].some((key) => entry[key] === name);
+}
+
+function findNamedSchemaEntry(
+  collection: unknown,
+  name: string,
+): Record<string, unknown> | undefined {
+  if (Array.isArray(collection)) {
+    return collection.find((entry): entry is Record<string, unknown> => (
+      isObjectRecord(entry) && entryNameMatches(entry, name)
+    ));
+  }
+
+  if (!isObjectRecord(collection)) return undefined;
+
+  const direct = collection[name];
+  if (isObjectRecord(direct)) {
+    return direct;
+  }
+
+  return Object.entries(collection).find(([, entry]) => (
+    isObjectRecord(entry) && entryNameMatches(entry, name)
+  ))?.[1] as Record<string, unknown> | undefined;
+}
+
+function getSchemaRoot(payload: unknown): Record<string, unknown> {
+  if (!isObjectRecord(payload)) {
+    throw new Error('Expected settings schema payload to be an object');
+  }
+  return isObjectRecord(payload.schema)
+    ? payload.schema
+    : payload;
+}
+
+function getNamedSchemaEntry(
+  root: Record<string, unknown>,
+  collectionKeys: readonly string[],
+  name: string,
+): Record<string, unknown> {
+  for (const collectionKey of collectionKeys) {
+    const entry = findNamedSchemaEntry(root[collectionKey], name);
+    if (entry) {
+      return entry;
+    }
+  }
+
+  throw new Error(`Expected schema entry for ${name}`);
+}
+
+function readStringMetadata(
+  entry: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of keys) {
+      const value = candidate[key];
+      if (typeof value === 'string') {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function readBooleanMetadata(
+  entry: Record<string, unknown>,
+  keys: readonly string[],
+): boolean | undefined {
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of keys) {
+      const value = candidate[key];
+      if (typeof value === 'boolean') {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function readNumberMetadata(
+  entry: Record<string, unknown>,
+  keys: readonly string[],
+): number | undefined {
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of keys) {
+      const value = candidate[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function collectSchemaStrings(
+  rawValue: unknown,
+  values: string[],
+  seen: Set<string>,
+): void {
+  if (typeof rawValue === 'string') {
+    const trimmed = rawValue.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      values.push(trimmed);
+    }
+    return;
+  }
+
+  if (Array.isArray(rawValue)) {
+    rawValue.forEach((value) => collectSchemaStrings(value, values, seen));
+    return;
+  }
+
+  if (!isObjectRecord(rawValue)) return;
+
+  for (const key of ['id', 'value', 'name', 'file', 'path', 'ownerFile']) {
+    if (typeof rawValue[key] === 'string') {
+      collectSchemaStrings(rawValue[key], values, seen);
+      return;
+    }
+  }
+
+  for (const [key, value] of Object.entries(rawValue)) {
+    if (isObjectRecord(value) || Array.isArray(value)) {
+      collectSchemaStrings(key, values, seen);
+    }
+  }
+}
+
+function readOwnerFiles(entry: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of ['owner', 'ownerFile', 'ownerPath', 'file', 'jsonFile', 'ownerFiles', 'owners']) {
+      collectSchemaStrings(candidate[key], values, seen);
+    }
+  }
+
+  return values.map((value) => value.split(/[\\/]/).at(-1) ?? value);
+}
+
+function readEnumLikeValues(entry: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of ['enum', 'enumValues', 'values', 'options', 'allowedValues']) {
+      collectSchemaStrings(candidate[key], values, seen);
+    }
+  }
+
+  return values;
+}
+
+function isRawOnlySchemaSubsystem(entry: Record<string, unknown>): boolean {
+  if (readBooleanMetadata(entry, ['rawOnly']) === true) {
+    return true;
+  }
+
+  const mode = readStringMetadata(entry, ['exposure', 'mode', 'uiExposure', 'gardenExposure']);
+  return mode === 'raw-only' || mode === 'raw_only';
+}
+
 function allocatePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -877,7 +1057,7 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(settingsPatchRes.status).toBe(200);
-    expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
     const settingsAfterPatchRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsAfterPatchRes.status).toBe(200);
@@ -958,7 +1138,7 @@ describe('AdminServer JSON API routes', () => {
         code: 'wrong_owner',
       }),
     ]));
-    expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
     expect(loadSettings(tempDir).sessionMessageLimit).toBe(55);
 
@@ -1222,6 +1402,84 @@ describe('AdminServer JSON API routes', () => {
         code: 'wrong_owner',
       }),
     ]));
+  });
+
+  it('returns schema metadata for subsystem ownership and schema-driven settings editors', async () => {
+    const restoreSttProvider = registerStreamingSttProvider('schema-plugin-stt', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in schema metadata');
+      }),
+      metadata: {
+        isConfigured: () => false,
+      },
+    });
+    const restoreTtsProvider = registerStreamingTtsProvider('schema-plugin-tts', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in schema metadata');
+      }),
+      metadata: {
+        isConfigured: () => false,
+      },
+    });
+
+    try {
+      const res = await request(
+        port,
+        'GET',
+        '/api/admin/settings/schema',
+        undefined,
+        authHeaders,
+      );
+
+      expect(res.status).toBe(200);
+      const schemaRoot = getSchemaRoot(JSON.parse(res.body));
+
+      const runtimeSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'runtime');
+      const modelsSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'models');
+      const schedulerSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'scheduler');
+      const capabilitiesSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'capabilities');
+      const skillsSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'skills');
+      const trustPolicySubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'trustPolicy');
+
+      expect(readOwnerFiles(runtimeSubsystem)).toContain('settings.json');
+      expect(readOwnerFiles(modelsSubsystem)).toContain('models.json');
+      expect(readOwnerFiles(schedulerSubsystem)).toContain('scheduler.json');
+      expect(readOwnerFiles(capabilitiesSubsystem)).toContain('capability-tier.json');
+      expect(isRawOnlySchemaSubsystem(skillsSubsystem)).toBe(true);
+      expect(isRawOnlySchemaSubsystem(trustPolicySubsystem)).toBe(true);
+
+      const sessionMessageLimitField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sessionMessageLimit');
+      const primaryModelField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'primaryModel');
+      const maintenanceIntervalMsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'maintenanceIntervalMs');
+      const capabilityTierField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'capabilityTier');
+      const sttProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sttProvider');
+      const ttsProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'ttsProvider');
+
+      expect(['number', 'integer']).toContain(
+        readStringMetadata(sessionMessageLimitField, ['type', 'kind', 'valueType', 'inputType']),
+      );
+      expect(readNumberMetadata(sessionMessageLimitField, ['min', 'minimum'])).toBe(5);
+      expect(readNumberMetadata(sessionMessageLimitField, ['max', 'maximum'])).toBe(200);
+
+      expect(readOwnerFiles(primaryModelField)).toContain('models.json');
+      expect(readOwnerFiles(maintenanceIntervalMsField)).toContain('scheduler.json');
+      expect(readOwnerFiles(capabilityTierField)).toContain('capability-tier.json');
+
+      expect(readEnumLikeValues(sttProviderField)).toEqual(expect.arrayContaining([
+        'disabled',
+        'deepgram',
+        'schema-plugin-stt',
+      ]));
+      expect(readEnumLikeValues(ttsProviderField)).toEqual(expect.arrayContaining([
+        'disabled',
+        'echo',
+        'elevenlabs',
+        'schema-plugin-tts',
+      ]));
+    } finally {
+      restoreSttProvider();
+      restoreTtsProvider();
+    }
   });
 
   it('accepts registered STT provider ids through admin settings patch', async () => {

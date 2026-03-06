@@ -40,7 +40,8 @@ import {
 
 const log = createComponentLogger('Settings');
 
-const SETTINGS_FILE = 'settings.json';
+export const SETTINGS_FILE_NAME = 'settings.json';
+const SETTINGS_FILE = SETTINGS_FILE_NAME;
 const SETTINGS_SEED_FILE = 'settings.seed.json';
 const PRIMARY_MODEL_SLOT_KEY = 'primary';
 const EXTRACTION_MODEL_SLOT_KEY = 'extraction';

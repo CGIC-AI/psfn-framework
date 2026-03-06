@@ -23,6 +23,7 @@ import type {
 import type {
   CapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
+import type { SettingsContractData } from '../../../config/settings-contract.js';
 import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
@@ -236,6 +237,7 @@ export interface ConfigUpdateResult {
 
 export interface AdminSettingsService {
   getSettingsData(): Promise<AdminSettingsData>;
+  getSettingsContractData(): SettingsContractData;
   updateSettings(body: string): ConfigUpdateResult;
 }
 

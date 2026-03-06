@@ -44,6 +44,9 @@ export function parseChannelIndexEntry(raw: unknown): ChannelIndexEntry | null {
   const messageCount = normalizeOptionalNonNegativeNumber(row.messageCount);
   if (messageCount !== undefined) entry.messageCount = messageCount;
 
+  const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(row.activeTurnTombstoneCount);
+  if (activeTurnTombstoneCount !== undefined) entry.activeTurnTombstoneCount = activeTurnTombstoneCount;
+
   const lastTimestamp = normalizeOptionalNonNegativeNumber(row.lastTimestamp);
   if (lastTimestamp !== undefined) entry.lastTimestamp = lastTimestamp;
 
@@ -125,6 +128,7 @@ export function upsertChannelIndex(
 export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   if (!entry.filename) return false;
   if (normalizeOptionalNonNegativeNumber(entry.messageCount) === undefined) return false;
+  if (normalizeOptionalNonNegativeNumber(entry.activeTurnTombstoneCount) === undefined) return false;
   if (normalizeOptionalNonNegativeNumber(entry.lastTimestamp) === undefined) return false;
 
   const maxId = normalizeOptionalNonNegativeNumber(entry.maxId);
@@ -162,6 +166,7 @@ export function buildIndexEntry(
   return {
     filename,
     messageCount: metadata.messageCount,
+    activeTurnTombstoneCount: metadata.activeTurnTombstoneCount,
     lastTimestamp: metadata.lastTimestamp,
     maxId: metadata.maxId,
     lastHmac: metadata.lastHmac,
@@ -210,6 +215,7 @@ export function snapshotIndexEntry(cache: ChannelCache): ChannelIndexEntry {
   return {
     filename: basename(cache.resolvedPath),
     messageCount: cache.messageCount,
+    activeTurnTombstoneCount: cache.activeTurnTombstoneCount,
     lastTimestamp: cache.lastTimestamp,
     maxId: cache.nextId - 1,
     lastHmac: cache.lastHmac,
@@ -272,6 +278,18 @@ export function rehydrateLastJournalEntry(
     };
   }
 
+  if (type === 'tombstone') {
+    return {
+      type: 'tombstone',
+      id: maxId,
+      channelId,
+      timestamp: lastTimestamp,
+      tombstoneTargetType: 'turn',
+      tombstoneTargetId: 'unknown',
+      tombstoneAction: 'redact',
+    };
+  }
+
   return {
     type: 'message',
     id: maxId,
@@ -292,6 +310,8 @@ export function createLightweightCache(
   return {
     entries: [],
     compactions: [],
+    turnTombstones: new Set(),
+    activeTurnTombstoneCount: normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0,
     nextId: maxId + 1,
     lastHmac: normalizeOptionalHmac(indexEntry.lastHmac) ?? null,
     lastExtractionCoveredUpTo: normalizeOptionalNonNegativeNumber(indexEntry.lastExtractionCoveredUpTo) ?? 0,

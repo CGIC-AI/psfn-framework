@@ -13,6 +13,7 @@ export type GardenSettingsSectionId =
   | 'budget'
   | 'memory'
   | 'sessions'
+  | 'compositional'
   | 'extraction-tuning'
   | 'profile'
   | 'think'
@@ -55,6 +56,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   compactionThresholdPct: { sectionId: 'sessions', surface: 'advanced' },
   maintenanceIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   sessionRestartBehavior: { sectionId: 'sessions', surface: 'advanced' },
+  compositionalPolicy: { sectionId: 'compositional', surface: 'advanced' },
   memoryExtractionMinImportance: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMinConfidence: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMinNovelty: { sectionId: 'extraction-tuning', surface: 'advanced' },
@@ -135,6 +137,7 @@ export const SETTINGS_GARDEN_SECTION_FIELDS: Record<GardenSettingsSectionId, str
   budget: collectSectionFields('budget'),
   memory: collectSectionFields('memory'),
   sessions: collectSectionFields('sessions'),
+  compositional: collectSectionFields('compositional'),
   'extraction-tuning': collectSectionFields('extraction-tuning'),
   profile: collectSectionFields('profile'),
   think: collectSectionFields('think'),

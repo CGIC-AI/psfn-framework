@@ -9,7 +9,8 @@ import { resolvePersistenceRoots } from './persistence/layout.js';
 
 // ── Channel-agnostic message types ──
 
-export type ChannelType = 'discord' | 'terminal' | 'api' | 'telegram';
+export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram'] as const;
+export type ChannelType = typeof CHANNEL_TYPES[number];
 
 declare const turnIdBrand: unique symbol;
 export type TurnID = string & { readonly [turnIdBrand]: true };
@@ -307,6 +308,14 @@ export type ModelRoleAssignments = Record<string, string>;
 export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext' | 'vision';
 export type CompletionPurpose = 'background' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
+export const COMPOSITIONAL_PURPOSES = [
+  'extraction',
+  'retrieval',
+  'appraisal',
+  'think',
+  'shard_context',
+] as const;
+export type CompositionalPurpose = typeof COMPOSITIONAL_PURPOSES[number];
 
 export const IMPORT_PROCESSING_ROUTE_MODES: readonly ImportProcessingRouteMode[] = [
   'background',
@@ -327,6 +336,22 @@ export type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous' | 'custom';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
 export const PROMOTED_EXTENDED_TOOL_SLOTS_MAX = 4;
+
+export interface CompositionalPolicyConfig {
+  enabled: boolean;
+  allowedTiers: CapabilityTier[];
+  allowedChannelTypes: ChannelType[];
+  allowedPurposes: CompositionalPurpose[];
+}
+
+export function createDefaultCompositionalPolicyConfig(): CompositionalPolicyConfig {
+  return {
+    enabled: false,
+    allowedTiers: [],
+    allowedChannelTypes: [],
+    allowedPurposes: [],
+  };
+}
 
 export interface WyomingShardRoutingConfig {
   enabled: boolean;
@@ -387,6 +412,7 @@ export interface SubstrateConfig {
   runtimeHooks?: RuntimeConfigHooks;
   promotedExtendedTools?: string[];
   capabilityTier?: CapabilityTier;
+  compositionalPolicy?: CompositionalPolicyConfig;
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
@@ -645,6 +671,7 @@ export function loadConfig(): SubstrateConfig {
     ...(responseStyleOverrides ? { responseStyleOverrides } : {}),
     importProcessingRouteMode: DEFAULT_IMPORT_PROCESSING_ROUTE_MODE,
     importProcessingStrictPolicy: false,
+    compositionalPolicy: createDefaultCompositionalPolicyConfig(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
     webFetchLocalCrawlerEnabled: false,

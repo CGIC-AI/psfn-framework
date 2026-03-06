@@ -1338,6 +1338,12 @@ describe('AdminServer JSON API routes', () => {
       importProcessingStrictPolicy: true,
       importProcessingLocalEndpointUrl: 'http://127.0.0.1:4000/v1',
       importProcessingLocalModel: 'llama.cpp/local',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api', 'discord'],
+        allowedPurposes: ['retrieval', 'think'],
+      },
       webFetchAllowHttp: true,
       webFetchDomainAllowlist: ['example.com', 'internal.local'],
       webFetchAllowInternalNetwork: true,
@@ -1431,6 +1437,12 @@ describe('AdminServer JSON API routes', () => {
         importProcessingRouteMode: 'local_endpoint',
         importProcessingLocalEndpointUrl: '',
         importProcessingLocalModel: '',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: [],
+          allowedChannelTypes: [],
+          allowedPurposes: [],
+        },
       }),
       authHeaders,
     );
@@ -1443,7 +1455,7 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(payload.ok).toBe(false);
     expect(payload.message).toContain('sessionMessageLimit must be 5-200');
-    expect(payload.validationErrors).toEqual(expect.arrayContaining([
+      expect(payload.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
         field: 'sessionMessageLimit',
         message: 'sessionMessageLimit must be 5-200',
@@ -1455,6 +1467,18 @@ describe('AdminServer JSON API routes', () => {
       expect.objectContaining({
         field: 'importProcessingLocalModel',
         message: 'importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint',
+      }),
+      expect.objectContaining({
+        field: 'compositionalPolicy.allowedTiers',
+        message: 'compositionalPolicy.allowedTiers must list at least one value when compositionalPolicy.enabled=true',
+      }),
+      expect.objectContaining({
+        field: 'compositionalPolicy.allowedChannelTypes',
+        message: 'compositionalPolicy.allowedChannelTypes must list at least one value when compositionalPolicy.enabled=true',
+      }),
+      expect.objectContaining({
+        field: 'compositionalPolicy.allowedPurposes',
+        message: 'compositionalPolicy.allowedPurposes must list at least one value when compositionalPolicy.enabled=true',
       }),
     ]));
   });
@@ -1546,6 +1570,7 @@ describe('AdminServer JSON API routes', () => {
       const modelRosterField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoster');
       const maintenanceIntervalMsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'maintenanceIntervalMs');
       const capabilityTierField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'capabilityTier');
+      const compositionalPolicyField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'compositionalPolicy');
       const sttProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sttProvider');
       const ttsProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'ttsProvider');
 
@@ -1564,6 +1589,8 @@ describe('AdminServer JSON API routes', () => {
       expect(readStringMetadata(modelRosterField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
       expect(readOwnerFiles(maintenanceIntervalMsField)).toContain('scheduler.json');
       expect(readOwnerFiles(capabilityTierField)).toContain('capability-tier.json');
+      expect(readOwnerFiles(compositionalPolicyField)).toContain('settings.json');
+      expect(readStringMetadata(compositionalPolicyField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
 
       expect(readEnumLikeValues(sttProviderField)).toEqual(expect.arrayContaining([
         'disabled',
@@ -1587,6 +1614,12 @@ describe('AdminServer JSON API routes', () => {
       sessionMessageLimit: 44,
       sessionRestartBehavior: 'new_session',
       openRouterProviderOrder: ['parasail', 'openai'],
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['retrieval'],
+      },
       webFetchDomainAllowlist: ['example.com', 'internal.local'],
       promotedExtendedTools: ['memory.search', 'contacts.lookup'],
       chatApiBaseUrl: 'https://admin.example.test/api',

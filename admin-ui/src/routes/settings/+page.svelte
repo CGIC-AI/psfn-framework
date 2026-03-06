@@ -48,6 +48,25 @@
   ];
 
   const DISABLED_PROVIDER_ID = 'disabled';
+  const COMPOSITIONAL_TIER_OPTIONS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
+  const COMPOSITIONAL_CHANNEL_TYPE_OPTIONS = ['discord', 'terminal', 'api', 'telegram'] as const;
+  const COMPOSITIONAL_PURPOSE_OPTIONS = [
+    'extraction',
+    'retrieval',
+    'appraisal',
+    'think',
+    'shard_context',
+  ] as const;
+
+  type CompositionalListKey = 'allowedTiers' | 'allowedChannelTypes' | 'allowedPurposes';
+
+  interface CompositionalPolicyFormValue {
+    enabled: boolean;
+    allowedTiers: string[];
+    allowedChannelTypes: string[];
+    allowedPurposes: string[];
+  }
+
   const ENUM_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
     importProcessingRouteMode: {
       background: 'Background Routing (default)',
@@ -101,6 +120,7 @@
       primaryModel, extractionModel, memoryBudgetPct,
       memoryRetrievalLimit, sessionMessageLimit,
       sessionRestartBehavior,
+      compositionalPolicy: configValue('compositionalPolicy') ?? null,
       sessionHistoryBudgetPct, memoryRetrievalBudgetPct,
       extractionThresholdPct, compactionThresholdPct,
       maxResponseTokens, retryMaxAttempts, retryBaseDelayMs,
@@ -310,6 +330,11 @@
       summary: () => `Max tokens: ${thinkMaxTokens.toLocaleString()}, Wall time: ${Math.round(thinkMaxWallTimeMs / 1000)}s`,
     },
     {
+      id: 'compositional', title: 'Compositional Cognition', icon: 'K',
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.compositional,
+      summary: () => summarizeCompositionalPolicy(configValue('compositionalPolicy')),
+    },
+    {
       id: 'trust', title: 'Trust & Capabilities', icon: 'T',
       keys: SETTINGS_GARDEN_SECTION_FIELDS.trust,
       summary: () => `Tier: ${capabilityTier}`,
@@ -395,7 +420,15 @@
   }
 
   function fieldErrors(field: string): string[] {
-    return validationErrorsByField[field] ?? [];
+    const nestedPrefix = `${field}.`;
+    const collected = new Set<string>();
+    for (const [path, messages] of Object.entries(validationErrorsByField)) {
+      if (path !== field && !path.startsWith(nestedPrefix)) continue;
+      for (const message of messages) {
+        collected.add(message);
+      }
+    }
+    return [...collected];
   }
 
   function hasFieldErrors(field: string): boolean {
@@ -418,14 +451,20 @@
 
     const invalidFields = new Set(Object.keys(next).filter((field) => field !== '$root'));
     if (invalidFields.size > 0) {
+      const invalidFieldList = [...invalidFields];
+      const matchesField = (candidate: string, key: string): boolean => (
+        candidate === key || candidate.startsWith(`${key}.`)
+      );
       const nextOpenSections = new Set(openSections);
       for (const section of SECTIONS) {
-        if (section.keys.some((key) => invalidFields.has(key))) {
+        if (section.keys.some((key) => invalidFieldList.some((field) => matchesField(field, key)))) {
           nextOpenSections.add(section.id);
         }
       }
-      const categorizedKeys = new Set(SECTIONS.flatMap((section) => section.keys));
-      if (Array.from(invalidFields).some((field) => !categorizedKeys.has(field))) {
+      const isCategorizedField = (field: string): boolean => (
+        SECTIONS.some((section) => section.keys.some((key) => matchesField(field, key)))
+      );
+      if (invalidFieldList.some((field) => !isCategorizedField(field))) {
         nextOpenSections.add('other');
       }
       openSections = nextOpenSections;
@@ -506,6 +545,94 @@
     return 'text';
   }
 
+  function summarizeCompositionalPolicy(value: unknown): string {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return 'Disabled';
+    }
+
+    const policy = value as {
+      enabled?: unknown;
+      allowedTiers?: unknown;
+      allowedChannelTypes?: unknown;
+      allowedPurposes?: unknown;
+    };
+    if (policy.enabled !== true) {
+      return 'Disabled';
+    }
+
+    const tierCount = Array.isArray(policy.allowedTiers) ? policy.allowedTiers.length : 0;
+    const channelCount = Array.isArray(policy.allowedChannelTypes) ? policy.allowedChannelTypes.length : 0;
+    const purposeCount = Array.isArray(policy.allowedPurposes) ? policy.allowedPurposes.length : 0;
+
+    return `Enabled, ${tierCount} tier${tierCount === 1 ? '' : 's'}, `
+      + `${channelCount} channel${channelCount === 1 ? '' : 's'}, `
+      + `${purposeCount} purpose${purposeCount === 1 ? '' : 's'}`;
+  }
+
+  function normalizeStringList(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(
+      value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0),
+    )];
+  }
+
+  function getCompositionalPolicy(): CompositionalPolicyFormValue {
+    const value = configValue('compositionalPolicy');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {
+        enabled: false,
+        allowedTiers: [],
+        allowedChannelTypes: [],
+        allowedPurposes: [],
+      };
+    }
+
+    const policy = value as {
+      enabled?: unknown;
+      allowedTiers?: unknown;
+      allowedChannelTypes?: unknown;
+      allowedPurposes?: unknown;
+    };
+    return {
+      enabled: policy.enabled === true,
+      allowedTiers: normalizeStringList(policy.allowedTiers),
+      allowedChannelTypes: normalizeStringList(policy.allowedChannelTypes),
+      allowedPurposes: normalizeStringList(policy.allowedPurposes),
+    };
+  }
+
+  function setCompositionalPolicy(policy: CompositionalPolicyFormValue): void {
+    setConfigValue('compositionalPolicy', {
+      enabled: policy.enabled === true,
+      allowedTiers: [...new Set(policy.allowedTiers)],
+      allowedChannelTypes: [...new Set(policy.allowedChannelTypes)],
+      allowedPurposes: [...new Set(policy.allowedPurposes)],
+    });
+  }
+
+  function toggleCompositionalPolicyValue(listKey: CompositionalListKey, value: string): void {
+    const policy = getCompositionalPolicy();
+    const currentList = policy[listKey];
+    const nextList = currentList.includes(value)
+      ? currentList.filter((entry) => entry !== value)
+      : [...currentList, value];
+    setCompositionalPolicy({
+      ...policy,
+      [listKey]: nextList,
+    } as CompositionalPolicyFormValue);
+  }
+
+  function setCompositionalPolicyEnabled(enabled: boolean): void {
+    setCompositionalPolicy({
+      ...getCompositionalPolicy(),
+      enabled,
+    });
+  }
+
+  function hasCompositionalPolicyValue(listKey: CompositionalListKey, value: string): boolean {
+    return getCompositionalPolicy()[listKey].includes(value);
+  }
+
   // ── Derived ──
   let slotKeys = $derived(catalogSlots.map(s => s.slotKey).filter(Boolean));
   let ttsProviderOptions = $derived(
@@ -515,7 +642,7 @@
     fieldEnumValues('sttProvider', [DISABLED_PROVIDER_ID, sttProvider]),
   );
   let capabilityTierOptions = $derived(
-    fieldEnumValues('capabilityTier', [capabilityTier]),
+    fieldEnumValues('capabilityTier', COMPOSITIONAL_TIER_OPTIONS),
   );
   let importRouteModeOptions = $derived(
     fieldEnumValues('importProcessingRouteMode', [importRouteMode]),
@@ -958,6 +1085,7 @@
       importProcessingLocalEndpointUrl: importLocalEndpointUrl,
       importProcessingLocalModel: importLocalModel,
       openRouterProviderOrder: splitCsv(openRouterProviderOrder),
+      compositionalPolicy: getCompositionalPolicy(),
       webFetchAllowHttp,
       webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
       webFetchAllowInternalNetwork,
@@ -2425,7 +2553,7 @@
                   {@const editorType = fieldEditorType(key, value)}
                   {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
                   {@const fieldSchema = fieldContract(key)}
-                  <div class="flex flex-col sm:flex-row sm:items-center gap-2">
+                  <div class="flex flex-col sm:flex-row sm:items-start gap-2">
                     <div class="sm:w-60 shrink-0 flex items-center gap-2">
                       <label class="text-sm font-mono text-shadow-700">{key}</label>
                       <span class="text-shadow-400 text-sm">({getSource(key)})</span>
@@ -2433,7 +2561,85 @@
                         <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>
                       {/if}
                     </div>
-                    {#if editorType === 'checkbox'}
+                    {#if key === 'compositionalPolicy'}
+                      {@const policy = getCompositionalPolicy()}
+                      <div class="flex-1 space-y-4 rounded-2xl border border-bark-300 bg-bark-100/60 p-4">
+                        <div class="space-y-2">
+                          <p class="text-sm text-shadow-600">
+                            Gate compositional cognition by capability tier, channel type, and purpose.
+                            This remains JSON-backed runtime config; secrets stay in the environment.
+                          </p>
+                          <label class="inline-flex items-center gap-3 rounded-full border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-medium text-shadow-800 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={policy.enabled}
+                              onchange={(e) => setCompositionalPolicyEnabled((e.target as HTMLInputElement).checked)}
+                              class={TOGGLE_CLS}
+                            />
+                            <span>Enable compositional cognition</span>
+                          </label>
+                        </div>
+
+                        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                          <div class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Tiers</p>
+                            <div class="flex flex-wrap gap-2">
+                              {#each capabilityTierOptions as option}
+                                <label
+                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedTiers', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={hasCompositionalPolicyValue('allowedTiers', option)}
+                                    onchange={() => toggleCompositionalPolicyValue('allowedTiers', option)}
+                                    class="sr-only"
+                                  />
+                                  <span>{formatSettingOptionLabel('capabilityTier', option)}</span>
+                                </label>
+                              {/each}
+                            </div>
+                          </div>
+
+                          <div class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Channels</p>
+                            <div class="flex flex-wrap gap-2">
+                              {#each COMPOSITIONAL_CHANNEL_TYPE_OPTIONS as option}
+                                <label
+                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedChannelTypes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={hasCompositionalPolicyValue('allowedChannelTypes', option)}
+                                    onchange={() => toggleCompositionalPolicyValue('allowedChannelTypes', option)}
+                                    class="sr-only"
+                                  />
+                                  <span>{humanizeSettingValue(option)}</span>
+                                </label>
+                              {/each}
+                            </div>
+                          </div>
+
+                          <div class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Purposes</p>
+                            <div class="flex flex-wrap gap-2">
+                              {#each COMPOSITIONAL_PURPOSE_OPTIONS as option}
+                                <label
+                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedPurposes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={hasCompositionalPolicyValue('allowedPurposes', option)}
+                                    onchange={() => toggleCompositionalPolicyValue('allowedPurposes', option)}
+                                    class="sr-only"
+                                  />
+                                  <span>{humanizeSettingValue(option)}</span>
+                                </label>
+                              {/each}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    {:else if editorType === 'checkbox'}
                       <label class="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox"
                           checked={Boolean(value)}

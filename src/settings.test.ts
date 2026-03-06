@@ -12,7 +12,10 @@ import {
   RUNTIME_SETTINGS_KEYS,
   normalizeEditableSettings,
 } from './settings.js';
-import type { SubstrateConfig } from './types.js';
+import {
+  createDefaultCompositionalPolicyConfig,
+  type SubstrateConfig,
+} from './types.js';
 import { registerStreamingSttProvider } from './voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from './voice/connectors/tts/index.js';
 
@@ -97,6 +100,7 @@ describe('settings', () => {
       expect(result.sessionHistoryBudgetPct).toBe(6);
       expect(result.memoryRetrievalBudgetPct).toBe(2);
       expect(result.extractionInterval).toBe(5);
+      expect(result.compositionalPolicy).toEqual(createDefaultCompositionalPolicyConfig());
       expect(existsSync(join(tempDir, 'settings.json'))).toBe(true);
     });
 
@@ -432,6 +436,25 @@ describe('settings', () => {
         'prompt_layer_list',
         'settings_get',
       ]);
+    });
+
+    it('applies compositional policy with fail-closed normalization', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous', 'autonomous', 'bogus'],
+          allowedChannelTypes: ['api', 'discord', 'bogus'],
+          allowedPurposes: ['retrieval', 'retrieval', 'bogus'],
+        } as any,
+      });
+
+      expect(config.compositionalPolicy).toEqual({
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api', 'discord'],
+        allowedPurposes: ['retrieval'],
+      });
     });
 
     it('applies import-processing routing controls', () => {
@@ -814,6 +837,12 @@ describe('settings', () => {
         importProcessingStrictPolicy: true,
         importProcessingLocalEndpointUrl: 'http://127.0.0.1:4000/v1',
         importProcessingLocalModel: 'llama.cpp/local',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api', 'discord'],
+          allowedPurposes: ['retrieval', 'think'],
+        },
         webFetchAllowHttp: true,
         webFetchDomainAllowlist: ['example.com', 'internal.local'],
         webFetchAllowInternalNetwork: true,
@@ -1139,6 +1168,7 @@ describe('settings', () => {
       expect(snapshot.importProcessingStrictPolicy).toBe(false);
       expect(snapshot.importProcessingLocalEndpointUrl).toBeNull();
       expect(snapshot.importProcessingLocalModel).toBeNull();
+      expect(snapshot.compositionalPolicy).toEqual(createDefaultCompositionalPolicyConfig());
       expect(snapshot.webFetchAllowHttp).toBe(false);
       expect(snapshot.webFetchDomainAllowlist).toEqual([]);
       expect(snapshot.webFetchLocalCrawlerEnabled).toBe(false);
@@ -1166,8 +1196,23 @@ describe('settings', () => {
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('thinkMaxSubQueries')).toBe(true);
       expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);
+      expect(isRuntimeSettingKey('compositionalPolicy')).toBe(true);
       expect(isRuntimeSettingKey('promotedExtendedTools')).toBe(true);
       expect(isRuntimeSettingKey('discordToken')).toBe(false);
+    });
+
+    it('includes compositional policy in snapshot when configured', () => {
+      const config = makeConfig();
+      config.compositionalPolicy = {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['retrieval'],
+      };
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.compositionalPolicy).toEqual(config.compositionalPolicy);
+      expect(snapshot.compositionalPolicy).not.toBe(config.compositionalPolicy);
     });
 
     it('includes promotedExtendedTools in snapshot when configured', () => {

@@ -35,6 +35,9 @@ import {
   SETTINGS_OWNER_FILE_BY_FIELD,
   SETTINGS_STRING_ARRAY_FIELDS,
 } from '../../../config/settings-contract.js';
+import {
+  validateCompositionalPolicyConfig,
+} from '../../../compositional/policy.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
@@ -477,6 +480,23 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateCompositionalPolicyField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('compositionalPolicy' in payload)) return;
+    for (const message of validateCompositionalPolicyConfig(payload.compositionalPolicy)) {
+      const separatorIndex = message.indexOf(' ');
+      const field = separatorIndex > 0 ? message.slice(0, separatorIndex) : 'compositionalPolicy';
+      this.pushFieldError(
+        errors,
+        field,
+        message,
+        message.includes('must be') ? 'invalid_type' : 'invalid_value',
+      );
+    }
+  }
+
   private validateModelCatalogRouting(
     payload: Record<string, unknown>,
     errors: SettingsValidationError[],
@@ -551,6 +571,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     this.validateHttpUrlField(payload, 'importProcessingLocalEndpointUrl', errors);
     this.validateHttpUrlField(payload, 'chatApiBaseUrl', errors);
+    this.validateCompositionalPolicyField(payload, errors);
     this.validateModelCatalogRouting(payload, errors);
 
     const effectiveRouteMode = typeof payload.importProcessingRouteMode === 'string'

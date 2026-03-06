@@ -27,6 +27,12 @@
   "profileSynthesisMinSourceMemories": 2,
   "importProcessingRouteMode": "background",
   "importProcessingStrictPolicy": false,
+  "compositionalPolicy": {
+    "enabled": false,
+    "allowedTiers": [],
+    "allowedChannelTypes": [],
+    "allowedPurposes": []
+  },
   "webFetchAllowHttp": false,
   "webFetchAllowInternalNetwork": false,
   "webFetchLocalCrawlerEnabled": false,

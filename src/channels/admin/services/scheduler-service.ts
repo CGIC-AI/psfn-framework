@@ -218,6 +218,7 @@ export class AdminSchedulerService {
     if (updates.intervalMs !== undefined) template.intervalMs = updates.intervalMs;
     if (updates.enabled !== undefined) template.enabled = updates.enabled;
     if (updates.sendToDiscord !== undefined) template.sendToDiscord = updates.sendToDiscord;
+    if (updates.internalStateInput !== undefined) template.internalStateInput = updates.internalStateInput;
     if (updates.mode !== undefined) template.mode = updates.mode;
     if (updates.deliberation !== undefined) template.deliberation = updates.deliberation;
 

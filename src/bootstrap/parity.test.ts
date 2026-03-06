@@ -8,6 +8,7 @@ import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { readLastActiveSession } from '../lifecycle/notifications.js';
 import { createDefaultExtendedToolAutoloadPolicy } from '../agent/extended-tool-autoload-policy.js';
+import { buildInternalStateSnapshotRef, InternalStateComputer } from '../self-model/state.js';
 import {
   wireExtendedToolAutoloadPolicy,
   wireHeartbeatRuntime,
@@ -16,6 +17,41 @@ import {
 } from './parity.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../agent/deferred-tool-handoff.js';
+
+function createInternalStateNarrativeFixture() {
+  const internalState = new InternalStateComputer().computeState({
+    emotionState: {
+      vad: { valence: 0.2, arousal: 0.35, dominance: 0.1 },
+      mood: { valence: 0.1, arousal: 0.25, dominance: 0.05 },
+      discrete: { curiosity: 0.6, calm: 0.4 },
+      confidence: 0.78,
+    },
+    activeConcerns: [{
+      id: 'concern-1',
+      text: 'Keep reflections grounded in lived experience',
+      priority: 'high',
+      source: 'heartbeat',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      expiresAt: '2026-03-02T00:00:00.000Z',
+    }],
+    trustLevel: 'trusted',
+    contactId: 'contact-1',
+    sessionMetrics: {
+      userMessageText: 'How am I doing right now?',
+      responseText: 'You are steady with moments of uncertainty.',
+      toolCallCount: 1,
+      recentTurnCount: 4,
+      lastSeenDeltaSeconds: 180,
+    },
+  });
+  return {
+    internalState,
+    snapshotRef: buildInternalStateSnapshotRef(internalState),
+    metacognitiveFlags: [
+      { flag: 'uncertainty', confidence: 0.57, evidence: 'multiple competing hypotheses' },
+    ],
+  };
+}
 
 describe('wireSessionToolsRuntime', () => {
   let tempDir: string;
@@ -187,8 +223,19 @@ describe('wireHeartbeatRuntime', () => {
     const target = {
       registerTool: vi.fn(),
     };
+    const narrative = createInternalStateNarrativeFixture();
     const agentLoop = {
-      handleMessage: vi.fn().mockResolvedValue({ content: 'Values reflection body' }),
+      handleMessage: vi.fn().mockResolvedValue({
+        content: 'Values reflection body',
+        metadata: {
+          internalState: narrative.internalState,
+          internalStateSnapshotRef: narrative.snapshotRef,
+          metacognitiveFlags: narrative.metacognitiveFlags,
+        },
+      }),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -220,11 +267,23 @@ describe('wireHeartbeatRuntime', () => {
         templateId: string;
         templateName: string;
         reflection: string;
+        internalStateSnapshotRef?: string;
+        internalState?: unknown;
+        metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
       };
       expect(entry.version).toBe(1);
       expect(entry.templateId).toBe('values-reflection');
       expect(entry.templateName).toBe('Values Reflection');
       expect(entry.reflection).toContain('Values reflection body');
+      expect(entry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+      expect(entry.internalState).toEqual(narrative.internalState);
+      expect(entry.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
+
+      const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call) => call[0]?.channelId === 'internal:reflection:values-reflection',
+      );
+      expect(valuesCall?.[0]?.content).toContain('[Internal State Input]');
+      expect(valuesCall?.[0]?.content).toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
     }
@@ -254,8 +313,12 @@ describe('wireHeartbeatRuntime', () => {
     const target = {
       registerTool: vi.fn(),
     };
+    const narrative = createInternalStateNarrativeFixture();
     const agentLoop = {
       handleMessage: vi.fn().mockResolvedValue({ content: 'fallback response' }),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -350,11 +413,16 @@ describe('wireHeartbeatRuntime', () => {
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(
         'Appearance context:\nhands with cat ears and tail',
       );
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Internal State Input]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
       expect(memoryWriter.write).toHaveBeenCalledTimes(1);
 
       const raw = readFileSync(join(tempDir, 'notes', 'values.jsonl'), 'utf-8').trim();
       const entry = JSON.parse(raw) as {
         reflection: string;
+        internalStateSnapshotRef?: string;
+        internalState?: unknown;
+        metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
         deliberation?: {
           rounds: number;
           totalTokens: number;
@@ -362,6 +430,9 @@ describe('wireHeartbeatRuntime', () => {
         };
       };
       expect(entry.reflection).toContain('synthesized values reflection');
+      expect(entry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+      expect(entry.internalState).toEqual(narrative.internalState);
+      expect(entry.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
       expect(entry.deliberation?.rounds).toBe(1);
       expect(entry.deliberation?.totalTokens).toBe(190);
       expect(entry.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
@@ -372,12 +443,64 @@ describe('wireHeartbeatRuntime', () => {
       const reflectionEntry = JSON.parse(reflectionLines[reflectionLines.length - 1] ?? '{}') as {
         mode: string;
         templateId: string;
+        internalStateSnapshotRef?: string;
       };
       expect(reflectionEntry.templateId).toBe('values-reflection');
       expect(reflectionEntry.mode).toBe('deliberation');
+      expect(reflectionEntry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('injects InternalState narrative payload for experiential-review template runs', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const narrative = createInternalStateNarrativeFixture();
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'Experiential reflection body' }),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+    );
+
+    const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
+    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
+    expect(runTemplateTool).toBeDefined();
+
+    const runResult = await runTemplateTool.execute(
+      'manual-experiential',
+      { templateId: 'experiential-review', deferIfBusy: false },
+      new AbortController().signal,
+    );
+    const runText = runResult.content.map((part: { text: string }) => part.text).join('');
+    expect(runText).toContain('Triggered reflection template "Experiential Review" (experiential-review).');
+
+    const experientialCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0]?.channelId === 'internal:reflection:experiential-review',
+    );
+    expect(experientialCall).toBeDefined();
+    expect(experientialCall?.[0]?.content).toContain('[Internal State Input]');
+    expect(experientialCall?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
+    expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
+    expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
   });
 
   it('defers manual template runs when the agent is busy and executes them after idle', async () => {

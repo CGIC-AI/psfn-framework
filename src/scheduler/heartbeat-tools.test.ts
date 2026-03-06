@@ -54,6 +54,7 @@ describe('heartbeat_get_policy', () => {
     expect(text).toContain('daily-review');
     expect(text).toContain('emotional-check');
     expect(text).toContain('goal-update');
+    expect(text).toContain('experiential-review');
     expect(text).toContain('values-reflection');
     expect(text).toContain('[ON]');
     expect(text).toContain('Interval:');
@@ -155,6 +156,20 @@ describe('heartbeat_update_policy', () => {
     expect(values?.deliberation?.maxTotalTokens).toBe(5000);
   });
 
+  it('updates internalStateInput toggle', async () => {
+    const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
+    const result = await tool.execute('call-internal-state', {
+      templateId: 'experiential-review',
+      internalStateInput: false,
+    }, new AbortController().signal);
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('Updated template "experiential-review"');
+    const policy = store.load();
+    const experiential = policy.templates.find(t => t.id === 'experiential-review');
+    expect(experiential?.internalStateInput).toBe(false);
+  });
+
   it('changes prompt text', async () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     const newPrompt = 'Tell me about the weather in your inner world today, in detail.';
@@ -220,7 +235,7 @@ describe('heartbeat_update_policy', () => {
     expect(syncFn).toHaveBeenCalled();
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
+    expect(policy.templates).toHaveLength(7);
     const added = policy.templates.find(t => t.id === 'custom-check');
     expect(added).toBeDefined();
     expect(added!.enabled).toBe(true);

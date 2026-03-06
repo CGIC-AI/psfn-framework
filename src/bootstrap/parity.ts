@@ -108,12 +108,39 @@ import {
   type IntentionActionDecision,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import {
+  buildInternalStateSnapshotRef,
+  cloneInternalState,
+  serializeInternalState,
+  type InternalState,
+} from '../self-model/state.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
+interface ReflectionMetacognitiveFlag {
+  flag: string;
+  confidence: number;
+  evidence?: string;
+}
+
+interface ReflectionInternalStateContext {
+  internalState: InternalState;
+  internalStateSnapshotRef: string;
+  metacognitiveFlags: ReflectionMetacognitiveFlag[];
+}
+
+interface HeartbeatAgentResponse {
+  content: string;
+  metadata?: {
+    internalState?: InternalState;
+    internalStateSnapshotRef?: string;
+    metacognitiveFlags?: unknown;
+  };
+}
+
 interface HeartbeatAgent {
-  handleMessage(message: SubstrateMessage): Promise<{ content: string }>;
+  handleMessage(message: SubstrateMessage): Promise<HeartbeatAgentResponse>;
   followUp?(message: SubstrateMessage): void;
   activateExtendedTools?(
     toolNames: readonly string[],
@@ -121,6 +148,9 @@ interface HeartbeatAgent {
   ): ExtendedToolActivationResult;
   waitForIdle?(): Promise<void>;
   registerPostTurnActionInferer?(inferer: PostTurnActionInferer): () => void;
+  getCurrentInternalState?(): InternalState | null;
+  getCurrentInternalStateSnapshotRef?(): string | null;
+  getCurrentMetacognitiveFlags?(): unknown;
 }
 
 interface HeartbeatRuntimeOptions {
@@ -511,6 +541,150 @@ export function wireHeartbeatRuntime(
     }
   };
 
+  let latestMetacognitiveFlags: ReflectionMetacognitiveFlag[] = [];
+
+  const normalizeMetacognitiveFlags = (
+    value: unknown,
+    context: string,
+  ): ReflectionMetacognitiveFlag[] => {
+    if (value === undefined || value === null) {
+      return [];
+    }
+    if (!Array.isArray(value)) {
+      throw new Error(`${context} must be an array when provided`);
+    }
+    return value.map((entry, index) => {
+      if (!entry || typeof entry !== 'object') {
+        throw new Error(`${context}[${String(index)}] must be an object`);
+      }
+      const flagRaw = (entry as { flag?: unknown }).flag;
+      if (typeof flagRaw !== 'string' || flagRaw.trim().length === 0) {
+        throw new Error(`${context}[${String(index)}].flag must be a non-empty string`);
+      }
+      const confidenceRaw = (entry as { confidence?: unknown }).confidence;
+      if (typeof confidenceRaw !== 'number' || !Number.isFinite(confidenceRaw) || confidenceRaw < 0 || confidenceRaw > 1) {
+        throw new Error(`${context}[${String(index)}].confidence must be a finite number in [0, 1]`);
+      }
+      const evidenceRaw = (entry as { evidence?: unknown }).evidence;
+      if (evidenceRaw !== undefined && (typeof evidenceRaw !== 'string' || evidenceRaw.trim().length === 0)) {
+        throw new Error(`${context}[${String(index)}].evidence must be a non-empty string when provided`);
+      }
+      return {
+        flag: flagRaw.trim(),
+        confidence: Number(confidenceRaw.toFixed(4)),
+        ...(typeof evidenceRaw === 'string' ? { evidence: evidenceRaw.trim() } : {}),
+      };
+    });
+  };
+
+  const normalizeSnapshotRef = (value: unknown, fieldName: string): string | null => {
+    if (value === undefined || value === null) return null;
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(`${fieldName} must be a non-empty string when provided`);
+    }
+    return value.trim();
+  };
+
+  const resolveInternalStateContext = (
+    template: ReflectionTemplate,
+  ): ReflectionInternalStateContext | null => {
+    if (!template.internalStateInput) {
+      return null;
+    }
+
+    const currentInternalState = agentLoop.getCurrentInternalState?.();
+    if (!currentInternalState) {
+      throw new Error(`Template "${template.id}" requires InternalState input, but no InternalState snapshot is available`);
+    }
+
+    const normalizedState = cloneInternalState(currentInternalState);
+    const snapshotRef = normalizeSnapshotRef(
+      agentLoop.getCurrentInternalStateSnapshotRef?.(),
+      'getCurrentInternalStateSnapshotRef result',
+    ) ?? buildInternalStateSnapshotRef(normalizedState);
+    const rawMetacognitiveFlags = agentLoop.getCurrentMetacognitiveFlags?.();
+    const metacognitiveFlags = rawMetacognitiveFlags !== undefined
+      ? normalizeMetacognitiveFlags(rawMetacognitiveFlags, 'getCurrentMetacognitiveFlags result')
+      : latestMetacognitiveFlags;
+    latestMetacognitiveFlags = metacognitiveFlags;
+
+    return {
+      internalState: normalizedState,
+      internalStateSnapshotRef: snapshotRef,
+      metacognitiveFlags,
+    };
+  };
+
+  const formatNarrativePromptInput = (
+    prompt: string,
+    context: ReflectionInternalStateContext | null,
+    appearanceContext?: string,
+  ): string => {
+    const sections: string[] = [prompt];
+    if (context) {
+      const concerns = context.internalState.attention.activeConcerns
+        .slice(0, 12)
+        .map((concern) => `[${concern.priority}|${concern.source}] ${concern.text}`);
+      const concernSection = concerns.length > 0
+        ? concerns.map((concern) => `- ${concern}`).join('\n')
+        : '- none';
+      const metacognitiveSection = context.metacognitiveFlags.length > 0
+        ? context.metacognitiveFlags
+          .map((flag) => `- ${flag.flag} (confidence=${flag.confidence.toFixed(2)})${flag.evidence ? ` evidence: ${flag.evidence}` : ''}`)
+          .join('\n')
+        : '- none exposed';
+
+      sections.push(
+        [
+          '[Internal State Input]',
+          `snapshot_ref: ${context.internalStateSnapshotRef}`,
+          `serialized_internal_state: ${serializeInternalState(context.internalState)}`,
+          '[Recent Metacognitive Flags]',
+          metacognitiveSection,
+          '[Active Concerns]',
+          concernSection,
+        ].join('\n'),
+      );
+    }
+    if (appearanceContext) {
+      sections.push(`Appearance context:\n${appearanceContext}`);
+    }
+    return sections.join('\n\n');
+  };
+
+  const captureResponseInternalStateContext = (
+    response: HeartbeatAgentResponse,
+  ): ReflectionInternalStateContext | null => {
+    const metadata = response.metadata;
+    if (!metadata) {
+      return null;
+    }
+
+    if (metadata.internalState === undefined && metadata.internalStateSnapshotRef === undefined && metadata.metacognitiveFlags === undefined) {
+      return null;
+    }
+
+    if (metadata.internalState === undefined) {
+      throw new Error('Heartbeat response metadata.internalState is required when snapshot metadata is provided');
+    }
+
+    const internalState = cloneInternalState(metadata.internalState);
+    const snapshotRef = normalizeSnapshotRef(
+      metadata.internalStateSnapshotRef,
+      'metadata.internalStateSnapshotRef',
+    ) ?? buildInternalStateSnapshotRef(internalState);
+    const metacognitiveFlags = normalizeMetacognitiveFlags(
+      metadata.metacognitiveFlags,
+      'metadata.metacognitiveFlags',
+    );
+    latestMetacognitiveFlags = metacognitiveFlags;
+    return {
+      internalState,
+      internalStateSnapshotRef: snapshotRef,
+      metacognitiveFlags,
+    };
+  };
+
   const toDeliberationMetadata = (
     result: DeliberationResult,
   ): ValuesDeliberationMetadata => ({
@@ -582,18 +756,15 @@ export function wireHeartbeatRuntime(
 
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
+    prompt: string,
   ): Promise<{ reflection: string; metadata: ValuesDeliberationMetadata }> => {
     const llmProvider = runtimeOptions.llmProvider;
     if (!llmProvider) {
       throw new Error('Deliberation mode requested without llmProvider');
     }
-    const appearanceContext = resolveDeliberationAppearanceContext();
-    const deliberationPrompt = appearanceContext
-      ? `${template.prompt}\n\nAppearance context:\n${appearanceContext}`
-      : template.prompt;
     const result = await runDeliberation(
       llmProvider,
-      deliberationPrompt,
+      prompt,
       {
         ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
         caps: {
@@ -631,12 +802,16 @@ export function wireHeartbeatRuntime(
     assertTemplateExecutionAllowed(template.id, source);
 
     const reflectionChannelId = `internal:reflection:${template.id}`;
+    const internalStateContext = resolveInternalStateContext(template);
+    const appearanceContext = shouldUseDeliberation(template) ? resolveDeliberationAppearanceContext() : undefined;
+    const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext, appearanceContext);
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
+    let persistenceContext = internalStateContext;
 
     if (shouldUseDeliberation(template)) {
-      const deliberationResult = await runTemplateDeliberation(template);
+      const deliberationResult = await runTemplateDeliberation(template, reflectionPrompt);
       reflectionText = deliberationResult.reflection;
       deliberationMetadata = deliberationResult.metadata;
       reflectionMode = 'deliberation';
@@ -654,19 +829,28 @@ export function wireHeartbeatRuntime(
         channelType: 'terminal',
         authorId: 'scheduler',
         authorName: template.name,
-        content: template.prompt,
+        content: reflectionPrompt,
         timestamp: new Date(),
       });
       reflectionText = response.content;
+      const responseContext = captureResponseInternalStateContext(response);
+      if (responseContext) {
+        persistenceContext = responseContext;
+      }
     }
 
     if (template.id === 'values-reflection') {
       valuesJournal.append({
         templateId: template.id,
         templateName: template.name,
-        prompt: template.prompt,
+        prompt: reflectionPrompt,
         reflection: reflectionText,
         ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+        ...(persistenceContext ? {
+          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+          internalState: persistenceContext.internalState,
+          metacognitiveFlags: persistenceContext.metacognitiveFlags,
+        } : {}),
       });
     }
 
@@ -674,11 +858,16 @@ export function wireHeartbeatRuntime(
       reflectionJournal.append({
         templateId: template.id,
         templateName: template.name,
-        prompt: template.prompt,
+        prompt: reflectionPrompt,
         reflection: reflectionText,
         channelId: reflectionChannelId,
         mode: reflectionMode,
         ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+        ...(persistenceContext ? {
+          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+          internalState: persistenceContext.internalState,
+          metacognitiveFlags: persistenceContext.metacognitiveFlags,
+        } : {}),
       });
     } catch (error) {
       log.warn(`Reflection "${template.id}" note journal persistence skipped`, {

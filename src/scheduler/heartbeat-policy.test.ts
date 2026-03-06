@@ -21,7 +21,7 @@ describe('HeartbeatPolicyStore', () => {
 
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
 
@@ -30,6 +30,7 @@ describe('HeartbeatPolicyStore', () => {
     expect(ids).toContain('daily-review');
     expect(ids).toContain('emotional-check');
     expect(ids).toContain('goal-update');
+    expect(ids).toContain('experiential-review');
     expect(ids).toContain('values-reflection');
 
     // File should now exist
@@ -61,7 +62,7 @@ describe('HeartbeatPolicyStore', () => {
   it('non-whisper templates do not send to Discord', () => {
     const policy = store.load();
     const nonWhispers = policy.templates.filter(t => t.id !== 'whisper');
-    expect(nonWhispers.length).toBe(4);
+    expect(nonWhispers.length).toBe(5);
     for (const t of nonWhispers) {
       expect(t.sendToDiscord).toBe(false);
     }
@@ -72,13 +73,22 @@ describe('HeartbeatPolicyStore', () => {
     const values = policy.templates.find(t => t.id === 'values-reflection');
     expect(values?.mode).toBe('deliberation');
     expect(values?.deliberation?.maxRounds).toBe(4);
+    expect(values?.internalStateInput).toBe(true);
+  });
+
+  it('experiential-review defaults to internal-state narrative mode', () => {
+    const policy = store.load();
+    const experiential = policy.templates.find(t => t.id === 'experiential-review');
+    expect(experiential).toBeDefined();
+    expect(experiential?.intervalMs).toBe(4 * 60 * 60_000);
+    expect(experiential?.internalStateInput).toBe(true);
   });
 
   it('returns defaults for corrupt file', () => {
     store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
     const policy = store.load();
     // Invalid templates (not an array) triggers default
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
   });
 
   it('restores defaults when persisted template intervals are invalid', () => {
@@ -103,7 +113,7 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
   });
@@ -174,6 +184,11 @@ describe('validateTemplate', () => {
   it('rejects invalid mode', () => {
     const errors = validateTemplate({ ...validTemplate, mode: 'other' as any }, true);
     expect(errors.some(e => e.field === 'mode')).toBe(true);
+  });
+
+  it('rejects invalid internalStateInput type', () => {
+    const errors = validateTemplate({ ...validTemplate, internalStateInput: 'yes' as any }, true);
+    expect(errors.some(e => e.field === 'internalStateInput')).toBe(true);
   });
 
   it('rejects invalid deliberation voices', () => {

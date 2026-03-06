@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
+import { cloneInternalState, type InternalState } from '../self-model/state.js';
 
 const log = createComponentLogger('ValuesJournal');
 
@@ -14,6 +15,9 @@ export interface ValuesJournalEntry {
   reflection: string;
   createdAt: string;
   deliberation?: ValuesDeliberationMetadata;
+  internalStateSnapshotRef?: string;
+  internalState?: InternalState;
+  metacognitiveFlags?: ValuesMetacognitiveFlag[];
 }
 
 export interface ValuesJournalAppendInput {
@@ -23,6 +27,9 @@ export interface ValuesJournalAppendInput {
   reflection: string;
   createdAt?: string;
   deliberation?: ValuesDeliberationMetadata;
+  internalStateSnapshotRef?: string;
+  internalState?: InternalState;
+  metacognitiveFlags?: ValuesMetacognitiveFlag[];
 }
 
 interface ValuesJournalListOptions {
@@ -42,6 +49,12 @@ export interface ValuesDeliberationMetadata {
   totalTokens: number;
   estimatedCostUsd: number;
   durationMs: number;
+}
+
+export interface ValuesMetacognitiveFlag {
+  flag: string;
+  confidence: number;
+  evidence?: string;
 }
 
 function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata | undefined {
@@ -94,6 +107,53 @@ function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata
   };
 }
 
+function normalizeSnapshotRef(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    throw new Error('values journal internalStateSnapshotRef must be a non-empty string when provided');
+  }
+  return raw.trim();
+}
+
+function normalizeInternalStateSnapshot(raw: unknown): InternalState | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  return cloneInternalState(raw as InternalState);
+}
+
+function normalizeMetacognitiveFlags(raw: unknown): ValuesMetacognitiveFlag[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new Error('values journal metacognitiveFlags must be an array when provided');
+  }
+  return raw.map((entry, index) => {
+    if (!entry || typeof entry !== 'object') {
+      throw new Error(`values journal metacognitiveFlags[${String(index)}] must be an object`);
+    }
+    const flagRaw = (entry as { flag?: unknown }).flag;
+    if (typeof flagRaw !== 'string' || flagRaw.trim().length === 0) {
+      throw new Error(`values journal metacognitiveFlags[${String(index)}].flag must be a non-empty string`);
+    }
+    const confidenceRaw = (entry as { confidence?: unknown }).confidence;
+    if (
+      typeof confidenceRaw !== 'number'
+      || !Number.isFinite(confidenceRaw)
+      || confidenceRaw < 0
+      || confidenceRaw > 1
+    ) {
+      throw new Error(`values journal metacognitiveFlags[${String(index)}].confidence must be in [0, 1]`);
+    }
+    const evidenceRaw = (entry as { evidence?: unknown }).evidence;
+    if (evidenceRaw !== undefined && (typeof evidenceRaw !== 'string' || evidenceRaw.trim().length === 0)) {
+      throw new Error(`values journal metacognitiveFlags[${String(index)}].evidence must be a non-empty string`);
+    }
+    return {
+      flag: flagRaw.trim(),
+      confidence: Number(confidenceRaw.toFixed(4)),
+      ...(typeof evidenceRaw === 'string' ? { evidence: evidenceRaw.trim() } : {}),
+    };
+  });
+}
+
 function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
   if (!raw || typeof raw !== 'object') return null;
   const entry = raw as Partial<ValuesJournalEntry>;
@@ -118,18 +178,31 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
   const id = typeof entry.id === 'string' && entry.id.trim().length > 0
     ? entry.id
     : `values-${entry.version}`;
-  const deliberation = normalizeDeliberationMetadata(entry.deliberation);
+  try {
+    const deliberation = normalizeDeliberationMetadata(entry.deliberation);
+    const internalStateSnapshotRef = normalizeSnapshotRef((entry as { internalStateSnapshotRef?: unknown }).internalStateSnapshotRef);
+    const internalState = normalizeInternalStateSnapshot((entry as { internalState?: unknown }).internalState);
+    const metacognitiveFlags = normalizeMetacognitiveFlags((entry as { metacognitiveFlags?: unknown }).metacognitiveFlags);
+    if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
+      return null;
+    }
 
-  return {
-    id,
-    version: entry.version,
-    templateId: entry.templateId,
-    templateName: entry.templateName,
-    prompt: entry.prompt,
-    reflection: entry.reflection,
-    createdAt: entry.createdAt,
-    ...(deliberation ? { deliberation } : {}),
-  };
+    return {
+      id,
+      version: entry.version,
+      templateId: entry.templateId,
+      templateName: entry.templateName,
+      prompt: entry.prompt,
+      reflection: entry.reflection,
+      createdAt: entry.createdAt,
+      ...(deliberation ? { deliberation } : {}),
+      ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
+      ...(internalState ? { internalState } : {}),
+      ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export class ValuesJournalStore {
@@ -157,6 +230,14 @@ export class ValuesJournalStore {
 
     const entries = this.readAll();
     const nextVersion = entries.length > 0 ? entries[entries.length - 1]!.version + 1 : 1;
+    const internalStateSnapshotRef = normalizeSnapshotRef(input.internalStateSnapshotRef);
+    const internalState = normalizeInternalStateSnapshot(input.internalState);
+    const metacognitiveFlags = normalizeMetacognitiveFlags(input.metacognitiveFlags);
+    if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
+      throw new Error(
+        'values journal append requires both internalStateSnapshotRef and internalState when narrative context is provided',
+      );
+    }
     const entry: ValuesJournalEntry = {
       id: `values-${nextVersion}`,
       version: nextVersion,
@@ -166,6 +247,9 @@ export class ValuesJournalStore {
       reflection,
       createdAt: input.createdAt ?? new Date().toISOString(),
       ...(input.deliberation ? { deliberation: input.deliberation } : {}),
+      ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
+      ...(internalState ? { internalState } : {}),
+      ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
     };
 
     appendJsonLine(this.filePath, entry);

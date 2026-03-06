@@ -63,6 +63,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   memoryExtractionMinImportance: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMinConfidence: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMinNovelty: { sectionId: 'extraction-tuning', surface: 'advanced' },
+  memoryExtractionEmotionalIntensityWeight: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMaxWrites: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionTelemetryEnabled: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryRetrievalTelemetryEnabled: { sectionId: 'extraction-tuning', surface: 'advanced' },

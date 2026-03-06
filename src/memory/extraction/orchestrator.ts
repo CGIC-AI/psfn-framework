@@ -55,6 +55,7 @@ export interface ExtractionRunOptions {
   telemetryEnabled: boolean;
   useCompositionalExtraction: boolean;
   isAcceptingExtractions: () => boolean;
+  adjustFactForWrite?: (fact: ExtractedFact) => ExtractedFact;
   processFact: (fact: ExtractedFact, sourceRef: string, canonicalContactId?: string) => Promise<WriteResult>;
   emitExtractionStart: (
     channelId: string,
@@ -135,8 +136,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const parsedFacts = mergeExtractedFactGroups(parsedFactGroups);
     const crossChunkDeduplicatedCount = Math.max(0, rawParsedFactCount - parsedFacts.length);
     const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
+    const adjustFactForWrite = options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact);
     const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts])
-      .map(fact => applyChannelImportanceCaps(fact, channelVisibility));
+      .map(fact => applyChannelImportanceCaps(adjustFactForWrite(fact), channelVisibility));
 
     if (inferredBoundaryFacts.length > 0 && options.telemetryEnabled) {
       log.info('Detected refusal-boundary facts from conversation transcript', {

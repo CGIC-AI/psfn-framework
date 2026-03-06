@@ -398,6 +398,7 @@ export interface SubstrateConfig {
   memoryExtractionMinImportance?: number;
   memoryExtractionMinConfidence?: number;
   memoryExtractionMinNovelty?: number;
+  memoryExtractionEmotionalIntensityWeight?: number;
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
@@ -522,6 +523,7 @@ const DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
 const DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE = 0.45;
 const DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE = 0.6;
 const DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY = 0.35;
+const DEFAULT_MEMORY_EXTRACTION_EMOTIONAL_INTENSITY_WEIGHT = 0.2;
 const DEFAULT_MEMORY_EXTRACTION_MAX_WRITES = 2;
 const DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS = 5 * 60 * 1000;
@@ -642,6 +644,7 @@ export function loadConfig(): SubstrateConfig {
     memoryExtractionMinImportance: DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE,
     memoryExtractionMinConfidence: DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE,
     memoryExtractionMinNovelty: DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY,
+    memoryExtractionEmotionalIntensityWeight: DEFAULT_MEMORY_EXTRACTION_EMOTIONAL_INTENSITY_WEIGHT,
     memoryExtractionMaxWrites: DEFAULT_MEMORY_EXTRACTION_MAX_WRITES,
     memoryExtractionTelemetryEnabled: true,
     memoryRetrievalTelemetryEnabled: true,

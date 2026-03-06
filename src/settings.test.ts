@@ -725,6 +725,15 @@ describe('settings', () => {
       expect((config as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('disabled');
     });
 
+    it('applies memory extraction emotional intensity weight when provided', () => {
+      const config = makeConfig();
+      applySettings(config, {
+        memoryExtractionEmotionalIntensityWeight: 0.35,
+      });
+
+      expect(config.memoryExtractionEmotionalIntensityWeight).toBe(0.35);
+    });
+
     it('preserves plugin STT provider ids without core switch edits', () => {
       const config = makeConfig();
       applySettings(config, {
@@ -870,6 +879,7 @@ describe('settings', () => {
         memoryExtractionMinImportance: 0.35,
         memoryExtractionMinConfidence: 0.45,
         memoryExtractionMinNovelty: 0.25,
+        memoryExtractionEmotionalIntensityWeight: 0.15,
         memoryExtractionMaxWrites: 8,
         memoryExtractionTelemetryEnabled: true,
         memoryRetrievalTelemetryEnabled: true,
@@ -1246,6 +1256,7 @@ describe('settings', () => {
       expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
       expect(snapshot.observationMaskingWindow).toBe(10);
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
+      expect(snapshot.memoryExtractionEmotionalIntensityWeight).toBeNull();
       expect(snapshot.openRouterProviderOrder).toEqual([]);
       expect(snapshot.importProcessingRouteMode).toBe('background');
       expect(snapshot.importProcessingStrictPolicy).toBe(false);

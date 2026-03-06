@@ -1,3 +1,5 @@
+name: psfn-production
+
 services:
   # Dedicated production runtime container profile with isolated mutable mounts.
   # Do not point any of these directories at continuous/dev roots.
@@ -9,17 +11,49 @@ services:
     network_mode: "none"
     restart: unless-stopped
     volumes:
-      # Gateway socket (created by host gateway process)
-      - ${PSFN_GATEWAY_SOCKET_DIR:-/run/psfn}:/run/psfn
+      - type: bind
+        source: ${PSFN_GATEWAY_SOCKET_DIR:-/run/psfn}
+        target: /run/psfn
+        bind:
+          create_host_path: false
       # Production-isolated mutable roots
-      - ${PSFN_PRODUCTION_SYSTEM_DATA_DIR:-../runtime/production/system-data}:/app/system-data
-      - ${PSFN_PRODUCTION_COMPANION_DATA_DIR:-../runtime/production/companion-data}:/app/companion-data
-      - ${PSFN_PRODUCTION_WORKSPACE_DIR:-../runtime/production/workspace}:/app/workspace
-      - ${PSFN_PRODUCTION_LOGS_DIR:-../runtime/production/logs}:/app/logs
-      - ${PSFN_PRODUCTION_TEMP_DIR:-../runtime/production/tmp}:/app/tmp
-      - ${PSFN_PRODUCTION_BACKUPS_DIR:-../runtime/production/backups}:/app/backups
+      - type: bind
+        source: ${PSFN_PRODUCTION_SYSTEM_DATA_DIR:-../runtime/production/system-data}
+        target: /app/system-data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_COMPANION_DATA_DIR:-../runtime/production/companion-data}
+        target: /app/companion-data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_WORKSPACE_DIR:-../runtime/production/workspace}
+        target: /app/workspace
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_LOGS_DIR:-../runtime/production/logs}
+        target: /app/logs
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_TEMP_DIR:-../runtime/production/tmp}
+        target: /app/tmp
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_BACKUPS_DIR:-../runtime/production/backups}
+        target: /app/backups
+        bind:
+          create_host_path: false
       # Character card + identity (RO)
-      - ${CHARACTER_CARD_DIR:-/home/user/.openclaw/agents/main}:/app/identity:ro
+      - type: bind
+        source: ${CHARACTER_CARD_DIR:-/home/user/.openclaw/agents/main}
+        target: /app/identity
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
       GATEWAY_SOCKET: /run/psfn/gateway.sock
       PSFN_RUNTIME_LAYOUT_MODE: production

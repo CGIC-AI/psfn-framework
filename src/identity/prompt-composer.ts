@@ -19,7 +19,9 @@ import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../logger.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 
-const STATIC_PREFIX_LAYER_TYPES = new Set<LayerType>(['base', 'operator', 'channel']);
+// Keep only identity/foundation + operator policy in the frozen prompt prefix.
+// Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.
+const STATIC_PREFIX_LAYER_TYPES = new Set<LayerType>(['base', 'operator']);
 const LAST_KNOWN_GOOD_FILENAME = 'last-known-good.json';
 const LAST_KNOWN_GOOD_VERSION = 1;
 const UNTRUSTED_COMPACTION_RECORD_TAG = 'untrusted_compaction_summary_record';

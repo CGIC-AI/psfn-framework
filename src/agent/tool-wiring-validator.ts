@@ -42,11 +42,33 @@ export type ToolConcurrencyClass =
   | 'read_only'
   | 'spawn_shard';
 
+export type ToolExclusivityKeyPolicy =
+  | 'none'
+  | 'category_tool_name'
+  | 'static_key';
+
+export type ToolInterruptibility =
+  | 'cooperative'
+  | 'non_interruptible';
+
+export interface ToolExecutionEligibility {
+  foreground: boolean;
+  background: boolean;
+}
+
 export interface ToolConcurrencyMeta {
   /**
    * Concurrency execution class used by scheduler logic.
    */
   class: ToolConcurrencyClass;
+
+  /**
+   * Explicit policy that explains how exclusivityKey was derived.
+   * - none: tool is not serialized via exclusivity key
+   * - category_tool_name: key is generated from <category>:<toolName>
+   * - static_key: key is explicitly authored in metadata
+   */
+  exclusivityKeyPolicy: ToolExclusivityKeyPolicy;
 
   /**
    * Required for exclusive class to serialize conflicting operations.
@@ -57,6 +79,17 @@ export interface ToolConcurrencyMeta {
    * Optional upper bound for parallel classes.
    */
   maxParallel?: number;
+
+  /**
+   * Whether the tool is safe to interrupt when turn control changes.
+   */
+  interruptibility: ToolInterruptibility;
+
+  /**
+   * Whether the tool can be scheduled in foreground and/or background turns.
+   * At least one lane must be enabled.
+   */
+  eligibility: ToolExecutionEligibility;
 }
 
 /** An AgentTool that optionally carries wiring metadata */
@@ -264,6 +297,16 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
         }
 
         if (
+          concurrency.exclusivityKeyPolicy !== 'none'
+          && concurrency.exclusivityKeyPolicy !== 'category_tool_name'
+          && concurrency.exclusivityKeyPolicy !== 'static_key'
+        ) {
+          missingConcurrencyMetadata.push(
+            `invalid concurrency.exclusivityKeyPolicy "${String((concurrency as { exclusivityKeyPolicy?: unknown }).exclusivityKeyPolicy)}"`,
+          );
+        }
+
+        if (
           concurrency.class === 'exclusive'
           && (!concurrency.exclusivityKey || concurrency.exclusivityKey.trim().length === 0)
         ) {
@@ -271,10 +314,51 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
         }
 
         if (
+          concurrency.class === 'exclusive'
+          && concurrency.exclusivityKeyPolicy === 'none'
+        ) {
+          missingConcurrencyMetadata.push('exclusive tools require non-none concurrency.exclusivityKeyPolicy');
+        }
+
+        if (
+          concurrency.class !== 'exclusive'
+          && concurrency.exclusivityKeyPolicy !== 'none'
+        ) {
+          missingConcurrencyMetadata.push('non-exclusive tools must use concurrency.exclusivityKeyPolicy "none"');
+        }
+
+        if (
+          concurrency.class !== 'exclusive'
+          && concurrency.exclusivityKey !== undefined
+        ) {
+          missingConcurrencyMetadata.push('non-exclusive tools must not set concurrency.exclusivityKey');
+        }
+
+        if (
           concurrency.maxParallel !== undefined
           && (!Number.isInteger(concurrency.maxParallel) || concurrency.maxParallel <= 0)
         ) {
           missingConcurrencyMetadata.push('concurrency.maxParallel must be a positive integer when provided');
+        }
+
+        if (
+          concurrency.interruptibility !== 'cooperative'
+          && concurrency.interruptibility !== 'non_interruptible'
+        ) {
+          missingConcurrencyMetadata.push(
+            `invalid concurrency.interruptibility "${String((concurrency as { interruptibility?: unknown }).interruptibility)}"`,
+          );
+        }
+
+        if (!concurrency.eligibility) {
+          missingConcurrencyMetadata.push('concurrency.eligibility metadata missing');
+        } else {
+          const { foreground, background } = concurrency.eligibility;
+          if (typeof foreground !== 'boolean' || typeof background !== 'boolean') {
+            missingConcurrencyMetadata.push('concurrency.eligibility must include boolean foreground/background flags');
+          } else if (!foreground && !background) {
+            missingConcurrencyMetadata.push('concurrency.eligibility must enable at least one lane');
+          }
         }
       }
     }

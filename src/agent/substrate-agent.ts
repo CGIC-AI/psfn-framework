@@ -85,6 +85,8 @@ import {
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
   type ToolConcurrencyClass,
+  type ToolExecutionEligibility,
+  type ToolInterruptibility,
   type ValidateToolsOptions,
   type WirableTool,
 } from './tool-wiring-validator.js';
@@ -729,19 +731,71 @@ export class SubstrateAgent {
     return 'exclusive';
   }
 
+  private inferToolInterruptibility(concurrencyClass: ToolConcurrencyClass): ToolInterruptibility {
+    if (concurrencyClass === 'spawn_shard') return 'non_interruptible';
+    return 'cooperative';
+  }
+
+  private inferToolEligibility(toolName: string, category: ToolCategory): ToolExecutionEligibility {
+    if (category === 'extended' && classifyDefaultExtendedToolForTurn(toolName) === 'background') {
+      return {
+        foreground: false,
+        background: true,
+      };
+    }
+    return {
+      foreground: true,
+      background: true,
+    };
+  }
+
   private withToolConcurrencyMetadata(tool: AgentTool<any>, category: ToolCategory): AgentTool<any> {
     const wirable = tool as WirableTool;
     const existingMeta = wirable.wiringMeta;
     const inferredClass = this.inferToolConcurrencyClass(tool.name);
+    const inferredEligibility = this.inferToolEligibility(tool.name, category);
     const concurrency = existingMeta?.concurrency
-      ? { ...existingMeta.concurrency }
-      : { class: inferredClass as ToolConcurrencyClass };
+      ? {
+        ...existingMeta.concurrency,
+        eligibility: existingMeta.concurrency.eligibility
+          ? { ...existingMeta.concurrency.eligibility }
+          : undefined,
+      }
+      : {
+        class: inferredClass as ToolConcurrencyClass,
+        exclusivityKeyPolicy: inferredClass === 'exclusive' ? 'category_tool_name' : 'none',
+        interruptibility: this.inferToolInterruptibility(inferredClass),
+        eligibility: inferredEligibility,
+      };
+
+    if (!concurrency.interruptibility) {
+      concurrency.interruptibility = this.inferToolInterruptibility(concurrency.class);
+    }
+
+    if (!concurrency.eligibility) {
+      concurrency.eligibility = inferredEligibility;
+    } else {
+      if (typeof concurrency.eligibility.foreground !== 'boolean') {
+        concurrency.eligibility.foreground = inferredEligibility.foreground;
+      }
+      if (typeof concurrency.eligibility.background !== 'boolean') {
+        concurrency.eligibility.background = inferredEligibility.background;
+      }
+    }
 
     if (concurrency.class === 'exclusive') {
       if (!concurrency.exclusivityKey || concurrency.exclusivityKey.trim().length === 0) {
         concurrency.exclusivityKey = `${category}:${tool.name}`;
+        concurrency.exclusivityKeyPolicy = 'category_tool_name';
+      } else if (
+        !concurrency.exclusivityKeyPolicy
+        || concurrency.exclusivityKeyPolicy === 'none'
+      ) {
+        concurrency.exclusivityKeyPolicy = 'static_key';
       }
     } else {
+      concurrency.exclusivityKeyPolicy = 'none';
+      delete concurrency.exclusivityKey;
       if (concurrency.maxParallel === undefined) {
         concurrency.maxParallel = concurrency.class === 'spawn_shard'
           ? DEFAULT_SPAWN_SHARD_PARALLEL_MAX

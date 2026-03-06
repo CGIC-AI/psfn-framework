@@ -1080,6 +1080,8 @@ async function main(): Promise<void> {
     {
       eventBus,
       llmProvider: gateway,
+      capabilityTier: config.capabilityTier,
+      compositionalPolicy: config.compositionalPolicy,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
       postTurnActions,

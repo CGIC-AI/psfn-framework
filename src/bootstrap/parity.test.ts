@@ -462,8 +462,8 @@ describe('wireHeartbeatRuntime', () => {
         response: { content: string };
         turnMessages: unknown[];
       },
-    ) => Array<{ kind: string; dedupeKey?: string; payload?: Record<string, unknown> }>;
-    const inferredActions = inferer({
+    ) => Promise<Array<{ kind: string; dedupeKey?: string; payload?: Record<string, unknown> }>>;
+    const inferredActions = await inferer({
       message: { id: 'msg-1', channelId: 'test-channel' },
       response: { content: 'ok' },
       turnMessages: [{
@@ -528,6 +528,115 @@ describe('wireHeartbeatRuntime', () => {
 
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
     expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+  });
+
+  it('gates composed post-turn appraisal by compositional policy', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const duplicateTurnMessages = [{
+      role: 'toolResult',
+      toolName: 'load_tools',
+      result: {
+        details: {
+          deferredToolHandoff: {
+            toolNames: ['extended_probe_tool'],
+            intendedAction: 'Use extended_probe_tool to collect diagnostics.',
+            maxRetries: 1,
+          },
+        },
+      },
+    }, {
+      role: 'toolResult',
+      toolName: 'load_tools',
+      result: {
+        details: {
+          deferredToolHandoff: {
+            toolNames: ['extended_probe_tool'],
+            intendedAction: 'Use extended_probe_tool to collect diagnostics.',
+            maxRetries: 1,
+          },
+        },
+      },
+    }];
+    const message = {
+      id: 'msg-dup-1',
+      channelId: 'api:test',
+      channelType: 'terminal' as const,
+      authorId: 'user-1',
+      authorName: 'Test User',
+      content: 'hello',
+      timestamp: new Date(),
+    };
+    const buildInferer = (allowedPurposes: string[]) => {
+      const target = { registerTool: vi.fn() };
+      const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
+      const agentLoop = {
+        handleMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        activateExtendedTools: vi.fn().mockReturnValue({
+          requestedTools: ['extended_probe_tool'],
+          activatedTools: ['extended_probe_tool'],
+          alreadyActiveTools: [],
+          missingTools: [],
+        }),
+        registerPostTurnActionInferer,
+      };
+      const sender = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      const postTurnActions = {
+        registerHandler: vi.fn().mockReturnValue(() => {}),
+        listQueued: vi.fn().mockReturnValue([]),
+      };
+
+      wireHeartbeatRuntime(
+        target,
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+        undefined,
+        {
+          eventBus,
+          postTurnActions,
+          capabilityTier: 'autonomous',
+          compositionalPolicy: {
+            enabled: true,
+            allowedTiers: ['autonomous'],
+            allowedChannelTypes: ['api'],
+            allowedPurposes,
+          },
+        },
+      );
+
+      return registerPostTurnActionInferer.mock.calls[0]?.[0] as (
+        context: {
+          message: typeof message;
+          response: { content: string };
+          turnMessages: unknown[];
+        },
+      ) => Promise<Array<any>>;
+    };
+
+    const composedInferer = buildInferer(['appraisal']);
+    const legacyInferer = buildInferer(['retrieval']);
+
+    const composedActions = await composedInferer({
+      message,
+      response: { content: 'ok' },
+      turnMessages: duplicateTurnMessages,
+    });
+    const legacyActions = await legacyInferer({
+      message,
+      response: { content: 'ok' },
+      turnMessages: duplicateTurnMessages,
+    });
+
+    expect(composedActions).toHaveLength(1);
+    expect(legacyActions).toHaveLength(2);
   });
 
   it('suppresses rapid-fire deferred heartbeat template execution loops', async () => {
@@ -612,7 +721,7 @@ describe('wireHeartbeatRuntime', () => {
     }
   });
 
-  it('infers deferred tool-handoff actions from late load_tools discovery payloads', () => {
+  it('infers deferred tool-handoff actions from late load_tools discovery payloads', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -668,7 +777,7 @@ describe('wireHeartbeatRuntime', () => {
         response: { content: string };
         turnMessages: unknown[];
       },
-    ) => Array<{
+    ) => Promise<Array<{
       kind: string;
       payload?: {
         toolNames?: string[];
@@ -683,8 +792,8 @@ describe('wireHeartbeatRuntime', () => {
       };
       dedupeKey?: string;
       maxRetries?: number;
-    }>;
-    const inferredActions = inferer({
+    }>>;
+    const inferredActions = await inferer({
       message: {
         id: 'msg-1',
         channelId: 'test-channel',
@@ -787,7 +896,7 @@ describe('wireHeartbeatRuntime', () => {
         response: { content: string };
         turnMessages: unknown[];
       },
-    ) => Array<any>;
+    ) => Promise<Array<any>>;
     const message = {
       id: 'msg-load-tools-1',
       channelId: 'test-channel',
@@ -797,7 +906,7 @@ describe('wireHeartbeatRuntime', () => {
       content: 'hello',
       timestamp: new Date(),
     };
-    const inferredActions = inferer({
+    const inferredActions = await inferer({
       message,
       response: { content: 'ok' },
       turnMessages: [{
@@ -920,7 +1029,7 @@ describe('wireHeartbeatRuntime', () => {
           response: { content: string };
           turnMessages: unknown[];
         },
-      ) => Array<any>;
+      ) => Promise<Array<any>>;
       const message = {
         id: 'msg-load-tools-fail-1',
         channelId: 'test-channel',
@@ -930,7 +1039,7 @@ describe('wireHeartbeatRuntime', () => {
         content: 'hello',
         timestamp: new Date(),
       };
-      const inferredActions = inferer({
+      const inferredActions = await inferer({
         message,
         response: { content: 'ok' },
         turnMessages: [{

@@ -2,6 +2,8 @@
 // Common primitives used by both single-process runtime and gateway agent mode.
 
 import type {
+  CapabilityTier,
+  CompositionalPolicyConfig,
   PostTurnActionCandidate,
   SubstrateConfig,
   SubstrateMessage,
@@ -82,7 +84,11 @@ import {
   normalizeDeferredToolHandoffPayload,
   type DeferredToolHandoffPayload,
 } from '../agent/deferred-tool-handoff.js';
-import { inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages } from './deferred-post-turn-inference.js';
+import {
+  inferComposedDeferredPostTurnActions,
+  inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages,
+} from './deferred-post-turn-inference.js';
+import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
@@ -100,6 +106,8 @@ interface HeartbeatAgent {
 interface HeartbeatRuntimeOptions {
   eventBus?: EventBus;
   llmProvider?: LLMProvider;
+  capabilityTier?: CapabilityTier;
+  compositionalPolicy?: CompositionalPolicyConfig;
   characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   postTurnActions?: PostTurnActionRuntime;
@@ -281,6 +289,14 @@ export function wireHeartbeatRuntime(
   const deferredToolHandoffPayloads = new Map<string, DeferredToolHandoffPayload>();
   const deferredToolHandoffExecutionState = new Map<string, { activated: boolean; executed: boolean }>();
   const telemetryEventBus = runtimeOptions.eventBus;
+  const shouldUseCompositionalAppraisal = (channelId: string): boolean => (
+    evaluateCompositionalPolicyForChannelId({
+      policy: runtimeOptions.compositionalPolicy,
+      capabilityTier: runtimeOptions.capabilityTier,
+      channelId,
+      purpose: 'appraisal',
+    }).allowed
+  );
 
   type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
 
@@ -930,15 +946,24 @@ export function wireHeartbeatRuntime(
     );
 
     if (agentLoop.registerPostTurnActionInferer) {
-      const inferDeferredPostTurnActions: PostTurnActionInferer = ({ message, turnMessages }) => (
-        inferDeferredPostTurnActionsFromMessages({
-          message,
-          turnMessages,
-          deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
-          onDeferredToolHandoffPayload: (dedupeKey, payload) => {
-            deferredToolHandoffPayloads.set(dedupeKey, payload);
-          },
-        })
+      const inferDeferredPostTurnActions: PostTurnActionInferer = async ({ message, turnMessages }) => (
+        shouldUseCompositionalAppraisal(message.channelId)
+          ? inferComposedDeferredPostTurnActions({
+            message,
+            turnMessages,
+            deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
+            onDeferredToolHandoffPayload: (dedupeKey, payload) => {
+              deferredToolHandoffPayloads.set(dedupeKey, payload);
+            },
+          })
+          : inferDeferredPostTurnActionsFromMessages({
+            message,
+            turnMessages,
+            deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
+            onDeferredToolHandoffPayload: (dedupeKey, payload) => {
+              deferredToolHandoffPayloads.set(dedupeKey, payload);
+            },
+          })
       );
       agentLoop.registerPostTurnActionInferer(inferDeferredPostTurnActions);
     } else {

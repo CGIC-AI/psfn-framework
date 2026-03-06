@@ -915,6 +915,8 @@ export class SubstrateRuntime implements Lifecycle {
       {
         eventBus: this.eventBus,
         llmProvider: this.llmClient,
+        capabilityTier: this.config.capabilityTier,
+        compositionalPolicy: this.config.compositionalPolicy,
         characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
         memoryWriter,
         postTurnActions,

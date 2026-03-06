@@ -2291,6 +2291,109 @@ describe('AdminServer', () => {
       testConfig.capabilityTier = 'nursery';
     });
 
+    it('round-trips dedicated subsystem JSON endpoints without drift', async () => {
+      const cases = [
+        {
+          key: 'models',
+          payload: {
+            modelCatalog: {
+              primary: {
+                model: 'openai/gpt-4.1-mini',
+                provider: 'openrouter',
+                defaults: { maxTokens: 4096, contextWindow: 128000 },
+                routing: { providerOrder: ['parasail', 'openai'] },
+              },
+              extraction: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                defaults: { maxTokens: 2048 },
+              },
+            },
+            modelRoleAssignments: {
+              chat: 'primary',
+              summary: 'primary',
+              reasoning: 'primary',
+              longContext: 'primary',
+              extraction: 'extraction',
+              background: 'extraction',
+              import_processing: 'extraction',
+            },
+          },
+        },
+        {
+          key: 'skills',
+          payload: {
+            enabled: true,
+            directories: ['skills'],
+            extraDirectories: ['history/skills'],
+            maxLoadedSkills: 16,
+            maxSkillChars: 12000,
+            disabledSkills: ['git-ops'],
+          },
+        },
+        {
+          key: 'scheduler',
+          payload: {
+            tickIntervalMs: 1500,
+            heartbeatIntervalMs: 9000,
+            salienceDecayIntervalMs: 12000,
+          },
+        },
+        {
+          key: 'trust-policy',
+          payload: {
+            trustCeiling: {
+              primary: ['public', 'personal', 'intimate', 'confidential'],
+              trusted: ['public', 'personal'],
+              regular: ['public'],
+              public: ['public'],
+            },
+            visibilityAllowed: {
+              private: ['public', 'personal', 'intimate', 'confidential'],
+              semi_private: ['public', 'personal'],
+              public: ['public'],
+              broadcast: ['public'],
+            },
+            channelClassification: {
+              privatePrefixes: ['custom:'],
+              broadcastPrefixes: ['social:'],
+              defaultVisibility: 'public',
+              visibilityOverrides: {
+                exact: {
+                  'custom:exact-room': 'broadcast',
+                },
+                prefix: {
+                  'custom:': 'private',
+                },
+              },
+            },
+          },
+        },
+        {
+          key: 'capabilities',
+          payload: {
+            tier: 'custom',
+            customTokens: ['identity.read', 'git.read'],
+          },
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const body = new URLSearchParams({
+          configJson: JSON.stringify(testCase.payload),
+        }).toString();
+
+        const postRes = await request(port, 'POST', `/api/settings/${testCase.key}`, body, {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        });
+        expect(postRes.status).toBe(200);
+
+        const getRes = await request(port, 'GET', `/api/settings/${testCase.key}`);
+        expect(getRes.status).toBe(200);
+        expect(JSON.parse(getRes.body)).toEqual(testCase.payload);
+      }
+    });
+
     it('shows validation error for invalid JSON config payloads', async () => {
       const body = new URLSearchParams({
         configJson: '{bad json',

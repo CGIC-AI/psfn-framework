@@ -206,7 +206,7 @@ const DEPRECATED_SETTINGS_FIELDS = new Set<string>([
 
 const STRUCTURED_SETTINGS_FIELD_KEYS = [...new Set<string>([
   ...RUNTIME_SETTINGS_KEYS,
-  'customTokens',
+  ...SETTINGS_OWNER_FILE_BY_FIELD.keys(),
 ])].sort();
 
 const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([

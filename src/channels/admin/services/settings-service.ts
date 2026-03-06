@@ -593,9 +593,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
   }
 
   async getSettingsData(): Promise<AdminSettingsData> {
-    await loadSettings(this.deps.config.dataDir);
-    const normalizedConfig = normalizeEditableSettings(this.deps.config);
-    const runtimeConfig = splitSettingsByDomain(normalizedConfig).runtime;
+    const runtimeConfig = splitSettingsByDomain(loadSettings(this.deps.config.dataDir)).runtime;
     runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     return {
       config: runtimeConfig,

@@ -19,6 +19,11 @@ import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import { loadSettings } from '../../settings.js';
+import { saveCapabilityTierConfig } from '../../config/capability-tier-config.js';
+import { saveModelsConfig } from '../../config/models-config.js';
+import { saveSchedulerConfig } from '../../config/scheduler-config.js';
+import { saveSkillsConfig } from '../../config/skills-config.js';
+import { saveTrustPolicyConfig } from '../../config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
@@ -1306,6 +1311,92 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('round-trips runtime settings PATCH/GET without drifting subsystem-owned editors', async () => {
+    const beforeRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
+    expect(beforeRes.status).toBe(200);
+    const beforePayload = JSON.parse(beforeRes.body) as {
+      config: Record<string, unknown>;
+      editors: Record<string, unknown>;
+    };
+
+    const patch = {
+      sessionHistoryBudgetPct: 9,
+      memoryRetrievalBudgetPct: 4,
+      sessionMessageLimit: 44,
+      sessionRestartBehavior: 'new_session',
+      memoryRetrievalLimit: 12,
+      extractionInterval: 6,
+      defaultContextWindow: 196000,
+      memoryBudgetPct: 24,
+      extractionThresholdPct: 34,
+      compactionThresholdPct: 76,
+      compactionEmotionalSalienceThresholdPct: 83,
+      retryMaxAttempts: 4,
+      retryBaseDelayMs: 2500,
+      openRouterProviderOrder: ['parasail', 'openai'],
+      importProcessingRouteMode: 'local_endpoint',
+      importProcessingStrictPolicy: true,
+      importProcessingLocalEndpointUrl: 'http://127.0.0.1:4000/v1',
+      importProcessingLocalModel: 'llama.cpp/local',
+      webFetchAllowHttp: true,
+      webFetchDomainAllowlist: ['example.com', 'internal.local'],
+      webFetchAllowInternalNetwork: true,
+      webFetchTlsCaCertPaths: ['/tmp/root-ca.pem'],
+      ttsProvider: 'echo',
+      voiceId: 'voice-123',
+      echoTtsUrl: 'http://127.0.0.1:8001/v1/audio/speech',
+      echoTtsVoice: 'allison',
+      echoTtsPreset: 'wide',
+      sttProvider: 'deepgram',
+      deepgramModel: 'nova-3',
+      discordEnabled: true,
+      discordHeartbeatChannel: '1234567890',
+      discordTriggerWords: 'pixie, hello companion',
+      discordTriggerReactions: '👆, 🔥',
+      discordTriggerListenWindowMs: 180000,
+      telegramEnabled: true,
+      telegramAuthorizedUsers: '123, 456',
+      obsidianVaultName: 'companion',
+      obsidianCliPath: '/usr/local/bin/obsidian',
+      obsidianAutoPublish: true,
+      obsidianTimeoutMs: 12000,
+      moaEnabled: true,
+      moaReferenceModels: ['openai/gpt-4.1-mini', 'moonshotai/kimi-k2.5'],
+      moaAggregatorModel: 'openai/gpt-4.1-mini',
+      moaMaxRounds: 3,
+      moaMaxTokensPerRound: 2048,
+      moaTimeoutMs: 30000,
+    };
+
+    const patchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify(patch),
+      authHeaders,
+    );
+    expect(patchRes.status).toBe(200);
+
+    const afterRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
+    expect(afterRes.status).toBe(200);
+    const afterPayload = JSON.parse(afterRes.body) as {
+      config: Record<string, unknown>;
+      editors: Record<string, unknown>;
+    };
+
+    expect(afterPayload.config).toEqual(expect.objectContaining(patch));
+    expect(afterPayload.config.primaryModel).toBeUndefined();
+    expect(afterPayload.config.maintenanceIntervalMs).toBeUndefined();
+    expect(afterPayload.config.capabilityTier).toBeUndefined();
+    expect(afterPayload.editors).toEqual(beforePayload.editors);
+
+    const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as Record<string, unknown>;
+    expect(persistedSettings).toEqual(expect.objectContaining(patch));
+    expect(persistedSettings.primaryModel).toBeUndefined();
+    expect(persistedSettings.maintenanceIntervalMs).toBeUndefined();
+    expect(persistedSettings.capabilityTier).toBeUndefined();
+  });
+
   it('keeps /api/admin/settings PATCH reachable through the canonical JSON handler', async () => {
     const malformedPatch = await request(
       port,
@@ -1450,6 +1541,9 @@ describe('AdminServer JSON API routes', () => {
 
       const sessionMessageLimitField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sessionMessageLimit');
       const primaryModelField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'primaryModel');
+      const modelCatalogField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelCatalog');
+      const modelRoleAssignmentsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoleAssignments');
+      const modelRosterField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoster');
       const maintenanceIntervalMsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'maintenanceIntervalMs');
       const capabilityTierField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'capabilityTier');
       const sttProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sttProvider');
@@ -1462,6 +1556,12 @@ describe('AdminServer JSON API routes', () => {
       expect(readNumberMetadata(sessionMessageLimitField, ['max', 'maximum'])).toBe(200);
 
       expect(readOwnerFiles(primaryModelField)).toContain('models.json');
+      expect(readOwnerFiles(modelCatalogField)).toContain('models.json');
+      expect(readOwnerFiles(modelRoleAssignmentsField)).toContain('models.json');
+      expect(readOwnerFiles(modelRosterField)).toContain('models.json');
+      expect(readStringMetadata(modelCatalogField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
+      expect(readStringMetadata(modelRoleAssignmentsField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
+      expect(readStringMetadata(modelRosterField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
       expect(readOwnerFiles(maintenanceIntervalMsField)).toContain('scheduler.json');
       expect(readOwnerFiles(capabilityTierField)).toContain('capability-tier.json');
 
@@ -1480,6 +1580,135 @@ describe('AdminServer JSON API routes', () => {
       restoreSttProvider();
       restoreTtsProvider();
     }
+  });
+
+  it('round-trips runtime settings and subsystem owner files through the canonical admin settings payload', async () => {
+    const runtimePatch = {
+      sessionMessageLimit: 44,
+      sessionRestartBehavior: 'new_session',
+      openRouterProviderOrder: ['parasail', 'openai'],
+      webFetchDomainAllowlist: ['example.com', 'internal.local'],
+      promotedExtendedTools: ['memory.search', 'contacts.lookup'],
+      chatApiBaseUrl: 'https://admin.example.test/api',
+      ttsProvider: 'disabled',
+      sttProvider: 'disabled',
+      moaEnabled: true,
+      moaReferenceModels: ['openai/gpt-4.1-mini', 'moonshotai/kimi-k2.5'],
+      moaAggregatorModel: 'openai/gpt-4.1-mini',
+      moaMaxRounds: 3,
+      moaMaxTokensPerRound: 2048,
+      moaTimeoutMs: 30000,
+    } as const;
+
+    const runtimePatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify(runtimePatch),
+      authHeaders,
+    );
+    expect(runtimePatchRes.status).toBe(200);
+
+    const expectedModels = saveModelsConfig(tempDir, {
+      modelCatalog: {
+        primary: {
+          model: 'openai/gpt-4.1-mini',
+          provider: 'openrouter',
+          defaults: { maxTokens: 4096, contextWindow: 128_000 },
+          routing: { providerOrder: ['parasail', 'openai'] },
+        },
+        extraction: {
+          model: 'deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          defaults: { maxTokens: 2048 },
+        },
+      },
+      modelRoleAssignments: {
+        chat: 'primary',
+        summary: 'primary',
+        reasoning: 'primary',
+        longContext: 'primary',
+        extraction: 'extraction',
+        background: 'extraction',
+        import_processing: 'extraction',
+      },
+    }, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    const expectedScheduler = saveSchedulerConfig(tempDir, {
+      tickIntervalMs: 1500,
+      heartbeatIntervalMs: 9000,
+      salienceDecayIntervalMs: 12000,
+    });
+    const expectedSkills = saveSkillsConfig(tempDir, {
+      enabled: true,
+      directories: ['skills'],
+      extraDirectories: ['history/skills'],
+      maxLoadedSkills: 16,
+      maxSkillChars: 12000,
+      disabledSkills: ['git-ops'],
+    });
+    const expectedTrustPolicy = saveTrustPolicyConfig(tempDir, {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        semi_private: ['public', 'personal'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: ['custom:'],
+        broadcastPrefixes: ['social:'],
+        defaultVisibility: 'public',
+        visibilityOverrides: {
+          exact: {
+            'custom:exact-room': 'broadcast',
+          },
+          prefix: {
+            'custom:': 'private',
+          },
+        },
+      },
+    });
+    const expectedCapabilities = saveCapabilityTierConfig(tempDir, {
+      tier: 'custom',
+      customTokens: ['identity.read', 'git.read'],
+    });
+
+    const res = await request(
+      port,
+      'GET',
+      '/api/admin/settings',
+      undefined,
+      authHeaders,
+    );
+
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as {
+      config: Record<string, unknown>;
+      editors: {
+        models: unknown;
+        scheduler: unknown;
+        skills: unknown;
+        trustPolicy: unknown;
+        capabilities: unknown;
+      };
+    };
+
+    expect(payload.config).toEqual(expect.objectContaining(runtimePatch));
+    expect(payload.editors.models).toEqual(expectedModels);
+    expect(payload.editors.scheduler).toEqual(expectedScheduler);
+    expect(payload.editors.skills).toEqual(expectedSkills);
+    expect(payload.editors.trustPolicy).toEqual(expectedTrustPolicy);
+    expect(payload.editors.capabilities).toEqual(expectedCapabilities);
+    expect(loadSettings(tempDir)).toEqual(expect.objectContaining(runtimePatch));
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
   });
 
   it('accepts registered STT provider ids through admin settings patch', async () => {

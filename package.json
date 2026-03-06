@@ -37,7 +37,8 @@
     "garden:dev": "cd admin-ui && npm run dev",
     "garden:build": "cd admin-ui && npm run build",
     "garden:preview": "cd admin-ui && npm run preview",
-    "verify:public-sanitize": "node scripts/public-sanitize-check.mjs"
+    "verify:public-sanitize": "node scripts/public-sanitize-check.mjs",
+    "verify:settings-contract": "tsx scripts/verify-settings-contract.ts"
   },
   "dependencies": {
     "@character-foundry/character-foundry": "^0.5.0",

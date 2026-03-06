@@ -117,6 +117,12 @@ import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
 import { buildSnapshotVersionPointer } from '../turns/snapshot.js';
 import type { ContextManifest, ContextManifestMemorySeed } from '../session/context-manifest.js';
 import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
+import { EmotionState, type EmotionStateSnapshot } from '../emotion/state.js';
+import { EmotionObserver } from '../emotion/observer.js';
+import {
+  buildSessionMetadataWithEmotionState,
+  parseSessionEmotionState,
+} from '../emotion/session-metadata.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -208,6 +214,20 @@ export interface ExtendedToolActivationOptions {
   intent?: string | null;
 }
 
+export interface EmotionRuntimeWiring {
+  state?: EmotionState;
+  observer?: EmotionObserver;
+  requireWiring?: boolean;
+}
+
+export interface SubstrateAgentOptions {
+  streamFn?: StreamFn;
+  characterName?: string;
+  characterPromptVariables?: Record<string, string>;
+  characterPromptVariablesProvider?: () => Record<string, string>;
+  emotionRuntime?: EmotionRuntimeWiring;
+}
+
 export type PromotedToolMutationErrorCode =
   | 'invalid_name'
   | 'tool_not_extended'
@@ -234,6 +254,8 @@ const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
 const SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS = 240;
 const SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS = 1_600;
 const PROMPT_HASH_LENGTH = 16;
+const TOP_EMOTION_COUNT = 3;
+const MIN_TOP_EMOTION_SCORE = 0.05;
 const VISION_ATTACHMENT_MAX_COUNT = 4;
 const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const VISION_ATTACHMENT_FETCH_TIMEOUT_MS = 12_000;
@@ -264,6 +286,10 @@ const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 
   extended_loaded: 2,
   deferred: 3,
 };
+
+function formatSignedDecimal(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
+}
 
 interface ActiveToolResolution {
   tools: AgentTool<any>[];
@@ -327,6 +353,11 @@ export class SubstrateAgent {
   private activeTurnCorrelation: CorrelationMetadata | null = null;
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
   private pendingBackgroundContinuationDeliveries = new Map<string, PendingBackgroundContinuationDelivery[]>();
+  private emotionState: EmotionState | null = null;
+  private emotionObserver: EmotionObserver | null = null;
+  private emotionRuntimeRequired = false;
+  private emotionStateSessionId: string | null = null;
+  private emotionStateUpdatedAtMs: number | null = null;
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -348,12 +379,7 @@ export class SubstrateAgent {
     sessionManager: SessionManager,
     systemPrompt: string,
     config: SubstrateConfig,
-    options?: {
-      streamFn?: StreamFn;
-      characterName?: string;
-      characterPromptVariables?: Record<string, string>;
-      characterPromptVariablesProvider?: () => Record<string, string>;
-    },
+    options?: SubstrateAgentOptions,
   ) {
     this.eventBus = eventBus;
     this.llmClient = llmClient;
@@ -364,6 +390,10 @@ export class SubstrateAgent {
     this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
     this.config = config;
+    this.emotionState = options?.emotionRuntime?.state ?? null;
+    this.emotionObserver = options?.emotionRuntime?.observer ?? null;
+    this.emotionRuntimeRequired = options?.emotionRuntime?.requireWiring ?? false;
+    this.assertEmotionRuntimeConfigured();
 
     this.agent = new Agent({
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config),
@@ -1779,8 +1809,13 @@ export class SubstrateAgent {
       authorContext.trustLevel,
       authorContext.canonicalContactKey,
     );
+    const emotionSessionId = this.resolveSessionChannelId(message.channelId);
 
     try {
+      const emotionSnapshot = await this.observeEmotionState(
+        message.content,
+        emotionSessionId,
+      );
       const trustLevel = authorContext.trustLevel;
       const channelType = this.resolveChannelType(message);
       const memoryProvider = this.memoryProvider as ProactiveMemoryProvider | null;
@@ -1912,6 +1947,7 @@ export class SubstrateAgent {
         runtimeNow,
         taskKind,
         templateVariables,
+        emotionSnapshot,
       );
       let fullPrompt = '';
 
@@ -2272,6 +2308,7 @@ export class SubstrateAgent {
           safeResponseText,
           authorContext.trustLevel,
           authorContext.canonicalContactKey,
+          emotionSnapshot,
         );
       }
 
@@ -2457,6 +2494,102 @@ export class SubstrateAgent {
     const resolved = manager.resolveSessionChannelId(channelId);
     const trimmed = resolved.trim();
     return trimmed.length > 0 ? trimmed : channelId;
+  }
+
+  private assertEmotionRuntimeConfigured(): void {
+    const partialWiring = (!!this.emotionState && !this.emotionObserver)
+      || (!this.emotionState && !!this.emotionObserver);
+    if (partialWiring) {
+      throw new Error('Emotion runtime wiring must provide both EmotionState and EmotionObserver');
+    }
+    if (!this.emotionRuntimeRequired) return;
+    if (!this.emotionState || !this.emotionObserver) {
+      throw new Error('Emotion runtime wiring is required but EmotionState/EmotionObserver are not configured');
+    }
+  }
+
+  private hydrateEmotionStateForSession(sessionChannelId: string): void {
+    if (!this.emotionState) return;
+    if (this.emotionStateSessionId === sessionChannelId) return;
+
+    const manager = this.sessionManager as SessionManager & {
+      getRecentMessages?: (channelId: string, limit?: number) => Array<{
+        metadata?: string;
+        timestamp: number;
+      }>;
+    };
+    if (typeof manager.getRecentMessages !== 'function') {
+      if (this.emotionRuntimeRequired) {
+        throw new Error('Emotion runtime wiring requires SessionManager.getRecentMessages for metadata recovery');
+      }
+      this.emotionState = new EmotionState();
+      this.emotionStateSessionId = sessionChannelId;
+      this.emotionStateUpdatedAtMs = null;
+      return;
+    }
+
+    const recentEntries = manager.getRecentMessages(sessionChannelId, 64);
+    for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
+      const entry = recentEntries[index];
+      if (!entry.metadata || !entry.metadata.includes('"emotionState"')) {
+        continue;
+      }
+      let snapshot: EmotionStateSnapshot | null;
+      try {
+        snapshot = parseSessionEmotionState(entry.metadata);
+      } catch (error) {
+        throw new Error(
+          `Failed to parse emotion metadata for session "${sessionChannelId}": ${toErrorMessage(error)}`,
+        );
+      }
+      if (!snapshot) continue;
+      this.emotionState = EmotionState.deserialize(snapshot);
+      this.emotionStateSessionId = sessionChannelId;
+      this.emotionStateUpdatedAtMs = entry.timestamp;
+      return;
+    }
+
+    this.emotionState = new EmotionState();
+    this.emotionStateSessionId = sessionChannelId;
+    this.emotionStateUpdatedAtMs = null;
+  }
+
+  private async observeEmotionState(
+    text: string,
+    sessionChannelId: string,
+  ): Promise<EmotionStateSnapshot | null> {
+    this.assertEmotionRuntimeConfigured();
+    if (!this.emotionState || !this.emotionObserver) {
+      return null;
+    }
+    this.hydrateEmotionStateForSession(sessionChannelId);
+
+    const now = Date.now();
+    const elapsedSeconds = this.emotionStateUpdatedAtMs === null
+      ? 0
+      : Math.max(0, (now - this.emotionStateUpdatedAtMs) / 1000);
+    const observation = await this.emotionObserver.observe(text, elapsedSeconds);
+    const snapshot = this.emotionState.update(observation, elapsedSeconds);
+    this.emotionStateUpdatedAtMs = now;
+    return snapshot;
+  }
+
+  private formatTopEmotions(discrete: Record<string, number>): string {
+    const top = Object.entries(discrete)
+      .map(([label, score]) => [label.trim().toLowerCase(), score] as const)
+      .filter(([label, score]) => label.length > 0 && Number.isFinite(score) && score >= MIN_TOP_EMOTION_SCORE)
+      .sort((left, right) => {
+        if (right[1] !== left[1]) {
+          return right[1] - left[1];
+        }
+        return left[0].localeCompare(right[0]);
+      })
+      .slice(0, TOP_EMOTION_COUNT)
+      .map(([label, score]) => `${label}=${score.toFixed(3)}`);
+    if (top.length === 0) {
+      return 'none';
+    }
+    return top.join(', ');
   }
 
   private queueBackgroundContinuationCompletion(
@@ -2928,7 +3061,12 @@ export class SubstrateAgent {
     responseText: string,
     trustLevel: TrustLevel,
     canonicalContactKey?: string,
+    emotionSnapshot?: EmotionStateSnapshot | null,
   ): number | null {
+    const metadata = emotionSnapshot
+      ? buildSessionMetadataWithEmotionState(undefined, emotionSnapshot)
+      : undefined;
+
     if (canonicalContactKey) {
       return this.sessionManager.recordAssistantMessage(
         message.channelId,
@@ -2941,6 +3079,7 @@ export class SubstrateAgent {
           turnId,
           requestId,
           sourceMessageId: message.id,
+          ...(metadata ? { metadata } : {}),
         },
       );
     }
@@ -2956,6 +3095,7 @@ export class SubstrateAgent {
         turnId,
         requestId,
         sourceMessageId: message.id,
+        ...(metadata ? { metadata } : {}),
       },
     );
   }
@@ -3419,6 +3559,7 @@ export class SubstrateAgent {
     now: Date = new Date(),
     taskKind?: string,
     templateVariables?: Record<string, string>,
+    emotionSnapshot?: EmotionStateSnapshot | null,
   ): string {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
     const modelId = this.agent.state.model.id;
@@ -3498,6 +3639,23 @@ export class SubstrateAgent {
     lines.push('');
     lines.push('[Response Style Guidance]');
     lines.push(responseStyleGuidance);
+
+    if (emotionSnapshot) {
+      lines.push('');
+      lines.push('[Emotional State]');
+      lines.push(
+        `Current VAD: valence=${formatSignedDecimal(emotionSnapshot.vad.valence)},`
+        + ` arousal=${formatSignedDecimal(emotionSnapshot.vad.arousal)},`
+        + ` dominance=${formatSignedDecimal(emotionSnapshot.vad.dominance)}`,
+      );
+      lines.push(
+        `Mood VAD: valence=${formatSignedDecimal(emotionSnapshot.mood.valence)},`
+        + ` arousal=${formatSignedDecimal(emotionSnapshot.mood.arousal)},`
+        + ` dominance=${formatSignedDecimal(emotionSnapshot.mood.dominance)}`,
+      );
+      lines.push(`Top emotions: ${this.formatTopEmotions(emotionSnapshot.discrete)}`);
+      lines.push(`Confidence: ${emotionSnapshot.confidence.toFixed(3)}`);
+    }
 
     if (skillsContext) {
       lines.push('');

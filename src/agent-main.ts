@@ -13,6 +13,8 @@ import type {
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
 import { MemoryStore } from './memory/store.js';
+import { EmotionObserver } from './emotion/observer.js';
+import { EmotionState } from './emotion/state.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
@@ -529,6 +531,8 @@ async function main(): Promise<void> {
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
+  const emotionObserver = new EmotionObserver();
+  const emotionState = new EmotionState();
   const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: gateway,
@@ -537,6 +541,11 @@ async function main(): Promise<void> {
     characterName: card.data.name,
     characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
+    emotionRuntime: {
+      observer: emotionObserver,
+      state: emotionState,
+      requireWiring: true,
+    },
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);

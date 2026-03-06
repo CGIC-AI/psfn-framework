@@ -426,13 +426,13 @@ export class SessionManager {
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     const metadata = options.turnId
-      ? buildSessionMetadataWithTurn(undefined, {
+      ? buildSessionMetadataWithTurn(options.metadata, {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'user',
       })
-      : undefined;
+      : options.metadata;
     const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'user',
@@ -487,13 +487,13 @@ export class SessionManager {
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     const metadata = options.turnId
-      ? buildSessionMetadataWithTurn(undefined, {
+      ? buildSessionMetadataWithTurn(options.metadata, {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'assistant',
       })
-      : undefined;
+      : options.metadata;
     const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'assistant',
@@ -541,13 +541,13 @@ export class SessionManager {
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     const turnMetadata = options.turnId
-      ? buildSessionMetadataWithTurn(undefined, {
+      ? buildSessionMetadataWithTurn(options.metadata, {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'tool',
       })
-      : undefined;
+      : options.metadata;
     const normalizedObservation = normalizeToolObservation(observation);
     const metadata = buildToolObservationMetadata(
       turnMetadata,

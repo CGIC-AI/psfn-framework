@@ -106,6 +106,7 @@ export interface SessionMessageRecordOptions {
   turnId?: TurnID;
   requestId?: string;
   sourceMessageId?: string;
+  metadata?: string;
 }
 
 export interface MirrorEntryMetadata {

@@ -838,7 +838,7 @@ describe('wireHeartbeatRuntime', () => {
     expect(inferredActions[0]?.dedupeKey).toContain(`${DEFERRED_TOOL_HANDOFF_ACTION_KIND}:msg-1:`);
   });
 
-  it('continues deferred tool handoff after idle and emits queued/activated/executed telemetry', async () => {
+  it('continues deferred tool handoff in background and emits queued/activated/executed telemetry', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -946,7 +946,7 @@ describe('wireHeartbeatRuntime', () => {
 
     await scheduler.tick();
 
-    expect(agentLoop.waitForIdle).toHaveBeenCalled();
+    expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
     expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
     expect(agentLoop.activateExtendedTools).toHaveBeenCalledWith(
       ['extended_probe_tool'],
@@ -962,7 +962,7 @@ describe('wireHeartbeatRuntime', () => {
     );
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
     expect(sender.send).toHaveBeenCalledWith('test-channel', 'Deferred continuation output');
-    expect(phases).toEqual(expect.arrayContaining(['queued', 'activated', 'executed']));
+    expect(phases).toEqual(['queued', 'activated', 'executed']);
   });
 
   it('bounds deferred tool-handoff retries and emits failed telemetry once exhausted', async () => {
@@ -1090,8 +1090,9 @@ describe('wireHeartbeatRuntime', () => {
       await scheduler.tick();
       expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
       expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
+      expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
       expect(sender.send).not.toHaveBeenCalled();
-      expect(phases).toEqual(expect.arrayContaining(['queued', 'activated', 'failed']));
+      expect(phases).toEqual(['queued', 'activated', 'failed']);
     } finally {
       nowSpy.mockRestore();
     }

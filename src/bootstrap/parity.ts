@@ -909,6 +909,7 @@ export function wireHeartbeatRuntime(
           phase: 'executed',
         });
       },
+      { executionMode: 'background' },
     );
 
     runtimeOptions.postTurnActions.registerHandler(

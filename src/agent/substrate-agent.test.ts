@@ -1287,6 +1287,136 @@ describe('SubstrateAgent.handleMessage', () => {
     ]);
   });
 
+  it('deduplicates queued background completion deliveries for repeated continuation ids', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    const completed: any[] = [];
+    const deliveries: any[] = [];
+    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
+      completed.push(payload);
+    });
+    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
+      deliveries.push(payload);
+    });
+
+    mockAssistantResponse('First deferred continuation output');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-dedupe',
+      channelId: 'terminal:dedupe-session',
+      channelType: 'terminal',
+      content: 'first deferred completion',
+    }));
+
+    mockAssistantResponse('Replacement deferred continuation output');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-dedupe',
+      channelId: 'terminal:dedupe-session',
+      channelType: 'terminal',
+      content: 'replacement deferred completion',
+    }));
+
+    mockAssistantResponse('Foreground flush');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-dedupe',
+      channelId: 'terminal:dedupe-session',
+      channelType: 'terminal',
+      content: 'flush queued background completion',
+    }));
+
+    expect(completed).toHaveLength(2);
+    expect(completed[0]).toMatchObject({
+      continuationId: 'action-dedupe',
+      queuedForPostTurnDelivery: true,
+      queueDepth: 1,
+    });
+    expect(completed[1]).toMatchObject({
+      continuationId: 'action-dedupe',
+      queuedForPostTurnDelivery: true,
+      queueDepth: 1,
+    });
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      deliverySessionId: 'terminal:dedupe-session',
+      deliveries: [
+        expect.objectContaining({
+          continuationId: 'action-dedupe',
+          content: 'Replacement deferred continuation output',
+        }),
+      ],
+    });
+    expect(deliveries[0].deliveries).toHaveLength(1);
+  });
+
+  it('cancels queued background completion delivery when a later completion is suppressed', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    const completed: any[] = [];
+    const deliveries: any[] = [];
+    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
+      completed.push(payload);
+    });
+    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
+      deliveries.push(payload);
+    });
+
+    mockAssistantResponse('Notify-worthy deferred continuation');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-cancel',
+      channelId: 'terminal:cancel-session',
+      channelType: 'terminal',
+      content: 'first deferred completion',
+    }));
+
+    mockAssistantResponse('   ');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-cancel',
+      channelId: 'terminal:cancel-session',
+      channelType: 'terminal',
+      content: 'interrupted deferred completion',
+    }));
+
+    mockAssistantResponse('Foreground response after suppression');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-cancel',
+      channelId: 'terminal:cancel-session',
+      channelType: 'terminal',
+      content: 'foreground follow-up',
+    }));
+
+    expect(completed).toHaveLength(2);
+    expect(completed[0]).toMatchObject({
+      continuationId: 'action-cancel',
+      queuedForPostTurnDelivery: true,
+      notifyUser: true,
+      queueDepth: 1,
+    });
+    expect(completed[1]).toMatchObject({
+      continuationId: 'action-cancel',
+      queuedForPostTurnDelivery: false,
+      notifyUser: false,
+      notificationReason: 'suppress_empty_response',
+      queueDepth: 0,
+    });
+    expect(deliveries).toHaveLength(0);
+    expect(agent.getBackgroundContinuationTasks()).toEqual([
+      expect.objectContaining({
+        continuationId: 'action-cancel',
+        notifyUser: false,
+        notificationReason: 'suppress_empty_response',
+      }),
+    ]);
+  });
+
   it('keeps normal chat replies responsive while a long-running background continuation is still in flight', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

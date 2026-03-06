@@ -188,6 +188,8 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  internalState?: import('./self-model/state.js').InternalState;
+  internalStateSnapshotRef?: string;
   diagnostics?: {
     fallback?: {
       code: 'vision_empty_response';

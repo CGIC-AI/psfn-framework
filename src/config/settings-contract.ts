@@ -188,6 +188,7 @@ const SETTINGS_NUMBER_FIELDS = new Set<string>([
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',
+  'moodCongruenceWeight',
   'profileSynthesisMinImportance',
   'profileSynthesisMinConfidence',
   'profileSynthesisMinNovelty',
@@ -220,6 +221,7 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([
   ['maintenanceIntervalMs', { min: 1_000 }],
+  ['moodCongruenceWeight', { min: 0, max: 1 }],
 ]);
 
 function resolveFieldType(field: string): SettingsFieldType {

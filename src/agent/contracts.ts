@@ -28,6 +28,12 @@ export interface EmbeddingService {
   readonly dims: number;
 }
 
+export interface RetrievalVADInput {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
+
 export interface MemoryProvider {
   captureTurnMemorySnapshot?(
     contextText: string,
@@ -45,6 +51,7 @@ export interface MemoryProvider {
     canonicalContactId?: string,
     turnSnapshot?: TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    currentVAD?: RetrievalVADInput,
   ): Promise<string>;
   retrieveProactiveRecall?(
     channelId: string,

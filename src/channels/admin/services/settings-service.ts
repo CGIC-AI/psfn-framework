@@ -4,6 +4,7 @@ import {
   type EditableSettings,
   hasModelSettings,
   loadSettings,
+  MOOD_CONGRUENCE_WEIGHT_RANGE,
   normalizeEditableSettings,
   splitSettingsByDomain,
   SETTINGS_VALIDATION,
@@ -527,6 +528,23 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateNumberRangeField(
+    payload: Record<string, unknown>,
+    field: string,
+    range: { min: number; max: number },
+    errors: SettingsValidationError[],
+  ): void {
+    if (!(field in payload)) return;
+    const value = payload[field];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'invalid_number');
+      return;
+    }
+    if (value < range.min || value > range.max) {
+      this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'out_of_range');
+    }
+  }
+
   private validateSettingsPayload(
     payload: Record<string, unknown>,
     current: Partial<SubstrateConfig>,
@@ -573,6 +591,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     this.validateHttpUrlField(payload, 'chatApiBaseUrl', errors);
     this.validateCompositionalPolicyField(payload, errors);
     this.validateModelCatalogRouting(payload, errors);
+    this.validateNumberRangeField(payload, 'moodCongruenceWeight', MOOD_CONGRUENCE_WEIGHT_RANGE, errors);
 
     const effectiveRouteMode = typeof payload.importProcessingRouteMode === 'string'
       ? payload.importProcessingRouteMode

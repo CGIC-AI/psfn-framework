@@ -405,6 +405,12 @@ describe('agent-main split wiring', () => {
     expect(source.indexOf('contactStore,', wireIndex)).toBeGreaterThan(wireIndex);
   });
 
+  it('wires core memory runtime in split mode', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(source).toContain('wireCoreMemoryRuntime({');
+    expect(source).toContain('sessionManager,');
+  });
+
   it('gates API voice websocket endpoint on fully wired runtime in split mode', () => {
     const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     expect(source).toContain('createApiVoiceWebSocketRuntime({');
@@ -438,6 +444,7 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('composeSessionRuntime({');
     expect(source).toContain('createEmbeddingProviderFromEnv()');
     expect(source).toContain('composeSubstrateAgent({');
+    expect(source).toContain('wireCoreMemoryRuntime({');
     expect(source).toContain('wireMemoryRuntime({');
     expect(source).toContain('wireShardAndThinkRuntime({');
   });

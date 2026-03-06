@@ -85,6 +85,7 @@ import {
   composeIdentity,
   composeSessionRuntime,
   composeSubstrateAgent,
+  wireCoreMemoryRuntime,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
@@ -565,6 +566,11 @@ async function main(): Promise<void> {
   });
   wireSettingsRuntime(agentLoop, config);
   wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir);
+  wireCoreMemoryRuntime({
+    agentLoop,
+    sessionManager,
+    config,
+  });
 
   // Contact store + tools — trust-gated privacy system
   const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;

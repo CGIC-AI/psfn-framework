@@ -88,6 +88,7 @@ import {
   composeSessionRuntime,
   createEmbeddingProviderFromEnv,
   composeSubstrateAgent,
+  wireCoreMemoryRuntime,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
@@ -655,6 +656,11 @@ export class SubstrateRuntime implements Lifecycle {
     });
     wireSettingsRuntime(this.agentLoop, this.config);
     wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir);
+    wireCoreMemoryRuntime({
+      agentLoop: this.agentLoop,
+      sessionManager: this.sessionManager,
+      config: this.config,
+    });
 
     // Contact store + tools — trust-gated privacy system
     const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;

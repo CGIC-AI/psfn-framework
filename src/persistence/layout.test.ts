@@ -15,6 +15,7 @@ import {
   migrateLegacyPersistenceLayout,
   resolveBackupsDir,
   resolveCharacterCardHistoryPath,
+  resolveCoreMemoryPath,
   resolveConfiguredCompanionDataDir,
   resolveConfiguredSystemDataDir,
   resolveContactsDir,
@@ -76,6 +77,7 @@ describe('persistence layout', () => {
     expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'notes', 'reflections'));
     expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'journal.jsonl'));
     expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'notes', 'scratchpad.json'));
+    expect(resolveCoreMemoryPath(dataDir)).toBe(join(dataDir, 'core_memory.json'));
     expect(resolveCharacterCardHistoryPath(dataDir)).toBe(join(dataDir, 'character-card-history.jsonl'));
     expect(resolvePromptLayersPath(dataDir)).toBe(join(dataDir, 'prompt-layers.json'));
     expect(resolvePromptHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-history.jsonl'));

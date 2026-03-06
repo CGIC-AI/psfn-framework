@@ -225,6 +225,10 @@ export function resolveScratchpadMirrorPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'scratchpad.json');
 }
 
+export function resolveCoreMemoryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'core_memory.json');
+}
+
 export function resolveCharacterCardHistoryPath(companionDataDir: string): string {
   return join(companionDataDir, 'character-card-history.jsonl');
 }

@@ -43,21 +43,38 @@ Each allowlist entry must include:
 - `reason`: why the exemption exists
 - optional `pattern`: scanner pattern name when exemption must apply to only one rule
 
+Use `pattern` for every entry whenever possible to keep suppression narrow and prevent hiding unrelated identity-literal regressions on the same line.
+
 Example entry:
 
 ```json
 {
   "path": "src/identity/loader.ts",
   "contains": "LEGACY_BOOTSTRAP_NAME = 'PSFN'",
-  "reason": "Legacy bootstrap identity migration marker."
+  "reason": "Legacy bootstrap identity migration marker.",
+  "pattern": "identity-proper-name"
 }
 ```
 
-## Review Rules
+## Ownership And Update Process
 
-When adding or modifying allowlist entries:
+When adding or modifying allowlist entries, the change owner must:
 
 1. Prefer removing the literal instead of allowlisting it.
-2. If allowlisting is required, keep the `contains` match as narrow as possible.
-3. Add/update tests proving violations are blocked and only specific exceptions are suppressed.
-4. Include migration/follow-up context in the `reason` so exemptions are auditable.
+2. Keep `contains` as narrow as possible and include `pattern` unless no pattern-specific scoping is possible.
+3. Add/update regression tests proving violations are blocked and only intended exceptions are suppressed.
+4. Include migration/follow-up context in `reason` so exemptions remain auditable.
+5. Run:
+   - `npm test -- src/scripts/identity-literal-scan.test.ts src/scripts/identity-literal-gate.test.ts`
+   - `npm run verify:identity-literals`
+
+## Intentional Fixture Literals
+
+Intentional literal coverage should be represented in scanner tests, not production/runtime modules.
+
+- Prefer `.test.*` fixtures under `src/scripts/` because scanner scope excludes test/spec files.
+- If a non-test source file must intentionally contain a literal for migration compatibility, add an explicit allowlist entry with:
+  - exact `contains` fragment
+  - `pattern`
+  - auditable `reason`
+- Do not add broad wildcard-like exceptions.

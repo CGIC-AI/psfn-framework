@@ -118,6 +118,7 @@ import {
   type BackgroundCompletionOrigin,
   type BackgroundCompletionUrgency,
 } from './background-completion-policy.js';
+import { BackgroundCompletionDeliveryQueue } from './background-completion-delivery-queue.js';
 import type {
   AdaptiveLoadedExtendedToolState,
   AdaptiveToolActivationSource,
@@ -471,7 +472,9 @@ export class SubstrateAgent {
   private activeTurnTaskKind: string | null = null;
   private activeTurnIntent: string | null = null;
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
-  private pendingBackgroundContinuationDeliveries = new Map<string, PendingBackgroundContinuationDelivery[]>();
+  private pendingBackgroundContinuationDeliveries = new BackgroundCompletionDeliveryQueue<
+    PendingBackgroundContinuationDelivery
+  >();
   private backgroundContinuationTasks = new Map<string, BackgroundContinuationTaskRecord>();
   private emotionState: EmotionState | null = null;
   private emotionObserver: EmotionObserver | null = null;
@@ -3426,9 +3429,8 @@ export class SubstrateAgent {
       notificationReason: decision.reason,
     });
 
-    const existing = this.pendingBackgroundContinuationDeliveries.get(deliverySessionId) ?? [];
     if (decision.shouldNotify) {
-      const next = [...existing, {
+      const enqueueResult = this.pendingBackgroundContinuationDeliveries.enqueue({
         continuationId: deferredContinuationId,
         sourceMessageId: message.id,
         deliverySessionId,
@@ -3442,8 +3444,7 @@ export class SubstrateAgent {
         taskKind,
         intent,
         notificationReason: decision.reason,
-      } satisfies PendingBackgroundContinuationDelivery];
-      this.pendingBackgroundContinuationDeliveries.set(deliverySessionId, next);
+      } satisfies PendingBackgroundContinuationDelivery);
       return {
         continuationId: deferredContinuationId,
         sourceMessageId: message.id,
@@ -3460,9 +3461,14 @@ export class SubstrateAgent {
         taskKind,
         intent,
         completedAt,
-        queueDepth: next.length,
+        queueDepth: enqueueResult.queueDepth,
       };
     }
+
+    const cancelled = this.pendingBackgroundContinuationDeliveries.cancel(
+      deferredContinuationId,
+      deliverySessionId,
+    );
 
     return {
       continuationId: deferredContinuationId,
@@ -3480,19 +3486,14 @@ export class SubstrateAgent {
       taskKind,
       intent,
       completedAt,
-      queueDepth: existing.length,
+      queueDepth: cancelled.queueDepth,
     };
   }
 
   private dequeueBackgroundContinuationDeliveries(
     deliverySessionId: string,
   ): PendingBackgroundContinuationDelivery[] {
-    const existing = this.pendingBackgroundContinuationDeliveries.get(deliverySessionId);
-    if (!existing || existing.length === 0) {
-      return [];
-    }
-    this.pendingBackgroundContinuationDeliveries.delete(deliverySessionId);
-    return existing;
+    return this.pendingBackgroundContinuationDeliveries.dequeue(deliverySessionId);
   }
 
   private async emitBackgroundContinuationEvent(

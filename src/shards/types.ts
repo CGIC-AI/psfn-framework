@@ -37,6 +37,7 @@ export interface ShardConfig {
   capabilities?: string[];         // Declared capability tokens for routing diagnostics
   requiredCapabilities?: string[]; // Required capability tokens to route this workload
   heartbeatStaleAfterMs?: number;  // Optional override for stale heartbeat threshold
+  heartbeatDisconnectAfterMs?: number; // Optional override for stale-eviction timeout
 }
 
 export interface ShardResult {
@@ -50,6 +51,8 @@ export interface ShardResult {
   turns: number;
   lifecycleState: ShardLifecycleState;
   health: ShardHealthState;
+  stateReason: string;
+  failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
 }

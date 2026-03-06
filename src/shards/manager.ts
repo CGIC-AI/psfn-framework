@@ -33,6 +33,7 @@ import { toErrorMessage } from '../utils/errors.js';
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
 const DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS = 60_000;
+const DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER = 3;
 const CONTEXT_PACK_SESSION_SCAN_LIMIT = 12;
 const CONTEXT_PACK_SESSION_ENTRY_LIMIT = 6;
 const CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS = 600;
@@ -85,6 +86,7 @@ export interface ShardManagerDeps {
   parentSystemPrompt: string;
   maxConcurrent?: number;
   heartbeatStaleAfterMs?: number;
+  heartbeatDisconnectAfterMs?: number;
   shardToolsets?: ShardToolsetConfig;
   toolCatalogProvider?: () => ShardToolCatalog;
   auditTrail?: ShardAuditTrail;
@@ -108,6 +110,7 @@ export interface ActiveShard {
   lastTransitionAt: number;
   lastHeartbeatAt: number;
   heartbeatStaleAfterMs: number;
+  heartbeatDisconnectAfterMs: number;
   capabilities: string[];
   requiredCapabilities: string[];
   failureReason?: string;
@@ -119,6 +122,7 @@ export class ShardManager {
   private activeCount = 0;
   private maxConcurrent: number;
   private heartbeatStaleAfterMs: number;
+  private heartbeatDisconnectAfterMs: number;
   private activeShards = new Map<string, ActiveShard>();
   private activeShardChannels = new Map<string, Set<string>>();
 
@@ -128,6 +132,11 @@ export class ShardManager {
     this.heartbeatStaleAfterMs = normalizeHeartbeatStaleAfterMs(
       deps.heartbeatStaleAfterMs,
       DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS,
+    );
+    this.heartbeatDisconnectAfterMs = normalizeHeartbeatDisconnectAfterMs(
+      deps.heartbeatDisconnectAfterMs,
+      this.heartbeatStaleAfterMs,
+      this.heartbeatStaleAfterMs * DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER,
     );
     this.auditTrail = deps.auditTrail ?? null;
     this.installAuditHooks();
@@ -242,6 +251,10 @@ export class ShardManager {
       );
     }
     const heartbeatStaleAfterMs = this.resolveHeartbeatStaleAfterMs(shardConfig.heartbeatStaleAfterMs);
+    const heartbeatDisconnectAfterMs = this.resolveHeartbeatDisconnectAfterMs(
+      shardConfig.heartbeatDisconnectAfterMs,
+      heartbeatStaleAfterMs,
+    );
 
     this.activeCount++;
     this.activeShards.set(shardId, {
@@ -256,6 +269,7 @@ export class ShardManager {
       lastTransitionAt: startTime,
       lastHeartbeatAt: startTime,
       heartbeatStaleAfterMs,
+      heartbeatDisconnectAfterMs,
       capabilities,
       requiredCapabilities,
     });
@@ -357,6 +371,8 @@ export class ShardManager {
         turns,
         lifecycleState: finishedShard?.state ?? 'offline',
         health: finishedShard?.health ?? 'healthy',
+        stateReason: finishedShard?.stateReason ?? 'completed',
+        ...(finishedShard?.failureReason ? { failureReason: finishedShard.failureReason } : {}),
         capabilities: [...capabilities],
         requiredCapabilities: [...requiredCapabilities],
       };
@@ -379,7 +395,7 @@ export class ShardManager {
         durationMs: Date.now() - startTime,
         error: msg,
       });
-      throw error;
+      throw new Error(`Shard "${shardConfig.name}" failed (execution_failed): ${msg}`);
     } finally {
       this.releaseActiveShard(shardId, channelId);
     }
@@ -403,6 +419,10 @@ export class ShardManager {
     return normalizeHeartbeatStaleAfterMs(value, this.heartbeatStaleAfterMs);
   }
 
+  private resolveHeartbeatDisconnectAfterMs(value: number | undefined, staleAfterMs: number): number {
+    return normalizeHeartbeatDisconnectAfterMs(value, staleAfterMs, this.heartbeatDisconnectAfterMs);
+  }
+
   private resolveAdvertisedCapabilities(tokens: readonly string[] | undefined): string[] {
     return normalizeCapabilityTokens(tokens, DEFAULT_SHARD_CAPABILITIES);
   }
@@ -415,12 +435,18 @@ export class ShardManager {
     const shard = this.activeShards.get(shardId);
     if (!shard) return;
     shard.lastHeartbeatAt = Date.now();
+    if (shard.state === 'degraded' && shard.stateReason === 'heartbeat_stale') {
+      this.transitionShardState(shardId, 'ready', 'heartbeat_recovered');
+    }
   }
 
   private refreshShardHealth(now = Date.now()): void {
     const activeShards = [...this.activeShards.values()];
     for (const shard of activeShards) {
-      if (shard.state !== 'registering' && shard.state !== 'ready') {
+      const inHeartbeatManagedState = shard.state === 'registering'
+        || shard.state === 'ready'
+        || (shard.state === 'degraded' && shard.stateReason === 'heartbeat_stale');
+      if (!inHeartbeatManagedState) {
         continue;
       }
 
@@ -429,16 +455,24 @@ export class ShardManager {
         continue;
       }
 
-      const reason = `No heartbeat observed for ${staleForMs}ms (limit ${shard.heartbeatStaleAfterMs}ms).`;
-      this.transitionShardState(shard.id, 'degraded', 'heartbeat_stale', reason);
-      this.transitionShardState(shard.id, 'offline', 'heartbeat_stale', reason);
+      const staleReason = `No heartbeat observed for ${staleForMs}ms (limit ${shard.heartbeatStaleAfterMs}ms).`;
+      this.transitionShardState(shard.id, 'degraded', 'heartbeat_stale', staleReason);
+      if (staleForMs <= shard.heartbeatDisconnectAfterMs) {
+        continue;
+      }
+
+      const timeoutReason =
+        `Heartbeat stale for ${staleForMs}ms exceeded recovery window `
+        + `(${shard.heartbeatDisconnectAfterMs}ms).`;
+      this.transitionShardState(shard.id, 'offline', 'heartbeat_timeout', timeoutReason);
       this.releaseActiveShard(shard.id, shard.channelId);
       this.auditTrail?.append('shard.health.evict', {
         shardId: shard.id,
         state: 'offline',
-        reason: 'heartbeat_stale',
+        reason: 'heartbeat_timeout',
         staleForMs,
         heartbeatStaleAfterMs: shard.heartbeatStaleAfterMs,
+        heartbeatDisconnectAfterMs: shard.heartbeatDisconnectAfterMs,
       });
     }
   }
@@ -488,6 +522,14 @@ export class ShardManager {
 
     const now = Date.now();
     const currentState = shard.state;
+    const currentFailureReason = shard.failureReason;
+    if (
+      currentState === nextState
+      && shard.stateReason === reason
+      && currentFailureReason === failureReason
+    ) {
+      return;
+    }
     if (currentState !== nextState) {
       const allowedTransitions = SHARD_STATE_TRANSITIONS[currentState];
       if (!allowedTransitions.includes(nextState)) {
@@ -890,4 +932,16 @@ function normalizeHeartbeatStaleAfterMs(value: number | undefined, fallback: num
   }
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : fallback;
+}
+
+function normalizeHeartbeatDisconnectAfterMs(
+  value: number | undefined,
+  staleAfterMs: number,
+  fallback: number,
+): number {
+  const normalized = normalizeHeartbeatStaleAfterMs(value, fallback);
+  if (normalized <= staleAfterMs) {
+    return staleAfterMs + 1;
+  }
+  return normalized;
 }

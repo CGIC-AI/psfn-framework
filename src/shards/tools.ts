@@ -77,6 +77,10 @@ export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
               `${result.turns} turn(s), ` +
               `${result.inputTokens + result.outputTokens} tokens, ` +
               `state=${result.lifecycleState}, health=${result.health}]\n` +
+              `[State reason: ${result.stateReason}]\n` +
+              `${result.failureReason
+                ? `[Failure reason: ${result.failureReason}]\n`
+                : ''}` +
               `${result.capabilities.length > 0
                 ? `[Capabilities: ${result.capabilities.join(', ')}]\n`
                 : ''}` +

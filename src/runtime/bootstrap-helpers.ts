@@ -1,5 +1,15 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { SubstrateConfig } from '../types.js';
-import { loadSettings, saveSettings, type EditableSettings } from '../settings.js';
+import type { CapabilityTier } from '../types.js';
+import {
+  applySettings,
+  loadSettings,
+  saveSettings,
+  splitSettingsByDomain,
+  type EditableSettings,
+  type SettingsDomainSplit,
+} from '../settings.js';
 import type { EligibilityGate } from '../capabilities/eligibility.js';
 import {
   createEmbeddingDimensionMismatchWarning,
@@ -32,6 +42,31 @@ import {
   wrapStreamingSttConnectorWithEligibility,
   wrapStreamingTtsConnectorWithEligibility,
 } from './plugin-eligibility.js';
+import { loadModelsConfigWithLegacyMigration, type ModelsLoadResult } from '../config/models-config.js';
+import {
+  CAPABILITY_TIER_FILE_NAME,
+  loadCapabilityTierConfig,
+  saveCapabilityTierConfig,
+} from '../config/capability-tier-config.js';
+import {
+  SCHEDULER_FILE_NAME,
+  loadSchedulerConfig,
+  saveSchedulerConfig,
+  type SchedulerRuntimeConfig,
+} from '../config/scheduler-config.js';
+import { loadTrustPolicyConfig, type TrustPolicyConfig } from '../config/trust-policy-config.js';
+import { resolveRuntimeSchedulerConfig } from '../config/scheduler-runtime.js';
+import { setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
+import {
+  resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
+  resolveRuntimePathLayout,
+  type RuntimePathLayout,
+} from '../persistence/layout.js';
+import {
+  assertPersistenceCutoverReady,
+  buildPersistenceCutoverOptionsFromConfig,
+} from '../persistence/cutover.js';
 
 export type RuntimeVoiceSttProvider = StreamingSttProvider | 'disabled';
 export type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
@@ -51,6 +86,39 @@ export interface RuntimeVoiceProviderGate {
 export interface RuntimeVoiceConnectorBinding<TProvider, TConnector> {
   provider: TProvider;
   connector: TConnector;
+}
+
+type LegacyMigrationState = 'none' | 'migrated' | 'drift_detected' | 'error';
+
+export interface StartupHydrationLegacyMigrationDiagnostics {
+  state: LegacyMigrationState;
+  settingsValue?: number | CapabilityTier;
+  storedValue?: number | CapabilityTier;
+  error?: string;
+}
+
+export interface StartupConfigHydrationDiagnostics {
+  modelsMigratedFromLegacySettings: boolean;
+  modelsLegacyDriftDetected: boolean;
+  maintenanceIntervalMigration: StartupHydrationLegacyMigrationDiagnostics;
+  capabilityTierMigration: StartupHydrationLegacyMigrationDiagnostics;
+  removedLegacyKeys: string[];
+  settingsRewriteError?: string;
+}
+
+export interface StartupConfigHydrationResult {
+  systemDataDir: string;
+  companionDataDir: string;
+  runtimePathLayout: RuntimePathLayout;
+  settingsDomains: SettingsDomainSplit;
+  modelsLoadResult: ModelsLoadResult;
+  trustPolicyConfig: TrustPolicyConfig;
+  schedulerConfig: SchedulerRuntimeConfig;
+  diagnostics: StartupConfigHydrationDiagnostics;
+}
+
+export interface StartupConfigHydrationOptions {
+  env?: NodeJS.ProcessEnv;
 }
 
 function hasExplicitRuntimeProviderSelection(provider: unknown): provider is string {
@@ -278,5 +346,142 @@ export function installPromotedToolsPersistenceHook(config: SubstrateConfig): vo
         promotedExtendedTools: [...toolNames],
       });
     },
+  };
+}
+
+export function hydrateCanonicalStartupConfig(
+  config: SubstrateConfig,
+  options: StartupConfigHydrationOptions = {},
+): StartupConfigHydrationResult {
+  const env = options.env ?? process.env;
+  const systemDataDir = resolveConfiguredSystemDataDir(config);
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const runtimePathLayout = resolveRuntimePathLayout({
+    mode: env.PSFN_RUNTIME_LAYOUT_MODE,
+    nodeEnv: env.NODE_ENV,
+    runtimeRootDir: env.PSFN_RUNTIME_ROOT,
+    systemDataDir,
+    companionDataDir,
+    legacyDataDir: env.DATA_DIR,
+    workspacePath: env.WORKSPACE_PATH,
+    logsDir: env.PSFN_LOGS_DIR,
+    tempDir: env.PSFN_TEMP_DIR,
+    backupsDir: env.BACKUP_ROOT_DIR,
+  });
+  assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config, env));
+
+  const savedSettings = loadSettings(systemDataDir);
+  const settingsDomains = splitSettingsByDomain(savedSettings);
+  applySettings(config, settingsDomains.runtime);
+  installPromotedToolsPersistenceHook(config);
+
+  const modelsLoadResult = loadModelsConfigWithLegacyMigration(systemDataDir, {
+    defaultContextWindow: config.defaultContextWindow,
+    legacySettings: settingsDomains.models,
+  });
+  applySettings(config, modelsLoadResult.config);
+
+  const diagnostics: StartupConfigHydrationDiagnostics = {
+    modelsMigratedFromLegacySettings: modelsLoadResult.migratedFromLegacySettings,
+    modelsLegacyDriftDetected: modelsLoadResult.legacyDriftDetected,
+    maintenanceIntervalMigration: { state: 'none' },
+    capabilityTierMigration: { state: 'none' },
+    removedLegacyKeys: [...settingsDomains.legacyKeys],
+  };
+
+  if (settingsDomains.maintenanceIntervalMs !== undefined) {
+    try {
+      const schedulerPath = join(systemDataDir, SCHEDULER_FILE_NAME);
+      const schedulerFileExisted = existsSync(schedulerPath);
+      const persistedScheduler = loadSchedulerConfig(systemDataDir, {
+        seedDir: env.CONFIG_DIR,
+      });
+      if (!schedulerFileExisted) {
+        saveSchedulerConfig(systemDataDir, {
+          ...persistedScheduler,
+          salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
+        });
+        diagnostics.maintenanceIntervalMigration = {
+          state: 'migrated',
+          settingsValue: settingsDomains.maintenanceIntervalMs,
+          storedValue: settingsDomains.maintenanceIntervalMs,
+        };
+      } else if (persistedScheduler.salienceDecayIntervalMs !== settingsDomains.maintenanceIntervalMs) {
+        diagnostics.maintenanceIntervalMigration = {
+          state: 'drift_detected',
+          settingsValue: settingsDomains.maintenanceIntervalMs,
+          storedValue: persistedScheduler.salienceDecayIntervalMs,
+        };
+      }
+    } catch (error) {
+      diagnostics.maintenanceIntervalMigration = {
+        state: 'error',
+        settingsValue: settingsDomains.maintenanceIntervalMs,
+        error: String(error),
+      };
+    }
+  }
+
+  if (settingsDomains.capabilityTier !== undefined) {
+    try {
+      const capabilityPath = join(systemDataDir, CAPABILITY_TIER_FILE_NAME);
+      const capabilityFileExisted = existsSync(capabilityPath);
+      const persistedCapabilities = loadCapabilityTierConfig(systemDataDir, {
+        seedDir: env.CONFIG_DIR,
+      });
+      if (!capabilityFileExisted) {
+        saveCapabilityTierConfig(systemDataDir, {
+          ...persistedCapabilities,
+          tier: settingsDomains.capabilityTier,
+        });
+        diagnostics.capabilityTierMigration = {
+          state: 'migrated',
+          settingsValue: settingsDomains.capabilityTier,
+          storedValue: settingsDomains.capabilityTier,
+        };
+      } else if (persistedCapabilities.tier !== settingsDomains.capabilityTier) {
+        diagnostics.capabilityTierMigration = {
+          state: 'drift_detected',
+          settingsValue: settingsDomains.capabilityTier,
+          storedValue: persistedCapabilities.tier,
+        };
+      }
+    } catch (error) {
+      diagnostics.capabilityTierMigration = {
+        state: 'error',
+        settingsValue: settingsDomains.capabilityTier,
+        error: String(error),
+      };
+    }
+  }
+
+  if (settingsDomains.legacyKeys.length > 0) {
+    try {
+      saveSettings(systemDataDir, settingsDomains.runtime);
+    } catch (error) {
+      diagnostics.settingsRewriteError = String(error);
+    }
+  }
+
+  const trustPolicyConfig = loadTrustPolicyConfig(systemDataDir, {
+    seedDir: env.CONFIG_DIR,
+  });
+  setRuntimeTrustPolicy(trustPolicyConfig);
+
+  const schedulerConfig = resolveRuntimeSchedulerConfig({
+    dataDir: systemDataDir,
+    seedDir: env.CONFIG_DIR,
+  });
+  config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
+
+  return {
+    systemDataDir,
+    companionDataDir,
+    runtimePathLayout,
+    settingsDomains,
+    modelsLoadResult,
+    trustPolicyConfig,
+    schedulerConfig,
+    diagnostics,
   };
 }

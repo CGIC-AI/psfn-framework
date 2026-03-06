@@ -97,6 +97,63 @@ describe('tool-call-scheduler', () => {
     expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
   });
 
+  it('keeps non-shard tools sequential even when metadata marks them read_only', async () => {
+    const starts: number[] = [];
+    const ends: number[] = [];
+    const repoStatus = makeTool(
+      'repo_status',
+      async () => {
+        starts.push(Date.now());
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        ends.push(Date.now());
+        return { content: [{ type: 'text', text: 'ok' }], details: {} };
+      },
+      { concurrency: { class: 'read_only', maxParallel: 3 } },
+    );
+
+    await executeToolCallsWithScheduler(
+      [repoStatus],
+      makeAssistantMessage(['repo_status', 'repo_status']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 8 },
+    );
+
+    expect(starts).toHaveLength(2);
+    expect(ends).toHaveLength(2);
+    expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
+  });
+
+  it('fails closed when one sibling spawn_shard call errors in a parallel batch', async () => {
+    const spawnShard = makeTool(
+      'spawn_shard',
+      async (toolCallId) => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        if (toolCallId === 'call-2') {
+          throw new Error('spawn failed');
+        }
+        return {
+          content: [{ type: 'text', text: `done:${toolCallId}` }],
+          details: {},
+        };
+      },
+      { concurrency: { class: 'spawn_shard', maxParallel: 3 } },
+    );
+
+    const result = await executeToolCallsWithScheduler(
+      [spawnShard],
+      makeAssistantMessage(['spawn_shard', 'spawn_shard', 'spawn_shard']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 3 },
+    );
+
+    expect(result.toolResults).toHaveLength(3);
+    expect((result.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[2] as ToolResultMessage).isError).toBe(false);
+  });
+
   it('skips remaining queued calls when steering messages arrive mid-batch', async () => {
     let steeringPollCount = 0;
     const telemetry = vi.fn();

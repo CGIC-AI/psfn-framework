@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import process from 'node:process';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const DEFAULT_TIMEOUT_MS = 10_000;
 const OPUS_BACKEND_PRIORITY = ['@discordjs/opus', 'node-opus', 'opusscript'];
 const VALID_TTS_PROVIDERS = new Set(['elevenlabs', 'echo']);
+const PHASE_V_AUTONOMY_SMOKE_PROFILE = 'phase-v-autonomy-smoke';
 
 function printUsage() {
   console.log(`Discord DM + Voice Readiness Smoke
@@ -25,6 +27,7 @@ Options:
   --report-only             Always exit 0 after printing readiness report
   --strict                  Exit non-zero when readiness checks fail (default)
   --timeout-ms <ms>         HTTP timeout for --live checks (default: ${DEFAULT_TIMEOUT_MS})
+  --phase-v-regression      Run focused Phase V autonomy regression profile after readiness checks
 
   --token <token>           Override DISCORD_TOKEN
   --bot-id <id>             Override DISCORD_BOT_ID
@@ -50,6 +53,7 @@ Environment variables consumed:
   ECHO_TTS_VOICE
   DISCORD_SMOKE_DM_CHANNEL_ID
   DISCORD_SMOKE_VOICE_CHANNEL_ID
+  DISCORD_SMOKE_PHASE_V_REGRESSION
 `);
 }
 
@@ -109,6 +113,43 @@ function normalizeTtsProvider(raw) {
   return provider;
 }
 
+async function runPhaseVAutonomyRegressionProfile() {
+  info(`Running focused Phase V autonomy regression profile (${PHASE_V_AUTONOMY_SMOKE_PROFILE})`);
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const env = {
+    ...process.env,
+    PSFN_VITEST_PROFILE: PHASE_V_AUTONOMY_SMOKE_PROFILE,
+  };
+
+  try {
+    const exitCode = await new Promise((resolve, reject) => {
+      const child = spawn(npmCommand, ['test'], {
+        cwd: process.cwd(),
+        env,
+        stdio: 'inherit',
+      });
+      child.once('error', reject);
+      child.once('close', (code) => resolve(code ?? 1));
+    });
+    if (exitCode === 0) {
+      pass('Phase V autonomy regression profile passed');
+      return { errors: [], warnings: [] };
+    }
+    fail(`Phase V autonomy regression profile failed (exit code ${exitCode})`);
+    return {
+      errors: [`phase-v-regression:exit-${exitCode}`],
+      warnings: [],
+    };
+  } catch (error) {
+    const message = toErrorMessage(error);
+    fail(`Phase V autonomy regression profile failed to run: ${message}`);
+    return {
+      errors: ['phase-v-regression:spawn-error'],
+      warnings: [],
+    };
+  }
+}
+
 function parseArgs(argv) {
   const options = {
     dryRun: true,
@@ -127,6 +168,7 @@ function parseArgs(argv) {
     voiceEnabled: parseBoolean(process.env.VOICE_ENABLED),
     dmChannelId: trimString(process.env.DISCORD_SMOKE_DM_CHANNEL_ID),
     voiceChannelId: trimString(process.env.DISCORD_SMOKE_VOICE_CHANNEL_ID),
+    phaseVRegression: parseBoolean(process.env.DISCORD_SMOKE_PHASE_V_REGRESSION),
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -151,6 +193,9 @@ function parseArgs(argv) {
         break;
       case '--timeout-ms':
         options.timeoutMs = parsePositiveInt(argv[++index], '--timeout-ms', DEFAULT_TIMEOUT_MS);
+        break;
+      case '--phase-v-regression':
+        options.phaseVRegression = true;
         break;
       case '--token':
         options.token = ensureArgValue(argv[++index], '--token');
@@ -477,9 +522,15 @@ async function main() {
   const live = options.dryRun
     ? { errors: [], warnings: [] }
     : await runLiveChecks(options);
+  const regression = options.phaseVRegression
+    ? await runPhaseVAutonomyRegressionProfile()
+    : { errors: [], warnings: [] };
+  if (!options.phaseVRegression) {
+    info('Skipping Phase V autonomy regression profile (pass --phase-v-regression to include it).');
+  }
 
-  const failures = [...readiness.errors, ...live.errors];
-  const warningCount = readiness.warnings.length + live.warnings.length;
+  const failures = [...readiness.errors, ...live.errors, ...regression.errors];
+  const warningCount = readiness.warnings.length + live.warnings.length + regression.warnings.length;
 
   if (failures.length === 0) {
     pass('Discord DM + voice readiness checks passed');

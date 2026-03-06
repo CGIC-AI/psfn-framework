@@ -116,6 +116,7 @@ import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
 import { buildSnapshotVersionPointer } from '../turns/snapshot.js';
 import type { ContextManifestMemorySeed } from '../session/context-manifest.js';
+import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -141,6 +142,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
     turnSnapshot?: import('../turns/snapshot.js').TurnMemorySnapshot,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ) => Promise<string>;
 }
 
@@ -1711,6 +1713,7 @@ export class SubstrateAgent {
       message.channelId,
     );
     const taskKind = this.resolveTaskKind(message);
+    const turnBudgetCharacteristics = this.buildTurnBudgetCharacteristics(message, taskKind);
     const turnCallType = this.resolveTurnCallType(message, taskKind);
     const turnCorrelationBase = this.buildTurnCorrelation(message, turnCallType, turnId, requestId);
     const channelMeta: ChannelMeta = {
@@ -1787,6 +1790,7 @@ export class SubstrateAgent {
           authorContext.canonicalContactKey ?? message.authorId,
           channelMeta,
           authorContext.continuityFallbackKeys,
+          turnBudgetCharacteristics,
         )
         : undefined;
       const memorySnapshot = memoryProvider && typeof memoryProvider.captureTurnMemorySnapshot === 'function'
@@ -1796,6 +1800,7 @@ export class SubstrateAgent {
           trustLevel,
           channelMeta,
           authorContext.canonicalContactKey,
+          turnBudgetCharacteristics,
         )
         : undefined;
       const turnSnapshot: TurnSnapshot = {
@@ -1824,6 +1829,7 @@ export class SubstrateAgent {
                 channelMeta,
                 authorContext.canonicalContactKey,
                 memorySnapshot,
+                turnBudgetCharacteristics,
               )
               : await memoryProvider.retrieve(
                 message.content,
@@ -1831,6 +1837,8 @@ export class SubstrateAgent {
                 trustLevel,
                 channelMeta,
                 authorContext.canonicalContactKey,
+                undefined,
+                turnBudgetCharacteristics,
               )
             : '';
           let proactiveRecallBlock = '';
@@ -1843,12 +1851,15 @@ export class SubstrateAgent {
                   channelMeta,
                   authorContext.canonicalContactKey,
                   memorySnapshot,
+                  turnBudgetCharacteristics,
                 )
                 : await memoryProvider.retrieveProactiveRecall(
                   message.channelId,
                   trustLevel,
                   channelMeta,
                   authorContext.canonicalContactKey,
+                  undefined,
+                  turnBudgetCharacteristics,
                 );
             } catch (error) {
               log.debug('Proactive recall skipped due to provider error', {
@@ -1952,6 +1963,7 @@ export class SubstrateAgent {
           authorContext.continuityFallbackKeys,
           turnSnapshot.sessionContext,
           memoryManifestSeed,
+          turnBudgetCharacteristics,
         ),
       );
       this.emitTurnStage(message, startTime, turnId, requestId, 'context', turnCallType, {
@@ -3589,6 +3601,19 @@ export class SubstrateAgent {
     if (suffix.includes('planning')) return 'planning';
     if (suffix.includes('maintenance')) return 'maintenance';
     return undefined;
+  }
+
+  private buildTurnBudgetCharacteristics(
+    message: SubstrateMessage,
+    taskKind?: string,
+  ): ContextBudgetTurnCharacteristics {
+    return {
+      channelId: message.channelId,
+      channelType: message.channelType,
+      isDirectMessage: message.isDirectMessage,
+      messageText: message.content,
+      ...(taskKind ? { taskKind } : {}),
+    };
   }
 
   private getPersonaAdaptation(trustLevel: TrustLevel): string | null {

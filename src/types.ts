@@ -381,6 +381,7 @@ export interface SubstrateConfig {
   memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
+  adaptiveContextBudgetsEnabled?: boolean;
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;
@@ -622,6 +623,7 @@ export function loadConfig(): SubstrateConfig {
     memoryRetrievalLimit: DEFAULT_MEMORY_RETRIEVAL_LIMIT,
     sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_DEFAULT,
     memoryRetrievalBudgetPct: MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
+    adaptiveContextBudgetsEnabled: false,
     extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
     maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
     defaultContextWindow,

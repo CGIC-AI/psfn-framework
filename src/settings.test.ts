@@ -434,6 +434,7 @@ describe('settings', () => {
       applySettings(config, {
         sessionHistoryBudgetPct: 8,
         memoryRetrievalBudgetPct: 3,
+        adaptiveContextBudgetsEnabled: true,
         sessionMessageLimit: 50,
         sessionRestartBehavior: 'new_session',
         memoryRetrievalLimit: 25,
@@ -444,6 +445,7 @@ describe('settings', () => {
       });
       expect(config.sessionHistoryBudgetPct).toBe(8);
       expect(config.memoryRetrievalBudgetPct).toBe(3);
+      expect(config.adaptiveContextBudgetsEnabled).toBe(true);
       expect(config.sessionMessageLimit).toBe(50);
       expect(config.sessionRestartBehavior).toBe('new_session');
       expect(config.memoryRetrievalLimit).toBe(25);
@@ -1028,6 +1030,25 @@ describe('settings', () => {
       expect(settings.importProcessingLocalModel).toBe('llama3.2:latest');
     });
 
+    it('parses adaptive context budget toggle', () => {
+      const params = new URLSearchParams({
+        adaptiveContextBudgetsEnabled: 'true',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.adaptiveContextBudgetsEnabled).toBe(true);
+    });
+
+    it('rejects invalid adaptive context budget toggle value', () => {
+      const params = new URLSearchParams({
+        adaptiveContextBudgetsEnabled: 'sometimes',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+      expect(errors).toContain('adaptiveContextBudgetsEnabled must be true or false');
+    });
+
     it('parses web fetch lane controls', () => {
       const params = new URLSearchParams({
         webFetchAllowHttp: 'false',
@@ -1209,6 +1230,7 @@ describe('settings', () => {
     it('normalizes optional values to null when unset', () => {
       const config = makeConfig();
       const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.adaptiveContextBudgetsEnabled).toBe(false);
       expect(snapshot.thinkMaxTokens).toBeNull();
       expect(snapshot.thinkMaxWallTimeMs).toBeNull();
       expect(snapshot.thinkMaxSubQueries).toBeNull();

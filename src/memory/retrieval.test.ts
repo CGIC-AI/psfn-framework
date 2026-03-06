@@ -661,6 +661,50 @@ describe('MemoryRetriever basic behavior', () => {
     expect(countRenderedMemories(largeResult)).toBeGreaterThan(countRenderedMemories(smallResult));
   });
 
+  it('adapts retrieval budgets per turn when adaptive context budgets are enabled', async () => {
+    const memories = Array.from({ length: 10 }, (_, idx) => makeMemory({
+      text: `Adaptive memory ${idx} ` + 'x'.repeat(900),
+      sensitivity: 'public',
+      similarity: 0.99 - idx * 0.01,
+    }));
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const config = makeRuntimeConfig({
+      adaptiveContextBudgetsEnabled: true,
+      memoryRetrievalLimit: undefined,
+      memoryRetrievalBudgetPct: 2,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 20_000,
+          contextBudget: { memoryRetrievalMinTokens: 1 },
+        },
+      },
+    });
+    const retriever = new MemoryRetriever(store, embedding, config, eventBus);
+
+    const recallResult = await retriever.retrieve(
+      'Can you remember what we talked about before?',
+      'api:test',
+      'primary',
+    );
+    const taskResult = await retriever.retrieve(
+      'Please implement this step-by-step refactor plan.',
+      'api:test',
+      'primary',
+    );
+
+    expect(countRenderedMemories(recallResult)).toBeGreaterThan(countRenderedMemories(taskResult));
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    const telemetryPayloads = calls.map(([, payload]) => payload as Record<string, unknown>);
+    expect(telemetryPayloads[0].retrievalBudgetPct).toBe(8);
+    expect(telemetryPayloads[1].retrievalBudgetPct).toBe(2);
+  });
+
   it('uses hard retrieval limit override when provided', async () => {
     const memories = Array.from({ length: 10 }, (_, idx) => makeMemory({
       text: `Hard limit memory ${idx} ` + 'x'.repeat(240),

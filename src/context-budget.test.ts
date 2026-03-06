@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyContextBudgetTurn,
   MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT,
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
+  resolveAdaptiveContextBudgetProfile,
   resolveMemoryRetrievalBudget,
   resolveMemoryRetrievalBudgetPct,
   resolveSessionHistoryBudget,
@@ -132,5 +134,100 @@ describe('context-budget', () => {
     expect(retrievalPct).toBe(MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT);
     expect(SESSION_HISTORY_BUDGET_PCT_DEFAULT).toBeGreaterThanOrEqual(SESSION_HISTORY_BUDGET_PCT_RANGE.min);
     expect(MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT).toBeGreaterThanOrEqual(MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min);
+  });
+
+  it('classifies turn characteristics into deterministic budget categories', () => {
+    expect(classifyContextBudgetTurn({
+      messageText: 'Can you remember what I said yesterday?',
+    })).toBe('recall');
+    expect(classifyContextBudgetTurn({
+      taskKind: 'heartbeat',
+    })).toBe('task');
+    expect(classifyContextBudgetTurn({
+      messageText: 'I feel anxious and need support today.',
+    })).toBe('emotional');
+    expect(classifyContextBudgetTurn({
+      messageText: 'Write a short poem about rain.',
+    })).toBe('creative');
+    expect(classifyContextBudgetTurn({
+      messageText: 'What is the difference between TCP and UDP?',
+    })).toBe('factual');
+    expect(classifyContextBudgetTurn({
+      messageText: 'hello there',
+    })).toBe('default');
+  });
+
+  it('fails closed to base percentages when adaptive budgets are disabled', () => {
+    const profile = resolveAdaptiveContextBudgetProfile({
+      sessionHistoryBudgetPct: 11,
+      memoryRetrievalBudgetPct: 5,
+      adaptiveContextBudgetsEnabled: false,
+    }, {
+      messageText: 'Can you remember what I told you?',
+    });
+
+    expect(profile.enabled).toBe(false);
+    expect(profile.source).toBe('disabled');
+    expect(profile.category).toBe('default');
+    expect(profile.sessionHistoryBudgetPct).toBe(11);
+    expect(profile.memoryRetrievalBudgetPct).toBe(5);
+  });
+
+  it('adapts session and memory percentages per turn when enabled', () => {
+    const profile = resolveAdaptiveContextBudgetProfile({
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+      adaptiveContextBudgetsEnabled: true,
+    }, {
+      messageText: 'Can you remember what I told you?',
+    });
+
+    expect(profile.enabled).toBe(true);
+    expect(profile.source).toBe('adaptive');
+    expect(profile.category).toBe('recall');
+    expect(profile.sessionHistoryBudgetPct).toBe(4);
+    expect(profile.memoryRetrievalBudgetPct).toBe(8);
+  });
+
+  it('uses adaptive percentages during budget resolution', () => {
+    const sessionBudget = resolveSessionHistoryBudget({
+      defaultContextWindow: 100_000,
+      modelRoster: {
+        chat: {
+          model: 'test/chat',
+          provider: 'openrouter',
+          maxTokens: 4096,
+          contextWindow: 100_000,
+        },
+      },
+      sessionHistoryBudgetPct: 6,
+      adaptiveContextBudgetsEnabled: true,
+    }, {
+      turn: {
+        messageText: 'Can you remember what I told you?',
+      },
+    });
+    const retrievalBudget = resolveMemoryRetrievalBudget({
+      defaultContextWindow: 100_000,
+      modelRoster: {
+        chat: {
+          model: 'test/chat',
+          provider: 'openrouter',
+          maxTokens: 4096,
+          contextWindow: 100_000,
+        },
+      },
+      memoryRetrievalBudgetPct: 2,
+      adaptiveContextBudgetsEnabled: true,
+    }, {
+      turn: {
+        messageText: 'Can you remember what I told you?',
+      },
+    });
+
+    expect(sessionBudget.budgetPct).toBe(4);
+    expect(sessionBudget.tokenBudget).toBe(4_000);
+    expect(retrievalBudget.budgetPct).toBe(8);
+    expect(retrievalBudget.tokenBudget).toBe(8_000);
   });
 });

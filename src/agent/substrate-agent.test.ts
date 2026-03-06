@@ -1113,6 +1113,12 @@ describe('SubstrateAgent.handleMessage', () => {
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[4]).toBe('contact-canonical-1');
     expect(buildCall[6]).toEqual(['api-user-1', 'discord-user-1']);
+    expect(buildCall[9]).toMatchObject({
+      channelId: 'test-channel',
+      channelType: 'api',
+      isDirectMessage: undefined,
+      messageText: 'Hello, Purrsephone!',
+    });
 
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
       'test-channel',
@@ -1147,6 +1153,13 @@ describe('SubstrateAgent.handleMessage', () => {
       'regular',
       { isDirectMessage: undefined },
       undefined,
+      undefined,
+      {
+        channelId: 'test-channel',
+        channelType: 'terminal',
+        isDirectMessage: undefined,
+        messageText: 'Hello, Purrsephone!',
+      },
     );
   });
 
@@ -1172,6 +1185,13 @@ describe('SubstrateAgent.handleMessage', () => {
       'regular',
       { isDirectMessage: undefined },
       undefined,
+      undefined,
+      {
+        channelId: 'test-channel',
+        channelType: 'terminal',
+        isDirectMessage: undefined,
+        messageText: 'Hello, Purrsephone!',
+      },
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[2]).toContain('Relevant memories here');
@@ -1203,6 +1223,14 @@ describe('SubstrateAgent.handleMessage', () => {
       'primary',
       { isDirectMessage: undefined },
       'scheduler',
+      undefined,
+      {
+        channelId: 'internal:heartbeat',
+        channelType: 'terminal',
+        isDirectMessage: undefined,
+        messageText: 'heartbeat check',
+        taskKind: 'heartbeat',
+      },
     );
   });
 

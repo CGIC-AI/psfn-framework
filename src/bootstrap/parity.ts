@@ -95,12 +95,25 @@ import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
 } from '../memory/sleeptime-agent.js';
+import type { EmotionStateSnapshot } from '../emotion/state.js';
+import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+import {
+  IntentionAppraisal,
+  INTENTION_FOLLOW_UP_ACTION_KIND,
+  decisionsToPostTurnActionCandidates,
+  normalizeIntentionFollowUpActionPayload,
+  sessionEntriesToIntentionMessages,
+  toInferredPostTurnActions,
+  type ActiveConcernSnapshot,
+  type IntentionActionDecision,
+} from '../intention/appraisal.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
 interface HeartbeatAgent {
   handleMessage(message: SubstrateMessage): Promise<{ content: string }>;
+  followUp?(message: SubstrateMessage): void;
   activateExtendedTools?(
     toolNames: readonly string[],
     options?: ExtendedToolActivationOptions,
@@ -117,6 +130,20 @@ interface HeartbeatRuntimeOptions {
   characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
+  emotionState?: { getState(): EmotionStateSnapshot };
+  contactStore?: {
+    getEmotionalSnapshot?(id: string): EmotionalSnapshot | undefined;
+  };
+  getActiveConcerns?: (input: {
+    channelId: string;
+    canonicalContactKey?: string;
+  }) => Promise<readonly ActiveConcernSnapshot[]> | readonly ActiveConcernSnapshot[];
+  onIntentionConcernDecision?: (input: {
+    decision: IntentionActionDecision;
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+  }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
   postTurnActions?: PostTurnActionRuntime;
@@ -324,6 +351,23 @@ export function wireHeartbeatRuntime(
       cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
     })
     : null;
+  const intentionAppraisal = (
+    runtimeOptions.postTurnActions
+    && runtimeOptions.llmProvider
+    && telemetryEventBus
+  )
+    ? new IntentionAppraisal({
+      llmProvider: runtimeOptions.llmProvider,
+      onEvaluationError: (error, context) => {
+        log.warn('Intention appraisal failed closed', {
+          sessionId: context.sessionId,
+          trigger: context.trigger,
+          error: String(error),
+        });
+      },
+    })
+    : null;
+  const intentionSessionsInFlight = new Set<string>();
 
   type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
 
@@ -822,6 +866,122 @@ export function wireHeartbeatRuntime(
     }
   };
 
+  type PostTurnInfererContext = Parameters<PostTurnActionInferer>[0];
+
+  const buildConversationTrajectory = (context: Pick<PostTurnInfererContext, 'message' | 'response'>) => {
+    const unresolvedTopics: string[] = [];
+    const userText = context.message.content.trim();
+    const responseText = context.response.content.trim();
+    if (userText.includes('?') && !responseText.endsWith('?')) {
+      unresolvedTopics.push(userText.slice(0, 180));
+    }
+
+    const summary = `User: ${userText.slice(0, 180)} | Assistant: ${responseText.slice(0, 180)}`;
+    return {
+      ...(unresolvedTopics.length > 0 ? { unresolvedTopics } : {}),
+      summary,
+      turnsSinceUserReply: 0,
+    };
+  };
+
+  const triggerIntentionPostTurnAppraisal = (
+    context: Pick<PostTurnInfererContext, 'message' | 'response' | 'canonicalContactKey'>,
+  ): void => {
+    if (!intentionAppraisal || !telemetryEventBus) {
+      return;
+    }
+
+    const resolvedSessionId = (
+      runtimeOptions.sessionManager?.resolveSessionChannelId(context.message.channelId)
+      ?? context.message.channelId
+    ).trim() || context.message.channelId;
+
+    if (intentionSessionsInFlight.has(resolvedSessionId)) {
+      return;
+    }
+    intentionSessionsInFlight.add(resolvedSessionId);
+
+    void (async () => {
+      try {
+        const recentSessionEntries = runtimeOptions.sessionManager?.getRecentMessages(resolvedSessionId, 12) ?? [];
+        const recentMessages = sessionEntriesToIntentionMessages(recentSessionEntries);
+        recentMessages.push({
+          role: 'user',
+          content: context.message.content,
+          timestamp: context.message.timestamp.getTime(),
+        });
+        const trimmedResponse = context.response.content.trim();
+        if (trimmedResponse) {
+          recentMessages.push({
+            role: 'assistant',
+            content: trimmedResponse,
+            timestamp: Date.now(),
+          });
+        }
+
+        const currentEmotion = runtimeOptions.emotionState?.getState() ?? null;
+        const contactEmotionalSnapshot = (
+          context.canonicalContactKey
+          && runtimeOptions.contactStore?.getEmotionalSnapshot
+        )
+          ? runtimeOptions.contactStore.getEmotionalSnapshot(context.canonicalContactKey) ?? null
+          : null;
+        const activeConcerns = await Promise.resolve(
+          runtimeOptions.getActiveConcerns?.({
+            channelId: resolvedSessionId,
+            canonicalContactKey: context.canonicalContactKey,
+          }) ?? [],
+        );
+        const decisions = await intentionAppraisal.evaluate({
+          sessionId: resolvedSessionId,
+          currentEmotion,
+          recentMessages,
+          activeConcerns,
+          contactEmotionalSnapshot,
+          conversationTrajectory: buildConversationTrajectory(context),
+        });
+
+        if (runtimeOptions.onIntentionConcernDecision) {
+          for (const decision of decisions) {
+            if (decision.type !== 'concern') continue;
+            await runtimeOptions.onIntentionConcernDecision({
+              decision,
+              channelId: resolvedSessionId,
+              canonicalContactKey: context.canonicalContactKey,
+              sourceMessageId: context.message.id,
+            });
+          }
+        }
+
+        const candidates = decisionsToPostTurnActionCandidates(decisions, {
+          message: context.message,
+        });
+        if (candidates.length === 0) {
+          return;
+        }
+
+        const inferredActions = toInferredPostTurnActions(candidates, context.message);
+        if (inferredActions.length === 0) {
+          return;
+        }
+
+        await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+          message: context.message,
+          response: context.response,
+          actions: inferredActions,
+        });
+      } catch (error) {
+        log.warn('Intention post-turn appraisal dispatch failed', {
+          channelId: context.message.channelId,
+          messageId: context.message.id,
+          error: String(error),
+        });
+      } finally {
+        intentionSessionsInFlight.delete(resolvedSessionId);
+      }
+    })();
+  };
+
   if (runtimeOptions.postTurnActions) {
     telemetryEventBus?.on('agent.post_turn.action.telemetry', (telemetry) => {
       if (telemetry.actionKind !== DEFERRED_TOOL_HANDOFF_ACTION_KIND) {
@@ -972,6 +1132,31 @@ export function wireHeartbeatRuntime(
         }
       },
     );
+    if (intentionAppraisal) {
+      if (agentLoop.followUp) {
+        runtimeOptions.postTurnActions.registerHandler(
+          INTENTION_FOLLOW_UP_ACTION_KIND,
+          async (action) => {
+            const payload = normalizeIntentionFollowUpActionPayload(action.payload);
+            if (!payload) {
+              throw new Error(`Intention follow-up action "${action.id}" payload is missing required fields`);
+            }
+            agentLoop.followUp?.({
+              id: `intention-follow-up:${action.id}`,
+              channelId: payload.channelId,
+              channelType: payload.channelType,
+              authorId: payload.authorId,
+              authorName: payload.authorName,
+              content: payload.content,
+              timestamp: new Date(),
+            });
+          },
+          { executionMode: 'background' },
+        );
+      } else {
+        log.warn('Intention appraisal enabled but followUp hook is unavailable on agent loop');
+      }
+    }
     if (sleeptimeAgent) {
       runtimeOptions.postTurnActions.registerHandler(
         SLEEPTIME_MEMORY_ACTION_KIND,
@@ -991,7 +1176,12 @@ export function wireHeartbeatRuntime(
     }
 
     if (agentLoop.registerPostTurnActionInferer) {
-      const inferDeferredPostTurnActions: PostTurnActionInferer = async ({ message, turnMessages }) => {
+      const inferDeferredPostTurnActions: PostTurnActionInferer = async ({
+        message,
+        response,
+        turnMessages,
+        canonicalContactKey,
+      }) => {
         const inferred = shouldUseCompositionalAppraisal(message.channelId)
           ? await inferComposedDeferredPostTurnActions({
             message,
@@ -1012,6 +1202,11 @@ export function wireHeartbeatRuntime(
         if (sleeptimeAgent) {
           inferred.push(...sleeptimeAgent.inferPostTurnActions({ message }));
         }
+        triggerIntentionPostTurnAppraisal({
+          message,
+          response,
+          canonicalContactKey,
+        });
         return inferred;
       };
       agentLoop.registerPostTurnActionInferer(inferDeferredPostTurnActions);

@@ -18,6 +18,7 @@ export interface ReflectionTemplate {
   intervalMs: number;   // how often (validated: 5min – 7d)
   enabled: boolean;
   sendToDiscord: boolean;  // if true, sends response via sender.send()
+  internalStateInput?: boolean; // inject serialized InternalState + recent signals into prompt
   mode?: 'standard' | 'deliberation';
   deliberation?: ReflectionDeliberationConfig;
 }
@@ -163,6 +164,12 @@ export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean)
     }
   }
 
+  if (isNew || t.internalStateInput !== undefined) {
+    if (t.internalStateInput !== undefined && typeof t.internalStateInput !== 'boolean') {
+      errors.push({ field: 'internalStateInput', message: 'internalStateInput must be a boolean when provided' });
+    }
+  }
+
   if (isNew || t.deliberation !== undefined) {
     errors.push(...validateDeliberationConfig(t.deliberation));
   }
@@ -208,12 +215,22 @@ function getDefaults(): HeartbeatPolicy {
         sendToDiscord: false,
       },
       {
+        id: 'experiential-review',
+        name: 'Experiential Review',
+        prompt: 'Describe your recent experience: what you felt, what you noticed about your own processing, what you found meaningful, and what you are uncertain about.',
+        intervalMs: 4 * 60 * 60_000, // 4 hours
+        enabled: true,
+        sendToDiscord: false,
+        internalStateInput: true,
+      },
+      {
         id: 'values-reflection',
         name: 'Values Reflection',
         prompt: 'Pause and reflect on what matters to you right now. Name the values guiding you today, explain why they matter, and note how recent interactions reinforced or challenged them.',
         intervalMs: 24 * 60 * 60_000, // 24 hours
         enabled: true,
         sendToDiscord: false,
+        internalStateInput: true,
         mode: 'deliberation',
         deliberation: {
           maxRounds: 4,

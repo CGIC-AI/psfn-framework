@@ -3,6 +3,39 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ValuesJournalStore } from './store.js';
+import { buildInternalStateSnapshotRef, cloneInternalState, InternalStateComputer } from '../self-model/state.js';
+
+function buildInternalStateSample() {
+  const state = new InternalStateComputer().computeState({
+    emotionState: {
+      vad: { valence: 0.2, arousal: 0.3, dominance: 0.1 },
+      mood: { valence: 0.1, arousal: 0.2, dominance: 0.05 },
+      discrete: { curiosity: 0.7, calm: 0.4 },
+      confidence: 0.75,
+    },
+    activeConcerns: [{
+      id: 'concern-1',
+      text: 'Maintain coherent reflection continuity',
+      priority: 'medium',
+      source: 'heartbeat',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      expiresAt: '2026-03-02T00:00:00.000Z',
+    }],
+    trustLevel: 'trusted',
+    contactId: 'contact-1',
+    sessionMetrics: {
+      userMessageText: 'What did we learn from today?',
+      responseText: 'We learned to anchor on lived continuity.',
+      toolCallCount: 1,
+      recentTurnCount: 4,
+      lastSeenDeltaSeconds: 120,
+    },
+  });
+  return {
+    state,
+    snapshotRef: buildInternalStateSnapshotRef(state),
+  };
+}
 
 describe('ValuesJournalStore', () => {
   let tempDir: string;
@@ -112,6 +145,55 @@ describe('ValuesJournalStore', () => {
       estimatedCostUsd: 0.00123,
       durationMs: 4567,
     });
+  });
+
+  it('persists internal-state narrative context when provided', () => {
+    const sample = buildInternalStateSample();
+    store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P',
+      reflection: 'R',
+      internalStateSnapshotRef: sample.snapshotRef,
+      internalState: sample.state,
+      metacognitiveFlags: [
+        { flag: 'uncertainty', confidence: 0.62, evidence: 'conflicting prior reflections' },
+      ],
+      createdAt: '2026-02-26T00:00:00.000Z',
+    });
+
+    const entries = store.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.internalStateSnapshotRef).toBe(sample.snapshotRef);
+    expect(entries[0]?.internalState).toEqual(cloneInternalState(sample.state));
+    expect(entries[0]?.metacognitiveFlags).toEqual([
+      { flag: 'uncertainty', confidence: 0.62, evidence: 'conflicting prior reflections' },
+    ]);
+  });
+
+  it('fails closed when internal-state context is partial', () => {
+    expect(() => store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P',
+      reflection: 'R',
+      internalStateSnapshotRef: 'internal-state-v1:abc',
+    })).toThrow('internalStateSnapshotRef and internalState');
+  });
+
+  it('skips malformed internal-state narrative entries on read', () => {
+    writeFileSync(
+      filePath,
+      [
+        '{"id":"values-1","version":1,"templateId":"values-reflection","templateName":"Values Reflection","prompt":"P","reflection":"R","createdAt":"2026-02-26T00:00:00.000Z","internalStateSnapshotRef":"internal-state-v1:abc"}',
+        '{"id":"values-2","version":2,"templateId":"values-reflection","templateName":"Values Reflection","prompt":"P2","reflection":"R2","createdAt":"2026-02-26T01:00:00.000Z"}',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+
+    const entries = store.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe('values-2');
   });
 
   it('migrates legacy values.jsonl into notes/values.jsonl on first access', () => {

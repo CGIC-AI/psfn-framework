@@ -247,6 +247,62 @@ describe('validateToolWiring', () => {
     expect(report.invalidTools).toHaveLength(1);
     expect(report.invalidTools[0].toolName).toBe('annotated_bad');
   });
+
+  it('fails closed when concurrency metadata is required and missing', () => {
+    const tools = [
+      makeTool('repo_status', { requiredGatewayMethods: ['git.status'] }),
+      makeTool('memory_write'),
+    ];
+    const report = validateToolWiring({
+      mode: 'single',
+      tools,
+      requireConcurrencyMetadata: true,
+    });
+    expect(report.invalidTools).toHaveLength(2);
+    expect(report.invalidTools[0].missingConcurrencyMetadata).toContain('concurrency metadata missing');
+    expect(report.invalidTools[1].missingConcurrencyMetadata).toContain('concurrency metadata missing');
+  });
+
+  it('accepts valid concurrency metadata when required', () => {
+    const tools = [
+      makeTool('repo_status', {
+        requiredGatewayMethods: ['git.status'],
+        concurrency: { class: 'read_only', maxParallel: 3 },
+      }),
+      makeTool('memory_write', {
+        concurrency: { class: 'exclusive', exclusivityKey: 'core:memory_write' },
+      }),
+      makeTool('spawn_shard', {
+        concurrency: { class: 'spawn_shard', maxParallel: 5 },
+      }),
+    ];
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools,
+      gatewayClientMethods: new Set(['gitStatus']),
+      requireConcurrencyMetadata: true,
+    });
+    expect(report.invalidTools).toHaveLength(0);
+  });
+
+  it('rejects invalid exclusive concurrency metadata when required', () => {
+    const tools = [
+      makeTool('memory_delete', {
+        concurrency: { class: 'exclusive' },
+      }),
+      makeTool('repo_diff', {
+        concurrency: { class: 'read_only', maxParallel: 0 },
+      }),
+    ];
+    const report = validateToolWiring({
+      mode: 'single',
+      tools,
+      requireConcurrencyMetadata: true,
+    });
+    expect(report.invalidTools).toHaveLength(2);
+    expect(report.invalidTools[0].missingConcurrencyMetadata[0]).toContain('exclusive tools require');
+    expect(report.invalidTools[1].missingConcurrencyMetadata[0]).toContain('maxParallel');
+  });
 });
 
 describe('validateAndLogToolWiring', () => {

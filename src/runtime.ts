@@ -142,6 +142,7 @@ import {
   resolveConfiguredSystemDataDir,
   resolveContactsDir,
   resolveNotesDir,
+  resolveRuntimePathLayout,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
@@ -364,6 +365,18 @@ export class SubstrateRuntime implements Lifecycle {
     }
     const systemDataDir = resolveConfiguredSystemDataDir(this.config);
     const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
+    const runtimePathLayout = resolveRuntimePathLayout({
+      mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
+      nodeEnv: process.env.NODE_ENV,
+      runtimeRootDir: process.env.PSFN_RUNTIME_ROOT,
+      systemDataDir,
+      companionDataDir,
+      legacyDataDir: process.env.DATA_DIR,
+      workspacePath: process.env.WORKSPACE_PATH,
+      logsDir: process.env.PSFN_LOGS_DIR,
+      tempDir: process.env.PSFN_TEMP_DIR,
+      backupsDir: process.env.BACKUP_ROOT_DIR,
+    });
     assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(this.config));
     const lifecycleRuntimeContract = resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SINGLE,
@@ -478,6 +491,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
     const backupConfig = resolveBackupRuntimeConfig({
       dataDir: companionDataDir,
+      defaultRootDir: runtimePathLayout.backupsDir,
     });
     this.config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
     this.capabilityRuntime = new CapabilityRuntime({

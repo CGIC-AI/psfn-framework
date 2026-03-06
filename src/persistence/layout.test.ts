@@ -11,8 +11,12 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  DEFAULT_CONTINUOUS_RUNTIME_ROOT,
+  DEFAULT_PRODUCTION_RUNTIME_ROOT,
+  RUNTIME_LAYOUT_MODE,
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
+  normalizeRuntimeLayoutMode,
   resolveBackupsDir,
   resolveCharacterCardHistoryPath,
   resolveCoreMemoryPath,
@@ -32,6 +36,8 @@ import {
   resolvePromptRegistryPath,
   resolveReflectionJournalPath,
   resolveReflectionNotesDir,
+  resolveRuntimeLayoutMode,
+  resolveRuntimePathLayout,
   resolveSafeguardAuditTrailPath,
   resolveShardSessionMemorySyncAuditPath,
   resolveScratchpadMirrorPath,
@@ -129,6 +135,81 @@ describe('persistence layout', () => {
       systemDataDir: '/tmp/shared',
       companionDataDir: '/tmp/shared',
     })).toThrow('SYSTEM_DATA_DIR and COMPANION_DATA_DIR must point to different roots');
+  });
+
+  it('normalizes runtime layout mode aliases and defaults from NODE_ENV', () => {
+    expect(normalizeRuntimeLayoutMode('prod')).toBe(RUNTIME_LAYOUT_MODE.PRODUCTION);
+    expect(normalizeRuntimeLayoutMode('DEV')).toBe(RUNTIME_LAYOUT_MODE.CONTINUOUS);
+    expect(resolveRuntimeLayoutMode({ nodeEnv: 'production' })).toBe(RUNTIME_LAYOUT_MODE.PRODUCTION);
+    expect(resolveRuntimeLayoutMode({ nodeEnv: 'development' })).toBe(RUNTIME_LAYOUT_MODE.CONTINUOUS);
+    expect(() => resolveRuntimeLayoutMode({ mode: 'staging' })).toThrow(
+      'Unsupported PSFN_RUNTIME_LAYOUT_MODE "staging"',
+    );
+  });
+
+  it('resolves continuous-mode defaults with shared data root compatibility', () => {
+    expect(resolveRuntimePathLayout()).toEqual({
+      mode: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+      runtimeRootDir: DEFAULT_CONTINUOUS_RUNTIME_ROOT,
+      systemDataDir: './data',
+      companionDataDir: './data',
+      workspacePath: './workspace',
+      logsDir: './logs',
+      tempDir: './tmp',
+      backupsDir: resolveBackupsDir('./data'),
+      usesLegacySharedDataDir: true,
+    });
+  });
+
+  it('resolves production-mode defaults with isolated roots', () => {
+    expect(resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+    })).toEqual({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+      runtimeRootDir: DEFAULT_PRODUCTION_RUNTIME_ROOT,
+      systemDataDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/system-data`,
+      companionDataDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/companion-data`,
+      workspacePath: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/workspace`,
+      logsDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/logs`,
+      tempDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/tmp`,
+      backupsDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/backups`,
+      usesLegacySharedDataDir: false,
+    });
+  });
+
+  it('rejects production mode when DATA_DIR shared-root fallback would be used', () => {
+    expect(() => resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+      legacyDataDir: '/srv/shared-data',
+    })).toThrow('DATA_DIR shared-root mode is forbidden');
+  });
+
+  it('rejects duplicate and overlapping mutable roots in production mode', () => {
+    expect(() => resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+      systemDataDir: '/srv/psfn/system-data',
+      companionDataDir: '/srv/psfn/companion-data',
+      workspacePath: '/srv/psfn/companion-data',
+    })).toThrow('shares a mutable root');
+
+    expect(() => resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+      systemDataDir: '/srv/psfn/system-data',
+      companionDataDir: '/srv/psfn/companion-data',
+      backupsDir: '/srv/psfn/companion-data/backups',
+    })).toThrow('must not overlap');
+  });
+
+  it('derives continuous shared data defaults from explicit runtime root', () => {
+    const layout = resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+      runtimeRootDir: '/srv/psfn/continuous',
+    });
+    expect(layout.systemDataDir).toBe('/srv/psfn/continuous/data');
+    expect(layout.companionDataDir).toBe('/srv/psfn/continuous/data');
+    expect(layout.workspacePath).toBe('/srv/psfn/continuous/workspace');
+    expect(layout.logsDir).toBe('/srv/psfn/continuous/logs');
+    expect(layout.tempDir).toBe('/srv/psfn/continuous/tmp');
   });
 
   it('resolves configured system and companion dirs from config-style objects', () => {

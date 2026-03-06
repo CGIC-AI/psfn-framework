@@ -147,6 +147,7 @@ import {
   resolveConfiguredSystemDataDir,
   resolveContactsDir,
   resolveNotesDir,
+  resolveRuntimePathLayout,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
@@ -220,6 +221,18 @@ async function main(): Promise<void> {
   }
   const systemDataDir = resolveConfiguredSystemDataDir(config);
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const runtimePathLayout = resolveRuntimePathLayout({
+    mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
+    nodeEnv: process.env.NODE_ENV,
+    runtimeRootDir: process.env.PSFN_RUNTIME_ROOT,
+    systemDataDir,
+    companionDataDir,
+    legacyDataDir: process.env.DATA_DIR,
+    workspacePath: process.env.WORKSPACE_PATH,
+    logsDir: process.env.PSFN_LOGS_DIR,
+    tempDir: process.env.PSFN_TEMP_DIR,
+    backupsDir: process.env.BACKUP_ROOT_DIR,
+  });
   assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config));
   const savedSettings = loadSettings(systemDataDir);
   const settingsDomains = splitSettingsByDomain(savedSettings);
@@ -325,6 +338,7 @@ async function main(): Promise<void> {
   });
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: companionDataDir,
+    defaultRootDir: runtimePathLayout.backupsDir,
   });
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const capabilityRuntime = new CapabilityRuntime({
@@ -344,10 +358,14 @@ async function main(): Promise<void> {
   const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const workspacePathEnv = process.env.WORKSPACE_PATH;
-  const workspacePath = workspacePathEnv ?? './workspace';
+  const workspacePath = runtimePathLayout.workspacePath;
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
   if (!workspacePathEnv) {
-    log.warn('WORKSPACE_PATH not set, defaulting to ./workspace', { resolved: workspaceRoot });
+    log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
+      mode: runtimePathLayout.mode,
+      workspacePath,
+      resolved: workspaceRoot,
+    });
   }
   const moduleRegistryPath = resolveModuleRegistryPathFromWorkspace(
     workspaceRoot,

@@ -192,6 +192,54 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('denies vault.read when vault policy is disabled', () => {
+    expect(evaluatePolicy(
+      { method: 'vault.read', params: { name: 'Daily.md' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows vault methods when explicitly allowlisted', () => {
+    const configWithVault: PolicyConfig = {
+      ...policyConfig,
+      vault: {
+        enabled: true,
+        allowActions: ['read', 'search', 'daily', 'write'],
+      },
+    };
+
+    expect(evaluatePolicy(
+      { method: 'vault.read', params: { name: 'Daily.md' } },
+      configWithVault,
+    )).toBe('ALLOW');
+    expect(evaluatePolicy(
+      { method: 'vault.search', params: { query: 'focus', limit: 10 } },
+      configWithVault,
+    )).toBe('ALLOW');
+    expect(evaluatePolicy(
+      { method: 'vault.daily', params: { content: 'hello' } },
+      configWithVault,
+    )).toBe('ALLOW');
+    expect(evaluatePolicy(
+      { method: 'vault.write', params: { name: 'Inbox', content: 'entry' } },
+      configWithVault,
+    )).toBe('ALLOW');
+  });
+
+  it('denies vault.write when action is not allowlisted', () => {
+    const configWithReadOnlyVault: PolicyConfig = {
+      ...policyConfig,
+      vault: {
+        enabled: true,
+        allowActions: ['read'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'vault.write', params: { name: 'Inbox', content: 'entry' } },
+      configWithReadOnlyVault,
+    )).toBe('DENY');
+  });
+
   it('denies beads methods when beads policy is disabled', () => {
     expect(evaluatePolicy(
       { method: 'beads.ready', params: {} },

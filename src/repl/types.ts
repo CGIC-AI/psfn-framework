@@ -12,7 +12,7 @@ import type { ModuleRegistryMutation } from '../modules/types.js';
 export interface ThinkBudget {
   maxIterations: number;      // default 15
   maxTokens?: number;         // total input+output tokens, default 100_000
-  maxWallTimeMs?: number;     // total elapsed, default 120_000 (2 min)
+  maxWallTimeMs?: number;     // total elapsed before tier clamp, default 120_000 (2 min)
   maxSubQueries?: number;     // llm_query calls, default 20
   maxToolCalls?: number;      // sandbox tool calls (file/web helpers), default 50
 }

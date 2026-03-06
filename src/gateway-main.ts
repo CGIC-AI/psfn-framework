@@ -45,6 +45,7 @@ import {
   type EligibilityDecision,
 } from './capabilities/eligibility.js';
 import { GitOps } from './git/ops.js';
+import { resolveGitRepoRoot } from './git/repo-root.js';
 import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
@@ -68,6 +69,8 @@ import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
 import type { BeadsAction } from './gateway/protocol.js';
+import type { VaultPolicyAction } from './gateway/policy.js';
+import { VaultOps } from './vault/ops.js';
 import {
   startDiscordWithRetry,
   DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
@@ -101,6 +104,12 @@ const ALL_BEADS_ACTIONS: readonly BeadsAction[] = [
   'update',
   'close',
   'sync',
+];
+const ALL_VAULT_ACTIONS: readonly VaultPolicyAction[] = [
+  'write',
+  'read',
+  'search',
+  'daily',
 ];
 
 function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
@@ -215,6 +224,23 @@ function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefi
     const normalized = entry.toLowerCase();
     if (valid.has(normalized as BeadsAction)) {
       actions.push(normalized as BeadsAction);
+    }
+  }
+  return actions;
+}
+
+function parseVaultActionsEnv(value: string | undefined): VaultPolicyAction[] | undefined {
+  const parsed = parseStringListEnv(value);
+  if (!parsed) {
+    return value === undefined ? undefined : [];
+  }
+
+  const valid = new Set(ALL_VAULT_ACTIONS);
+  const actions: VaultPolicyAction[] = [];
+  for (const entry of parsed) {
+    const normalized = entry.toLowerCase();
+    if (valid.has(normalized as VaultPolicyAction)) {
+      actions.push(normalized as VaultPolicyAction);
     }
   }
   return actions;
@@ -372,6 +398,12 @@ async function main(): Promise<void> {
   const beadsToolsEnabled = parseBooleanEnv(process.env.BEADS_TOOLS_ENABLED, false);
   const beadsAllowActions = parseBeadsActionsEnv(process.env.BEADS_ALLOW_ACTIONS)
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
+  const vaultToolsEnabled = parseBooleanEnv(
+    process.env.VAULT_TOOLS_ENABLED,
+    Boolean(config.obsidianVaultName),
+  );
+  const vaultAllowActions = parseVaultActionsEnv(process.env.VAULT_ALLOW_ACTIONS)
+    ?? (vaultToolsEnabled ? [...ALL_VAULT_ACTIONS] : undefined);
   const discordStartRetryBaseDelayMs = parsePositiveIntEnv(
     process.env.DISCORD_START_RETRY_BASE_DELAY_MS,
     DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
@@ -406,7 +438,31 @@ async function main(): Promise<void> {
   const runtimeMode = resolveGatewayRuntimeMode(process.env.PSFN_RUNTIME_MODE);
   const codebaseRoot = resolve('.');
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
+  const gitRepoRoot = resolveGitRepoRoot({
+    codebaseRoot,
+    configuredGitRepoRoot: process.env.GIT_REPO_ROOT,
+  });
   mkdirSync(workspaceRoot, { recursive: true });
+  if (workspaceRoot !== gitRepoRoot) {
+    log.info('Gateway workspace and git roots diverge', {
+      workspaceRoot,
+      gitRepoRoot,
+    });
+  }
+  if (vaultToolsEnabled && !config.obsidianVaultName) {
+    throw new Error(
+      'VAULT_TOOLS_ENABLED is true but obsidianVaultName is not configured in settings.',
+    );
+  }
+  const vaultOps = vaultToolsEnabled
+    ? new VaultOps({
+      vaultName: config.obsidianVaultName!,
+      ...(config.obsidianCliPath ? { cliPath: config.obsidianCliPath } : {}),
+      ...(typeof config.obsidianTimeoutMs === 'number'
+        ? { timeoutMs: config.obsidianTimeoutMs }
+        : {}),
+    })
+    : undefined;
   const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(process.env, codebaseRoot);
   if (fullCodebaseReadRoot) {
     log.warn('YOLO runtime mode active: full-codebase fs.read is enabled', {
@@ -434,7 +490,7 @@ async function main(): Promise<void> {
     dims: embeddingProvider.dims,
   });
   const gitOps = new GitOps({
-    repoRoot: workspaceRoot,
+    repoRoot: gitRepoRoot,
   });
   const capabilityRuntime = new CapabilityRuntime({
     dataDir: systemDataDir,
@@ -519,6 +575,11 @@ async function main(): Promise<void> {
       beads: {
         enabled: beadsToolsEnabled,
         ...(beadsAllowActions ? { allowActions: beadsAllowActions } : {}),
+      },
+      vault: {
+        enabled: vaultToolsEnabled,
+        ...(vaultAllowActions ? { allowActions: vaultAllowActions } : {}),
+        ...(vaultOps ? { ops: vaultOps } : {}),
       },
     },
     ntfy: ntfyBaseUrl && ntfyTopic

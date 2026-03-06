@@ -49,10 +49,17 @@ describe('registerVaultTools', () => {
   it('attaches gateway wiring metadata when gatewayMode is true', () => {
     registerVaultTools(target, createMockOps(), { gatewayMode: true });
 
+    const expectedMethodsByTool: Record<string, string> = {
+      vault_write: 'vault.write',
+      vault_read: 'vault.read',
+      vault_search: 'vault.search',
+      vault_daily: 'vault.daily',
+    };
+
     for (const call of target.registerTool.mock.calls) {
-      const tool = call[0] as { wiringMeta?: { requiredGatewayMethods: string[] } };
+      const tool = call[0] as { name: string; wiringMeta?: { requiredGatewayMethods: string[] } };
       expect(tool.wiringMeta).toBeDefined();
-      expect(tool.wiringMeta!.requiredGatewayMethods).toContain('shell.exec');
+      expect(tool.wiringMeta!.requiredGatewayMethods).toContain(expectedMethodsByTool[tool.name]);
     }
   });
 

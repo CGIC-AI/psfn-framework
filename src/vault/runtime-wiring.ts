@@ -18,10 +18,10 @@ export interface VaultRuntimeTarget {
 
 /** Gateway RPC methods required by each vault tool */
 const VAULT_TOOL_GATEWAY_METHODS: Record<string, string[]> = {
-  vault_write: ['shell.exec'],
-  vault_read: ['shell.exec'],
-  vault_search: ['shell.exec'],
-  vault_daily: ['shell.exec'],
+  vault_write: ['vault.write'],
+  vault_read: ['vault.read'],
+  vault_search: ['vault.search'],
+  vault_daily: ['vault.daily'],
 };
 
 function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTool {

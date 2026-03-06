@@ -31,6 +31,10 @@ import type {
   WebFetchResult,
   WebFetchBinaryResult,
   ShellExecResult,
+  VaultWriteResult,
+  VaultReadResult,
+  VaultSearchResult,
+  VaultDailyResult,
   FsReadResult,
   FsWriteResult,
   FsListResult,
@@ -558,6 +562,63 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       args,
       ...options,
     }) as ShellExecResult;
+  }
+
+  async vaultWrite(
+    name: string,
+    content: string,
+    options: {
+      folder?: string;
+      mode?: 'create' | 'append' | 'prepend';
+    } = {},
+  ): Promise<VaultWriteResult> {
+    return await this.rpcInstance.request('vault.write', {
+      name,
+      content,
+      ...options,
+    }) as VaultWriteResult;
+  }
+
+  async vaultRead(name: string): Promise<VaultReadResult> {
+    return await this.rpcInstance.request('vault.read', { name }) as VaultReadResult;
+  }
+
+  async vaultSearch(query: string, limit?: number): Promise<VaultSearchResult> {
+    return await this.rpcInstance.request('vault.search', {
+      query,
+      ...(typeof limit === 'number' && Number.isFinite(limit)
+        ? { limit: Math.max(1, Math.floor(limit)) }
+        : {}),
+    }) as VaultSearchResult;
+  }
+
+  async vaultDaily(content?: string): Promise<VaultDailyResult> {
+    return await this.rpcInstance.request('vault.daily', {
+      ...(typeof content === 'string' ? { content } : {}),
+    }) as VaultDailyResult;
+  }
+
+  async ['vault.write'](
+    name: string,
+    content: string,
+    options?: {
+      folder?: string;
+      mode?: 'create' | 'append' | 'prepend';
+    },
+  ): Promise<VaultWriteResult> {
+    return await this.vaultWrite(name, content, options);
+  }
+
+  async ['vault.read'](name: string): Promise<VaultReadResult> {
+    return await this.vaultRead(name);
+  }
+
+  async ['vault.search'](query: string, limit?: number): Promise<VaultSearchResult> {
+    return await this.vaultSearch(query, limit);
+  }
+
+  async ['vault.daily'](content?: string): Promise<VaultDailyResult> {
+    return await this.vaultDaily(content);
   }
 
   // ── Filesystem ──

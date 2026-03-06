@@ -4,6 +4,10 @@ import {
   TEXT_EMOTION_LABEL_VAD_MAP,
   type TextEmotionClassifierLike,
 } from './observer.js';
+import type {
+  AudioEmotionClassification,
+  AudioEmotionClassifierLike,
+} from './audio-classifier.js';
 import { EmotionState } from './state.js';
 import type { TextEmotionClassification } from './text-classifier.js';
 import type { VadLexicon } from './vad-lexicon.js';
@@ -24,6 +28,16 @@ function createLexicon(
   return new Map(
     Object.entries(entries).map(([token, vad]) => [token, Object.freeze({ ...vad })]),
   );
+}
+
+function createAudioClassifier(
+  scores: readonly AudioEmotionClassification[],
+): { classifier: AudioEmotionClassifierLike; classify: ReturnType<typeof vi.fn> } {
+  const classify = vi.fn().mockResolvedValue(scores);
+  return {
+    classifier: { classify },
+    classify,
+  };
 }
 
 describe('EmotionObserver', () => {
@@ -140,5 +154,41 @@ describe('EmotionObserver', () => {
     await observer.observe('   123456789   ', 0);
 
     expect(classify).toHaveBeenCalledWith('12345');
+  });
+
+  it('builds audio modality observations when audio classifier is configured', async () => {
+    const { classifier } = createClassifier([{ label: 'neutral', score: 1 }]);
+    const { classifier: audioClassifier, classify } = createAudioClassifier([
+      { label: 'joy', score: 1, source: 'emotion' },
+      { label: 'event:laughter', score: 1, source: 'event' },
+    ]);
+
+    const observer = new EmotionObserver({
+      textClassifier: classifier,
+      audioClassifier,
+      vadLexicon: createLexicon({}),
+    });
+    const audioBuffer = Buffer.from([0, 0]);
+    const audio = await observer.buildAudioObservation({
+      audioBuffer,
+      sampleRate: 16_000,
+    });
+
+    expect(classify).toHaveBeenCalledWith(audioBuffer, 16_000);
+    expect(audio.observation.discrete).toEqual({ joy: 1 });
+    expect(audio.events).toEqual(['laughter']);
+  });
+
+  it('fails closed when audio modality is requested without an audio classifier', async () => {
+    const { classifier } = createClassifier([{ label: 'neutral', score: 1 }]);
+    const observer = new EmotionObserver({
+      textClassifier: classifier,
+      vadLexicon: createLexicon({}),
+    });
+
+    await expect(observer.buildAudioObservation({
+      audioBuffer: Buffer.from([0, 0]),
+      sampleRate: 16_000,
+    })).rejects.toThrow('audio emotion classifier is not configured');
   });
 });

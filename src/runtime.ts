@@ -16,6 +16,7 @@ import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { SubstrateAgent } from './agent/substrate-agent.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
+import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
 import type { DiscordAdapter } from './channels/discord/adapter.js';
 import { MemoryStore } from './memory/store.js';
 import { MemoryExtractor } from './memory/extraction.js';
@@ -616,7 +617,9 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Agent loop
-    const emotionObserver = new EmotionObserver();
+    const emotionObserver = new EmotionObserver({
+      audioClassifier: getSharedAudioEmotionClassifier(),
+    });
     const emotionState = new EmotionState();
     this.agentLoop = composeSubstrateAgent({
       eventBus: this.eventBus,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { injectPromptRuntimeTokens } from './prompt-runtime.js';
+import { injectPromptRuntimeTokens, renderPromptRuntimeTokens } from './prompt-runtime.js';
 
 describe('injectPromptRuntimeTokens', () => {
   const fixedNow = new Date('2026-02-20T13:45:27.000Z');
@@ -32,6 +32,20 @@ describe('injectPromptRuntimeTokens', () => {
     const output = injectPromptRuntimeTokens(input, { now: fixedNow });
 
     expect(output).toBe('Keep {{unknown_token}} unchanged');
+  });
+
+  it('reports unresolved macro tokens explicitly', () => {
+    const input = 'Known={{user}} Unknown={{unknown_token}}';
+    const unresolved: string[] = [];
+    const output = renderPromptRuntimeTokens(input, {
+      now: fixedNow,
+      variables: { user: 'PrimaryUser' },
+      onUnresolvedToken: (token) => unresolved.push(token),
+    });
+
+    expect(output.text).toBe('Known=PrimaryUser Unknown={{unknown_token}}');
+    expect(output.unresolvedTokens).toEqual(['unknown_token']);
+    expect(unresolved).toEqual(['unknown_token']);
   });
 
   it('injects simple prompt variables', () => {

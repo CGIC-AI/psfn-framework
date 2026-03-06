@@ -26,6 +26,14 @@ const TEST_CARD: CharacterCardV2 = {
     post_history_instructions: 'post history',
     tags: ['test'],
     creator: 'test',
+    extensions: {
+      visual_description: 'cat ears and tail with human hands',
+      hexaco: {
+        emotional_expression: {
+          intensity: 0.5,
+        },
+      },
+    },
   },
 };
 
@@ -100,6 +108,8 @@ describe('buildCharacterPromptTemplateVariables', () => {
     expect(variables.mes_example).toContain('Example dialogue style');
     expect(variables['character.description']).toContain('A test character');
     expect(variables['character.personality']).toContain('Friendly and helpful');
+    expect(variables.extensions_visual_description).toBe('cat ears and tail with human hands');
+    expect(variables['character.extensions.hexaco.emotional_expression.intensity']).toBe('0.5');
   });
 });
 

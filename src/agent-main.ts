@@ -146,6 +146,7 @@ import {
   assertPersistenceCutoverReady,
   buildPersistenceCutoverOptionsFromConfig,
 } from './persistence/cutover.js';
+import { wireContextFeedbackRuntime } from './context-feedback/runtime.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
@@ -727,6 +728,14 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createUndoMemoryDeleteTool(memoryStore));
   agentLoop.registerTool(createScratchpadReadTool(memoryStore));
   agentLoop.registerTool(createScratchpadWriteTool(memoryStore));
+  wireContextFeedbackRuntime({
+    agentLoop,
+    postTurnActions,
+    llmProvider: gateway,
+    memoryWriter,
+    sessionStore,
+    eventBus,
+  });
 
   // Git tools — self-modification via gateway-hosted git ops
   registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });

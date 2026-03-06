@@ -2475,6 +2475,7 @@ export class SubstrateAgent {
       let responseModel: string;
       let responseText: string;
       let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
+      let turnIntent: string | null = null;
 
       const moaSettings = this.resolveMoaSettings();
       if (moaSettings) {
@@ -2498,6 +2499,7 @@ export class SubstrateAgent {
         // Configure pi-agent-core Agent for this turn
         this.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
         const autoloadOutcome = this.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
+        turnIntent = autoloadOutcome.intent;
         this.applyActiveToolsToAgentForTurn(
           message,
           taskKind,
@@ -2868,7 +2870,7 @@ export class SubstrateAgent {
           message,
           agentResponse,
           taskKind ?? null,
-          this.activeTurnIntent,
+          turnIntent,
         );
         await this.emitBackgroundContinuationEvent(
           'agent.background.continuation.completed',

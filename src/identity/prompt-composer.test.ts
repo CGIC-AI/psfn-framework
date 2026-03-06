@@ -190,11 +190,11 @@ describe('PromptComposer', () => {
 
       const split = composer.composeSplit({ channelType: 'discord_text', taskKind: 'heartbeat' });
 
-      expect(split.staticPrefix).toBe('BASE\n\nDISCORD');
-      expect(split.dynamicSuffix).toBe('RUNTIME\n\nHEARTBEAT');
-      expect(split.text).toBe('BASE\n\nDISCORD\n\nRUNTIME\n\nHEARTBEAT');
-      expect(split.staticLayerIds).toEqual([base.id, channel.id]);
-      expect(split.dynamicLayerIds).toEqual([runtime.id, task.id]);
+      expect(split.staticPrefix).toBe('BASE');
+      expect(split.dynamicSuffix).toBe('RUNTIME\n\nDISCORD\n\nHEARTBEAT');
+      expect(split.text).toBe('BASE\n\nRUNTIME\n\nDISCORD\n\nHEARTBEAT');
+      expect(split.staticLayerIds).toEqual([base.id]);
+      expect(split.dynamicLayerIds).toEqual([runtime.id, channel.id, task.id]);
 
       const composed = composer.compose({ channelType: 'discord_text', taskKind: 'heartbeat' });
       expect(composed.text).toBe(split.text);
@@ -204,10 +204,17 @@ describe('PromptComposer', () => {
     it('keeps static hash stable when only dynamic layers change', () => {
       const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME-A' });
+      const channel = store.create({
+        type: 'channel',
+        name: 'Discord',
+        content: 'DISCORD-A',
+        channelType: 'discord_text',
+      });
 
-      const before = composer.composeSplit();
+      const before = composer.composeSplit({ channelType: 'discord_text' });
       store.update(runtime.id, 'RUNTIME-B', 'test');
-      const after = composer.composeSplit();
+      store.update(channel.id, 'DISCORD-B', 'test');
+      const after = composer.composeSplit({ channelType: 'discord_text' });
 
       expect(before.staticHash).toBe(after.staticHash);
       expect(before.dynamicHash).not.toBe(after.dynamicHash);

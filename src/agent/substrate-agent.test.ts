@@ -2580,8 +2580,12 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(firstPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-26T00:00:00.000Z');
       expect(firstPrompt).toContain('[DYNAMIC] 2026-02-26T00:00:00.000Z');
+      expect(firstPrompt.indexOf('[DYNAMIC] 2026-02-26T00:00:00.000Z'))
+        .toBeLessThan(firstPrompt.indexOf('[Runtime Context]'));
       expect(secondPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-26T00:00:00.000Z');
       expect(secondPrompt).toContain('[DYNAMIC] 2026-02-26T00:10:00.000Z');
+      expect(secondPrompt.indexOf('[DYNAMIC] 2026-02-26T00:10:00.000Z'))
+        .toBeLessThan(secondPrompt.indexOf('[Runtime Context]'));
       expect(secondPrompt).not.toContain('[STATIC] PrimaryUser @ 2026-02-26T00:10:00.000Z');
     } finally {
       vi.useRealTimers();

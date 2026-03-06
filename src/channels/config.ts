@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { getIgnoredTelegramChannelEnvKeys } from '../config/legacy-env.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { parseBooleanEnv } from '../utils/env.js';
 import { isRecord } from '../utils/types.js';
 
 const log = createComponentLogger('ChannelConfig');
@@ -78,11 +79,7 @@ function interpolateEnvTokens(value: unknown, env: NodeJS.ProcessEnv): unknown {
 function parseBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
   if (typeof value !== 'string') return undefined;
-
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'true') return true;
-  if (normalized === 'false') return false;
-  return undefined;
+  return parseBooleanEnv(value);
 }
 
 function parsePositiveInteger(value: unknown): number | undefined {

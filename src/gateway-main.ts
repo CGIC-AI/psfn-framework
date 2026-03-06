@@ -49,7 +49,11 @@ import { resolveGitRepoRoot } from './git/repo-root.js';
 import { loadSettings, applySettings } from './settings.js';
 import { loadModelsConfig } from './config/models-config.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
-import { parsePositiveIntEnv } from './utils/env.js';
+import {
+  parseBooleanEnv as parseEnvBoolean,
+  parseEnvList,
+  parsePositiveIntEnv,
+} from './utils/env.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
   resolveConfiguredCompanionDataDir,
@@ -193,27 +197,13 @@ function createDiscordReverseRpcVoiceModule(): GatewayVoiceModule {
   };
 }
 
-function parseStringListEnv(value: string | undefined): string[] | undefined {
-  if (typeof value !== 'string') return undefined;
-  const parsed = [...new Set(
-    value
-      .split(',')
-      .map(entry => entry.trim())
-      .filter(Boolean),
-  )];
-  return parsed.length > 0 ? parsed : undefined;
-}
-
-function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
-  if (typeof value !== 'string') return fallback;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
-  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
-  return fallback;
+function parseBooleanEnvWithFallback(value: string | undefined, fallback = false): boolean {
+  const parsed = parseEnvBoolean(value);
+  return parsed === undefined ? fallback : parsed;
 }
 
 function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefined {
-  const parsed = parseStringListEnv(value);
+  const parsed = parseEnvList(value, { separators: [','] });
   if (!parsed) {
     return value === undefined ? undefined : [];
   }
@@ -230,7 +220,7 @@ function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefi
 }
 
 function parseVaultActionsEnv(value: string | undefined): VaultPolicyAction[] | undefined {
-  const parsed = parseStringListEnv(value);
+  const parsed = parseEnvList(value, { separators: [','] });
   if (!parsed) {
     return value === undefined ? undefined : [];
   }
@@ -376,9 +366,9 @@ async function main(): Promise<void> {
   );
   const confirmationOperatorDiscordChannelId = process.env.CONFIRMATION_OPERATOR_DISCORD_CHANNEL_ID?.trim() || undefined;
   const confirmationNtfyTopic = process.env.CONFIRMATION_NTFY_TOPIC?.trim() || undefined;
-  const shellExecEnabled = parseBooleanEnv(process.env.SHELL_EXEC_ENABLED, false);
-  const shellExecAllowlist = parseStringListEnv(process.env.SHELL_EXEC_ALLOWLIST);
-  const shellExecAllowedCwd = parseStringListEnv(process.env.SHELL_EXEC_ALLOWED_CWD);
+  const shellExecEnabled = parseBooleanEnvWithFallback(process.env.SHELL_EXEC_ENABLED, false);
+  const shellExecAllowlist = parseEnvList(process.env.SHELL_EXEC_ALLOWLIST, { separators: [','] });
+  const shellExecAllowedCwd = parseEnvList(process.env.SHELL_EXEC_ALLOWED_CWD, { separators: [','] });
   const shellExecDefaultTimeoutMs = parsePositiveIntEnv(
     process.env.SHELL_EXEC_DEFAULT_TIMEOUT_MS,
     DEFAULT_SHELL_EXEC_TIMEOUT_MS,
@@ -395,10 +385,10 @@ async function main(): Promise<void> {
     process.env.SHELL_EXEC_MAX_OUTPUT_CHARS,
     DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
   );
-  const beadsToolsEnabled = parseBooleanEnv(process.env.BEADS_TOOLS_ENABLED, false);
+  const beadsToolsEnabled = parseBooleanEnvWithFallback(process.env.BEADS_TOOLS_ENABLED, false);
   const beadsAllowActions = parseBeadsActionsEnv(process.env.BEADS_ALLOW_ACTIONS)
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
-  const vaultToolsEnabled = parseBooleanEnv(
+  const vaultToolsEnabled = parseBooleanEnvWithFallback(
     process.env.VAULT_TOOLS_ENABLED,
     Boolean(config.obsidianVaultName),
   );

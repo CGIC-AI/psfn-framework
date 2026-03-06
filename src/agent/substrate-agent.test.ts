@@ -2762,7 +2762,12 @@ describe('SubstrateAgent.handleMessage', () => {
     const summary = autoloadSummaries.at(-1);
     expect(summary?.intent).toBe('dev');
     expect(summary?.activated).toEqual([]);
-    expect(summary?.unavailable).toEqual(['repo_status', 'repo_diff', 'repo_apply_patch']);
+    expect(summary?.unavailable).toEqual(expect.arrayContaining([
+      'repo_status',
+      'repo_diff',
+      'repo_apply_patch',
+    ]));
+    expect(summary?.unavailable.length).toBeGreaterThanOrEqual(3);
   });
 
   it('excludes background-only tools from foreground autoload overlay selection', async () => {

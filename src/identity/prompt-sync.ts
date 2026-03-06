@@ -1,7 +1,9 @@
 import { composeSystemPromptTemplate } from './loader.js';
+import { buildCharacterMacroMap } from './character-macro-map.js';
 import { isCanonicalCharacterFoundationLayer } from './canonical-foundation.js';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { CharacterCardV2 } from './types.js';
+import { renderPromptRuntimeTokens } from './prompt-runtime.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 export interface PromptSyncResult {
@@ -9,6 +11,31 @@ export interface PromptSyncResult {
   updated: boolean;
   error?: string;
 }
+
+const ALLOWED_RUNTIME_UNRESOLVED_TOKENS = new Set([
+  'user',
+  'user_name',
+  'user_id',
+  'channel',
+  'channel_id',
+  'channel_type',
+  'channel_visibility',
+  'trust_level',
+  'canonical_contact_id',
+  'model',
+  'model_id',
+  'now_iso',
+  'current_datetime',
+  'current_datetime_iso',
+  'now',
+  'current_date',
+  'date',
+  'current_time',
+  'time',
+  'current_timestamp',
+  'unix_timestamp',
+  'timestamp',
+]);
 
 function resolveCharacterFoundationLayer(
   promptStore: PromptLayerStore,
@@ -20,7 +47,7 @@ function resolveCharacterFoundationLayer(
 
 export function syncCharacterFoundationPromptFromCard(
   promptStore: PromptLayerStore | null | undefined,
-  _card: CharacterCardV2,
+  card: CharacterCardV2,
   updatedBy: string,
   reason = 'Sync Character Foundation prompt from imported character card',
 ): PromptSyncResult {
@@ -34,6 +61,18 @@ export function syncCharacterFoundationPromptFromCard(
   }
 
   const nextPrompt = composeSystemPromptTemplate();
+  const macroVariables = buildCharacterMacroMap(card);
+  const macroValidation = renderPromptRuntimeTokens(nextPrompt, { variables: macroVariables });
+  const unsupportedUnresolved = macroValidation.unresolvedTokens.filter(
+    token => !ALLOWED_RUNTIME_UNRESOLVED_TOKENS.has(token),
+  );
+  if (unsupportedUnresolved.length > 0) {
+    return {
+      ok: false,
+      updated: false,
+      error: `Unsupported unresolved prompt macros: ${unsupportedUnresolved.join(', ')}`,
+    };
+  }
   if (foundation.content === nextPrompt) {
     return { ok: true, updated: false };
   }

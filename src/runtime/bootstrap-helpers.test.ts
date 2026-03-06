@@ -968,6 +968,75 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(result.diagnostics.removedLegacyKeys).toEqual([]);
   });
 
+  it('returns parity-consistent canonical startup snapshots across entrypoint callers', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-parity-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    saveSettings(systemDataDir, {
+      sessionMessageLimit: 41,
+      memoryRetrievalLimit: 17,
+    });
+    saveModelsConfig(systemDataDir, {
+      modelCatalog: {
+        chatslot: {
+          model: 'openai/gpt-4.1-mini',
+          provider: 'openrouter',
+          defaults: {
+            maxTokens: 3072,
+            contextWindow: 131_072,
+          },
+        },
+      },
+    });
+    saveSchedulerConfig(systemDataDir, {
+      tickIntervalMs: 2_000,
+      heartbeatIntervalMs: 7_000,
+      salienceDecayIntervalMs: 222_000,
+    });
+
+    const env = {
+      ...process.env,
+      CONFIG_DIR: './config',
+      PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+      DATA_DIR: legacyDataDir,
+    };
+
+    const runtimeConfig = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    const agentConfig = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    const gatewayConfig = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    const chatCliConfig = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+
+    const runtimeSnapshot = hydrateCanonicalStartupConfig(runtimeConfig, { env });
+    const agentSnapshot = hydrateCanonicalStartupConfig(agentConfig, { env });
+    const gatewaySnapshot = hydrateCanonicalStartupConfig(gatewayConfig, { env });
+    const chatCliSnapshot = hydrateCanonicalStartupConfig(chatCliConfig, { env });
+
+    const snapshots = [agentSnapshot, gatewaySnapshot, chatCliSnapshot];
+    for (const snapshot of snapshots) {
+      expect(snapshot.systemDataDir).toBe(runtimeSnapshot.systemDataDir);
+      expect(snapshot.companionDataDir).toBe(runtimeSnapshot.companionDataDir);
+      expect(snapshot.settingsDomains).toEqual(runtimeSnapshot.settingsDomains);
+      expect(snapshot.runtimePathLayout).toEqual(runtimeSnapshot.runtimePathLayout);
+      expect(snapshot.trustPolicyConfig).toEqual(runtimeSnapshot.trustPolicyConfig);
+      expect(snapshot.schedulerConfig).toEqual(runtimeSnapshot.schedulerConfig);
+    }
+
+    expect(runtimeConfig.sessionMessageLimit).toBe(41);
+    expect(agentConfig.sessionMessageLimit).toBe(41);
+    expect(gatewayConfig.sessionMessageLimit).toBe(41);
+    expect(chatCliConfig.sessionMessageLimit).toBe(41);
+    expect(runtimeConfig.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
+    expect(agentConfig.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
+    expect(gatewayConfig.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
+    expect(chatCliConfig.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
+  });
+
   it('reports and applies legacy scheduler/capability migration diagnostics', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
     const systemDataDir = join(rootDir, 'system-data');

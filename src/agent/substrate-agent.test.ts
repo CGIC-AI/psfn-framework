@@ -450,21 +450,57 @@ describe('SubstrateAgent.registerTool', () => {
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
     } as any, 'core');
 
+    agent.registerTool({
+      name: 'schedule_task',
+      label: 'schedule_task',
+      description: 'background-only scheduler tool',
+      parameters: { type: 'object' as const, properties: {} },
+      execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+    } as any, 'extended');
+
     const catalog = agent.getToolCatalog();
     const repoStatus = [...catalog.extended].find(tool => tool.name === 'repo_status') as any;
     const spawnShard = [...catalog.extended].find(tool => tool.name === 'spawn_shard') as any;
     const memoryWrite = [...catalog.core].find(tool => tool.name === 'memory_write') as any;
+    const scheduleTask = [...catalog.extended].find(tool => tool.name === 'schedule_task') as any;
 
     expect(repoStatus?.wiringMeta?.concurrency).toMatchObject({
       class: 'read_only',
+      exclusivityKeyPolicy: 'none',
       maxParallel: 3,
+      interruptibility: 'cooperative',
+      eligibility: {
+        foreground: true,
+        background: true,
+      },
     });
     expect(spawnShard?.wiringMeta?.concurrency).toMatchObject({
       class: 'spawn_shard',
+      exclusivityKeyPolicy: 'none',
       maxParallel: 5,
+      interruptibility: 'non_interruptible',
+      eligibility: {
+        foreground: true,
+        background: true,
+      },
     });
-    expect(memoryWrite?.wiringMeta?.concurrency?.class).toBe('exclusive');
-    expect(memoryWrite?.wiringMeta?.concurrency?.exclusivityKey).toBe('core:memory_write');
+    expect(memoryWrite?.wiringMeta?.concurrency).toMatchObject({
+      class: 'exclusive',
+      exclusivityKeyPolicy: 'category_tool_name',
+      exclusivityKey: 'core:memory_write',
+      interruptibility: 'cooperative',
+      eligibility: {
+        foreground: true,
+        background: true,
+      },
+    });
+    expect(scheduleTask?.wiringMeta?.concurrency).toMatchObject({
+      class: 'exclusive',
+      eligibility: {
+        foreground: false,
+        background: true,
+      },
+    });
   });
 
   it('installs the bounded tool scheduler loop patch on the underlying Agent runtime', () => {

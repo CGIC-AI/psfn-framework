@@ -1128,6 +1128,75 @@ describe('MemoryExtractor provenance and trust caps', () => {
     expect(sourceRef).toContain('lines:41-42');
     expect(sourceRef).toContain(`turn:${turnId}`);
   });
+
+  it('propagates formationVAD into extracted memory writes when provider is configured', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User is excited about the launch</text>
+<type>emotional</type>
+<importance>0.8</importance>
+<emotional_valence>0.6</emotional_valence>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+      }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { id: 1, role: 'user', authorName: 'user', content: 'I am excited for launch day', timestamp: 1_000 },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const getFormationVAD = vi.fn(() => ({
+      valence: 0.55,
+      arousal: 0.8,
+      dominance: -0.25,
+    }));
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+      null,
+      null,
+      null,
+      { getFormationVAD },
+    );
+
+    const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-vad-1' } }));
+    (extractor as any).writer = { write };
+
+    await extractor.extract('api:emotion-formation');
+
+    expect(getFormationVAD).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({
+      formationVAD: {
+        valence: 0.55,
+        arousal: 0.8,
+        dominance: -0.25,
+      },
+    }));
+  });
 });
 
 describe('MemoryExtractor canonical profile synthesis', () => {

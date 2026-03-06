@@ -9,7 +9,7 @@ import type { SubstrateConfig, TurnID } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import type { MemoryStore } from './store.js';
-import type { ExtractedFact } from './types.js';
+import type { ExtractedFact, MemoryFormationVAD } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
 import {
@@ -52,6 +52,10 @@ import { parseFactsXml } from './extraction/parser.js';
 
 const log = createComponentLogger('Extraction');
 
+export interface MemoryExtractorFormationOptions {
+  getFormationVAD?: () => MemoryFormationVAD | undefined;
+}
+
 export class MemoryExtractor {
   private llmClient: LLMProvider;
   private sessionManager: SessionManager;
@@ -73,6 +77,7 @@ export class MemoryExtractor {
   private inFlightByChannel = new Map<string, Promise<void>>();
   private inFlightProfileRefreshes = new Set<Promise<void>>();
   private inFlightProfileByContact = new Map<string, Promise<void>>();
+  private getFormationVAD: (() => MemoryFormationVAD | undefined) | null = null;
 
   constructor(
     llmClient: LLMProvider,
@@ -84,6 +89,7 @@ export class MemoryExtractor {
     promptRegistry?: PromptRegistryStore | null,
     sessionStore?: SessionStore | null,
     contactStore?: ContactStore | null,
+    formationOptions?: MemoryExtractorFormationOptions,
   ) {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
@@ -113,6 +119,7 @@ export class MemoryExtractor {
     this.promptRegistry = promptRegistry ?? null;
     this.sessionStore = sessionStore ?? null;
     this.contactStore = contactStore ?? null;
+    this.getFormationVAD = formationOptions?.getFormationVAD ?? null;
   }
 
   async queueRetroactiveExtraction(
@@ -328,11 +335,13 @@ export class MemoryExtractor {
     sourceRef: string,
     canonicalContactId?: string,
   ): Promise<WriteResult> {
+    const formationVAD = this.getFormationVAD?.();
     return this.writer.write({
       text: fact.text,
       type: fact.type,
       importance: fact.importance,
       emotionalValence: fact.emotionalValence,
+      formationVAD,
       confidence: fact.confidence,
       tags: fact.tags,
       sourceRef,

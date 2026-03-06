@@ -249,6 +249,28 @@ describe('MemoryStore', () => {
       });
     });
 
+    it('stores and retrieves formationVAD', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m1', 'Emotion-context memory', {
+          formationVAD: {
+            valence: -0.4,
+            arousal: 0.9,
+            dominance: -0.1,
+          },
+        }),
+        emb,
+      );
+
+      const mem = store.getById('m1');
+      expect(mem).toBeDefined();
+      expect(mem!.formationVAD).toEqual({
+        valence: -0.4,
+        arousal: 0.9,
+        dominance: -0.1,
+      });
+    });
+
     it('defaults sensitivity to personal for records without it', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(makeMemory('m1', 'Default sensitivity'), emb);
@@ -525,16 +547,27 @@ describe('MemoryStore', () => {
         .all() as Array<{ name: string }>;
       expect(columns.some(column => column.name === 'contact_id')).toBe(true);
       expect(columns.some(column => column.name === 'provenance_refs')).toBe(true);
+      expect(columns.some(column => column.name === 'formation_vad')).toBe(true);
 
       const emb = makeEmbedding(1);
       migratedStore.insertMemory(
         makeMemory('legacy-migrated', 'Legacy schema now supports contact', {
           contactId: 'contact-legacy-1',
+          formationVAD: {
+            valence: 0.2,
+            arousal: -0.1,
+            dominance: 0.4,
+          },
         }),
         emb,
       );
       const inserted = migratedStore.getById('legacy-migrated');
       expect(inserted?.contactId).toBe('contact-legacy-1');
+      expect(inserted?.formationVAD).toEqual({
+        valence: 0.2,
+        arousal: -0.1,
+        dominance: 0.4,
+      });
 
       legacyDb.close();
     });

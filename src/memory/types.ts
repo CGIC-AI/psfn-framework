@@ -28,6 +28,11 @@ export type MemoryType =
   | 'reflection'
   | 'relational';
 export type MemoryRetentionClass = 'standard' | 'durable';
+export interface MemoryFormationVAD {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
 
 export const DURABLE_RETENTION_TAG = 'durable';
 export const CORE_DURABLE_MEMORY_TAGS = [
@@ -88,6 +93,7 @@ export interface PurrMemory {
   importance: number;
   confidence: number;
   emotionalValence: number;
+  formationVAD?: MemoryFormationVAD;
   salience: number;
   embedding?: Float32Array;
   sourceRef: string;
@@ -213,6 +219,29 @@ export function normalizeMemoryTags(tags: readonly string[]): string[] {
 function clampUnit(value: number, fallback = 0.5): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(0, Math.min(1, value));
+}
+
+function clampSigned(value: number, fallback = 0): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(-1, Math.min(1, value));
+}
+
+export function normalizeFormationVAD(
+  value: Partial<MemoryFormationVAD> | undefined,
+): MemoryFormationVAD | undefined {
+  if (!value) return undefined;
+  const hasAnyDimension = (
+    value.valence !== undefined
+    || value.arousal !== undefined
+    || value.dominance !== undefined
+  );
+  if (!hasAnyDimension) return undefined;
+
+  return {
+    valence: clampSigned(value.valence ?? 0),
+    arousal: clampSigned(value.arousal ?? 0),
+    dominance: clampSigned(value.dominance ?? 0),
+  };
 }
 
 export function getSensitivityWriteThreshold(sensitivity: SensitivityLevel): SensitivityWriteThreshold {

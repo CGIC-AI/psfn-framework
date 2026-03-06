@@ -16,8 +16,12 @@ export function shardCard(s: ActiveShard): string {
   const required = s.requiredCapabilities.length > 0
     ? s.requiredCapabilities.join(', ')
     : 'none';
-  const failureReason = s.failureReason
-    ? `<p style="font-size:0.8rem;color:#b45309;margin-top:0.3rem">Failure: ${escapeHtml(s.failureReason)}</p>`
+  const failureReasonText = s.failureReason?.trim()
+    || (s.health !== 'healthy'
+      ? `No explicit failure detail recorded (${s.stateReason}).`
+      : '');
+  const failureReason = failureReasonText
+    ? `<p style="font-size:0.8rem;color:#b45309;margin-top:0.3rem">Failure: ${escapeHtml(failureReasonText)}</p>`
     : '';
   return `<div class="card shard-card" data-shard-id="${escapeHtml(s.id)}">
     <strong>${escapeHtml(s.name)}</strong>
@@ -25,6 +29,7 @@ export function shardCard(s: ActiveShard): string {
     <p style="font-size:0.8rem;color:var(--text-muted);margin-top:0.3rem">State: ${escapeHtml(s.state)} (${escapeHtml(s.health)})</p>
     <p style="font-size:0.8rem;color:var(--text-muted);margin-top:0.3rem">Reason: ${escapeHtml(s.stateReason)}</p>
     <p style="font-size:0.8rem;color:var(--text-muted);margin-top:0.3rem">Running for ${elapsed}s - heartbeat ${heartbeatAgo}s ago</p>
+    <p style="font-size:0.8rem;color:var(--text-muted);margin-top:0.3rem">Heartbeat thresholds: stale ${escapeHtml(String(s.heartbeatStaleAfterMs))}ms / evict ${escapeHtml(String(s.heartbeatDisconnectAfterMs))}ms</p>
     <p style="font-size:0.8rem;color:var(--text-muted);margin-top:0.3rem">Capabilities: ${escapeHtml(capabilities)}</p>
     <p style="font-size:0.8rem;color:var(--text-muted);margin-top:0.3rem">Required: ${escapeHtml(required)}</p>
     ${failureReason}

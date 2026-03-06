@@ -405,10 +405,11 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       maxConcurrent: 1,
       heartbeatStaleAfterMs: 20,
+      heartbeatDisconnectAfterMs: 30,
     });
 
     const staleShard = manager.spawn({ name: 'stale', task: 'long-running task' });
-    await new Promise(resolve => setTimeout(resolve, 40));
+    await new Promise(resolve => setTimeout(resolve, 60));
 
     // Health sweep happens on accessors; stale shard should be evicted from active routing.
     expect(manager.getActiveCount()).toBe(0);
@@ -421,6 +422,46 @@ describe('ShardManager', () => {
       lifecycleState: 'offline',
     });
     await staleShard;
+  });
+
+  it('recovers a heartbeat-stale shard when activity resumes before disconnect timeout', async () => {
+    mockShardDelayMs = 160;
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      heartbeatStaleAfterMs: 20,
+      heartbeatDisconnectAfterMs: 200,
+    });
+
+    const pending = manager.spawn({ name: 'recoverable', task: 'long-running task' });
+    await new Promise(resolve => setTimeout(resolve, 45));
+
+    const degraded = manager.getActiveShards();
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0].state).toBe('degraded');
+    expect(degraded[0].health).toBe('stale');
+    expect(degraded[0].stateReason).toBe('heartbeat_stale');
+    expect(degraded[0].failureReason).toContain('No heartbeat observed');
+
+    await eventBus.emit('agent.tool.start', {
+      channelId: degraded[0].channelId,
+      toolCallId: 'recover-call',
+      toolName: 'repo_status',
+    });
+
+    const recovered = manager.getActiveShards();
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0].state).toBe('ready');
+    expect(recovered[0].health).toBe('healthy');
+    expect(recovered[0].stateReason).toBe('heartbeat_recovered');
+    expect(recovered[0].failureReason).toBeUndefined();
+
+    await pending;
   });
 
   it('wires memory provider for read access', async () => {
@@ -986,7 +1027,37 @@ describe('createSpawnShardTool', () => {
     expect(text).toContain('Shard "test-tool" completed');
     expect(text).toContain('1 turn(s)');
     expect(text).toContain('0 tokens');  // pi-agent-core doesn't surface token counts
+    expect(text).toContain('[State reason: completed]');
     expect(text).toContain('tool output');
+  });
+
+  it('surfaces explicit lifecycle failure diagnostics from shard results', async () => {
+    const spawn = vi.fn(async () => ({
+      shardId: 'shard-failure',
+      name: 'degraded-shard',
+      content: 'partial output',
+      model: 'mock-model',
+      inputTokens: 1,
+      outputTokens: 2,
+      durationMs: 33,
+      turns: 1,
+      lifecycleState: 'offline' as const,
+      health: 'failed' as const,
+      stateReason: 'heartbeat_timeout',
+      failureReason: 'Heartbeat stale for 4200ms exceeded recovery window (4000ms).',
+      capabilities: ['general'],
+      requiredCapabilities: [],
+    }));
+    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+
+    const result = await tool.execute('call-failure', {
+      name: 'degraded-shard',
+      task: 'diagnostic run',
+    });
+
+    const text = result.content.map((c: any) => c.text).join('');
+    expect(text).toContain('[State reason: heartbeat_timeout]');
+    expect(text).toContain('[Failure reason: Heartbeat stale for 4200ms exceeded recovery window (4000ms).]');
   });
 
   it('passes source request context into shard spawns', async () => {
@@ -1001,6 +1072,7 @@ describe('createSpawnShardTool', () => {
       turns: 1,
       lifecycleState: 'offline' as const,
       health: 'healthy' as const,
+      stateReason: 'completed',
       capabilities: ['general'],
       requiredCapabilities: [],
     }));

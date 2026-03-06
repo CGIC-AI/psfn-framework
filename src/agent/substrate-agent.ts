@@ -99,8 +99,12 @@ import {
   type DeferredToolHandoffIntent,
 } from './deferred-tool-handoff.js';
 import {
+  classifyExtendedToolForTurn as classifyDefaultExtendedToolForTurn,
   createDefaultExtendedToolAutoloadPolicy,
+  DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX,
+  selectBoundedOverlayCandidates,
   type ExtendedToolAutoloadPolicy,
+  type ExtendedToolTurnClass,
 } from './extended-tool-autoload-policy.js';
 import type {
   AdaptiveLoadedExtendedToolState,
@@ -275,6 +279,7 @@ export type PromotedToolMutationErrorCode =
   | 'tool_not_extended'
   | 'duplicate'
   | 'max_slots'
+  | 'background_only'
   | 'capability_denied'
   | 'not_found'
   | 'invalid_slot'
@@ -394,6 +399,8 @@ export class SubstrateAgent {
   private postTurnActionInferers: PostTurnActionInferer[] = [];
   private intentionPostTurnHooks: IntentionPostTurnHook[] = [];
   private activeTurnCorrelation: CorrelationMetadata | null = null;
+  private activeTurnTaskKind: string | null = null;
+  private activeTurnIntent: string | null = null;
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
   private pendingBackgroundContinuationDeliveries = new Map<string, PendingBackgroundContinuationDelivery[]>();
   private emotionState: EmotionState | null = null;
@@ -735,6 +742,14 @@ export class SubstrateAgent {
     return this.extendedTools.find(tool => tool.name === name) ?? null;
   }
 
+  private classifyExtendedToolForTurn(toolName: string): ExtendedToolTurnClass {
+    const classifier = this.extendedToolAutoloadPolicy?.classifyToolForTurn;
+    if (!classifier) {
+      return classifyDefaultExtendedToolForTurn(toolName);
+    }
+    return classifier(toolName);
+  }
+
   private resolvePromotedToolActivation(): PromotedToolResolution {
     const promoted = this.getPromotedExtendedToolNamesInternal();
     const access = this.resolveCapabilityAccess();
@@ -747,6 +762,14 @@ export class SubstrateAgent {
           toolName,
           source: 'promoted',
           reason: 'not_registered',
+        });
+        continue;
+      }
+      if (this.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
+        skipped.push({
+          toolName: tool.name,
+          source: 'promoted',
+          reason: 'background_only',
         });
         continue;
       }
@@ -828,6 +851,9 @@ export class SubstrateAgent {
 
     const promotedResolution = this.resolvePromotedToolActivation();
     for (const tool of this.extendedTools) {
+      if (this.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
+        continue;
+      }
       const loaded = this.loadedExtended.get(tool.name);
       const source: AdaptiveToolActivationSource | null = promotedResolution.activeNames.has(tool.name)
         ? 'promoted'
@@ -983,6 +1009,15 @@ export class SubstrateAgent {
         promotedTools: current,
         message: `Tool "${normalizedName}" is not available in the extended catalog.`,
         errorCode: 'tool_not_extended',
+      };
+    }
+    if (this.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
+      return {
+        ok: false,
+        changed: false,
+        promotedTools: current,
+        message: `Tool "${normalizedName}" is background-only and cannot be promoted.`,
+        errorCode: 'background_only',
       };
     }
 
@@ -1326,11 +1361,55 @@ export class SubstrateAgent {
           maxRetries?: number;
         },
       ): Promise<AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }>> => {
-        const activation = self.activateExtendedTools(params.tools, {
+        const requestedTools = normalizeToolNameList(params.tools);
+        const sameTurnMax = Number.isFinite(self.extendedToolAutoloadPolicy?.maxPreloadCount)
+          ? Math.max(0, Math.floor(self.extendedToolAutoloadPolicy!.maxPreloadCount))
+          : DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX;
+        const sameTurnSelection = selectBoundedOverlayCandidates(
+          requestedTools,
+          self.extendedTools.map(tool => tool.name),
+          sameTurnMax,
+        );
+        const overlayEligible = sameTurnSelection.selected;
+        const backgroundOnlySkipped = sameTurnSelection.skipped
+          .filter(entry => entry.reason === 'not_overlay_eligible')
+          .map(entry => entry.toolName);
+        const budgetSkipped = sameTurnSelection.skipped
+          .filter(entry => entry.reason === 'budget_exhausted')
+          .map(entry => entry.toolName);
+        const unavailableSkipped = sameTurnSelection.skipped
+          .filter(entry => entry.reason === 'not_registered')
+          .map(entry => entry.toolName);
+        const invalidSkipped = sameTurnSelection.skipped
+          .filter(entry => entry.reason === 'invalid_metadata')
+          .map(entry => entry.toolName);
+        const duplicateSkipped = sameTurnSelection.skipped
+          .filter(entry => entry.reason === 'duplicate_candidate')
+          .map(entry => entry.toolName);
+
+        for (const entry of sameTurnSelection.skipped) {
+          const reason = entry.reason === 'not_overlay_eligible'
+            ? 'background_only'
+            : entry.reason;
+          self.emitAdaptiveToolDecision({
+            ...self.withAdaptiveCorrelation(self.activeTurnCorrelation ?? undefined, 'agent.tools.adaptive.decision'),
+            toolName: entry.toolName,
+            source: 'extended_loaded',
+            decision: 'skipped',
+            reason,
+            taskKind: self.activeTurnTaskKind,
+            intent: self.activeTurnIntent,
+          });
+        }
+
+        const activation = self.activateExtendedTools(overlayEligible, {
           source: 'extended_loaded',
           correlation: self.activeTurnCorrelation ?? undefined,
+          taskKind: self.activeTurnTaskKind,
+          intent: self.activeTurnIntent,
         });
-        if (activation.activatedTools.length > 0 || activation.alreadyActiveTools.length > 0) {
+        const activatedCount = activation.activatedTools.length + activation.alreadyActiveTools.length;
+        if (activatedCount > 0 || sameTurnSelection.skipped.length > 0 || activation.missingTools.length > 0) {
           const details: { deferredToolHandoff?: DeferredToolHandoffIntent } = {};
           const contentLines: string[] = [];
           if (activation.activatedTools.length > 0) {
@@ -1347,10 +1426,31 @@ export class SubstrateAgent {
           if (activation.missingTools.length > 0) {
             contentLines.push(`Missing tools: ${activation.missingTools.join(', ')}`);
           }
+          if (unavailableSkipped.length > 0) {
+            contentLines.push(`Unavailable tools: ${unavailableSkipped.join(', ')}`);
+          }
+          if (backgroundOnlySkipped.length > 0) {
+            contentLines.push(
+              `Background-only tools not activated in-turn: ${backgroundOnlySkipped.join(', ')}`,
+            );
+          }
+          if (budgetSkipped.length > 0) {
+            contentLines.push(
+              `Skipped by same-turn overlay budget (${sameTurnSelection.maxCount}): ${budgetSkipped.join(', ')}`,
+            );
+          }
+          if (invalidSkipped.length > 0) {
+            contentLines.push(`Ignored invalid tool names: ${invalidSkipped.join(', ')}`);
+          }
+          if (duplicateSkipped.length > 0) {
+            contentLines.push(`Ignored duplicate tool names: ${duplicateSkipped.join(', ')}`);
+          }
 
           const handoffTools = [...new Set([
             ...activation.activatedTools,
             ...activation.alreadyActiveTools,
+            ...backgroundOnlySkipped,
+            ...budgetSkipped,
           ])];
           const deferredSessionId = self.activeTurnCorrelation?.channelId
             ? self.resolveSessionChannelId(self.activeTurnCorrelation.channelId)
@@ -1388,6 +1488,24 @@ export class SubstrateAgent {
             }
           }
 
+          self.emitTelemetry('agent.tools.same_turn_activation', {
+            ...self.withAdaptiveCorrelation(self.activeTurnCorrelation ?? undefined, 'agent.tools.same_turn_activation'),
+            timestamp: Date.now(),
+            requestedTools,
+            overlayEligible,
+            activatedTools: activation.activatedTools,
+            alreadyActiveTools: activation.alreadyActiveTools,
+            missingTools: activation.missingTools,
+            skippedBackgroundOnly: backgroundOnlySkipped,
+            skippedBudget: budgetSkipped,
+            skippedUnavailable: unavailableSkipped,
+            skippedInvalid: invalidSkipped,
+            skippedDuplicate: duplicateSkipped,
+            sameTurnOverlaySelection: sameTurnSelection,
+            taskKind: self.activeTurnTaskKind,
+            intent: self.activeTurnIntent,
+          });
+
           return {
             content: [{ type: 'text', text: contentLines.join('\n') }],
             details,
@@ -1418,7 +1536,16 @@ export class SubstrateAgent {
       ? Math.max(0, Math.floor(policy.maxPreloadCount))
       : 0;
     const intent = policy.classifyIntent(message, taskKind);
-    const candidateNames = policy.getCandidatesForIntent(intent).slice(0, boundedMax);
+    const overlaySelection = policy.selectOverlayCandidates(
+      intent,
+      this.extendedTools.map(tool => tool.name),
+      boundedMax,
+    );
+    const candidateNames = overlaySelection.candidates;
+    const overlayCandidateNames = overlaySelection.selected;
+    const skippedBackgroundOnly = overlaySelection.skipped
+      .filter(entry => entry.reason === 'not_overlay_eligible')
+      .map(entry => entry.toolName);
     if (candidateNames.length === 0) {
       this.emitTelemetry('agent.tools.autoload', {
         channelId: message.channelId,
@@ -1430,6 +1557,8 @@ export class SubstrateAgent {
         alreadyActive: [],
         skippedDenied: [],
         unavailable: [],
+        skippedBackgroundOnly: [],
+        overlaySelection,
         ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload'),
       });
       return {
@@ -1446,7 +1575,43 @@ export class SubstrateAgent {
     const skippedDenied: Array<{ toolName: string; missingTokens: CapabilityToken[] }> = [];
     const skipped: AdaptiveToolSnapshotSkip[] = [];
 
-    for (const toolName of candidateNames) {
+    const skippedBackgroundOnly: string[] = [];
+    for (const selectionSkip of overlaySelection.skipped) {
+      const toolName = selectionSkip.toolName;
+      const reason = selectionSkip.reason === 'not_overlay_eligible'
+        ? 'background_only'
+        : selectionSkip.reason;
+      if (selectionSkip.reason === 'not_registered') {
+        unavailable.push(toolName);
+      }
+      if (selectionSkip.reason === 'not_overlay_eligible') {
+        skippedBackgroundOnly.push(toolName);
+      }
+      skipped.push({
+        toolName,
+        source: 'autoload',
+        reason,
+      });
+      this.emitTelemetry('agent.tools.autoload.skipped', {
+        channelId: message.channelId,
+        intent,
+        taskKind: taskKind ?? null,
+        toolName,
+        reason,
+        ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
+      });
+      this.emitAdaptiveToolDecision({
+        ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
+        toolName,
+        source: 'autoload',
+        decision: 'skipped',
+        reason,
+        taskKind: taskKind ?? null,
+        intent,
+      });
+    }
+
+    for (const toolName of overlayCandidateNames) {
       const tool = catalog.get(toolName);
       if (!tool) {
         unavailable.push(toolName);
@@ -1531,10 +1696,13 @@ export class SubstrateAgent {
       taskKind: taskKind ?? null,
       boundedMax,
       candidates: candidateNames,
+      overlayCandidates: overlayCandidateNames,
       activated,
       alreadyActive,
       skippedDenied,
       unavailable,
+      skippedBackgroundOnly,
+      overlaySelection,
       ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload'),
     });
 
@@ -2204,6 +2372,8 @@ export class SubstrateAgent {
           purpose: 'agent.turn.prompt',
         });
         this.activeTurnCorrelation = turnCorrelationBase;
+        this.activeTurnTaskKind = taskKind ?? null;
+        this.activeTurnIntent = autoloadOutcome.intent;
         const turnUserContent = await this.buildTurnUserContent(message);
         try {
           // Run the agent — pi-agent-core handles tool loop internally
@@ -2219,6 +2389,8 @@ export class SubstrateAgent {
           unsubscribeFirstToken();
           this.bridge.clearChannel(bridgeToken);
           this.activeTurnCorrelation = null;
+          this.activeTurnTaskKind = null;
+          this.activeTurnIntent = null;
         }
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
         if (streamFirstTokenAt == null) {
@@ -4082,8 +4254,11 @@ export class SubstrateAgent {
       lines.push('Available extended tools:');
       for (const t of this.extendedTools) {
         const loaded = this.loadedExtended.get(t.name);
+        const turnClass = this.classifyExtendedToolForTurn(t.name);
         let suffix = ' (use load_tools to activate)';
-        if (promotedNames.has(t.name)) {
+        if (turnClass !== 'overlay') {
+          suffix = ' (background-only; not callable in-turn)';
+        } else if (promotedNames.has(t.name)) {
           suffix = ' (promoted, always active)';
         } else if (loaded?.source === 'autoload') {
           suffix = ' (autoload active)';

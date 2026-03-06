@@ -1,6 +1,25 @@
 import type { SubstrateMessage } from '../types.js';
 
 export type TurnIntent = 'dev' | 'memory' | 'ops' | 'social';
+export type ExtendedToolTurnClass = 'overlay' | 'background';
+export type OverlaySelectionSkipReason =
+  | 'invalid_metadata'
+  | 'duplicate_candidate'
+  | 'not_overlay_eligible'
+  | 'not_registered'
+  | 'budget_exhausted';
+
+export interface OverlaySelectionSkip {
+  toolName: string;
+  reason: OverlaySelectionSkipReason;
+}
+
+export interface OverlaySelectionResult {
+  candidates: string[];
+  selected: string[];
+  skipped: OverlaySelectionSkip[];
+  maxCount: number;
+}
 
 export interface ExtendedToolAutoloadPolicy {
   maxPreloadCount: number;
@@ -9,6 +28,12 @@ export interface ExtendedToolAutoloadPolicy {
     taskKind?: string,
   ) => TurnIntent;
   getCandidatesForIntent: (intent: TurnIntent) => readonly string[];
+  classifyToolForTurn: (toolName: string) => ExtendedToolTurnClass;
+  selectOverlayCandidates: (
+    intent: TurnIntent,
+    registeredToolNames: readonly string[],
+    maxCount?: number,
+  ) => OverlaySelectionResult;
 }
 
 const DEV_PATTERN = /\b(git|repo|branch|commit|diff|patch|pr|pull request|code|test|build|lint|debug|bug|issue|ticket|beads|refactor|typescript|javascript|python|npm|pnpm|yarn)\b/i;
@@ -17,6 +42,10 @@ const OPS_PATTERN = /\b(schedule|heartbeat|policy|runtime|settings|restart|rebui
 const OPS_TASK_KINDS = new Set(['heartbeat', 'reflection', 'planning', 'maintenance']);
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX = 3;
+export const DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS: ReadonlySet<string> = new Set([
+  'schedule_task',
+  'heartbeat_run_template',
+]);
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnIntent, readonly string[]>> = {
   dev: [
@@ -54,6 +83,84 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
   social: [],
 };
 
+export function classifyExtendedToolForTurn(toolName: string): ExtendedToolTurnClass {
+  return DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS.has(toolName.trim())
+    ? 'background'
+    : 'overlay';
+}
+
+function toBoundedMax(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+export function selectBoundedOverlayCandidates(
+  candidateNames: readonly string[],
+  registeredToolNames: readonly string[],
+  maxCount: number,
+): OverlaySelectionResult {
+  const boundedMax = toBoundedMax(maxCount, DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
+  const registered = new Set(registeredToolNames);
+  const candidates: string[] = [];
+  const selected: string[] = [];
+  const skipped: OverlaySelectionSkip[] = [];
+  const seen = new Set<string>();
+
+  for (const rawName of candidateNames) {
+    const normalized = rawName.trim();
+    if (!normalized) {
+      skipped.push({
+        toolName: rawName,
+        reason: 'invalid_metadata',
+      });
+      continue;
+    }
+
+    if (seen.has(normalized)) {
+      skipped.push({
+        toolName: normalized,
+        reason: 'duplicate_candidate',
+      });
+      continue;
+    }
+    seen.add(normalized);
+    candidates.push(normalized);
+
+    if (classifyExtendedToolForTurn(normalized) !== 'overlay') {
+      skipped.push({
+        toolName: normalized,
+        reason: 'not_overlay_eligible',
+      });
+      continue;
+    }
+
+    if (!registered.has(normalized)) {
+      skipped.push({
+        toolName: normalized,
+        reason: 'not_registered',
+      });
+      continue;
+    }
+
+    if (selected.length >= boundedMax) {
+      skipped.push({
+        toolName: normalized,
+        reason: 'budget_exhausted',
+      });
+      continue;
+    }
+
+    selected.push(normalized);
+  }
+
+  return {
+    candidates,
+    selected,
+    skipped,
+    maxCount: boundedMax,
+  };
+}
+
 export function classifyTurnIntent(
   message: Pick<SubstrateMessage, 'channelId' | 'channelType' | 'content'>,
   taskKind?: string,
@@ -87,13 +194,17 @@ export function classifyTurnIntent(
 export function createDefaultExtendedToolAutoloadPolicy(
   maxPreloadCount: number = DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX,
 ): ExtendedToolAutoloadPolicy {
-  const boundedMax = Number.isFinite(maxPreloadCount)
-    ? Math.max(0, Math.floor(maxPreloadCount))
-    : DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX;
+  const boundedMax = toBoundedMax(maxPreloadCount, DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
 
   return {
     maxPreloadCount: boundedMax,
     classifyIntent: classifyTurnIntent,
     getCandidatesForIntent: (intent) => DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES[intent],
+    classifyToolForTurn: classifyExtendedToolForTurn,
+    selectOverlayCandidates: (intent, registeredToolNames, maxCount = boundedMax) => selectBoundedOverlayCandidates(
+      DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES[intent],
+      registeredToolNames,
+      maxCount,
+    ),
   };
 }

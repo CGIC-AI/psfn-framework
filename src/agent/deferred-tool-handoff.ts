@@ -9,6 +9,7 @@ import type {
 
 export const DEFERRED_TOOL_HANDOFF_ACTION_KIND = 'tool_handoff.continue';
 export const DEFAULT_DEFERRED_TOOL_HANDOFF_MAX_RETRIES = 2;
+export const DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX = 'deferred-tool-handoff:';
 const MAX_DEFERRED_TOOL_HANDOFF_MAX_RETRIES = 4;
 
 const VALID_CHANNEL_TYPES = new Set<ChannelType>(['discord', 'terminal', 'api', 'telegram']);
@@ -25,12 +26,14 @@ export interface DeferredToolHandoffIntent {
   toolNames: string[];
   intendedAction: string;
   maxRetries?: number;
+  sessionId?: string;
 }
 
 export interface DeferredToolHandoffTurnMetadata {
   turnId: string;
   requestId: string;
   channelId: string;
+  sessionId?: string;
   channelType: ChannelType;
   authorId: string;
   authorName: string;
@@ -45,6 +48,19 @@ export interface DeferredToolHandoffPayload {
   turn: DeferredToolHandoffTurnMetadata;
 }
 
+export function parseDeferredToolHandoffActionId(messageId: string): string | null {
+  const trimmed = messageId.trim();
+  if (!trimmed.startsWith(DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX)) {
+    return null;
+  }
+  const actionId = trimmed.slice(DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX.length).trim();
+  return actionId.length > 0 ? actionId : null;
+}
+
+export function isDeferredToolHandoffMessageId(messageId: string): boolean {
+  return parseDeferredToolHandoffActionId(messageId) !== null;
+}
+
 function normalizeMaxRetries(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -53,6 +69,14 @@ function normalizeMaxRetries(raw: unknown): number | undefined {
     return undefined;
   }
   return Math.min(MAX_DEFERRED_TOOL_HANDOFF_MAX_RETRIES, Math.floor(raw));
+}
+
+function normalizeSessionId(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 export function normalizeToolNameList(raw: unknown): string[] {
@@ -84,10 +108,12 @@ export function normalizeDeferredToolHandoffIntent(raw: unknown): DeferredToolHa
   }
 
   const maxRetries = normalizeMaxRetries(candidate.maxRetries);
+  const sessionId = normalizeSessionId(candidate.sessionId);
   return {
     toolNames,
     intendedAction,
     ...(maxRetries !== undefined ? { maxRetries } : {}),
+    ...(sessionId ? { sessionId } : {}),
   };
 }
 
@@ -103,6 +129,7 @@ export function buildDeferredToolHandoffCandidate(
       turnId: message.id,
       requestId: message.id,
       channelId: message.channelId,
+      ...(intent.sessionId ? { sessionId: intent.sessionId } : {}),
       channelType: message.channelType,
       authorId: message.authorId,
       authorName: message.authorName,
@@ -166,6 +193,7 @@ export function normalizeDeferredToolHandoffPayload(raw: unknown): DeferredToolH
   const isDirectMessage = typeof turnCandidate.isDirectMessage === 'boolean'
     ? turnCandidate.isDirectMessage
     : undefined;
+  const sessionId = normalizeSessionId(turnCandidate.sessionId);
   const routing = (
     turnCandidate.routing
     && typeof turnCandidate.routing === 'object'
@@ -181,6 +209,7 @@ export function normalizeDeferredToolHandoffPayload(raw: unknown): DeferredToolH
       turnId,
       requestId,
       channelId,
+      ...(sessionId ? { sessionId } : {}),
       channelType: channelTypeRaw as ChannelType,
       authorId,
       authorName,
@@ -196,8 +225,8 @@ export function buildDeferredToolHandoffMessage(
   payload: DeferredToolHandoffPayload,
 ): SubstrateMessage {
   return {
-    id: `deferred-tool-handoff:${actionId}`,
-    channelId: payload.turn.channelId,
+    id: `${DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX}${actionId}`,
+    channelId: payload.turn.sessionId ?? payload.turn.channelId,
     channelType: payload.turn.channelType,
     authorId: payload.turn.authorId,
     authorName: payload.turn.authorName,

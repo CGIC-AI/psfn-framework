@@ -434,4 +434,70 @@ describe('createEventBridge', () => {
     await new Promise(r => setTimeout(r, 10));
     expect(channelIds).toEqual(['my-channel', 'my-channel', 'my-channel']);
   });
+
+  it('keeps the latest context active when clearing an older channel token', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: Array<{ channelId: string; text: string }> = [];
+    eventBus.on('agent.stream.delta', ({ channelId, text }) => {
+      deltas.push({ channelId, text });
+    });
+
+    const olderToken = bridge.setChannel('channel-a');
+    const newerToken = bridge.setChannel('channel-b');
+
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'first' },
+    });
+
+    bridge.clearChannel(olderToken);
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'second' },
+    });
+
+    bridge.clearChannel(newerToken);
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: 'ignored' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas).toEqual([
+      { channelId: 'channel-b', text: 'first' },
+      { channelId: 'channel-b', text: 'second' },
+    ]);
+  });
+
+  it('preserves background origin correlation on tool events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const events: any[] = [];
+    eventBus.on('agent.tool.start', (data) => { events.push(data); });
+
+    bridge.setChannel('background-channel', {
+      callType: 'background',
+      originType: 'background',
+      originStage: 'agent.background.turn',
+      purpose: 'agent.background.turn',
+    });
+    emitAgentEvent({
+      type: 'tool_execution_start',
+      toolCallId: 'call-bg-1',
+      toolName: 'think',
+      args: {},
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      channelId: 'background-channel',
+      callType: 'tool',
+      originType: 'background',
+      originStage: 'agent.background.turn',
+      purpose: 'agent.background.turn',
+    });
+  });
 });

@@ -117,6 +117,21 @@ function makeMessage(overrides?: Partial<SubstrateMessage>): SubstrateMessage {
 }
 
 function makeMockSessionManager(): SessionManager {
+  let activeContextSessionId: string | null = null;
+  const resolveSessionChannelId = vi.fn((channelId: string) => {
+    if (!activeContextSessionId) {
+      return channelId;
+    }
+    if (!(channelId.startsWith('api:') || channelId.startsWith('terminal:'))) {
+      return channelId;
+    }
+    return activeContextSessionId;
+  });
+  const setActiveContextSession = vi.fn((sessionId: string | null) => {
+    const normalized = sessionId?.trim();
+    activeContextSessionId = normalized ? normalized : null;
+  });
+  const getActiveContextSession = vi.fn(() => activeContextSessionId);
   return {
     recordUserMessage: vi.fn().mockReturnValue(101),
     recordToolObservation: vi.fn().mockReturnValue(102),
@@ -129,6 +144,9 @@ function makeMockSessionManager(): SessionManager {
         { role: 'user', content: 'Hello' },
       ],
     } satisfies LLMContext),
+    resolveSessionChannelId,
+    setActiveContextSession,
+    getActiveContextSession,
     continuityStore: null,
   } as unknown as SessionManager;
 }
@@ -566,6 +584,138 @@ describe('SubstrateAgent.handleMessage', () => {
       'heartbeat.run_template:shared',
       'heartbeat.run_template:daily',
     ]);
+  });
+
+  it('emits explicit background continuation completion and delivers queued results after a foreground turn ends', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    const order: string[] = [];
+    const completed: any[] = [];
+    const deliveries: any[] = [];
+    eventBus.on('agent.turn.end', ({ requestId }) => { order.push(`end:${requestId}`); });
+    eventBus.on('agent.turn.usage', ({ requestId }) => { order.push(`usage:${requestId}`); });
+    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
+      order.push(`completed:${payload.requestId}`);
+      completed.push(payload);
+    });
+    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
+      order.push(`delivery:${payload.requestId}`);
+      deliveries.push(payload);
+    });
+
+    mockAssistantResponse('Deferred continuation output');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-42',
+      channelId: 'terminal:session-a',
+      channelType: 'terminal',
+      content: 'continue with deferred tools',
+    }));
+
+    mockAssistantResponse('Foreground response');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-1',
+      channelId: 'terminal:session-a',
+      channelType: 'terminal',
+      content: 'normal foreground request',
+    }));
+
+    expect(order).toEqual([
+      'end:deferred-tool-handoff:action-42',
+      'completed:deferred-tool-handoff:action-42',
+      'usage:deferred-tool-handoff:action-42',
+      'end:foreground-turn-1',
+      'delivery:foreground-turn-1',
+      'usage:foreground-turn-1',
+    ]);
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({
+      continuationId: 'action-42',
+      sourceMessageId: 'deferred-tool-handoff:action-42',
+      deliverySessionId: 'terminal:session-a',
+      queuedForPostTurnDelivery: true,
+      hasDeliverableContent: true,
+      callType: 'background',
+      purpose: 'agent.background.continuation.completed',
+    });
+
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      deliverySessionId: 'terminal:session-a',
+      callType: 'chat',
+      purpose: 'agent.background.continuation.post_turn_delivery',
+      deliveries: [
+        expect.objectContaining({
+          continuationId: 'action-42',
+          deliverySessionId: 'terminal:session-a',
+          content: 'Deferred continuation output',
+        }),
+      ],
+    });
+  });
+
+  it('keeps deferred background completions isolated from an unrelated active foreground session', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const setActive = (sessionManager.setActiveContextSession as any) as (sessionId: string | null) => void;
+    const getActive = (sessionManager.getActiveContextSession as any) as () => string | null;
+    setActive('terminal:foreground-active');
+
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    const deliveries: any[] = [];
+    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
+      deliveries.push(payload);
+    });
+
+    mockAssistantResponse('Background continuation payload');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-99',
+      channelId: 'terminal:background-session',
+      channelType: 'terminal',
+      content: 'deferred continuation',
+    }));
+
+    expect(getActive()).toBe('terminal:foreground-active');
+
+    mockAssistantResponse('Foreground reply');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-active',
+      channelId: 'terminal:transient-request',
+      channelType: 'terminal',
+      content: 'foreground in active session',
+    }));
+
+    expect(deliveries).toHaveLength(0);
+
+    setActive('terminal:background-session');
+    mockAssistantResponse('Foreground reply on resumed session');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-resumed',
+      channelId: 'terminal:transient-request',
+      channelType: 'terminal',
+      content: 'foreground after resume',
+    }));
+
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      deliverySessionId: 'terminal:background-session',
+      deliveries: [
+        expect.objectContaining({
+          continuationId: 'action-99',
+          deliverySessionId: 'terminal:background-session',
+          content: 'Background continuation payload',
+        }),
+      ],
+    });
   });
 
   it('emits stage telemetry for trust, memory, context, prompt, first-token, and end', async () => {

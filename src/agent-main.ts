@@ -15,6 +15,7 @@ import { EventBus } from './event-bus.js';
 import { MemoryStore } from './memory/store.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
+import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
@@ -531,7 +532,9 @@ async function main(): Promise<void> {
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
-  const emotionObserver = new EmotionObserver();
+  const emotionObserver = new EmotionObserver({
+    audioClassifier: getSharedAudioEmotionClassifier(),
+  });
   const emotionState = new EmotionState();
   const agentLoop = composeSubstrateAgent({
     eventBus,

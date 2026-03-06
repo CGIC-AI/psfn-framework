@@ -117,12 +117,14 @@ import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
 import { buildSnapshotVersionPointer } from '../turns/snapshot.js';
 import type { ContextManifest, ContextManifestMemorySeed } from '../session/context-manifest.js';
 import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
-import { EmotionState, type EmotionStateSnapshot } from '../emotion/state.js';
-import { EmotionObserver } from '../emotion/observer.js';
+import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from '../emotion/state.js';
+import { EmotionObserver, type EmotionObserverResult } from '../emotion/observer.js';
+import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
 import {
   buildSessionMetadataWithEmotionState,
   parseSessionEmotionState,
 } from '../emotion/session-metadata.js';
+import { buildEmotionalAffectSection } from '../emotion/persona-adaptation.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -217,6 +219,7 @@ export interface ExtendedToolActivationOptions {
 export interface EmotionRuntimeWiring {
   state?: EmotionState;
   observer?: EmotionObserver;
+  appraisal?: EmotionAppraisal;
   requireWiring?: boolean;
 }
 
@@ -355,6 +358,7 @@ export class SubstrateAgent {
   private pendingBackgroundContinuationDeliveries = new Map<string, PendingBackgroundContinuationDelivery[]>();
   private emotionState: EmotionState | null = null;
   private emotionObserver: EmotionObserver | null = null;
+  private emotionAppraisal: EmotionAppraisal | null = null;
   private emotionRuntimeRequired = false;
   private emotionStateSessionId: string | null = null;
   private emotionStateUpdatedAtMs: number | null = null;
@@ -392,6 +396,10 @@ export class SubstrateAgent {
     this.config = config;
     this.emotionState = options?.emotionRuntime?.state ?? null;
     this.emotionObserver = options?.emotionRuntime?.observer ?? null;
+    this.emotionAppraisal = options?.emotionRuntime?.appraisal
+      ?? ((this.emotionState && this.emotionObserver)
+        ? new EmotionAppraisal({ llmProvider: this.llmClient })
+        : null);
     this.emotionRuntimeRequired = options?.emotionRuntime?.requireWiring ?? false;
     this.assertEmotionRuntimeConfigured();
 
@@ -1816,6 +1824,7 @@ export class SubstrateAgent {
         message.content,
         emotionSessionId,
       );
+      const emotionAppraisalChain = this.getEmotionAppraisalChain(emotionSessionId);
       const trustLevel = authorContext.trustLevel;
       const channelType = this.resolveChannelType(message);
       const memoryProvider = this.memoryProvider as ProactiveMemoryProvider | null;
@@ -1948,6 +1957,7 @@ export class SubstrateAgent {
         taskKind,
         templateVariables,
         emotionSnapshot,
+        emotionAppraisalChain,
       );
       let fullPrompt = '';
 
@@ -1966,7 +1976,7 @@ export class SubstrateAgent {
           now: runtimeNow,
           variables: templateVariables,
         });
-        const personaHint = this.getPersonaAdaptation(trustLevel);
+        const personaHint = this.getPersonaAdaptation(trustLevel, emotionSnapshot, templateVariables);
         const dynamicSuffixTemplate = [turnSnapshot.prompt?.dynamicSuffixTemplate ?? '', personaHint]
           .map(section => section?.trim() ?? '')
           .filter(section => section.length > 0)
@@ -2435,6 +2445,18 @@ export class SubstrateAgent {
         log.error('Memory extraction error', { error: String(err) });
       });
 
+      void this.triggerEmotionAppraisal({
+        sessionChannelId: emotionSessionId,
+        turnId,
+        emotionSnapshot,
+        templateVariables,
+      }).catch((error) => {
+        log.error('Emotion appraisal error', {
+          channelId: message.channelId,
+          error: toErrorMessage(error),
+        });
+      });
+
       return agentResponse;
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -2502,6 +2524,9 @@ export class SubstrateAgent {
     if (partialWiring) {
       throw new Error('Emotion runtime wiring must provide both EmotionState and EmotionObserver');
     }
+    if (this.emotionAppraisal && (!this.emotionState || !this.emotionObserver)) {
+      throw new Error('Emotion appraisal wiring requires EmotionState and EmotionObserver');
+    }
     if (!this.emotionRuntimeRequired) return;
     if (!this.emotionState || !this.emotionObserver) {
       throw new Error('Emotion runtime wiring is required but EmotionState/EmotionObserver are not configured');
@@ -2568,10 +2593,27 @@ export class SubstrateAgent {
     const elapsedSeconds = this.emotionStateUpdatedAtMs === null
       ? 0
       : Math.max(0, (now - this.emotionStateUpdatedAtMs) / 1000);
-    const observation = await this.emotionObserver.observe(text, elapsedSeconds);
+    const rawObservation = await this.emotionObserver.observe(text, elapsedSeconds) as EmotionObserverResult | EmotionObservation;
+    const observation = this.normalizeEmotionObservation(rawObservation);
     const snapshot = this.emotionState.update(observation, elapsedSeconds);
     this.emotionStateUpdatedAtMs = now;
     return snapshot;
+  }
+
+  private normalizeEmotionObservation(
+    rawObservation: unknown,
+  ): EmotionObservation {
+    if (!rawObservation || typeof rawObservation !== 'object') {
+      throw new Error('Emotion observer returned an invalid observation payload');
+    }
+    if ('observation' in rawObservation) {
+      const nested = rawObservation.observation;
+      if (!nested || typeof nested !== 'object') {
+        throw new Error('Emotion observer returned an invalid nested observation payload');
+      }
+      return nested;
+    }
+    return rawObservation;
   }
 
   private formatTopEmotions(discrete: Record<string, number>): string {
@@ -2590,6 +2632,77 @@ export class SubstrateAgent {
       return 'none';
     }
     return top.join(', ');
+  }
+
+  private getEmotionAppraisalChain(sessionChannelId: string): EmotionAppraisalEntry[] {
+    if (!this.emotionAppraisal) return [];
+    return this.emotionAppraisal.getChain(sessionChannelId);
+  }
+
+  private resolveEmotionPersonalityTraits(
+    templateVariables: Record<string, string> | undefined,
+  ): Record<string, string> {
+    if (!templateVariables) return {};
+    const traits: Record<string, string> = {};
+    for (const [key, rawValue] of Object.entries(templateVariables)) {
+      const value = rawValue.replace(/\s+/g, ' ').trim();
+      if (!value) continue;
+      if (
+        key === 'personality'
+        || key === 'character.personality'
+        || key.startsWith('hexaco.')
+        || key.startsWith('hexaco_')
+        || key.startsWith('character.hexaco.')
+        || key.startsWith('character.hexaco_')
+      ) {
+        traits[key] = value;
+      }
+    }
+    return traits;
+  }
+
+  private async triggerEmotionAppraisal(params: {
+    sessionChannelId: string;
+    turnId: TurnID;
+    emotionSnapshot: EmotionStateSnapshot | null;
+    templateVariables: Record<string, string> | undefined;
+  }): Promise<void> {
+    if (!this.emotionAppraisal || !params.emotionSnapshot) return;
+
+    const manager = this.sessionManager as SessionManager & {
+      getRecentMessages?: (channelId: string, limit?: number) => Array<{
+        role: 'user' | 'assistant' | 'system' | 'tool';
+        content: string;
+        timestamp: number;
+      }>;
+    };
+    if (typeof manager.getRecentMessages !== 'function') {
+      if (this.emotionRuntimeRequired) {
+        throw new Error('Emotion appraisal runtime requires SessionManager.getRecentMessages');
+      }
+      return;
+    }
+
+    const recentMessages = manager.getRecentMessages(params.sessionChannelId, 10).map((entry) => ({
+      role: entry.role,
+      content: entry.content,
+      timestamp: entry.timestamp,
+    }));
+
+    const result = await this.emotionAppraisal.maybeAppraise({
+      sessionId: params.sessionChannelId,
+      turnId: params.turnId,
+      currentEmotion: params.emotionSnapshot,
+      recentMessages,
+      personalityTraits: this.resolveEmotionPersonalityTraits(params.templateVariables),
+    });
+    if (result.appraised) {
+      log.debug('Post-turn emotion appraisal completed', {
+        sessionChannelId: params.sessionChannelId,
+        trigger: result.trigger,
+        delta: result.delta,
+      });
+    }
   }
 
   private queueBackgroundContinuationCompletion(
@@ -3560,6 +3673,7 @@ export class SubstrateAgent {
     taskKind?: string,
     templateVariables?: Record<string, string>,
     emotionSnapshot?: EmotionStateSnapshot | null,
+    emotionAppraisalChain: readonly EmotionAppraisalEntry[] = [],
   ): string {
     const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
     const modelId = this.agent.state.model.id;
@@ -3655,6 +3769,15 @@ export class SubstrateAgent {
       );
       lines.push(`Top emotions: ${this.formatTopEmotions(emotionSnapshot.discrete)}`);
       lines.push(`Confidence: ${emotionSnapshot.confidence.toFixed(3)}`);
+    }
+
+    if (emotionAppraisalChain.length > 0) {
+      lines.push('');
+      lines.push('[Emotion Appraisal Chain]');
+      for (const entry of emotionAppraisalChain.slice(-3)) {
+        const summary = entry.summary.replace(/\s+/g, ' ').trim();
+        lines.push(`- ${new Date(entry.timestamp).toISOString()} (${entry.trigger}): ${summary}`);
+      }
     }
 
     if (skillsContext) {
@@ -3783,19 +3906,35 @@ export class SubstrateAgent {
     };
   }
 
-  private getPersonaAdaptation(trustLevel: TrustLevel): string | null {
-    switch (trustLevel) {
-      case 'primary':
-        return '[Trust: You are speaking with your primary person. Be your full, authentic self — share freely, reference shared history, express genuine emotions and vulnerability. This is honne — your inner truth.]';
-      case 'trusted':
-        return '[Trust: This is a trusted contact. Be warm and personal but mindful of boundaries — share appropriate personal context, avoid intimate details or confidential memories.]';
-      case 'regular':
-        return '[Trust: This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.]';
-      case 'public':
-        return '[Trust: This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.]';
-      default:
-        return null;
-    }
+  private getPersonaAdaptation(
+    trustLevel: TrustLevel,
+    emotionSnapshot?: EmotionStateSnapshot | null,
+    templateVariables?: Record<string, string>,
+  ): string | null {
+    const trustHint = (() => {
+      switch (trustLevel) {
+        case 'primary':
+          return '[Trust: You are speaking with your primary person. Be your full, authentic self — share freely, reference shared history, express genuine emotions and vulnerability. This is honne — your inner truth.]';
+        case 'trusted':
+          return '[Trust: This is a trusted contact. Be warm and personal but mindful of boundaries — share appropriate personal context, avoid intimate details or confidential memories.]';
+        case 'regular':
+          return '[Trust: This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.]';
+        case 'public':
+          return '[Trust: This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.]';
+        default:
+          return '[Trust: This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.]';
+      }
+    })();
+    const affectHint = buildEmotionalAffectSection({
+      trustLevel,
+      emotionSnapshot,
+      promptVariables: templateVariables,
+      config: this.config as unknown as Record<string, unknown>,
+    });
+
+    const sections = [trustHint, affectHint].filter((section): section is string => Boolean(section?.trim()));
+    if (sections.length === 0) return null;
+    return sections.join('\n\n');
   }
 
   private resolveIdentityChannel(message: SubstrateMessage): string {

@@ -1,5 +1,10 @@
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot, type VADVector } from './state.js';
 import {
+  toAudioEmotionSignal,
+  type AudioEmotionClassification,
+  type AudioEmotionClassifierLike,
+} from './audio-classifier.js';
+import {
   getSharedTextEmotionClassifier,
   type TextEmotionClassification,
 } from './text-classifier.js';
@@ -14,9 +19,26 @@ export interface TextEmotionClassifierLike {
   classify(text: string): Promise<readonly TextEmotionClassification[]>;
 }
 
+export interface EmotionObserverAudioInput {
+  audioBuffer: Buffer;
+  sampleRate: number;
+}
+
+export interface EmotionObserverAudioObservation {
+  observation: EmotionObservation;
+  events: readonly string[];
+  classifications: readonly AudioEmotionClassification[];
+}
+
+export interface EmotionObserverModalityObservations {
+  text: EmotionObservation;
+  audio?: EmotionObserverAudioObservation;
+}
+
 export interface EmotionObserverConfig {
   state?: EmotionState;
   textClassifier?: TextEmotionClassifierLike;
+  audioClassifier?: AudioEmotionClassifierLike | null;
   vadLexicon?: VadLexicon;
   maxTextLength?: number;
 }
@@ -79,12 +101,14 @@ interface LexiconSignal {
 export class EmotionObserver {
   private readonly state: EmotionState;
   private readonly textClassifier: TextEmotionClassifierLike;
+  private readonly audioClassifier: AudioEmotionClassifierLike | null;
   private readonly vadLexicon: VadLexicon;
   private readonly maxTextLength: number;
 
   constructor(config: EmotionObserverConfig = {}) {
     this.state = config.state ?? new EmotionState();
     this.textClassifier = config.textClassifier ?? getSharedTextEmotionClassifier();
+    this.audioClassifier = config.audioClassifier ?? null;
     this.vadLexicon = config.vadLexicon ?? loadVadLexicon();
     this.maxTextLength = normalizeMaxTextLength(config.maxTextLength);
   }
@@ -137,6 +161,35 @@ export class EmotionObserver {
       discrete: fusedCategorical ? { [fusedCategorical.label]: 1 } : undefined,
       confidence: observationConfidence,
     };
+  }
+
+  async classifyAudio(input: EmotionObserverAudioInput): Promise<readonly AudioEmotionClassification[]> {
+    if (!this.audioClassifier) {
+      throw new Error('audio emotion classifier is not configured');
+    }
+    return this.audioClassifier.classify(input.audioBuffer, input.sampleRate);
+  }
+
+  async buildAudioObservation(input: EmotionObserverAudioInput): Promise<EmotionObserverAudioObservation> {
+    const classifications = await this.classifyAudio(input);
+    const signal = toAudioEmotionSignal(classifications);
+    return {
+      observation: signal.observation,
+      events: signal.events,
+      classifications: [...classifications],
+    };
+  }
+
+  async buildModalityObservations(input: {
+    text: string;
+    audio?: EmotionObserverAudioInput | null;
+  }): Promise<EmotionObserverModalityObservations> {
+    const text = await this.buildObservation(input.text);
+    if (!input.audio) {
+      return { text };
+    }
+    const audio = await this.buildAudioObservation(input.audio);
+    return { text, audio };
   }
 
   private scoreLexiconSignal(text: string): LexiconSignal {

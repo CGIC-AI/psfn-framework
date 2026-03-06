@@ -119,6 +119,13 @@ function makeMessage(overrides?: Partial<SubstrateMessage>): SubstrateMessage {
   };
 }
 
+function extractPromptExpressiveness(prompt: string): number | null {
+  const match = prompt.match(/expressiveness=([0-9]+\.[0-9]+)/);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function makeMockSessionManager(): SessionManager {
   let activeContextSessionId: string | null = null;
   const resolveSessionChannelId = vi.fn((channelId: string) => {
@@ -3192,6 +3199,131 @@ describe('SubstrateAgent.handleMessage', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('runs post-turn emotion appraisal and injects appraisal chain on the next turn', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const llmClient = makeMockLLMProvider();
+    const completeSpy = llmClient.complete as ReturnType<typeof vi.fn>;
+    completeSpy.mockResolvedValue({
+      content: 'Appraisal summary: she feels guarded but recovering composure.',
+      toolCalls: [],
+      model: 'deepseek/deepseek-v3.2',
+      inputTokens: 12,
+      outputTokens: 18,
+      stopReason: 'stop',
+    });
+    const emotionObserver = {
+      observe: vi.fn().mockResolvedValue({
+        vad: { valence: 0.6, arousal: 0.25, dominance: 0.1 },
+        discrete: { joy: 0.8, trust: 0.5 },
+        confidence: 0.85,
+      }),
+    };
+
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      llmClient,
+      sessionManager,
+      'Base prompt',
+      config,
+      {
+        emotionRuntime: {
+          observer: emotionObserver as any,
+          state: new EmotionState(),
+          requireWiring: true,
+        },
+      },
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-appraisal-1',
+      content: 'I feel much better now.',
+    }));
+    await Promise.resolve();
+    await agent.handleMessage(makeMessage({
+      id: 'msg-appraisal-2',
+      content: 'Checking in again.',
+    }));
+
+    expect(completeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.any(String),
+      }),
+      'background',
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          purpose: 'emotion.appraisal',
+        }),
+      }),
+    );
+
+    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    expect(secondPrompt).toContain('[Emotion Appraisal Chain]');
+    expect(secondPrompt).toContain('Appraisal summary: she feels guarded but recovering composure.');
+  });
+
+  it('injects trust-gated emotional affect guidance into persona adaptation', async () => {
+    const config = makeConfig();
+    const emotionObservation = {
+      vad: { valence: 0.8, arousal: 0.7, dominance: 0.6 },
+      discrete: { joy: 0.95, trust: 0.72 },
+      confidence: 0.9,
+    };
+
+    const primarySessionManager = makeMockSessionManager();
+    const primaryAgent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      primarySessionManager,
+      'Base prompt',
+      config,
+      {
+        emotionRuntime: {
+          observer: { observe: vi.fn().mockResolvedValue(emotionObservation) } as any,
+          state: new EmotionState(),
+        },
+      },
+    );
+    primaryAgent.contactStore = {
+      resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
+    } as unknown as ContactStore;
+
+    const publicSessionManager = makeMockSessionManager();
+    const publicAgent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      publicSessionManager,
+      'Base prompt',
+      config,
+      {
+        emotionRuntime: {
+          observer: { observe: vi.fn().mockResolvedValue(emotionObservation) } as any,
+          state: new EmotionState(),
+        },
+      },
+    );
+    publicAgent.contactStore = {
+      resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'public' }),
+    } as unknown as ContactStore;
+
+    await primaryAgent.handleMessage(makeMessage({ id: 'affect-primary-turn' }));
+    await publicAgent.handleMessage(makeMessage({ id: 'affect-public-turn' }));
+
+    const primaryPrompt = (primarySessionManager.buildContext as any).mock.calls[0][1] as string;
+    const publicPrompt = (publicSessionManager.buildContext as any).mock.calls[0][1] as string;
+
+    expect(primaryPrompt).toContain('[Emotional Affect]');
+    expect(primaryPrompt).toContain('Trust gate: honne (genuine)');
+    expect(publicPrompt).toContain('[Emotional Affect]');
+    expect(publicPrompt).toContain('Trust gate: tatemae (controlled)');
+
+    const primaryExpressiveness = extractPromptExpressiveness(primaryPrompt);
+    const publicExpressiveness = extractPromptExpressiveness(publicPrompt);
+    expect(primaryExpressiveness).not.toBeNull();
+    expect(publicExpressiveness).not.toBeNull();
+    expect(publicExpressiveness as number).toBeLessThan(primaryExpressiveness as number);
   });
 
   it('fails closed when strict emotion wiring is requested without observer/state', () => {

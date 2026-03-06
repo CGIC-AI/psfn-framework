@@ -140,6 +140,7 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-x92u.6` (`shard focused context-pack contract`) is integrated, including source-request context capture on `spawn_shard`, task-scoped shard context packs rendered into child prompts, focused source-session excerpt + parent-channel memory packaging, and fail-closed suppression of live child memory retrieval when a bounded context pack is active.
   - `PSFN-x92u.7` (`compositional telemetry, budgets, timeout/fallback diagnostics`) is integrated, including richer `agent.think.trace` telemetry with nested-think diagnostics and correlation fields, extraction compose-path telemetry for chunking/dedup/boundary facts, and retrieval compose-path telemetry exposing candidate/batch/finalist counts and deterministic fallback modes.
   - `PSFN-crgg` (`ModelPurpose.context` model-roster slot) is integrated, including shared type/settings/routing wiring, context→background→chat fallback resolution, JSON-backed seed defaults, and Garden/admin exposure for the dedicated helper-model slot used by context-composition work.
+  - `PSFN-bb43` (`helper LLM relevance scoring for retrieved memories`) is integrated via the compositional retrieval rerank path, with retrieval evaluation/compose helper calls routed through `purpose='context'`, deterministic fail-closed fallback to baseline scoring when helper outputs fail, and targeted retrieval regressions covering relevance-based rerank ordering and fallback modes.
   - `PSFN-domy.1` (`persist structured tool observations in session history for context masking`) is integrated, with first-class `tool` session entries, strict tool-observation metadata, context/snapshot round-tripping, and fail-closed recording of tool results before assistant archival.
   - `PSFN-20kl` (`observation masking in buildContext()`) is integrated, with a pre-compaction masking pass over stale tool observations, JSON-backed `observationMaskingWindow` runtime settings governance, and placeholder rendering that preserves recent tool observations while collapsing older ones to `[Tool result: name — see earlier context]`.
   - `PSFN-fihj` (`context manifest for debugging`) is integrated, with `buildContext()` now emitting/logging a structured context manifest covering section budgets, session inclusion/masking/compaction counts, and retrieval-source memory inclusion/exclusion diagnostics carried from turn-scoped retrieval telemetry.
@@ -152,7 +153,7 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-y2ac` settings-governance epic is closed on `phase-v`.
   - `PSFN-x92u` compositional-kernel epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Continue Stage 4 on `PSFN-domy` after `PSFN-fihj` + `PSFN-p3ub` by advancing the remaining context-composition feature beads (`PSFN-3pxm`, `PSFN-bb43`, `PSFN-c9z2`, `PSFN-du0t`, `PSFN-jl9r`, `PSFN-jvl4`, `PSFN-z3li`) in dependency order.
+  - Continue Stage 4 on `PSFN-domy` after `PSFN-fihj` + `PSFN-p3ub` by advancing the remaining context-composition feature beads (`PSFN-3pxm`, `PSFN-c9z2`, `PSFN-du0t`, `PSFN-jl9r`, `PSFN-jvl4`, `PSFN-z3li`) in dependency order.
   - Continue `PSFN-17lw.1` and `PSFN-17lw.2` beyond landed child slices (`.1.1`, `.1.2`, `.2.1`), then advance `PSFN-17lw.4`, `PSFN-17lw.5`, and `PSFN-17lw.3` in parallel-safe order on the autonomy lane.
   - Keep `PSFN-bu5f` queued behind `PSFN-domy`, then advance `PSFN-8e3t`, with `PSFN-be11` remaining the final self-model lane behind emotion + intention.
   - Keep `PSFN-04dt.4` open as the remaining Stage 1 foundation lane for tombstone/redaction replay semantics; it does not block Stage 4.
@@ -225,6 +226,7 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-x92u.5` / `PSFN-x92u.6` / `PSFN-x92u.7` build validation: `npm run build`
 - `PSFN-crgg` targeted regressions: `npm test -- --run src/settings.test.ts src/llm/routing.test.ts src/llm/client.test.ts src/llm/correlation.test.ts src/channels/admin/templates.test.ts src/config/subsystem-config.test.ts src/channels/admin/api-routes.test.ts`
 - `PSFN-crgg` build validation: `npm run build`
+- `PSFN-bb43` targeted regressions: `npm test -- --cache=false --run src/memory/retrieval.test.ts`
 - `PSFN-domy.1` / `PSFN-20kl` settings-contract validation: `npm run verify:settings-contract`
 - `PSFN-domy.1` / `PSFN-20kl` targeted regressions: `npm test -- --run src/agent/messages.test.ts src/agent/substrate-agent.test.ts src/session/manager.test.ts src/settings.test.ts src/config/subsystem-config.test.ts src/channels/admin/api-routes.test.ts src/config/settings-contract-guard.test.ts`
 - `PSFN-domy.1` / `PSFN-20kl` build validation: `npm run build`

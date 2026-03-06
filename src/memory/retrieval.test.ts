@@ -1495,6 +1495,8 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
       result.indexOf('Alpha baseline memory'),
     );
     expect(llmProvider.complete).toHaveBeenCalledTimes(3);
+    const llmCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls;
+    expect(llmCalls.every((call) => call[1] === 'context')).toBe(true);
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt).toContain('Alpha baseline memory');
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[2][0].systemPrompt).toContain('Delta best continuity anchor');
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;

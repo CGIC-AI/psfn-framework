@@ -986,6 +986,8 @@ export class SubstrateRuntime implements Lifecycle {
         characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
         memoryWriter,
         sessionManager: this.sessionManager,
+        emotionState,
+        contactStore,
         coreMemoryStore,
         postTurnActions,
         ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),

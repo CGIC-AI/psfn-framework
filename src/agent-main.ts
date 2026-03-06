@@ -1150,6 +1150,8 @@ async function main(): Promise<void> {
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
       sessionManager,
+      emotionState,
+      contactStore,
       coreMemoryStore,
       postTurnActions,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),

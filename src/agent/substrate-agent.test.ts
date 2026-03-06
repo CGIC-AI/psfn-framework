@@ -1123,6 +1123,13 @@ describe('SubstrateAgent.handleMessage', () => {
       deliverySessionId: 'terminal:session-a',
       queuedForPostTurnDelivery: true,
       hasDeliverableContent: true,
+      notifyUser: true,
+      notificationReason: 'notify_deferred_user_task',
+      origin: 'user_delegated',
+      urgency: 'normal',
+      channelContext: 'session',
+      stale: false,
+      taskKind: 'deferred_tool_handoff',
       callType: 'background',
       purpose: 'agent.background.continuation.completed',
     });
@@ -1137,9 +1144,147 @@ describe('SubstrateAgent.handleMessage', () => {
           continuationId: 'action-42',
           deliverySessionId: 'terminal:session-a',
           content: 'Deferred continuation output',
+          origin: 'user_delegated',
+          urgency: 'normal',
+          channelContext: 'session',
+          stale: false,
+          taskKind: 'deferred_tool_handoff',
+          notificationReason: 'notify_deferred_user_task',
         }),
       ],
     });
+
+    expect(agent.getBackgroundContinuationTasks()).toEqual([
+      expect.objectContaining({
+        continuationId: 'action-42',
+        sourceMessageId: 'deferred-tool-handoff:action-42',
+        deliverySessionId: 'terminal:session-a',
+        origin: 'user_delegated',
+        urgency: 'normal',
+        channelContext: 'session',
+        stale: false,
+        taskKind: 'deferred_tool_handoff',
+        notifyUser: true,
+        notificationReason: 'notify_deferred_user_task',
+      }),
+    ]);
+  });
+
+  it('tracks internal-session background completions and suppresses user notification by policy', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    const completed: any[] = [];
+    const deliveries: any[] = [];
+    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
+      completed.push(payload);
+    });
+    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
+      deliveries.push(payload);
+    });
+
+    mockAssistantResponse('Internal maintenance completed.');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-internal',
+      channelId: 'internal:maintenance',
+      channelType: 'terminal',
+      content: 'internal background continuation',
+    }));
+
+    mockAssistantResponse('Foreground reply');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-after-internal',
+      channelId: 'terminal:session-user',
+      channelType: 'terminal',
+      content: 'foreground check',
+    }));
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({
+      continuationId: 'action-internal',
+      deliverySessionId: 'internal:maintenance',
+      queuedForPostTurnDelivery: false,
+      hasDeliverableContent: true,
+      notifyUser: false,
+      notificationReason: 'suppress_internal_session',
+      origin: 'internal',
+      urgency: 'normal',
+      channelContext: 'internal',
+      taskKind: 'deferred_tool_handoff',
+    });
+    expect(deliveries).toHaveLength(0);
+
+    expect(agent.getBackgroundContinuationTasks()).toEqual([
+      expect.objectContaining({
+        continuationId: 'action-internal',
+        deliverySessionId: 'internal:maintenance',
+        origin: 'internal',
+        urgency: 'normal',
+        channelContext: 'internal',
+        notifyUser: false,
+        notificationReason: 'suppress_internal_session',
+      }),
+    ]);
+  });
+
+  it('suppresses stale deferred completion deliveries while still tracking completion metadata', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    const completed: any[] = [];
+    const deliveries: any[] = [];
+    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
+      completed.push(payload);
+    });
+    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
+      deliveries.push(payload);
+    });
+
+    mockAssistantResponse('Stale deferred continuation output');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-stale',
+      channelId: 'terminal:stale-session',
+      channelType: 'terminal',
+      content: 'continue stale deferred task',
+      timestamp: new Date(Date.now() - (16 * 60 * 1000)),
+    }));
+
+    mockAssistantResponse('Foreground reply after stale completion');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-after-stale',
+      channelId: 'terminal:stale-session',
+      channelType: 'terminal',
+      content: 'foreground request',
+    }));
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({
+      continuationId: 'action-stale',
+      queuedForPostTurnDelivery: false,
+      notifyUser: false,
+      notificationReason: 'suppress_stale_completion',
+      origin: 'user_delegated',
+      stale: true,
+    });
+    expect(deliveries).toHaveLength(0);
+
+    expect(agent.getBackgroundContinuationTasks()).toEqual([
+      expect.objectContaining({
+        continuationId: 'action-stale',
+        notifyUser: false,
+        notificationReason: 'suppress_stale_completion',
+        origin: 'user_delegated',
+        stale: true,
+      }),
+    ]);
   });
 
   it('keeps normal chat replies responsive while a long-running background continuation is still in flight', async () => {

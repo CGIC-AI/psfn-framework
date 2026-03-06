@@ -111,6 +111,13 @@ import {
   type ExtendedToolAutoloadPolicy,
   type ExtendedToolTurnClass,
 } from './extended-tool-autoload-policy.js';
+import {
+  decideBackgroundCompletionNotification,
+  type BackgroundCompletionChannelContext,
+  type BackgroundCompletionNotificationReason,
+  type BackgroundCompletionOrigin,
+  type BackgroundCompletionUrgency,
+} from './background-completion-policy.js';
 import type {
   AdaptiveLoadedExtendedToolState,
   AdaptiveToolActivationSource,
@@ -385,6 +392,15 @@ interface BackgroundContinuationCompletionSignal {
   deliverySessionId: string;
   queuedForPostTurnDelivery: boolean;
   hasDeliverableContent: boolean;
+  notifyUser: boolean;
+  notificationReason: BackgroundCompletionNotificationReason;
+  origin: BackgroundCompletionOrigin;
+  urgency: BackgroundCompletionUrgency;
+  channelContext: BackgroundCompletionChannelContext;
+  completionAgeMs: number | null;
+  stale: boolean;
+  taskKind: string | null;
+  intent: string | null;
   completedAt: number;
   queueDepth: number;
 }
@@ -395,6 +411,35 @@ interface PendingBackgroundContinuationDelivery {
   deliverySessionId: string;
   content: string;
   completedAt: number;
+  origin: BackgroundCompletionOrigin;
+  urgency: BackgroundCompletionUrgency;
+  channelContext: BackgroundCompletionChannelContext;
+  completionAgeMs: number | null;
+  stale: boolean;
+  taskKind: string | null;
+  intent: string | null;
+  notificationReason: BackgroundCompletionNotificationReason;
+}
+
+interface BackgroundContinuationTaskRecord {
+  continuationId: string;
+  sourceMessageId: string;
+  sourceTimestampMs: number | null;
+  channelId: string;
+  channelType: SubstrateMessage['channelType'];
+  deliverySessionId: string;
+  origin: BackgroundCompletionOrigin;
+  urgency: BackgroundCompletionUrgency;
+  channelContext: BackgroundCompletionChannelContext;
+  completionAgeMs: number | null;
+  stale: boolean;
+  taskKind: string | null;
+  intent: string | null;
+  completedAt: number;
+  responseChars: number;
+  hasDeliverableContent: boolean;
+  notifyUser: boolean;
+  notificationReason: BackgroundCompletionNotificationReason;
 }
 
 // ── SubstrateAgent ──
@@ -427,6 +472,7 @@ export class SubstrateAgent {
   private activeTurnIntent: string | null = null;
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
   private pendingBackgroundContinuationDeliveries = new Map<string, PendingBackgroundContinuationDelivery[]>();
+  private backgroundContinuationTasks = new Map<string, BackgroundContinuationTaskRecord>();
   private emotionState: EmotionState | null = null;
   private emotionObserver: EmotionObserver | null = null;
   private emotionAppraisal: EmotionAppraisal | null = null;
@@ -1328,6 +1374,12 @@ export class SubstrateAgent {
         }
         : null,
     };
+  }
+
+  getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {
+    return [...this.backgroundContinuationTasks.values()]
+      .sort((left, right) => left.completedAt - right.completedAt)
+      .map(entry => ({ ...entry }));
   }
 
   activateExtendedTools(
@@ -2815,6 +2867,8 @@ export class SubstrateAgent {
           deferredContinuationId,
           message,
           agentResponse,
+          taskKind ?? null,
+          this.activeTurnIntent,
         );
         await this.emitBackgroundContinuationEvent(
           'agent.background.continuation.completed',
@@ -2825,6 +2879,15 @@ export class SubstrateAgent {
             deliverySessionId: completionSignal.deliverySessionId,
             queuedForPostTurnDelivery: completionSignal.queuedForPostTurnDelivery,
             hasDeliverableContent: completionSignal.hasDeliverableContent,
+            notifyUser: completionSignal.notifyUser,
+            notificationReason: completionSignal.notificationReason,
+            origin: completionSignal.origin,
+            urgency: completionSignal.urgency,
+            channelContext: completionSignal.channelContext,
+            completionAgeMs: completionSignal.completionAgeMs,
+            stale: completionSignal.stale,
+            taskKind: completionSignal.taskKind,
+            intent: completionSignal.intent,
             completedAt: completionSignal.completedAt,
             queueDepth: completionSignal.queueDepth,
             ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.completed'),
@@ -3318,41 +3381,104 @@ export class SubstrateAgent {
     deferredContinuationId: string,
     message: SubstrateMessage,
     response: AgentResponse,
+    taskKind: string | null,
+    intent: string | null,
   ): BackgroundContinuationCompletionSignal {
     const completedAt = Date.now();
     const deliverySessionId = this.resolveSessionChannelId(message.channelId);
-    const hasDeliverableContent = response.content.trim().length > 0
-      && !deliverySessionId.startsWith('internal:');
-    if (!hasDeliverableContent) {
+    const hasDeliverableContent = response.content.trim().length > 0;
+    const sourceTimestampMs = Number.isFinite(message.timestamp.getTime())
+      ? Math.trunc(message.timestamp.getTime())
+      : null;
+    const decision = decideBackgroundCompletionNotification({
+      continuationId: deferredContinuationId,
+      sourceMessageId: message.id,
+      deliverySessionId,
+      channelId: message.channelId,
+      channelType: message.channelType,
+      sourceTimestampMs,
+      taskKind,
+      intent,
+      responseContent: response.content,
+      completedAt,
+    });
+
+    this.backgroundContinuationTasks.set(deferredContinuationId, {
+      continuationId: deferredContinuationId,
+      sourceMessageId: message.id,
+      sourceTimestampMs,
+      channelId: message.channelId,
+      channelType: message.channelType,
+      deliverySessionId,
+      origin: decision.context.origin,
+      urgency: decision.context.urgency,
+      channelContext: decision.context.channelContext,
+      completionAgeMs: decision.context.completionAgeMs,
+      stale: decision.context.stale,
+      taskKind,
+      intent,
+      completedAt,
+      responseChars: response.content.length,
+      hasDeliverableContent,
+      notifyUser: decision.shouldNotify,
+      notificationReason: decision.reason,
+    });
+
+    const existing = this.pendingBackgroundContinuationDeliveries.get(deliverySessionId) ?? [];
+    if (decision.shouldNotify) {
+      const next = [...existing, {
+        continuationId: deferredContinuationId,
+        sourceMessageId: message.id,
+        deliverySessionId,
+        content: response.content,
+        completedAt,
+        origin: decision.context.origin,
+        urgency: decision.context.urgency,
+        channelContext: decision.context.channelContext,
+        completionAgeMs: decision.context.completionAgeMs,
+        stale: decision.context.stale,
+        taskKind,
+        intent,
+        notificationReason: decision.reason,
+      } satisfies PendingBackgroundContinuationDelivery];
+      this.pendingBackgroundContinuationDeliveries.set(deliverySessionId, next);
       return {
         continuationId: deferredContinuationId,
         sourceMessageId: message.id,
         deliverySessionId,
-        queuedForPostTurnDelivery: false,
-        hasDeliverableContent: false,
+        queuedForPostTurnDelivery: true,
+        hasDeliverableContent,
+        notifyUser: true,
+        notificationReason: decision.reason,
+        origin: decision.context.origin,
+        urgency: decision.context.urgency,
+        channelContext: decision.context.channelContext,
+        completionAgeMs: decision.context.completionAgeMs,
+        stale: decision.context.stale,
+        taskKind,
+        intent,
         completedAt,
-        queueDepth: this.pendingBackgroundContinuationDeliveries.get(deliverySessionId)?.length ?? 0,
+        queueDepth: next.length,
       };
     }
-
-    const existing = this.pendingBackgroundContinuationDeliveries.get(deliverySessionId) ?? [];
-    const next = [...existing, {
-      continuationId: deferredContinuationId,
-      sourceMessageId: message.id,
-      deliverySessionId,
-      content: response.content,
-      completedAt,
-    } satisfies PendingBackgroundContinuationDelivery];
-    this.pendingBackgroundContinuationDeliveries.set(deliverySessionId, next);
 
     return {
       continuationId: deferredContinuationId,
       sourceMessageId: message.id,
       deliverySessionId,
-      queuedForPostTurnDelivery: true,
-      hasDeliverableContent: true,
+      queuedForPostTurnDelivery: false,
+      hasDeliverableContent,
+      notifyUser: false,
+      notificationReason: decision.reason,
+      origin: decision.context.origin,
+      urgency: decision.context.urgency,
+      channelContext: decision.context.channelContext,
+      completionAgeMs: decision.context.completionAgeMs,
+      stale: decision.context.stale,
+      taskKind,
+      intent,
       completedAt,
-      queueDepth: next.length,
+      queueDepth: existing.length,
     };
   }
 

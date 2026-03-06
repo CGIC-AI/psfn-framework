@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../logger.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import { backfillLegacyTurnId } from '../../turns/id.js';
 import {
   appendJournalEntry,
   journalToCompactionSummary,
@@ -14,6 +15,7 @@ import {
 } from '../journal-utils.js';
 import { SessionSearchIndex } from '../search-index.js';
 import type { JournalEntry, SessionEntry } from '../types.js';
+import { resolveSessionEntryTurnContext } from '../turn-provenance.js';
 import type {
   ChannelCache,
   ChannelIndexEntry,
@@ -23,6 +25,25 @@ import { applyJournalState } from './crash-recovery.js';
 import { snapshotIndexEntry } from './channel-index.js';
 
 const log = createComponentLogger('SessionStore');
+
+function applyTurnTombstonesToSessionEntries(
+  entries: readonly SessionEntry[],
+  tombstones: ReadonlySet<string>,
+): SessionEntry[] {
+  if (tombstones.size === 0) return [...entries];
+
+  return entries.filter((entry) => {
+    let turnId: string;
+    try {
+      turnId = resolveSessionEntryTurnContext(entry).turnId;
+    } catch {
+      // Malformed metadata should not block deterministic replay filtering.
+      // Resolver already backfills for missing metadata; parse failures use deterministic seed.
+      turnId = backfillLegacyTurnId(`legacy-turn:${entry.channelId}:${entry.id}:${entry.timestamp}:${entry.role}`);
+    }
+    return !tombstones.has(turnId);
+  });
+}
 
 export class SessionJournalRuntime {
   private integrityProvider: SessionIntegrityProvider | null;
@@ -95,6 +116,8 @@ export class SessionJournalRuntime {
     const cache: ChannelCache = {
       entries: [],
       compactions: [],
+      turnTombstones: new Set(),
+      activeTurnTombstoneCount: 0,
       nextId: 1,
       lastHmac: null,
       lastExtractionCoveredUpTo: 0,
@@ -133,6 +156,11 @@ export class SessionJournalRuntime {
 
     cache.nextId = maxId + 1;
     cache.lastHmac = previousHmac;
+    if (cache.turnTombstones.size > 0) {
+      cache.entries = applyTurnTombstonesToSessionEntries(cache.entries, cache.turnTombstones);
+      cache.messageCount = cache.entries.length;
+    }
+    cache.activeTurnTombstoneCount = cache.turnTombstones.size;
     return cache;
   }
 
@@ -145,24 +173,21 @@ export class SessionJournalRuntime {
 
     for (const [channelId, indexEntry] of params.channelIndex.entries()) {
       const expectedCount = typeof indexEntry.messageCount === 'number' ? indexEntry.messageCount : 0;
-      if (expectedCount <= 0) continue;
-
       const indexedCount = params.searchIndex.countIndexedMessages(channelId);
-      if (indexedCount >= expectedCount) continue;
+      if (expectedCount <= 0) {
+        if (indexedCount > 0) {
+          params.searchIndex.replaceChannelEntries(channelId, []);
+        }
+        continue;
+      }
+      if (indexedCount === expectedCount) continue;
 
       const filePath = join(params.sessionsDir, indexEntry.filename);
       if (!existsSync(filePath)) continue;
 
       try {
-        const { entries } = readJournalFile(filePath);
-        let previousHmac: string | null = null;
-        for (const rawEntry of entries) {
-          const entry = this.verifyAndNormalizeEntry(rawEntry, previousHmac);
-          previousHmac = typeof rawEntry._hmac === 'string' ? rawEntry._hmac : previousHmac;
-          const message = journalToSessionEntry(entry);
-          if (!message) continue;
-          params.searchIndex.upsertSessionEntry(message);
-        }
+        const loaded = this.loadChannelFromPath(channelId, filePath);
+        params.searchIndex.replaceChannelEntries(channelId, loaded.entries);
       } catch (error) {
         if (!this.searchIndexFailureLogged) {
           this.searchIndexFailureLogged = true;

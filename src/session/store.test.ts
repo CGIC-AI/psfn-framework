@@ -200,6 +200,185 @@ describe('SessionStore', () => {
     expect(() => store.getRecentTurnRecords(channelId, 10)).toThrow();
   });
 
+  it('applies append-only turn tombstones to session reads and supports deterministic restore', () => {
+    const channelId = 'api:turn-tombstone-session';
+    const firstTurnId = createTurnId();
+    const secondTurnId = createTurnId();
+
+    const firstTurnUserMeta = JSON.stringify({
+      turn: {
+        schemaVersion: 1,
+        turnId: firstTurnId,
+        requestId: 'req-first',
+        role: 'user',
+      },
+    });
+    const firstTurnAssistantMeta = JSON.stringify({
+      turn: {
+        schemaVersion: 1,
+        turnId: firstTurnId,
+        requestId: 'req-first',
+        role: 'assistant',
+      },
+    });
+    const secondTurnUserMeta = JSON.stringify({
+      turn: {
+        schemaVersion: 1,
+        turnId: secondTurnId,
+        requestId: 'req-second',
+        role: 'user',
+      },
+    });
+    const secondTurnAssistantMeta = JSON.stringify({
+      turn: {
+        schemaVersion: 1,
+        turnId: secondTurnId,
+        requestId: 'req-second',
+        role: 'assistant',
+      },
+    });
+
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'turn-1 user',
+      timestamp: 1_000,
+      metadata: firstTurnUserMeta,
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'turn-1 assistant',
+      timestamp: 1_100,
+      metadata: firstTurnAssistantMeta,
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'turn-2 user',
+      timestamp: 1_200,
+      metadata: secondTurnUserMeta,
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'turn-2 assistant',
+      timestamp: 1_300,
+      metadata: secondTurnAssistantMeta,
+    });
+
+    store.redactTurn(channelId, firstTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+      timestamp: 1_400,
+    });
+
+    const reloaded = new SessionStore(dir);
+    const redactedEntries = reloaded.getRecent(channelId, 10);
+    expect(redactedEntries.map(entry => entry.content)).toEqual([
+      'turn-2 user',
+      'turn-2 assistant',
+    ]);
+    expect(reloaded.count(channelId)).toBe(2);
+
+    const indexPayload = JSON.parse(readFileSync(join(dir, '_channel_index.json'), 'utf-8')) as {
+      channels: Record<string, { filename: string; activeTurnTombstoneCount?: number }>;
+    };
+    expect(indexPayload.channels[channelId]?.activeTurnTombstoneCount).toBe(1);
+
+    const journalPath = join(dir, indexPayload.channels[channelId]!.filename);
+    const journalLines = readFileSync(journalPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { type: string; content?: string; tombstoneAction?: string; tombstoneTargetId?: string });
+    expect(journalLines).toHaveLength(5);
+    expect(journalLines.filter(line => line.type === 'message').map(line => line.content)).toEqual([
+      'turn-1 user',
+      'turn-1 assistant',
+      'turn-2 user',
+      'turn-2 assistant',
+    ]);
+    const tombstoneLine = journalLines.find(line => line.type === 'tombstone');
+    expect(tombstoneLine).toMatchObject({
+      tombstoneAction: 'redact',
+      tombstoneTargetId: firstTurnId,
+    });
+
+    reloaded.restoreTurn(channelId, firstTurnId, {
+      actor: 'admin:test',
+      reason: 'undo',
+      timestamp: 1_500,
+    });
+
+    const restoredAgain = new SessionStore(dir);
+    const restoredEntries = restoredAgain.getRecent(channelId, 10);
+    expect(restoredEntries.map(entry => entry.content)).toEqual([
+      'turn-1 user',
+      'turn-1 assistant',
+      'turn-2 user',
+      'turn-2 assistant',
+    ]);
+    expect(restoredAgain.count(channelId)).toBe(4);
+  });
+
+  it('excludes tombstoned turn ids from turn-record reads and restores deterministically', () => {
+    const channelId = 'api:turn-tombstone-records';
+    const firstTurnId = createTurnId();
+    const secondTurnId = createTurnId();
+
+    store.appendTurnRecord({
+      schemaVersion: 1,
+      turnId: firstTurnId,
+      requestId: 'req-1',
+      channelId,
+      channelType: 'api',
+      startedAt: 10,
+      completedAt: 20,
+      status: 'completed',
+      userMessage: { role: 'user', content: 'first', timestamp: 10 },
+      assistantMessage: { role: 'assistant', content: 'first-reply', timestamp: 20 },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: { model: 'test/model' },
+      provenanceRefs: [],
+    });
+    store.appendTurnRecord({
+      schemaVersion: 1,
+      turnId: secondTurnId,
+      requestId: 'req-2',
+      channelId,
+      channelType: 'api',
+      startedAt: 30,
+      completedAt: 40,
+      status: 'completed',
+      userMessage: { role: 'user', content: 'second', timestamp: 30 },
+      assistantMessage: { role: 'assistant', content: 'second-reply', timestamp: 40 },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: { model: 'test/model' },
+      provenanceRefs: [],
+    });
+
+    store.redactTurn(channelId, firstTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+    expect(store.getRecentTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
+
+    store.restoreTurn(channelId, firstTurnId, {
+      actor: 'admin:test',
+      reason: 'undo',
+    });
+    expect(store.getRecentTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([
+      firstTurnId,
+      secondTurnId,
+    ]);
+  });
+
   it('indexes appended messages for FTS keyword search across channels', () => {
     store.append({
       channelId: 'api:alpha',

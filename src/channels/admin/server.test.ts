@@ -2326,6 +2326,7 @@ describe('AdminServer', () => {
               longContext: 'primary',
               extraction: 'extraction',
               background: 'extraction',
+              context: 'extraction',
               import_processing: 'extraction',
             },
           },

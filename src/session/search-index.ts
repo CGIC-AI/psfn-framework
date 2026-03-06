@@ -80,6 +80,7 @@ function buildSafeMatchQuery(query: string): string {
 export class SessionSearchIndex {
   private db: Database.Database;
   private readonly upsertStmt: Database.Statement;
+  private readonly deleteChannelStmt: Database.Statement;
   private readonly searchStmt: Database.Statement;
   private readonly countChannelStmt: Database.Statement;
 
@@ -105,6 +106,10 @@ export class SessionSearchIndex {
         content = excluded.content,
         timestamp = excluded.timestamp,
         channel_visibility = excluded.channel_visibility
+    `);
+    this.deleteChannelStmt = this.db.prepare(`
+      DELETE FROM session_messages_index
+      WHERE channel_id = ?
     `);
     this.searchStmt = this.db.prepare(`
       SELECT
@@ -182,6 +187,16 @@ export class SessionSearchIndex {
       normalizeTimestamp(entry.timestamp),
       visibility,
     );
+  }
+
+  replaceChannelEntries(channelId: string, entries: readonly SessionEntry[]): void {
+    const tx = this.db.transaction((targetChannelId: string, replacementEntries: readonly SessionEntry[]) => {
+      this.deleteChannelStmt.run(targetChannelId);
+      for (const entry of replacementEntries) {
+        this.upsertSessionEntry(entry);
+      }
+    });
+    tx(channelId, entries);
   }
 
   countIndexedMessages(channelId: string): number {

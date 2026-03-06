@@ -10,6 +10,8 @@ import {
 export interface ChannelCache {
   entries: import('./types.js').SessionEntry[];
   compactions: import('./types.js').CompactionSummary[];
+  turnTombstones: Set<string>;
+  activeTurnTombstoneCount: number;
   nextId: number;
   lastHmac: string | null;
   lastExtractionCoveredUpTo: number;
@@ -23,6 +25,7 @@ export interface ChannelCache {
 export interface ChannelIndexEntry {
   filename: string;
   messageCount?: number;
+  activeTurnTombstoneCount?: number;
   lastTimestamp?: number;
   maxId?: number;
   lastHmac?: string | null;
@@ -166,7 +169,7 @@ export function normalizeOptionalHmac(value: unknown): string | null | undefined
 }
 
 export function normalizeOptionalJournalType(value: unknown): JournalEntry['type'] | undefined {
-  if (value === 'message' || value === 'compaction' || value === 'marker') {
+  if (value === 'message' || value === 'compaction' || value === 'marker' || value === 'tombstone') {
     return value;
   }
   return undefined;
@@ -284,6 +287,7 @@ export function channelIndexEntryEquals(left: ChannelIndexEntry | undefined, rig
   if (!left) return false;
   return left.filename === right.filename
     && left.messageCount === right.messageCount
+    && left.activeTurnTombstoneCount === right.activeTurnTombstoneCount
     && left.lastTimestamp === right.lastTimestamp
     && left.maxId === right.maxId
     && left.lastHmac === right.lastHmac

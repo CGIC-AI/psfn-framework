@@ -5,6 +5,7 @@ import { extractCardPatchFromRecord } from '../../../identity/card-versioning.js
 import {
   normalizeImportedCard,
 } from '../../../identity/importer.js';
+import { buildCharacterMacroMap } from '../../../identity/character-macro-map.js';
 import type { PromptLayerStore } from '../../../identity/prompt-store.js';
 import { syncCharacterFoundationPromptFromCard } from '../../../identity/prompt-sync.js';
 import type { CCv3Data } from '@character-foundry/character-foundry/loader';
@@ -42,6 +43,13 @@ function extractSettingsResultMessage(html: string): ImportResult {
   };
 }
 
+function resolveMissingRequiredIdentityField(card: CharacterCardV2): 'name' | 'personality' | null {
+  const macroMap = buildCharacterMacroMap(card);
+  if (!macroMap.name.trim()) return 'name';
+  if (!macroMap.personality.trim()) return 'personality';
+  return null;
+}
+
 export class AdminIdentityDataService implements AdminIdentityService {
   constructor(private readonly deps: {
     characterCard: CharacterCardV2;
@@ -50,6 +58,32 @@ export class AdminIdentityDataService implements AdminIdentityService {
     importIdentityCardHtml?: (body: string) => Promise<string>;
     promptStore?: PromptLayerStore | null;
   }) {}
+
+  private syncCharacterFoundationWithOutcome(
+    card: CharacterCardV2,
+    updatedBy: string,
+    reason: string,
+  ): { ok: true; warningSuffix: string } | { ok: false; error: string } {
+    const promptSync = syncCharacterFoundationPromptFromCard(
+      this.deps.promptStore,
+      card,
+      updatedBy,
+      reason,
+    );
+    if (promptSync.ok) {
+      return { ok: true, warningSuffix: '' };
+    }
+    if (promptSync.errorCode === 'missing_required_fields') {
+      return {
+        ok: false,
+        error: promptSync.error ?? 'Missing required identity fields for Character Foundation sync',
+      };
+    }
+    return {
+      ok: true,
+      warningSuffix: ` (Character Foundation sync warning: ${promptSync.error})`,
+    };
+  }
 
   getIdentityData(): AdminIdentityData {
     const snapshot = this.deps.cardVersionStore?.getCurrent();
@@ -152,24 +186,35 @@ export class AdminIdentityDataService implements AdminIdentityService {
         return { ok: false, message: 'Uploaded card data must have a "data" object or a "name" field' };
       }
 
+      const missingRequiredField = resolveMissingRequiredIdentityField(normalizedCard);
+      if (missingRequiredField) {
+        return {
+          ok: false,
+          message: `Import failed: required identity field "${missingRequiredField}" cannot be empty`,
+        };
+      }
+
       // Apply full-card replacement so missing fields are cleared.
       const snapshot = cardVersionStore.update(normalizedCard, 'admin:upload', 'File upload import');
 
       // Update in-memory reference
       Object.assign(this.deps.characterCard, snapshot.card);
 
-      const promptSync = syncCharacterFoundationPromptFromCard(
-        this.deps.promptStore,
+      const promptSyncOutcome = this.syncCharacterFoundationWithOutcome(
         snapshot.card,
         'admin:upload',
+        'Sync Character Foundation prompt from uploaded character card',
       );
-      const promptWarning = !promptSync.ok
-        ? ` (Character Foundation sync warning: ${promptSync.error})`
-        : '';
+      if (!promptSyncOutcome.ok) {
+        return {
+          ok: false,
+          message: `Import failed: ${promptSyncOutcome.error}`,
+        };
+      }
 
       return {
         ok: true,
-        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}${promptWarning}`,
+        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}${promptSyncOutcome.warningSuffix}`,
       };
     } catch (error) {
       return {
@@ -210,22 +255,35 @@ export class AdminIdentityDataService implements AdminIdentityService {
     if (!Number.isInteger(version) || version <= 0) {
       return { ok: false, message: 'version must be a positive integer' };
     }
+    const targetEntry = cardVersionStore.getHistoryEntry(version);
+    if (!targetEntry) {
+      return { ok: false, message: `version ${version} is not available` };
+    }
+    const missingRequiredField = resolveMissingRequiredIdentityField(targetEntry.newCard);
+    if (missingRequiredField) {
+      return {
+        ok: false,
+        message: `Rollback blocked: required identity field "${missingRequiredField}" is empty in version ${version}`,
+      };
+    }
 
     try {
       const snapshot = cardVersionStore.rollback(version, 'admin:api');
       Object.assign(this.deps.characterCard, snapshot.card);
-      const promptSync = syncCharacterFoundationPromptFromCard(
-        this.deps.promptStore,
+      const promptSyncOutcome = this.syncCharacterFoundationWithOutcome(
         snapshot.card,
         'admin:rollback',
         `Sync Character Foundation prompt after rollback to version ${version}`,
       );
-      const promptWarning = !promptSync.ok
-        ? ` (Character Foundation sync warning: ${promptSync.error})`
-        : '';
+      if (!promptSyncOutcome.ok) {
+        return {
+          ok: false,
+          message: `Rollback failed: ${promptSyncOutcome.error}`,
+        };
+      }
       return {
         ok: true,
-        message: `Rolled back to version ${version}${promptWarning}`,
+        message: `Rolled back to version ${version}${promptSyncOutcome.warningSuffix}`,
         snapshot,
       };
     } catch (error) {
@@ -308,23 +366,39 @@ export class AdminIdentityDataService implements AdminIdentityService {
     }
 
     const patch = extractCardPatchFromRecord(patchRecord);
+    const nextCard: CharacterCardV2 = {
+      ...this.deps.characterCard,
+      data: {
+        ...this.deps.characterCard.data,
+        ...patch,
+      },
+    };
+    const missingRequiredField = resolveMissingRequiredIdentityField(nextCard);
+    if (missingRequiredField) {
+      return {
+        ok: false,
+        message: `required identity field "${missingRequiredField}" cannot be empty`,
+      };
+    }
     try {
       const snapshot = cardVersionStore.updateData(patch, 'admin:api', `Admin edited field: ${field}`);
       // Also update the in-memory character card reference
       const current = snapshot.card;
       Object.assign(this.deps.characterCard, current);
-      const promptSync = syncCharacterFoundationPromptFromCard(
-        this.deps.promptStore,
+      const promptSyncOutcome = this.syncCharacterFoundationWithOutcome(
         current,
         'admin:api',
         `Sync Character Foundation prompt after field update: ${field}`,
       );
-      const promptWarning = !promptSync.ok
-        ? ` (Character Foundation sync warning: ${promptSync.error})`
-        : '';
+      if (!promptSyncOutcome.ok) {
+        return {
+          ok: false,
+          message: `Update failed: ${promptSyncOutcome.error}`,
+        };
+      }
       return {
         ok: true,
-        message: `Updated "${field}" to v${snapshot.version}${promptWarning}`,
+        message: `Updated "${field}" to v${snapshot.version}${promptSyncOutcome.warningSuffix}`,
       };
     } catch (error) {
       return { ok: false, message: String(error) };

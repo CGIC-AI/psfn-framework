@@ -121,4 +121,35 @@ describe('syncCharacterFoundationPromptFromCard', () => {
     const foundation = promptStore.getByType('base')[0];
     expect(foundation.content).toBe('Legacy rendered foundation content');
   });
+
+  it('fails closed when required identity fields are effectively empty after normalization', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('Legacy rendered foundation content');
+
+    const badCard: CharacterCardV2 = {
+      ...TEST_CARD,
+      data: {
+        ...TEST_CARD.data,
+        name: 'system prompt',
+      },
+    };
+
+    const result = syncCharacterFoundationPromptFromCard(
+      promptStore,
+      badCard,
+      'admin:sync-test',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.updated).toBe(false);
+    expect(result.errorCode).toBe('missing_required_fields');
+    expect(result.error).toContain('name');
+
+    const foundation = promptStore.getByType('base')[0];
+    expect(foundation.content).toBe('Legacy rendered foundation content');
+  });
 });

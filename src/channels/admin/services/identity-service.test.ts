@@ -80,6 +80,42 @@ describe('AdminIdentityDataService', () => {
     expect(foundation.updatedBy).toBe('admin:api');
   });
 
+  it('fails closed when editing required identity fields to empty/placeholder values', () => {
+    const root = makeTempDir();
+    const characterCardPath = writeCard(root);
+
+    const cardVersionStore = new CharacterCardVersionStore(
+      characterCardPath,
+      join(root, 'character-card-history.jsonl'),
+    );
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('You are {{char}}.');
+
+    const service = new AdminIdentityDataService({
+      characterCard: loadCharacterCard(characterCardPath),
+      config: {} as SubstrateConfig,
+      cardVersionStore,
+      promptStore,
+    });
+
+    const emptyName = service.updateIdentityField(JSON.stringify({
+      field: 'name',
+      value: '',
+    }));
+    expect(emptyName.ok).toBe(false);
+    expect(emptyName.message).toContain('required identity field');
+
+    const placeholderName = service.updateIdentityField(JSON.stringify({
+      field: 'name',
+      value: 'system prompt',
+    }));
+    expect(placeholderName.ok).toBe(false);
+    expect(placeholderName.message).toContain('required identity field');
+  });
+
   it('syncs Character Foundation prompt after card data import', async () => {
     const root = makeTempDir();
     const characterCardPath = writeCard(root);
@@ -165,5 +201,34 @@ describe('AdminIdentityDataService', () => {
     expect(rollback.ok).toBe(true);
     expect(rollback.message).toContain('Rolled back to version 2');
     expect(rollback.message).toContain('Character Foundation sync warning');
+  });
+
+  it('fails closed on rollback when target version has missing required identity fields', () => {
+    const root = makeTempDir();
+    const characterCardPath = writeCard(root);
+
+    const cardVersionStore = new CharacterCardVersionStore(
+      characterCardPath,
+      join(root, 'character-card-history.jsonl'),
+    );
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('You are {{char}}.');
+
+    const service = new AdminIdentityDataService({
+      characterCard: loadCharacterCard(characterCardPath),
+      config: {} as SubstrateConfig,
+      cardVersionStore,
+      promptStore,
+    });
+
+    cardVersionStore.updateData({ personality: 'Still valid.' }, 'test', 'safe');
+    const invalidSnapshot = cardVersionStore.updateData({ name: 'system prompt' }, 'test', 'invalid');
+
+    const rollback = service.rollbackIdentityCard(JSON.stringify({ version: invalidSnapshot.version - 1 }));
+    expect(rollback.ok).toBe(false);
+    expect(rollback.message).toContain('Rollback blocked');
   });
 });

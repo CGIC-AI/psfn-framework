@@ -449,6 +449,24 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('wireShardAndThinkRuntime({');
   });
 
+  it('passes sleeptime memory dependencies into shared heartbeat wiring in both runtime modes', () => {
+    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+    const runtimeHeartbeatIndex = runtimeSource.indexOf('wireHeartbeatRuntime(');
+    expect(runtimeHeartbeatIndex).toBeGreaterThanOrEqual(0);
+    expect(runtimeSource.indexOf('sessionManager: this.sessionManager', runtimeHeartbeatIndex))
+      .toBeGreaterThan(runtimeHeartbeatIndex);
+    expect(runtimeSource.indexOf('coreMemoryStore,', runtimeHeartbeatIndex))
+      .toBeGreaterThan(runtimeHeartbeatIndex);
+
+    const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const agentHeartbeatIndex = agentSource.indexOf('wireHeartbeatRuntime(');
+    expect(agentHeartbeatIndex).toBeGreaterThanOrEqual(0);
+    expect(agentSource.indexOf('sessionManager,', agentHeartbeatIndex))
+      .toBeGreaterThan(agentHeartbeatIndex);
+    expect(agentSource.indexOf('coreMemoryStore,', agentHeartbeatIndex))
+      .toBeGreaterThan(agentHeartbeatIndex);
+  });
+
   it('routes gateway embedding bootstrap through env provider factory', () => {
     const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
     expect(source).toContain('createEmbeddingProviderFromEnv(process.env)');

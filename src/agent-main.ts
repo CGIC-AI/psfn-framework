@@ -566,7 +566,7 @@ async function main(): Promise<void> {
   });
   wireSettingsRuntime(agentLoop, config);
   wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir, gateway);
-  wireCoreMemoryRuntime({
+  const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,
     config,
@@ -1091,6 +1091,8 @@ async function main(): Promise<void> {
       compositionalPolicy: config.compositionalPolicy,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
+      sessionManager,
+      coreMemoryStore,
       postTurnActions,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
     },

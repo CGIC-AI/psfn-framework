@@ -3073,6 +3073,40 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).toContain('conversation');
   });
 
+  it('injects active concerns into runtime context when concern provider is wired', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    agent.activeConcernProvider = {
+      getActiveConcerns: vi.fn().mockReturnValue([{
+        id: 'concern-1',
+        text: 'Check whether V ate today.',
+        priority: 'high',
+        source: 'agent',
+        createdAt: '2026-02-01T10:00:00.000Z',
+        expiresAt: '2026-02-03T10:00:00.000Z',
+        contactId: 'user-123',
+      }]),
+    } as any;
+
+    await agent.handleMessage(makeMessage({
+      authorId: 'user-123',
+    }));
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const prompt = buildCall[1] as string;
+    expect(prompt).toContain('[Active Concerns]');
+    expect(prompt).toContain('Check whether V ate today');
+    expect(prompt).toContain('contact=user-123');
+    expect(prompt).toContain('high');
+  });
+
   it('injects bounded scratchpad notes into system context when scratchpad provider is wired', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

@@ -85,6 +85,7 @@ import {
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
+import { wireIntentionRuntime } from './intention/runtime-wiring.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
   composeIdentity,
@@ -697,9 +698,10 @@ export class SubstrateRuntime implements Lifecycle {
               privacyLevel: 'private',
             }],
           }
-          : {}),
-      },
-    );
+        : {}),
+    },
+  );
+    wireIntentionRuntime(this.agentLoop, this.db);
 
     this.memoryExtractor = wireMemoryRuntime({
       agentLoop: this.agentLoop,

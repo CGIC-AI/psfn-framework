@@ -84,6 +84,7 @@ import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
+import { wireIntentionRuntime } from './intention/runtime-wiring.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -607,9 +608,10 @@ async function main(): Promise<void> {
             privacyLevel: 'private',
           }],
         }
-        : {}),
-    },
-  );
+      : {}),
+  },
+);
+  wireIntentionRuntime(agentLoop, db);
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
   const memoryExtractor = wireMemoryRuntime({

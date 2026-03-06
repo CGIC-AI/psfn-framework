@@ -92,6 +92,8 @@ import {
 import { runDeliberation } from '../llm/deliberation.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import {
+  parseDeferredToolHandoffActionId,
+  isDeferredToolHandoffMessageId,
   normalizeDeferredToolHandoffIntent,
   normalizeToolNameList,
   type DeferredToolHandoffIntent,
@@ -274,6 +276,24 @@ interface AutoloadTurnOutcome {
   skipped: AdaptiveToolSnapshotSkip[];
 }
 
+interface BackgroundContinuationCompletionSignal {
+  continuationId: string;
+  sourceMessageId: string;
+  deliverySessionId: string;
+  queuedForPostTurnDelivery: boolean;
+  hasDeliverableContent: boolean;
+  completedAt: number;
+  queueDepth: number;
+}
+
+interface PendingBackgroundContinuationDelivery {
+  continuationId: string;
+  sourceMessageId: string;
+  deliverySessionId: string;
+  content: string;
+  completedAt: number;
+}
+
 // ── SubstrateAgent ──
 
 export class SubstrateAgent {
@@ -300,6 +320,7 @@ export class SubstrateAgent {
   private postTurnActionInferers: PostTurnActionInferer[] = [];
   private activeTurnCorrelation: CorrelationMetadata | null = null;
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
+  private pendingBackgroundContinuationDeliveries = new Map<string, PendingBackgroundContinuationDelivery[]>();
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -1238,11 +1259,15 @@ export class SubstrateAgent {
             ...activation.activatedTools,
             ...activation.alreadyActiveTools,
           ])];
+          const deferredSessionId = self.activeTurnCorrelation?.channelId
+            ? self.resolveSessionChannelId(self.activeTurnCorrelation.channelId)
+            : undefined;
           const deferredToolHandoff = params.deferUntilTurnBoundary
             ? normalizeDeferredToolHandoffIntent({
               toolNames: handoffTools,
               intendedAction: params.intendedAction,
               maxRetries: params.maxRetries,
+              ...(deferredSessionId ? { sessionId: deferredSessionId } : {}),
             })
             : null;
           if (deferredToolHandoff) {
@@ -1680,6 +1705,11 @@ export class SubstrateAgent {
     const startTime = Date.now();
     const requestId = message.id;
     const turnId = createTurnId();
+    const deferredContinuationId = parseDeferredToolHandoffActionId(message.id);
+    const restorePinnedSessionContext = this.pinDeferredContinuationSessionContext(
+      deferredContinuationId,
+      message.channelId,
+    );
     const taskKind = this.resolveTaskKind(message);
     const turnCallType = this.resolveTurnCallType(message, taskKind);
     const turnCorrelationBase = this.buildTurnCorrelation(message, turnCallType, turnId, requestId);
@@ -1991,7 +2021,7 @@ export class SubstrateAgent {
         });
 
         // Activate event bridge for this channel (streams deltas + tool events to EventBus)
-        this.bridge.setChannel(message.channelId, {
+        const bridgeToken = this.bridge.setChannel(message.channelId, {
           turnId,
           requestId,
           callType: turnCallType,
@@ -2013,7 +2043,7 @@ export class SubstrateAgent {
           );
         } finally {
           unsubscribeFirstToken();
-          this.bridge.clearChannel();
+          this.bridge.clearChannel(bridgeToken);
           this.activeTurnCorrelation = null;
         }
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
@@ -2065,7 +2095,7 @@ export class SubstrateAgent {
             requestSuffix: string,
             originStage: string,
           ): Promise<void> => {
-            this.bridge.setChannel(message.channelId, {
+            const bridgeToken = this.bridge.setChannel(message.channelId, {
               turnId,
               requestId: `${requestId}:${requestSuffix}`,
               callType: turnCallType,
@@ -2084,7 +2114,7 @@ export class SubstrateAgent {
                 } satisfies UserMessage),
               );
             } finally {
-              this.bridge.clearChannel();
+              this.bridge.clearChannel(bridgeToken);
               this.activeTurnCorrelation = null;
             }
           };
@@ -2290,6 +2320,42 @@ export class SubstrateAgent {
           ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.post_turn.actions.inferred'),
         });
       }
+      if (deferredContinuationId && turnCallType === 'background') {
+        const completionSignal = this.queueBackgroundContinuationCompletion(
+          deferredContinuationId,
+          message,
+          agentResponse,
+        );
+        await this.emitBackgroundContinuationEvent(
+          'agent.background.continuation.completed',
+          {
+            channelId: message.channelId,
+            continuationId: completionSignal.continuationId,
+            sourceMessageId: completionSignal.sourceMessageId,
+            deliverySessionId: completionSignal.deliverySessionId,
+            queuedForPostTurnDelivery: completionSignal.queuedForPostTurnDelivery,
+            hasDeliverableContent: completionSignal.hasDeliverableContent,
+            completedAt: completionSignal.completedAt,
+            queueDepth: completionSignal.queueDepth,
+            ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.completed'),
+          },
+        );
+      } else if (turnCallType === 'chat') {
+        const postTurnDeliveries = this.dequeueBackgroundContinuationDeliveries(
+          this.resolveSessionChannelId(message.channelId),
+        );
+        if (postTurnDeliveries.length > 0) {
+          await this.emitBackgroundContinuationEvent(
+            'agent.background.continuation.post_turn_delivery',
+            {
+              channelId: message.channelId,
+              deliverySessionId: this.resolveSessionChannelId(message.channelId),
+              deliveries: postTurnDeliveries,
+              ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.post_turn_delivery'),
+            },
+          );
+        }
+      }
       await this.eventBus.emit('agent.turn.usage', {
         message,
         usage: turnUsage,
@@ -2322,10 +2388,118 @@ export class SubstrateAgent {
       throw err;
     } finally {
       unsubscribeRetrieval();
+      restorePinnedSessionContext();
     }
   }
 
   // ── Private helpers ──
+
+  private pinDeferredContinuationSessionContext(
+    deferredContinuationId: string | null,
+    channelId: string,
+  ): () => void {
+    if (!deferredContinuationId) {
+      return () => {};
+    }
+    const manager = this.sessionManager as unknown as {
+      getActiveContextSession?: () => string | null;
+      setActiveContextSession?: (sessionId: string | null) => void;
+    };
+    if (
+      typeof manager.getActiveContextSession !== 'function'
+      || typeof manager.setActiveContextSession !== 'function'
+    ) {
+      throw new Error(
+        'Deferred continuation session isolation failed: active-context session controls are unavailable',
+      );
+    }
+    const pinnedSessionId = channelId.trim();
+    if (!pinnedSessionId) {
+      throw new Error(
+        `Deferred continuation session isolation failed: invalid channel/session id for "${deferredContinuationId}"`,
+      );
+    }
+    const previousSessionId = manager.getActiveContextSession();
+    manager.setActiveContextSession(pinnedSessionId);
+    return () => {
+      manager.setActiveContextSession(previousSessionId ?? null);
+    };
+  }
+
+  private resolveSessionChannelId(channelId: string): string {
+    const manager = this.sessionManager as unknown as {
+      resolveSessionChannelId?: (sourceChannelId: string) => string;
+    };
+    if (typeof manager.resolveSessionChannelId !== 'function') {
+      return channelId;
+    }
+    const resolved = manager.resolveSessionChannelId(channelId);
+    const trimmed = resolved.trim();
+    return trimmed.length > 0 ? trimmed : channelId;
+  }
+
+  private queueBackgroundContinuationCompletion(
+    deferredContinuationId: string,
+    message: SubstrateMessage,
+    response: AgentResponse,
+  ): BackgroundContinuationCompletionSignal {
+    const completedAt = Date.now();
+    const deliverySessionId = this.resolveSessionChannelId(message.channelId);
+    const hasDeliverableContent = response.content.trim().length > 0
+      && !deliverySessionId.startsWith('internal:');
+    if (!hasDeliverableContent) {
+      return {
+        continuationId: deferredContinuationId,
+        sourceMessageId: message.id,
+        deliverySessionId,
+        queuedForPostTurnDelivery: false,
+        hasDeliverableContent: false,
+        completedAt,
+        queueDepth: this.pendingBackgroundContinuationDeliveries.get(deliverySessionId)?.length ?? 0,
+      };
+    }
+
+    const existing = this.pendingBackgroundContinuationDeliveries.get(deliverySessionId) ?? [];
+    const next = [...existing, {
+      continuationId: deferredContinuationId,
+      sourceMessageId: message.id,
+      deliverySessionId,
+      content: response.content,
+      completedAt,
+    } satisfies PendingBackgroundContinuationDelivery];
+    this.pendingBackgroundContinuationDeliveries.set(deliverySessionId, next);
+
+    return {
+      continuationId: deferredContinuationId,
+      sourceMessageId: message.id,
+      deliverySessionId,
+      queuedForPostTurnDelivery: true,
+      hasDeliverableContent: true,
+      completedAt,
+      queueDepth: next.length,
+    };
+  }
+
+  private dequeueBackgroundContinuationDeliveries(
+    deliverySessionId: string,
+  ): PendingBackgroundContinuationDelivery[] {
+    const existing = this.pendingBackgroundContinuationDeliveries.get(deliverySessionId);
+    if (!existing || existing.length === 0) {
+      return [];
+    }
+    this.pendingBackgroundContinuationDeliveries.delete(deliverySessionId);
+    return existing;
+  }
+
+  private async emitBackgroundContinuationEvent(
+    eventName: 'agent.background.continuation.completed' | 'agent.background.continuation.post_turn_delivery',
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const telemetryBus = this.eventBus as unknown as {
+      emit: (event: string, payload: Record<string, unknown>) => Promise<void>;
+    };
+    await telemetryBus.emit(eventName, payload);
+  }
 
   private resolveMoaSettings(): ResolvedMoaSettings | null {
     if (this.config.moaEnabled !== true) return null;
@@ -2514,6 +2688,9 @@ export class SubstrateAgent {
     message: SubstrateMessage,
     taskKind: string | undefined,
   ): ObservabilityCallType {
+    if (isDeferredToolHandoffMessageId(message.id)) {
+      return 'background';
+    }
     if (taskKind === 'heartbeat' || taskKind === 'reflection') {
       return 'scheduled';
     }
@@ -3395,6 +3572,9 @@ export class SubstrateAgent {
 
   /** Map internal channel/task context to prompt taskKind overlays */
   private resolveTaskKind(message: SubstrateMessage): string | undefined {
+    if (isDeferredToolHandoffMessageId(message.id)) {
+      return 'deferred_tool_handoff';
+    }
     const channelDock = this.resolveChannelPromptDock(message);
     const adapterTaskKind = channelDock?.prompt?.resolveTaskKind?.(message);
     if (adapterTaskKind) return adapterTaskKind;

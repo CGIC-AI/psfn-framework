@@ -18,9 +18,9 @@ export interface EventBridge {
       CorrelationMetadata,
       'turnId' | 'requestId' | 'callType' | 'purpose' | 'originType' | 'originStage'
     >>,
-  ): void;
+  ): number;
   /** Clear the active channel after prompt completes */
-  clearChannel(): void;
+  clearChannel(token?: number): void;
   /** Unsubscribe from Agent events */
   destroy(): void;
 }
@@ -40,7 +40,9 @@ export interface EventBridge {
  * Events are only emitted when a channel is active (between setChannel/clearChannel).
  */
 export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge {
-  let currentContext: {
+  let nextContextToken = 1;
+  const contextStack: Array<{
+    token: number;
     channelId: string;
     turnId?: string;
     requestId?: string;
@@ -48,9 +50,10 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
     purpose?: string;
     originType?: ObservabilityCallType;
     originStage?: string;
-  } | null = null;
+  }> = [];
 
   const unsub = agent.subscribe((event: AgentEvent) => {
+    const currentContext = contextStack[contextStack.length - 1] ?? null;
     if (!currentContext) return;
     const {
       channelId,
@@ -72,7 +75,9 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
       callType: type === 'chat' ? (callType ?? 'chat') : 'tool',
       toolName: toolName ?? undefined,
       purpose: purpose ?? eventPurpose,
-      originType: type === 'chat' ? (originType ?? callType ?? 'chat') : 'tool',
+      originType: type === 'chat'
+        ? (originType ?? callType ?? 'chat')
+        : (originType ?? callType ?? 'tool'),
       originStage: originStage ?? purpose ?? eventPurpose,
     });
 
@@ -155,7 +160,9 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
         'turnId' | 'requestId' | 'callType' | 'purpose' | 'originType' | 'originStage'
       >>,
     ) {
-      currentContext = {
+      const token = nextContextToken++;
+      contextStack.push({
+        token,
         channelId,
         ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
         ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
@@ -163,10 +170,27 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
         ...(correlation?.purpose ? { purpose: correlation.purpose } : {}),
         ...(correlation?.originType ? { originType: correlation.originType } : {}),
         ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
-      };
+      });
+      return token;
     },
-    clearChannel() { currentContext = null; },
-    destroy() { unsub(); },
+    clearChannel(token?: number) {
+      if (contextStack.length === 0) {
+        return;
+      }
+      if (token === undefined) {
+        contextStack.pop();
+        return;
+      }
+      const index = contextStack.findIndex(entry => entry.token === token);
+      if (index === -1) {
+        return;
+      }
+      contextStack.splice(index, 1);
+    },
+    destroy() {
+      contextStack.length = 0;
+      unsub();
+    },
   };
 }
 

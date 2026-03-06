@@ -14,6 +14,8 @@ import { SessionManager } from './session/manager.js';
 import { buildSessionHmacKeyring } from './session/journal-utils.js';
 import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { SubstrateAgent } from './agent/substrate-agent.js';
+import { EmotionObserver } from './emotion/observer.js';
+import { EmotionState } from './emotion/state.js';
 import type { DiscordAdapter } from './channels/discord/adapter.js';
 import { MemoryStore } from './memory/store.js';
 import { MemoryExtractor } from './memory/extraction.js';
@@ -614,6 +616,8 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Agent loop
+    const emotionObserver = new EmotionObserver();
+    const emotionState = new EmotionState();
     this.agentLoop = composeSubstrateAgent({
       eventBus: this.eventBus,
       llmProvider: this.llmClient,
@@ -622,6 +626,11 @@ export class SubstrateRuntime implements Lifecycle {
       characterName: card.data.name,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       config: this.config,
+      emotionRuntime: {
+        observer: emotionObserver,
+        state: emotionState,
+        requireWiring: true,
+      },
     });
     this.agentLoop.scratchpadProvider = this.memoryStore;
     this.agentLoop.setCapabilityRuntime(this.capabilityRuntime);

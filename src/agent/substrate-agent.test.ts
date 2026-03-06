@@ -9,6 +9,8 @@ import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ChannelPromptDock } from '../channels/types.js';
 import { isTurnId } from '../turns/id.js';
+import { EmotionState } from '../emotion/state.js';
+import { parseSessionEmotionState } from '../emotion/session-metadata.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -145,6 +147,7 @@ function makeMockSessionManager(): SessionManager {
         { role: 'user', content: 'Hello' },
       ],
     } satisfies LLMContext),
+    getRecentMessages: vi.fn().mockReturnValue([]),
     resolveSessionChannelId,
     setActiveContextSession,
     getActiveContextSession,
@@ -3122,6 +3125,89 @@ describe('SubstrateAgent.handleMessage', () => {
       .filter(line => line.startsWith('- sp-'));
     expect(injectedEntries.length).toBeLessThanOrEqual(8);
     expect(prompt).toContain('(4 additional notes omitted for context budget)');
+  });
+
+  it('updates emotion state per message, injects runtime context, and persists metadata snapshots', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const config = makeConfig();
+      const sessionManager = makeMockSessionManager();
+      const emotionObserver = {
+        observe: vi.fn()
+          .mockResolvedValueOnce({
+            vad: { valence: 0.6, arousal: 0.2, dominance: 0.1 },
+            discrete: { joy: 0.9, trust: 0.4 },
+            confidence: 0.8,
+          })
+          .mockResolvedValueOnce({
+            vad: { valence: -0.7, arousal: 0.5, dominance: -0.2 },
+            discrete: { anger: 1, fear: 0.6 },
+            confidence: 1,
+          }),
+      };
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        sessionManager,
+        'Base prompt',
+        config,
+        {
+          emotionRuntime: {
+            observer: emotionObserver as any,
+            state: new EmotionState(),
+            requireWiring: true,
+          },
+        },
+      );
+
+      await agent.handleMessage(makeMessage({
+        id: 'msg-emotion-1',
+        content: 'I feel great today',
+      }));
+      vi.advanceTimersByTime(4_000);
+      await agent.handleMessage(makeMessage({
+        id: 'msg-emotion-2',
+        content: 'Now I am frustrated',
+      }));
+
+      expect(emotionObserver.observe).toHaveBeenCalledTimes(2);
+      expect(emotionObserver.observe).toHaveBeenNthCalledWith(1, 'I feel great today', 0);
+      expect(emotionObserver.observe).toHaveBeenNthCalledWith(2, 'Now I am frustrated', 4);
+
+      const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+      const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+      expect(firstPrompt).toContain('[Emotional State]');
+      expect(firstPrompt).toContain('Top emotions: joy=');
+      expect(secondPrompt).toContain('Top emotions: anger=');
+
+      const firstAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[0][5] as { metadata?: string };
+      const secondAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[1][5] as { metadata?: string };
+      expect(firstAssistantOptions.metadata).toBeTypeOf('string');
+      expect(secondAssistantOptions.metadata).toBeTypeOf('string');
+      const firstSnapshot = parseSessionEmotionState(firstAssistantOptions.metadata);
+      const secondSnapshot = parseSessionEmotionState(secondAssistantOptions.metadata);
+      expect(firstSnapshot?.discrete.joy).toBeGreaterThan(0);
+      expect(secondSnapshot?.discrete.anger).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails closed when strict emotion wiring is requested without observer/state', () => {
+    const config = makeConfig();
+    expect(() => new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+      {
+        emotionRuntime: {
+          requireWiring: true,
+        },
+      },
+    )).toThrow('Emotion runtime wiring is required');
   });
 
   it('emits agent.error on handleMessage failure', async () => {

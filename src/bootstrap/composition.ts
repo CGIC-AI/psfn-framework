@@ -15,7 +15,7 @@ import {
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
   type EmbeddingRuntimeProvider,
 } from '../memory/embedding.js';
-import { SubstrateAgent } from '../agent/substrate-agent.js';
+import { SubstrateAgent, type EmotionRuntimeWiring } from '../agent/substrate-agent.js';
 import { MemoryRetriever } from '../memory/retrieval.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import type { MemoryStore } from '../memory/store.js';
@@ -121,6 +121,7 @@ export interface SubstrateAgentCompositionOptions {
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
   config: SubstrateConfig;
+  emotionRuntime?: EmotionRuntimeWiring;
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -136,6 +137,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.characterPromptVariablesProvider
         ? { characterPromptVariablesProvider: options.characterPromptVariablesProvider }
         : {}),
+      ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
     },
   );
 }

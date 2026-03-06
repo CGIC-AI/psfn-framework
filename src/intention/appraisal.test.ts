@@ -136,6 +136,52 @@ describe('IntentionAppraisal', () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
+  it('supports motivation trigger override to bypass cadence checks', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'followUp',
+          priority: 'medium',
+          reason: 'Sustained mood drift needs a check-in.',
+          timing: 'soon',
+          followUp: {
+            content: 'Following up because the emotional trend stayed low.',
+          },
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 20,
+      emotionalShiftThreshold: 0.95,
+    });
+
+    const first = await appraisal.evaluate({
+      sessionId: 'api:motivation',
+      currentEmotion: makeEmotionSnapshot(),
+      recentMessages: [{ role: 'user', content: 'Just checking in.' }],
+    });
+    const second = await appraisal.evaluate({
+      sessionId: 'api:motivation',
+      currentEmotion: makeEmotionSnapshot({
+        mood: { valence: -0.12, arousal: 0.04, dominance: -0.08 },
+      }),
+      recentMessages: [{ role: 'user', content: 'Still feeling low energy.' }],
+      triggerOverride: 'motivation',
+      motivationSignals: ['sustained_negative_valence'],
+    });
+
+    expect(first[0]?.type).toBe('noop');
+    expect(second[0]?.type).toBe('followUp');
+    expect(complete).toHaveBeenCalledTimes(1);
+    const promptPayload = JSON.parse((complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}') as string) as {
+      trigger?: string;
+      motivationSignals?: string[];
+    };
+    expect(promptPayload.trigger).toBe('motivation');
+    expect(promptPayload.motivationSignals).toEqual(['sustained_negative_valence']);
+  });
+
   it('fails closed when model output is malformed', async () => {
     const { provider } = makeProvider(['not valid json']);
     const onEvaluationError = vi.fn();

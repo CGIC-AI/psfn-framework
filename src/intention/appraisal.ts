@@ -96,6 +96,8 @@ export interface IntentionAppraisalInput {
   activeConcerns?: readonly ActiveConcernSnapshot[];
   contactEmotionalSnapshot?: EmotionalSnapshot | null;
   conversationTrajectory?: ConversationTrajectorySnapshot;
+  triggerOverride?: 'motivation';
+  motivationSignals?: readonly string[];
   now?: number;
 }
 
@@ -138,10 +140,12 @@ interface NormalizedIntentionAppraisalInput {
   activeConcerns: ActiveConcernSnapshot[];
   contactEmotionalSnapshot: EmotionalSnapshot | null;
   conversationTrajectory: ConversationTrajectorySnapshot | null;
+  triggerOverride: 'motivation' | null;
+  motivationSignals: string[];
   now: number;
 }
 
-type AppraisalTrigger = 'frequency' | 'emotional_shift' | 'concern_due';
+type AppraisalTrigger = 'frequency' | 'emotional_shift' | 'concern_due' | 'motivation';
 
 interface ParsedDecisionResponse {
   decisions: IntentionActionDecision[];
@@ -383,6 +387,27 @@ function normalizeConversationTrajectory(value: ConversationTrajectorySnapshot |
   };
 }
 
+function normalizeTriggerOverride(value: unknown): 'motivation' | null {
+  if (value === undefined || value === null) return null;
+  if (value === 'motivation') return value;
+  throw new Error(`triggerOverride is unsupported: ${String(value)}`);
+}
+
+function normalizeMotivationSignals(value: unknown): string[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('motivationSignals must be an array when provided');
+  }
+
+  const normalized = value
+    .filter(signal => typeof signal === 'string')
+    .map(signal => signal.trim().toLowerCase())
+    .filter(signal => signal.length > 0);
+  return [...new Set(normalized)].slice(0, 8);
+}
+
 function normalizeInput(
   input: IntentionAppraisalInput,
   options: {
@@ -401,6 +426,8 @@ function normalizeInput(
   const activeConcerns = normalizeActiveConcerns(input.activeConcerns, options.maxConcernCount);
   const contactEmotionalSnapshot = normalizeContactEmotionalSnapshot(input.contactEmotionalSnapshot);
   const conversationTrajectory = normalizeConversationTrajectory(input.conversationTrajectory);
+  const triggerOverride = normalizeTriggerOverride(input.triggerOverride);
+  const motivationSignals = normalizeMotivationSignals(input.motivationSignals);
   const now = (
     typeof input.now === 'number'
     && Number.isFinite(input.now)
@@ -416,6 +443,8 @@ function normalizeInput(
     activeConcerns,
     contactEmotionalSnapshot,
     conversationTrajectory,
+    triggerOverride,
+    motivationSignals,
     now,
   };
 }
@@ -918,13 +947,14 @@ export class IntentionAppraisal {
       this.dueSoonWindowMs,
     );
     const trigger: AppraisalTrigger | null = (
-      emotionalShift >= this.emotionalShiftThreshold
+      normalized.triggerOverride
+      ?? (emotionalShift >= this.emotionalShiftThreshold
         ? 'emotional_shift'
         : concernDueSoon
           ? 'concern_due'
           : turnsSinceLast >= this.appraisalFrequency
             ? 'frequency'
-            : null
+            : null)
     );
 
     state.lastEmotion = normalized.currentEmotion;
@@ -951,6 +981,7 @@ export class IntentionAppraisal {
       contactEmotionalSnapshot: normalized.contactEmotionalSnapshot,
       activeConcerns: normalized.activeConcerns,
       conversationTrajectory: normalized.conversationTrajectory,
+      ...(normalized.motivationSignals.length > 0 ? { motivationSignals: normalized.motivationSignals } : {}),
       recentMessages: normalized.recentMessages,
       now: normalized.now,
     };

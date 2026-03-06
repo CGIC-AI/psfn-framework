@@ -107,6 +107,7 @@ import {
   type ActiveConcernSnapshot,
   type IntentionActionDecision,
 } from '../intention/appraisal.js';
+import { MotivationBridge } from '../intention/motivation.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
@@ -133,6 +134,7 @@ interface HeartbeatRuntimeOptions {
   emotionState?: { getState(): EmotionStateSnapshot };
   contactStore?: {
     getEmotionalSnapshot?(id: string): EmotionalSnapshot | undefined;
+    getById?(id: string): { trustLevel?: string } | undefined;
   };
   getActiveConcerns?: (input: {
     channelId: string;
@@ -368,6 +370,7 @@ export function wireHeartbeatRuntime(
     })
     : null;
   const intentionSessionsInFlight = new Set<string>();
+  const motivationBridge = intentionAppraisal ? new MotivationBridge() : null;
 
   type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
 
@@ -926,6 +929,23 @@ export function wireHeartbeatRuntime(
         )
           ? runtimeOptions.contactStore.getEmotionalSnapshot(context.canonicalContactKey) ?? null
           : null;
+        const isPrimaryContact = context.canonicalContactKey
+          ? runtimeOptions.contactStore?.getById?.(context.canonicalContactKey)?.trustLevel === 'primary'
+          : false;
+        const motivationAssessment = motivationBridge?.assess({
+          sessionId: resolvedSessionId,
+          currentEmotion,
+          contactEmotionalSnapshot,
+          isPrimaryContact,
+        });
+        if (motivationAssessment?.shouldTriggerAppraisal) {
+          log.debug('Motivation bridge trigger matched', {
+            sessionId: resolvedSessionId,
+            profile: motivationAssessment.profile,
+            signals: motivationAssessment.signals.map(signal => signal.kind),
+            metrics: motivationAssessment.metrics,
+          });
+        }
         const activeConcerns = await Promise.resolve(
           runtimeOptions.getActiveConcerns?.({
             channelId: resolvedSessionId,
@@ -939,6 +959,12 @@ export function wireHeartbeatRuntime(
           activeConcerns,
           contactEmotionalSnapshot,
           conversationTrajectory: buildConversationTrajectory(context),
+          ...(motivationAssessment?.shouldTriggerAppraisal
+            ? {
+              triggerOverride: 'motivation' as const,
+              motivationSignals: motivationAssessment.signals.map(signal => signal.kind),
+            }
+            : {}),
         });
 
         if (runtimeOptions.onIntentionConcernDecision) {

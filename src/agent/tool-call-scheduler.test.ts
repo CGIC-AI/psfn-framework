@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
-import type { WirableTool } from './tool-wiring-validator.js';
+import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
 import { executeToolCallsWithScheduler } from './tool-call-scheduler.js';
 
 function makeTool(
@@ -34,6 +34,42 @@ function makeAssistantMessage(toolNames: string[]) {
   };
 }
 
+function makeConcurrencyMeta(
+  className: ToolConcurrencyMeta['class'],
+  overrides: Partial<ToolConcurrencyMeta> = {},
+): ToolConcurrencyMeta {
+  const defaults: ToolConcurrencyMeta = className === 'exclusive'
+    ? {
+      class: 'exclusive',
+      exclusivityKeyPolicy: 'static_key',
+      exclusivityKey: 'core:test',
+      interruptibility: 'cooperative',
+      eligibility: {
+        foreground: true,
+        background: true,
+      },
+    }
+    : {
+      class: className,
+      exclusivityKeyPolicy: 'none',
+      interruptibility: 'cooperative',
+      eligibility: {
+        foreground: true,
+        background: true,
+      },
+    };
+
+  return {
+    ...defaults,
+    ...overrides,
+    class: className,
+    eligibility: {
+      ...defaults.eligibility,
+      ...(overrides.eligibility ?? {}),
+    },
+  };
+}
+
 describe('tool-call-scheduler', () => {
   it('runs sibling spawn_shard calls concurrently when bounded parallelism allows it', async () => {
     const starts = new Map<string, number>();
@@ -49,7 +85,7 @@ describe('tool-call-scheduler', () => {
           details: {},
         };
       },
-      { concurrency: { class: 'spawn_shard', maxParallel: 3 } },
+      { concurrency: makeConcurrencyMeta('spawn_shard', { maxParallel: 3 }) },
     );
 
     const streamEvents: any[] = [];
@@ -88,7 +124,12 @@ describe('tool-call-scheduler', () => {
         ends.push(Date.now());
         return { content: [{ type: 'text', text: 'ok' }], details: {} };
       },
-      { concurrency: { class: 'exclusive', exclusivityKey: 'core:memory_write' } },
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'core:memory_write',
+        }),
+      },
     );
 
     const telemetry = vi.fn();
@@ -132,7 +173,7 @@ describe('tool-call-scheduler', () => {
           details: {},
         };
       },
-      { concurrency: { class: 'spawn_shard', maxParallel: 5 } },
+      { concurrency: makeConcurrencyMeta('spawn_shard', { maxParallel: 5 }) },
     );
 
     await executeToolCallsWithScheduler(
@@ -158,7 +199,7 @@ describe('tool-call-scheduler', () => {
         ends.push(Date.now());
         return { content: [{ type: 'text', text: 'ok' }], details: {} };
       },
-      { concurrency: { class: 'read_only', maxParallel: 3 } },
+      { concurrency: makeConcurrencyMeta('read_only', { maxParallel: 3 }) },
     );
 
     await executeToolCallsWithScheduler(
@@ -174,6 +215,46 @@ describe('tool-call-scheduler', () => {
     expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
   });
 
+  it('fails closed to sequential when spawn_shard metadata carries exclusivity wiring', async () => {
+    const starts: number[] = [];
+    const ends: number[] = [];
+    const telemetry = vi.fn();
+    const spawnShard = makeTool(
+      'spawn_shard',
+      async () => {
+        starts.push(Date.now());
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        ends.push(Date.now());
+        return { content: [{ type: 'text', text: 'ok' }], details: {} };
+      },
+      {
+        concurrency: makeConcurrencyMeta('spawn_shard', {
+          maxParallel: 4,
+          exclusivityKeyPolicy: 'static_key',
+          exclusivityKey: 'unsafe:key',
+        }),
+      },
+    );
+
+    await executeToolCallsWithScheduler(
+      [spawnShard],
+      makeAssistantMessage(['spawn_shard', 'spawn_shard']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 4, onTelemetry: telemetry },
+    );
+
+    expect(starts).toHaveLength(2);
+    expect(ends).toHaveLength(2);
+    expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.serialized',
+      expect.objectContaining({
+        batchSize: 1,
+      }),
+    );
+  });
+
   it('fails closed when one sibling spawn_shard call errors in a parallel batch', async () => {
     const spawnShard = makeTool(
       'spawn_shard',
@@ -187,7 +268,7 @@ describe('tool-call-scheduler', () => {
           details: {},
         };
       },
-      { concurrency: { class: 'spawn_shard', maxParallel: 3 } },
+      { concurrency: makeConcurrencyMeta('spawn_shard', { maxParallel: 3 }) },
     );
 
     const result = await executeToolCallsWithScheduler(
@@ -213,7 +294,12 @@ describe('tool-call-scheduler', () => {
         content: [{ type: 'text', text: 'show' }],
         details: {},
       }),
-      { concurrency: { class: 'exclusive', exclusivityKey: 'extended:issue_show' } },
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:issue_show',
+        }),
+      },
     );
 
     const result = await executeToolCallsWithScheduler(
@@ -252,7 +338,12 @@ describe('tool-call-scheduler', () => {
       async () => {
         throw new Error('aborted');
       },
-      { concurrency: { class: 'exclusive', exclusivityKey: 'extended:issue_show' } },
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:issue_show',
+        }),
+      },
     );
 
     const result = await executeToolCallsWithScheduler(

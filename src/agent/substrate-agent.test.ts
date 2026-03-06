@@ -610,6 +610,12 @@ describe('SubstrateAgent.registerTool', () => {
         concurrency: {
           class: 'spawn_shard',
           maxParallel: 3,
+          exclusivityKeyPolicy: 'none',
+          interruptibility: 'cooperative',
+          eligibility: {
+            foreground: true,
+            background: true,
+          },
         },
       },
     } as any;
@@ -664,6 +670,12 @@ describe('SubstrateAgent.registerTool', () => {
         concurrency: {
           class: 'read_only',
           maxParallel: 5,
+          exclusivityKeyPolicy: 'none',
+          interruptibility: 'cooperative',
+          eligibility: {
+            foreground: true,
+            background: true,
+          },
         },
       },
     } as any;
@@ -713,6 +725,12 @@ describe('SubstrateAgent.registerTool', () => {
         concurrency: {
           class: 'spawn_shard',
           maxParallel: 3,
+          exclusivityKeyPolicy: 'none',
+          interruptibility: 'cooperative',
+          eligibility: {
+            foreground: true,
+            background: true,
+          },
         },
       },
     } as any;

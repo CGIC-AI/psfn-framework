@@ -159,6 +159,20 @@ docker compose -f docker/docker-compose.production.yml up --build
 
 Runtime mode operations runbook: `docs/operations/runtime-mode-runbook.md`
 
+Lifecycle scripts require explicit mode selection:
+
+```bash
+./scripts/self/restart.sh --mode continuous
+./scripts/self/restart.sh --mode production
+./scripts/self/rebuild.sh --mode continuous
+./scripts/self/rebuild.sh --mode production
+```
+
+Cross-mode safeguards are fail-closed:
+
+- `--mode production` rejects `./data` PID paths and requires `PSFN_RUNTIME_LAYOUT_MODE=production` in custom start commands.
+- `--mode continuous` rejects production PID paths under `./runtime/production`.
+
 ### Optional Services
 
 **Admin GUI (admin UI) + JSON API:**

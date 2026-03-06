@@ -216,6 +216,7 @@ export interface ToolRuntimeOptions {
   replConfig?: REPLConfig;
   shardAuditTrail?: ShardAuditTrail | null;
   getCapabilityTier?: () => CapabilityTier;
+  compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
 }
@@ -242,6 +243,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     scheduler: options.scheduler ?? null,
     eventBus: options.eventBus,
     getCapabilityTier: options.getCapabilityTier,
+    compositionalPolicy: options.compositionalPolicy,
     moduleInstallConfirmationQueue: options.moduleInstallConfirmationQueue,
     onModuleRegistryMutation: options.onModuleRegistryMutation,
     config: options.replConfig ?? DEFAULT_REPL_CONFIG,

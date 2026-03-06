@@ -670,6 +670,7 @@ async function main(): Promise<void> {
     replConfig,
     shardAuditTrail: safeguardAuditTrail,
     getCapabilityTier: () => capabilityRuntime.getTier(),
+    compositionalPolicy: config.compositionalPolicy,
     moduleInstallConfirmationQueue: cardProposalQueue,
     onModuleRegistryMutation: async (mutation) => {
       await moduleLoader.applyRegistryMutation(mutation);

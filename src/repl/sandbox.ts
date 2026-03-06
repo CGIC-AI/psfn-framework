@@ -19,6 +19,7 @@ import {
   createRepoCapabilities,
   createSchedulerCapabilities,
   createShellCapabilities,
+  createThinkCapabilities,
   createToolchainCapabilities,
   createWebCapabilities,
 } from './sandbox-capabilities/index.js';
@@ -76,6 +77,11 @@ export class REPLSandbox {
       pushEvidence,
       requestMetadata: this.deps.requestMetadata,
     });
+    const nestedThink = this.deps.runNestedThink
+      ? createThinkCapabilities({
+        runNestedThink: this.deps.runNestedThink,
+      })
+      : null;
 
     const memory = createMemoryCapabilities({
       llmProvider: this.deps.llmProvider,
@@ -134,6 +140,7 @@ export class REPLSandbox {
       llm_query: llm.llm_query,
       llm_query_strict: llm.llm_query_strict,
       llm_query_json: llm.llm_query_json,
+      ...(nestedThink ? { sub_think: nestedThink.sub_think } : {}),
       memory_search: memory.memory_search,
       memory_count: memory.memory_count,
       memory_write: memory.memory_write,

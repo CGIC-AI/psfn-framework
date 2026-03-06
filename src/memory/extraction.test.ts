@@ -322,6 +322,13 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(endCall?.[1]?.count).toBe(0);
     expect(endCall?.[1]?.parsedCount).toBe(0);
     expect(endCall?.[1]?.acceptedCount).toBe(0);
+    expect(endCall?.[1]).toMatchObject({
+      compositionalMode: 'legacy',
+      chunkCount: 1,
+      mergedFactCount: 0,
+      crossChunkDeduplicatedCount: 0,
+      boundaryFactCount: 0,
+    });
     expect(llmClient.complete).toHaveBeenCalled();
     expect(llmClient.complete.mock.calls[0][0].correlation).toMatchObject({
       turnId,
@@ -629,6 +636,13 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(endCall?.[1]?.acceptedCount).toBe(2);
     expect(endCall?.[1]?.writeCount).toBe(2);
     expect(endCall?.[1]?.rejectionBreakdown?.write_cap).toBe(1);
+    expect(endCall?.[1]).toMatchObject({
+      compositionalMode: 'legacy',
+      chunkCount: 1,
+      mergedFactCount: 3,
+      crossChunkDeduplicatedCount: 0,
+      boundaryFactCount: 0,
+    });
   });
 });
 
@@ -793,6 +807,13 @@ describe('MemoryExtractor compositional extraction', () => {
     expect(endCall?.[1]?.acceptedCount).toBe(2);
     expect(endCall?.[1]?.writeCount).toBe(2);
     expect(endCall?.[1]?.rejectionBreakdown?.write_cap).toBe(1);
+    expect(endCall?.[1]).toMatchObject({
+      compositionalMode: 'chunk_compose',
+      chunkCount: 3,
+      mergedFactCount: 3,
+      crossChunkDeduplicatedCount: 1,
+      boundaryFactCount: 0,
+    });
   });
 
   it('fails closed to the legacy one-shot extraction path when policy does not allow extraction', async () => {
@@ -850,6 +871,15 @@ describe('MemoryExtractor compositional extraction', () => {
     const prompt = llmClient.complete.mock.calls[0][0].systemPrompt as string;
     expect(prompt).toContain('Message 1');
     expect(prompt).toContain('Message 25');
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const endCall = calls.find(([name]) => name === 'memory.extraction.end');
+    expect(endCall?.[1]).toMatchObject({
+      compositionalMode: 'legacy',
+      chunkCount: 1,
+      mergedFactCount: 0,
+      crossChunkDeduplicatedCount: 0,
+      boundaryFactCount: 0,
+    });
   });
 });
 
@@ -927,6 +957,7 @@ describe('MemoryExtractor refusal boundary extraction', () => {
     expect(endCall).toBeTruthy();
     expect(endCall?.[1]?.parsedCount).toBe(1);
     expect(endCall?.[1]?.acceptedCount).toBe(1);
+    expect(endCall?.[1]?.boundaryFactCount).toBe(1);
   });
 });
 

@@ -56,6 +56,11 @@ export interface ExtractionEndTelemetry {
   deduplicatedCount: number;
   supersededCount: number;
   rejectionBreakdown: Record<ExtractionRejectionReason, number>;
+  compositionalMode: 'legacy' | 'chunk_compose';
+  chunkCount: number;
+  mergedFactCount: number;
+  crossChunkDeduplicatedCount: number;
+  boundaryFactCount: number;
 }
 
 export interface ProfileSynthesisConfig {

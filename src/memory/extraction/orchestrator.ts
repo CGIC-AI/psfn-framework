@@ -103,6 +103,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const entryChunks = options.useCompositionalExtraction
       ? buildExtractionEntryChunks(recentEntries)
       : [recentEntries];
+    const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'legacy';
     const parsedFactGroups: ExtractedFact[][] = [];
     for (const [index, chunkEntries] of entryChunks.entries()) {
       const prompt = injectPromptRuntimeTokens(extractionPrompt)
@@ -129,7 +130,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
       parsedFactGroups.push(parseFactsXml(response.content));
     }
+    const rawParsedFactCount = parsedFactGroups
+      .reduce((total, group) => total + group.length, 0);
     const parsedFacts = mergeExtractedFactGroups(parsedFactGroups);
+    const crossChunkDeduplicatedCount = Math.max(0, rawParsedFactCount - parsedFacts.length);
     const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
     const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts])
       .map(fact => applyChannelImportanceCaps(fact, channelVisibility));
@@ -166,6 +170,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
           low_signal: 0,
           write_cap: 0,
         },
+        compositionalMode,
+        chunkCount: entryChunks.length,
+        mergedFactCount: parsedFacts.length,
+        crossChunkDeduplicatedCount,
+        boundaryFactCount: inferredBoundaryFacts.length,
       });
       return;
     }
@@ -278,6 +287,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       deduplicatedCount,
       supersededCount,
       rejectionBreakdown,
+      compositionalMode,
+      chunkCount: entryChunks.length,
+      mergedFactCount: parsedFacts.length,
+      crossChunkDeduplicatedCount,
+      boundaryFactCount: inferredBoundaryFacts.length,
     };
 
     if (options.telemetryEnabled) {

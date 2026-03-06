@@ -759,6 +759,7 @@ export class SubstrateRuntime implements Lifecycle {
       replConfig,
       shardAuditTrail: safeguardAuditTrail,
       getCapabilityTier: () => this.capabilityRuntime.getTier(),
+      compositionalPolicy: this.config.compositionalPolicy,
       moduleInstallConfirmationQueue: cardProposalQueue,
       onModuleRegistryMutation: async (mutation) => {
         await this.moduleLoader?.applyRegistryMutation(mutation);

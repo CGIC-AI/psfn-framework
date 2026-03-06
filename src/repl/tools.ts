@@ -8,6 +8,7 @@ import type { REPLDeps } from './types.js';
 import { runRLMLoop } from './loop.js';
 import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { getRequestContext } from '../llm/request-context.js';
 
 export function createThinkTool(deps: REPLDeps): AgentTool<any> {
   return {
@@ -53,9 +54,17 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
         );
 
         if (effectiveDeps.eventBus) {
+          const requestContext = getRequestContext();
           await effectiveDeps.eventBus.emit('agent.think.trace', {
             timestamp: Date.now(),
             task: params.task,
+            ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
+            ...(requestContext?.requestId ? { requestId: requestContext.requestId } : {}),
+            ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
+            toolName: 'think',
+            toolCallId,
+            originType: 'tool',
+            originStage: 'repl.think.tool',
             result: {
               iterations: result.iterations,
               totalInputTokens: result.totalInputTokens,
@@ -63,6 +72,11 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
               durationMs: result.durationMs,
               truncated: result.truncated,
               budgetStop: result.budgetStatus.exceeded,
+              subQueries: result.budgetStatus.subQueries,
+              toolCalls: result.budgetStatus.toolCalls,
+              sessionCostUsd: result.budgetStatus.sessionCostUsd,
+              warnings: [...result.budgetStatus.warnings],
+              nestedThink: result.diagnostics,
               steps: result.steps.map(step => ({
                 iteration: step.iteration,
                 timestamp: step.timestamp,
@@ -82,10 +96,12 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
         const totalTokens = result.totalInputTokens + result.totalOutputTokens;
         const tokenBudget = effectiveDeps.config.budget.maxTokens ?? 100_000;
         const evidenceCount = result.evidence.length;
+        const nestedThinkCount = result.diagnostics.nestedThinkSuccessCount;
         const header =
           `[Think: ${result.iterations} iter${result.iterations !== 1 ? 's' : ''}, ` +
           `${totalTokens}/${tokenBudget} tokens, ` +
           `${result.durationMs}ms` +
+          `${nestedThinkCount > 0 ? `, ${nestedThinkCount} sub-think` : ''}` +
           `${evidenceCount > 0 ? `, ${evidenceCount} evidence` : ''}` +
           `${result.truncated ? ', truncated' : ''}` +
           `${result.budgetStatus.exceeded ? `, stopped: ${result.budgetStatus.exceeded}` : ''}]`;

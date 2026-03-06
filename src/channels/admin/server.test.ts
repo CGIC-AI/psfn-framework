@@ -633,6 +633,16 @@ describe('AdminServer', () => {
           durationMs: 910,
           truncated: false,
           budgetStop: null,
+          subQueries: 1,
+          toolCalls: 1,
+          sessionCostUsd: 0.0012,
+          warnings: ['Autonomous daily think spend warning'],
+          nestedThink: {
+            nestedThinkCallCount: 1,
+            nestedThinkSuccessCount: 1,
+            nestedThinkFailureCount: 0,
+            maxNestedDepthReached: 1,
+          },
           steps: [
             {
               iteration: 1,

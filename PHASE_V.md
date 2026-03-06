@@ -59,13 +59,14 @@ The Five Aggregates vision in `docs/PHASE_V_VISION.md` remains the product direc
 - `PSFN-y2ac` settings contract (blocked by `PSFN-bxvy` and `PSFN-c0zl`).
 
 ### Stage 3
-- `PSFN-x92u` compositional kernel (now active on `phase-v`; `PSFN-x92u.1`, `.2`, `.3`, and `.4` integrated, `PSFN-x92u.5` next).
+- `PSFN-x92u` compositional kernel (integrated and closed on `phase-v`; `PSFN-x92u.1` through `.7` landed).
 
 ### Stage 4 (Feature Epics on Top)
-- `PSFN-domy` depends on `PSFN-x92u` and `PSFN-y2ac`.
-- `PSFN-8e3t` depends on `PSFN-x92u`.
-- `PSFN-17lw` depends on `PSFN-qyrl`.
-- `PSFN-be11` depends on prior emotion/intention foundations and `PSFN-x92u`.
+- `PSFN-domy` depends on `PSFN-x92u` and `PSFN-y2ac`; it becomes the primary context-composition lane once `PSFN-x92u` closes.
+- `PSFN-17lw` depends on `PSFN-qyrl`; it is already unblocked and can run in parallel with the context/emotion track.
+- `PSFN-bu5f` depends on `PSFN-domy`.
+- `PSFN-8e3t` depends on `PSFN-bu5f`, with the `PSFN-x92u` foundation already satisfied.
+- `PSFN-be11` depends on `PSFN-bu5f` and `PSFN-8e3t`, with the `PSFN-x92u` foundation already satisfied.
 
 ## New Features We Are Baking In
 
@@ -135,13 +136,18 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-x92u.2` (`memory extraction chunk-and-compose pipeline`) is integrated, including channel-id-aware compositional policy gating, chunked extraction prompt fan-out for long pre-compaction transcripts, stable compose/dedup merging before acceptance/writes, and regression coverage proving fail-closed fallback to the legacy one-shot path when policy does not allow compositional extraction.
   - `PSFN-x92u.3` (`retrieval rerank batch-evaluate-and-compose pipeline`) is integrated, including fail-closed compositional rerank helpers, runtime LLM wiring into `MemoryRetriever`, policy-gated retrieval compose/rerank on allowed channel/tier/purpose combinations, and regression coverage proving deterministic fallback when policy or helper output denies the path.
   - `PSFN-x92u.4` (`post-turn intention appraisal`) is integrated, including a new signal-wise post-turn appraisal composer under `src/intention/*`, fail-closed policy gating for `purpose='appraisal'` at the parity runtime seam, and preserved downstream post-turn action queue/telemetry behavior with regression coverage for both legacy and composed inference paths.
+  - `PSFN-x92u.5` (`recursive think subcalls with isolated child context and conclusion-only return`) is integrated, including policy-gated `sub_think(...)`, shared root-budget accounting across nested runs, depth-limited recursion, runtime/bootstrap wiring for compositional policy, and think-tool telemetry/header updates that surface nested execution diagnostics without leaking child scratch context.
+  - `PSFN-x92u.6` (`shard focused context-pack contract`) is integrated, including source-request context capture on `spawn_shard`, task-scoped shard context packs rendered into child prompts, focused source-session excerpt + parent-channel memory packaging, and fail-closed suppression of live child memory retrieval when a bounded context pack is active.
+  - `PSFN-x92u.7` (`compositional telemetry, budgets, timeout/fallback diagnostics`) is integrated, including richer `agent.think.trace` telemetry with nested-think diagnostics and correlation fields, extraction compose-path telemetry for chunking/dedup/boundary facts, and retrieval compose-path telemetry exposing candidate/batch/finalist counts and deterministic fallback modes.
   - `PSFN-qyrl` plugin-seam epic is closed on `phase-v`.
   - `PSFN-bxvy` config/persistence-topology epic is closed on `phase-v`.
   - `PSFN-y2ac` settings-governance epic is closed on `phase-v`.
+  - `PSFN-x92u` compositional-kernel epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Continue Stage 3 on `PSFN-x92u.5`: recursive think subcalls with isolated child context and conclusion-only return.
-  - Queue `PSFN-x92u.6` behind the active think lane, with `PSFN-x92u.7` remaining the final telemetry/diagnostics pass after the compositional sub-pipelines land.
-  - Keep `PSFN-04dt.4` open as the remaining Stage 1 foundation lane for tombstone/redaction replay semantics; it does not block `PSFN-x92u`.
+  - Start Stage 4 on `PSFN-domy`, now unblocked by the closed `PSFN-x92u` + `PSFN-y2ac` epics.
+  - Run `PSFN-17lw` in parallel where worker capacity allows; it is already unblocked by the closed `PSFN-qyrl` epic.
+  - Keep `PSFN-bu5f` queued behind `PSFN-domy`, then advance `PSFN-8e3t`, with `PSFN-be11` remaining the final self-model lane behind emotion + intention.
+  - Keep `PSFN-04dt.4` open as the remaining Stage 1 foundation lane for tombstone/redaction replay semantics; it does not block Stage 4.
   - Keep `PSFN-eg59` as the residual de-hardcode test-fixture cleanup lane where remaining `PSFN` hits are intentional branding/legacy cases versus generic fixture drift.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 
@@ -207,3 +213,5 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-x92u.3` build validation: `npm run build`
 - `PSFN-x92u.4` targeted regressions: `npm test -- --cache=false --run src/intention/post-turn-appraisal.test.ts src/bootstrap/deferred-post-turn-inference.test.ts src/bootstrap/parity.test.ts src/bootstrap/post-turn-actions.test.ts`
 - `PSFN-x92u.4` build validation: `npm run build`
+- `PSFN-x92u.5` / `PSFN-x92u.6` / `PSFN-x92u.7` targeted regressions: `npm test -- --run src/repl/loop.test.ts src/repl/sandbox.test.ts src/bootstrap/composition.test.ts src/shards/manager.test.ts src/memory/extraction.test.ts src/memory/retrieval.test.ts src/channels/admin/server.test.ts src/channels/admin/audit-timeline.test.ts src/agent/substrate-agent.test.ts`
+- `PSFN-x92u.5` / `PSFN-x92u.6` / `PSFN-x92u.7` build validation: `npm run build`

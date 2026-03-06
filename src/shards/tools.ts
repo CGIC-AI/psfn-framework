@@ -5,6 +5,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { ShardManager } from './manager.js';
+import { getRequestContext } from '../llm/request-context.js';
 import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -29,10 +30,18 @@ export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
+        const requestContext = getRequestContext();
         const result = await manager.spawn({
           name: params.name,
           task: params.task,
           systemPrompt: params.systemPrompt,
+          sourceContext: requestContext?.channelId
+            ? {
+              channelId: requestContext.channelId,
+              ...(requestContext.requestId ? { requestId: requestContext.requestId } : {}),
+              ...(requestContext.turnId ? { turnId: requestContext.turnId } : {}),
+            }
+            : undefined,
         });
 
         return {

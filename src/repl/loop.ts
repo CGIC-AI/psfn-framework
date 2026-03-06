@@ -5,12 +5,15 @@ import type { CapabilityTier, ContextMessage, LLMContext, LLMResponse } from '..
 import type { LLMRequestMetadata } from '../agent/contracts.js';
 import type {
   BudgetStatus,
+  NestedThinkOptions,
   REPLDeps,
   REPLConfig,
+  ThinkDiagnostics,
   ThinkBudget,
   ThinkResult,
   ThinkStep,
 } from './types.js';
+import { createEmptyThinkDiagnostics } from './types.js';
 import { REPLSandbox } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import { buildRLMSystemPrompt } from './prompt.js';
@@ -27,6 +30,7 @@ import {
   updateBudgetRuntime,
 } from './loop-helpers.js';
 import { getRequestContext } from '../llm/request-context.js';
+import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
@@ -35,6 +39,7 @@ const INVOCATION_RATE_LIMIT_REASON = 'invocation rate limit';
 const NURSERY_DAILY_COST_REASON = 'daily cost cap';
 const RATE_LIMIT_ANSWER = '[Think invocation rate limit exceeded; try again shortly]';
 const NURSERY_DAILY_CAP_ANSWER = '[Think daily cost cap reached for nursery tier]';
+const MAX_NESTED_THINK_DEPTH = 2;
 
 interface DailyCostSnapshot {
   dayKey: string;
@@ -44,6 +49,26 @@ interface DailyCostSnapshot {
 interface ReplGovernanceState {
   invocationTimestampsMs: number[];
   dailyCostByTier: Record<CapabilityTier, DailyCostSnapshot>;
+}
+
+interface SharedThinkExecutionState {
+  readonly startTime: number;
+  readonly rootBudget: ThinkBudget;
+  readonly budgetRef: SandboxBudgetRef;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  consumedIterations: number;
+  sessionCostUsd: number;
+  warnings: string[];
+  autonomousCostWarningSent: boolean;
+  nextNestedThinkId: number;
+  diagnostics: ThinkDiagnostics;
+}
+
+interface ThinkRunOptions {
+  depth?: number;
+  sharedState?: SharedThinkExecutionState;
+  skipInvocationRateLimit?: boolean;
 }
 
 const GOVERNANCE_DEFAULT_DAY = '1970-01-01';
@@ -60,6 +85,14 @@ class LLMIterationTimeoutError extends Error {
 function getRemainingWallTimeMs(startTime: number, budget: ThinkBudget): number | null {
   if (!budget.maxWallTimeMs) return null;
   return budget.maxWallTimeMs - (Date.now() - startTime);
+}
+
+function pickMostConstrainedRemainingWallTimeMs(...values: Array<number | null>): number | null {
+  const finiteValues = values.filter((value): value is number => value !== null);
+  if (finiteValues.length === 0) {
+    return null;
+  }
+  return Math.min(...finiteValues);
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -174,6 +207,143 @@ function resolveMemoryCeilingBytes(config: REPLConfig, tier: CapabilityTier): nu
   return Math.floor(tierLimitMb * 1024 * 1024);
 }
 
+function createSharedThinkExecutionState(
+  startTime: number,
+  rootBudget: ThinkBudget,
+  budgetRef: SandboxBudgetRef,
+): SharedThinkExecutionState {
+  return {
+    startTime,
+    rootBudget,
+    budgetRef,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    consumedIterations: 0,
+    sessionCostUsd: 0,
+    warnings: [],
+    autonomousCostWarningSent: false,
+    nextNestedThinkId: 0,
+    diagnostics: createEmptyThinkDiagnostics(),
+  };
+}
+
+function syncBudgetStatusFromSharedState(
+  budgetStatus: BudgetStatus,
+  sharedState: SharedThinkExecutionState,
+  dayCostUsd: number,
+): void {
+  budgetStatus.sessionCostUsd = sharedState.sessionCostUsd;
+  budgetStatus.dayCostUsd = dayCostUsd;
+  budgetStatus.warnings = sharedState.warnings;
+}
+
+function normalizePositiveBudgetOverride(
+  value: number | undefined,
+  field: keyof NestedThinkOptions,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`sub_think ${field} must be a positive number`);
+  }
+  return Math.floor(value);
+}
+
+function computeRemainingTokenBudget(sharedState: SharedThinkExecutionState): number | undefined {
+  if (sharedState.rootBudget.maxTokens === undefined) {
+    return undefined;
+  }
+
+  return sharedState.rootBudget.maxTokens
+    - (sharedState.totalInputTokens + sharedState.totalOutputTokens);
+}
+
+function checkSharedBudgetExceeded(sharedState: SharedThinkExecutionState): BudgetStatus['exceeded'] {
+  const totalTokens = sharedState.totalInputTokens + sharedState.totalOutputTokens;
+  if (sharedState.consumedIterations >= sharedState.rootBudget.maxIterations) {
+    return 'max iterations';
+  }
+  if (
+    sharedState.rootBudget.maxTokens !== undefined
+    && totalTokens >= sharedState.rootBudget.maxTokens
+  ) {
+    return 'token budget';
+  }
+  if (
+    sharedState.rootBudget.maxWallTimeMs !== undefined
+    && Date.now() - sharedState.startTime >= sharedState.rootBudget.maxWallTimeMs
+  ) {
+    return 'wall time';
+  }
+  if (
+    sharedState.rootBudget.maxSubQueries !== undefined
+    && sharedState.budgetRef.subQueries >= sharedState.rootBudget.maxSubQueries
+  ) {
+    return 'sub-query limit';
+  }
+  if (
+    sharedState.rootBudget.maxToolCalls !== undefined
+    && (sharedState.budgetRef.toolCalls ?? 0) >= sharedState.rootBudget.maxToolCalls
+  ) {
+    return 'tool-call limit';
+  }
+  return null;
+}
+
+function buildNestedThinkConfig(
+  config: REPLConfig,
+  sharedState: SharedThinkExecutionState,
+  options: NestedThinkOptions | undefined,
+): REPLConfig {
+  const maxIterationsOverride = normalizePositiveBudgetOverride(options?.maxIterations, 'maxIterations');
+  const maxTokensOverride = normalizePositiveBudgetOverride(options?.maxTokens, 'maxTokens');
+  const maxWallTimeOverride = normalizePositiveBudgetOverride(options?.maxWallTimeMs, 'maxWallTimeMs');
+
+  const remainingIterations = sharedState.rootBudget.maxIterations - sharedState.consumedIterations;
+  if (remainingIterations <= 0) {
+    throw new Error('sub_think budget exhausted: no iterations remaining');
+  }
+
+  const remainingTokens = computeRemainingTokenBudget(sharedState);
+  if (remainingTokens !== undefined && remainingTokens <= 0) {
+    throw new Error('sub_think budget exhausted: no tokens remaining');
+  }
+
+  const remainingWallTimeMs = getRemainingWallTimeMs(sharedState.startTime, sharedState.rootBudget);
+  if (remainingWallTimeMs !== null && remainingWallTimeMs <= 0) {
+    throw new Error('sub_think budget exhausted: no wall time remaining');
+  }
+
+  const childBudget: ThinkBudget = {
+    ...config.budget,
+    maxIterations: maxIterationsOverride === undefined
+      ? remainingIterations
+      : Math.min(remainingIterations, maxIterationsOverride),
+  };
+
+  if (remainingTokens !== undefined) {
+    childBudget.maxTokens = maxTokensOverride === undefined
+      ? remainingTokens
+      : Math.min(remainingTokens, maxTokensOverride);
+  } else if (maxTokensOverride !== undefined) {
+    childBudget.maxTokens = maxTokensOverride;
+  }
+
+  if (remainingWallTimeMs !== null) {
+    childBudget.maxWallTimeMs = maxWallTimeOverride === undefined
+      ? remainingWallTimeMs
+      : Math.min(remainingWallTimeMs, maxWallTimeOverride);
+  } else if (maxWallTimeOverride !== undefined) {
+    childBudget.maxWallTimeMs = maxWallTimeOverride;
+  }
+
+  return {
+    ...config,
+    budget: childBudget,
+  };
+}
+
 interface BuildResultOptions {
   answer: string;
   iterations: number;
@@ -183,6 +353,7 @@ interface BuildResultOptions {
   truncated: boolean;
   budgetStatus: BudgetStatus;
   steps: ThinkStep[];
+  diagnostics: ThinkDiagnostics;
 }
 
 function buildThinkResult(options: BuildResultOptions): ThinkResult {
@@ -198,6 +369,7 @@ function buildThinkResult(options: BuildResultOptions): ThinkResult {
       budgetStatus: options.budgetStatus,
       steps: options.steps,
       evidence: allEvidence,
+      diagnostics: options.diagnostics,
     },
   );
 }
@@ -300,23 +472,52 @@ function buildThinkCorrelation(
   };
 }
 
+function buildNestedThinkRequestMetadata(
+  metadata: ResolvedThinkRequestMetadata,
+  childId: number,
+): Partial<LLMRequestMetadata> {
+  const suffix = `subthink-${childId}`;
+  return {
+    ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+    requestId: `${metadata.requestId}:${suffix}`,
+    ...(metadata.channelId ? { channelId: metadata.channelId } : {}),
+    toolName: metadata.toolName ?? 'think',
+    ...(metadata.toolCallId ? { toolCallId: `${metadata.toolCallId}:${suffix}` } : {}),
+    originType: metadata.originType,
+    originStage: 'repl.think.subcall',
+  };
+}
+
 export async function runRLMLoop(
   task: string,
   deps: REPLDeps,
   toolInvocationMetadata?: Partial<LLMRequestMetadata>,
+  runOptions: ThinkRunOptions = {},
 ): Promise<ThinkResult> {
   const startTime = Date.now();
   const { config, llmProvider } = deps;
   const requestMetadata = resolveThinkRequestMetadata(deps, toolInvocationMetadata);
+  const depth = runOptions.depth ?? 0;
+  const isNestedRun = depth > 0;
   const tier = deps.getCapabilityTier?.() ?? 'autonomous';
   const budget = resolveEffectiveBudget(config, tier);
+  const sharedState = runOptions.sharedState ?? createSharedThinkExecutionState(
+    startTime,
+    budget,
+    {
+      subQueries: 0,
+      maxSubQueries: budget.maxSubQueries ?? 20,
+      toolCalls: 0,
+      maxToolCalls: budget.maxToolCalls ?? 50,
+    },
+  );
 
-  // Budget tracking
   const budgetStatus = createBudgetStatus();
+  budgetStatus.warnings = sharedState.warnings;
   const governanceState = getOrCreateGovernanceState(llmProvider);
-  const dayKey = toDayKey(startTime);
+  const dayKey = toDayKey(sharedState.startTime);
   const dayCost = getDailyCostSnapshot(governanceState, tier, dayKey);
-  budgetStatus.dayCostUsd = dayCost.totalUsd;
+  syncBudgetStatusFromSharedState(budgetStatus, sharedState, dayCost.totalUsd);
 
   const rateWindowMs = Number.isFinite(config.rateLimit.windowMs)
     ? Math.max(1, Math.floor(config.rateLimit.windowMs))
@@ -325,8 +526,8 @@ export async function runRLMLoop(
     ? Math.floor(config.rateLimit.maxInvocationsPerMinute)
     : 5;
 
-  if (maxInvocationsPerWindow > 0) {
-    const cutoff = startTime - rateWindowMs;
+  if (!runOptions.skipInvocationRateLimit && maxInvocationsPerWindow > 0) {
+    const cutoff = sharedState.startTime - rateWindowMs;
     governanceState.invocationTimestampsMs = governanceState.invocationTimestampsMs
       .filter(ts => ts > cutoff);
     if (governanceState.invocationTimestampsMs.length >= maxInvocationsPerWindow) {
@@ -341,9 +542,10 @@ export async function runRLMLoop(
         truncated: true,
         budgetStatus,
         steps: [],
+        diagnostics: sharedState.diagnostics,
       });
     }
-    governanceState.invocationTimestampsMs.push(startTime);
+    governanceState.invocationTimestampsMs.push(sharedState.startTime);
   }
 
   const nurseryDailyCapUsd = Number.isFinite(config.cost.nurseryDailyCapUsd)
@@ -361,20 +563,22 @@ export async function runRLMLoop(
       truncated: true,
       budgetStatus,
       steps: [],
+      diagnostics: sharedState.diagnostics,
     });
   }
 
-  // Shared budget ref for sandbox llm_query tracking
-  const budgetRef: SandboxBudgetRef = {
-    subQueries: 0,
-    maxSubQueries: budget.maxSubQueries ?? 20,
-    toolCalls: 0,
-    maxToolCalls: budget.maxToolCalls ?? 50,
-  };
   const sandboxTokenUsage = {
     inputTokens: 0,
     outputTokens: 0,
   };
+  const nestedThinkPolicy = requestMetadata.channelId
+    ? evaluateCompositionalPolicyForChannelId({
+      policy: deps.compositionalPolicy,
+      capabilityTier: tier,
+      channelId: requestMetadata.channelId,
+      purpose: 'think',
+    })
+    : { allowed: false, reason: 'channel_type_not_allowed' as const };
   const sandboxLLMProvider = Object.create(llmProvider) as typeof llmProvider;
   sandboxLLMProvider.complete = async (context, purpose) => {
     const incomingCorrelation = context.correlation;
@@ -413,6 +617,46 @@ export async function runRLMLoop(
 
   const steps: ThinkStep[] = [];
   const memoryCeilingBytes = resolveMemoryCeilingBytes(config, tier);
+  const nestedThinkRunner = async (
+    nestedTask: string,
+    nestedOptions?: NestedThinkOptions,
+  ): Promise<string> => {
+    sharedState.diagnostics.nestedThinkCallCount += 1;
+    sharedState.diagnostics.maxNestedDepthReached = Math.max(
+      sharedState.diagnostics.maxNestedDepthReached,
+      depth + 1,
+    );
+    if (!nestedThinkPolicy.allowed) {
+      sharedState.diagnostics.nestedThinkFailureCount += 1;
+      throw new Error(`sub_think is disabled by compositional policy (${nestedThinkPolicy.reason})`);
+    }
+    if (depth >= MAX_NESTED_THINK_DEPTH) {
+      sharedState.diagnostics.nestedThinkFailureCount += 1;
+      throw new Error(`sub_think depth limit reached (${MAX_NESTED_THINK_DEPTH})`);
+    }
+    try {
+      const childId = ++sharedState.nextNestedThinkId;
+      const childConfig = buildNestedThinkConfig(config, sharedState, nestedOptions);
+      const childResult = await runRLMLoop(
+        nestedTask,
+        {
+          ...deps,
+          config: childConfig,
+        },
+        buildNestedThinkRequestMetadata(requestMetadata, childId),
+        {
+          depth: depth + 1,
+          sharedState,
+          skipInvocationRateLimit: true,
+        },
+      );
+      sharedState.diagnostics.nestedThinkSuccessCount += 1;
+      return childResult.answer;
+    } catch (error) {
+      sharedState.diagnostics.nestedThinkFailureCount += 1;
+      throw error;
+    }
+  };
 
   const sandbox = new REPLSandbox({
     llmProvider: sandboxLLMProvider,
@@ -422,10 +666,11 @@ export async function runRLMLoop(
     scheduler: deps.scheduler,
     eventBus: deps.eventBus,
     getCapabilityTier: deps.getCapabilityTier,
+    runNestedThink: nestedThinkRunner,
     moduleInstallConfirmationQueue: deps.moduleInstallConfirmationQueue,
     onModuleRegistryMutation: deps.onModuleRegistryMutation,
     requestMetadata,
-  }, budgetRef, { memoryCeilingBytes });
+  }, sharedState.budgetRef, { memoryCeilingBytes });
 
   // Gather context metadata for system prompt
   const stats = deps.memoryStore?.getStats();
@@ -439,6 +684,7 @@ export async function runRLMLoop(
       : 'none',
     channelCount: 0,
     currentChannelMessages: 0,
+    nestedThinkAvailable: nestedThinkPolicy.allowed && depth < MAX_NESTED_THINK_DEPTH,
   };
 
   const systemPrompt = buildRLMSystemPrompt(metadata);
@@ -449,7 +695,7 @@ export async function runRLMLoop(
 
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
-  let autonomousCostWarningSent = false;
+  let localIterations = 0;
   const autonomousWarningUsd = Number.isFinite(config.cost.autonomousDailyWarningUsd)
     ? Math.max(0, config.cost.autonomousDailyWarningUsd)
     : 0;
@@ -459,45 +705,92 @@ export async function runRLMLoop(
       inputTokens,
       outputTokens,
     );
-    budgetStatus.sessionCostUsd += iterationCostUsd;
+    sharedState.sessionCostUsd += iterationCostUsd;
     dayCost.totalUsd += iterationCostUsd;
-    budgetStatus.dayCostUsd = dayCost.totalUsd;
+    syncBudgetStatusFromSharedState(budgetStatus, sharedState, dayCost.totalUsd);
 
     if (
       tier === 'autonomous'
       && autonomousWarningUsd > 0
-      && !autonomousCostWarningSent
+      && !sharedState.autonomousCostWarningSent
       && dayCost.totalUsd >= autonomousWarningUsd
     ) {
-      budgetStatus.warnings.push(
+      sharedState.warnings.push(
         `Autonomous daily think spend warning: $${dayCost.totalUsd.toFixed(4)} >= $${autonomousWarningUsd.toFixed(4)}`,
       );
-      autonomousCostWarningSent = true;
+      sharedState.autonomousCostWarningSent = true;
     }
   };
 
-  for (let i = 0; i < budget.maxIterations; i++) {
+  const finalizeBudgetStatus = (): void => {
+    if (isNestedRun) {
+      updateBudgetRuntime(
+        budgetStatus,
+        startTime,
+        sharedState.budgetRef.subQueries,
+        sharedState.budgetRef.toolCalls ?? 0,
+      );
+    } else {
+      updateBudgetProgress(
+        budgetStatus,
+        sharedState.consumedIterations,
+        sharedState.totalInputTokens,
+        sharedState.totalOutputTokens,
+        startTime,
+        sharedState.budgetRef.subQueries,
+        sharedState.budgetRef.toolCalls ?? 0,
+      );
+    }
+    syncBudgetStatusFromSharedState(budgetStatus, sharedState, dayCost.totalUsd);
+  };
+
+  const refreshBudgetStatus = (): void => {
+    updateBudgetProgress(
+      budgetStatus,
+      localIterations,
+      totalInputTokens,
+      totalOutputTokens,
+      startTime,
+      sharedState.budgetRef.subQueries,
+      sharedState.budgetRef.toolCalls ?? 0,
+    );
+    syncBudgetStatusFromSharedState(budgetStatus, sharedState, dayCost.totalUsd);
+  };
+
+  const enforceBudgets = (): void => {
+    refreshBudgetStatus();
+    checkBudget(budgetStatus, budget);
+    if (!budgetStatus.exceeded) {
+      budgetStatus.exceeded = checkSharedBudgetExceeded(sharedState);
+    }
+  };
+
+  while (localIterations < budget.maxIterations) {
     if (tier === 'nursery' && nurseryDailyCapUsd > 0 && dayCost.totalUsd >= nurseryDailyCapUsd) {
-      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
+      finalizeBudgetStatus();
       budgetStatus.exceeded = NURSERY_DAILY_COST_REASON;
       break;
     }
 
     const iterationStart = Date.now();
-    const remainingBeforeLLM = getRemainingWallTimeMs(startTime, budget);
+    const remainingBeforeLLM = pickMostConstrainedRemainingWallTimeMs(
+      getRemainingWallTimeMs(startTime, budget),
+      getRemainingWallTimeMs(sharedState.startTime, sharedState.rootBudget),
+    );
     if (remainingBeforeLLM !== null && remainingBeforeLLM <= 0) {
-      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
+      finalizeBudgetStatus();
       budgetStatus.exceeded = 'wall time';
       break;
     }
 
     let response: LLMResponse;
+    const iterationNumber = localIterations + 1;
     try {
       const timeoutMs = remainingBeforeLLM === null
         ? null
         : Math.floor(remainingBeforeLLM - LLM_TIMEOUT_BUFFER_MS);
       if (timeoutMs !== null && timeoutMs <= 0) {
-        updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
+        finalizeBudgetStatus();
         budgetStatus.exceeded = 'wall time';
         break;
       }
@@ -509,7 +802,7 @@ export async function runRLMLoop(
           correlation: buildThinkCorrelation(
             requestMetadata,
             'repl.think.iteration',
-            `iteration-${i + 1}`,
+            `iteration-${iterationNumber}`,
           ),
         },
         'reasoning',
@@ -518,7 +811,7 @@ export async function runRLMLoop(
         ? await completion
         : await withTimeout(completion, timeoutMs);
     } catch (error) {
-      updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
+      finalizeBudgetStatus();
       if (error instanceof LLMIterationTimeoutError) {
         budgetStatus.exceeded = LLM_TIMEOUT_REASON;
         break;
@@ -526,21 +819,15 @@ export async function runRLMLoop(
       throw error;
     }
 
+    localIterations = iterationNumber;
+    sharedState.consumedIterations += 1;
     totalInputTokens += response.inputTokens;
     totalOutputTokens += response.outputTokens;
-
-    // Update budget status
-    updateBudgetProgress(
-      budgetStatus,
-      i + 1,
-      totalInputTokens,
-      totalOutputTokens,
-      startTime,
-      budgetRef.subQueries,
-      budgetRef.toolCalls ?? 0,
-    );
+    sharedState.totalInputTokens += response.inputTokens;
+    sharedState.totalOutputTokens += response.outputTokens;
 
     applyCostCharge(response.inputTokens, response.outputTokens);
+    refreshBudgetStatus();
 
     const text = response.content;
     messages.push({ role: 'assistant', content: text });
@@ -551,21 +838,23 @@ export async function runRLMLoop(
       case 'final': {
         pushPassiveStep(
           steps,
-          i + 1,
+          iterationNumber,
           response,
-          budgetStatus.totalTokens,
+          sharedState.totalInputTokens + sharedState.totalOutputTokens,
           iterationStart,
           action.answer,
         );
+        finalizeBudgetStatus();
         return buildThinkResult({
           answer: action.answer,
-          iterations: i + 1,
-          totalInputTokens,
-          totalOutputTokens,
+          iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
+          totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
+          totalOutputTokens: isNestedRun ? totalOutputTokens : sharedState.totalOutputTokens,
           startTime,
           truncated: false,
           budgetStatus,
           steps,
+          diagnostics: sharedState.diagnostics,
         });
       }
 
@@ -575,21 +864,23 @@ export async function runRLMLoop(
         const answer = value !== undefined ? String(value) : `[Variable "${action.varName}" not found]`;
         pushPassiveStep(
           steps,
-          i + 1,
+          iterationNumber,
           response,
-          budgetStatus.totalTokens,
+          sharedState.totalInputTokens + sharedState.totalOutputTokens,
           iterationStart,
           answer,
         );
+        finalizeBudgetStatus();
         return buildThinkResult({
           answer,
-          iterations: i + 1,
-          totalInputTokens,
-          totalOutputTokens,
+          iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
+          totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
+          totalOutputTokens: isNestedRun ? totalOutputTokens : sharedState.totalOutputTokens,
           startTime,
           truncated: false,
           budgetStatus,
           steps,
+          diagnostics: sharedState.diagnostics,
         });
       }
 
@@ -606,36 +897,40 @@ export async function runRLMLoop(
         const stepTokens = response.inputTokens + response.outputTokens;
 
         const step = buildStep({
-          iteration: i + 1,
+          iteration: iterationNumber,
           code: action.code,
           output: result.output,
           error: result.error,
           evidenceCollected: stepEvidence,
           inputTokens: response.inputTokens,
           outputTokens: response.outputTokens,
-          cumulativeTokens: budgetStatus.totalTokens,
+          cumulativeTokens: isNestedRun
+            ? totalInputTokens + totalOutputTokens
+            : sharedState.totalInputTokens + sharedState.totalOutputTokens,
           durationMs: Date.now() - iterationStart,
           variablesChanged: result.variablesChanged,
         });
         steps.push(step);
 
         if (result.finalAnswer !== null) {
+          finalizeBudgetStatus();
           return buildThinkResult({
             answer: result.finalAnswer,
-            iterations: i + 1,
-            totalInputTokens,
-            totalOutputTokens,
+            iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
+            totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
+            totalOutputTokens: isNestedRun ? totalOutputTokens : sharedState.totalOutputTokens,
             startTime,
             truncated: false,
             budgetStatus,
             steps,
+            diagnostics: sharedState.diagnostics,
           });
         }
 
         const feedback = formatExecutionFeedback(
           result.output,
           result.error,
-          i + 1,
+          iterationNumber,
           stepTokens,
           result.variablesChanged,
         );
@@ -646,7 +941,13 @@ export async function runRLMLoop(
 
       case 'none':
         {
-        pushPassiveStep(steps, i + 1, response, budgetStatus.totalTokens, iterationStart);
+        pushPassiveStep(
+          steps,
+          iterationNumber,
+          response,
+          sharedState.totalInputTokens + sharedState.totalOutputTokens,
+          iterationStart,
+        );
         messages.push({
           role: 'user',
           content: 'Please write a ```repl code block to execute, or call FINAL("your answer") when done.',
@@ -655,15 +956,13 @@ export async function runRLMLoop(
         }
     }
 
-    // Check budget after each iteration
-    updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
-    checkBudget(budgetStatus, budget);
+    enforceBudgets();
     if (budgetStatus.exceeded) break;
   }
 
   // Budget or max iterations exhausted
   const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
-  updateBudgetRuntime(budgetStatus, startTime, budgetRef.subQueries, budgetRef.toolCalls ?? 0);
+  finalizeBudgetStatus();
   if (!budgetStatus.exceeded) {
     budgetStatus.exceeded = 'max iterations';
   }
@@ -674,12 +973,13 @@ export async function runRLMLoop(
     : '[No response generated]';
   return buildThinkResult({
     answer: lastAssistant?.content ?? timeoutFallback,
-    iterations: budgetStatus.iterations,
-    totalInputTokens,
-    totalOutputTokens,
+    iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
+    totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
+    totalOutputTokens: isNestedRun ? totalOutputTokens : sharedState.totalOutputTokens,
     startTime,
     truncated: true,
     budgetStatus,
     steps,
+    diagnostics: sharedState.diagnostics,
   });
 }

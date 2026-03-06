@@ -318,6 +318,26 @@ describe('createMemoryWriteTool', () => {
     const callArgs = writer.write.mock.calls[0][0];
     expect(callArgs.sensitivity).toBeUndefined();
   });
+
+  it('passes formationVAD from provider into writer.write()', async () => {
+    const getFormationVAD = vi.fn(() => ({
+      valence: 0.7,
+      arousal: -0.35,
+      dominance: 0.1,
+    }));
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter, { getFormationVAD });
+
+    await tool.execute('call-18b', { text: 'Mood-tagged memory', type: 'semantic' });
+
+    expect(getFormationVAD).toHaveBeenCalledTimes(1);
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      formationVAD: {
+        valence: 0.7,
+        arousal: -0.35,
+        dominance: 0.1,
+      },
+    }));
+  });
 });
 
 describe('createMemoryImportTool', () => {

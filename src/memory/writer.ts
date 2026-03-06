@@ -13,6 +13,7 @@ import type {
   ConsentRedactionBehavior,
   MemoryRedactionOperation,
   MemoryRetentionClass,
+  MemoryFormationVAD,
 } from './types.js';
 import {
   DEDUP_THRESHOLD,
@@ -22,6 +23,7 @@ import {
   getSensitivityWriteThreshold,
   inferMemoryRetentionClass,
   isDurableMemory,
+  normalizeFormationVAD,
   normalizeMemoryTags,
   resolveConsentRedactionBehavior,
 } from './types.js';
@@ -35,6 +37,7 @@ export interface MemoryWriteOptions {
   importance?: number;       // default 0.5
   salience?: number;         // default to importance when omitted
   emotionalValence?: number; // default 0
+  formationVAD?: MemoryFormationVAD;
   confidence?: number;       // default 0.8
   tags?: string[];
   sourceRef?: string;        // default 'tool:memory_write'
@@ -320,6 +323,7 @@ export class MemoryWriter {
       importance = 0.5,
       salience,
       emotionalValence = 0,
+      formationVAD,
       confidence = 0.8,
       tags = [],
       sourceRef,
@@ -344,6 +348,7 @@ export class MemoryWriter {
     const normalizedConsentFlags = consentFlags === undefined
       ? undefined
       : normalizeConsentFlags(consentFlags);
+    const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
     const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_write');
     const incomingProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
     const targetSalience = clampUnit(salience ?? importance, importance);
@@ -496,6 +501,7 @@ export class MemoryWriter {
       importance,
       confidence,
       emotionalValence,
+      formationVAD: normalizedFormationVAD,
       salience: targetSalience,
       sourceRef: normalizedSourceRef,
       extractedAt: now,
@@ -539,6 +545,7 @@ export class MemoryWriter {
       importance = 0.5,
       salience,
       emotionalValence = 0,
+      formationVAD,
       confidence = 0.8,
       tags = [],
       sourceRef,
@@ -562,6 +569,7 @@ export class MemoryWriter {
     const normalizedConsentFlags = consentFlags === undefined
       ? undefined
       : normalizeConsentFlags(consentFlags);
+    const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
     const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_upsert');
     const normalizedProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
     const targetSalience = clampUnit(salience ?? importance, importance);
@@ -636,6 +644,7 @@ export class MemoryWriter {
       importance,
       confidence,
       emotionalValence,
+      formationVAD: normalizedFormationVAD,
       salience: targetSalience,
       sourceRef: normalizedSourceRef,
       extractedAt: now,

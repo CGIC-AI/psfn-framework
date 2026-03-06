@@ -3,6 +3,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
 } from './context-budget.js';
 import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
+import type { ContextManifest } from './session/context-manifest.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import { resolvePersistenceRoots } from './persistence/layout.js';
@@ -240,6 +241,7 @@ export interface LLMContext {
   messages: ContextMessage[];
   tools?: ToolSchema[];
   correlation?: CorrelationMetadata;
+  manifest?: ContextManifest;
 }
 
 export interface StreamCallbacks {

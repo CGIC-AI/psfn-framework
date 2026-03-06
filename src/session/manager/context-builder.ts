@@ -1,7 +1,11 @@
 import type { LLMProvider } from '../../agent/contracts.js';
-import { countTokens } from '../../llm/tokens.js';
+import { countMessageTokens, countTokens } from '../../llm/tokens.js';
+import { createComponentLogger } from '../../logger.js';
 import type { ContextMessage, LLMContext, SubstrateConfig } from '../../types.js';
-import { resolveSessionHistoryBudget } from '../../context-budget.js';
+import {
+  resolveMemoryRetrievalBudget,
+  resolveSessionHistoryBudget,
+} from '../../context-budget.js';
 import type { EventBus } from '../../event-bus.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
@@ -15,6 +19,10 @@ import {
 } from '../../trust/policy.js';
 import type { SessionStore } from '../store.js';
 import type { UserContinuityStore } from '../continuity.js';
+import type {
+  ContextManifest,
+  ContextManifestMemorySeed,
+} from '../context-manifest.js';
 import {
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   isUntrustedVisibility,
@@ -27,6 +35,8 @@ import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages, getMergedContinuity } from './context-support.js';
 import { runAutoCompaction } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
+
+const log = createComponentLogger('ContextBuilder');
 
 interface BuildSessionContextParams {
   channelId: string;
@@ -45,28 +55,48 @@ interface BuildSessionContextParams {
   /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
   turnSnapshot?: TurnSessionContextSnapshot;
+  memoryManifestSeed?: ContextManifestMemorySeed;
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
   const channelVisibility = classifyChannel(params.channelId, params.channelMeta);
   const historyBudget = resolveSessionHistoryBudget(params.config);
+  const memoryBudget = resolveMemoryRetrievalBudget(params.config);
   let recent = params.turnSnapshot
     ? params.turnSnapshot.recentEntries.map(cloneSessionEntry)
     : params.store.getRecent(params.channelId, historyBudget.estimatedCount);
+  const sourceEntryCount = recent.length;
   if (!params.turnSnapshot && historyBudget.mode === 'budget') {
     recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
   }
-  recent = applyObservationMasking(
+  const trimmedEntryCount = Math.max(0, sourceEntryCount - recent.length);
+  const masking = applyObservationMasking(
     recent,
     params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
   );
+  recent = masking.entries;
   let compactionSummaryTexts = params.turnSnapshot
     ? [...params.turnSnapshot.compactionSummaryTexts]
     : params.store.getCompactionSummaries(params.channelId).map(summary => summary.summary);
+  const baseSystemTokenCount = countTokens(params.systemPrompt);
+  const memoryTokenCount = countTokens(params.memoriesBlock);
+  const compactionThresholdTokenBudget = Math.floor(
+    historyBudget.contextWindow * (params.config.compactionThresholdPct / 100),
+  );
+  const preCompactionMessageTokens = countMessageTokens(
+    entriesToMessages(recent, channelVisibility, false),
+  );
+  let compactionManifest = {
+    triggered: false,
+    compactedEntryCount: 0,
+    totalTokensBefore: baseSystemTokenCount + memoryTokenCount + preCompactionMessageTokens,
+    totalTokensAfter: baseSystemTokenCount + memoryTokenCount + preCompactionMessageTokens,
+  };
 
   // Auto-compaction: when total context tokens exceed threshold, compact oldest half
   if (params.llmProvider) {
-    const systemTokens = countTokens(params.systemPrompt) + countTokens(params.memoriesBlock);
+    const systemTokens = baseSystemTokenCount + memoryTokenCount;
+    const preCompactionEntryCount = recent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
       recent,
@@ -88,18 +118,36 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         wrapCompactionSummaryAsUntrustedContext(result.compactionSummaryText),
       ];
     }
+    const postCompactionMessageTokens = countMessageTokens(
+      entriesToMessages(recent, channelVisibility, false),
+    );
+    const newSummaryTokenCount = result.compactionSummaryText
+      ? countTokens(wrapCompactionSummaryAsUntrustedContext(result.compactionSummaryText))
+      : 0;
+    compactionManifest = {
+      triggered: result.compacted,
+      compactedEntryCount: result.compacted
+        ? Math.max(0, preCompactionEntryCount - recent.length)
+        : 0,
+      totalTokensBefore: systemTokens + preCompactionMessageTokens,
+      totalTokensAfter: systemTokens + postCompactionMessageTokens + newSummaryTokenCount,
+    };
   }
 
   // Build system prompt with memories
   let fullSystem = params.systemPrompt;
-  if (params.memoriesBlock) {
+  const hasMemorySection = params.memoriesBlock.trim().length > 0;
+  const memorySectionText = hasMemorySection ? params.memoriesBlock : '';
+  if (hasMemorySection) {
     fullSystem += '\n\n' + params.memoriesBlock;
   }
 
   // Prepend compaction summaries as context
+  let compactionSummarySectionText = '';
   if (compactionSummaryTexts.length > 0) {
     const summaryBlock = compactionSummaryTexts.join('\n\n');
-    fullSystem += '\n\n[Previous conversation summary]\n' + summaryBlock;
+    compactionSummarySectionText = '[Previous conversation summary]\n' + summaryBlock;
+    fullSystem += '\n\n' + compactionSummarySectionText;
   }
 
   // Cross-channel continuity: include recent activity from other channels
@@ -116,6 +164,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       })
       : [];
 
+  let continuitySectionText = '';
   if (crossChannel.length > 0) {
     const roleNames = { charName: params.characterName };
     const continuityBlock = crossChannel
@@ -133,25 +182,119 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         return wrapUntrustedContext(rawContent);
       })
       .join('\n');
-    fullSystem += '\n\n[Recent activity from other channels]\n' + continuityBlock;
+    continuitySectionText = '[Recent activity from other channels]\n' + continuityBlock;
+    fullSystem += '\n\n' + continuitySectionText;
   }
 
   // Convert session entries to LLM messages
   const messages: ContextMessage[] = entriesToMessages(recent, channelVisibility);
+  const sessionMessageTokenCount = countMessageTokens(messages);
+  const memoryIncludedCount = params.memoryManifestSeed?.returnedCount ?? 0;
+  const seededMemoryHardLimit = params.memoryManifestSeed?.retrievalLimitMode === 'hard_limit'
+    ? params.memoryManifestSeed.retrievalLimit
+    : undefined;
+  const manifest: ContextManifest = {
+    channelId: params.channelId,
+    generatedAt: Date.now(),
+    session: {
+      sourceEntryCount,
+      trimmedEntryCount,
+      maskedEntryCount: masking.maskedCount,
+      compactedEntryCount: compactionManifest.compactedEntryCount,
+      finalEntryCount: recent.length,
+      finalMessageCount: messages.length,
+      compactionSummaryCount: compactionSummaryTexts.length,
+      continuityEntryCount: crossChannel.length,
+    },
+    memory: {
+      includedCount: memoryIncludedCount,
+      includedTypes: { ...(params.memoryManifestSeed?.selectedTypes ?? {}) },
+      includedTokenCount: memoryTokenCount,
+      reason: params.memoryManifestSeed?.reason ?? (memorySectionText ? 'seed_missing' : 'empty_input'),
+      ...(params.memoryManifestSeed?.retrievalSource
+        ? { retrievalSource: params.memoryManifestSeed.retrievalSource }
+        : {}),
+      candidateCount: params.memoryManifestSeed?.candidateCount ?? 0,
+      policyAllowedCount: params.memoryManifestSeed?.policyAllowedCount ?? 0,
+      rankedCount: params.memoryManifestSeed?.rankedCount ?? 0,
+      returnedCount: memoryIncludedCount,
+      excluded: {
+        sensitivityRejectedCount: params.memoryManifestSeed?.sensitivityRejectedCount ?? 0,
+        policyRejectedCount: params.memoryManifestSeed?.policyRejectedCount ?? 0,
+        scoreRejectedCount: params.memoryManifestSeed?.scoreRejectedCount ?? 0,
+        budgetCappedCount: params.memoryManifestSeed?.budgetCappedCount ?? 0,
+      },
+      retrieval: {
+        mode: params.memoryManifestSeed?.retrievalLimitMode ?? memoryBudget.mode,
+        budgetPct: params.memoryManifestSeed?.retrievalBudgetPct ?? memoryBudget.budgetPct,
+        tokenBudget: params.memoryManifestSeed?.retrievalTokenBudget ?? memoryBudget.tokenBudget,
+        limit: params.memoryManifestSeed?.retrievalLimit ?? memoryBudget.estimatedCount,
+        ...(params.memoryManifestSeed?.compositionalMode
+          ? { compositionalMode: params.memoryManifestSeed.compositionalMode }
+          : {}),
+      },
+    },
+    budgets: {
+      contextWindow: historyBudget.contextWindow,
+      sessionHistory: {
+        mode: historyBudget.mode,
+        budgetPct: historyBudget.budgetPct,
+        tokenBudget: historyBudget.tokenBudget,
+        estimatedCount: historyBudget.estimatedCount,
+        ...(historyBudget.hardLimit !== undefined ? { hardLimit: historyBudget.hardLimit } : {}),
+        actualCount: recent.length,
+        actualTokenCount: sessionMessageTokenCount,
+      },
+      memoryRetrieval: {
+        mode: params.memoryManifestSeed?.retrievalLimitMode ?? memoryBudget.mode,
+        budgetPct: params.memoryManifestSeed?.retrievalBudgetPct ?? memoryBudget.budgetPct,
+        tokenBudget: params.memoryManifestSeed?.retrievalTokenBudget ?? memoryBudget.tokenBudget,
+        estimatedCount: memoryBudget.estimatedCount,
+        ...(seededMemoryHardLimit !== undefined
+          ? { hardLimit: seededMemoryHardLimit }
+          : memoryBudget.hardLimit !== undefined
+            ? { hardLimit: memoryBudget.hardLimit }
+            : {}),
+        actualCount: memoryIncludedCount,
+        actualTokenCount: memoryTokenCount,
+      },
+      sections: [
+        { section: 'system_prompt', tokenCount: baseSystemTokenCount },
+        { section: 'memories', tokenCount: memoryTokenCount },
+        { section: 'compaction_summary', tokenCount: countTokens(compactionSummarySectionText) },
+        { section: 'continuity', tokenCount: countTokens(continuitySectionText) },
+        { section: 'session_history', tokenCount: sessionMessageTokenCount },
+      ],
+    },
+    compaction: {
+      triggered: compactionManifest.triggered,
+      thresholdPct: params.config.compactionThresholdPct,
+      tokenBudget: compactionThresholdTokenBudget,
+      totalTokensBefore: compactionManifest.totalTokensBefore,
+      totalTokensAfter: compactionManifest.totalTokensAfter,
+    },
+  };
+  log.debug('Built context manifest', manifest);
 
   return {
     systemPrompt: fullSystem,
     messages,
+    manifest,
   };
 }
 
 const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
 
-function applyObservationMasking(entries: SessionEntry[], window: number): SessionEntry[] {
+function applyObservationMasking(
+  entries: SessionEntry[],
+  window: number,
+): { entries: SessionEntry[]; maskedCount: number } {
   const normalizedWindow = Number.isFinite(window)
     ? Math.max(0, Math.floor(window))
     : DEFAULT_OBSERVATION_MASKING_WINDOW;
-  if (entries.length === 0) return entries;
+  if (entries.length === 0) {
+    return { entries, maskedCount: 0 };
+  }
 
   const unmaskedTurnIds = new Set<string>();
   if (normalizedWindow > 0) {
@@ -166,15 +309,22 @@ function applyObservationMasking(entries: SessionEntry[], window: number): Sessi
     }
   }
 
-  return entries.map((entry) => {
+  let maskedCount = 0;
+  const maskedEntries = entries.map((entry) => {
     if (entry.role !== 'tool') return entry;
     const turnContext = resolveSessionEntryTurnContext(entry);
     if (unmaskedTurnIds.has(turnContext.turnId)) {
       return entry;
     }
+    maskedCount += 1;
     return {
       ...entry,
       content: MASKED_TOOL_OBSERVATION_CONTENT,
     };
   });
+
+  return {
+    entries: maskedEntries,
+    maskedCount,
+  };
 }

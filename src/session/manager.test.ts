@@ -103,6 +103,85 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Memory block');
   });
 
+  it('records memory manifest details when retrieval seed metadata is provided', async () => {
+    const config = makeConfig({
+      memoryRetrievalLimit: 2,
+      memoryRetrievalBudgetPct: 15,
+    });
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'Hi there');
+
+    const ctx = await mgr.buildContext(
+      'ch1',
+      'System',
+      'Remembered facts',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      undefined,
+      {
+        reason: 'ok',
+        retrievalSource: 'embedding',
+        candidateCount: 6,
+        policyAllowedCount: 4,
+        rankedCount: 3,
+        returnedCount: 2,
+        retrievalLimit: 2,
+        retrievalBudgetPct: 15,
+        retrievalTokenBudget: 150,
+        retrievalLimitMode: 'hard_limit',
+        sensitivityRejectedCount: 1,
+        policyRejectedCount: 1,
+        scoreRejectedCount: 1,
+        budgetCappedCount: 1,
+        selectedTypes: { semantic: 1, episodic: 1 },
+        compositionalMode: 'applied',
+      },
+    );
+
+    expect(ctx.manifest?.memory).toMatchObject({
+      includedCount: 2,
+      includedTypes: { semantic: 1, episodic: 1 },
+      includedTokenCount: expect.any(Number),
+      reason: 'ok',
+      retrievalSource: 'embedding',
+      candidateCount: 6,
+      policyAllowedCount: 4,
+      rankedCount: 3,
+      returnedCount: 2,
+      excluded: {
+        sensitivityRejectedCount: 1,
+        policyRejectedCount: 1,
+        scoreRejectedCount: 1,
+        budgetCappedCount: 1,
+      },
+      retrieval: {
+        mode: 'hard_limit',
+        budgetPct: 15,
+        tokenBudget: 150,
+        limit: 2,
+        compositionalMode: 'applied',
+      },
+    });
+    expect(ctx.manifest?.budgets.memoryRetrieval).toMatchObject({
+      mode: 'hard_limit',
+      budgetPct: 15,
+      tokenBudget: 150,
+      hardLimit: 2,
+      actualCount: 2,
+      actualTokenCount: expect.any(Number),
+    });
+    expect(ctx.manifest?.budgets.sections).toEqual(expect.arrayContaining([
+      { section: 'system_prompt', tokenCount: expect.any(Number) },
+      { section: 'memories', tokenCount: expect.any(Number) },
+      { section: 'compaction_summary', tokenCount: 0 },
+      { section: 'continuity', tokenCount: 0 },
+      { section: 'session_history', tokenCount: expect.any(Number) },
+    ]));
+  });
+
   it('persists tool observations and renders them as distinct context blocks', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
@@ -180,6 +259,20 @@ describe('SessionManager', () => {
     expect(allContent).toContain('[Tool result: search_logs — see earlier context]');
     expect(allContent).not.toContain('Older tool output should be masked.');
     expect(allContent).toContain('[Tool result: search_logs] Newest tool output should remain visible.');
+    expect(ctx.manifest?.session).toMatchObject({
+      sourceEntryCount: 6,
+      trimmedEntryCount: 0,
+      maskedEntryCount: 1,
+      compactedEntryCount: 0,
+      finalEntryCount: 6,
+      finalMessageCount: 6,
+      compactionSummaryCount: 0,
+      continuityEntryCount: 0,
+    });
+    expect(ctx.manifest?.budgets.sessionHistory).toMatchObject({
+      actualCount: 6,
+      actualTokenCount: expect.any(Number),
+    });
   });
 
   it('does not persist internal reflection channels to session journals', () => {
@@ -648,6 +741,19 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBeLessThan(20);
     // Compaction summary should be in system prompt
     expect(ctx.systemPrompt).toContain('Previous conversation summary');
+    expect(ctx.manifest?.session).toMatchObject({
+      sourceEntryCount: 20,
+      compactedEntryCount: 10,
+      finalEntryCount: 10,
+      compactionSummaryCount: 1,
+    });
+    expect(ctx.manifest?.compaction).toMatchObject({
+      triggered: true,
+      thresholdPct: 70,
+    });
+    expect(ctx.manifest?.compaction.totalTokensAfter).toBeLessThan(
+      ctx.manifest?.compaction.totalTokensBefore ?? 0,
+    );
   });
 
   it('marks compaction summaries as untrusted at generation and retrieval boundaries', async () => {

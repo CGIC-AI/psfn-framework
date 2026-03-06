@@ -7,6 +7,7 @@ import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
 import type { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
+import { runWithRequestContext } from '../llm/request-context.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
 
 // ── Helpers ──
@@ -1071,14 +1072,59 @@ describe('MemoryRetriever basic behavior', () => {
     expect(calls[0][1]).toMatchObject({
       channelId: 'api:test',
       count: 2,
+      candidates: 2,
+      ranked: 2,
+      returned: 2,
       reason: 'ok',
       candidateCount: 2,
       rankedCount: 2,
       returnedCount: 2,
+      selectedTypes: { semantic: 2 },
+      budgetCappedCount: 0,
       compositionalMode: 'disabled_policy',
       compositionalCandidateCount: 2,
       compositionalEvaluationBatchCount: 1,
       compositionalFinalistCount: 2,
+    });
+  });
+
+  it('emits request-scoped retrieval telemetry for manifest seeding', async () => {
+    const memories = [
+      makeMemory({ text: 'Public A', sensitivity: 'public', similarity: 0.95 }),
+      makeMemory({ text: 'Public B', sensitivity: 'public', similarity: 0.9 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await runWithRequestContext(
+      {
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        channelId: 'api:test',
+        callType: 'chat',
+        purpose: 'agent.turn.memory',
+        originType: 'chat',
+        originStage: 'agent.turn.memory',
+      },
+      async () => retriever.retrieve('test query', 'api:test', 'primary'),
+    );
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      requestId: 'req-1',
+      turnId: 'turn-1',
+      callType: 'chat',
+      purpose: 'memory.retrieval',
+      originType: 'chat',
+      originStage: 'agent.turn.memory',
+      candidates: 2,
+      ranked: 2,
+      returned: 2,
+      selectedTypes: { semantic: 2 },
+      budgetCappedCount: 0,
     });
   });
 

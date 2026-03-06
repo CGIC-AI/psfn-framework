@@ -2944,6 +2944,79 @@ describe('SubstrateAgent.handleMessage', () => {
     ]);
   });
 
+  it('passes request-scoped memory retrieval details into buildContext manifest seed', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      config,
+    );
+
+    agent.memoryProvider = {
+      retrieve: vi.fn(async () => {
+        await eventBus.emit('memory.retrieval', {
+          channelId: 'twitter:timeline',
+          requestId: 'other-request',
+          count: 9,
+          reason: 'error',
+          candidateCount: 9,
+          returnedCount: 9,
+        });
+        await eventBus.emit('memory.retrieval', {
+          channelId: 'twitter:timeline',
+          requestId: 'msg-1',
+          count: 1,
+          reason: 'ok',
+          retrievalSource: 'embedding',
+          candidateCount: 3,
+          policyAllowedCount: 2,
+          rankedCount: 2,
+          returnedCount: 1,
+          retrievalLimit: 1,
+          retrievalBudgetPct: 2,
+          retrievalTokenBudget: 2560,
+          retrievalLimitMode: 'hard_limit',
+          sensitivityRejectedCount: 1,
+          policyRejectedCount: 0,
+          scoreRejectedCount: 1,
+          budgetCappedCount: 1,
+          selectedTypes: { semantic: 1 },
+          compositionalMode: 'disabled_policy',
+        });
+        return 'Memory block';
+      }),
+    };
+
+    await agent.handleMessage(makeMessage({
+      channelId: 'twitter:timeline',
+      content: 'share an update',
+    }));
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[8]).toMatchObject({
+      reason: 'ok',
+      retrievalSource: 'embedding',
+      candidateCount: 3,
+      policyAllowedCount: 2,
+      rankedCount: 2,
+      returnedCount: 1,
+      retrievalLimit: 1,
+      retrievalBudgetPct: 2,
+      retrievalTokenBudget: 2560,
+      retrievalLimitMode: 'hard_limit',
+      sensitivityRejectedCount: 1,
+      policyRejectedCount: 0,
+      scoreRejectedCount: 1,
+      budgetCappedCount: 1,
+      selectedTypes: { semantic: 1 },
+      compositionalMode: 'disabled_policy',
+    });
+  });
+
   it('refreshes resolved model on next turn after config drift', async () => {
     const config = makeConfig();
     const agent = new SubstrateAgent(

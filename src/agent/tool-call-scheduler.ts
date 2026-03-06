@@ -262,7 +262,10 @@ function collectCompatibleBatch(descriptors: ToolCallDescriptor[], startIndex: n
   const batch: ToolCallDescriptor[] = [first];
   for (let index = startIndex + 1; index < descriptors.length; index += 1) {
     const candidate = descriptors[index];
-    if (!candidate || !canRunConcurrently(first, candidate)) {
+    if (
+      !candidate
+      || batch.some((entry) => !canRunConcurrently(entry, candidate))
+    ) {
       break;
     }
     batch.push(candidate);
@@ -271,7 +274,24 @@ function collectCompatibleBatch(descriptors: ToolCallDescriptor[], startIndex: n
 }
 
 function canRunConcurrently(a: ToolCallDescriptor, b: ToolCallDescriptor): boolean {
-  return a.metadata.class === 'spawn_shard' && b.metadata.class === 'spawn_shard';
+  if (a.metadataIssue || b.metadataIssue) {
+    return false;
+  }
+  if (a.metadata.class !== b.metadata.class) {
+    return false;
+  }
+  if (a.metadata.class !== 'spawn_shard') {
+    return false;
+  }
+  if (
+    a.metadata.exclusivityKeyPolicy !== 'none'
+    || b.metadata.exclusivityKeyPolicy !== 'none'
+    || a.metadata.exclusivityKey !== undefined
+    || b.metadata.exclusivityKey !== undefined
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function resolveBatchParallelLimit(batch: ToolCallDescriptor[], maxParallelToolCalls: number): number {
@@ -280,7 +300,7 @@ function resolveBatchParallelLimit(batch: ToolCallDescriptor[], maxParallelToolC
     : 1;
   const boundedByMetadata = batch.reduce((current, descriptor) => {
     const candidate = descriptor.metadata.maxParallel;
-    if (!candidate || !Number.isFinite(candidate) || candidate < 1) {
+    if (!candidate || !Number.isInteger(candidate) || candidate < 1) {
       return current;
     }
     return Math.min(current, Math.floor(candidate));
@@ -317,7 +337,7 @@ function resolveToolConcurrencyMetadata(
 ): { metadata: ToolConcurrencyMeta; issue?: 'missing' | 'invalid' } {
   if (!tool) {
     return {
-      metadata: { class: 'exclusive', exclusivityKey: 'tool' },
+      metadata: createFailClosedConcurrencyMetadata('tool'),
       issue: 'missing',
     };
   }
@@ -325,7 +345,7 @@ function resolveToolConcurrencyMetadata(
   const concurrency = (tool as WirableTool).wiringMeta?.concurrency;
   if (!concurrency) {
     return {
-      metadata: { class: 'exclusive', exclusivityKey: `tool:${tool.name}` },
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
       issue: 'missing',
     };
   }
@@ -335,7 +355,18 @@ function resolveToolConcurrencyMetadata(
     && concurrency.class !== 'spawn_shard'
   ) {
     return {
-      metadata: { class: 'exclusive', exclusivityKey: `tool:${tool.name}` },
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
+      issue: 'invalid',
+    };
+  }
+
+  if (
+    concurrency.exclusivityKeyPolicy !== 'none'
+    && concurrency.exclusivityKeyPolicy !== 'category_tool_name'
+    && concurrency.exclusivityKeyPolicy !== 'static_key'
+  ) {
+    return {
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
       issue: 'invalid',
     };
   }
@@ -345,22 +376,90 @@ function resolveToolConcurrencyMetadata(
     && (!concurrency.exclusivityKey || concurrency.exclusivityKey.trim().length === 0)
   ) {
     return {
-      metadata: { class: 'exclusive', exclusivityKey: `tool:${tool.name}` },
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
+      issue: 'invalid',
+    };
+  }
+
+  if (
+    concurrency.class === 'exclusive'
+    && concurrency.exclusivityKeyPolicy === 'none'
+  ) {
+    return {
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
+      issue: 'invalid',
+    };
+  }
+
+  if (
+    concurrency.class !== 'exclusive'
+    && concurrency.exclusivityKeyPolicy !== 'none'
+  ) {
+    return {
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
+      issue: 'invalid',
+    };
+  }
+
+  if (
+    concurrency.class !== 'exclusive'
+    && concurrency.exclusivityKey !== undefined
+  ) {
+    return {
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
       issue: 'invalid',
     };
   }
 
   if (
     concurrency.maxParallel !== undefined
-    && (!Number.isFinite(concurrency.maxParallel) || concurrency.maxParallel < 1)
+    && (!Number.isInteger(concurrency.maxParallel) || concurrency.maxParallel < 1)
   ) {
     return {
-      metadata: { class: 'exclusive', exclusivityKey: `tool:${tool.name}` },
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
+      issue: 'invalid',
+    };
+  }
+
+  if (
+    concurrency.interruptibility !== 'cooperative'
+    && concurrency.interruptibility !== 'non_interruptible'
+  ) {
+    return {
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
+      issue: 'invalid',
+    };
+  }
+
+  if (
+    !concurrency.eligibility
+    || typeof concurrency.eligibility.foreground !== 'boolean'
+    || typeof concurrency.eligibility.background !== 'boolean'
+    || (!concurrency.eligibility.foreground && !concurrency.eligibility.background)
+  ) {
+    return {
+      metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
       issue: 'invalid',
     };
   }
 
   return {
-    metadata: { ...concurrency },
+    metadata: {
+      ...concurrency,
+      eligibility: { ...concurrency.eligibility },
+    },
+  };
+}
+
+function createFailClosedConcurrencyMetadata(exclusivityKey: string): ToolConcurrencyMeta {
+  return {
+    class: 'exclusive',
+    exclusivityKeyPolicy: 'static_key',
+    exclusivityKey,
+    interruptibility: 'cooperative',
+    eligibility: {
+      foreground: true,
+      background: true,
+    },
   };
 }

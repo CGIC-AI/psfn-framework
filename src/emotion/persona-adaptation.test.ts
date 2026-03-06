@@ -53,6 +53,24 @@ describe('emotion/persona-adaptation', () => {
     expect(profile.displayRange.max).toBeCloseTo(0.55, 6);
   });
 
+  it('accepts extensions_* emotional expression aliases from character-card variables', () => {
+    const profile = resolveEmotionalExpressionProfile({
+      promptVariables: {
+        extensions_hexaco_emotional_expression_intensity: '0.61',
+        extensions_hexaco_emotional_expression_variability: '0.47',
+        extensions_hexaco_emotional_expression_control: '0.73',
+        extensions_hexaco_emotional_expression_display_range_min: '0.15',
+        extensions_hexaco_emotional_expression_display_range_max: '0.68',
+      },
+    });
+
+    expect(profile.intensity).toBeCloseTo(0.61, 6);
+    expect(profile.variability).toBeCloseTo(0.47, 6);
+    expect(profile.control).toBeCloseTo(0.73, 6);
+    expect(profile.displayRange.min).toBeCloseTo(0.15, 6);
+    expect(profile.displayRange.max).toBeCloseTo(0.68, 6);
+  });
+
   it('applies stricter tatemae gating for public trust than primary trust', () => {
     const snapshot = makeSnapshot();
     const primary = mapEmotionToPersonaAffect({

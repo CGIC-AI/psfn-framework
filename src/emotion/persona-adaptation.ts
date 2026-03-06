@@ -66,26 +66,31 @@ const EPSILON = 1e-6;
 const PROMPT_VARIABLE_KEYS = {
   intensity: [
     'hexaco_emotional_expression_intensity',
+    'extensions_hexaco_emotional_expression_intensity',
     'character.hexaco.emotional_expression.intensity',
     'emotional_expression_intensity',
   ],
   variability: [
     'hexaco_emotional_expression_variability',
+    'extensions_hexaco_emotional_expression_variability',
     'character.hexaco.emotional_expression.variability',
     'emotional_expression_variability',
   ],
   control: [
     'hexaco_emotional_expression_control',
+    'extensions_hexaco_emotional_expression_control',
     'character.hexaco.emotional_expression.control',
     'emotional_expression_control',
   ],
   displayRangeMin: [
     'hexaco_emotional_expression_display_range_min',
+    'extensions_hexaco_emotional_expression_display_range_min',
     'character.hexaco.emotional_expression.display_range.min',
     'emotional_expression_display_range_min',
   ],
   displayRangeMax: [
     'hexaco_emotional_expression_display_range_max',
+    'extensions_hexaco_emotional_expression_display_range_max',
     'character.hexaco.emotional_expression.display_range.max',
     'emotional_expression_display_range_max',
   ],

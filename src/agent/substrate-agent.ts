@@ -124,6 +124,7 @@ import {
   formatActiveConcernsContextBlock,
   type ActiveConcernContextProvider,
 } from '../intention/concerns.js';
+import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
 import {
   buildSessionMetadataWithEmotionState,
   parseSessionEmotionState,
@@ -386,6 +387,7 @@ export class SubstrateAgent {
   memoryExtractor: MemoryExtractor | null = null;
   scratchpadProvider: ScratchpadProvider | null = null;
   activeConcernProvider: ActiveConcernContextProvider | null = null;
+  behavioralPatternProvider: BehavioralPatternContextProvider | null = null;
 
   // Trust resolution — null until contacts are wired
   contactStore: ContactStore | null = null;
@@ -1751,6 +1753,10 @@ export class SubstrateAgent {
 
   setActiveConcernProvider(provider: ActiveConcernContextProvider | null): void {
     this.activeConcernProvider = provider;
+  }
+
+  setBehavioralPatternProvider(provider: BehavioralPatternContextProvider | null): void {
+    this.behavioralPatternProvider = provider;
   }
 
   registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
@@ -3854,6 +3860,12 @@ export class SubstrateAgent {
       lines.push(activeConcernsBlock);
     }
 
+    const behavioralNotesBlock = this.buildBehavioralNotesContextBlock(canonicalContactKey);
+    if (behavioralNotesBlock) {
+      lines.push('');
+      lines.push(behavioralNotesBlock);
+    }
+
     if (skillsContext) {
       lines.push('');
       lines.push('[Skills Index]');
@@ -3873,6 +3885,19 @@ export class SubstrateAgent {
       return formatActiveConcernsContextBlock(concerns);
     } catch (error) {
       log.warn('Active concerns context injection skipped due to provider error', {
+        error: toErrorMessage(error),
+      });
+      return '';
+    }
+  }
+
+  private buildBehavioralNotesContextBlock(canonicalContactKey?: string): string {
+    if (!this.behavioralPatternProvider) return '';
+
+    try {
+      return this.behavioralPatternProvider.getBehavioralNotes(canonicalContactKey);
+    } catch (error) {
+      log.warn('Behavioral notes context injection skipped due to provider error', {
         error: toErrorMessage(error),
       });
       return '';

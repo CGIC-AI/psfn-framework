@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
+import type { EmotionStateSnapshot } from '../emotion/state.js';
 import {
   ActiveConcernStore,
   type ActiveConcernContextProvider,
@@ -9,6 +11,11 @@ import type {
   IntentionActionDecision,
 } from './appraisal.js';
 import {
+  BehavioralPatternTracker,
+  scoreBehavioralOutcomeFromEmotion,
+  type BehavioralPatternContextProvider,
+} from './patterns.js';
+import {
   createCreateConcernTool,
   createListConcernsTool,
   createResolveConcernTool,
@@ -16,8 +23,16 @@ import {
 
 export interface IntentionRuntimeTarget {
   activeConcernProvider: ActiveConcernContextProvider | null;
+  behavioralPatternProvider?: BehavioralPatternContextProvider | null;
   setActiveConcernProvider?: (provider: ActiveConcernContextProvider | null) => void;
+  setBehavioralPatternProvider?: (provider: BehavioralPatternContextProvider | null) => void;
+  registerIntentionPostTurnHook?: (hook: IntentionPostTurnHook) => (() => void) | void;
   registerTool: ToolRegistrar;
+}
+
+export interface IntentionRuntimeWiring {
+  concernStore: ActiveConcernStore;
+  behavioralPatternTracker: BehavioralPatternTracker;
 }
 
 export interface IntentionAppraisalHooks {
@@ -30,6 +45,22 @@ export interface IntentionAppraisalHooks {
     channelId: string;
     canonicalContactKey?: string;
     sourceMessageId: string;
+  }): void;
+}
+
+export interface IntentionBehavioralPatternHooks {
+  onBehavioralPatternOutcome(input: {
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    emotionSnapshot: EmotionStateSnapshot;
+    observedAtMs?: number;
+  }): Promise<void>;
+  onTurnResponseRecorded(input: {
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    responseContent: string;
+    completedAtMs?: number;
   }): void;
 }
 
@@ -80,6 +111,13 @@ function toActiveConcernSnapshot(concern: ReturnType<ActiveConcernStore['getActi
   };
 }
 
+function normalizeObservedAtIso(value: number | undefined): string | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return new Date(Math.floor(value)).toISOString();
+}
+
 export function createIntentionAppraisalHooks(
   concernStore: ActiveConcernStore,
 ): IntentionAppraisalHooks {
@@ -111,18 +149,99 @@ export function createIntentionAppraisalHooks(
   };
 }
 
+export function createIntentionBehavioralPatternHooks(
+  patternTracker: BehavioralPatternTracker,
+): IntentionBehavioralPatternHooks {
+  return {
+    onBehavioralPatternOutcome: async ({
+      canonicalContactKey,
+      sourceMessageId,
+      emotionSnapshot,
+      observedAtMs,
+    }) => {
+      const contactId = normalizeOptionalText(canonicalContactKey);
+      if (!contactId) {
+        return;
+      }
+      const sourceId = normalizeOptionalText(sourceMessageId);
+      if (!sourceId) {
+        throw new Error('Behavioral pattern outcome requires sourceMessageId');
+      }
+      const outcomeScore = scoreBehavioralOutcomeFromEmotion(emotionSnapshot);
+      const observedAt = normalizeObservedAtIso(observedAtMs);
+      await patternTracker.tryRecordOutcomeForLatestPending({
+        contactId,
+        outcomeScore,
+        ...(observedAt ? { observedAt } : {}),
+        outcomeSourceMessageId: sourceId,
+      });
+    },
+    onTurnResponseRecorded: ({
+      canonicalContactKey,
+      sourceMessageId,
+      responseContent,
+      completedAtMs,
+    }) => {
+      const contactId = normalizeOptionalText(canonicalContactKey);
+      if (!contactId) {
+        return;
+      }
+      const sourceId = normalizeOptionalText(sourceMessageId);
+      if (!sourceId) {
+        throw new Error('Behavioral pattern turn recording requires sourceMessageId');
+      }
+      const normalizedResponse = normalizeOptionalText(responseContent);
+      if (!normalizedResponse) {
+        return;
+      }
+      const createdAt = normalizeObservedAtIso(completedAtMs);
+
+      patternTracker.recordResponseStrategy({
+        contactId,
+        sourceMessageId: sourceId,
+        responseContent: normalizedResponse,
+        ...(createdAt ? { createdAt } : {}),
+      });
+    },
+  };
+}
+
 export function wireIntentionRuntime(
   target: IntentionRuntimeTarget,
   db: Database.Database,
-): ActiveConcernStore {
+): IntentionRuntimeWiring {
   const concernStore = new ActiveConcernStore(db);
+  const behavioralPatternTracker = new BehavioralPatternTracker(db);
+  const behavioralHooks = createIntentionBehavioralPatternHooks(behavioralPatternTracker);
+
   if (typeof target.setActiveConcernProvider === 'function') {
     target.setActiveConcernProvider(concernStore);
   } else {
     target.activeConcernProvider = concernStore;
   }
+
+  if (typeof target.setBehavioralPatternProvider === 'function') {
+    target.setBehavioralPatternProvider(behavioralPatternTracker);
+  } else {
+    target.behavioralPatternProvider = behavioralPatternTracker;
+  }
+
+  if (typeof target.registerIntentionPostTurnHook === 'function') {
+    target.registerIntentionPostTurnHook((context) => {
+      behavioralHooks.onTurnResponseRecorded({
+        canonicalContactKey: context.canonicalContactKey,
+        sourceMessageId: context.message.id,
+        responseContent: context.response.content,
+        completedAtMs: context.completedAt,
+      });
+    });
+  }
+
   target.registerTool(createCreateConcernTool(concernStore));
   target.registerTool(createListConcernsTool(concernStore));
   target.registerTool(createResolveConcernTool(concernStore));
-  return concernStore;
+  return {
+    concernStore,
+    behavioralPatternTracker,
+  };
 }

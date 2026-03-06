@@ -86,8 +86,10 @@ import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
   createIntentionAppraisalHooks,
+  createIntentionBehavioralPatternHooks,
   wireIntentionRuntime,
 } from './intention/runtime-wiring.js';
+import { createBehavioralPatternMemoryPromotionHook } from './intention/patterns.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -614,8 +616,11 @@ async function main(): Promise<void> {
       : {}),
   },
 );
-  const intentionConcernStore = wireIntentionRuntime(agentLoop, db);
-  const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionConcernStore);
+  const intentionRuntime = wireIntentionRuntime(agentLoop, db);
+  const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionRuntime.concernStore);
+  const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
+    intentionRuntime.behavioralPatternTracker,
+  );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
   const memoryExtractor = wireMemoryRuntime({
@@ -739,6 +744,9 @@ async function main(): Promise<void> {
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
+  intentionRuntime.behavioralPatternTracker.setPromotionHook(
+    createBehavioralPatternMemoryPromotionHook(memoryWriter),
+  );
   agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
   agentLoop.registerTool(createMemoryImportTool(memoryWriter));
   agentLoop.registerTool(createMemoryRedactTool(memoryWriter));
@@ -1158,6 +1166,7 @@ async function main(): Promise<void> {
       contactStore,
       getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
       onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
+      onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       coreMemoryStore,
       postTurnActions,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),

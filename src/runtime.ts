@@ -87,8 +87,10 @@ import { wireGitRuntime } from './git/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
   createIntentionAppraisalHooks,
+  createIntentionBehavioralPatternHooks,
   wireIntentionRuntime,
 } from './intention/runtime-wiring.js';
+import { createBehavioralPatternMemoryPromotionHook } from './intention/patterns.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
   composeIdentity,
@@ -704,8 +706,11 @@ export class SubstrateRuntime implements Lifecycle {
         : {}),
     },
   );
-    const intentionConcernStore = wireIntentionRuntime(this.agentLoop, this.db);
-    const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionConcernStore);
+    const intentionRuntime = wireIntentionRuntime(this.agentLoop, this.db);
+    const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionRuntime.concernStore);
+    const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
+      intentionRuntime.behavioralPatternTracker,
+    );
 
     this.memoryExtractor = wireMemoryRuntime({
       agentLoop: this.agentLoop,
@@ -829,6 +834,9 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Memory write/import tools — intentional memory creation
     const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
+    intentionRuntime.behavioralPatternTracker.setPromotionHook(
+      createBehavioralPatternMemoryPromotionHook(memoryWriter),
+    );
     this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryRedactTool(memoryWriter));
@@ -994,6 +1002,7 @@ export class SubstrateRuntime implements Lifecycle {
         contactStore,
         getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
         onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
+        onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
         coreMemoryStore,
         postTurnActions,
         ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),

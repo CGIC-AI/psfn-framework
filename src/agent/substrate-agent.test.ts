@@ -3136,6 +3136,33 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(prompt).toContain('high');
   });
 
+  it('injects behavioral notes into runtime context when provider is wired', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+    );
+    agent.setBehavioralPatternProvider({
+      getBehavioralNotes: vi.fn().mockReturnValue([
+        '[Behavioral Notes]',
+        '- empathy: avg +0.42 over 3 outcome sample(s), 100% positive',
+      ].join('\n')),
+    });
+
+    await agent.handleMessage(makeMessage({
+      authorId: 'user-123',
+    }));
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    const prompt = buildCall[1] as string;
+    expect(prompt).toContain('[Behavioral Notes]');
+    expect(prompt).toContain('empathy: avg +0.42');
+  });
+
   it('injects bounded scratchpad notes into system context when scratchpad provider is wired', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

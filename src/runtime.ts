@@ -168,6 +168,7 @@ export {
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
+const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
 
 function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
   eventBus.emit('capability.eligibility', {
@@ -718,6 +719,28 @@ export class SubstrateRuntime implements Lifecycle {
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     });
+    this.scheduler.register({
+      id: COMPACTION_GUIDELINE_REVIEW_TASK_ID,
+      name: 'Compression Guideline Review',
+      type: 'every',
+      intervalMs: this.config.maintenanceIntervalMs,
+      handler: async () => {
+        const result = await this.sessionManager.runPeriodicCompressionGuidelineUpdate(this.llmClient);
+        if (result.status === 'updated') {
+          log.info('Compression guideline updated from failure log review', {
+            version: result.version,
+            reviewedFailureCount: result.reviewedFailureCount,
+          });
+          return;
+        }
+        log.debug('Compression guideline review skipped', {
+          reason: result.reason,
+          reviewedFailureCount: result.reviewedFailureCount,
+        });
+      },
+      eligibility: { requiredTokens: ['memory.write'] },
+      state: 'idle',
+    });
     registerScheduledBackupTask({
       scheduler: this.scheduler,
       db: this.db,
@@ -740,6 +763,18 @@ export class SubstrateRuntime implements Lifecycle {
       scheduler: this.scheduler,
       agentLoop: this.agentLoop,
       eligibilityGate,
+    });
+    this.eventBus.on('agent.turn.end', ({ message, response }) => {
+      const captured = this.sessionManager.recordCompressionFailureFromResponse(
+        message.channelId,
+        message.id,
+        response.content,
+      );
+      if (!captured) return;
+      log.info('Captured compression failure signal for guideline evolution', {
+        channelId: message.channelId,
+        sourceMessageId: message.id,
+      });
     });
 
     log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via ${embeddingProvider.kind})`);

@@ -46,6 +46,7 @@ interface BuildSessionContextParams {
   systemPrompt: string;
   coreMemoryBlock: string;
   memoriesBlock: string;
+  compactionPromptText?: string;
   llmProvider?: LLMProvider;
   userId?: string;
   channelMeta?: ChannelMeta;
@@ -55,6 +56,12 @@ interface BuildSessionContextParams {
   eventBus: EventBus | null;
   promptRegistry: PromptRegistryStore | null;
   preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
+  onCompactionComplete?: (event: {
+    channelId: string;
+    originalContext: string;
+    compressedContext: string;
+    capturedAt: number;
+  }) => void;
   continuityStore: UserContinuityStore | null;
   /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
@@ -128,13 +135,14 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       recent,
       channelVisibility,
       systemTokens,
-      compactionPromptText: params.turnSnapshot?.compactionPromptText,
+      compactionPromptText: params.compactionPromptText ?? params.turnSnapshot?.compactionPromptText,
       llmProvider: params.llmProvider,
       store: params.store,
       config: params.config,
       eventBus: params.eventBus,
       promptRegistry: params.promptRegistry,
       preCompactionExtractionHandler: params.preCompactionExtractionHandler,
+      onCompactionComplete: params.onCompactionComplete,
       userId: params.userId,
     });
     recent = result.recent;

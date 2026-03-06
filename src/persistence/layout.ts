@@ -225,6 +225,14 @@ export function resolveFocusKnowledgePath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'focus-knowledge.jsonl');
 }
 
+export function resolveCompressionGuidelinePath(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'compaction-guideline.json');
+}
+
+export function resolveCompressionFailureLogPath(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'compaction-failures.jsonl');
+}
+
 export function resolveScratchpadMirrorPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'scratchpad.json');
 }

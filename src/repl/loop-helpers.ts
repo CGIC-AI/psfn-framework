@@ -1,4 +1,12 @@
-import type { BudgetStatus, ThinkBudget, ThinkEvidence, ThinkResult, ThinkStep } from './types.js';
+import {
+  createEmptyThinkDiagnostics,
+  type BudgetStatus,
+  type ThinkBudget,
+  type ThinkDiagnostics,
+  type ThinkEvidence,
+  type ThinkResult,
+  type ThinkStep,
+} from './types.js';
 
 export interface StepBuilderInput {
   iteration: number;
@@ -23,6 +31,7 @@ export interface BudgetResultInput {
   budgetStatus: BudgetStatus;
   steps?: ThinkStep[];
   evidence?: ThinkEvidence[];
+  diagnostics?: ThinkDiagnostics;
 }
 
 export function createBudgetStatus(): BudgetStatus {
@@ -111,6 +120,7 @@ export function makeBudgetResult(input: BudgetResultInput): ThinkResult {
     budgetStatus: input.budgetStatus,
     steps: input.steps ?? [],
     evidence: input.evidence ?? [],
+    diagnostics: input.diagnostics ?? createEmptyThinkDiagnostics(),
   };
 }
 

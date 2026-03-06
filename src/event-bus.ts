@@ -155,6 +155,16 @@ export interface EventMap {
       durationMs: number;
       truncated: boolean;
       budgetStop: string | null;
+      subQueries: number;
+      toolCalls: number;
+      sessionCostUsd: number;
+      warnings: string[];
+      nestedThink: {
+        nestedThinkCallCount: number;
+        nestedThinkSuccessCount: number;
+        nestedThinkFailureCount: number;
+        maxNestedDepthReached: number;
+      };
       steps: Array<{
         iteration: number;
         timestamp: number;
@@ -168,7 +178,7 @@ export interface EventMap {
         variablesChanged: string[];
       }>;
     };
-  };
+  } & EventCorrelationFields;
   'agent.error': { message: SubstrateMessage; error: Error } & EventCorrelationFields;
   'memory.extraction.start': { channelId: string; triggerReason?: string } & EventCorrelationFields;
   'memory.extraction.end': {
@@ -183,6 +193,11 @@ export interface EventMap {
     deduplicatedCount?: number;
     supersededCount?: number;
     rejectionBreakdown?: Record<string, number>;
+    compositionalMode?: 'legacy' | 'chunk_compose';
+    chunkCount?: number;
+    mergedFactCount?: number;
+    crossChunkDeduplicatedCount?: number;
+    boundaryFactCount?: number;
   } & EventCorrelationFields;
   'memory.retrieval': {
     channelId: string;
@@ -195,7 +210,11 @@ export interface EventMap {
     visibilityScope?: 'public_only' | 'approved_private_context' | 'non_broadcast';
     operatorApproval?: boolean;
     provenanceRefs?: string[];
-  };
+    compositionalMode?: 'disabled_policy' | 'llm_unavailable' | 'insufficient_candidates' | 'malformed_or_failed' | 'applied';
+    compositionalCandidateCount?: number;
+    compositionalEvaluationBatchCount?: number;
+    compositionalFinalistCount?: number;
+  } & EventCorrelationFields;
   'broadcast.pre_send.classified': {
     channelId: string;
     risky: boolean;

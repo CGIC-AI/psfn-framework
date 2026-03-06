@@ -36,6 +36,9 @@ import {
 } from '../turns/snapshot.js';
 import {
   composeRetrievalRanking,
+  RETRIEVAL_COMPOSITION_BATCH_SIZE,
+  RETRIEVAL_COMPOSITION_FINALIST_LIMIT,
+  RETRIEVAL_COMPOSITION_MAX_CANDIDATES,
   type RetrievalComposeCandidate,
 } from './retrieval-compose.js';
 const log = createComponentLogger('Retrieval');
@@ -131,6 +134,18 @@ interface RetrievalTelemetry {
   bottomSimilarity?: number;
   topScore?: number;
   bottomScore?: number;
+  compositionalMode?: 'disabled_policy' | 'llm_unavailable' | 'insufficient_candidates' | 'malformed_or_failed' | 'applied';
+  compositionalCandidateCount?: number;
+  compositionalEvaluationBatchCount?: number;
+  compositionalFinalistCount?: number;
+}
+
+interface CompositionalRetrievalDecision {
+  ranked: ScoredMemory[] | null;
+  mode: NonNullable<RetrievalTelemetry['compositionalMode']>;
+  candidateCount: number;
+  evaluationBatchCount: number;
+  finalistCount: number;
 }
 
 interface ProactiveWeightedMemory {
@@ -488,12 +503,16 @@ export class MemoryRetriever implements MemoryProvider {
       const allScored = policyAllowed
         .map(memory => ({ memory, ...computeRetrievalScore(memory, contextText) }))
         .sort((a, b) => b.score - a.score);
-      const reranked = await this.applyCompositionalRetrievalRanking(
+      const rerankDecision = await this.applyCompositionalRetrievalRanking(
         contextText,
         channelId,
         allScored,
       );
-      const scoredCandidates = reranked ?? allScored;
+      const scoredCandidates = rerankDecision.ranked ?? allScored;
+      telemetry.compositionalMode = rerankDecision.mode;
+      telemetry.compositionalCandidateCount = rerankDecision.candidateCount;
+      telemetry.compositionalEvaluationBatchCount = rerankDecision.evaluationBatchCount;
+      telemetry.compositionalFinalistCount = rerankDecision.finalistCount;
 
       diagnostics.contradictionAdjustedCount = scoredCandidates
         .filter(item => item.contradictionPenaltyMultiplier < 1)
@@ -607,6 +626,10 @@ export class MemoryRetriever implements MemoryProvider {
         explicitQueryOverrideCount: diagnostics.explicitQueryOverrideCount,
         budgetMode: budget.mode,
         tokenBudget: budget.tokenBudget,
+        compositionalMode: telemetry.compositionalMode,
+        compositionalCandidateCount: telemetry.compositionalCandidateCount,
+        compositionalEvaluationBatchCount: telemetry.compositionalEvaluationBatchCount,
+        compositionalFinalistCount: telemetry.compositionalFinalistCount,
       });
       log.debug('Retrieval decision rationale', {
         trustLevel: effectiveTrust,
@@ -832,9 +855,41 @@ export class MemoryRetriever implements MemoryProvider {
     contextText: string,
     channelId: string,
     candidates: ScoredMemory[],
-  ): Promise<ScoredMemory[] | null> {
-    if (!this.shouldUseCompositionalRetrieval(channelId) || candidates.length < 2 || !this.llmProvider) {
-      return null;
+  ): Promise<CompositionalRetrievalDecision> {
+    const compositionalCandidateCount = Math.min(candidates.length, RETRIEVAL_COMPOSITION_MAX_CANDIDATES);
+    const finalistCount = compositionalCandidateCount < 2
+      ? compositionalCandidateCount
+      : Math.min(RETRIEVAL_COMPOSITION_FINALIST_LIMIT, compositionalCandidateCount);
+    const evaluationBatchCount = compositionalCandidateCount < 2
+      ? 0
+      : Math.ceil(compositionalCandidateCount / RETRIEVAL_COMPOSITION_BATCH_SIZE);
+
+    if (!this.shouldUseCompositionalRetrieval(channelId)) {
+      return {
+        ranked: null,
+        mode: 'disabled_policy',
+        candidateCount: compositionalCandidateCount,
+        evaluationBatchCount,
+        finalistCount,
+      };
+    }
+    if (candidates.length < 2) {
+      return {
+        ranked: null,
+        mode: 'insufficient_candidates',
+        candidateCount: compositionalCandidateCount,
+        evaluationBatchCount,
+        finalistCount,
+      };
+    }
+    if (!this.llmProvider) {
+      return {
+        ranked: null,
+        mode: 'llm_unavailable',
+        candidateCount: compositionalCandidateCount,
+        evaluationBatchCount,
+        finalistCount,
+      };
     }
 
     const decision = await composeRetrievalRanking({
@@ -854,13 +909,22 @@ export class MemoryRetriever implements MemoryProvider {
         explicitlyQueried: candidate.explicitlyQueried,
       })),
     });
-    if (!decision) return null;
+    if (!decision) {
+      return {
+        ranked: null,
+        mode: 'malformed_or_failed',
+        candidateCount: compositionalCandidateCount,
+        evaluationBatchCount,
+        finalistCount,
+      };
+    }
 
     const finalOrderIndex = new Map(
       decision.finalOrder.map((id, index) => [id, index] as const),
     );
 
-    return candidates
+    return {
+      ranked: candidates
       .map((candidate) => {
         const relevance = decision.relevanceById.get(candidate.memory.id) ?? 0;
         const finalIndex = finalOrderIndex.get(candidate.memory.id);
@@ -875,7 +939,12 @@ export class MemoryRetriever implements MemoryProvider {
           score: candidate.score * multiplier,
         };
       })
-      .sort((left, right) => right.score - left.score);
+      .sort((left, right) => right.score - left.score),
+      mode: 'applied',
+      candidateCount: compositionalCandidateCount,
+      evaluationBatchCount,
+      finalistCount,
+    };
   }
 
   private isTelemetryEnabled(): boolean {

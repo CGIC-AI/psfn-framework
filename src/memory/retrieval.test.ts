@@ -1075,6 +1075,10 @@ describe('MemoryRetriever basic behavior', () => {
       candidateCount: 2,
       rankedCount: 2,
       returnedCount: 2,
+      compositionalMode: 'disabled_policy',
+      compositionalCandidateCount: 2,
+      compositionalEvaluationBatchCount: 1,
+      compositionalFinalistCount: 2,
     });
   });
 
@@ -1391,6 +1395,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     ];
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
     const llmProvider = makeMockLLMProvider([
       {
         content: `<response>
@@ -1430,7 +1435,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
       store,
       embedding,
       runtimeConfig,
-      undefined,
+      eventBus,
       null,
       llmProvider,
     );
@@ -1446,6 +1451,15 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     expect(llmProvider.complete).toHaveBeenCalledTimes(3);
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt).toContain('Alpha baseline memory');
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[2][0].systemPrompt).toContain('Delta best continuity anchor');
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      compositionalMode: 'applied',
+      compositionalCandidateCount: 5,
+      compositionalEvaluationBatchCount: 2,
+      compositionalFinalistCount: 5,
+    });
   });
 
   it('fails closed to deterministic retrieval when compositional retrieval is not allowed by policy', async () => {
@@ -1455,6 +1469,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     ];
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
     const llmProvider = makeMockLLMProvider([
       { content: '<response></response>' },
     ]);
@@ -1471,7 +1486,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
       store,
       embedding,
       runtimeConfig,
-      undefined,
+      eventBus,
       null,
       llmProvider,
     );
@@ -1482,6 +1497,15 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
       result.indexOf('Bravo directly answers the question'),
     );
     expect(llmProvider.complete).not.toHaveBeenCalled();
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      compositionalMode: 'disabled_policy',
+      compositionalCandidateCount: 2,
+      compositionalEvaluationBatchCount: 1,
+      compositionalFinalistCount: 2,
+    });
   });
 
   it('fails closed to deterministic retrieval when compositional rerank responses are malformed', async () => {
@@ -1492,6 +1516,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     ];
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
     const llmProvider = makeMockLLMProvider([
       { content: '<response><candidate><id>unknown</id><relevance>0.9</relevance></candidate></response>' },
     ]);
@@ -1508,7 +1533,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
       store,
       embedding,
       runtimeConfig,
-      undefined,
+      eventBus,
       null,
       llmProvider,
     );
@@ -1522,6 +1547,15 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
       result.indexOf('Delta best continuity anchor'),
     );
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      compositionalMode: 'malformed_or_failed',
+      compositionalCandidateCount: 3,
+      compositionalEvaluationBatchCount: 1,
+      compositionalFinalistCount: 3,
+    });
   });
 });
 

@@ -5,7 +5,7 @@ import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { EventBus } from '../event-bus.js';
-import type { CapabilityTier } from '../types.js';
+import type { CapabilityTier, CompositionalPolicyConfig } from '../types.js';
 import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
 
@@ -57,6 +57,17 @@ export interface REPLConfig {
   outputTruncation: number;
   executionTimeoutMs: number;
 }
+
+export interface NestedThinkOptions {
+  maxIterations?: number;
+  maxTokens?: number;
+  maxWallTimeMs?: number;
+}
+
+export type NestedThinkRunner = (
+  task: string,
+  options?: NestedThinkOptions,
+) => Promise<string>;
 
 export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
   nursery: {
@@ -113,6 +124,7 @@ export interface REPLDeps {
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;
   getCapabilityTier?: () => CapabilityTier;
+  compositionalPolicy?: CompositionalPolicyConfig;
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   requestMetadata?: Partial<LLMRequestMetadata>;
@@ -152,6 +164,22 @@ export interface ThinkStep {
   variablesChanged: string[];
 }
 
+export interface ThinkDiagnostics {
+  nestedThinkCallCount: number;
+  nestedThinkSuccessCount: number;
+  nestedThinkFailureCount: number;
+  maxNestedDepthReached: number;
+}
+
+export function createEmptyThinkDiagnostics(): ThinkDiagnostics {
+  return {
+    nestedThinkCallCount: 0,
+    nestedThinkSuccessCount: 0,
+    nestedThinkFailureCount: 0,
+    maxNestedDepthReached: 0,
+  };
+}
+
 export interface ThinkResult {
   answer: string;
   iterations: number;
@@ -162,4 +190,5 @@ export interface ThinkResult {
   budgetStatus: BudgetStatus;
   steps: ThinkStep[];
   evidence: ThinkEvidence[];
+  diagnostics: ThinkDiagnostics;
 }

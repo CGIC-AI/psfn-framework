@@ -15,13 +15,25 @@ import type { EventBus } from '../event-bus.js';
 import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent/contracts.js';
 import { SubstrateAgent } from '../agent/substrate-agent.js';
 import { normalizeCapabilityTier } from '../capabilities/tiers.js';
+import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import type { SessionStore } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
-import type { ShardConfig, ShardResult } from './types.js';
+import type { SessionEntry } from '../session/types.js';
+import type {
+  ShardConfig,
+  ShardContextPack,
+  ShardContextPackEntry,
+  ShardResult,
+  ShardSourceContext,
+} from './types.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
+const CONTEXT_PACK_SESSION_SCAN_LIMIT = 12;
+const CONTEXT_PACK_SESSION_ENTRY_LIMIT = 6;
+const CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS = 600;
+const CONTEXT_PACK_MEMORY_MAX_CHARS = 4_000;
 const SHARD_TOOLSET_ALL = '*';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'load_tools']);
@@ -98,6 +110,10 @@ export class ShardManager {
   async spawn(shardConfig: ShardConfig): Promise<ShardResult> {
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
+    const contextPack = shardConfig.contextPack ?? await this.buildContextPack(shardConfig);
+    const preparedConfig = contextPack
+      ? { ...shardConfig, contextPack }
+      : shardConfig;
     const baseMessage: SubstrateMessage = {
       id: shardId,
       channelId,
@@ -107,7 +123,7 @@ export class ShardManager {
       content: shardConfig.task,
       timestamp: new Date(),
     };
-    return this.executeShard(shardId, channelId, shardConfig, baseMessage);
+    return this.executeShard(shardId, channelId, preparedConfig, baseMessage);
   }
 
   async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {
@@ -208,7 +224,7 @@ export class ShardManager {
         this.deps.eventBus,
       );
 
-      const systemPrompt = shardConfig.systemPrompt ?? this.deps.parentSystemPrompt;
+      const systemPrompt = this.resolveSystemPrompt(shardConfig);
 
       const agentLoop = new SubstrateAgent(
         this.deps.eventBus,
@@ -219,7 +235,7 @@ export class ShardManager {
       );
 
       // Shards can READ memory but don't extract or archive (ephemeral)
-      if (this.deps.memoryProvider) {
+      if (this.deps.memoryProvider && !shardConfig.contextPack) {
         agentLoop.memoryProvider = this.deps.memoryProvider;
       }
 
@@ -374,6 +390,190 @@ export class ShardManager {
 
   private resolveCapabilityTier(): CapabilityTier {
     return normalizeCapabilityTier(this.deps.config.capabilityTier);
+  }
+
+  private async buildContextPack(shardConfig: ShardConfig): Promise<ShardContextPack | null> {
+    const source = this.normalizeSourceContext(shardConfig.sourceContext);
+    if (!source) {
+      return null;
+    }
+
+    const policyDecision = evaluateCompositionalPolicyForChannelId({
+      policy: this.deps.config.compositionalPolicy,
+      capabilityTier: this.resolveCapabilityTier(),
+      channelId: source.channelId,
+      purpose: 'shard_context',
+    });
+    if (!policyDecision.allowed) {
+      return null;
+    }
+
+    const sessionEntries = this.buildContextPackEntries(source);
+    const memoryBlock = await this.buildContextPackMemoryBlock(shardConfig.task, source.channelId);
+    if (sessionEntries.length === 0 && memoryBlock.length === 0) {
+      return null;
+    }
+
+    return {
+      purpose: 'shard_context',
+      task: shardConfig.task,
+      source,
+      sessionEntries,
+      ...(memoryBlock ? { memoryBlock } : {}),
+    };
+  }
+
+  private normalizeSourceContext(
+    sourceContext: ShardSourceContext | undefined,
+  ): ShardSourceContext | null {
+    const channelId = sourceContext?.channelId?.trim();
+    if (!channelId) {
+      return null;
+    }
+
+    const requestId = sourceContext.requestId?.trim();
+    const turnId = sourceContext.turnId?.trim();
+    return {
+      channelId,
+      ...(requestId ? { requestId } : {}),
+      ...(turnId ? { turnId } : {}),
+    };
+  }
+
+  private buildContextPackEntries(source: ShardSourceContext): ShardContextPackEntry[] {
+    const recentEntries = this.deps.sessionStore.getRecent(
+      source.channelId,
+      CONTEXT_PACK_SESSION_SCAN_LIMIT,
+    );
+    const focusedEntries = this.selectContextPackEntries(recentEntries, source);
+    return focusedEntries.map(entry => ({
+      role: entry.role,
+      content: this.truncateContextText(entry.content, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS),
+      ...(entry.authorName ? { authorName: entry.authorName } : {}),
+      timestamp: entry.timestamp,
+    }));
+  }
+
+  private selectContextPackEntries(
+    recentEntries: readonly SessionEntry[],
+    source: ShardSourceContext,
+  ): SessionEntry[] {
+    if (recentEntries.length <= CONTEXT_PACK_SESSION_ENTRY_LIMIT) {
+      return [...recentEntries];
+    }
+
+    const anchorIndex = this.findContextPackAnchorIndex(recentEntries, source);
+    if (anchorIndex < 0) {
+      return recentEntries.slice(-CONTEXT_PACK_SESSION_ENTRY_LIMIT);
+    }
+
+    const endExclusive = anchorIndex + 1;
+    const start = Math.max(0, endExclusive - CONTEXT_PACK_SESSION_ENTRY_LIMIT);
+    return recentEntries.slice(start, endExclusive);
+  }
+
+  private findContextPackAnchorIndex(
+    recentEntries: readonly SessionEntry[],
+    source: ShardSourceContext,
+  ): number {
+    for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
+      const entry = recentEntries[index];
+      if (!entry) continue;
+      if (this.sessionEntryMatchesSource(entry, source)) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private sessionEntryMatchesSource(entry: SessionEntry, source: ShardSourceContext): boolean {
+    const metadata = entry.metadata;
+    if (!metadata) {
+      return false;
+    }
+
+    return this.metadataIncludesField(metadata, 'requestId', source.requestId)
+      || this.metadataIncludesField(metadata, 'turnId', source.turnId);
+  }
+
+  private metadataIncludesField(
+    metadata: string,
+    field: 'requestId' | 'turnId',
+    value: string | undefined,
+  ): boolean {
+    if (!value) {
+      return false;
+    }
+    return metadata.includes(`\"${field}\":${JSON.stringify(value)}`);
+  }
+
+  private async buildContextPackMemoryBlock(
+    task: string,
+    sourceChannelId: string,
+  ): Promise<string> {
+    const query = task.trim();
+    if (!query || !this.deps.memoryProvider) {
+      return '';
+    }
+
+    const memoryBlock = await this.deps.memoryProvider.retrieve(query, sourceChannelId);
+    return this.truncateContextText(memoryBlock, CONTEXT_PACK_MEMORY_MAX_CHARS);
+  }
+
+  private resolveSystemPrompt(shardConfig: ShardConfig): string {
+    const basePrompt = shardConfig.systemPrompt ?? this.deps.parentSystemPrompt;
+    if (!shardConfig.contextPack) {
+      return basePrompt;
+    }
+
+    return [basePrompt, this.renderContextPack(shardConfig.contextPack)]
+      .map(section => section.trim())
+      .filter(section => section.length > 0)
+      .join('\n\n');
+  }
+
+  private renderContextPack(contextPack: ShardContextPack): string {
+    const sourceConversation = contextPack.sessionEntries
+      .map(entry => {
+        const speaker = entry.role === 'assistant'
+          ? 'Assistant'
+          : entry.role === 'system'
+            ? 'System'
+            : (entry.authorName?.trim() || 'User');
+        return `${speaker}: ${entry.content}`;
+      })
+      .join('\n');
+
+    return [
+      '[Shard context pack]',
+      'Use only this task-scoped source context while working the shard task.',
+      `Source channel: ${contextPack.source.channelId}`,
+      ...(contextPack.source.requestId ? [`Source requestId: ${contextPack.source.requestId}`] : []),
+      ...(contextPack.source.turnId ? [`Source turnId: ${contextPack.source.turnId}`] : []),
+      `Task scope: ${this.truncateContextText(contextPack.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}`,
+      ...(sourceConversation
+        ? [
+          '',
+          '[Focused source conversation]',
+          sourceConversation,
+        ]
+        : []),
+      ...(contextPack.memoryBlock
+        ? [
+          '',
+          '[Task-scoped memory]',
+          contextPack.memoryBlock,
+        ]
+        : []),
+    ].join('\n');
+  }
+
+  private truncateContextText(value: string, maxChars: number): string {
+    const normalized = value.trim();
+    if (normalized.length <= maxChars) {
+      return normalized;
+    }
+    return `${normalized.slice(0, maxChars - 3)}...`;
   }
 
   private wrapShardTool(tool: AgentTool<any>, shardId: string): AgentTool<any> {

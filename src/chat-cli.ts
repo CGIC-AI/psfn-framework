@@ -14,7 +14,7 @@ import { MemoryStore } from './memory/store.js';
 import { SalienceDecay } from './memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
-import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
+import { hydrateCanonicalStartupConfig } from './runtime/bootstrap-helpers.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -27,7 +27,8 @@ import {
 const CHANNEL_ID = 'cli:chat';
 
 async function main(): Promise<void> {
-  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
+  const config = loadConfig();
+  hydrateCanonicalStartupConfig(config, { env: process.env });
   const eventBus = new EventBus();
 
   console.log('[CLI] Initializing companion runtime...');

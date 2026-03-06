@@ -1,6 +1,4 @@
 import type Database from 'better-sqlite3';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type { SubstrateConfig, Lifecycle } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
@@ -34,22 +32,7 @@ import type {
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { applySettings, loadSettings, saveSettings, splitSettingsByDomain } from './settings.js';
-import { loadModelsConfigWithLegacyMigration } from './config/models-config.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
-import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
-import {
-  CAPABILITY_TIER_FILE_NAME,
-  loadCapabilityTierConfig,
-  saveCapabilityTierConfig,
-} from './config/capability-tier-config.js';
-import {
-  SCHEDULER_FILE_NAME,
-  loadSchedulerConfig,
-  saveSchedulerConfig,
-} from './config/scheduler-config.js';
-import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
-import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
 import { registerScheduledBackupTask } from './backup/service.js';
 import {
@@ -139,24 +122,19 @@ import { ModuleLoader } from './modules/loader.js';
 import {
   resolveCharacterCardHistoryPath,
   resolveConfiguredCompanionDataDir,
-  resolveConfiguredSystemDataDir,
   resolveContactsDir,
   resolveNotesDir,
-  resolveRuntimePathLayout,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
-import {
-  assertPersistenceCutoverReady,
-  buildPersistenceCutoverOptionsFromConfig,
-} from './persistence/cutover.js';
 import {
   buildRuntimeChannelsConfigOverrides,
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   createEmbeddingDimensionMismatchFatalMessage,
-  installPromotedToolsPersistenceHook,
+  hydrateCanonicalStartupConfig,
   resolveRuntimeVoiceSttProvider,
+  type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
 import {
   isExplicitTrue,
@@ -187,6 +165,61 @@ export {
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
+
+function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {
+  if (diagnostics.modelsMigratedFromLegacySettings) {
+    log.warn('Migrated legacy model settings from settings.json to models.json');
+  } else if (diagnostics.modelsLegacyDriftDetected) {
+    log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+  }
+
+  if (diagnostics.maintenanceIntervalMigration.state === 'migrated') {
+    log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
+      maintenanceIntervalMs:
+        diagnostics.maintenanceIntervalMigration.storedValue
+        ?? diagnostics.maintenanceIntervalMigration.settingsValue,
+    });
+  } else if (diagnostics.maintenanceIntervalMigration.state === 'drift_detected') {
+    log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
+      settingsMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.settingsValue,
+      schedulerMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.storedValue,
+    });
+  } else if (diagnostics.maintenanceIntervalMigration.state === 'error') {
+    log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
+      error: diagnostics.maintenanceIntervalMigration.error ?? 'unknown',
+    });
+  }
+
+  if (diagnostics.capabilityTierMigration.state === 'migrated') {
+    log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
+      capabilityTier:
+        diagnostics.capabilityTierMigration.storedValue
+        ?? diagnostics.capabilityTierMigration.settingsValue,
+    });
+  } else if (diagnostics.capabilityTierMigration.state === 'drift_detected') {
+    log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
+      settingsCapabilityTier: diagnostics.capabilityTierMigration.settingsValue,
+      capabilityTier: diagnostics.capabilityTierMigration.storedValue,
+    });
+  } else if (diagnostics.capabilityTierMigration.state === 'error') {
+    log.warn('Failed to migrate legacy capabilityTier from settings.json', {
+      error: diagnostics.capabilityTierMigration.error ?? 'unknown',
+    });
+  }
+
+  if (diagnostics.removedLegacyKeys.length > 0) {
+    if (diagnostics.settingsRewriteError) {
+      log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
+        keys: diagnostics.removedLegacyKeys,
+        error: diagnostics.settingsRewriteError,
+      });
+    } else {
+      log.warn('Removed legacy cross-domain keys from settings.json', {
+        keys: diagnostics.removedLegacyKeys,
+      });
+    }
+  }
+}
 
 export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;
@@ -363,21 +396,20 @@ export class SubstrateRuntime implements Lifecycle {
         keys: ignoredMutableEnvKeys,
       });
     }
-    const systemDataDir = resolveConfiguredSystemDataDir(this.config);
-    const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
-    const runtimePathLayout = resolveRuntimePathLayout({
-      mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
-      nodeEnv: process.env.NODE_ENV,
-      runtimeRootDir: process.env.PSFN_RUNTIME_ROOT,
+
+    const startupHydration = hydrateCanonicalStartupConfig(this.config, {
+      env: process.env,
+    });
+    const {
       systemDataDir,
       companionDataDir,
-      legacyDataDir: process.env.DATA_DIR,
-      workspacePath: process.env.WORKSPACE_PATH,
-      logsDir: process.env.PSFN_LOGS_DIR,
-      tempDir: process.env.PSFN_TEMP_DIR,
-      backupsDir: process.env.BACKUP_ROOT_DIR,
-    });
-    assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(this.config));
+      runtimePathLayout,
+      settingsDomains,
+      trustPolicyConfig,
+      schedulerConfig,
+    } = startupHydration;
+    logStartupHydrationDiagnostics(startupHydration.diagnostics);
+
     const lifecycleRuntimeContract = resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SINGLE,
       runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
@@ -385,98 +417,6 @@ export class SubstrateRuntime implements Lifecycle {
     });
     const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
     log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
-
-    // Load persisted settings and apply runtime-owned config from canonical JSON.
-    const savedSettings = loadSettings(systemDataDir);
-    const settingsDomains = splitSettingsByDomain(savedSettings);
-    applySettings(this.config, settingsDomains.runtime);
-    installPromotedToolsPersistenceHook(this.config);
-
-    const modelsLoadResult = loadModelsConfigWithLegacyMigration(systemDataDir, {
-      defaultContextWindow: this.config.defaultContextWindow,
-      legacySettings: settingsDomains.models,
-    });
-    if (modelsLoadResult.migratedFromLegacySettings) {
-      log.warn('Migrated legacy model settings from settings.json to models.json');
-    } else if (modelsLoadResult.legacyDriftDetected) {
-      log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
-    }
-    applySettings(this.config, modelsLoadResult.config);
-
-    if (settingsDomains.maintenanceIntervalMs !== undefined) {
-      try {
-        const schedulerPath = join(systemDataDir, SCHEDULER_FILE_NAME);
-        const schedulerFileExisted = existsSync(schedulerPath);
-        const persistedScheduler = loadSchedulerConfig(systemDataDir, {
-          seedDir: process.env.CONFIG_DIR,
-        });
-        if (!schedulerFileExisted) {
-          saveSchedulerConfig(systemDataDir, {
-            ...persistedScheduler,
-            salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
-          });
-          log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
-            maintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
-          });
-        } else if (persistedScheduler.salienceDecayIntervalMs !== settingsDomains.maintenanceIntervalMs) {
-          log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
-            settingsMaintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
-            schedulerMaintenanceIntervalMs: persistedScheduler.salienceDecayIntervalMs,
-          });
-        }
-      } catch (error) {
-        log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
-          error: String(error),
-        });
-      }
-    }
-
-    if (settingsDomains.capabilityTier !== undefined) {
-      try {
-        const capabilityPath = join(systemDataDir, CAPABILITY_TIER_FILE_NAME);
-        const capabilityFileExisted = existsSync(capabilityPath);
-        const persistedCapabilities = loadCapabilityTierConfig(systemDataDir, {
-          seedDir: process.env.CONFIG_DIR,
-        });
-        if (!capabilityFileExisted) {
-          saveCapabilityTierConfig(systemDataDir, {
-            ...persistedCapabilities,
-            tier: settingsDomains.capabilityTier,
-          });
-          log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
-            capabilityTier: settingsDomains.capabilityTier,
-          });
-        } else if (persistedCapabilities.tier !== settingsDomains.capabilityTier) {
-          log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
-            settingsCapabilityTier: settingsDomains.capabilityTier,
-            capabilityTier: persistedCapabilities.tier,
-          });
-        }
-      } catch (error) {
-        log.warn('Failed to migrate legacy capabilityTier from settings.json', {
-          error: String(error),
-        });
-      }
-    }
-
-    if (settingsDomains.legacyKeys.length > 0) {
-      try {
-        saveSettings(systemDataDir, settingsDomains.runtime);
-        log.warn('Removed legacy cross-domain keys from settings.json', {
-          keys: settingsDomains.legacyKeys,
-        });
-      } catch (error) {
-        log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
-          keys: settingsDomains.legacyKeys,
-          error: String(error),
-        });
-      }
-    }
-
-    const trustPolicyConfig = loadTrustPolicyConfig(systemDataDir, {
-      seedDir: process.env.CONFIG_DIR,
-    });
-    setRuntimeTrustPolicy(trustPolicyConfig);
     log.info('Loaded trust policy configuration', {
       exactOverrideCount: Object.keys(
         trustPolicyConfig.channelClassification.visibilityOverrides.exact,
@@ -485,15 +425,10 @@ export class SubstrateRuntime implements Lifecycle {
         trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
       ).length,
     });
-    const schedulerConfig = resolveRuntimeSchedulerConfig({
-      dataDir: systemDataDir,
-      seedDir: process.env.CONFIG_DIR,
-    });
     const backupConfig = resolveBackupRuntimeConfig({
       dataDir: companionDataDir,
       defaultRootDir: runtimePathLayout.backupsDir,
     });
-    this.config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
     this.capabilityRuntime = new CapabilityRuntime({
       dataDir: systemDataDir,
       seedDir: process.env.CONFIG_DIR,
@@ -869,7 +804,7 @@ export class SubstrateRuntime implements Lifecycle {
     const channelsConfig = loadRuntimeChannelsConfig(
       systemDataDir,
       process.env,
-      buildRuntimeChannelsConfigOverrides(this.config, savedSettings),
+      buildRuntimeChannelsConfigOverrides(this.config, settingsDomains.runtime),
     );
 
     const channelFactoryManifest = buildChannelAdapterFactoryManifest([

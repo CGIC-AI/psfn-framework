@@ -995,6 +995,51 @@ describe('MemoryRetriever basic behavior', () => {
     }
   });
 
+  it('reuses a captured turn snapshot for retrieval and proactive recall after store drift', async () => {
+    const stableMemory = makeMemory({
+      id: 'snapshot-stable',
+      text: 'Stable snapshot memory.',
+      sensitivity: 'public',
+      similarity: 0.96,
+    });
+    const driftMemory = makeMemory({
+      id: 'snapshot-drift',
+      text: 'Late drift memory.',
+      sensitivity: 'public',
+      similarity: 0.99,
+    });
+    const store = makeMockStore([stableMemory]);
+    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([stableMemory]);
+
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), {
+      retrievalLimit: 10,
+      proactiveRecallProbability: 1,
+      proactiveRecallMinTurnsBetween: 0,
+    });
+
+    const snapshot = await retriever.captureTurnMemorySnapshot('snapshot query', 'api:test', 'primary');
+
+    (store.searchByEmbedding as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
+    (store.searchByText as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
+    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
+    (store.getAllActiveMemories as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
+
+    const randomSpy = vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.1);
+    try {
+      const result = await retriever.retrieve('snapshot query', 'api:test', 'primary', undefined, undefined, snapshot);
+      const proactive = await retriever.retrieveProactiveRecall('api:test', 'primary', undefined, undefined, snapshot);
+
+      expect(result).toContain('Stable snapshot memory.');
+      expect(result).not.toContain('Late drift memory.');
+      expect(proactive).toContain('Stable snapshot memory.');
+      expect(proactive).not.toContain('Late drift memory.');
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('emits structured retrieval telemetry event when event bus is provided', async () => {
     const memories = [
       makeMemory({ text: 'Public A', sensitivity: 'public', similarity: 0.95 }),

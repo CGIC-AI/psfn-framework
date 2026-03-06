@@ -34,6 +34,9 @@ export interface TurnRecordVersionPointers {
   model: string;
   promptMode?: MessagePromptOverrideMode;
   promptHash?: string;
+  promptStack?: string;
+  memoryState?: string;
+  sessionState?: string;
 }
 
 export interface TurnRecord {

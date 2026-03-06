@@ -98,6 +98,9 @@ describe('SessionStore', () => {
       versionPointers: {
         model: 'openrouter/test-model',
         promptMode: 'default',
+        promptStack: 'prompt-snapshot-v1',
+        memoryState: 'memory-snapshot-v1',
+        sessionState: 'session-snapshot-v1',
       },
       provenanceRefs: ['turn:seed'],
     });
@@ -114,6 +117,11 @@ describe('SessionStore', () => {
       status: 'completed',
       userMessage: expect.objectContaining({ content: 'hello' }),
       assistantMessage: expect.objectContaining({ content: 'hi' }),
+      versionPointers: expect.objectContaining({
+        promptStack: 'prompt-snapshot-v1',
+        memoryState: 'memory-snapshot-v1',
+        sessionState: 'session-snapshot-v1',
+      }),
     });
   });
 

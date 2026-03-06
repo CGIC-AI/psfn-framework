@@ -73,9 +73,17 @@ import {
   type FocusKnowledgeBlock,
 } from './focus-knowledge.js';
 import {
+  resolveCompressionFailureLogPath,
+  resolveCompressionGuidelinePath,
   resolveConfiguredCompanionDataDir,
   resolveFocusKnowledgePath,
 } from '../persistence/layout.js';
+import {
+  CompressionFailureLogStore,
+  CompressionGuidelineRuntime,
+  CompressionGuidelineStore,
+  type CompressionGuidelineUpdateResult,
+} from './compression-guideline.js';
 
 export type {
   ImportedHistoryBootstrapChunk,
@@ -185,6 +193,7 @@ export class SessionManager {
   private eventBus: EventBus | null;
   private promptRegistry: PromptRegistryStore | null;
   private focusKnowledgeStore: FocusKnowledgeStore;
+  private compressionGuidelineRuntime: CompressionGuidelineRuntime;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
   private activeContextSessionId: string | null = null;
@@ -206,8 +215,16 @@ export class SessionManager {
     this.promptRegistry = promptRegistry ?? null;
     const companionDataDir = resolveConfiguredCompanionDataDir(config);
     this.focusKnowledgeStore = new FocusKnowledgeStore(resolveFocusKnowledgePath(companionDataDir));
+    this.compressionGuidelineRuntime = new CompressionGuidelineRuntime(
+      new CompressionGuidelineStore(resolveCompressionGuidelinePath(companionDataDir)),
+      new CompressionFailureLogStore(resolveCompressionFailureLogPath(companionDataDir)),
+    );
     this.preCompactionExtractionHandler = null;
     this.coreMemoryProvider = null;
+  }
+
+  private resolveCompactionPromptText(basePrompt: string): string {
+    return this.compressionGuidelineRuntime.buildCompactionPrompt(basePrompt);
   }
 
   private shouldOverrideSessionContext(channelId: string): boolean {
@@ -589,6 +606,10 @@ export class SessionManager {
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext()
       : '';
+    const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
+      ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+    const compactionPromptText = turnSnapshot?.compactionPromptText
+      ?? this.resolveCompactionPromptText(baseCompactionPrompt);
     const focusKnowledgeTexts = turnSnapshot?.focusKnowledgeTexts
       ?? this.getFocusKnowledgeTexts(resolvedChannelId);
     const focusCompactionRanges = turnSnapshot
@@ -599,6 +620,7 @@ export class SessionManager {
       systemPrompt,
       coreMemoryBlock,
       memoriesBlock,
+      compactionPromptText,
       llmProvider,
       userId,
       channelMeta,
@@ -608,6 +630,14 @@ export class SessionManager {
       eventBus: this.eventBus,
       promptRegistry: this.promptRegistry,
       preCompactionExtractionHandler: this.preCompactionExtractionHandler,
+      onCompactionComplete: ({ channelId: compactedChannelId, originalContext, compressedContext, capturedAt }) => {
+        this.compressionGuidelineRuntime.recordCompactionTrajectory({
+          channelId: compactedChannelId,
+          originalContext,
+          compressedContext,
+          capturedAt,
+        });
+      },
       continuityStore: this.continuityStore,
       characterName: this.characterName,
       turnSnapshot,
@@ -657,8 +687,9 @@ export class SessionManager {
     const compactionSummaryTexts = this.compactionBoundaryStore
       .getCompactionSummaries(resolvedChannelId)
       .map(summary => summary.summary);
-    const compactionPromptText = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
+    const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+    const compactionPromptText = this.resolveCompactionPromptText(baseCompactionPrompt);
 
     return {
       channelId: resolvedChannelId,
@@ -701,6 +732,25 @@ export class SessionManager {
 
   setCoreMemoryProvider(provider: SessionCoreMemoryProvider | null): void {
     this.coreMemoryProvider = provider;
+  }
+
+  recordCompressionFailureFromResponse(
+    channelId: string,
+    sourceMessageId: string,
+    assistantResponse: string,
+  ): boolean {
+    const entry = this.compressionGuidelineRuntime.captureFailureFromResponse({
+      channelId: this.resolveSessionChannelId(channelId),
+      sourceMessageId,
+      assistantResponse,
+    });
+    return entry !== null;
+  }
+
+  runPeriodicCompressionGuidelineUpdate(
+    llmProvider: LLMProvider,
+  ): Promise<CompressionGuidelineUpdateResult> {
+    return this.compressionGuidelineRuntime.runPeriodicGuidelineUpdate(llmProvider);
   }
 
   async importLegacyChatFromFile(request: LegacyChatImportRunRequest): Promise<LegacyChatImportRunResult> {

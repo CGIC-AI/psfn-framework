@@ -23,4 +23,21 @@ describe('maintenance interval wiring', () => {
     expect(salienceDecayTask).toContain('intervalMs: config.maintenanceIntervalMs');
     expect(salienceDecayTask).not.toContain('intervalMs: MEMORY_CONFIG.maintenanceIntervalMs');
   });
+
+  it('wires periodic compression guideline review through runtime scheduler', () => {
+    const runtimeSource = readSource('runtime.ts');
+    const guidelineTask = /id:\s*COMPACTION_GUIDELINE_REVIEW_TASK_ID[\s\S]*?runPeriodicCompressionGuidelineUpdate\(this\.llmClient\)/m.exec(runtimeSource)?.[0] ?? runtimeSource;
+    expect(guidelineTask).toContain('intervalMs: this.config.maintenanceIntervalMs');
+    expect(guidelineTask).toContain('runPeriodicCompressionGuidelineUpdate(this.llmClient)');
+  });
+
+  it('wires post-turn compression failure capture in runtime and agent-main', () => {
+    const runtimeSource = readSource('runtime.ts');
+    expect(runtimeSource).toContain("this.eventBus.on('agent.turn.end'");
+    expect(runtimeSource).toContain('recordCompressionFailureFromResponse');
+
+    const agentMainSource = readSource('agent-main.ts');
+    expect(agentMainSource).toContain("eventBus.on('agent.turn.end'");
+    expect(agentMainSource).toContain('recordCompressionFailureFromResponse');
+  });
 });

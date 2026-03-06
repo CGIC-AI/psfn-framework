@@ -154,6 +154,7 @@ const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
+const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
 
 function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
   eventBus.emit('capability.eligibility', {
@@ -629,6 +630,28 @@ async function main(): Promise<void> {
     eligibility: { requiredTokens: ['memory.write'] },
     state: 'idle',
   });
+  scheduler.register({
+    id: COMPACTION_GUIDELINE_REVIEW_TASK_ID,
+    name: 'Compression Guideline Review',
+    type: 'every',
+    intervalMs: config.maintenanceIntervalMs,
+    handler: async () => {
+      const result = await sessionManager.runPeriodicCompressionGuidelineUpdate(gateway);
+      if (result.status === 'updated') {
+        log.info('Compression guideline updated from failure log review', {
+          version: result.version,
+          reviewedFailureCount: result.reviewedFailureCount,
+        });
+        return;
+      }
+      log.debug('Compression guideline review skipped', {
+        reason: result.reason,
+        reviewedFailureCount: result.reviewedFailureCount,
+      });
+    },
+    eligibility: { requiredTokens: ['memory.write'] },
+    state: 'idle',
+  });
   registerScheduledBackupTask({
     scheduler,
     db,
@@ -650,6 +673,18 @@ async function main(): Promise<void> {
     scheduler,
     agentLoop,
     eligibilityGate,
+  });
+  eventBus.on('agent.turn.end', ({ message, response }) => {
+    const captured = sessionManager.recordCompressionFailureFromResponse(
+      message.channelId,
+      message.id,
+      response.content,
+    );
+    if (!captured) return;
+    log.info('Captured compression failure signal for guideline evolution', {
+      channelId: message.channelId,
+      sourceMessageId: message.id,
+    });
   });
   scheduler.start();
   log.info(`Memory system enabled (${gateway.dims}d embeddings via gateway)`);

@@ -1410,7 +1410,8 @@ describe('SessionManager', () => {
 
     expect(mockLLM.complete).toHaveBeenCalled();
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
-    expect(call.systemPrompt).toBe(customPrompt);
+    expect(call.systemPrompt).toContain(customPrompt);
+    expect(call.systemPrompt).toContain('[Compression Guideline v1]');
   });
 
   it('pins the compaction prompt inside a captured turn snapshot', async () => {
@@ -1435,7 +1436,9 @@ describe('SessionManager', () => {
     await mgr.buildContext('ch1', 'Sys', '', mockLLM, 'u1', undefined, [], snapshot);
 
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
-    expect(call.systemPrompt).toBe('Snapshot prompt v1');
+    expect(call.systemPrompt).toContain('Snapshot prompt v1');
+    expect(call.systemPrompt).not.toContain('Live prompt v2');
+    expect(call.systemPrompt).toContain('[Compression Guideline v1]');
   });
 
   it('injects runtime datetime tokens in compaction prompts', async () => {

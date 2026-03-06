@@ -153,7 +153,11 @@ set -a && source .env && set +a && npm run agent
 ```bash
 npm run build
 npm run agent:docker    # --network=none Docker container
+# Production-isolated container profile:
+docker compose -f docker/docker-compose.production.yml up --build
 ```
+
+Runtime mode operations runbook: `docs/operations/runtime-mode-runbook.md`
 
 ### Optional Services
 

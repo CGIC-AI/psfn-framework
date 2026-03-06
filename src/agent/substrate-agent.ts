@@ -122,6 +122,7 @@ import { EmotionObserver, type EmotionObserverResult } from '../emotion/observer
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
 import {
   formatActiveConcernsContextBlock,
+  type ActiveConcern,
   type ActiveConcernContextProvider,
 } from '../intention/concerns.js';
 import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
@@ -130,6 +131,14 @@ import {
   parseSessionEmotionState,
 } from '../emotion/session-metadata.js';
 import { buildEmotionalAffectSection } from '../emotion/persona-adaptation.js';
+import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+import {
+  buildInternalStateSnapshotRef,
+  cloneInternalState,
+  INTERNAL_STATE_NEUTRAL_EMOTION,
+  InternalStateComputer,
+  type InternalState,
+} from '../self-model/state.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -381,6 +390,9 @@ export class SubstrateAgent {
   private emotionRuntimeRequired = false;
   private emotionStateSessionId: string | null = null;
   private emotionStateUpdatedAtMs: number | null = null;
+  private readonly internalStateComputer = new InternalStateComputer();
+  private currentInternalState: InternalState | null = null;
+  private currentInternalStateSnapshotRef: string | null = null;
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -1759,6 +1771,15 @@ export class SubstrateAgent {
     this.behavioralPatternProvider = provider;
   }
 
+  getCurrentInternalState(): InternalState | null {
+    if (!this.currentInternalState) return null;
+    return cloneInternalState(this.currentInternalState);
+  }
+
+  getCurrentInternalStateSnapshotRef(): string | null {
+    return this.currentInternalStateSnapshotRef;
+  }
+
   registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
     this.postTurnActionInferers.push(inferer);
     return () => {
@@ -2340,6 +2361,19 @@ export class SubstrateAgent {
         log.info('Broadcast provenance', provenancePayload);
       }
 
+      const internalState = this.computeInternalStateForTurn({
+        message,
+        responseText,
+        trustLevel: authorContext.trustLevel,
+        canonicalContactKey: authorContext.canonicalContactKey,
+        emotionSnapshot,
+        turnUsage,
+        sessionChannelId: emotionSessionId,
+      });
+      this.currentInternalState = internalState;
+      const internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
+      this.currentInternalStateSnapshotRef = internalStateSnapshotRef;
+
       this.recordToolObservations(
         message,
         turnId,
@@ -2379,6 +2413,8 @@ export class SubstrateAgent {
           inputTokens: turnUsage.inputTokens,
           outputTokens: turnUsage.outputTokens,
           durationMs: completedAt - startTime,
+          internalState: cloneInternalState(internalState),
+          internalStateSnapshotRef,
           ...(fallbackDiagnostics ? { diagnostics: fallbackDiagnostics } : {}),
           ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         },
@@ -2411,6 +2447,7 @@ export class SubstrateAgent {
           canonicalContactKey: authorContext.canonicalContactKey,
           retrievalProvenanceRefs,
           turnSnapshot,
+          internalStateSnapshotRef,
         }),
       );
 
@@ -2653,6 +2690,94 @@ export class SubstrateAgent {
     const snapshot = this.emotionState.update(observation, elapsedSeconds);
     this.emotionStateUpdatedAtMs = now;
     return snapshot;
+  }
+
+  private computeInternalStateForTurn(input: {
+    message: SubstrateMessage;
+    responseText: string;
+    trustLevel: TrustLevel;
+    canonicalContactKey?: string;
+    emotionSnapshot: EmotionStateSnapshot | null;
+    turnUsage: TurnUsage;
+    sessionChannelId: string;
+  }): InternalState {
+    const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
+    const contactEmotionalSnapshot = this.resolveContactEmotionalSnapshot(input.canonicalContactKey);
+    const recentTurnCount = this.resolveRecentTurnCount(input.sessionChannelId);
+    const lastSeenDeltaSeconds = this.resolveContactLastSeenDeltaSeconds(
+      input.canonicalContactKey,
+      Date.now(),
+    );
+    const emotionState = input.emotionSnapshot ?? INTERNAL_STATE_NEUTRAL_EMOTION;
+
+    return this.internalStateComputer.computeState({
+      emotionState,
+      activeConcerns,
+      trustLevel: input.trustLevel,
+      ...(input.canonicalContactKey ? { contactId: input.canonicalContactKey } : {}),
+      contactEmotionalSnapshot,
+      sessionMetrics: {
+        userMessageText: input.message.content,
+        responseText: input.responseText,
+        toolCallCount: input.turnUsage.toolCalls,
+        recentTurnCount,
+        ...(lastSeenDeltaSeconds === null ? {} : { lastSeenDeltaSeconds }),
+      },
+    });
+  }
+
+  private resolveInternalStateActiveConcerns(canonicalContactKey?: string): ActiveConcern[] {
+    if (!this.activeConcernProvider) return [];
+    const concerns = this.activeConcernProvider.getActiveConcerns(canonicalContactKey);
+    if (!Array.isArray(concerns)) {
+      throw new Error('Active concern provider returned an invalid payload for InternalState computation');
+    }
+    return concerns;
+  }
+
+  private resolveContactEmotionalSnapshot(canonicalContactKey?: string): EmotionalSnapshot | null {
+    if (!canonicalContactKey || !this.contactStore) return null;
+    const contactStore = this.contactStore as ContactStore & {
+      getEmotionalSnapshot?: (id: string) => EmotionalSnapshot | undefined;
+    };
+    if (typeof contactStore.getEmotionalSnapshot !== 'function') {
+      return null;
+    }
+    return contactStore.getEmotionalSnapshot(canonicalContactKey) ?? null;
+  }
+
+  private resolveContactLastSeenDeltaSeconds(
+    canonicalContactKey: string | undefined,
+    nowMs: number,
+  ): number | null {
+    if (!canonicalContactKey || !this.contactStore) return null;
+    const contactStore = this.contactStore as ContactStore & {
+      getById?: (id: string) => Contact | undefined;
+    };
+    if (typeof contactStore.getById !== 'function') {
+      return null;
+    }
+    const contact = contactStore.getById(canonicalContactKey);
+    if (!contact?.lastSeen) return null;
+    const lastSeenMs = Date.parse(contact.lastSeen);
+    if (!Number.isFinite(lastSeenMs)) {
+      throw new Error(`Contact "${canonicalContactKey}" has invalid lastSeen timestamp`);
+    }
+    return Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000));
+  }
+
+  private resolveRecentTurnCount(sessionChannelId: string): number {
+    const manager = this.sessionManager as SessionManager & {
+      getRecentMessages?: (channelId: string, limit?: number) => Array<unknown>;
+    };
+    if (typeof manager.getRecentMessages !== 'function') {
+      return 0;
+    }
+    const recentMessages = manager.getRecentMessages(sessionChannelId, 12);
+    if (!Array.isArray(recentMessages)) {
+      throw new Error('SessionManager.getRecentMessages returned an invalid payload for InternalState computation');
+    }
+    return recentMessages.length;
   }
 
   private normalizeEmotionObservation(
@@ -3327,6 +3452,7 @@ export class SubstrateAgent {
     canonicalContactKey?: string;
     retrievalProvenanceRefs: string[];
     turnSnapshot?: TurnSnapshot;
+    internalStateSnapshotRef?: string;
   }): TurnRecord {
     const toolCalls = this.buildTurnToolCalls(input.turnMessages);
     const provenanceRefs = [...new Set([
@@ -3367,6 +3493,7 @@ export class SubstrateAgent {
         `prompt:${input.turnSnapshot?.prompt?.versionPointer ?? 'none'}`,
         `memory:${input.turnSnapshot?.memory?.versionPointer ?? 'none'}`,
         `session:${input.turnSnapshot?.sessionContext?.versionPointer ?? 'none'}`,
+        `self:${input.internalStateSnapshotRef ?? 'none'}`,
       ].join('|'),
       extractedMemoryIds: [],
       concernDeltaRefs: [],

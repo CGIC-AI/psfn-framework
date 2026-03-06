@@ -3291,6 +3291,98 @@ describe('SubstrateAgent.handleMessage', () => {
     }
   });
 
+  it('computes and exposes per-turn internal state snapshots for downstream consumers', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Base prompt',
+      config,
+      {
+        emotionRuntime: {
+          observer: {
+            observe: vi.fn().mockResolvedValue({
+              vad: { valence: 0.5, arousal: 0.2, dominance: 0.15 },
+              discrete: { joy: 0.8, trust: 0.6 },
+              confidence: 0.9,
+            }),
+          } as any,
+          state: new EmotionState(),
+        },
+      },
+    );
+
+    agent.activeConcernProvider = {
+      getActiveConcerns: vi.fn().mockReturnValue([
+        {
+          id: 'concern-1',
+          text: 'Confirm release rollback owner',
+          priority: 'high',
+          source: 'agent',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2026-01-02T00:00:00.000Z',
+        },
+      ]),
+    } as any;
+
+    agent.contactStore = {
+      resolveUserId: vi.fn().mockReturnValue({
+        id: 'contact-123',
+        displayName: 'Test Contact',
+        trustLevel: 'trusted',
+        relationshipType: 'friend',
+        firstSeen: '2025-01-01T00:00:00.000Z',
+        lastSeen: '2026-01-01T00:00:00.000Z',
+      }),
+      getById: vi.fn().mockReturnValue({
+        id: 'contact-123',
+        displayName: 'Test Contact',
+        trustLevel: 'trusted',
+        relationshipType: 'friend',
+        firstSeen: '2025-01-01T00:00:00.000Z',
+        lastSeen: '2026-01-01T00:00:00.000Z',
+      }),
+      getEmotionalSnapshot: vi.fn().mockReturnValue({
+        baselineValence: 0.3,
+        moodValence: 0.35,
+        moodDrift: 0.05,
+        moodSamples: 7,
+      }),
+    } as unknown as ContactStore;
+
+    const response = await agent.handleMessage(makeMessage({
+      id: 'msg-internal-state',
+      content: 'Can you help me plan this migration?',
+      authorId: 'trusted-user',
+    }));
+
+    expect(response.metadata.internalState).toBeDefined();
+    expect(response.metadata.internalStateSnapshotRef).toMatch(/^internal-state-v1:/);
+    expect(response.metadata.internalState).toMatchObject({
+      emotional: {
+        confidence: expect.any(Number),
+      },
+      attention: {
+        activeConcerns: [
+          expect.objectContaining({ id: 'concern-1' }),
+        ],
+      },
+      relational: {
+        contactId: 'contact-123',
+        trustLevel: 'trusted',
+      },
+    });
+
+    const record = (sessionManager.recordTurn as any).mock.calls[0][0];
+    expect(record.internalStateSnapshotRef).toContain(
+      `self:${response.metadata.internalStateSnapshotRef}`,
+    );
+    expect(agent.getCurrentInternalState()).toEqual(response.metadata.internalState);
+    expect(agent.getCurrentInternalStateSnapshotRef()).toBe(response.metadata.internalStateSnapshotRef);
+  });
+
   it('runs post-turn emotion appraisal and injects appraisal chain on the next turn', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

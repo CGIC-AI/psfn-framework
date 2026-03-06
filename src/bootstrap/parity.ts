@@ -1084,7 +1084,7 @@ export function wireHeartbeatRuntime(
   };
 
   const triggerIntentionPostTurnAppraisal = (
-    context: Pick<PostTurnInfererContext, 'message' | 'response' | 'canonicalContactKey'>,
+    context: Pick<PostTurnInfererContext, 'message' | 'response' | 'canonicalContactKey' | 'completedAt'>,
   ): void => {
     if (!intentionAppraisal || !telemetryEventBus) {
       return;
@@ -1118,8 +1118,17 @@ export function wireHeartbeatRuntime(
           });
         }
 
-        const currentEmotion = runtimeOptions.emotionState?.getState() ?? null;
-        if (currentEmotion && runtimeOptions.onBehavioralPatternOutcome) {
+        if (!context.response.metadata || context.response.metadata.internalState === undefined) {
+          throw new Error('Intention post-turn appraisal requires response.metadata.internalState');
+        }
+        const internalState = cloneInternalState(context.response.metadata.internalState);
+        const currentEmotion = {
+          vad: { ...internalState.emotional.vad },
+          mood: { ...internalState.emotional.mood },
+          discrete: { ...internalState.emotional.discreteEmotions },
+          confidence: internalState.emotional.confidence,
+        };
+        if (runtimeOptions.onBehavioralPatternOutcome) {
           try {
             await runtimeOptions.onBehavioralPatternOutcome({
               channelId: resolvedSessionId,
@@ -1167,6 +1176,7 @@ export function wireHeartbeatRuntime(
         );
         const decisions = await intentionAppraisal.evaluate({
           sessionId: resolvedSessionId,
+          internalState,
           currentEmotion,
           recentMessages,
           activeConcerns,

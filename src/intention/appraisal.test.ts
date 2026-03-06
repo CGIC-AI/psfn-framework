@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMProvider } from '../agent/contracts.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
+import { InternalStateComputer } from '../self-model/state.js';
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
@@ -49,6 +50,35 @@ function makeProvider(responses: string[]): { provider: LLMProvider; complete: R
     },
     complete,
   };
+}
+
+function makeInternalState() {
+  return new InternalStateComputer().computeState({
+    emotionState: makeEmotionSnapshot({
+      vad: { valence: -0.3, arousal: 0.2, dominance: -0.1 },
+      mood: { valence: -0.25, arousal: 0.18, dominance: -0.08 },
+      discrete: { concern: 0.7 },
+      confidence: 0.82,
+    }),
+    activeConcerns: [{
+      id: 'concern-1',
+      text: 'Follow up soon',
+      priority: 'high',
+      source: 'agent',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      expiresAt: '2026-03-02T00:00:00.000Z',
+      contactId: 'contact-primary',
+    }],
+    trustLevel: 'primary',
+    contactId: 'contact-primary',
+    sessionMetrics: {
+      userMessageText: 'Can we revisit this tomorrow?',
+      responseText: 'Absolutely, I can check in.',
+      toolCallCount: 0,
+      recentTurnCount: 4,
+      lastSeenDeltaSeconds: 120,
+    },
+  });
 }
 
 describe('IntentionAppraisal', () => {
@@ -205,6 +235,41 @@ describe('IntentionAppraisal', () => {
       timing: 'none',
     }]);
     expect(onEvaluationError).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses InternalState as primary appraisal input when provided', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'followUp',
+          priority: 'medium',
+          reason: 'Needs proactive support.',
+          timing: 'soon',
+          followUp: {
+            content: 'Checking in after your recent stress signals.',
+          },
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+    });
+
+    const decisions = await appraisal.evaluate({
+      sessionId: 'api:internal-state',
+      internalState: makeInternalState(),
+      recentMessages: [{ role: 'user', content: 'I still feel off today.' }],
+    });
+
+    expect(decisions[0]?.type).toBe('followUp');
+    const promptPayload = JSON.parse((complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}') as string) as {
+      internalState?: unknown;
+      currentEmotion?: unknown;
+    };
+    expect(promptPayload.internalState).toBeDefined();
+    expect(promptPayload.currentEmotion).toBeDefined();
   });
 });
 

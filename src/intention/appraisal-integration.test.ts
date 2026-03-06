@@ -7,6 +7,7 @@ import { wireHeartbeatRuntime } from '../bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
 import { EventBus } from '../event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
+import { InternalStateComputer } from '../self-model/state.js';
 import type { AgentResponse, SubstrateMessage } from '../types.js';
 
 function makeMessage(): SubstrateMessage {
@@ -21,7 +22,39 @@ function makeMessage(): SubstrateMessage {
   };
 }
 
-function makeResponse(): AgentResponse {
+function makeInternalState(overrides?: {
+  vad?: { valence: number; arousal: number; dominance: number };
+  mood?: { valence: number; arousal: number; dominance: number };
+}): ReturnType<InternalStateComputer['computeState']> {
+  return new InternalStateComputer().computeState({
+    emotionState: {
+      vad: overrides?.vad ?? { valence: -0.2, arousal: 0.3, dominance: -0.1 },
+      mood: overrides?.mood ?? { valence: -0.15, arousal: 0.25, dominance: -0.05 },
+      discrete: { concern: 0.7 },
+      confidence: 0.8,
+    },
+    activeConcerns: [{
+      id: 'concern-runtime-1',
+      text: 'Follow up soon',
+      priority: 'high',
+      source: 'agent',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      expiresAt: '2026-03-02T00:00:00.000Z',
+      contactId: 'contact-primary',
+    }],
+    trustLevel: 'primary',
+    contactId: 'contact-primary',
+    sessionMetrics: {
+      userMessageText: 'Can you check in with me tomorrow?',
+      responseText: 'Absolutely, I can follow up.',
+      toolCallCount: 0,
+      recentTurnCount: 4,
+      lastSeenDeltaSeconds: 60,
+    },
+  });
+}
+
+function makeResponse(internalState = makeInternalState()): AgentResponse {
   return {
     channelId: 'api:test',
     content: 'Absolutely, I can follow up.',
@@ -30,6 +63,7 @@ function makeResponse(): AgentResponse {
       inputTokens: 100,
       outputTokens: 50,
       durationMs: 12,
+      internalState,
     },
   };
 }
@@ -135,6 +169,10 @@ describe('intention appraisal runtime integration', () => {
 
       expect(llmProvider.complete).toHaveBeenCalledTimes(1);
       expect(llmProvider.complete.mock.calls[0]?.[1]).toBe('background');
+      const promptPayload = JSON.parse(
+        String(llmProvider.complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}'),
+      ) as { internalState?: unknown };
+      expect(promptPayload.internalState).toBeDefined();
       expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
       expect(agentLoop.followUp).toHaveBeenCalledTimes(1);
       expect(agentLoop.followUp).toHaveBeenCalledWith(expect.objectContaining({
@@ -250,11 +288,18 @@ describe('intention appraisal runtime integration', () => {
         id: 'msg-intention-motivation-2',
         content: 'Still feeling the same low mood.',
       };
-      const response = makeResponse();
+      const firstResponse = makeResponse(makeInternalState({
+        vad: { valence: -0.2, arousal: 0.1, dominance: -0.1 },
+        mood: { valence: -0.28, arousal: 0.05, dominance: -0.1 },
+      }));
+      const secondResponse = makeResponse(makeInternalState({
+        vad: { valence: -0.22, arousal: 0.09, dominance: -0.1 },
+        mood: { valence: -0.29, arousal: 0.04, dominance: -0.1 },
+      }));
 
       await inferer({
         message: firstMessage,
-        response,
+        response: firstResponse,
         turnMessages: [],
         canonicalContactKey: 'contact-primary',
         turnId: 'turn-intention-motivation-1' as any,
@@ -269,7 +314,7 @@ describe('intention appraisal runtime integration', () => {
 
       await inferer({
         message: secondMessage,
-        response,
+        response: secondResponse,
         turnMessages: [],
         canonicalContactKey: 'contact-primary',
         turnId: 'turn-intention-motivation-2' as any,

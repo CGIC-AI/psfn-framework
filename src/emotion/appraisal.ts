@@ -2,6 +2,7 @@ import type { LLMProvider } from '../agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, LLMResponse } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
+import { cloneInternalState, type InternalState } from '../self-model/state.js';
 
 const log = createComponentLogger('EmotionAppraisal');
 
@@ -39,7 +40,8 @@ export interface EmotionAppraisalEntry {
 
 export interface EmotionAppraisalInput {
   sessionId: string;
-  currentEmotion: EmotionStateSnapshot;
+  currentEmotion?: EmotionStateSnapshot;
+  internalState?: InternalState;
   recentMessages: readonly EmotionAppraisalMessage[];
   personalityTraits?: Record<string, string>;
   turnId?: string;
@@ -146,6 +148,16 @@ function normalizeSnapshot(snapshot: EmotionStateSnapshot): EmotionStateSnapshot
     discrete,
     confidence: normalizeUnit(snapshot.confidence, 'emotion.confidence'),
   };
+}
+
+function toEmotionSnapshotFromInternalState(state: InternalState): EmotionStateSnapshot {
+  const normalized = cloneInternalState(state);
+  return normalizeSnapshot({
+    vad: { ...normalized.emotional.vad },
+    mood: { ...normalized.emotional.mood },
+    discrete: { ...normalized.emotional.discreteEmotions },
+    confidence: normalized.emotional.confidence,
+  });
 }
 
 function normalizeSessionId(sessionId: unknown): string {
@@ -340,7 +352,16 @@ export class EmotionAppraisal {
 
   async maybeAppraise(input: EmotionAppraisalInput): Promise<EmotionAppraisalResult> {
     const sessionId = normalizeSessionId(input.sessionId);
-    const snapshot = normalizeSnapshot(input.currentEmotion);
+    const internalState = input.internalState
+      ? cloneInternalState(input.internalState)
+      : null;
+    const snapshot = internalState
+      ? toEmotionSnapshotFromInternalState(internalState)
+      : input.currentEmotion
+        ? normalizeSnapshot(input.currentEmotion)
+        : (() => {
+          throw new Error('Emotion appraisal requires internalState or currentEmotion');
+        })();
     const recentMessages = normalizeRecentMessages(
       input.recentMessages,
       this.recentMessageCount,
@@ -378,6 +399,7 @@ export class EmotionAppraisal {
           role: 'user',
           content: this.buildPrompt({
             snapshot,
+            internalState,
             recentMessages,
             personalityTraits,
           }),
@@ -440,6 +462,7 @@ export class EmotionAppraisal {
 
   private buildPrompt(input: {
     snapshot: EmotionStateSnapshot;
+    internalState: InternalState | null;
     recentMessages: readonly EmotionAppraisalMessage[];
     personalityTraits: Record<string, string>;
   }): string {
@@ -459,6 +482,25 @@ export class EmotionAppraisal {
     );
     lines.push(`Top discrete emotions: ${topDiscrete(input.snapshot.discrete, TOP_DISCRETE_COUNT)}`);
     lines.push(`Signal confidence: ${input.snapshot.confidence.toFixed(3)}`);
+    if (input.internalState) {
+      lines.push('');
+      lines.push('[Internal State Signals]');
+      lines.push(
+        `Cognitive: certainty=${input.internalState.cognitive.certaintyLevel.toFixed(3)}, `
+        + `engagement=${input.internalState.cognitive.topicEngagement.toFixed(3)}, `
+        + `processing=${input.internalState.cognitive.processingQuality}`,
+      );
+      lines.push(
+        `Attention: trajectory=${input.internalState.attention.conversationTrajectory}, `
+        + `concerns=${input.internalState.attention.activeConcerns.length}, `
+        + `salient_entities=${input.internalState.attention.salientEntities.length}`,
+      );
+      lines.push(
+        `Relationship: trust=${input.internalState.relational.trustLevel}, `
+        + `contact=${input.internalState.relational.contactId ?? 'none'}, `
+        + `mood_drift=${formatSigned(input.internalState.relational.moodDrift)}`,
+      );
+    }
     lines.push('');
     lines.push('[Personality Traits]');
     const traitEntries = Object.entries(input.personalityTraits);

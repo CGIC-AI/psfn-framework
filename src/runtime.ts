@@ -97,6 +97,7 @@ import {
   composeSessionRuntime,
   createEmbeddingProviderFromEnv,
   composeSubstrateAgent,
+  wireSelfModelRuntime,
   wireCoreMemoryRuntime,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
@@ -707,6 +708,7 @@ export class SubstrateRuntime implements Lifecycle {
     },
   );
     const intentionRuntime = wireIntentionRuntime(this.agentLoop, this.db);
+    wireSelfModelRuntime(this.agentLoop);
     const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionRuntime.concernStore);
     const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
       intentionRuntime.behavioralPatternTracker,

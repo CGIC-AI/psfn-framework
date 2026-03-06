@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { LLMProvider } from '../agent/contracts.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
+import { cloneInternalState, type InternalState } from '../self-model/state.js';
 import type {
   ChannelType,
   CompletionPurpose,
@@ -91,6 +92,7 @@ export interface IntentionActionDecision {
 
 export interface IntentionAppraisalInput {
   sessionId: string;
+  internalState?: InternalState | null;
   currentEmotion?: EmotionStateSnapshot | null;
   recentMessages: readonly IntentionAppraisalMessage[];
   activeConcerns?: readonly ActiveConcernSnapshot[];
@@ -135,6 +137,7 @@ interface SessionAppraisalState {
 
 interface NormalizedIntentionAppraisalInput {
   sessionId: string;
+  internalState: InternalState | null;
   currentEmotion: EmotionStateSnapshot | null;
   recentMessages: IntentionAppraisalMessage[];
   activeConcerns: ActiveConcernSnapshot[];
@@ -227,6 +230,35 @@ function normalizeEmotionSnapshot(snapshot: EmotionStateSnapshot): EmotionStateS
     discrete,
     confidence: parseUnit(snapshot.confidence, 'emotion.confidence'),
   };
+}
+
+function normalizeInternalState(value: InternalState | null | undefined): InternalState | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return cloneInternalState(value);
+}
+
+function emotionSnapshotFromInternalState(state: InternalState): EmotionStateSnapshot {
+  return normalizeEmotionSnapshot({
+    vad: { ...state.emotional.vad },
+    mood: { ...state.emotional.mood },
+    discrete: { ...state.emotional.discreteEmotions },
+    confidence: state.emotional.confidence,
+  });
+}
+
+function activeConcernsFromInternalState(state: InternalState): ActiveConcernSnapshot[] {
+  return state.attention.activeConcerns.map((concern) => {
+    const dueAtRaw = Date.parse(concern.expiresAt);
+    return {
+      id: concern.id,
+      title: concern.text,
+      status: 'open',
+      ...(Number.isFinite(dueAtRaw) ? { dueAt: Math.floor(dueAtRaw) } : {}),
+      priority: concern.priority,
+    };
+  });
 }
 
 function normalizeSessionId(value: unknown): string {
@@ -417,13 +449,21 @@ function normalizeInput(
   },
 ): NormalizedIntentionAppraisalInput {
   const sessionId = normalizeSessionId(input.sessionId);
-  const currentEmotion = input.currentEmotion ? normalizeEmotionSnapshot(input.currentEmotion) : null;
+  const internalState = normalizeInternalState(input.internalState);
+  const currentEmotion = internalState
+    ? emotionSnapshotFromInternalState(internalState)
+    : input.currentEmotion
+      ? normalizeEmotionSnapshot(input.currentEmotion)
+      : null;
   const recentMessages = normalizeRecentMessages(
     input.recentMessages,
     options.recentMessageCount,
     options.maxMessageChars,
   );
-  const activeConcerns = normalizeActiveConcerns(input.activeConcerns, options.maxConcernCount);
+  const activeConcerns = normalizeActiveConcerns(
+    input.activeConcerns ?? (internalState ? activeConcernsFromInternalState(internalState) : undefined),
+    options.maxConcernCount,
+  );
   const contactEmotionalSnapshot = normalizeContactEmotionalSnapshot(input.contactEmotionalSnapshot);
   const conversationTrajectory = normalizeConversationTrajectory(input.conversationTrajectory);
   const triggerOverride = normalizeTriggerOverride(input.triggerOverride);
@@ -438,6 +478,7 @@ function normalizeInput(
 
   return {
     sessionId,
+    internalState,
     currentEmotion,
     recentMessages,
     activeConcerns,
@@ -970,6 +1011,23 @@ export class IntentionAppraisal {
       sessionId: normalized.sessionId,
       turnsSinceLastAppraisal: turnsSinceLast,
       emotionalShift: Number(emotionalShift.toFixed(4)),
+      internalState: normalized.internalState
+        ? {
+          emotional: {
+            vad: normalized.internalState.emotional.vad,
+            mood: normalized.internalState.emotional.mood,
+            confidence: normalized.internalState.emotional.confidence,
+            topDiscrete: topDiscreteLabels(normalized.internalState.emotional.discreteEmotions),
+          },
+          cognitive: normalized.internalState.cognitive,
+          attention: {
+            conversationTrajectory: normalized.internalState.attention.conversationTrajectory,
+            salientEntities: normalized.internalState.attention.salientEntities,
+            activeConcernCount: normalized.internalState.attention.activeConcerns.length,
+          },
+          relational: normalized.internalState.relational,
+        }
+        : null,
       currentEmotion: normalized.currentEmotion
         ? {
           vad: normalized.currentEmotion.vad,

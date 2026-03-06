@@ -444,6 +444,7 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('composeSessionRuntime({');
     expect(source).toContain('createEmbeddingProviderFromEnv()');
     expect(source).toContain('composeSubstrateAgent({');
+    expect(source).toContain('wireSelfModelRuntime(');
     expect(source).toContain('wireCoreMemoryRuntime({');
     expect(source).toContain('wireMemoryRuntime({');
     expect(source).toContain('wireShardAndThinkRuntime({');
@@ -459,6 +460,7 @@ describe('runtime composition wiring', () => {
       .toBeGreaterThan(runtimeHeartbeatIndex);
 
     const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(agentSource).toContain('wireSelfModelRuntime(');
     const agentHeartbeatIndex = agentSource.indexOf('wireHeartbeatRuntime(');
     expect(agentHeartbeatIndex).toBeGreaterThanOrEqual(0);
     expect(agentSource.indexOf('sessionManager,', agentHeartbeatIndex))

@@ -142,6 +142,14 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
   );
 }
 
+export interface SelfModelRuntimeTarget {
+  setSelfModelRuntimeRequired(required: boolean): void;
+}
+
+export function wireSelfModelRuntime(target: SelfModelRuntimeTarget): void {
+  target.setSelfModelRuntimeRequired(true);
+}
+
 export interface CoreMemoryRuntimeOptions {
   agentLoop: SubstrateAgent;
   sessionManager: SessionManager;

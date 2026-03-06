@@ -94,6 +94,7 @@ import {
   composeIdentity,
   composeSessionRuntime,
   composeSubstrateAgent,
+  wireSelfModelRuntime,
   wireCoreMemoryRuntime,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
@@ -617,6 +618,7 @@ async function main(): Promise<void> {
   },
 );
   const intentionRuntime = wireIntentionRuntime(agentLoop, db);
+  wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionRuntime.concernStore);
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
     intentionRuntime.behavioralPatternTracker,

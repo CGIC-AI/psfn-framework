@@ -3,6 +3,7 @@ import type { LLMProvider } from '../agent/contracts.js';
 import type { LLMContext, LLMResponse } from '../types.js';
 import { EmotionAppraisal } from './appraisal.js';
 import type { EmotionStateSnapshot } from './state.js';
+import { InternalStateComputer } from '../self-model/state.js';
 
 function makeSnapshot(
   overrides?: Partial<EmotionStateSnapshot>,
@@ -48,6 +49,34 @@ function makeMockProvider(responses: string[]): { provider: LLMProvider; complet
     },
     complete,
   };
+}
+
+function makeInternalState() {
+  return new InternalStateComputer().computeState({
+    emotionState: makeSnapshot({
+      vad: { valence: 0.2, arousal: 0.3, dominance: 0.1 },
+      mood: { valence: 0.15, arousal: 0.25, dominance: 0.08 },
+      discrete: { joy: 0.7, trust: 0.6 },
+      confidence: 0.8,
+    }),
+    activeConcerns: [{
+      id: 'concern-1',
+      text: 'Follow up with user',
+      priority: 'high',
+      source: 'agent',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      expiresAt: '2026-03-02T00:00:00.000Z',
+    }],
+    trustLevel: 'trusted',
+    contactId: 'contact-1',
+    sessionMetrics: {
+      userMessageText: 'hello',
+      responseText: 'I can help with that.',
+      toolCallCount: 0,
+      recentTurnCount: 3,
+      lastSeenDeltaSeconds: 120,
+    },
+  });
 }
 
 describe('EmotionAppraisal', () => {
@@ -170,5 +199,25 @@ describe('EmotionAppraisal', () => {
       currentEmotion: makeSnapshot(),
       recentMessages: [{ role: 'user', content: 'hello' }],
     })).rejects.toThrow('non-empty');
+  });
+
+  it('accepts InternalState input as the primary appraisal signal', async () => {
+    const { provider, complete } = makeMockProvider(['Internal-state appraisal summary']);
+    const appraisal = new EmotionAppraisal({
+      llmProvider: provider,
+      turnCadence: 1,
+      vadDeltaThreshold: 1.5,
+    });
+
+    const result = await appraisal.maybeAppraise({
+      sessionId: 'session-internal-state',
+      internalState: makeInternalState(),
+      recentMessages: [{ role: 'user', content: 'How am I doing?' }],
+    });
+
+    expect(result.appraised).toBe(true);
+    const prompt = complete.mock.calls[0]?.[0].messages[0]?.content as string;
+    expect(prompt).toContain('[Internal State Signals]');
+    expect(prompt).toContain('Cognitive: certainty=');
   });
 });

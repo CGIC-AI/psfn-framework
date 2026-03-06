@@ -10,6 +10,7 @@ import {
   type DeferredToolHandoffIntent,
   type DeferredToolHandoffPayload,
 } from '../agent/deferred-tool-handoff.js';
+import { createSignalWisePostTurnAppraiser } from '../intention/post-turn-appraisal.js';
 
 const HEARTBEAT_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
 const LOAD_TOOLS_TOOL_NAME = 'load_tools';
@@ -155,6 +156,44 @@ function resolvePostTurnCallType(message: SubstrateMessage): ObservabilityCallTy
   return 'chat';
 }
 
+function inferDeferredHeartbeatActions(
+  turnMessages: readonly unknown[],
+  deferredHeartbeatActionKind: string,
+): PostTurnActionCandidate[] {
+  const inferred: PostTurnActionCandidate[] = [];
+  for (const turnMessage of turnMessages) {
+    if (!isHeartbeatRunTemplateToolResult(turnMessage)) continue;
+    const candidate = extractDeferredActionCandidate(turnMessage);
+    if (candidate && candidate.kind === deferredHeartbeatActionKind) {
+      inferred.push(candidate);
+    }
+  }
+  return inferred;
+}
+
+function inferDeferredToolHandoffActions(input: InferDeferredPostTurnActionsInput & {
+  callType: ObservabilityCallType;
+}): PostTurnActionCandidate[] {
+  const inferred: PostTurnActionCandidate[] = [];
+  for (const turnMessage of input.turnMessages) {
+    if (!isLoadToolsToolResult(turnMessage)) continue;
+    const deferredToolHandoff = extractDeferredToolHandoffIntent(turnMessage);
+    if (!deferredToolHandoff) continue;
+    const candidate = buildDeferredToolHandoffCandidate(
+      deferredToolHandoff,
+      input.message,
+      input.callType,
+    );
+    const normalizedPayload = normalizeDeferredToolHandoffPayload(candidate.payload);
+    if (!normalizedPayload) continue;
+    if (candidate.dedupeKey && input.onDeferredToolHandoffPayload) {
+      input.onDeferredToolHandoffPayload(candidate.dedupeKey, normalizedPayload);
+    }
+    inferred.push(candidate);
+  }
+  return inferred;
+}
+
 export function inferDeferredPostTurnActions({
   message,
   turnMessages,
@@ -188,4 +227,29 @@ export function inferDeferredPostTurnActions({
     inferred.push(candidate);
   }
   return inferred;
+}
+
+const inferSignalWisePostTurnActions = createSignalWisePostTurnAppraiser<
+InferDeferredPostTurnActionsInput & { callType: ObservabilityCallType }
+>([
+  {
+    name: 'heartbeat_deferred_action',
+    infer: (context) => inferDeferredHeartbeatActions(
+      context.turnMessages,
+      context.deferredHeartbeatActionKind,
+    ),
+  },
+  {
+    name: 'deferred_tool_handoff',
+    infer: (context) => inferDeferredToolHandoffActions(context),
+  },
+]);
+
+export async function inferComposedDeferredPostTurnActions(
+  input: InferDeferredPostTurnActionsInput,
+): Promise<PostTurnActionCandidate[]> {
+  return inferSignalWisePostTurnActions({
+    ...input,
+    callType: resolvePostTurnCallType(input.message),
+  });
 }

@@ -43,6 +43,7 @@ const log = createComponentLogger('ContextBuilder');
 interface BuildSessionContextParams {
   channelId: string;
   systemPrompt: string;
+  coreMemoryBlock: string;
   memoriesBlock: string;
   llmProvider?: LLMProvider;
   userId?: string;
@@ -90,6 +91,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ? [...params.turnSnapshot.compactionSummaryTexts]
     : params.store.getCompactionSummaries(params.channelId).map(summary => summary.summary);
   const baseSystemTokenCount = countTokens(params.systemPrompt);
+  const hasCoreMemorySection = params.coreMemoryBlock.trim().length > 0;
+  const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
+  const coreMemoryTokenCount = countTokens(coreMemorySectionText);
   const memoryTokenCount = countTokens(params.memoriesBlock);
   const compactionThresholdTokenBudget = Math.floor(
     historyBudget.contextWindow * (params.config.compactionThresholdPct / 100),
@@ -100,13 +104,13 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   let compactionManifest = {
     triggered: false,
     compactedEntryCount: 0,
-    totalTokensBefore: baseSystemTokenCount + memoryTokenCount + preCompactionMessageTokens,
-    totalTokensAfter: baseSystemTokenCount + memoryTokenCount + preCompactionMessageTokens,
+    totalTokensBefore: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + preCompactionMessageTokens,
+    totalTokensAfter: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + preCompactionMessageTokens,
   };
 
   // Auto-compaction: when total context tokens exceed threshold, compact oldest half
   if (params.llmProvider) {
-    const systemTokens = baseSystemTokenCount + memoryTokenCount;
+    const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
     const preCompactionEntryCount = recent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
@@ -147,6 +151,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   // Build system prompt with memories
   let fullSystem = params.systemPrompt;
+  if (hasCoreMemorySection) {
+    fullSystem += '\n\n' + coreMemorySectionText;
+  }
   const hasMemorySection = params.memoriesBlock.trim().length > 0;
   const memorySectionText = hasMemorySection ? params.memoriesBlock : '';
   if (hasMemorySection) {
@@ -271,6 +278,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       },
       sections: [
         { section: 'system_prompt', tokenCount: baseSystemTokenCount },
+        { section: 'core_memory', tokenCount: coreMemoryTokenCount },
         { section: 'memories', tokenCount: memoryTokenCount },
         { section: 'compaction_summary', tokenCount: countTokens(compactionSummarySectionText) },
         { section: 'continuity', tokenCount: countTokens(continuitySectionText) },

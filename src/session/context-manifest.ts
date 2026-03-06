@@ -26,6 +26,7 @@ export interface ContextManifestMemorySeed {
 
 export type ContextManifestSection =
   | 'system_prompt'
+  | 'core_memory'
   | 'memories'
   | 'compaction_summary'
   | 'continuity'

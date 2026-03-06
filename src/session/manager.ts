@@ -127,6 +127,10 @@ export interface StartupSessionMetadata {
   timestamp: number;
 }
 
+export interface SessionCoreMemoryProvider {
+  formatForContext(): string;
+}
+
 export class SessionManager {
   private store: SessionStore;
   private compactionBoundaryStore: SessionStore;
@@ -134,6 +138,7 @@ export class SessionManager {
   private eventBus: EventBus | null;
   private promptRegistry: PromptRegistryStore | null;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
+  private coreMemoryProvider: SessionCoreMemoryProvider | null;
   private activeContextSessionId: string | null = null;
   continuityStore: UserContinuityStore | null = null;
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
@@ -151,6 +156,7 @@ export class SessionManager {
     this.eventBus = eventBus ?? null;
     this.promptRegistry = promptRegistry ?? null;
     this.preCompactionExtractionHandler = null;
+    this.coreMemoryProvider = null;
   }
 
   private shouldOverrideSessionContext(channelId: string): boolean {
@@ -375,9 +381,13 @@ export class SessionManager {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const coreMemoryBlock = this.coreMemoryProvider
+      ? this.coreMemoryProvider.formatForContext()
+      : '';
     return buildSessionContext({
       channelId: resolvedChannelId,
       systemPrompt,
+      coreMemoryBlock,
       memoriesBlock,
       llmProvider,
       userId,
@@ -466,6 +476,10 @@ export class SessionManager {
 
   setPreCompactionExtractionHandler(handler: PreCompactionExtractionHandler | null): void {
     this.preCompactionExtractionHandler = handler;
+  }
+
+  setCoreMemoryProvider(provider: SessionCoreMemoryProvider | null): void {
+    this.coreMemoryProvider = provider;
   }
 
   async importLegacyChatFromFile(request: LegacyChatImportRunRequest): Promise<LegacyChatImportRunResult> {

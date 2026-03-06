@@ -23,6 +23,12 @@ import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
 import { createSpawnShardTool } from '../shards/tools.js';
 import { createThinkTool } from '../repl/tools.js';
+import { CoreMemoryStore } from '../core-memory/store.js';
+import {
+  createCoreMemoryAppendTool,
+  createCoreMemoryReplaceTool,
+  createMemoryRethinkTool,
+} from '../core-memory/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { CapabilityTier } from '../types.js';
@@ -37,6 +43,7 @@ import {
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
   resolveConfiguredCompanionDataDir,
+  resolveCoreMemoryPath,
   resolveContinuityDir,
   resolveSessionsDir,
 } from '../persistence/layout.js';
@@ -130,6 +137,22 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
         : {}),
     },
   );
+}
+
+export interface CoreMemoryRuntimeOptions {
+  agentLoop: SubstrateAgent;
+  sessionManager: SessionManager;
+  config: SubstrateConfig;
+}
+
+export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMemoryStore {
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  const store = new CoreMemoryStore(resolveCoreMemoryPath(companionDataDir));
+  options.sessionManager.setCoreMemoryProvider(store);
+  options.agentLoop.registerTool(createCoreMemoryAppendTool(store));
+  options.agentLoop.registerTool(createCoreMemoryReplaceTool(store));
+  options.agentLoop.registerTool(createMemoryRethinkTool(store));
+  return store;
 }
 
 export interface MemoryRuntimeOptions {

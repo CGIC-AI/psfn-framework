@@ -103,6 +103,31 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Memory block');
   });
 
+  it('injects core memory into system prompt before retrieved memory block', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.setCoreMemoryProvider({
+      formatForContext: () => [
+        '[Core Memory]',
+        'persona:',
+        'Analytical and direct.',
+        'human:',
+        'Prefers concise updates.',
+        'goals:',
+        'Complete Phase V task PSFN-du0t.',
+      ].join('\n'),
+    });
+
+    const ctx = await mgr.buildContext('ch1', 'System', 'Retrieved memory block');
+    const coreIndex = ctx.systemPrompt.indexOf('[Core Memory]');
+    const memoryIndex = ctx.systemPrompt.indexOf('Retrieved memory block');
+
+    expect(coreIndex).toBeGreaterThanOrEqual(0);
+    expect(memoryIndex).toBeGreaterThan(coreIndex);
+    expect(ctx.systemPrompt).toContain('Complete Phase V task PSFN-du0t.');
+  });
+
   it('records memory manifest details when retrieval seed metadata is provided', async () => {
     const config = makeConfig({
       memoryRetrievalLimit: 2,
@@ -175,6 +200,7 @@ describe('SessionManager', () => {
     });
     expect(ctx.manifest?.budgets.sections).toEqual(expect.arrayContaining([
       { section: 'system_prompt', tokenCount: expect.any(Number) },
+      { section: 'core_memory', tokenCount: expect.any(Number) },
       { section: 'memories', tokenCount: expect.any(Number) },
       { section: 'compaction_summary', tokenCount: 0 },
       { section: 'continuity', tokenCount: 0 },

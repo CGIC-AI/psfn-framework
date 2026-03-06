@@ -310,6 +310,7 @@ describe('LLMClient correlation metadata', () => {
     expect(inferCallType('reasoning')).toBe('tool');
     expect(inferCallType('summary')).toBe('summary');
     expect(inferCallType('extraction')).toBe('memory');
+    expect(inferCallType('context')).toBe('background');
     expect(inferCallType('background', 'internal:heartbeat')).toBe('scheduled');
     expect(inferCallType('background', 'discord:general')).toBe('background');
   });

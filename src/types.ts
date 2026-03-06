@@ -305,8 +305,8 @@ export interface ModelCatalogEntry {
 
 export type ModelRoleAssignments = Record<string, string>;
 
-export type ModelPurpose = 'chat' | 'background' | 'reasoning' | 'longContext' | 'vision';
-export type CompletionPurpose = 'background' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
+export type ModelPurpose = 'chat' | 'background' | 'context' | 'reasoning' | 'longContext' | 'vision';
+export type CompletionPurpose = 'background' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
 export const COMPOSITIONAL_PURPOSES = [
   'extraction',
@@ -496,6 +496,7 @@ const DEFAULT_EXTRACTION_MAX_TOKENS = 8_192;
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
   background: 'extraction',
+  context: 'extraction',
   extraction: 'extraction',
   summary: 'primary',
   reasoning: 'primary',
@@ -648,6 +649,7 @@ export function loadConfig(): SubstrateConfig {
     modelRoster: {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
+      context: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
     },
     voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
     discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',

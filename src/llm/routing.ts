@@ -7,7 +7,7 @@ import type {
   SubstrateConfig,
 } from '../types.js';
 
-export type RoutingPurpose = 'chat' | 'background' | 'reasoning' | 'import_processing';
+export type RoutingPurpose = 'chat' | 'background' | 'context' | 'reasoning' | 'import_processing';
 export type ImportPolicyRejectionReason = 'strict_requires_openrouter_zdr';
 
 export interface RoutingCandidate {
@@ -66,7 +66,7 @@ function fallbackTokenBudget(
   config: SubstrateConfig,
   purpose: RoutingPurpose,
 ): { maxTokens: number; contextWindow?: number } {
-  if (purpose === 'background' || purpose === 'import_processing') {
+  if (purpose === 'background' || purpose === 'context' || purpose === 'import_processing') {
     return { maxTokens: config.extractionMaxTokens };
   }
 
@@ -138,6 +138,15 @@ function purposeSlotChain(assignments: ModelRoleAssignments | undefined, purpose
         role.extraction,
         'extraction',
       ]
+      : purpose === 'context'
+        ? [
+          role.context,
+          role.background,
+          role.extraction,
+          'extraction',
+          role.chat,
+          'primary',
+        ]
       : purpose === 'reasoning'
         ? [
           role.reasoning,
@@ -198,6 +207,25 @@ function rosterChain(config: SubstrateConfig, purpose: RoutingPurpose): Array<Mo
         model: config.extractionModel,
         provider: config.extractionProvider,
         maxTokens: config.extractionMaxTokens,
+      },
+    ];
+  }
+
+  if (purpose === 'context') {
+    return [
+      config.modelRoster.context,
+      config.modelRoster.background,
+      {
+        model: config.extractionModel,
+        provider: config.extractionProvider,
+        maxTokens: config.extractionMaxTokens,
+      },
+      config.modelRoster.chat,
+      {
+        model: config.primaryModel,
+        provider: config.primaryProvider,
+        maxTokens: config.primaryMaxTokens,
+        contextWindow: config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow,
       },
     ];
   }

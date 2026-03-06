@@ -482,7 +482,7 @@ export function settingsPage(
         <div class="card">
           <h3 style="margin-bottom:0.75rem">Purpose Mappings</h3>
           <p class="note" style="margin:0 0 0.75rem 0;line-height:1.4">
-            Map each runtime purpose to a slot key. Defaults include chat/background plus completion purposes (extraction/summary/reasoning).
+            Map each runtime purpose to a slot key. Defaults include chat/background/context plus completion purposes (extraction/summary/reasoning).
           </p>
           <table class="config-table">
             <thead>
@@ -509,7 +509,7 @@ export function settingsPage(
               <input type="text" data-alias-primary-model value="${escapeHtml(config.primaryModel)}" readonly>
             </div>
             <div class="form-group">
-              <label>Extraction Alias (extraction/background)</label>
+              <label>Extraction Alias (extraction/background/context)</label>
               <input type="text" data-alias-extraction-model value="${escapeHtml(config.extractionModel)}" readonly>
             </div>
           </div>

@@ -25,6 +25,7 @@
   "modelRoleAssignments": {
     "chat": "primary",
     "background": "extraction",
+    "context": "extraction",
     "extraction": "extraction",
     "summary": "primary",
     "reasoning": "primary",

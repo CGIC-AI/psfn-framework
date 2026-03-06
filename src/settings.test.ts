@@ -60,6 +60,7 @@ function makeConfig(): SubstrateConfig {
     modelRoleAssignments: {
       chat: 'primary',
       background: 'extraction',
+      context: 'extraction',
       extraction: 'extraction',
       summary: 'primary',
       reasoning: 'primary',
@@ -68,6 +69,7 @@ function makeConfig(): SubstrateConfig {
     modelRoster: {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
       background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      context: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
     },
     retryMaxAttempts: 3,
     retryBaseDelayMs: 2000,
@@ -249,6 +251,38 @@ describe('settings', () => {
       });
       expect(normalized.modelRoster?.chat?.routing).toEqual({
         providerOrder: ['parasail', 'openai'],
+      });
+    });
+
+    it('defaults context roster to the background slot when no dedicated context assignment exists', () => {
+      const normalized = normalizeEditableSettings({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            defaults: { maxTokens: 6000, contextWindow: 128_000 },
+          },
+          extraction: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            defaults: { maxTokens: 2048 },
+          },
+        },
+        modelRoleAssignments: {
+          chat: 'primary',
+          background: 'extraction',
+          extraction: 'extraction',
+        },
+      }, {
+        defaultContextWindow: 128_000,
+      });
+
+      expect(normalized.modelRoleAssignments?.context).toBe('extraction');
+      expect(normalized.modelRoster?.context).toEqual({
+        model: 'deepseek/deepseek-v3.2',
+        provider: 'openrouter',
+        maxTokens: 2048,
+        contextWindow: 128_000,
       });
     });
 
@@ -553,10 +587,16 @@ describe('settings', () => {
             defaults: { maxTokens: 12000, contextWindow: 256_000 },
             overrides: { maxTokens: 10000 },
           },
+          helper: {
+            model: 'openai/gpt-4.1-mini',
+            provider: 'openrouter',
+            defaults: { maxTokens: 1536, contextWindow: 64_000 },
+          },
         },
         modelRoleAssignments: {
           chat: 'lowlatency',
           background: 'extractionx',
+          context: 'helper',
           extraction: 'extractionx',
           summary: 'lowlatency',
           reasoning: 'thinker',
@@ -583,6 +623,12 @@ describe('settings', () => {
         provider: 'openrouter',
         maxTokens: 10000,
         contextWindow: 256_000,
+      });
+      expect(config.modelRoster.context).toEqual({
+        model: 'openai/gpt-4.1-mini',
+        provider: 'openrouter',
+        maxTokens: 1536,
+        contextWindow: 64_000,
       });
       expect(config.modelRoster.longContext).toEqual({
         model: 'z-ai/glm-5',
@@ -945,6 +991,7 @@ describe('settings', () => {
         }),
         modelRoleAssignmentsJson: JSON.stringify({
           chat: 'fast',
+          context: 'extract',
           extraction: 'extract',
           background: 'extract',
           summary: 'fast',
@@ -955,6 +1002,7 @@ describe('settings', () => {
       expect(errors).toEqual([]);
       expect(settings.modelCatalog.fast.overrides.maxTokens).toBe(1536);
       expect(settings.modelRoleAssignments?.chat).toBe('fast');
+      expect(settings.modelRoleAssignments?.context).toBe('extract');
       expect(settings.primaryModel).toBe('openai/gpt-4.1-mini');
       expect(settings.extractionModel).toBe('deepseek/deepseek-v3.2');
     });

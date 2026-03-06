@@ -72,6 +72,7 @@ describe('subsystem config round-trip', () => {
         summary: 'primary',
         reasoning: 'primary',
         longContext: 'primary',
+        context: 'extraction',
         extraction: 'extraction',
         background: 'extraction',
         import_processing: 'extraction',

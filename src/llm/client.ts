@@ -541,6 +541,9 @@ export class LLMClient {
     if (purpose === 'import_processing') {
       return 'import_processing';
     }
+    if (purpose === 'context') {
+      return 'context';
+    }
     if (purpose === 'background') {
       return 'background';
     }

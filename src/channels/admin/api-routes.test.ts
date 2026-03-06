@@ -1661,6 +1661,7 @@ describe('AdminServer JSON API routes', () => {
         summary: 'primary',
         reasoning: 'primary',
         longContext: 'primary',
+        context: 'extraction',
         extraction: 'extraction',
         background: 'extraction',
         import_processing: 'extraction',

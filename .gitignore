@@ -28,3 +28,6 @@ workspace/
 admin-ui/node_modules/
 admin-ui/build/
 admin-ui/.svelte-kit/
+
+# Dolt database files (added by bd init)
+.dolt/

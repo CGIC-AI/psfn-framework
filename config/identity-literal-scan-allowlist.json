@@ -3,52 +3,62 @@
     {
       "path": "admin-ui/src/app.css",
       "contains": "Purrsephone's Garden",
-      "reason": "Legacy UI branding pending follow-up customization epic."
+      "reason": "Legacy UI branding pending follow-up customization epic.",
+      "pattern": "identity-proper-name"
     },
     {
       "path": "admin-ui/src/app.html",
       "contains": "Purrsephone's Garden",
-      "reason": "Legacy UI branding pending follow-up customization epic."
+      "reason": "Legacy UI branding pending follow-up customization epic.",
+      "pattern": "identity-proper-name"
     },
     {
       "path": "admin-ui/src/lib/companion-name.ts",
       "contains": "purrsephone?:",
-      "reason": "Legacy API field compatibility for bootstrap payload shape."
+      "reason": "Legacy API field compatibility for bootstrap payload shape.",
+      "pattern": "identity-legacy-slug"
     },
     {
       "path": "admin-ui/src/lib/companion-name.ts",
       "contains": "payload.purrsephone",
-      "reason": "Legacy API field compatibility for bootstrap payload shape."
+      "reason": "Legacy API field compatibility for bootstrap payload shape.",
+      "pattern": "identity-legacy-slug"
     },
     {
       "path": "src/channels/admin/templates/layout.ts",
       "contains": "Purrsephone's Garden",
-      "reason": "Legacy admin template branding pending neutral terminology migration."
+      "reason": "Legacy admin template branding pending neutral terminology migration.",
+      "pattern": "identity-proper-name"
     },
     {
       "path": "src/git/tools.ts",
       "contains": "legacy purrsephone/ is still allowed",
-      "reason": "Intentional note describing temporary legacy skills path."
+      "reason": "Intentional note describing temporary legacy skills path.",
+      "pattern": "identity-legacy-slug"
     },
     {
       "path": "src/identity/companion-naming.ts",
       "contains": "LEGACY_COMPANION_NAME = 'Purrsephone'",
-      "reason": "Legacy companion-name migration constant."
+      "reason": "Legacy companion-name migration constant.",
+      "pattern": "identity-proper-name"
     },
     {
       "path": "src/identity/companion-naming.ts",
       "contains": "LEGACY_COMPANION_ID = 'purrsephone'",
-      "reason": "Legacy companion-id migration constant."
+      "reason": "Legacy companion-id migration constant.",
+      "pattern": "identity-legacy-slug"
     },
     {
       "path": "src/identity/companion-naming.ts",
       "contains": "LEGACY_COMPANION_SKILLS_DIRECTORY = 'purrsephone/skills'",
-      "reason": "Legacy skills directory migration constant."
+      "reason": "Legacy skills directory migration constant.",
+      "pattern": "identity-legacy-slug"
     },
     {
       "path": "src/identity/loader.ts",
       "contains": "LEGACY_BOOTSTRAP_NAME = 'Purrsephone'",
-      "reason": "Legacy bootstrap identity migration marker."
+      "reason": "Legacy bootstrap identity migration marker.",
+      "pattern": "identity-proper-name"
     }
   ]
 }

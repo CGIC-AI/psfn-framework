@@ -73,6 +73,32 @@ describe('identity-literal scan', () => {
     expect(result.allowlisted).toHaveLength(0);
   });
 
+  it('scopes allowlist suppression by pattern to avoid masking other hits on the same line', () => {
+    const result = scanIdentityLiteralEntries(
+      [
+        {
+          path: 'src/identity/loader.ts',
+          text: "const LEGACY = 'Purrsephone purrsephone';\n",
+        },
+      ],
+      {
+        allowlist: [
+          {
+            path: 'src/identity/loader.ts',
+            contains: "LEGACY = 'Purrsephone purrsephone'",
+            reason: 'allow proper-name only',
+            pattern: 'identity-proper-name',
+          },
+        ],
+      },
+    );
+
+    expect(result.allowlisted).toHaveLength(1);
+    expect(result.allowlisted[0].pattern).toBe('identity-proper-name');
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0].pattern).toBe('identity-legacy-slug');
+  });
+
   it('loads valid allowlist entries and drops malformed ones', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'identity-literal-allowlist-'));
     const file = path.join(dir, 'allowlist.json');

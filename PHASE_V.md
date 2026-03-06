@@ -134,8 +134,8 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-bxvy` config/persistence-topology epic is closed on `phase-v`.
   - `PSFN-y2ac` settings-governance epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Open `PSFN-x92u.1` immediately: compositional policy config (tier/channel/purpose flags) with default-OFF gating.
-  - Follow `PSFN-x92u.1` with `PSFN-x92u.2` / `.3` to land the first compositional extraction and retrieval pipelines.
+  - Re-open Stage 1 foundation work on `PSFN-04dt.2`: immutable `TurnSnapshot` contract between fast-loop and slow/background mutation paths.
+  - Move to `PSFN-x92u.1` only after `PSFN-04dt.2` closes, because the compositional kernel still depends on that snapshot boundary.
   - Keep `PSFN-eg59` as the residual de-hardcode test-fixture cleanup lane where remaining `PSFN` hits are intentional branding/legacy cases versus generic fixture drift.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 

@@ -242,20 +242,7 @@ function collectCompatibleBatch(descriptors: ToolCallDescriptor[], startIndex: n
 }
 
 function canRunConcurrently(a: ToolCallDescriptor, b: ToolCallDescriptor): boolean {
-  if (a.metadata.class !== b.metadata.class) {
-    return false;
-  }
-  if (a.metadata.class === 'spawn_shard') {
-    return true;
-  }
-  if (a.metadata.class !== 'read_only') {
-    return false;
-  }
-
-  if (a.metadata.exclusivityKey && b.metadata.exclusivityKey) {
-    return a.metadata.exclusivityKey !== b.metadata.exclusivityKey;
-  }
-  return true;
+  return a.metadata.class === 'spawn_shard' && b.metadata.class === 'spawn_shard';
 }
 
 function resolveBatchParallelLimit(batch: ToolCallDescriptor[], maxParallelToolCalls: number): number {

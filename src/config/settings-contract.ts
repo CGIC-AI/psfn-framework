@@ -125,6 +125,7 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
 ]);
 
 export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
+  'adaptiveContextBudgetsEnabled',
   'importProcessingStrictPolicy',
   'webFetchAllowHttp',
   'webFetchAllowInternalNetwork',

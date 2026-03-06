@@ -439,6 +439,84 @@ describe('SessionManager', () => {
     expect(budgetCtx.messages.length).toBeLessThan(overrideCtx.messages.length);
   });
 
+  it('applies adaptive per-turn session and memory budgets when enabled', async () => {
+    const config = makeConfig({
+      adaptiveContextBudgetsEnabled: true,
+      sessionMessageLimit: undefined,
+      memoryRetrievalLimit: undefined,
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 200_000,
+          contextBudget: {
+            sessionHistoryMinTokens: 1,
+            memoryRetrievalMinTokens: 1,
+          },
+        },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+
+    for (let i = 0; i < 60; i++) {
+      mgr.recordUserMessage('ch-adaptive', `Turn ${i} ` + 'x'.repeat(800), 'u1', 'User');
+    }
+
+    const recallTurn = { messageText: 'Can you remember what I told you last week?' };
+    const taskTurn = { messageText: 'Please implement this step-by-step refactor plan.' };
+    const recallSnapshot = mgr.captureTurnContextSnapshot(
+      'ch-adaptive',
+      undefined,
+      undefined,
+      [],
+      recallTurn,
+    );
+    const taskSnapshot = mgr.captureTurnContextSnapshot(
+      'ch-adaptive',
+      undefined,
+      undefined,
+      [],
+      taskTurn,
+    );
+
+    expect(recallSnapshot.recentEntries.length).toBeLessThan(taskSnapshot.recentEntries.length);
+
+    const recallContext = await mgr.buildContext(
+      'ch-adaptive',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      recallSnapshot,
+      undefined,
+      recallTurn,
+    );
+    const taskContext = await mgr.buildContext(
+      'ch-adaptive',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      taskSnapshot,
+      undefined,
+      taskTurn,
+    );
+
+    expect(recallContext.messages.length).toBeGreaterThan(0);
+    expect(taskContext.messages.length).toBeGreaterThan(0);
+    expect(recallContext.manifest?.budgets.sessionHistory.budgetPct).toBe(4);
+    expect(recallContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(8);
+    expect(taskContext.manifest?.budgets.sessionHistory.budgetPct).toBe(12);
+    expect(taskContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(2);
+  });
+
   it('prefers hard session limit over budget percentage', async () => {
     const config = makeConfig({
       sessionMessageLimit: 8,

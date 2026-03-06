@@ -116,6 +116,7 @@ export interface EditableSettings {
   modelRoster?: Partial<Record<ModelPurpose, ModelSlot>>;
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
+  adaptiveContextBudgetsEnabled?: boolean;
   sessionMessageLimit?: number;
   sessionRestartBehavior?: SessionRestartBehavior;
   memoryRetrievalLimit?: number;
@@ -215,6 +216,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'extractionMaxTokens',
   'sessionHistoryBudgetPct',
   'memoryRetrievalBudgetPct',
+  'adaptiveContextBudgetsEnabled',
   'sessionMessageLimit',
   'sessionRestartBehavior',
   'memoryRetrievalLimit',
@@ -714,6 +716,15 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     delete normalized.memoryRetrievalBudgetPct;
   }
 
+  if ('adaptiveContextBudgetsEnabled' in settings) {
+    const adaptiveContextBudgetsEnabled = toBoolean(settings.adaptiveContextBudgetsEnabled);
+    if (adaptiveContextBudgetsEnabled !== undefined) {
+      normalized.adaptiveContextBudgetsEnabled = adaptiveContextBudgetsEnabled;
+    } else {
+      delete normalized.adaptiveContextBudgetsEnabled;
+    }
+  }
+
   const emotionalSalienceThresholdPct = toIntegerInRange(
     settings.compactionEmotionalSalienceThresholdPct,
     0,
@@ -1204,6 +1215,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     extractionMaxTokens: config.extractionMaxTokens,
     sessionHistoryBudgetPct: sessionBudgetPct,
     memoryRetrievalBudgetPct: retrievalBudgetPct,
+    adaptiveContextBudgetsEnabled: config.adaptiveContextBudgetsEnabled ?? false,
     sessionMessageLimit: config.sessionMessageLimit ?? null,
     sessionRestartBehavior: config.sessionRestartBehavior ?? 'reuse_latest_session',
     memoryRetrievalLimit: config.memoryRetrievalLimit ?? null,
@@ -1332,6 +1344,9 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
   if (settings.memoryRetrievalBudgetPct !== undefined) {
     config.memoryRetrievalBudgetPct = settings.memoryRetrievalBudgetPct;
+  }
+  if (settings.adaptiveContextBudgetsEnabled !== undefined) {
+    config.adaptiveContextBudgetsEnabled = settings.adaptiveContextBudgetsEnabled;
   }
   if (settings.sessionMessageLimit !== undefined) config.sessionMessageLimit = settings.sessionMessageLimit;
   if ('sessionRestartBehavior' in settings) {
@@ -1651,6 +1666,16 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
       errors.push('importProcessingStrictPolicy must be true or false');
     } else {
       settings.importProcessingStrictPolicy = strictPolicy;
+    }
+  }
+
+  const adaptiveContextBudgetsEnabledRaw = params.get('adaptiveContextBudgetsEnabled');
+  if (adaptiveContextBudgetsEnabledRaw !== null) {
+    const enabled = toBoolean(adaptiveContextBudgetsEnabledRaw);
+    if (enabled === undefined) {
+      errors.push('adaptiveContextBudgetsEnabled must be true or false');
+    } else {
+      settings.adaptiveContextBudgetsEnabled = enabled;
     }
   }
 

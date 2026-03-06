@@ -1,6 +1,7 @@
 {
   "sessionHistoryBudgetPct": 6,
   "memoryRetrievalBudgetPct": 2,
+  "adaptiveContextBudgetsEnabled": false,
   "sessionMessageLimit": 30,
   "sessionRestartBehavior": "reuse_latest_session",
   "memoryRetrievalLimit": 15,

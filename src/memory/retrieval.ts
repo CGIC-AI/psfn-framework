@@ -10,6 +10,7 @@ import type { ContextBudgetConfigLike } from '../context-budget.js';
 import {
   MEMORY_RETRIEVAL_MIN_ITEMS,
   resolveMemoryRetrievalBudget,
+  type ContextBudgetTurnCharacteristics,
 } from '../context-budget.js';
 import {
   classifyChannel,
@@ -233,15 +234,22 @@ export class MemoryRetriever implements MemoryProvider {
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
   }
 
-  private resolveRetrievalBudget(): ReturnType<typeof resolveMemoryRetrievalBudget> {
+  private resolveRetrievalBudget(
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+  ): ReturnType<typeof resolveMemoryRetrievalBudget> {
     if (this.runtimeConfig) {
-      return resolveMemoryRetrievalBudget(this.runtimeConfig);
+      return resolveMemoryRetrievalBudget(this.runtimeConfig, {
+        ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
+      });
     }
 
     return resolveMemoryRetrievalBudget(
       this.fallbackBudgetConfig ?? {
         defaultContextWindow: 128_000,
         modelRoster: {},
+      },
+      {
+        ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
       },
     );
   }
@@ -252,8 +260,14 @@ export class MemoryRetriever implements MemoryProvider {
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<TurnMemorySnapshot> {
-    const budget = this.resolveRetrievalBudget();
+    const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
+      channelId,
+      ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
+      messageText: contextText,
+    };
+    const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
     const channelVisibility = classifyChannel(channelId, channelMeta);
@@ -317,8 +331,14 @@ export class MemoryRetriever implements MemoryProvider {
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
     turnSnapshot?: TurnMemorySnapshot,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<string> {
-    const budget = this.resolveRetrievalBudget();
+    const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
+      channelId,
+      ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
+      messageText: contextText,
+    };
+    const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
     const channelVisibility = classifyChannel(channelId, channelMeta);
@@ -694,6 +714,7 @@ export class MemoryRetriever implements MemoryProvider {
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
     turnSnapshot?: TurnMemorySnapshot,
+    _turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<string> {
     if (this.proactiveRecallProbability <= 0) return '';
 

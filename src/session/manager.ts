@@ -27,7 +27,11 @@ import {
   markCompactionSummaryAsUntrustedRecord,
   wrapCompactionSummaryAsUntrustedContext,
 } from '../identity/prompt-composer.js';
-import { resolveSessionHistoryBudget } from '../context-budget.js';
+import {
+  resolveAdaptiveContextBudgetProfile,
+  resolveSessionHistoryBudget,
+  type ContextBudgetTurnCharacteristics,
+} from '../context-budget.js';
 import {
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   trimRecentEntriesToTokenBudget,
@@ -368,6 +372,7 @@ export class SessionManager {
     continuityFallbackUserIds: string[] = [],
     turnSnapshot?: TurnSessionContextSnapshot,
     memoryManifestSeed?: ContextManifestMemorySeed,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return buildSessionContext({
@@ -387,6 +392,7 @@ export class SessionManager {
       characterName: this.characterName,
       turnSnapshot,
       memoryManifestSeed,
+      turnBudgetCharacteristics,
     });
   }
 
@@ -395,9 +401,16 @@ export class SessionManager {
     userId?: string,
     channelMeta?: ChannelMeta,
     continuityFallbackUserIds: string[] = [],
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): TurnSessionContextSnapshot {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const historyBudget = resolveSessionHistoryBudget(this.config);
+    const adaptiveProfile = resolveAdaptiveContextBudgetProfile(
+      this.config,
+      turnBudgetCharacteristics,
+    );
+    const historyBudget = resolveSessionHistoryBudget(this.config, {
+      adaptiveProfile,
+    });
     let recent = this.compactionBoundaryStore.getRecent(resolvedChannelId, historyBudget.estimatedCount);
     if (historyBudget.mode === 'budget') {
       recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);

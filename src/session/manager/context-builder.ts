@@ -3,8 +3,10 @@ import { countMessageTokens, countTokens } from '../../llm/tokens.js';
 import { createComponentLogger } from '../../logger.js';
 import type { ContextMessage, LLMContext, SubstrateConfig } from '../../types.js';
 import {
+  resolveAdaptiveContextBudgetProfile,
   resolveMemoryRetrievalBudget,
   resolveSessionHistoryBudget,
+  type ContextBudgetTurnCharacteristics,
 } from '../../context-budget.js';
 import type { EventBus } from '../../event-bus.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
@@ -56,12 +58,21 @@ interface BuildSessionContextParams {
   characterName?: string;
   turnSnapshot?: TurnSessionContextSnapshot;
   memoryManifestSeed?: ContextManifestMemorySeed;
+  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
   const channelVisibility = classifyChannel(params.channelId, params.channelMeta);
-  const historyBudget = resolveSessionHistoryBudget(params.config);
-  const memoryBudget = resolveMemoryRetrievalBudget(params.config);
+  const adaptiveBudgetProfile = resolveAdaptiveContextBudgetProfile(
+    params.config,
+    params.turnBudgetCharacteristics,
+  );
+  const historyBudget = resolveSessionHistoryBudget(params.config, {
+    adaptiveProfile: adaptiveBudgetProfile,
+  });
+  const memoryBudget = resolveMemoryRetrievalBudget(params.config, {
+    adaptiveProfile: adaptiveBudgetProfile,
+  });
   let recent = params.turnSnapshot
     ? params.turnSnapshot.recentEntries.map(cloneSessionEntry)
     : params.store.getRecent(params.channelId, historyBudget.estimatedCount);

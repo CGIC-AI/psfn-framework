@@ -7,6 +7,7 @@ export interface ContextBudgetConfigLike {
   memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
+  adaptiveContextBudgetsEnabled?: boolean;
 }
 
 export interface PercentageRange {
@@ -21,6 +22,29 @@ export interface ResolvedContextBudget {
   estimatedCount: number;
   hardLimit?: number;
   mode: 'budget' | 'hard_limit';
+}
+
+export interface ContextBudgetTurnCharacteristics {
+  channelId?: string;
+  channelType?: string;
+  isDirectMessage?: boolean;
+  messageText?: string;
+  taskKind?: string;
+}
+
+export type ContextBudgetTurnCategory = 'default' | 'recall' | 'task' | 'emotional' | 'creative' | 'factual';
+
+export interface AdaptiveContextBudgetProfile {
+  enabled: boolean;
+  source: 'disabled' | 'default' | 'adaptive';
+  category: ContextBudgetTurnCategory;
+  sessionHistoryBudgetPct: number;
+  memoryRetrievalBudgetPct: number;
+}
+
+export interface ContextBudgetResolutionOptions {
+  turn?: ContextBudgetTurnCharacteristics;
+  adaptiveProfile?: AdaptiveContextBudgetProfile;
 }
 
 export const SESSION_HISTORY_BUDGET_PCT_DEFAULT = 6;
@@ -40,6 +64,23 @@ export const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
 export const MEMORY_RETRIEVAL_MAX_ITEMS = 200;
 
 const DEFAULT_CONTEXT_WINDOW_FALLBACK = 128_000;
+const TASK_KIND_TASK_SET = new Set(['heartbeat', 'reflection', 'planning', 'maintenance', 'deferred_tool_handoff']);
+const CHANNEL_TASK_TYPE_SET = new Set(['terminal', 'internal']);
+const MEMORY_RECALL_PATTERN = /\b(remember|recall|memory|memories|journal|scratchpad|what do you know about|what did i (?:say|mention|tell)|last time|previous conversation)\b/i;
+const TASK_PATTERN = /\b(step(?:-by-step)?|plan|roadmap|implement|fix|debug|build|refactor|investigate|analy[sz]e|tests?|deploy|terminal|shell|command|script)\b/i;
+const EMOTIONAL_PATTERN = /\b(feel(?:ing)?|emotion(?:al)?|anxious|stressed|overwhelmed|upset|sad|lonely|frustrated|relationship|support|comfort|vent)\b/i;
+const CREATIVE_PATTERN = /\b(write|story|poem|lyrics|brainstorm|creative|invent|imagine|character|scene|worldbuilding)\b/i;
+const FACTUAL_PATTERN = /\b(what|when|where|who|which|why|how|explain|define|summarize)\b/i;
+const ADAPTIVE_BUDGET_PROFILE_BY_CATEGORY: Readonly<Record<
+  Exclude<ContextBudgetTurnCategory, 'default'>,
+  { sessionHistoryBudgetPct: number; memoryRetrievalBudgetPct: number }
+>> = {
+  recall: { sessionHistoryBudgetPct: 4, memoryRetrievalBudgetPct: 8 },
+  task: { sessionHistoryBudgetPct: 12, memoryRetrievalBudgetPct: 2 },
+  emotional: { sessionHistoryBudgetPct: 7, memoryRetrievalBudgetPct: 4 },
+  creative: { sessionHistoryBudgetPct: 9, memoryRetrievalBudgetPct: 3 },
+  factual: { sessionHistoryBudgetPct: 6, memoryRetrievalBudgetPct: 3 },
+};
 
 function toPositiveInteger(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
@@ -49,6 +90,10 @@ function toPositiveInteger(value: unknown): number | undefined {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizeTurnText(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? '';
 }
 
 function resolvePct(value: number | undefined, fallback: number, range: PercentageRange): number {
@@ -102,10 +147,115 @@ export function resolveMemoryRetrievalBudgetPct(
   );
 }
 
-export function resolveSessionHistoryBudget(config: ContextBudgetConfigLike): ResolvedContextBudget {
+export function classifyContextBudgetTurn(
+  turn: ContextBudgetTurnCharacteristics | undefined,
+): ContextBudgetTurnCategory {
+  const taskKind = turn?.taskKind?.trim().toLowerCase();
+  if (taskKind && TASK_KIND_TASK_SET.has(taskKind)) {
+    return 'task';
+  }
+
+  const channelType = turn?.channelType?.trim().toLowerCase();
+  if (channelType && CHANNEL_TASK_TYPE_SET.has(channelType)) {
+    return 'task';
+  }
+
+  const channelId = turn?.channelId?.trim().toLowerCase() ?? '';
+  if (channelId.startsWith('internal:') || channelId.startsWith('terminal:')) {
+    return 'task';
+  }
+
+  const messageText = normalizeTurnText(turn?.messageText);
+  if (!messageText) {
+    return 'default';
+  }
+
+  if (MEMORY_RECALL_PATTERN.test(messageText)) {
+    return 'recall';
+  }
+  if (EMOTIONAL_PATTERN.test(messageText)) {
+    return 'emotional';
+  }
+  if (CREATIVE_PATTERN.test(messageText)) {
+    return 'creative';
+  }
+  if (TASK_PATTERN.test(messageText) || messageText.includes('```')) {
+    return 'task';
+  }
+  if (FACTUAL_PATTERN.test(messageText) && messageText.includes('?')) {
+    return 'factual';
+  }
+
+  return 'default';
+}
+
+export function resolveAdaptiveContextBudgetProfile(
+  config: Pick<
+    ContextBudgetConfigLike,
+    'sessionHistoryBudgetPct' | 'memoryRetrievalBudgetPct' | 'adaptiveContextBudgetsEnabled'
+  >,
+  turn?: ContextBudgetTurnCharacteristics,
+): AdaptiveContextBudgetProfile {
+  const baseSessionHistoryPct = resolveSessionHistoryBudgetPct(config);
+  const baseMemoryRetrievalPct = resolveMemoryRetrievalBudgetPct(config);
+
+  if (config.adaptiveContextBudgetsEnabled !== true) {
+    return {
+      enabled: false,
+      source: 'disabled',
+      category: 'default',
+      sessionHistoryBudgetPct: baseSessionHistoryPct,
+      memoryRetrievalBudgetPct: baseMemoryRetrievalPct,
+    };
+  }
+
+  const category = classifyContextBudgetTurn(turn);
+  if (category === 'default') {
+    return {
+      enabled: true,
+      source: 'default',
+      category,
+      sessionHistoryBudgetPct: baseSessionHistoryPct,
+      memoryRetrievalBudgetPct: baseMemoryRetrievalPct,
+    };
+  }
+
+  const profile = ADAPTIVE_BUDGET_PROFILE_BY_CATEGORY[category];
+  if (!profile) {
+    return {
+      enabled: true,
+      source: 'default',
+      category: 'default',
+      sessionHistoryBudgetPct: baseSessionHistoryPct,
+      memoryRetrievalBudgetPct: baseMemoryRetrievalPct,
+    };
+  }
+
+  return {
+    enabled: true,
+    source: 'adaptive',
+    category,
+    sessionHistoryBudgetPct: clamp(
+      profile.sessionHistoryBudgetPct,
+      SESSION_HISTORY_BUDGET_PCT_RANGE.min,
+      SESSION_HISTORY_BUDGET_PCT_RANGE.max,
+    ),
+    memoryRetrievalBudgetPct: clamp(
+      profile.memoryRetrievalBudgetPct,
+      MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
+      MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
+    ),
+  };
+}
+
+export function resolveSessionHistoryBudget(
+  config: ContextBudgetConfigLike,
+  options: ContextBudgetResolutionOptions = {},
+): ResolvedContextBudget {
   const hardLimit = toPositiveInteger(config.sessionMessageLimit);
   const contextWindow = resolveChatContextWindow(config);
-  const budgetPct = resolveSessionHistoryBudgetPct(config);
+  const adaptiveProfile = options.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(config, options.turn);
+  const budgetPct = adaptiveProfile.sessionHistoryBudgetPct;
   const minTokenFloor = resolveTokenFloor(
     config.modelRoster.chat?.contextBudget?.sessionHistoryMinTokens,
     SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT,
@@ -129,10 +279,14 @@ export function resolveSessionHistoryBudget(config: ContextBudgetConfigLike): Re
   };
 }
 
-export function resolveMemoryRetrievalBudget(config: ContextBudgetConfigLike): ResolvedContextBudget {
+export function resolveMemoryRetrievalBudget(
+  config: ContextBudgetConfigLike,
+  options: ContextBudgetResolutionOptions = {},
+): ResolvedContextBudget {
   const hardLimit = toPositiveInteger(config.memoryRetrievalLimit);
   const contextWindow = resolveChatContextWindow(config);
-  const budgetPct = resolveMemoryRetrievalBudgetPct(config);
+  const adaptiveProfile = options.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(config, options.turn);
+  const budgetPct = adaptiveProfile.memoryRetrievalBudgetPct;
   const minTokenFloor = resolveTokenFloor(
     config.modelRoster.chat?.contextBudget?.memoryRetrievalMinTokens,
     MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT,

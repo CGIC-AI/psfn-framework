@@ -2,13 +2,20 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     getSettings,
+    getSettingsSchema,
     updateSettings,
     getSubConfig,
     saveSubConfig,
     listModels,
     refreshModels,
   } from '$lib/api/endpoints/settings';
-  import type { AdminSettingsData, ConfigUpdateResult, DiscoveredModel } from '$lib/types';
+  import type {
+    AdminSettingsData,
+    ConfigUpdateResult,
+    DiscoveredModel,
+    SettingsContractData,
+    SettingsContractField,
+  } from '$lib/types';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -33,17 +40,34 @@
     'chat', 'background', 'extraction', 'summary', 'reasoning', 'longContext', 'import_processing',
   ];
 
-  const CAPABILITY_TIERS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
-  const IMPORT_ROUTE_MODES = [
-    { value: 'background', label: 'Background Routing (default)' },
-    { value: 'openrouter_zdr', label: 'OpenRouter ZDR-only' },
-    { value: 'local_endpoint', label: 'Local Endpoint Only' },
-  ] as const;
-  const SESSION_RESTART_BEHAVIORS = [
-    { value: 'reuse_latest_session', label: 'Reuse latest session' },
-    { value: 'new_session', label: 'Always start a new session' },
-  ] as const;
   const DISABLED_PROVIDER_ID = 'disabled';
+  const RAW_EDITOR_KEYS = ['models', 'skills', 'scheduler', 'trust-policy', 'capabilities'] as const;
+  const RAW_EDITOR_SUBSYSTEM_BY_KEY = {
+    models: 'models',
+    skills: 'skills',
+    scheduler: 'scheduler',
+    'trust-policy': 'trustPolicy',
+    capabilities: 'capabilities',
+  } as const;
+  const RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<RawEditorKey, string> = {
+    settings: 'settings.json',
+    models: 'models.json',
+    skills: 'skills.json',
+    scheduler: 'scheduler.json',
+    'trust-policy': 'trust-policy.json',
+    capabilities: 'capability-tier.json',
+  };
+  const ENUM_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
+    importProcessingRouteMode: {
+      background: 'Background Routing (default)',
+      openrouter_zdr: 'OpenRouter ZDR-only',
+      local_endpoint: 'Local Endpoint Only',
+    },
+    sessionRestartBehavior: {
+      reuse_latest_session: 'Reuse latest session',
+      new_session: 'Always start a new session',
+    },
+  };
 
   // ── Budget constants (from context-budget.ts) ──
   const SESSION_HISTORY_TOKENS_PER_MSG = 256;
@@ -65,6 +89,7 @@
   let saveMessage = $state('');
   let saveOk = $state(true);
   let discoveredModels = $state<DiscoveredModel[]>([]);
+  let settingsSchema = $state<SettingsContractData | null>(null);
   let refreshingModels = $state(false);
 
   // ── Dirty tracking ──
@@ -94,6 +119,7 @@
       webFetchDomainAllowlist, webFetchAllowInternalNetwork,
       webFetchTlsCaCertPaths,
       capabilityTier, catalogSlots, purposeMappings,
+      capabilityCustomTokens,
       // Memory & Extraction
       extractionInterval, compactionEmotionalSalienceThresholdPct,
       defaultContextWindow, maintenanceIntervalMs,
@@ -191,6 +217,7 @@
 
   // ── Capability tier ──
   let capabilityTier = $state('apprentice');
+  let capabilityCustomTokens = $state('');
 
   // ── LLM retries ──
   let retryBaseDelayMs = $state(2000);
@@ -313,7 +340,7 @@
     },
     {
       id: 'trust', title: 'Trust & Capabilities', icon: 'T',
-      keys: ['capabilityTier'],
+      keys: ['capabilityTier', 'customTokens'],
       summary: () => `Tier: ${capabilityTier}`,
     },
     {
@@ -379,25 +406,7 @@
     },
   ];
 
-  const RAW_EDITORS = [
-    { key: 'models', label: 'models.json' },
-    { key: 'skills', label: 'skills.json' },
-    { key: 'scheduler', label: 'scheduler.json' },
-    { key: 'trust-policy', label: 'trust-policy.json' },
-    { key: 'capabilities', label: 'capabilities.json' },
-  ] as const;
-
-  const MODEL_OWNED_FIELDS = new Set([
-    'primaryModel',
-    'primaryProvider',
-    'primaryMaxTokens',
-    'extractionModel',
-    'extractionProvider',
-    'extractionMaxTokens',
-    'modelCatalog',
-    'modelRoleAssignments',
-    'modelRoster',
-  ]);
+  const RAW_EDITORS = RAW_EDITOR_KEYS.map((key) => ({ key }));
 
   type ModelsEditorConfig = {
     modelCatalog?: Record<string, Record<string, unknown>>;
@@ -468,54 +477,96 @@
   }
 
   // ── Source attribution ──
-  type SettingSource =
-    | 'default'
-    | 'settings.json'
-    | 'env var'
-    | 'models.json'
-    | 'scheduler.json'
-    | 'capability-tier.json';
+  type SettingSource = 'default' | string;
+
+  function fieldContract(key: string): SettingsContractField | undefined {
+    return settingsSchema?.fields?.[key];
+  }
+
+  function subsystemOwnerFile(subsystemId: string): string | undefined {
+    return settingsSchema?.subsystems?.[subsystemId]?.ownerFile;
+  }
+
+  function fieldOwnerFile(key: string): string | undefined {
+    return fieldContract(key)?.ownerFile;
+  }
+
+  function fieldMinimum(key: string): number | undefined {
+    return fieldContract(key)?.minimum;
+  }
+
+  function fieldMaximum(key: string): number | undefined {
+    return fieldContract(key)?.maximum;
+  }
+
+  function fieldEnumValues(key: string, fallback: readonly string[] = []): string[] {
+    const values = [
+      ...(fieldContract(key)?.enumValues ?? []),
+      ...fallback,
+    ];
+    return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
+  }
+
+  function humanizeSettingValue(value: string): string {
+    return value
+      .replaceAll(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replaceAll('_', ' ')
+      .replaceAll(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  function formatSettingOptionLabel(field: string, value: string): string {
+    return ENUM_LABELS_BY_FIELD[field]?.[value] ?? humanizeSettingValue(value);
+  }
+
+  function rawEditorOwnerFile(key: RawEditorKey): string {
+    if (key === 'settings') {
+      return subsystemOwnerFile('runtime') ?? RAW_EDITOR_FALLBACK_FILE_BY_KEY.settings;
+    }
+    const subsystemId = RAW_EDITOR_SUBSYSTEM_BY_KEY[key as keyof typeof RAW_EDITOR_SUBSYSTEM_BY_KEY];
+    return subsystemOwnerFile(subsystemId) ?? RAW_EDITOR_FALLBACK_FILE_BY_KEY[key];
+  }
 
   function getSource(key: string): SettingSource {
     if (!data) return 'default';
-    const env = data.env as Record<string, unknown> | undefined;
-    const envMap: Record<string, string> = {
-      'primaryModel': 'primaryModel',
-      'extractionModel': 'extractionModel',
-      'webFetchAllowHttp': 'webFetchAllowHttp',
-    };
-    if (env && envMap[key] && env[envMap[key]] !== undefined) return 'env var';
-    if (MODEL_OWNED_FIELDS.has(key)) {
-      const models = getModelsEditorConfig();
-      if (key === 'primaryModel' && models.modelCatalog?.primary?.model !== undefined) return 'models.json';
-      if (key === 'extractionModel' && models.modelCatalog?.extraction?.model !== undefined) return 'models.json';
-      if ((key === 'modelCatalog' || key === 'modelRoleAssignments') && models[key] !== undefined) return 'models.json';
-      if (key !== 'primaryModel' && key !== 'extractionModel') return 'models.json';
-    }
-    if (key === 'maintenanceIntervalMs' && getSchedulerEditorConfig().salienceDecayIntervalMs !== undefined) {
-      return 'scheduler.json';
-    }
-    if (key === 'capabilityTier' && getCapabilitiesEditorConfig().tier !== undefined) {
-      return 'capability-tier.json';
-    }
+    const ownerFile = fieldOwnerFile(key);
+    if (ownerFile) return ownerFile;
     const config = data.config as Record<string, unknown>;
-    if (config[key] !== undefined) return 'settings.json';
-    return 'default';
+    return config[key] !== undefined ? RAW_EDITOR_FALLBACK_FILE_BY_KEY.settings : 'default';
+  }
+
+  function fieldEditorType(
+    key: string,
+    value: unknown,
+  ): 'text' | 'number' | 'checkbox' | 'array' | 'object' | 'enum' {
+    const schemaType = fieldContract(key)?.type;
+    if (schemaType === 'boolean') return 'checkbox';
+    if (schemaType === 'integer' || schemaType === 'number') return 'number';
+    if (schemaType === 'string_array') return 'array';
+    if (schemaType === 'object') return 'object';
+    if (schemaType === 'enum') return 'enum';
+    if (typeof value === 'boolean') return 'checkbox';
+    if (typeof value === 'number') return 'number';
+    if (Array.isArray(value)) return 'array';
+    if (value !== null && typeof value === 'object') return 'object';
+    return 'text';
   }
 
   // ── Derived ──
   let slotKeys = $derived(catalogSlots.map(s => s.slotKey).filter(Boolean));
-  let availableTtsProviderIds = $derived(
-    data?.voiceProviders?.tts?.map(provider => provider.id) ?? [],
-  );
-  let availableSttProviderIds = $derived(
-    data?.voiceProviders?.stt?.map(provider => provider.id) ?? [],
-  );
   let ttsProviderOptions = $derived(
-    [...new Set([DISABLED_PROVIDER_ID, ...availableTtsProviderIds, ttsProvider].filter(Boolean))],
+    fieldEnumValues('ttsProvider', [DISABLED_PROVIDER_ID, ttsProvider]),
   );
   let sttProviderOptions = $derived(
-    [...new Set([DISABLED_PROVIDER_ID, ...availableSttProviderIds, sttProvider].filter(Boolean))],
+    fieldEnumValues('sttProvider', [DISABLED_PROVIDER_ID, sttProvider]),
+  );
+  let capabilityTierOptions = $derived(
+    fieldEnumValues('capabilityTier', [capabilityTier]),
+  );
+  let importRouteModeOptions = $derived(
+    fieldEnumValues('importProcessingRouteMode', [importRouteMode]),
+  );
+  let sessionRestartBehaviorOptions = $derived(
+    fieldEnumValues('sessionRestartBehavior', [sessionRestartBehavior]),
   );
 
   function clamp(value: number, min: number, max: number): number {
@@ -621,6 +672,9 @@
     webFetchAllowInternalNetwork = Boolean(config.webFetchAllowInternalNetwork);
     webFetchTlsCaCertPaths = Array.isArray(config.webFetchTlsCaCertPaths) ? config.webFetchTlsCaCertPaths.join(', ') : '';
     capabilityTier = String(capabilities?.tier ?? 'apprentice');
+    capabilityCustomTokens = Array.isArray(capabilities?.customTokens)
+      ? capabilities.customTokens.join(', ')
+      : '';
 
     // Memory & Extraction
     extractionInterval = Number(config.extractionInterval ?? 5);
@@ -761,14 +815,6 @@
     (data.config as Record<string, unknown>)[key] = value;
   }
 
-  function fieldType(value: unknown): 'text' | 'number' | 'checkbox' | 'array' | 'object' {
-    if (typeof value === 'boolean') return 'checkbox';
-    if (typeof value === 'number') return 'number';
-    if (Array.isArray(value)) return 'array';
-    if (value !== null && typeof value === 'object') return 'object';
-    return 'text';
-  }
-
   function toggleSection(id: string) {
     const next = new Set(openSections);
     if (next.has(id)) next.delete(id);
@@ -816,14 +862,7 @@
   }
 
   function rawEditorLabel(key: RawEditorKey): string {
-    switch (key) {
-      case 'settings': return 'settings.json';
-      case 'models': return 'models.json';
-      case 'skills': return 'skills.json';
-      case 'scheduler': return 'scheduler.json';
-      case 'trust-policy': return 'trust-policy.json';
-      case 'capabilities': return 'capabilities.json';
-    }
+    return rawEditorOwnerFile(key);
   }
 
   function resetDirtyTracking(): void {
@@ -1026,16 +1065,24 @@
 
   function buildCapabilitiesPayload(): Record<string, unknown> {
     const current = getCapabilitiesEditorConfig();
+    const customTokens = capabilityTier === 'custom'
+      ? splitCsv(capabilityCustomTokens)
+      : (Array.isArray(current.customTokens) ? current.customTokens : []);
     return {
       ...current,
       tier: capabilityTier,
-      customTokens: Array.isArray(current.customTokens) ? current.customTokens : [],
+      customTokens,
     };
   }
 
-  async function reloadSettingsState(settingsData?: AdminSettingsData): Promise<void> {
-    const nextSettingsData = settingsData ?? await getSettings();
+  async function reloadSettingsState(options: {
+    settingsData?: AdminSettingsData;
+    schemaData?: SettingsContractData;
+  } = {}): Promise<void> {
+    const nextSettingsData = options.settingsData ?? await getSettings();
+    const nextSchemaData = options.schemaData ?? await getSettingsSchema();
     data = nextSettingsData;
+    settingsSchema = nextSchemaData;
     populateSimpleFields(nextSettingsData);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
@@ -1213,11 +1260,13 @@
   onMount(async () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
     try {
-      const [settingsData, models] = await Promise.all([
+      const [settingsData, schemaData, models] = await Promise.all([
         getSettings(),
+        getSettingsSchema(),
         listModels().catch(() => [] as DiscoveredModel[]),
       ]);
       data = settingsData;
+      settingsSchema = schemaData;
       discoveredModels = models;
       populateSimpleFields(data);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
@@ -1588,15 +1637,21 @@
             <p class="text-sm text-shadow-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Maintenance Interval (ms)</label>
+            <label class={LABEL_CLS}>
+              Maintenance Interval (ms)
+              <span class="text-shadow-400 font-normal ml-1">({getSource('maintenanceIntervalMs')})</span>
+            </label>
             <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Restart Behavior</label>
+            <label class={LABEL_CLS}>
+              Restart Behavior
+              <span class="text-shadow-400 font-normal ml-1">({getSource('sessionRestartBehavior')})</span>
+            </label>
             <select bind:value={sessionRestartBehavior} class={INPUT_CLS}>
-              {#each SESSION_RESTART_BEHAVIORS as option}
-                <option value={option.value}>{option.label}</option>
+              {#each sessionRestartBehaviorOptions as option}
+                <option value={option}>{formatSettingOptionLabel('sessionRestartBehavior', option)}</option>
               {/each}
             </select>
             <p class="text-sm text-shadow-500 mt-1">Choose whether startup resumes the latest session or seeds a fresh one.</p>
@@ -1929,13 +1984,32 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Capability Tier</label>
+                <label class={LABEL_CLS}>
+                  Capability Tier
+                  <span class="text-shadow-400 font-normal ml-1">({getSource('capabilityTier')})</span>
+                </label>
                 <select bind:value={capabilityTier} class={INPUT_CLS}>
-                  {#each CAPABILITY_TIERS as tier}
-                    <option value={tier}>{tier}</option>
+                  {#each capabilityTierOptions as tier}
+                    <option value={tier}>{formatSettingOptionLabel('capabilityTier', tier)}</option>
                   {/each}
                 </select>
                 <p class="text-sm text-shadow-500 mt-1">Controls agent autonomy level</p>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>
+                  Custom Capability Tokens
+                  <span class="text-shadow-400 font-normal ml-1">({getSource('customTokens')})</span>
+                </label>
+                <input
+                  type="text"
+                  bind:value={capabilityCustomTokens}
+                  class={INPUT_CLS}
+                  placeholder="identity.read, git.read"
+                  disabled={capabilityTier !== 'custom'}
+                />
+                <p class="text-sm text-shadow-500 mt-1">
+                  Comma-separated capability tokens for the <span class="font-mono">custom</span> tier. Saved to {rawEditorLabel('capabilities')}.
+                </p>
               </div>
             </div>
           </div>
@@ -1998,10 +2072,13 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Route Mode</label>
+                <label class={LABEL_CLS}>
+                  Route Mode
+                  <span class="text-shadow-400 font-normal ml-1">({getSource('importProcessingRouteMode')})</span>
+                </label>
                 <select bind:value={importRouteMode} class={INPUT_CLS}>
-                  {#each IMPORT_ROUTE_MODES as opt}
-                    <option value={opt.value}>{opt.label}</option>
+                  {#each importRouteModeOptions as option}
+                    <option value={option}>{formatSettingOptionLabel('importProcessingRouteMode', option)}</option>
                   {/each}
                 </select>
               </div>
@@ -2390,13 +2467,18 @@
               <div class="px-5 pb-5 space-y-3 border-t border-bark-300 pt-4">
                 {#each sectionKeys as key}
                   {@const value = configValue(key)}
-                  {@const ft = fieldType(value)}
+                  {@const editorType = fieldEditorType(key, value)}
+                  {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
+                  {@const fieldSchema = fieldContract(key)}
                   <div class="flex flex-col sm:flex-row sm:items-center gap-2">
                     <div class="sm:w-60 shrink-0 flex items-center gap-2">
                       <label class="text-sm font-mono text-shadow-700">{key}</label>
                       <span class="text-shadow-400 text-sm">({getSource(key)})</span>
+                      {#if fieldSchema?.deprecated}
+                        <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>
+                      {/if}
                     </div>
-                    {#if ft === 'checkbox'}
+                    {#if editorType === 'checkbox'}
                       <label class="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox"
                           checked={Boolean(value)}
@@ -2408,18 +2490,30 @@
                                     after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
                                     peer-checked:after:translate-x-full"></div>
                       </label>
-                    {:else if ft === 'number'}
+                    {:else if editorType === 'enum'}
+                      <select
+                        value={String(value ?? '')}
+                        onchange={(e) => setConfigValue(key, (e.target as HTMLSelectElement).value)}
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
+                      >
+                        {#each enumValues as option}
+                          <option value={option}>{formatSettingOptionLabel(key, option)}</option>
+                        {/each}
+                      </select>
+                    {:else if editorType === 'number'}
                       <input type="number"
                         value={Number(value)}
+                        min={fieldMinimum(key)}
+                        max={fieldMaximum(key)}
                         onchange={(e) => setConfigValue(key, Number((e.target as HTMLInputElement).value))}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {:else if ft === 'array'}
+                    {:else if editorType === 'array'}
                       <input type="text"
                         value={Array.isArray(value) ? value.join(', ') : ''}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
                         placeholder="comma-separated values" />
-                    {:else if ft === 'object'}
+                    {:else if editorType === 'object'}
                       <textarea
                         value={JSON.stringify(value, null, 2)}
                         onchange={(e) => { try { setConfigValue(key, JSON.parse((e.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
@@ -2474,13 +2568,18 @@
               <div class="px-5 pb-5 space-y-3 border-t border-bark-300 pt-4">
                 {#each otherKeys as key}
                   {@const value = configValue(key)}
-                  {@const ft = fieldType(value)}
+                  {@const editorType = fieldEditorType(key, value)}
+                  {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
+                  {@const fieldSchema = fieldContract(key)}
                   <div class="flex flex-col sm:flex-row sm:items-center gap-2">
                     <div class="sm:w-60 shrink-0 flex items-center gap-2">
                       <label class="text-sm font-mono text-shadow-700">{key}</label>
                       <span class="text-shadow-400 text-sm">({getSource(key)})</span>
+                      {#if fieldSchema?.deprecated}
+                        <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>
+                      {/if}
                     </div>
-                    {#if ft === 'checkbox'}
+                    {#if editorType === 'checkbox'}
                       <label class="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox"
                           checked={Boolean(value)}
@@ -2492,18 +2591,30 @@
                                     after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
                                     peer-checked:after:translate-x-full"></div>
                       </label>
-                    {:else if ft === 'number'}
+                    {:else if editorType === 'enum'}
+                      <select
+                        value={String(value ?? '')}
+                        onchange={(e) => setConfigValue(key, (e.target as HTMLSelectElement).value)}
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
+                      >
+                        {#each enumValues as option}
+                          <option value={option}>{formatSettingOptionLabel(key, option)}</option>
+                        {/each}
+                      </select>
+                    {:else if editorType === 'number'}
                       <input type="number"
                         value={Number(value)}
+                        min={fieldMinimum(key)}
+                        max={fieldMaximum(key)}
                         onchange={(e) => setConfigValue(key, Number((e.target as HTMLInputElement).value))}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {:else if ft === 'array'}
+                    {:else if editorType === 'array'}
                       <input type="text"
                         value={Array.isArray(value) ? value.join(', ') : ''}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
                         placeholder="comma-separated values" />
-                    {:else if ft === 'object'}
+                    {:else if editorType === 'object'}
                       <textarea
                         value={JSON.stringify(value, null, 2)}
                         onchange={(e) => { try { setConfigValue(key, JSON.parse((e.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
@@ -2598,9 +2709,10 @@
 
       {#each RAW_EDITORS as editor}
         {@const status = rawSaveStatus[editor.key]}
+        {@const ownerFile = rawEditorLabel(editor.key)}
         <div class="card-garden overflow-hidden">
           <div class="flex items-center justify-between px-5 py-3 border-b border-bark-300">
-            <h3 class="text-sm font-serif font-semibold text-shadow-800">{editor.label}</h3>
+            <h3 class="text-sm font-serif font-semibold text-shadow-800">{ownerFile}</h3>
             <div class="flex items-center gap-3">
               {#if status}
                 <span class="text-sm font-medium {status.ok ? 'text-moss-600' : 'text-wilt-600'}">
@@ -2608,7 +2720,7 @@
                 </span>
               {/if}
               <button
-                onclick={() => saveRawConfig(editor.key, editor.label)}
+                onclick={() => saveRawConfig(editor.key, ownerFile)}
                 disabled={saving}
                 class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium
                        hover:bg-gold-700 disabled:opacity-50 transition-colors"

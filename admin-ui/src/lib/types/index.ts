@@ -257,6 +257,29 @@ export interface ContactMutationAuditEntry {
 }
 
 // Settings
+export interface SettingsContractSubsystem {
+  id: string;
+  ownerFile: string;
+  mode: 'structured' | 'raw_only';
+}
+
+export interface SettingsContractField {
+  key: string;
+  ownerSubsystem: string;
+  ownerFile: string;
+  type: 'string' | 'boolean' | 'integer' | 'number' | 'string_array' | 'enum' | 'object';
+  minimum?: number;
+  maximum?: number;
+  enumValues?: string[];
+  deprecated?: boolean;
+}
+
+export interface SettingsContractData {
+  schemaVersion: number;
+  subsystems: Record<string, SettingsContractSubsystem>;
+  fields: Record<string, SettingsContractField>;
+}
+
 export interface AdminSettingsData {
   config: Record<string, unknown>;
   env: Record<string, unknown>;

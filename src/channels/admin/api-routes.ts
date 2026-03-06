@@ -637,6 +637,13 @@ export function buildAdminApiRoutes(options: {
       },
     },
     {
+      method: 'GET',
+      match: exactPath(`${ADMIN_SETTINGS_API_PATH}/schema`),
+      handle: (_req, res) => {
+        sendJson(res, 200, settingsService.getSettingsContractData());
+      },
+    },
+    {
       method: 'PATCH',
       match: exactPath(ADMIN_SETTINGS_API_PATH),
       handle: (req, res) => {

@@ -4,10 +4,15 @@ import type {
   AdminSettingsData,
   ConfigUpdateResult,
   DiscoveredModel,
+  SettingsContractData,
 } from '$lib/types';
 
 export function getSettings(): Promise<AdminSettingsData> {
   return apiGet<AdminSettingsData>('/api/admin/settings');
+}
+
+export function getSettingsSchema(): Promise<SettingsContractData> {
+  return apiGet<SettingsContractData>('/api/admin/settings/schema');
 }
 
 export function updateSettings(

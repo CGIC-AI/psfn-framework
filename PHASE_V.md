@@ -125,11 +125,15 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-bxvy.3` (`subsystem config normalization`) is integrated, with `/api/admin/settings` now exposing runtime-owned settings only, explicit fail-closed wrong-owner validation for model/scheduler/capability fields, and Garden saving model catalog, scheduler, and capability-tier edits back through their canonical JSON files instead of the generic runtime settings patch path.
   - `PSFN-bxvy.4` (`env scope reduction`) is integrated, with JSON-owned model/runtime/channel config no longer taking authority from `.env`, startup warnings for ignored legacy config env vars, canonical seed/default alignment for system-data config files, standalone CLI/E2E entrypoints hydrating from JSON-backed config owners, and operator/docs examples trimmed so `.env` is documented as secrets/bootstrap wiring only.
   - `PSFN-bxvy.5` (`migration pipeline for config/data topology cutover`) is integrated, with a single manifest-backed persistence cutover engine covering legacy shared-root plus legacy companion-root artifacts, dry-run/apply CLI support, entrypoint startup guards, integrity-verified backups, audit-db migration, and post-cutover legacy session cleanup normalization.
+  - `PSFN-y2ac.1` (`backend settings schema endpoints and ownership map by subsystem`) is integrated, with a canonical settings contract module, `/api/admin/settings/schema`, dynamic owner metadata, and admin regressions proving schema exposure for subsystem files and provider enums.
+  - `PSFN-y2ac.2` (`Garden schema renderer for common controls`) is integrated, with Garden fetching typed schema metadata and driving advanced-mode common field rendering from backend-declared types/enums/ownership instead of local hardcoded field semantics.
+  - `PSFN-y2ac.3` (`bind complex settings blocks to schema ownership`) is integrated, with Garden complex model/scheduler/capability editors using canonical owner-file labels, preserving JSON-for-config / env-for-secrets separation, and exposing capability-tier custom tokens in the structured UI instead of raw-only.
   - `PSFN-qyrl` plugin-seam epic is closed on `phase-v`.
   - `PSFN-bxvy` config/persistence-topology epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Open `PSFN-y2ac.1` immediately: backend settings schema/ownership registry for subsystem JSON owners and structured Garden fields.
-  - Follow `PSFN-y2ac.1` with `PSFN-y2ac.2` / `.3` / `.4` / `.5` in dependency order.
+  - Open `PSFN-y2ac.4` immediately: CI guard enforcing schema + UI exposure + owner-file coverage for settings changes.
+  - Follow `PSFN-y2ac.4` with `PSFN-y2ac.5` round-trip/losslessness coverage across subsystem JSON owners.
+  - Close `PSFN-y2ac` after `.4` and `.5`, then move to `PSFN-x92u.1`.
   - Keep `PSFN-eg59` as the residual de-hardcode test-fixture cleanup lane where remaining `PSFN` hits are intentional branding/legacy cases versus generic fixture drift.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 

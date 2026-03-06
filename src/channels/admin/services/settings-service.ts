@@ -27,6 +27,14 @@ import {
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
+import {
+  buildSettingsContractData,
+  IMPORT_PROCESSING_ROUTE_MODE_VALUES,
+  SESSION_RESTART_BEHAVIOR_VALUES,
+  SETTINGS_BOOLEAN_FIELDS,
+  SETTINGS_OWNER_FILE_BY_FIELD,
+  SETTINGS_STRING_ARRAY_FIELDS,
+} from '../../../config/settings-contract.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
@@ -53,23 +61,9 @@ import type {
   SettingsConfigEditors,
 } from './types.js';
 
-const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local_endpoint']);
-const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
+const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
+const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
 const log = createComponentLogger('AdminSettingsService');
-const SETTINGS_OWNER_BY_FIELD = new Map<string, string>([
-  ['primaryModel', 'models.json'],
-  ['primaryProvider', 'models.json'],
-  ['primaryMaxTokens', 'models.json'],
-  ['extractionModel', 'models.json'],
-  ['extractionProvider', 'models.json'],
-  ['extractionMaxTokens', 'models.json'],
-  ['modelCatalog', 'models.json'],
-  ['modelRoleAssignments', 'models.json'],
-  ['modelRoster', 'models.json'],
-  ['maintenanceIntervalMs', 'scheduler.json'],
-  ['capabilityTier', 'capability-tier.json'],
-  ['customTokens', 'capability-tier.json'],
-]);
 
 type SettingsMutationResult =
   | { ok: true }
@@ -265,28 +259,6 @@ export function applyAdminSettingsMutation(options: {
 
   return { ok: true };
 }
-
-const BOOLEAN_SETTINGS_FIELDS = new Set([
-  'importProcessingStrictPolicy',
-  'webFetchAllowHttp',
-  'webFetchAllowInternalNetwork',
-  'webFetchLocalCrawlerEnabled',
-  'webFetchLocalCrawlerAllowHttp',
-  'discordEnabled',
-  'telegramEnabled',
-  'obsidianAutoPublish',
-  'moaEnabled',
-]);
-
-const STRING_ARRAY_SETTINGS_FIELDS = new Set([
-  'openRouterProviderOrder',
-  'webFetchDomainAllowlist',
-  'webFetchLocalCrawlerHostAllowlist',
-  'webFetchLocalCrawlerDomainAllowlist',
-  'webFetchTlsCaCertPaths',
-  'promotedExtendedTools',
-  'moaReferenceModels',
-]);
 
 export class AdminSettingsDataService implements AdminSettingsService {
   constructor(private readonly deps: {
@@ -541,7 +513,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
   ): SettingsValidationError[] {
     const errors: SettingsValidationError[] = [];
 
-    for (const [field, owner] of SETTINGS_OWNER_BY_FIELD.entries()) {
+    for (const [field, owner] of SETTINGS_OWNER_FILE_BY_FIELD.entries()) {
       if (!(field in payload)) continue;
       this.pushFieldError(
         errors,
@@ -553,7 +525,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     for (const [field, range] of Object.entries(SETTINGS_VALIDATION)) {
       if (!(field in payload)) continue;
-      if (SETTINGS_OWNER_BY_FIELD.has(field)) continue;
+      if (SETTINGS_OWNER_FILE_BY_FIELD.has(field)) continue;
       const value = payload[field];
       if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
         this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'invalid_number');
@@ -564,16 +536,16 @@ export class AdminSettingsDataService implements AdminSettingsService {
       }
     }
 
-    for (const field of BOOLEAN_SETTINGS_FIELDS) {
+    for (const field of SETTINGS_BOOLEAN_FIELDS) {
       this.validateBooleanField(payload, field, errors);
     }
 
     this.validateEnumField(payload, 'importProcessingRouteMode', IMPORT_ROUTE_MODE_VALUES, errors);
-    this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES, errors);
+    this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES_SET, errors);
     this.validateTtsProviderField(payload, errors);
     this.validateSttProviderField(payload, errors);
 
-    for (const field of STRING_ARRAY_SETTINGS_FIELDS) {
+    for (const field of SETTINGS_STRING_ARRAY_FIELDS) {
       this.validateStringArrayField(payload, field, errors);
     }
 
@@ -631,6 +603,13 @@ export class AdminSettingsDataService implements AdminSettingsService {
       editors: this.loadSettingsConfigEditors(),
       voiceProviders: this.loadVoiceProviderData(),
     };
+  }
+
+  getSettingsContractData() {
+    return buildSettingsContractData({
+      sttProviderIds: listStreamingSttProviders(),
+      ttsProviderIds: listStreamingTtsProviders(),
+    });
   }
 
   updateSettings(body: string): ConfigUpdateResult {

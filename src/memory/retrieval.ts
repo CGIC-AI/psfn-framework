@@ -1,4 +1,4 @@
-import type { MemoryProvider, EmbeddingService } from '../agent/contracts.js';
+import type { MemoryProvider, EmbeddingService, LLMProvider } from '../agent/contracts.js';
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
 import type { PurrMemory, MemoryPrivacyRiskBreakdown } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
@@ -26,6 +26,7 @@ import { createComponentLogger } from '../logger.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
+import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import {
   buildSnapshotVersionPointer,
   cloneContactProfileArtifact,
@@ -33,6 +34,10 @@ import {
   cloneMemory,
   cloneScoredMemory,
 } from '../turns/snapshot.js';
+import {
+  composeRetrievalRanking,
+  type RetrievalComposeCandidate,
+} from './retrieval-compose.js';
 const log = createComponentLogger('Retrieval');
 
 /**
@@ -161,6 +166,7 @@ export class MemoryRetriever implements MemoryProvider {
   private eventBus?: EventBus;
   private contactStore: ContactStore | null;
   private telemetryEnabled: boolean;
+  private llmProvider: LLMProvider | null;
   private proactiveRecallProbability: number;
   private proactiveRecallMinTurnsBetween: number;
   private proactiveTurnCounter: number;
@@ -172,6 +178,7 @@ export class MemoryRetriever implements MemoryProvider {
     config?: MemoryRetrieverConfig | SubstrateConfig,
     eventBus?: EventBus,
     contactStore?: ContactStore | null,
+    llmProvider?: LLMProvider | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -203,6 +210,7 @@ export class MemoryRetriever implements MemoryProvider {
       this.proactiveRecallMinTurnsBetween = clampTurnFrequency(retrieverConfig?.proactiveRecallMinTurnsBetween ?? 2);
     }
     this.contactStore = contactStore ?? null;
+    this.llmProvider = llmProvider ?? null;
     this.proactiveTurnCounter = 0;
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
   }
@@ -480,21 +488,27 @@ export class MemoryRetriever implements MemoryProvider {
       const allScored = policyAllowed
         .map(memory => ({ memory, ...computeRetrievalScore(memory, contextText) }))
         .sort((a, b) => b.score - a.score);
+      const reranked = await this.applyCompositionalRetrievalRanking(
+        contextText,
+        channelId,
+        allScored,
+      );
+      const scoredCandidates = reranked ?? allScored;
 
-      diagnostics.contradictionAdjustedCount = allScored
+      diagnostics.contradictionAdjustedCount = scoredCandidates
         .filter(item => item.contradictionPenaltyMultiplier < 1)
         .length;
-      diagnostics.lowConfidenceSuppressedCount = allScored
+      diagnostics.lowConfidenceSuppressedCount = scoredCandidates
         .filter(item => item.lowConfidenceSingleSourceSuppressed)
         .length;
-      diagnostics.explicitQueryOverrideCount = allScored
+      diagnostics.explicitQueryOverrideCount = scoredCandidates
         .filter(item => item.explicitlyQueried && item.evidenceSupport < 0.5)
         .length;
-      telemetry.evidenceSupportAverage = allScored.length > 0
+      telemetry.evidenceSupportAverage = scoredCandidates.length > 0
         ? Number(
           (
-            allScored.reduce((sum, item) => sum + item.evidenceSupport, 0)
-            / allScored.length
+            scoredCandidates.reduce((sum, item) => sum + item.evidenceSupport, 0)
+            / scoredCandidates.length
           ).toFixed(4),
         )
         : 0;
@@ -502,8 +516,8 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.lowConfidenceSuppressedCount = diagnostics.lowConfidenceSuppressedCount;
       telemetry.explicitQueryOverrideCount = diagnostics.explicitQueryOverrideCount;
 
-      const positiveScored = allScored.filter(c => c.score > 0);
-      const zeroScored = allScored.filter(c => c.score <= 0);
+      const positiveScored = scoredCandidates.filter(c => c.score > 0);
+      const zeroScored = scoredCandidates.filter(c => c.score <= 0);
       diagnostics.rejectedByScore = zeroScored.length;
       telemetry.scoreRejectedCount = diagnostics.rejectedByScore;
 
@@ -801,6 +815,67 @@ export class MemoryRetriever implements MemoryProvider {
       .getAllActiveMemories()
       .sort((left, right) => right.lastAccessed - left.lastAccessed)
       .slice(0, 24);
+  }
+
+  private shouldUseCompositionalRetrieval(channelId: string): boolean {
+    if (!this.runtimeConfig || !this.llmProvider) return false;
+
+    return evaluateCompositionalPolicyForChannelId({
+      policy: this.runtimeConfig.compositionalPolicy,
+      capabilityTier: this.runtimeConfig.capabilityTier,
+      channelId,
+      purpose: 'retrieval',
+    }).allowed;
+  }
+
+  private async applyCompositionalRetrievalRanking(
+    contextText: string,
+    channelId: string,
+    candidates: ScoredMemory[],
+  ): Promise<ScoredMemory[] | null> {
+    if (!this.shouldUseCompositionalRetrieval(channelId) || candidates.length < 2 || !this.llmProvider) {
+      return null;
+    }
+
+    const decision = await composeRetrievalRanking({
+      llmClient: this.llmProvider,
+      query: contextText,
+      channelId,
+      candidates: candidates.map((candidate): RetrievalComposeCandidate => ({
+        id: candidate.memory.id,
+        text: candidate.memory.text,
+        type: candidate.memory.type,
+        score: candidate.score,
+        similarity: candidate.memory.similarity,
+        importance: candidate.memory.importance,
+        confidence: candidate.memory.confidence,
+        salience: candidate.memory.salience,
+        evidenceSupport: candidate.evidenceSupport,
+        explicitlyQueried: candidate.explicitlyQueried,
+      })),
+    });
+    if (!decision) return null;
+
+    const finalOrderIndex = new Map(
+      decision.finalOrder.map((id, index) => [id, index] as const),
+    );
+
+    return candidates
+      .map((candidate) => {
+        const relevance = decision.relevanceById.get(candidate.memory.id) ?? 0;
+        const finalIndex = finalOrderIndex.get(candidate.memory.id);
+        let multiplier = 1 + (relevance * 0.75);
+        if (finalIndex !== undefined && decision.finalOrder.length > 0) {
+          const composeWeight = (decision.finalOrder.length - finalIndex) / decision.finalOrder.length;
+          multiplier += composeWeight * 1.25;
+        }
+
+        return {
+          ...candidate,
+          score: candidate.score * multiplier,
+        };
+      })
+      .sort((left, right) => right.score - left.score);
   }
 
   private isTelemetryEnabled(): boolean {

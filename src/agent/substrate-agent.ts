@@ -59,6 +59,7 @@ import {
   resolveExplicitModel,
   resolveModel,
 } from './stream-adapter.js';
+import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
@@ -83,7 +84,9 @@ import {
   extractGatewayMethods,
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
+  type ToolConcurrencyClass,
   type ValidateToolsOptions,
+  type WirableTool,
 } from './tool-wiring-validator.js';
 import {
   classifyBroadcastDraft,
@@ -333,6 +336,25 @@ const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 
   extended_loaded: 2,
   deferred: 3,
 };
+const DEFAULT_PARALLEL_READ_MAX = 3;
+const DEFAULT_SPAWN_SHARD_PARALLEL_MAX = 5;
+const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
+const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
+  'repo_status',
+  'repo_diff',
+  'issue_ready',
+  'issue_show',
+  'settings_get',
+  'heartbeat_get_policy',
+  'contact_lookup',
+  'contact_list',
+  'session_list',
+  'skill_list',
+  'skill_view',
+  'prompt_layer_list',
+  'prompt_layer_get',
+  'identity_diff',
+]);
 
 function formatSignedDecimal(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
@@ -463,6 +485,18 @@ export class SubstrateAgent {
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config),
       convertToLlm,
     });
+    installAgentToolSchedulerPatch(this.agent, {
+      maxParallelToolCalls: DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL,
+      onTelemetry: (eventName, payload) => {
+        this.emitTelemetry(eventName, {
+          ...this.withAdaptiveCorrelation(this.activeTurnCorrelation ?? undefined, eventName),
+          timestamp: Date.now(),
+          taskKind: this.activeTurnTaskKind,
+          intent: this.activeTurnIntent,
+          ...payload,
+        });
+      },
+    });
 
     this.installRuntimeHooks();
 
@@ -470,7 +504,7 @@ export class SubstrateAgent {
     this.bridge = createEventBridge(this.agent, eventBus);
 
     // Register the load_tools meta-tool as a core tool
-    this.coreTools.push(tagToolWithReversibility(this.createLoadToolsTool()));
+    this.registerTool(this.createLoadToolsTool(), 'core');
 
     // Eagerly try to resolve the model, but don't throw if it fails
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
@@ -681,12 +715,45 @@ export class SubstrateAgent {
   }
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
-    const taggedTool = tagToolWithReversibility(tool);
+    const taggedTool = this.withToolConcurrencyMetadata(tagToolWithReversibility(tool), category);
     if (category === 'core') {
       this.coreTools.push(taggedTool);
     } else {
       this.extendedTools.push(taggedTool);
     }
+  }
+
+  private inferToolConcurrencyClass(toolName: string): ToolConcurrencyClass {
+    if (toolName === 'spawn_shard') return 'spawn_shard';
+    if (PARALLEL_READ_ONLY_TOOL_NAMES.has(toolName)) return 'read_only';
+    return 'exclusive';
+  }
+
+  private withToolConcurrencyMetadata(tool: AgentTool<any>, category: ToolCategory): AgentTool<any> {
+    const wirable = tool as WirableTool;
+    const existingMeta = wirable.wiringMeta;
+    const inferredClass = this.inferToolConcurrencyClass(tool.name);
+    const concurrency = existingMeta?.concurrency
+      ? { ...existingMeta.concurrency }
+      : { class: inferredClass as ToolConcurrencyClass };
+
+    if (concurrency.class === 'exclusive') {
+      if (!concurrency.exclusivityKey || concurrency.exclusivityKey.trim().length === 0) {
+        concurrency.exclusivityKey = `${category}:${tool.name}`;
+      }
+    } else {
+      if (concurrency.maxParallel === undefined) {
+        concurrency.maxParallel = concurrency.class === 'spawn_shard'
+          ? DEFAULT_SPAWN_SHARD_PARALLEL_MAX
+          : DEFAULT_PARALLEL_READ_MAX;
+      }
+    }
+
+    wirable.wiringMeta = {
+      ...(existingMeta ?? {}),
+      concurrency,
+    };
+    return wirable;
   }
 
   private normalizePromotedExtendedToolNames(raw: readonly string[] | undefined): string[] {
@@ -1287,6 +1354,7 @@ export class SubstrateAgent {
       mode,
       tools: allTools,
       requiredGatewayMetadataCoverage,
+      requireConcurrencyMetadata: true,
     };
 
     if (mode === 'gateway' && gatewayClient) {

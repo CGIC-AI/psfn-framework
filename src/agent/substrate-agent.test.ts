@@ -419,6 +419,62 @@ describe('SubstrateAgent.registerTool', () => {
     // Should not throw
     agent.registerTool(tool as any);
   });
+
+  it('attaches fail-closed concurrency metadata to registered tools', () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    agent.registerTool({
+      name: 'repo_status',
+      label: 'repo_status',
+      description: 'read-only git status',
+      parameters: { type: 'object' as const, properties: {} },
+      execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+    } as any, 'extended');
+
+    agent.registerTool({
+      name: 'spawn_shard',
+      label: 'spawn_shard',
+      description: 'parallel shard fan-out',
+      parameters: { type: 'object' as const, properties: {} },
+      execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+    } as any, 'extended');
+
+    agent.registerTool({
+      name: 'memory_write',
+      label: 'memory_write',
+      description: 'stateful write tool',
+      parameters: { type: 'object' as const, properties: {} },
+      execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+    } as any, 'core');
+
+    const catalog = agent.getToolCatalog();
+    const repoStatus = [...catalog.extended].find(tool => tool.name === 'repo_status') as any;
+    const spawnShard = [...catalog.extended].find(tool => tool.name === 'spawn_shard') as any;
+    const memoryWrite = [...catalog.core].find(tool => tool.name === 'memory_write') as any;
+
+    expect(repoStatus?.wiringMeta?.concurrency).toMatchObject({
+      class: 'read_only',
+      maxParallel: 3,
+    });
+    expect(spawnShard?.wiringMeta?.concurrency).toMatchObject({
+      class: 'spawn_shard',
+      maxParallel: 5,
+    });
+    expect(memoryWrite?.wiringMeta?.concurrency?.class).toBe('exclusive');
+    expect(memoryWrite?.wiringMeta?.concurrency?.exclusivityKey).toBe('core:memory_write');
+  });
+
+  it('installs the bounded tool scheduler loop patch on the underlying Agent runtime', () => {
+    const config = makeConfig();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+
+    expect((agent as any).agent.__psfnToolSchedulerPatched).toBe(true);
+  });
 });
 
 describe('SubstrateAgent persona adaptation', () => {

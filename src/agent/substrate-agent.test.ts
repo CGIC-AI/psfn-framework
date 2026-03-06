@@ -2545,6 +2545,64 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
+  it('skips background-only load_tools candidates and emits same-turn activation diagnostics', async () => {
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      makeConfig(),
+    );
+
+    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('schedule_task'), 'extended');
+
+    const sameTurnEvents: any[] = [];
+    const adaptiveDecisions: any[] = [];
+    (eventBus as any).on('agent.tools.same_turn_activation', (payload: any) => { sameTurnEvents.push(payload); });
+    (eventBus as any).on('agent.tools.adaptive.decision', (payload: any) => { adaptiveDecisions.push(payload); });
+
+    (agent as any).activeTurnCorrelation = {
+      turnId: 'turn-1',
+      requestId: 'request-1',
+      channelId: 'test-channel',
+      callType: 'chat',
+      purpose: 'agent.turn.prompt',
+    };
+    (agent as any).activeTurnTaskKind = 'chat';
+    (agent as any).activeTurnIntent = 'ops';
+
+    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
+    expect(loadTools).toBeDefined();
+    const result = await (loadTools as any).execute('load-background-skip', {
+      tools: ['schedule_task', 'repo_status'],
+    });
+
+    expect(result.content[0]?.text).toContain('Background-only tools not activated in-turn: schedule_task');
+    const runtimeState = agent.getAdaptiveToolRuntimeState();
+    const activeToolNames = runtimeState.activeTools.map(tool => tool.toolName);
+    expect(activeToolNames).toContain('repo_status');
+    expect(activeToolNames).not.toContain('schedule_task');
+
+    expect(sameTurnEvents.at(-1)).toMatchObject({
+      requestedTools: ['schedule_task', 'repo_status'],
+      overlayEligible: ['repo_status'],
+      activatedTools: ['repo_status'],
+      skippedBackgroundOnly: ['schedule_task'],
+      intent: 'ops',
+      taskKind: 'chat',
+    });
+    expect(adaptiveDecisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolName: 'schedule_task',
+        source: 'extended_loaded',
+        decision: 'skipped',
+        reason: 'background_only',
+      }),
+    ]));
+  });
+
   it('activates promoted extended tools each turn without load_tools calls', async () => {
     const config = makeConfig({
       promotedExtendedTools: ['extended_probe_tool'],
@@ -2705,6 +2763,49 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(summary?.intent).toBe('dev');
     expect(summary?.activated).toEqual([]);
     expect(summary?.unavailable).toEqual(['repo_status', 'repo_diff', 'repo_apply_patch']);
+  });
+
+  it('excludes background-only tools from foreground autoload overlay selection', async () => {
+    const config = makeConfig({ capabilityTier: 'autonomous' });
+    const eventBus = new EventBus();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+
+    agent.registerTool(makeExtendedProbeTool('settings_get'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('heartbeat_run_template'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('schedule_task'), 'extended');
+
+    const autoloadSummaries: any[] = [];
+    const autoloadSkips: any[] = [];
+    (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
+    (eventBus as any).on('agent.tools.autoload.skipped', (payload: any) => { autoloadSkips.push(payload); });
+    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+
+    await agent.handleMessage(makeMessage({
+      id: 'msg-autoload-ops-overlay',
+      channelId: 'internal:heartbeat',
+      channelType: 'terminal',
+      content: 'tick',
+    }));
+
+    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    const toolNames = configuredTools.map(tool => tool.name);
+    expect(toolNames).toContain('settings_get');
+    expect(toolNames).not.toContain('heartbeat_run_template');
+    expect(toolNames).not.toContain('schedule_task');
+
+    const summary = autoloadSummaries.at(-1);
+    expect(summary?.intent).toBe('ops');
+    expect(summary?.overlayCandidates).toEqual(['settings_get', 'heartbeat_get_policy']);
+    expect(summary?.skippedBackgroundOnly).toEqual(['heartbeat_run_template']);
+    expect(autoloadSkips).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'heartbeat_run_template', reason: 'background_only' }),
+    ]));
   });
 
   it('emits adaptive decision telemetry and per-turn active-set snapshots with source labels', async () => {
@@ -2904,6 +3005,19 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(denied.ok).toBe(false);
     expect(denied.errorCode).toBe('capability_denied');
     expect(denied.missingTokens).toContain('git.write');
+
+    const backgroundTool = {
+      name: 'schedule_task',
+      label: 'schedule_task',
+      description: 'background scheduler tool',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
+    } as any;
+    agent.registerTool(backgroundTool, 'extended');
+
+    const backgroundOnly = agent.addPromotedExtendedTool('schedule_task');
+    expect(backgroundOnly.ok).toBe(false);
+    expect(backgroundOnly.errorCode).toBe('background_only');
   });
 
   it('keeps runtime state unchanged when promoted-tool persistence fails', () => {

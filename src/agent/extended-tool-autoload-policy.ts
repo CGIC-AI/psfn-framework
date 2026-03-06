@@ -1,7 +1,8 @@
 import type { SubstrateMessage } from '../types.js';
 
 export type TurnIntent = 'dev' | 'memory' | 'ops' | 'social';
-export type ExtendedToolTurnClass = 'overlay' | 'background';
+export type ToolTurnClass = 'core' | 'overlay' | 'background';
+export type ExtendedToolTurnClass = Exclude<ToolTurnClass, 'core'>;
 export type OverlaySelectionSkipReason =
   | 'invalid_metadata'
   | 'duplicate_candidate'
@@ -19,6 +20,11 @@ export interface OverlaySelectionResult {
   selected: string[];
   skipped: OverlaySelectionSkip[];
   maxCount: number;
+}
+
+export interface ToolTurnClassificationOptions {
+  coreToolNames?: readonly string[] | ReadonlySet<string>;
+  backgroundOnlyToolNames?: readonly string[] | ReadonlySet<string>;
 }
 
 export interface ExtendedToolAutoloadPolicy {
@@ -83,10 +89,43 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
   social: [],
 };
 
+function hasToolName(
+  toolNames: readonly string[] | ReadonlySet<string> | undefined,
+  targetToolName: string,
+): boolean {
+  if (!toolNames) return false;
+  for (const rawToolName of toolNames) {
+    if (rawToolName.trim() === targetToolName) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function classifyToolForTurn(
+  toolName: string,
+  options?: ToolTurnClassificationOptions,
+): ToolTurnClass {
+  const normalizedToolName = toolName.trim();
+  if (!normalizedToolName) {
+    return 'background';
+  }
+
+  if (hasToolName(options?.coreToolNames, normalizedToolName)) {
+    return 'core';
+  }
+
+  const backgroundToolNames = options?.backgroundOnlyToolNames ?? DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS;
+  if (hasToolName(backgroundToolNames, normalizedToolName)) {
+    return 'background';
+  }
+
+  return 'overlay';
+}
+
 export function classifyExtendedToolForTurn(toolName: string): ExtendedToolTurnClass {
-  return DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS.has(toolName.trim())
-    ? 'background'
-    : 'overlay';
+  const turnClass = classifyToolForTurn(toolName);
+  return turnClass === 'overlay' ? 'overlay' : 'background';
 }
 
 function toBoundedMax(value: number, fallback: number): number {
@@ -98,6 +137,7 @@ export function selectBoundedOverlayCandidates(
   candidateNames: readonly string[],
   registeredToolNames: readonly string[],
   maxCount: number,
+  options?: ToolTurnClassificationOptions,
 ): OverlaySelectionResult {
   const boundedMax = toBoundedMax(maxCount, DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
   const registered = new Set(registeredToolNames);
@@ -126,7 +166,7 @@ export function selectBoundedOverlayCandidates(
     seen.add(normalized);
     candidates.push(normalized);
 
-    if (classifyExtendedToolForTurn(normalized) !== 'overlay') {
+    if (classifyToolForTurn(normalized, options) !== 'overlay') {
       skipped.push({
         toolName: normalized,
         reason: 'not_overlay_eligible',

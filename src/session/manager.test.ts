@@ -337,6 +337,44 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Legacy continuity message');
   });
 
+  it('buildContext reuses a captured turn snapshot when live session state drifts', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity-snapshot'));
+    mgr.continuityStore = continuityStore;
+
+    mgr.recordUserMessage('api:main', 'snapshot message', 'u1', 'User');
+    mgr.recordAssistantMessage('api:main', 'snapshot reply');
+    continuityStore.append('user1', {
+      channelId: 'api:side',
+      originChannelId: 'api:side',
+      role: 'assistant',
+      content: 'snapshot continuity',
+      timestamp: 1_700_000_000_000,
+      channelVisibility: 'private',
+    });
+
+    const snapshot = mgr.captureTurnContextSnapshot('api:main', 'user1');
+
+    mgr.recordAssistantMessage('api:main', 'late drift');
+    continuityStore.append('user1', {
+      channelId: 'api:side',
+      originChannelId: 'api:side',
+      role: 'assistant',
+      content: 'late continuity',
+      timestamp: 1_700_000_000_100,
+      channelVisibility: 'private',
+    });
+
+    const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1', undefined, [], snapshot);
+
+    expect(ctx.messages.some(message => message.content.includes('snapshot message'))).toBe(true);
+    expect(ctx.messages.some(message => message.content.includes('snapshot reply'))).toBe(true);
+    expect(ctx.messages.some(message => message.content.includes('late drift'))).toBe(false);
+    expect(ctx.systemPrompt).toContain('snapshot continuity');
+    expect(ctx.systemPrompt).not.toContain('late continuity');
+  });
+
   it('mirrors related messages into other active sessions with mirror metadata', () => {
     const config = makeConfig({
       sessionMirrorEnabled: true,
@@ -1083,6 +1121,31 @@ describe('SessionManager', () => {
     expect(mockLLM.complete).toHaveBeenCalled();
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
     expect(call.systemPrompt).toBe(customPrompt);
+  });
+
+  it('pins the compaction prompt inside a captured turn snapshot', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const promptRegistry = new PromptRegistryStore(
+      join(dir, 'prompt-registry.json'),
+      join(dir, 'prompt-registry-history.jsonl'),
+    );
+    promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, 'Snapshot prompt v1', 'test');
+
+    const mgr = new SessionManager(store, config, undefined, promptRegistry);
+    const mockLLM = makeMockLLM();
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
+    }
+
+    const snapshot = mgr.captureTurnContextSnapshot('ch1', 'u1');
+    promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, 'Live prompt v2', 'test');
+
+    await mgr.buildContext('ch1', 'Sys', '', mockLLM, 'u1', undefined, [], snapshot);
+
+    const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
+    expect(call.systemPrompt).toBe('Snapshot prompt v1');
   });
 
   it('injects runtime datetime tokens in compaction prompts', async () => {

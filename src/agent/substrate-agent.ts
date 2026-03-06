@@ -111,6 +111,8 @@ import type {
 } from './adaptive-tools-telemetry.js';
 import { contextMessagesToPiMessages } from '../llm/message-conversion.js';
 import { createTurnId } from '../turns/id.js';
+import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
+import { buildSnapshotVersionPointer } from '../turns/snapshot.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -135,6 +137,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
+    turnSnapshot?: import('../turns/snapshot.js').TurnMemorySnapshot,
   ) => Promise<string>;
 }
 
@@ -1680,7 +1683,7 @@ export class SubstrateAgent {
     const turnCallType = this.resolveTurnCallType(message, taskKind);
     const turnCorrelationBase = this.buildTurnCorrelation(message, turnCallType, turnId, requestId);
     const channelMeta: ChannelMeta = {
-      ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
+      isDirectMessage: message.isDirectMessage,
       ...(message.routing?.broadcast?.approvalToken
         ? { broadcastApprovalToken: message.routing.broadcast.approvalToken }
         : {}),
@@ -1719,28 +1722,78 @@ export class SubstrateAgent {
 
     try {
       const trustLevel = authorContext.trustLevel;
-
-      // Retrieve relevant memories (empty string if no memory provider)
-      const memoryStageStart = Date.now();
+      const channelType = this.resolveChannelType(message);
       const memoryProvider = this.memoryProvider as ProactiveMemoryProvider | null;
-      const memoriesBlock = memoryProvider
-        ? await memoryProvider.retrieve(
+      this.ensureModel(message);
+      const promptSnapshot = this.captureTurnPromptSnapshot({ channelType, taskKind });
+      const sessionContextSnapshot = typeof (this.sessionManager as SessionManager & {
+        captureTurnContextSnapshot?: SessionManager['captureTurnContextSnapshot'];
+      }).captureTurnContextSnapshot === 'function'
+        ? this.sessionManager.captureTurnContextSnapshot(
+          message.channelId,
+          authorContext.canonicalContactKey ?? message.authorId,
+          channelMeta,
+          authorContext.continuityFallbackKeys,
+        )
+        : undefined;
+      const memorySnapshot = memoryProvider && typeof memoryProvider.captureTurnMemorySnapshot === 'function'
+        ? await memoryProvider.captureTurnMemorySnapshot(
           message.content,
           message.channelId,
           trustLevel,
           channelMeta,
           authorContext.canonicalContactKey,
         )
-        : '';
-      let proactiveRecallBlock = '';
-      if (memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function') {
-        try {
-          proactiveRecallBlock = await memoryProvider.retrieveProactiveRecall(
+        : undefined;
+      const turnSnapshot: TurnSnapshot = {
+        turnId,
+        requestId,
+        channelId: message.channelId,
+        capturedAt: Date.now(),
+        trustLevel,
+        ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
+        ...(promptSnapshot ? { prompt: promptSnapshot } : {}),
+        ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
+        ...(memorySnapshot ? { memory: memorySnapshot } : {}),
+      };
+
+      // Retrieve relevant memories (empty string if no memory provider)
+      const memoryStageStart = Date.now();
+      const memoriesBlock = memoryProvider
+        ? memorySnapshot
+          ? await memoryProvider.retrieve(
+            message.content,
             message.channelId,
             trustLevel,
             channelMeta,
             authorContext.canonicalContactKey,
-          );
+            memorySnapshot,
+          )
+          : await memoryProvider.retrieve(
+            message.content,
+            message.channelId,
+            trustLevel,
+            channelMeta,
+            authorContext.canonicalContactKey,
+          )
+        : '';
+      let proactiveRecallBlock = '';
+      if (memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function') {
+        try {
+          proactiveRecallBlock = memorySnapshot
+            ? await memoryProvider.retrieveProactiveRecall(
+              message.channelId,
+              trustLevel,
+              channelMeta,
+              authorContext.canonicalContactKey,
+              memorySnapshot,
+            )
+            : await memoryProvider.retrieveProactiveRecall(
+              message.channelId,
+              trustLevel,
+              channelMeta,
+              authorContext.canonicalContactKey,
+            );
         } catch (error) {
           log.debug('Proactive recall skipped due to provider error', {
             channelId: message.channelId,
@@ -1764,7 +1817,6 @@ export class SubstrateAgent {
       });
 
       // Compose prompt context (default system prompt pipeline or per-turn override).
-      const channelType = this.resolveChannelType(message);
       const runtimeNow = new Date();
       const promptOverride = this.normalizeTurnPromptOverride(message);
       const responseStyle = this.resolveResponseStyle(message, channelType, channelMeta);
@@ -1790,7 +1842,6 @@ export class SubstrateAgent {
       let fullPrompt = '';
 
       if (promptOverride.mode === 'default') {
-        const promptSections = this.composePromptSections({ channelType, taskKind });
         const staticCacheKey = this.buildPromptPrefixCacheKey(
           message,
           channelType,
@@ -1799,14 +1850,14 @@ export class SubstrateAgent {
         const staticSettingsHash = this.buildStaticPromptSettingsHash(templateVariables);
         const staticPrefix = this.resolveStaticPromptPrefix({
           cacheKey: staticCacheKey,
-          staticPrefixTemplate: promptSections.staticPrefix,
-          staticHash: promptSections.staticHash,
+          staticPrefixTemplate: turnSnapshot.prompt?.staticPrefixTemplate ?? this.systemPrompt,
+          staticHash: turnSnapshot.prompt?.staticHash ?? this.hashPromptText(this.systemPrompt),
           settingsHash: staticSettingsHash,
           now: runtimeNow,
           variables: templateVariables,
         });
         const personaHint = this.getPersonaAdaptation(trustLevel);
-        const dynamicSuffixTemplate = [promptSections.dynamicSuffix, personaHint]
+        const dynamicSuffixTemplate = [turnSnapshot.prompt?.dynamicSuffixTemplate ?? '', personaHint]
           .map(section => section?.trim() ?? '')
           .filter(section => section.length > 0)
           .join('\n\n');
@@ -1840,6 +1891,7 @@ export class SubstrateAgent {
           authorContext.canonicalContactKey ?? message.authorId,
           channelMeta,
           authorContext.continuityFallbackKeys,
+          turnSnapshot.sessionContext,
         ),
       );
       this.emitTurnStage(message, startTime, turnId, requestId, 'context', turnCallType, {
@@ -1877,7 +1929,6 @@ export class SubstrateAgent {
         responseText = moaResult.output;
       } else {
         // Configure pi-agent-core Agent for this turn
-        this.ensureModel(message);
         this.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
         const autoloadOutcome = this.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
         this.applyActiveToolsToAgentForTurn(
@@ -2184,6 +2235,7 @@ export class SubstrateAgent {
           trustLevel: authorContext.trustLevel,
           canonicalContactKey: authorContext.canonicalContactKey,
           retrievalProvenanceRefs,
+          turnSnapshot,
         }),
       );
 
@@ -2524,6 +2576,19 @@ export class SubstrateAgent {
     };
   }
 
+  private captureTurnPromptSnapshot(ctx: ComposeContext): TurnPromptSnapshot {
+    const sections = this.composePromptSections(ctx);
+    return {
+      staticPrefixTemplate: sections.staticPrefix,
+      dynamicSuffixTemplate: sections.dynamicSuffix,
+      staticHash: sections.staticHash,
+      versionPointer: buildSnapshotVersionPointer([
+        sections.staticHash,
+        this.hashPromptText(sections.dynamicSuffix),
+      ]),
+    };
+  }
+
   private buildPromptPrefixCacheKey(
     message: SubstrateMessage,
     channelType: string | undefined,
@@ -2689,6 +2754,7 @@ export class SubstrateAgent {
     trustLevel: TrustLevel;
     canonicalContactKey?: string;
     retrievalProvenanceRefs: string[];
+    turnSnapshot?: TurnSnapshot;
   }): TurnRecord {
     const toolCalls = this.buildTurnToolCalls(input.turnMessages);
     const provenanceRefs = [...new Set([
@@ -2723,7 +2789,13 @@ export class SubstrateAgent {
       },
       toolCalls,
       contextManifestRef: `session:${input.message.channelId}|messages:${input.contextMessageCount}|memory_chars:${input.memoryContextChars}`,
-      internalStateSnapshotRef: `trust:${input.trustLevel}|contact:${input.canonicalContactKey ?? 'none'}`,
+      internalStateSnapshotRef: [
+        `trust:${input.trustLevel}`,
+        `contact:${input.canonicalContactKey ?? 'none'}`,
+        `prompt:${input.turnSnapshot?.prompt?.versionPointer ?? 'none'}`,
+        `memory:${input.turnSnapshot?.memory?.versionPointer ?? 'none'}`,
+        `session:${input.turnSnapshot?.sessionContext?.versionPointer ?? 'none'}`,
+      ].join('|'),
       extractedMemoryIds: [],
       concernDeltaRefs: [],
       contactDeltaRefs: [],
@@ -2731,6 +2803,15 @@ export class SubstrateAgent {
         model: input.response.metadata.model,
         promptMode: input.promptMode,
         promptHash: this.hashPromptText(input.promptText),
+        ...(input.turnSnapshot?.prompt?.versionPointer
+          ? { promptStack: input.turnSnapshot.prompt.versionPointer }
+          : {}),
+        ...(input.turnSnapshot?.memory?.versionPointer
+          ? { memoryState: input.turnSnapshot.memory.versionPointer }
+          : {}),
+        ...(input.turnSnapshot?.sessionContext?.versionPointer
+          ? { sessionState: input.turnSnapshot.sessionContext.versionPointer }
+          : {}),
       },
       provenanceRefs,
     };

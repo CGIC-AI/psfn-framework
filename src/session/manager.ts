@@ -18,13 +18,18 @@ import type { SessionEntry } from './types.js';
 import type { SessionSearchHit } from './search-index.js';
 import type { EventBus } from '../event-bus.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
-import type { PromptRegistryStore } from '../identity/prompt-registry.js';
+import {
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  getDefaultPromptText,
+  type PromptRegistryStore,
+} from '../identity/prompt-registry.js';
 import {
   markCompactionSummaryAsUntrustedRecord,
   wrapCompactionSummaryAsUntrustedContext,
 } from '../identity/prompt-composer.js';
 import { resolveSessionHistoryBudget } from '../context-budget.js';
 import {
+  DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   trimRecentEntriesToTokenBudget,
   type SessionMessageRecordOptions,
 } from './manager-primitives.js';
@@ -44,6 +49,12 @@ import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
 } from './manager/contracts.js';
+import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
+import {
+  buildSnapshotVersionPointer,
+  cloneSessionEntry,
+} from '../turns/snapshot.js';
+import { getMergedContinuity } from './manager/context-support.js';
 
 export type {
   ImportedHistoryBootstrapChunk,
@@ -312,6 +323,7 @@ export class SessionManager {
     userId?: string,
     channelMeta?: ChannelMeta,
     continuityFallbackUserIds: string[] = [],
+    turnSnapshot?: TurnSessionContextSnapshot,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return buildSessionContext({
@@ -329,7 +341,55 @@ export class SessionManager {
       preCompactionExtractionHandler: this.preCompactionExtractionHandler,
       continuityStore: this.continuityStore,
       characterName: this.characterName,
+      turnSnapshot,
     });
+  }
+
+  captureTurnContextSnapshot(
+    channelId: string,
+    userId?: string,
+    channelMeta?: ChannelMeta,
+    continuityFallbackUserIds: string[] = [],
+  ): TurnSessionContextSnapshot {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const historyBudget = resolveSessionHistoryBudget(this.config);
+    let recent = this.compactionBoundaryStore.getRecent(resolvedChannelId, historyBudget.estimatedCount);
+    if (historyBudget.mode === 'budget') {
+      recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
+    }
+
+    const continuityEntries = userId && this.continuityStore
+      ? getMergedContinuity({
+        continuityStore: this.continuityStore,
+        canonicalUserId: userId,
+        limit: this.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
+        fallbackUserIds: continuityFallbackUserIds,
+        channelId: resolvedChannelId,
+        channelMeta,
+      })
+      : [];
+    const compactionSummaryTexts = this.compactionBoundaryStore
+      .getCompactionSummaries(resolvedChannelId)
+      .map(summary => summary.summary);
+    const compactionPromptText = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
+      ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+
+    return {
+      channelId: resolvedChannelId,
+      recentEntries: recent.map(cloneSessionEntry),
+      compactionSummaryTexts: [...compactionSummaryTexts],
+      continuityEntries: continuityEntries.map(cloneSessionEntry),
+      compactionPromptText,
+      versionPointer: buildSnapshotVersionPointer([
+        resolvedChannelId,
+        recent.at(-1)?.id,
+        recent.at(-1)?.timestamp,
+        compactionSummaryTexts.join('\n'),
+        continuityEntries.at(-1)?.id,
+        continuityEntries.at(-1)?.timestamp,
+        compactionPromptText,
+      ]),
+    };
   }
 
   /** Append a system note to a session. Visible in subsequent context builds. */

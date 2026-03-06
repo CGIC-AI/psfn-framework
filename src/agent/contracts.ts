@@ -12,6 +12,7 @@ import type {
 } from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
+import type { TurnMemorySnapshot } from '../turns/snapshot.js';
 
 export interface LLMProvider {
   stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
@@ -27,12 +28,27 @@ export interface EmbeddingService {
 }
 
 export interface MemoryProvider {
+  captureTurnMemorySnapshot?(
+    contextText: string,
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
+  ): Promise<TurnMemorySnapshot>;
   retrieve(
     contextText: string,
     channelId: string,
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
+    turnSnapshot?: TurnMemorySnapshot,
+  ): Promise<string>;
+  retrieveProactiveRecall?(
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
+    turnSnapshot?: TurnMemorySnapshot,
   ): Promise<string>;
 }
 

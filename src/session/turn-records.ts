@@ -123,6 +123,9 @@ function parseVersionPointers(value: unknown): TurnRecordVersionPointers {
   const model = parseRequiredString(value.model, 'versionPointers.model');
   const promptMode = value.promptMode;
   const promptHash = value.promptHash;
+  const promptStack = value.promptStack;
+  const memoryState = value.memoryState;
+  const sessionState = value.sessionState;
 
   return {
     model,
@@ -131,6 +134,15 @@ function parseVersionPointers(value: unknown): TurnRecordVersionPointers {
       : {}),
     ...(typeof promptHash === 'string' && promptHash.trim().length > 0
       ? { promptHash: promptHash.trim() }
+      : {}),
+    ...(typeof promptStack === 'string' && promptStack.trim().length > 0
+      ? { promptStack: promptStack.trim() }
+      : {}),
+    ...(typeof memoryState === 'string' && memoryState.trim().length > 0
+      ? { memoryState: memoryState.trim() }
+      : {}),
+    ...(typeof sessionState === 'string' && sessionState.trim().length > 0
+      ? { sessionState: sessionState.trim() }
       : {}),
   };
 }

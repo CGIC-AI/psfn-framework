@@ -24,6 +24,15 @@ import {
 import { computeBoundarySimilarityBoost, isBoundaryMemory } from './boundary-log.js';
 import { createComponentLogger } from '../logger.js';
 import type { ContactStore } from '../contacts/store.js';
+import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+import type { TurnMemorySnapshot } from '../turns/snapshot.js';
+import {
+  buildSnapshotVersionPointer,
+  cloneContactProfileArtifact,
+  cloneEmotionalSnapshot,
+  cloneMemory,
+  cloneScoredMemory,
+} from '../turns/snapshot.js';
 const log = createComponentLogger('Retrieval');
 
 /**
@@ -124,14 +133,6 @@ interface ProactiveWeightedMemory {
   weight: number;
 }
 
-interface EmotionalSnapshot {
-  baselineValence: number;
-  moodValence: number;
-  moodDrift: number;
-  moodSamples: number;
-  lastMoodUpdateEpochMs?: number;
-}
-
 export interface MemoryRetrieverConfig {
   retrievalLimit?: number;
   retrievalBudgetPct?: number;
@@ -219,12 +220,77 @@ export class MemoryRetriever implements MemoryProvider {
     );
   }
 
+  async captureTurnMemorySnapshot(
+    contextText: string,
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
+  ): Promise<TurnMemorySnapshot> {
+    const budget = this.resolveRetrievalBudget();
+    const limit = budget.estimatedCount;
+    const effectiveTrust = trustLevel ?? 'regular';
+    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
+    const operatorApproval = visibilityScope === 'approved_private_context';
+    const profile = canonicalContactId
+      ? this.memoryStore.getContactProfile(canonicalContactId)
+      : undefined;
+    const emotionalSnapshot = canonicalContactId
+      ? this.resolveEmotionalSnapshot(canonicalContactId)
+      : undefined;
+    const contactEmotionalMemories = canonicalContactId
+      ? this.collectContactEmotionalMemories(canonicalContactId)
+      : [];
+
+    let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
+    let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
+
+    if (contextText.trim().length > 0) {
+      const embedding = await this.embeddingService.embed(contextText);
+      const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
+      semanticCandidates = this.memoryStore.searchByEmbedding(
+        embedding,
+        this.retrievalThreshold,
+        candidateLimit,
+      ).map(cloneScoredMemory);
+      if (semanticCandidates.length === 0) {
+        lexicalCandidates = this.memoryStore.searchByText(contextText, candidateLimit).map(cloneScoredMemory);
+      }
+    }
+
+    const proactiveCandidates = this.collectProactiveRecallCandidates(channelId, canonicalContactId).map(cloneMemory);
+
+    return {
+      channelId,
+      ...(profile ? { profile: cloneContactProfileArtifact(profile) } : {}),
+      ...(emotionalSnapshot ? { emotionalSnapshot: cloneEmotionalSnapshot(emotionalSnapshot) } : {}),
+      contactEmotionalMemories: contactEmotionalMemories.map(cloneMemory),
+      semanticCandidates,
+      lexicalCandidates,
+      proactiveCandidates,
+      versionPointer: buildSnapshotVersionPointer([
+        channelId,
+        effectiveTrust,
+        visibilityScope,
+        operatorApproval ? 'approved' : 'default',
+        profile?.updatedAt,
+        emotionalSnapshot?.lastMoodUpdateEpochMs,
+        contactEmotionalMemories.map(memory => memory.id).join(','),
+        semanticCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
+        lexicalCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
+        proactiveCandidates.map(memory => memory.id).join(','),
+      ]),
+    };
+  }
+
   async retrieve(
     contextText: string,
     channelId: string,
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
+    turnSnapshot?: TurnMemorySnapshot,
   ): Promise<string> {
     const budget = this.resolveRetrievalBudget();
     const limit = budget.estimatedCount;
@@ -256,13 +322,17 @@ export class MemoryRetriever implements MemoryProvider {
       emotionalSnapshotIncluded: false,
       emotionalContinuityCount: 0,
     };
-    const profile = canonicalContactId
-      ? this.memoryStore.getContactProfile(canonicalContactId)
-      : undefined;
+    const profile = turnSnapshot?.profile
+      ? cloneContactProfileArtifact(turnSnapshot.profile)
+      : canonicalContactId
+        ? this.memoryStore.getContactProfile(canonicalContactId)
+        : undefined;
     telemetry.profileIncluded = !!profile;
-    const emotionalSnapshot = canonicalContactId
-      ? this.resolveEmotionalSnapshot(canonicalContactId)
-      : undefined;
+    const emotionalSnapshot = turnSnapshot?.emotionalSnapshot
+      ? cloneEmotionalSnapshot(turnSnapshot.emotionalSnapshot)
+      : canonicalContactId
+        ? this.resolveEmotionalSnapshot(canonicalContactId)
+        : undefined;
     telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
 
     const emptySelectedIds = new Set<string>();
@@ -273,6 +343,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelVisibility,
         emptySelectedIds,
         operatorApproval,
+        turnSnapshot?.contactEmotionalMemories,
       )
       : [];
     telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
@@ -287,20 +358,25 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     try {
-      const embedding = await this.embeddingService.embed(contextText);
-      // Oversample candidates: trust/score filtering can drop many, so fetch 4x budget
-      const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
-
-      const semanticMemories = this.memoryStore.searchByEmbedding(
-        embedding,
-        this.retrievalThreshold,
-        candidateLimit,
-      );
+      let semanticMemories = turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [];
+      if (semanticMemories.length === 0 && !turnSnapshot) {
+        const embedding = await this.embeddingService.embed(contextText);
+        const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
+        semanticMemories = this.memoryStore.searchByEmbedding(
+          embedding,
+          this.retrievalThreshold,
+          candidateLimit,
+        );
+      }
       telemetry.semanticCandidateCount = semanticMemories.length;
 
       let memories = semanticMemories;
       if (semanticMemories.length === 0) {
-        const lexicalMemories = this.memoryStore.searchByText(contextText, candidateLimit);
+        const lexicalMemories = turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
+          ?? this.memoryStore.searchByText(
+            contextText,
+            Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4)),
+          );
         telemetry.lexicalCandidateCount = lexicalMemories.length;
         if (lexicalMemories.length > 0) {
           memories = lexicalMemories;
@@ -531,6 +607,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           selectedIds,
           operatorApproval,
+          turnSnapshot?.contactEmotionalMemories,
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
@@ -572,6 +649,7 @@ export class MemoryRetriever implements MemoryProvider {
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
+    turnSnapshot?: TurnMemorySnapshot,
   ): Promise<string> {
     if (this.proactiveRecallProbability <= 0) return '';
 
@@ -588,7 +666,8 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
-    const candidates = this.collectProactiveRecallCandidates(channelId, canonicalContactId);
+    const candidates = turnSnapshot?.proactiveCandidates.map(cloneMemory)
+      ?? this.collectProactiveRecallCandidates(channelId, canonicalContactId);
     if (candidates.length === 0) return '';
 
     const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
@@ -677,8 +756,9 @@ export class MemoryRetriever implements MemoryProvider {
     channelVisibility: ChannelVisibility,
     selectedIds: ReadonlySet<string>,
     operatorApproval = false,
+    sourceOverride?: readonly PurrMemory[],
   ): PurrMemory[] {
-    const source = this.memoryStore.getMemoriesByContact(canonicalContactId, 12);
+    const source = sourceOverride?.map(cloneMemory) ?? this.collectContactEmotionalMemories(canonicalContactId);
     if (source.length === 0) return [];
 
     const allowed = getAllowedSensitivities(trustLevel, channelVisibility);
@@ -699,6 +779,10 @@ export class MemoryRetriever implements MemoryProvider {
       })
       .sort((left, right) => right.extractedAt - left.extractedAt)
       .slice(0, 3);
+  }
+
+  private collectContactEmotionalMemories(canonicalContactId: string): PurrMemory[] {
+    return this.memoryStore.getMemoriesByContact(canonicalContactId, 12);
   }
 
   private collectProactiveRecallCandidates(

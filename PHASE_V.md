@@ -111,6 +111,7 @@ Any new setting merged in Phase V must satisfy all of the following:
 - Top-level integration branch remains `phase-v`.
 - Integrated on `phase-v` in this session:
   - `PSFN-04dt.1` (`canonical TurnRecord + TurnID provenance`) is merged from `phase-v-04dt1` at `092fa78`.
+  - `PSFN-04dt.2` (`immutable TurnSnapshot contract between fast-loop and slow/background mutation paths`) is integrated, with frozen prompt/session/memory turn snapshots captured at turn start, compaction prompt pinning, snapshot-backed retrieval/context reads, and persisted snapshot version pointers on canonical turn records.
   - `PSFN-04dt.5` (`evidence-aware retrieval scoring + regression coverage`) is merged from `phase-v-04dt5` at `591a4cf` + `88eeab4`.
   - `PSFN-qyrl.1` (`channel adapter manifest registry loader`) is merged, with an additional fail-closed guard so a manifest cannot silently skip a `required` channel by marking it disabled.
   - `PSFN-qyrl.2` (`STT provider registry and pluggable provider contract`) is merged, including runtime/bootstrap gating plus backend settings/admin validation for registered provider ids.
@@ -134,8 +135,8 @@ Any new setting merged in Phase V must satisfy all of the following:
   - `PSFN-bxvy` config/persistence-topology epic is closed on `phase-v`.
   - `PSFN-y2ac` settings-governance epic is closed on `phase-v`.
 - Next active Phase V focus:
-  - Re-open Stage 1 foundation work on `PSFN-04dt.2`: immutable `TurnSnapshot` contract between fast-loop and slow/background mutation paths.
-  - Move to `PSFN-x92u.1` only after `PSFN-04dt.2` closes, because the compositional kernel still depends on that snapshot boundary.
+  - Start Stage 3 compositional kernel work on `PSFN-x92u.1`: policy config and default-OFF gating for compositional cognition by tier/channel/purpose.
+  - Keep `PSFN-04dt.4` open as the remaining Stage 1 foundation lane for tombstone/redaction replay semantics; it does not block `PSFN-x92u`.
   - Keep `PSFN-eg59` as the residual de-hardcode test-fixture cleanup lane where remaining `PSFN` hits are intentional branding/legacy cases versus generic fixture drift.
 - Prior orchestration thread hit stale subagent/thread-cap contamination. Do not continue spawning workers from that old top-level session. Resume from a fresh top-level Codex session.
 
@@ -171,6 +172,7 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-qyrl.1` targeted regression: `npm test -- --run src/runtime/channel-lifecycle.test.ts`
 - `PSFN-04dt.5` targeted regression: `npm test -- --run src/memory/retrieval.test.ts`
 - `PSFN-04dt.1` targeted regression: `npm test -- --run src/agent/substrate-agent.test.ts src/memory/extraction.test.ts src/session/store.test.ts`
+- `PSFN-04dt.2` targeted regressions: `npm test -- --run src/agent/substrate-agent.test.ts src/session/manager.test.ts src/memory/retrieval.test.ts src/session/store.test.ts`
 - `PSFN-qyrl.2` targeted regressions: `npm test -- --run src/voice/connectors/stt/index.test.ts src/runtime/bootstrap-helpers.test.ts src/settings.test.ts src/channels/admin/api-routes.test.ts`
 - `PSFN-qyrl.3` targeted regressions: `npm test -- --run src/voice/connectors/tts/index.test.ts src/runtime/bootstrap-helpers.test.ts src/settings.test.ts src/channels/admin/api-routes.test.ts src/channels/api/voice-websocket-runtime.test.ts`
 - `PSFN-qyrl.4` targeted regressions: `npm test -- --run src/runtime/bootstrap-helpers.test.ts src/channels/api/voice-websocket-runtime.test.ts src/channels/discord/voice.test.ts`
@@ -189,5 +191,6 @@ When restarting Phase V orchestration after a thread-cap or stale-session failur
 - `PSFN-bxvy.5` targeted regressions: `npm test -- --run src/persistence/cutover.test.ts src/runtime.test.ts src/bootstrap/parity.test.ts src/channels/admin/server.test.ts`
 - `PSFN-bxvy.5` migration CLI validation: `npm run migrate:persistence-layout -- --help`
 - `phase-v` build after integrated `PSFN-qyrl.*` / `PSFN-04dt.1` / `PSFN-04dt.5`: `npm run build`
+- `PSFN-04dt.2` build validation: `npm run build`
 - `PSFN-y2ac.4` guard validation: `npm run verify:settings-contract`, `npm test -- --run src/config/settings-contract-guard.test.ts src/channels/admin/api-routes.test.ts src/settings.test.ts`, `npm --prefix admin-ui run check`, `npm run garden:build`, and `npm run build`
 - `PSFN-y2ac.5` round-trip validation: `npm test -- --run src/config/subsystem-config.test.ts src/channels/admin/api-routes.test.ts src/channels/admin/server.test.ts src/settings.test.ts`

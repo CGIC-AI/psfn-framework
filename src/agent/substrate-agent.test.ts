@@ -793,6 +793,58 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
+  it('passes captured turn snapshots through context build and persisted turn metadata', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager() as any;
+    sessionManager.captureTurnContextSnapshot = vi.fn().mockReturnValue({
+      channelId: 'test-channel',
+      recentEntries: [],
+      compactionSummaryTexts: [],
+      continuityEntries: [],
+      compactionPromptText: 'Compaction prompt snapshot',
+      versionPointer: 'session-snapshot-v1',
+    });
+
+    const memorySnapshot = {
+      channelId: 'test-channel',
+      contactEmotionalMemories: [],
+      semanticCandidates: [],
+      lexicalCandidates: [],
+      proactiveCandidates: [],
+      versionPointer: 'memory-snapshot-v1',
+    };
+    const mockMemory = {
+      captureTurnMemorySnapshot: vi.fn().mockResolvedValue(memorySnapshot),
+      retrieve: vi.fn().mockResolvedValue(''),
+      retrieveProactiveRecall: vi.fn().mockResolvedValue(''),
+    };
+
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+    agent.memoryProvider = mockMemory as unknown as MemoryProvider;
+
+    await agent.handleMessage(makeMessage({ id: 'msg-snapshot-record' }));
+
+    expect(sessionManager.captureTurnContextSnapshot).toHaveBeenCalledTimes(1);
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[7]).toMatchObject({
+      versionPointer: 'session-snapshot-v1',
+      compactionPromptText: 'Compaction prompt snapshot',
+    });
+    expect(mockMemory.captureTurnMemorySnapshot).toHaveBeenCalledTimes(1);
+
+    const record = (sessionManager.recordTurn as any).mock.calls[0][0];
+    expect(record.versionPointers).toMatchObject({
+      promptStack: expect.any(String),
+      memoryState: 'memory-snapshot-v1',
+      sessionState: 'session-snapshot-v1',
+    });
+    expect(record.internalStateSnapshotRef).toContain('memory:memory-snapshot-v1');
+    expect(record.internalStateSnapshotRef).toContain('session:session-snapshot-v1');
+  });
+
   it('uses canonical contact key for continuity indexing and context lookup', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

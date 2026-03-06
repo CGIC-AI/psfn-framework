@@ -53,4 +53,36 @@ describe('buildCharacterMacroMap', () => {
     expect(variables['character.extensions.hexaco.emotional_expression.intensity']).toBe('0.3');
     expect(variables.extensions_moderation_enabled).toBe('true');
   });
+
+  it('normalizes missing and placeholder fields into canonical empty macro values', () => {
+    const minimalCard: CharacterCardV2 = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'Companion',
+        description: '',
+        personality: 'Helpful and calm.',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        system_prompt: 'sytem prompt',
+        post_history_instructions: 'post history instructions',
+        tags: [],
+        creator: 'system',
+      },
+    };
+
+    const variables = buildCharacterMacroMap(minimalCard);
+
+    expect(variables.char).toBe('Companion');
+    expect(variables.system_prompt).toBe('');
+    expect(variables.post_history_instructions).toBe('');
+    expect(variables.mes_example).toBe('');
+    expect(variables.creator_notes).toBe('');
+    expect(variables.alternate_greetings).toBe('');
+    expect(variables.visual_description).toBe('');
+    expect(variables['character.creator_notes']).toBe('');
+    expect(variables['character.alternate_greetings']).toBe('');
+    expect(variables['character.visual_description']).toBe('');
+  });
 });

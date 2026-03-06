@@ -48,6 +48,28 @@ describe('injectPromptRuntimeTokens', () => {
     expect(unresolved).toEqual(['unknown_token']);
   });
 
+  it('reports unresolved missing dotted keys once', () => {
+    const unresolved: string[] = [];
+    const output = renderPromptRuntimeTokens(
+      'Missing={{character.extensions.voice_style}} Repeat={{character.extensions.voice_style}}',
+      {
+        now: fixedNow,
+        variables: {
+          character: {
+            name: 'Companion',
+          },
+        },
+        onUnresolvedToken: (token) => unresolved.push(token),
+      },
+    );
+
+    expect(output.text).toBe(
+      'Missing={{character.extensions.voice_style}} Repeat={{character.extensions.voice_style}}',
+    );
+    expect(output.unresolvedTokens).toEqual(['character.extensions.voice_style']);
+    expect(unresolved).toEqual(['character.extensions.voice_style']);
+  });
+
   it('injects simple prompt variables', () => {
     const input = 'Hello {{user}}, you are speaking with {{char}} in {{channel_id}}';
     const output = injectPromptRuntimeTokens(input, {

@@ -74,6 +74,19 @@ describe('composeSystemPrompt', () => {
     expect(prompt).not.toContain('{{user}}');
   });
 
+  it('resolves canonical aliases through runtime macro expansion', () => {
+    const aliasCard: CharacterCardV2 = {
+      ...TEST_CARD,
+      data: {
+        ...TEST_CARD.data,
+        description: '{{character.name}} with {{char_name}} helping {{user_name}}.',
+      },
+    };
+
+    const prompt = composeSystemPrompt(aliasCard, 'Alice');
+    expect(prompt).toContain('TestChar with TestChar helping Alice.');
+  });
+
   it('skips placeholder system_prompt and post_history', () => {
     const prompt = composeSystemPrompt(TEST_CARD);
     expect(prompt).not.toContain('sytem prompt');

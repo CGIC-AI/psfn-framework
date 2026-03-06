@@ -438,6 +438,13 @@ describe('agent-main split wiring', () => {
 });
 
 describe('runtime composition wiring', () => {
+  it('keeps spawn_shard tool registration in shared shard/think composition wiring', () => {
+    const source = readFileSync(resolve('src/bootstrap/composition.ts'), 'utf-8');
+    expect(source).toContain('createSpawnShardTool(');
+    expect(source).toContain('registerTool(createSpawnShardTool(');
+    expect(source).toContain('wireShardAndThinkRuntime(');
+  });
+
   it('routes runtime bootstrap through composition helpers', () => {
     const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
     expect(source).toContain('composeIdentity(this.config)');

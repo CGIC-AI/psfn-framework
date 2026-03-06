@@ -8,6 +8,7 @@ import type { SessionManager } from '../session/manager.js';
 import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ChannelPromptDock } from '../channels/types.js';
+import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import { isTurnId } from '../turns/id.js';
 import { EmotionState } from '../emotion/state.js';
 import { parseSessionEmotionState } from '../emotion/session-metadata.js';
@@ -397,6 +398,82 @@ describe('SubstrateAgent construction', () => {
 });
 
 describe('SubstrateAgent.registerTool', () => {
+  const zeroUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+
+  function makeAssistantToolCallMessage(toolNames: string[]): any {
+    return {
+      role: 'assistant',
+      content: toolNames.map((name, index) => ({
+        type: 'toolCall',
+        id: `call-${index + 1}`,
+        name,
+        arguments: {},
+      })),
+      api: 'chat',
+      provider: 'test',
+      model: 'test-model',
+      usage: zeroUsage,
+      stopReason: 'stop',
+      timestamp: Date.now(),
+    };
+  }
+
+  function makeAssistantTextMessage(text: string): any {
+    return {
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+      api: 'chat',
+      provider: 'test',
+      model: 'test-model',
+      usage: zeroUsage,
+      stopReason: 'stop',
+      timestamp: Date.now(),
+    };
+  }
+
+  function makeLoopStreamFn(messages: any[]) {
+    let callIndex = 0;
+    return vi.fn(async () => {
+      const template = messages[Math.min(callIndex, messages.length - 1)];
+      callIndex += 1;
+      const partial = JSON.parse(JSON.stringify(template));
+      const final = JSON.parse(JSON.stringify(template));
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial };
+          yield { type: 'done' };
+        },
+        result: async () => final,
+      } as any;
+    });
+  }
+
+  function makeLoopConfig(): any {
+    return {
+      model: {
+        id: 'test-model',
+        api: 'chat',
+        provider: 'test',
+      },
+      convertToLlm: async (messages: any[]) => messages,
+      getSteeringMessages: async () => [],
+      getFollowUpMessages: async () => [],
+    };
+  }
+
   beforeEach(() => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
   });
@@ -510,6 +587,162 @@ describe('SubstrateAgent.registerTool', () => {
     );
 
     expect((agent as any).agent.__psfnToolSchedulerPatched).toBe(true);
+  });
+
+  it('runs sibling spawn_shard tool calls with overlap in one parent-loop assistant turn', async () => {
+    const starts = new Map<string, number>();
+    const ends = new Map<string, number>();
+    const spawnShard = {
+      name: 'spawn_shard',
+      label: 'spawn_shard',
+      description: 'spawn shards',
+      parameters: { type: 'object', properties: {} },
+      execute: vi.fn<any>(async (toolCallId: string) => {
+        starts.set(toolCallId, Date.now());
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        ends.set(toolCallId, Date.now());
+        return {
+          content: [{ type: 'text', text: `ok:${toolCallId}` }],
+          details: {},
+        };
+      }),
+      wiringMeta: {
+        concurrency: {
+          class: 'spawn_shard',
+          maxParallel: 3,
+        },
+      },
+    } as any;
+
+    const streamFn = makeLoopStreamFn([
+      makeAssistantToolCallMessage(['spawn_shard', 'spawn_shard', 'spawn_shard']),
+      makeAssistantTextMessage('all shards complete'),
+    ]);
+    const events: any[] = [];
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'fan out' }] } as any],
+      {
+        systemPrompt: 'test system',
+        messages: [],
+        tools: [spawnShard],
+      } as any,
+      makeLoopConfig(),
+      new AbortController().signal,
+      streamFn,
+      { maxParallelToolCalls: 3 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const firstEnd = ends.get('call-1') as number;
+    expect(starts.get('call-2')).toBeLessThan(firstEnd);
+    expect(starts.get('call-3')).toBeLessThan(firstEnd);
+    expect(events.filter((event) => event.type === 'tool_execution_start')).toHaveLength(3);
+  });
+
+  it('keeps non-shard tools sequential in the same parent-loop scheduling path', async () => {
+    const starts: number[] = [];
+    const ends: number[] = [];
+    const repoStatus = {
+      name: 'repo_status',
+      label: 'repo_status',
+      description: 'repo read',
+      parameters: { type: 'object', properties: {} },
+      execute: vi.fn<any>(async () => {
+        starts.push(Date.now());
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        ends.push(Date.now());
+        return {
+          content: [{ type: 'text', text: 'ok' }],
+          details: {},
+        };
+      }),
+      wiringMeta: {
+        concurrency: {
+          class: 'read_only',
+          maxParallel: 5,
+        },
+      },
+    } as any;
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'status twice' }] } as any],
+      {
+        systemPrompt: 'test system',
+        messages: [],
+        tools: [repoStatus],
+      } as any,
+      makeLoopConfig(),
+      new AbortController().signal,
+      makeLoopStreamFn([
+        makeAssistantToolCallMessage(['repo_status', 'repo_status']),
+        makeAssistantTextMessage('done'),
+      ]),
+      { maxParallelToolCalls: 8 },
+    );
+
+    for await (const _event of stream) {
+      // Drain the stream to completion.
+    }
+
+    expect(starts).toHaveLength(2);
+    expect(ends).toHaveLength(2);
+    expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
+  });
+
+  it('fails closed when spawn_shard rejects due to shard limit or health guard', async () => {
+    const spawnShard = {
+      name: 'spawn_shard',
+      label: 'spawn_shard',
+      description: 'spawn shards',
+      parameters: { type: 'object', properties: {} },
+      execute: vi.fn<any>(async (toolCallId: string) => {
+        if (toolCallId === 'call-2') {
+          throw new Error('Shard limit reached: health guard rejected spawn');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return {
+          content: [{ type: 'text', text: `ok:${toolCallId}` }],
+          details: {},
+        };
+      }),
+      wiringMeta: {
+        concurrency: {
+          class: 'spawn_shard',
+          maxParallel: 3,
+        },
+      },
+    } as any;
+
+    const events: any[] = [];
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'fan out with guard' }] } as any],
+      {
+        systemPrompt: 'test system',
+        messages: [],
+        tools: [spawnShard],
+      } as any,
+      makeLoopConfig(),
+      new AbortController().signal,
+      makeLoopStreamFn([
+        makeAssistantToolCallMessage(['spawn_shard', 'spawn_shard']),
+        makeAssistantTextMessage('done'),
+      ]),
+      { maxParallelToolCalls: 3 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const errorExecution = events.find(
+      (event) => event.type === 'tool_execution_end' && event.toolCallId === 'call-2',
+    );
+    expect(errorExecution?.isError).toBe(true);
+    expect(errorExecution?.result?.content?.[0]?.text).toContain('Shard limit reached');
   });
 });
 

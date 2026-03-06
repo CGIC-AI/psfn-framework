@@ -1,23 +1,28 @@
 services:
+  # Continuous/dev runtime container profile.
+  # For production, use docker-compose.production.yml instead.
   psfn-agent:
     build:
       context: ..
       dockerfile: docker/Dockerfile.agent
-    container_name: psfn-agent
+    container_name: psfn-agent-continuous
     network_mode: "none"
     restart: unless-stopped
     volumes:
       # Gateway socket (created by host gateway process)
-      - /run/psfn:/run/psfn
-      # Agent's SQLite database (RW)
-      - ../data:/app/data
-      # PSFN's playground — self-authored modules, notes (RW)
-      - ../workspace:/app/workspace
+      - ${PSFN_GATEWAY_SOCKET_DIR:-/run/psfn}:/run/psfn
+      # Continuous/dev mutable roots
+      - ${PSFN_CONTINUOUS_DATA_DIR:-../data}:/app/data
+      - ${PSFN_CONTINUOUS_WORKSPACE_DIR:-../workspace}:/app/workspace
       # Character card + identity (RO)
       - ${CHARACTER_CARD_DIR:-/home/user/.openclaw/agents/main}:/app/identity:ro
     environment:
       GATEWAY_SOCKET: /run/psfn/gateway.sock
-      DATABASE_PATH: /app/data/psfn.db
+      PSFN_RUNTIME_LAYOUT_MODE: continuous
       DATA_DIR: /app/data
+      SYSTEM_DATA_DIR: /app/data
+      COMPANION_DATA_DIR: /app/data
+      WORKSPACE_PATH: /app/workspace
+      DATABASE_PATH: /app/data/psfn.db
       CHARACTER_CARD_PATH: /app/identity/character.json
       EMBEDDING_DIMS: ${EMBEDDING_DIMS:-1024}

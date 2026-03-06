@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ── Rebuild & Restart ──
 # Runs npm run build, then calls restart.sh.
-# Usage: ./scripts/self/rebuild.sh [pid_file] [start_command]
+# Usage: ./scripts/self/rebuild.sh --mode <continuous|production> [pid_file] [start_command]
 
 set -euo pipefail
 

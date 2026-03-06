@@ -53,6 +53,22 @@ export async function executeToolCallsWithScheduler(
     const parallelLimit = resolveBatchParallelLimit(batch, options.maxParallelToolCalls);
     const mode = batch.length > 1 && parallelLimit > 1 ? 'parallel' : 'sequential';
 
+    if (remainingCount > 0) {
+      options.onTelemetry?.('agent.tools.scheduler.queued', {
+        queuedCount: remainingCount,
+        activeBatchSize: batch.length,
+        activeTools: batch.map((entry) => entry.toolCall.name),
+      });
+    }
+    options.onTelemetry?.(
+      mode === 'parallel' ? 'agent.tools.scheduler.parallel' : 'agent.tools.scheduler.serialized',
+      {
+        batchSize: batch.length,
+        parallelLimit,
+        toolNames: batch.map((entry) => entry.toolCall.name),
+      },
+    );
+
     options.onTelemetry?.('agent.tools.scheduler.batch', {
       mode,
       batchSize: batch.length,
@@ -65,8 +81,8 @@ export async function executeToolCallsWithScheduler(
     });
 
     const batchResults = mode === 'parallel'
-      ? await executeParallelBatch(batch, parallelLimit, context)
-      : await executeSequentialBatch(batch, context, getSteeringMessages);
+      ? await executeParallelBatch(batch, parallelLimit, context, options)
+      : await executeSequentialBatch(batch, context, getSteeringMessages, options);
 
     results.push(...batchResults.toolResults);
     steeringMessages = batchResults.steeringMessages;
@@ -96,10 +112,11 @@ async function executeSequentialBatch(
   descriptors: ToolCallDescriptor[],
   context: ToolExecutionContext,
   getSteeringMessages: (() => Promise<AgentMessage[]>) | undefined,
+  options: ToolCallSchedulerOptions,
 ): Promise<ToolExecutionResult> {
   const results: ToolResultMessage[] = [];
   for (const descriptor of descriptors) {
-    const result = await executeSingleToolCall(descriptor, context);
+    const result = await executeSingleToolCall(descriptor, context, options);
     results.push(result);
 
     if (getSteeringMessages) {
@@ -120,11 +137,12 @@ async function executeParallelBatch(
   descriptors: ToolCallDescriptor[],
   parallelLimit: number,
   context: ToolExecutionContext,
+  options: ToolCallSchedulerOptions,
 ): Promise<ToolExecutionResult> {
   const results = await mapBounded(
     descriptors,
     parallelLimit,
-    async (descriptor) => executeSingleToolCall(descriptor, context),
+    async (descriptor) => executeSingleToolCall(descriptor, context, options),
   );
 
   return {
@@ -135,6 +153,7 @@ async function executeParallelBatch(
 async function executeSingleToolCall(
   descriptor: ToolCallDescriptor,
   context: ToolExecutionContext,
+  options: ToolCallSchedulerOptions,
 ): Promise<ToolResultMessage> {
   const { toolCall, tool } = descriptor;
   context.stream.push({
@@ -146,6 +165,7 @@ async function executeSingleToolCall(
 
   let result: { content: any[]; details: any };
   let isError = false;
+  let cancelled = false;
   try {
     if (!tool) {
       throw new Error(`Tool ${toolCall.name} not found`);
@@ -161,11 +181,20 @@ async function executeSingleToolCall(
       });
     });
   } catch (error) {
+    cancelled = context.signal?.aborted === true
+      || (error instanceof Error && /abort(ed)?/i.test(error.message));
     result = {
       content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
       details: {},
     };
     isError = true;
+  }
+
+  if (cancelled) {
+    options.onTelemetry?.('agent.tools.scheduler.cancelled', {
+      toolName: toolCall.name,
+      toolCallId: toolCall.id,
+    });
   }
 
   context.stream.push({

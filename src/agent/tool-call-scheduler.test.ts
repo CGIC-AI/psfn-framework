@@ -53,12 +53,13 @@ describe('tool-call-scheduler', () => {
     );
 
     const streamEvents: any[] = [];
+    const telemetry = vi.fn();
     const result = await executeToolCallsWithScheduler(
       [spawnShard],
       makeAssistantMessage(['spawn_shard', 'spawn_shard', 'spawn_shard']),
       undefined,
       { stream: { push: (event) => { streamEvents.push(event); } } },
-      { maxParallelToolCalls: 3 },
+      { maxParallelToolCalls: 3, onTelemetry: telemetry },
     );
 
     expect(result.toolResults).toHaveLength(3);
@@ -68,6 +69,12 @@ describe('tool-call-scheduler', () => {
     expect(secondStart).toBeLessThan(firstEnd);
     expect(thirdStart).toBeLessThan(firstEnd);
     expect(streamEvents.filter(event => event.type === 'tool_execution_start')).toHaveLength(3);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.parallel',
+      expect.objectContaining({
+        batchSize: 3,
+      }),
+    );
   });
 
   it('fails closed to sequential execution for exclusive tool calls', async () => {
@@ -84,17 +91,60 @@ describe('tool-call-scheduler', () => {
       { concurrency: { class: 'exclusive', exclusivityKey: 'core:memory_write' } },
     );
 
+    const telemetry = vi.fn();
     await executeToolCallsWithScheduler(
       [memoryWrite],
       makeAssistantMessage(['memory_write', 'memory_write']),
       undefined,
       { stream: { push: () => undefined } },
-      { maxParallelToolCalls: 8 },
+      { maxParallelToolCalls: 8, onTelemetry: telemetry },
     );
 
     expect(starts).toHaveLength(2);
     expect(ends).toHaveLength(2);
     expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.serialized',
+      expect.objectContaining({
+        batchSize: 1,
+      }),
+    );
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.queued',
+      expect.objectContaining({
+        queuedCount: 1,
+      }),
+    );
+  });
+
+  it('respects maxParallelToolCalls bound for spawn_shard batches', async () => {
+    let active = 0;
+    let peak = 0;
+    const spawnShard = makeTool(
+      'spawn_shard',
+      async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active -= 1;
+        return {
+          content: [{ type: 'text', text: 'ok' }],
+          details: {},
+        };
+      },
+      { concurrency: { class: 'spawn_shard', maxParallel: 5 } },
+    );
+
+    await executeToolCallsWithScheduler(
+      [spawnShard],
+      makeAssistantMessage(['spawn_shard', 'spawn_shard', 'spawn_shard']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 2 },
+    );
+
+    expect(peak).toBeGreaterThanOrEqual(2);
+    expect(peak).toBeLessThanOrEqual(2);
   });
 
   it('keeps non-shard tools sequential even when metadata marks them read_only', async () => {
@@ -188,6 +238,39 @@ describe('tool-call-scheduler', () => {
       expect.objectContaining({
         skippedCount: 2,
         reason: 'queued_user_message',
+      }),
+    );
+  });
+
+  it('emits cancelled telemetry when execution aborts before a tool call runs', async () => {
+    const telemetry = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+
+    const issueShow = makeTool(
+      'issue_show',
+      async () => {
+        throw new Error('aborted');
+      },
+      { concurrency: { class: 'exclusive', exclusivityKey: 'extended:issue_show' } },
+    );
+
+    const result = await executeToolCallsWithScheduler(
+      [issueShow],
+      makeAssistantMessage(['issue_show']),
+      undefined,
+      {
+        signal: controller.signal,
+        stream: { push: () => undefined },
+      },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    expect((result.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.cancelled',
+      expect.objectContaining({
+        toolName: 'issue_show',
       }),
     );
   });

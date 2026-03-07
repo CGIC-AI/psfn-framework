@@ -912,6 +912,52 @@ describe('hydrateCanonicalStartupConfig', () => {
     }
   });
 
+  it('fails closed when voice startup is enabled without Discord auth secrets', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    config.voiceEnabled = true;
+
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow('DISCORD_TOKEN and DISCORD_BOT_ID are required when DISCORD_VOICE_ENABLED=true');
+  });
+
+  it('fails closed when only one Discord auth secret is configured at startup', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    config.discordToken = 'discord-secret';
+
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow('DISCORD_BOT_ID is required when DISCORD_TOKEN is configured');
+  });
+
   it('hydrates settings/models/trust/scheduler from canonical owners in one helper', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
     const systemDataDir = join(rootDir, 'system-data');

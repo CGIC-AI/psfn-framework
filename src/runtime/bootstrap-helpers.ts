@@ -349,6 +349,27 @@ export function installPromotedToolsPersistenceHook(config: SubstrateConfig): vo
   };
 }
 
+function assertSecuritySensitiveStartupConfig(config: SubstrateConfig): void {
+  const discordToken = config.discordToken.trim();
+  const discordBotId = config.discordBotId.trim();
+  const hasDiscordToken = discordToken.length > 0;
+  const hasDiscordBotId = discordBotId.length > 0;
+
+  if (hasDiscordToken !== hasDiscordBotId) {
+    if (!hasDiscordToken) {
+      throw new Error('DISCORD_TOKEN is required when DISCORD_BOT_ID is configured');
+    }
+    throw new Error('DISCORD_BOT_ID is required when DISCORD_TOKEN is configured');
+  }
+
+  if (config.voiceEnabled !== true) return;
+  if (hasDiscordToken) return;
+
+  throw new Error(
+    'DISCORD_TOKEN and DISCORD_BOT_ID are required when DISCORD_VOICE_ENABLED=true',
+  );
+}
+
 export function hydrateCanonicalStartupConfig(
   config: SubstrateConfig,
   options: StartupConfigHydrationOptions = {},
@@ -373,6 +394,7 @@ export function hydrateCanonicalStartupConfig(
   const savedSettings = loadSettings(systemDataDir);
   const settingsDomains = splitSettingsByDomain(savedSettings);
   applySettings(config, settingsDomains.runtime);
+  assertSecuritySensitiveStartupConfig(config);
   installPromotedToolsPersistenceHook(config);
 
   const modelsLoadResult = loadModelsConfigWithLegacyMigration(systemDataDir, {

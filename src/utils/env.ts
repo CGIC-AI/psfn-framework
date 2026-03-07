@@ -26,6 +26,10 @@ function normalizeEnvString(value: string | undefined): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+export function parseOptionalStringEnv(value: string | undefined): string | undefined {
+  return normalizeEnvString(value);
+}
+
 function splitEnvList(
   value: string,
   separators: readonly string[],

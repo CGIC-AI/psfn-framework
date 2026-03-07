@@ -4,6 +4,7 @@ import {
   parseBooleanEnv,
   parseEnvList,
   parseOptionalPositiveIntEnv,
+  parseOptionalStringEnv,
   parsePathListEnv,
   parsePositiveIntEnv,
 } from './env.js';
@@ -51,6 +52,15 @@ describe('env utils', () => {
       expect(parseBooleanEnv('')).toBeUndefined();
       expect(parseBooleanEnv('   ')).toBeUndefined();
       expect(parseBooleanEnv(undefined)).toBeUndefined();
+    });
+  });
+
+  describe('parseOptionalStringEnv', () => {
+    it('returns trimmed strings and drops empty values', () => {
+      expect(parseOptionalStringEnv('  token  ')).toBe('token');
+      expect(parseOptionalStringEnv('')).toBeUndefined();
+      expect(parseOptionalStringEnv('   ')).toBeUndefined();
+      expect(parseOptionalStringEnv(undefined)).toBeUndefined();
     });
   });
 

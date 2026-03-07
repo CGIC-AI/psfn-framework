@@ -187,7 +187,7 @@ function hashFileSync(path: string): string {
   const fd = openSync(path, 'r');
   const buffer = Buffer.allocUnsafe(HASH_BUFFER_BYTES);
   try {
-    while (true) {
+    for (;;) {
       const bytesRead = readSync(fd, buffer, 0, HASH_BUFFER_BYTES, null);
       if (bytesRead === 0) break;
       hash.update(bytesRead === HASH_BUFFER_BYTES ? buffer : buffer.subarray(0, bytesRead));

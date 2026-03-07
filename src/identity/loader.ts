@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { CharacterCardV2 } from './types.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
+import { normalizeCompanionName } from './companion-naming.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
 
 const LEGACY_BOOTSTRAP_NAME = 'Purrsephone';
@@ -130,7 +131,7 @@ export function assertValidCharacterCard(card: CharacterCardV2, pathHint = 'char
 
 export function composeSystemPrompt(card: CharacterCardV2, userName = '{{user}}'): string {
   const characterVariables = buildCharacterPromptTemplateVariables(card);
-  const runtimeCharacterName = characterVariables.char?.trim() || card.data.name;
+  const runtimeCharacterName = normalizeCompanionName(characterVariables.char, card.data.name);
   const runtimeVariables = {
     ...characterVariables,
     user: userName,

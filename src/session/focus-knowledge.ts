@@ -192,7 +192,7 @@ function mergeCompactionRanges(ranges: FocusCompactionRange[]): FocusCompactionR
 
   const merged: FocusCompactionRange[] = [];
   for (const range of sorted) {
-    const previous = merged[merged.length - 1];
+    const previous = merged.at(-1);
     if (!previous) {
       merged.push({ ...range });
       continue;

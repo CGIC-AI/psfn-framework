@@ -1005,7 +1005,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(result.runtimePathLayout.systemDataDir).toBe(systemDataDir);
     expect(config.sessionMessageLimit).toBe(44);
     expect(config.memoryRetrievalLimit).toBe(11);
-    expect(config.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
+    expect(config.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(result.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
     expect(config.maintenanceIntervalMs).toBe(123_000);
     expect(result.trustPolicyConfig.channelClassification.defaultVisibility).toBeTruthy();
@@ -1077,10 +1077,10 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(agentConfig.sessionMessageLimit).toBe(41);
     expect(gatewayConfig.sessionMessageLimit).toBe(41);
     expect(chatCliConfig.sessionMessageLimit).toBe(41);
-    expect(runtimeConfig.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
-    expect(agentConfig.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
-    expect(gatewayConfig.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
-    expect(chatCliConfig.modelCatalog?.chatslot?.model).toBe('openai/gpt-4.1-mini');
+    expect(runtimeConfig.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
+    expect(agentConfig.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
+    expect(gatewayConfig.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
+    expect(chatCliConfig.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
   });
 
   it('reports and applies legacy scheduler/capability migration diagnostics', () => {

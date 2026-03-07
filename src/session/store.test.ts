@@ -284,7 +284,7 @@ describe('SessionStore', () => {
     const indexPayload = JSON.parse(readFileSync(join(dir, '_channel_index.json'), 'utf-8')) as {
       channels: Record<string, { filename: string; activeTurnTombstoneCount?: number }>;
     };
-    expect(indexPayload.channels[channelId]?.activeTurnTombstoneCount).toBe(1);
+    expect(indexPayload.channels[channelId].activeTurnTombstoneCount).toBe(1);
 
     const journalPath = join(dir, indexPayload.channels[channelId]!.filename);
     const journalLines = readFileSync(journalPath, 'utf-8')

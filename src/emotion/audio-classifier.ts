@@ -39,7 +39,7 @@ export interface AudioEmotionClassifierConfig {
   runtimeLoader?: SherpaOnnxRuntimeLoader;
 }
 
-export const AUDIO_EMOTION_LABEL_VAD_MAP: Readonly<Record<string, Readonly<VADVector>>> = Object.freeze({
+export const AUDIO_EMOTION_LABEL_VAD_MAP: Readonly<Partial<Record<string, Readonly<VADVector>>>> = Object.freeze({
   anger: Object.freeze({ valence: -0.8, arousal: 0.8, dominance: 0.6 }),
   disgust: Object.freeze({ valence: -0.7, arousal: 0.6, dominance: 0.1 }),
   fear: Object.freeze({ valence: -0.7, arousal: 0.9, dominance: -0.7 }),
@@ -228,7 +228,6 @@ export function toAudioEmotionSignal(
   const events: string[] = [];
 
   for (const classification of classifications) {
-    if (!classification) continue;
     const confidence = clampUnit(classification.score);
 
     if (classification.source === 'event') {
@@ -281,6 +280,18 @@ export function toAudioEmotionSignal(
   }
 
   const vad = AUDIO_EMOTION_LABEL_VAD_MAP[strongestEmotion.label];
+  if (!vad) {
+    return {
+      observation: {
+        discrete: { [strongestEmotion.label]: 1 },
+        confidence: strongestEmotion.score,
+      },
+      events: uniqueEvents,
+      strongestEmotionLabel: strongestEmotion.label,
+      strongestEmotionScore: strongestEmotion.score,
+    };
+  }
+
   return {
     observation: {
       vad: {

@@ -286,23 +286,27 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
       if (!concurrency) {
         missingConcurrencyMetadata.push('concurrency metadata missing');
       } else {
+        const concurrencyClass = (concurrency as { class?: unknown }).class;
         if (
-          concurrency.class !== 'exclusive'
-          && concurrency.class !== 'read_only'
-          && concurrency.class !== 'spawn_shard'
+          concurrencyClass !== 'exclusive'
+          && concurrencyClass !== 'read_only'
+          && concurrencyClass !== 'spawn_shard'
         ) {
           missingConcurrencyMetadata.push(
-            `invalid concurrency.class "${String((concurrency as { class?: unknown }).class)}"`,
+            `invalid concurrency.class "${String(concurrencyClass)}"`,
           );
         }
 
+        const exclusivityKeyPolicy = (
+          concurrency as { exclusivityKeyPolicy?: unknown }
+        ).exclusivityKeyPolicy;
         if (
-          concurrency.exclusivityKeyPolicy !== 'none'
-          && concurrency.exclusivityKeyPolicy !== 'category_tool_name'
-          && concurrency.exclusivityKeyPolicy !== 'static_key'
+          exclusivityKeyPolicy !== 'none'
+          && exclusivityKeyPolicy !== 'category_tool_name'
+          && exclusivityKeyPolicy !== 'static_key'
         ) {
           missingConcurrencyMetadata.push(
-            `invalid concurrency.exclusivityKeyPolicy "${String((concurrency as { exclusivityKeyPolicy?: unknown }).exclusivityKeyPolicy)}"`,
+            `invalid concurrency.exclusivityKeyPolicy "${String(exclusivityKeyPolicy)}"`,
           );
         }
 
@@ -341,19 +345,24 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
           missingConcurrencyMetadata.push('concurrency.maxParallel must be a positive integer when provided');
         }
 
+        const interruptibility = (concurrency as { interruptibility?: unknown }).interruptibility;
         if (
-          concurrency.interruptibility !== 'cooperative'
-          && concurrency.interruptibility !== 'non_interruptible'
+          interruptibility !== 'cooperative'
+          && interruptibility !== 'non_interruptible'
         ) {
           missingConcurrencyMetadata.push(
-            `invalid concurrency.interruptibility "${String((concurrency as { interruptibility?: unknown }).interruptibility)}"`,
+            `invalid concurrency.interruptibility "${String(interruptibility)}"`,
           );
         }
 
-        if (!concurrency.eligibility) {
+        const eligibility = (concurrency as { eligibility?: unknown }).eligibility;
+        if (!eligibility || typeof eligibility !== 'object') {
           missingConcurrencyMetadata.push('concurrency.eligibility metadata missing');
         } else {
-          const { foreground, background } = concurrency.eligibility;
+          const { foreground, background } = eligibility as {
+            foreground?: unknown;
+            background?: unknown;
+          };
           if (typeof foreground !== 'boolean' || typeof background !== 'boolean') {
             missingConcurrencyMetadata.push('concurrency.eligibility must include boolean foreground/background flags');
           } else if (!foreground && !background) {

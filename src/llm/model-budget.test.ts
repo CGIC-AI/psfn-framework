@@ -117,8 +117,8 @@ describe('ModelBudgetController', () => {
     expect(snapshot.dailyTotals.inputTokens).toBe(1200);
     expect(snapshot.dailyTotals.outputTokens).toBe(800);
     expect(snapshot.dailyTotals.estimatedCostUsd).toBeCloseTo(0.002, 8);
-    expect(snapshot.totalsByModel['openrouter:z-ai/glm-5']?.calls).toBe(1);
-    expect(snapshot.totalsByServiceProcess['chat:agent.turn.prompt']?.calls).toBe(1);
+    expect(snapshot.totalsByModel['openrouter:z-ai/glm-5'].calls).toBe(1);
+    expect(snapshot.totalsByServiceProcess['chat:agent.turn.prompt'].calls).toBe(1);
   });
 
   it('blocks when projected daily budget would be exceeded', () => {

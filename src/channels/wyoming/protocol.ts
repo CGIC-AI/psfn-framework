@@ -6,7 +6,7 @@ export type WyomingJsonValue =
   | WyomingJsonValue[];
 
 export interface WyomingJsonObject {
-  [key: string]: WyomingJsonValue;
+  [key: string]: WyomingJsonValue | undefined;
 }
 
 export interface WyomingFrame {
@@ -25,7 +25,7 @@ export interface WyomingTransportSession {
   remotePort?: number;
 }
 
-export interface WyomingServiceInfo {
+export interface WyomingServiceInfo extends WyomingJsonObject {
   name: string;
   description?: string;
   version?: string;

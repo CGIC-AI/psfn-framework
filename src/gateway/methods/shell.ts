@@ -320,7 +320,7 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       const policy = runtime.policyConfig.shellExec ?? {};
 
       const command = resolveCommand(params.command);
-      assertCommandAllowed(command, policy.allowlist);
+      assertCommandAllowed(command, policy.allowlist ?? []);
       const args = resolveArgs(params.args);
       const cwd = resolveWorkingDirectory(params.cwd, runtime, policy);
       const limits = resolveBoundedExecutionPolicy(params, policy);

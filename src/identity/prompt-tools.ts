@@ -525,7 +525,11 @@ export function createPromptLayerUpdateTool(
         const action = params.action ?? 'update';
 
         if (action === 'cancel' || action === 'commit') {
-          return handlePromptLayerStagedAction(store, identityCoolingOff, params, {
+          return handlePromptLayerStagedAction(store, identityCoolingOff, {
+            action,
+            stage_id: params.stage_id,
+            reason: params.reason,
+          }, {
             commitReason: 'Committed staged prompt-layer update via prompt_layer_update',
             commitSuccessMessage: (updated, stageId) =>
               `Committed staged update for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
@@ -621,7 +625,11 @@ export function createPromptLayerRollbackTool(
       try {
         const action = params.action ?? 'rollback';
         if (action === 'cancel' || action === 'commit') {
-          return handlePromptLayerStagedAction(store, identityCoolingOff, params, {
+          return handlePromptLayerStagedAction(store, identityCoolingOff, {
+            action,
+            stage_id: params.stage_id,
+            reason: params.reason,
+          }, {
             commitReason: 'Committed staged prompt-layer rollback via prompt_layer_rollback',
             commitSuccessMessage: (updated, stageId) =>
               `Committed staged rollback for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,

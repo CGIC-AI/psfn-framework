@@ -51,7 +51,7 @@ export class DeepgramSttClient {
         Authorization: `Token ${this.apiKey}`,
         'Content-Type': 'audio/wav',
       },
-      body: audioWav,
+      body: new Blob([Uint8Array.from(audioWav)], { type: 'audio/wav' }),
     });
 
     if (!response.ok) {

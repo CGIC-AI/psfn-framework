@@ -121,7 +121,7 @@ function normalizeContextManifest(value: unknown): ContextManifest {
     throw new Error('Context feedback payload field "contextManifest.compaction.triggered" must be boolean');
   }
 
-  return value as ContextManifest;
+  return value as unknown as ContextManifest;
 }
 
 export function normalizeContextFeedbackActionPayload(payload: unknown): ContextFeedbackActionPayload | null {

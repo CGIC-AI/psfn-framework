@@ -178,9 +178,10 @@ export class WyomingRuntime {
     this.onUnhandledEvent = options.onUnhandledEvent;
     this.onAuditSummary = options.onAuditSummary;
     this.eventBus = options.eventBus;
-    this.infoProvider = typeof options.info === 'function'
-      ? options.info
-      : () => options.info;
+    const runtimeInfo = options.info;
+    this.infoProvider = typeof runtimeInfo === 'function'
+      ? runtimeInfo
+      : () => runtimeInfo;
     this.now = options.now ?? (() => Date.now());
 
     this.maxConcurrentSessions = toPositiveInteger(

@@ -615,12 +615,12 @@ export class LLMClient {
               log.warn('LLM stream failed, retrying', {
                 model: String(model.id),
                 provider: candidateTarget.provider,
-                purpose: 'chat',
                 attempt,
                 maxRetries,
                 delayMs,
                 error: error.message,
                 ...correlation,
+                purpose: 'chat',
               });
             },
           });
@@ -633,11 +633,11 @@ export class LLMClient {
       );
 
       log.info('LLM stream completed', {
-        purpose: 'chat',
         model: candidate.model,
         provider: candidate.provider,
         attempts,
         ...correlation,
+        purpose: 'chat',
       });
 
       this.recordUsage(
@@ -701,13 +701,13 @@ export class LLMClient {
             log.warn('LLM complete failed, retrying', {
               model: String(model.id),
               provider: candidateTarget.provider,
-              purpose,
-              routingPurpose,
               attempt,
               maxRetries,
               delayMs,
               error: error.message,
               ...correlation,
+              purpose,
+              routingPurpose,
             });
           },
         });
@@ -720,13 +720,13 @@ export class LLMClient {
     );
 
     log.info('LLM complete finished', {
-      purpose,
-      routingPurpose,
       model: candidate.model,
       provider: candidate.provider,
       attempts,
       requestedModelHint: modelHint?.model,
       ...correlation,
+      purpose,
+      routingPurpose,
     });
 
     const content = extractTextContent(response.content as unknown[]);

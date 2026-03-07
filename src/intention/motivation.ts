@@ -128,7 +128,7 @@ function parsePositiveNumber(value: unknown, field: string): number {
 }
 
 function parsePositiveInteger(value: unknown, field: string): number {
-  if (!Number.isInteger(value) || value <= 0) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new Error(`${field} must be a positive integer`);
   }
   return value;

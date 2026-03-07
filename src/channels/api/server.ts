@@ -3,8 +3,8 @@
 // Uses Node.js built-in http module — no framework dependency.
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
+import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type {
@@ -330,7 +330,7 @@ export class ApiServer implements ChannelAdapter {
     });
   }
 
-  private handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
+  private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const handled = this.voiceWebSocket.handleUpgrade(req, socket, head);
     if (!handled) {
       this.voiceWebSocket.rejectUnknownUpgrade(socket);
@@ -1353,15 +1353,23 @@ export class ApiServer implements ChannelAdapter {
       }
     }
 
+    const nonce = claim.nonce;
+    const expiresAt = claim.expiresAt;
+    const signature = claim.signature;
+    if (!nonce || !expiresAt || !signature) {
+      this.sendError(res, 400, 'invalid_identity_claim', 'Identity claim verification headers were incomplete');
+      return false;
+    }
+
     const verificationResult = this.contactStore.verifyIdentityLinkChallenge({
       contactId: claim.canonicalContactId,
       sourceChannel: claim.sourceChannel,
       sourceUserId: claim.sourceUserId,
       targetChannel: 'api',
       targetUserId: authorId,
-      nonce: claim.nonce,
-      expiresAt: claim.expiresAt,
-      signature: claim.signature,
+      nonce,
+      expiresAt,
+      signature,
     });
 
     switch (verificationResult.status) {

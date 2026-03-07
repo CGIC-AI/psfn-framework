@@ -32,6 +32,7 @@ import {
   type VoiceWireInboundFrame,
   type WebSocketVoiceConnection,
 } from './voice/transports/websocket/types.js';
+import { INSECURE_LOCAL_API_PRINCIPAL } from './channels/http/auth.js';
 import { toErrorMessage } from './utils/errors.js';
 import type {
   VoiceWebSocketRuntime,
@@ -271,7 +272,10 @@ async function runSystemVoiceTurn(params: {
     },
   } as unknown as IncomingMessage;
 
-  const context: VoiceWebSocketRuntimeContext = { request };
+  const context: VoiceWebSocketRuntimeContext = {
+    request,
+    principal: INSECURE_LOCAL_API_PRINCIPAL,
+  };
   const detach = runtime.attach(connection, context);
   const sessionId = `voice-session-${Date.now()}`;
 

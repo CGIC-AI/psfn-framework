@@ -169,7 +169,7 @@ export function createStartFocusTool(sessionManager: FocusSessionManager): Agent
       _toolCallId: string,
       params: { scope: string; channelId?: string },
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<Record<string, unknown>>> => {
       const channelId = resolveTargetChannelId(sessionManager, params.channelId);
       if (!channelId) {
         return textResultWithError('start_focus failed: unable to resolve channelId for this turn.', true);
@@ -223,7 +223,7 @@ export function createCompleteFocusTool(
       _toolCallId: string,
       params: { channelId?: string; conclusion?: string },
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<Record<string, unknown>>> => {
       const channelId = resolveTargetChannelId(sessionManager, params.channelId);
       if (!channelId) {
         return textResultWithError('complete_focus failed: unable to resolve channelId for this turn.', true);

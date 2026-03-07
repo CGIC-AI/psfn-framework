@@ -328,7 +328,7 @@ function normalizeSherpaOnnxRuntime(value: unknown): SherpaOnnxRuntimeLike {
   if (!isRecord(value) || typeof value.OfflineRecognizer !== 'function') {
     throw new Error('sherpa-onnx-node did not expose OfflineRecognizer');
   }
-  return value as SherpaOnnxRuntimeLike;
+  return value as unknown as SherpaOnnxRuntimeLike;
 }
 
 function assertRecognizerInterface(recognizer: SherpaOnnxOfflineRecognizerLike): void {

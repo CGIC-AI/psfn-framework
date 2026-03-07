@@ -11,9 +11,8 @@ import type {
   ReflectionDeliberationConfig,
 } from './heartbeat-policy.js';
 import type { Scheduler } from './scheduler.js';
-import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
-import type { PostTurnActionCandidate } from '../types.js';
+import type { PostTurnActionCandidate, SubstrateMessage } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { isBusyTurnError } from '../lifecycle/turn-contention.js';
@@ -67,6 +66,11 @@ interface HeartbeatRunTemplateResult {
   reflection: string;
   queued?: boolean;
   deferredAction?: PostTurnActionCandidate;
+}
+
+interface ScheduleTaskAgentLoop {
+  handleMessage(message: SubstrateMessage): Promise<{ content: string }>;
+  waitForIdle?(): Promise<void>;
 }
 
 // ── Tool 1: heartbeat_get_policy ──
@@ -368,7 +372,7 @@ export function createHeartbeatRunTemplateTool(
 
 export function createScheduleTaskTool(
   scheduler: Scheduler,
-  agentLoop: SubstrateAgent,
+  agentLoop: ScheduleTaskAgentLoop,
   sender: MessageSender,
   heartbeatChannelId?: string,
 ): AgentTool<any> {
@@ -437,6 +441,9 @@ export function createScheduleTaskTool(
               await runPlannedPrompt();
             } catch (err) {
               if (!isBusyTurnError(err)) {
+                throw err;
+              }
+              if (typeof agentLoop.waitForIdle !== 'function') {
                 throw err;
               }
               await agentLoop.waitForIdle();

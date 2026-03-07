@@ -250,17 +250,26 @@ function computeNoveltyFromSimilarities(similarities: readonly number[]): number
   return clampUnit(1 - maxSimilarity, 1);
 }
 
+type MemoryWritePolicyDecision =
+  | {
+    accepted: true;
+    reason: Extract<MemoryWritePolicyReason, 'default_allow' | 'consent_deny_override'>;
+    minSalience: number;
+    minNovelty: number;
+  }
+  | {
+    accepted: false;
+    reason: Exclude<MemoryWritePolicyReason, 'default_allow' | 'consent_deny_override'>;
+    minSalience: number;
+    minNovelty: number;
+  };
+
 function evaluateSensitivityWritePolicy(input: {
   sensitivity: SensitivityLevel;
   salience: number;
   novelty: number;
   consentFlags?: ConsentFlags;
-}): {
-  accepted: boolean;
-  reason: MemoryWritePolicyReason;
-  minSalience: number;
-  minNovelty: number;
-} {
+}): MemoryWritePolicyDecision {
   const threshold = getSensitivityWriteThreshold(input.sensitivity);
   if (input.consentFlags?.allowRecall === false) {
     return {

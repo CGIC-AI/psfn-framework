@@ -3,17 +3,28 @@ export interface TextEmotionClassification {
   score: number;
 }
 
+export type TextEmotionDType =
+  | 'auto'
+  | 'fp32'
+  | 'fp16'
+  | 'q8'
+  | 'int8'
+  | 'uint8'
+  | 'q4'
+  | 'bnb4'
+  | 'q4f16';
+
 export interface TextEmotionClassifierConfig {
   model?: string;
   cacheDir?: string;
-  dtype?: string;
+  dtype?: TextEmotionDType;
   pipelineFactory?: TextEmotionPipelineFactory;
 }
 
 export interface TextEmotionPipelineFactoryConfig {
   model: string;
   cacheDir?: string;
-  dtype: string;
+  dtype: TextEmotionDType;
 }
 
 export type TextEmotionPipeline = (
@@ -28,12 +39,12 @@ export type TextEmotionPipelineFactory = (
 export const TEXT_EMOTION_MODEL_ID = 'boltuix/bert-emotion';
 export const TEXT_EMOTION_LABEL_COUNT = 13;
 
-const DEFAULT_DTYPE = 'fp32';
+const DEFAULT_DTYPE: TextEmotionDType = 'fp32';
 
 export class TextEmotionClassifier {
   private readonly model: string;
   private readonly cacheDir?: string;
-  private readonly dtype: string;
+  private readonly dtype: TextEmotionDType;
   private readonly pipelineFactory: TextEmotionPipelineFactory;
   private pipeline: TextEmotionPipeline | null = null;
   private initPromise: Promise<TextEmotionPipeline> | null = null;
@@ -192,9 +203,23 @@ function normalizeModel(model: string | undefined): string {
   return normalized && normalized.length > 0 ? normalized : TEXT_EMOTION_MODEL_ID;
 }
 
-function normalizeDtype(dtype: string | undefined): string {
+function normalizeDtype(dtype: TextEmotionDType | undefined): TextEmotionDType {
   const normalized = dtype?.trim();
-  return normalized && normalized.length > 0 ? normalized : DEFAULT_DTYPE;
+  if (!normalized) return DEFAULT_DTYPE;
+  switch (normalized) {
+    case 'auto':
+    case 'fp32':
+    case 'fp16':
+    case 'q8':
+    case 'int8':
+    case 'uint8':
+    case 'q4':
+    case 'bnb4':
+    case 'q4f16':
+      return normalized;
+    default:
+      return DEFAULT_DTYPE;
+  }
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {

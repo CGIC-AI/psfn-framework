@@ -1740,8 +1740,9 @@ export class DiscordVoiceRuntime {
     detail?: Record<string, unknown>;
   }): Promise<void> {
     const { turnId, stage, kind, detail } = params;
+    const resolvedTurnId = turnId ?? this.activeTurnId ?? `voice-observation-${Date.now()}`;
     const payload = {
-      turnId,
+      turnId: resolvedTurnId,
       channelId: this.activeChannel?.id,
       userId: this.targetUserId,
       stage,

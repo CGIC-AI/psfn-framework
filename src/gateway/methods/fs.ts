@@ -71,8 +71,6 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       const paths: string[] = [];
       for await (const match of fsGlob(normalizedGlob, {
         cwd: readRoot,
-        withFileTypes: false,
-        dot: true,
       })) {
         const relative = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
         const absolute = resolveWorkspaceFsPathFromRoot(relative, readRoot);

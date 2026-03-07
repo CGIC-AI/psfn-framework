@@ -1,16 +1,42 @@
+import { createRequire } from 'node:module';
 import {
+  buildSettingsContractData,
+  type SettingsContractData,
+  type SettingsSubsystemId,
+} from './settings-contract.js';
+
+interface GardenSettingsFieldExposure {
+  sectionId: string;
+  surface: 'advanced' | 'custom';
+  editorId?: string;
+}
+
+type GardenSettingsRawEditorKey =
+  | 'settings'
+  | 'models'
+  | 'skills'
+  | 'scheduler'
+  | 'trust-policy'
+  | 'capabilities';
+
+const require = createRequire(import.meta.url);
+const settingsGardenContract = require('../../admin-ui/src/lib/settings-garden-contract.js') as {
+  SETTINGS_GARDEN_FIELD_EXPOSURE: Record<string, GardenSettingsFieldExposure | undefined>;
+  SETTINGS_GARDEN_GENERIC_FIELD_TYPES: readonly string[];
+  SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSettingsRawEditorKey, string>;
+  SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY: Record<GardenSettingsRawEditorKey, SettingsSubsystemId>;
+  SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS: readonly string[];
+  listGardenSettingsFieldExposureKeys: () => string[];
+};
+
+const {
   SETTINGS_GARDEN_FIELD_EXPOSURE,
   SETTINGS_GARDEN_GENERIC_FIELD_TYPES,
   SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY,
   SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
   SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS,
   listGardenSettingsFieldExposureKeys,
-} from '../../admin-ui/src/lib/settings-garden-contract.js';
-import {
-  buildSettingsContractData,
-  type SettingsContractData,
-  type SettingsSubsystemId,
-} from './settings-contract.js';
+} = settingsGardenContract;
 
 export interface SettingsContractGuardOptions {
   contractData?: SettingsContractData;

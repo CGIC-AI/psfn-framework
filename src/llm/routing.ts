@@ -322,10 +322,10 @@ function compareScoredCandidates(a: ScoredSelectorCandidate, b: ScoredSelectorCa
 }
 
 function withOpenRouterPreferences(
-  candidate: RoutingCandidate | undefined,
+  candidate: RoutingCandidate,
   config: SubstrateConfig,
-): RoutingCandidate | undefined {
-  if (!candidate || candidate.provider !== 'openrouter') return candidate;
+): RoutingCandidate {
+  if (candidate.provider !== 'openrouter') return candidate;
   if (candidate.openRouterProviderOrder !== undefined) return candidate;
   const providerOrder = config.openRouterProviderOrder?.filter(Boolean) ?? [];
   if (providerOrder.length === 0) return candidate;

@@ -93,7 +93,7 @@ export function syncCharacterFoundationPromptFromCard(
   }
 
   try {
-    promptStore.update(foundation.id, nextPrompt, updatedBy, reason);
+    promptStore.update(foundation.id, nextPrompt, updatedBy, undefined, reason);
     return { ok: true, updated: true };
   } catch (error) {
     return {

@@ -23,6 +23,7 @@
     "proxy:logs": "docker compose -f proxy/docker-compose.yml logs -f",
     "test": "vitest run",
     "test:privacy": "vitest run src/__tests__/privacy/privacy-regression.test.ts",
+    "test:leak-audit": "vitest run src/session/context-leak-audit.test.ts",
     "test:watch": "vitest",
     "chat": "tsx src/chat-cli.ts",
     "session:repair": "tsx src/session-repair.ts",
@@ -40,7 +41,8 @@
     "garden:preview": "cd admin-ui && npm run preview",
     "verify:public-sanitize": "node scripts/public-sanitize-check.mjs",
     "verify:identity-literals": "node scripts/identity-literal-scan.mjs",
-    "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:identity-literals",
+    "verify:dependency-cycles": "node scripts/check-dependency-cycles.mjs",
+    "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:identity-literals && npm run verify:dependency-cycles",
     "verify:settings-contract": "tsx scripts/verify-settings-contract.ts",
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
     "verify:agent-docker-isolation": "node scripts/verify-agent-docker-isolation.mjs"

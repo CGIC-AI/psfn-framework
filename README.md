@@ -318,11 +318,17 @@ Gateway (host)                    Agent (production container, network_mode: non
 | **Trust & Privacy** | Honne/tatemae: 4-tier trust, 4-tier sensitivity, 5-layer policy, contact store, channel visibility, persona adaptation |
 | **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
 | **Git Self-Modification** | GitOps service, 6 tools (status, diff, patch, commit, branch, PR), path allowlist, audit log |
-| **Module System** | Hot-loadable TypeScript modules (planned) |
+| **Module System** | Implemented hot-loadable TypeScript registry/loader with tier-gated install flow |
 | **Channel Layer** | Discord (text + voice), OpenAI API, admin GUI (Svelte SPA at `/garden`), Wyoming protocol |
 | **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers |
 
 Heartbeat/reflection runtime wiring uses `wireHeartbeatRuntime` in `src/bootstrap/parity.ts`.
+
+Operational parity docs:
+
+- `docs/architecture/module-runtime-maturity.md`
+- `docs/architecture/shard-reintegration-provenance-rules.md`
+- `docs/operations/re-embedding-strategy.md`
 
 ### Storage
 

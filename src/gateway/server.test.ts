@@ -35,6 +35,7 @@ function createMockConnection(
 ) {
   const emitter = new EventEmitter();
   const sent: unknown[] = [];
+  let destroyed = false;
 
   const conn = {
     send(data: unknown): boolean {
@@ -49,10 +50,11 @@ function createMockConnection(
       emitter.on(event, handler);
     },
     destroy(): void {
+      destroyed = true;
       emitter.removeAllListeners();
     },
     get destroyed(): boolean {
-      return false;
+      return destroyed;
     },
     _emit(message: unknown): void {
       emitter.emit('message', message);
@@ -60,9 +62,22 @@ function createMockConnection(
     _emitClose(): void {
       emitter.emit('close');
     },
+    _emitError(error: unknown): void {
+      emitter.emit('error', error);
+    },
+    _emitFrameError(error: unknown): void {
+      emitter.emit('frameError', error);
+    },
   };
 
-  return { conn: conn as unknown as NdjsonConnection, sent, _emit: conn._emit, _emitClose: conn._emitClose };
+  return {
+    conn: conn as unknown as NdjsonConnection,
+    sent,
+    _emit: conn._emit,
+    _emitClose: conn._emitClose,
+    _emitError: conn._emitError,
+    _emitFrameError: conn._emitFrameError,
+  };
 }
 
 async function setupServerConnection(
@@ -932,6 +947,73 @@ describe('GatewayServer', () => {
       expect(status.state).toBe('degraded');
       expect(status.health).toBe('stale');
       expect(status.stateReason).toBe('heartbeat_stale');
+    });
+
+    it('fails closed and audits malformed JSON-RPC frames', async () => {
+      const auditLog = vi.fn().mockReturnValue(123);
+      const auditComplete = vi.fn();
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: {
+          log: auditLog,
+          complete: auditComplete,
+        } as any,
+      });
+
+      conn._emit({
+        jsonrpc: '2.0',
+        id: 77,
+        method: 42,
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(auditLog).toHaveBeenCalledWith(
+        'gateway.ipc.frame.invalid',
+        'DENY',
+        expect.objectContaining({
+          frameKind: 'jsonrpc',
+        }),
+      );
+      expect(auditComplete).toHaveBeenCalledWith(
+        123,
+        expect.any(Number),
+        expect.stringContaining('method'),
+      );
+      expect(conn.conn.destroyed).toBe(true);
+      await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+    });
+
+    it('fails closed and audits malformed NDJSON frames', async () => {
+      const auditLog = vi.fn().mockReturnValue(222);
+      const auditComplete = vi.fn();
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: {
+          log: auditLog,
+          complete: auditComplete,
+        } as any,
+      });
+
+      conn._emitFrameError({
+        message: 'Malformed NDJSON frame received',
+        preview: '{"jsonrpc":"2.0","bad":',
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(auditLog).toHaveBeenCalledWith(
+        'gateway.ipc.frame.invalid',
+        'DENY',
+        expect.objectContaining({
+          frameKind: 'ndjson',
+        }),
+      );
+      expect(auditComplete).toHaveBeenCalledWith(
+        222,
+        expect.any(Number),
+        'Malformed NDJSON frame received',
+      );
+      expect(conn.conn.destroyed).toBe(true);
+      await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
     });
   });
 

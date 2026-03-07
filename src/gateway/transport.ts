@@ -8,6 +8,7 @@ import { unlinkSync, chmodSync } from 'node:fs';
 import { createComponentLogger } from '../logger.js';
 
 const log = createComponentLogger('Transport');
+const FRAME_PREVIEW_LIMIT = 200;
 
 export interface TransportOptions {
   socketPath: string;
@@ -18,6 +19,24 @@ export interface SocketServerOptions {
 }
 
 type MessageHandler = (message: unknown) => void;
+
+export class NdjsonFramingError extends Error {
+  readonly preview: string;
+
+  constructor(line: string) {
+    super('Malformed NDJSON frame received');
+    this.name = 'NdjsonFramingError';
+    this.preview = summarizeFramePreview(line);
+  }
+}
+
+function summarizeFramePreview(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed.length <= FRAME_PREVIEW_LIMIT) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, FRAME_PREVIEW_LIMIT)}... (${trimmed.length} chars)`;
+}
 
 // ── Socket connection wrapper (both client and server connections) ──
 
@@ -36,7 +55,12 @@ export class NdjsonConnection extends EventEmitter {
         const parsed = JSON.parse(line);
         this.emit('message', parsed);
       } catch {
-        log.error('Invalid JSON line', { data: line.slice(0, 100) });
+        const framingError = new NdjsonFramingError(line);
+        log.error('Malformed NDJSON frame received; closing connection', {
+          preview: framingError.preview,
+        });
+        this.emit('frameError', framingError);
+        this.destroy();
       }
     });
 

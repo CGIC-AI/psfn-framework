@@ -2488,6 +2488,46 @@ describe('SubstrateAgent.handleMessage', () => {
     }
   });
 
+  it('rejects direct fetch fallback in gateway mode when gateway binary fetch is unavailable', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        makeMockSessionManager(),
+        'test',
+        config,
+        { runtimeMode: 'gateway' },
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'discord',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/image.png',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expect(promptInput.content).toBe('Hello, PSFN!');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
   it('routes Telegram image turns through vision model slot even without fetchable image URLs', async () => {
     const config = makeConfig({
       modelRoster: {

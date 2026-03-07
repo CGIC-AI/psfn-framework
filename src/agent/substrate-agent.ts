@@ -285,6 +285,7 @@ export interface SubstrateAgentOptions {
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
+  runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
   selfModelRuntime?: SelfModelRuntimeWiring;
 }
@@ -445,6 +446,28 @@ interface BackgroundContinuationTaskRecord {
   notificationReason: BackgroundCompletionNotificationReason;
 }
 
+interface GatewayRuntimeInferenceCandidate {
+  discordSend?: (channelId: string, content: string) => Promise<void>;
+  fsRead?: (path: string) => Promise<string>;
+  webFetch?: (
+    url: string,
+    prompt?: string,
+    lane?: 'default' | 'local_crawler',
+  ) => Promise<string>;
+}
+
+function inferRuntimeModeFromProvider(provider: LLMProvider): RuntimeMode {
+  const candidate = provider as unknown as GatewayRuntimeInferenceCandidate;
+  if (
+    typeof candidate.discordSend === 'function'
+    || typeof candidate.fsRead === 'function'
+    || typeof candidate.webFetch === 'function'
+  ) {
+    return 'gateway';
+  }
+  return 'single';
+}
+
 // ── SubstrateAgent ──
 
 export class SubstrateAgent {
@@ -490,6 +513,7 @@ export class SubstrateAgent {
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
+  private runtimeMode: RuntimeMode;
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -524,6 +548,7 @@ export class SubstrateAgent {
     this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
     this.config = config;
+    this.runtimeMode = options?.runtimeMode ?? inferRuntimeModeFromProvider(llmClient);
     this.emotionState = options?.emotionRuntime?.state ?? null;
     this.emotionObserver = options?.emotionRuntime?.observer ?? null;
     this.emotionAppraisal = options?.emotionRuntime?.appraisal
@@ -1992,6 +2017,14 @@ export class SubstrateAgent {
         });
         return null;
       }
+    }
+
+    if (this.runtimeMode === 'gateway') {
+      log.warn('Skipping Discord image attachment because direct egress is disabled in gateway mode', {
+        channelId: message.channelId,
+        url: attachmentUrl.toString(),
+      });
+      return null;
     }
 
     const abortController = new AbortController();

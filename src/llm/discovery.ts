@@ -15,6 +15,11 @@ export interface DiscoveredModel {
   pricing?: Record<string, string>;
 }
 
+export interface ModelDiscoveryOptions {
+  fetchFn?: typeof fetch;
+  allowDirectNetworkEgress?: boolean;
+}
+
 interface LiteLLMModelEntry {
   id: string;
   object?: string;
@@ -80,16 +85,31 @@ function normalizePricing(pricing: OpenRouterModelEntry['pricing']): Record<stri
 
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
+function isGatewayAgentEntrypoint(): boolean {
+  const entrypoint = (process.argv[1] ?? '')
+    .replace(/\\/g, '/')
+    .toLowerCase();
+  return entrypoint.endsWith('/agent-main.ts') || entrypoint.endsWith('/agent-main.js');
+}
+
 export class ModelDiscovery {
   private litellmBaseUrl: string;
   private litellmApiKey?: string;
+  private fetchFn?: typeof fetch;
+  private allowDirectNetworkEgress: boolean;
   private cache: DiscoveredModel[] | null = null;
   private cacheTime = 0;
 
-  constructor(litellmBaseUrl: string, litellmApiKey?: string) {
+  constructor(
+    litellmBaseUrl: string,
+    litellmApiKey?: string,
+    options: ModelDiscoveryOptions = {},
+  ) {
     // Strip trailing /v1 if present — we add our own paths
     this.litellmBaseUrl = litellmBaseUrl.replace(/\/v1\/?$/, '');
     this.litellmApiKey = litellmApiKey;
+    this.fetchFn = options.fetchFn;
+    this.allowDirectNetworkEgress = options.allowDirectNetworkEgress ?? !isGatewayAgentEntrypoint();
   }
 
   async getAvailableModels(): Promise<DiscoveredModel[]> {
@@ -137,13 +157,21 @@ export class ModelDiscovery {
     this.cacheTime = 0;
   }
 
+  private resolveFetch(): typeof fetch {
+    if (this.fetchFn) return this.fetchFn;
+    if (this.allowDirectNetworkEgress) return fetch;
+    throw new Error(
+      'Direct network egress is disabled; model discovery requires gateway-backed fetch wiring.',
+    );
+  }
+
   private async fetchLiteLLM(): Promise<LiteLLMModelEntry[]> {
     try {
       const headers: Record<string, string> = {};
       if (this.litellmApiKey) {
         headers['Authorization'] = `Bearer ${this.litellmApiKey}`;
       }
-      const res = await fetch(`${this.litellmBaseUrl}/v1/models`, { headers });
+      const res = await this.resolveFetch()(`${this.litellmBaseUrl}/v1/models`, { headers });
       if (!res.ok) {
         log.warn(`LiteLLM /v1/models returned ${res.status}`);
         return [];
@@ -158,7 +186,7 @@ export class ModelDiscovery {
 
   private async fetchOpenRouterMeta(): Promise<OpenRouterModelEntry[]> {
     try {
-      const res = await fetch('https://openrouter.ai/api/v1/models');
+      const res = await this.resolveFetch()('https://openrouter.ai/api/v1/models');
       if (!res.ok) {
         log.warn(`OpenRouter /api/v1/models returned ${res.status}`);
         return [];

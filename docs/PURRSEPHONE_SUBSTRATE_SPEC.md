@@ -1,6 +1,6 @@
 # Purrsephone Substrate Specification
 
-*Revision date: 2026-02-26*
+*Revision date: 2026-03-07*
 
 A purpose-built runtime for long-lived AI companions with persistent memory, trust-aware privacy, and controlled self-modification.
 
@@ -25,7 +25,7 @@ The codebase currently ships the following architecture layers:
 | Trust & Privacy | Implemented (honne/tatemae policy, trust tiers, sensitivity tiers, channel visibility) |
 | Identity & Prompts | Implemented (layered prompt stack + editable admin surfaces) |
 | Git Self-Modification | Implemented (`GitOps` + path allowlist + protected branch rules + audit logging) |
-| Module System | Not yet fully shipped as hot-loadable module registry |
+| Module System | Implemented (registry + loader in single/split agent runtime, tier-gated install flow) |
 | Channel Layer | Implemented (Discord, OpenAI-compatible API, admin GUI, websocket voice transport) |
 | Scheduler | Implemented (heartbeat, cron, one-shot, maintenance workers) |
 
@@ -137,7 +137,7 @@ Contributor and agent workflow uses **bd (beads)** for all tracked work.
 
 The following are intentionally incomplete or still evolving:
 
-- General-purpose hot-loadable module registry/runtime
+- Module governance hardening (trust catalog/signing/supply-chain controls)
 - Capability token layer
 
 ## Verification Commands

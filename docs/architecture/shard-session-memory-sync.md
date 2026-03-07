@@ -8,6 +8,9 @@
 
 Define explicit, deterministic boundaries for what can sync between the prime runtime and spawned shards, with fail-closed enforcement and auditable allow/deny decisions.
 
+For operator-facing reintegration and provenance verification steps, use
+`docs/architecture/shard-reintegration-provenance-rules.md`.
+
 ## Sync Classes
 
 1. `transcript_fact`

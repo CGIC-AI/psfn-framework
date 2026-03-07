@@ -143,6 +143,10 @@ Scheduled backup artifacts are structured as:
 
 Restore verification defaults to enabled (`BACKUP_VERIFY_RESTORE=true`) and rehearses a restore plus SQLite integrity check for each scheduled backup cycle.
 
+If embedding provider/model dimensions change, run the dedicated re-embedding
+runbook before reopening normal traffic:
+`docs/operations/re-embedding-strategy.md`.
+
 Manual restore verification smoke:
 
 ```bash

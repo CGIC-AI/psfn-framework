@@ -21,6 +21,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   load_tools: 'reversible',
   prompt_layer_list: 'reversible',
   prompt_layer_get: 'reversible',
+  prompt_layer_rollback: 'irreversible',
   prompt_layer_update: 'irreversible',
   prompt_layer_toggle: 'irreversible',
   settings_get: 'reversible',

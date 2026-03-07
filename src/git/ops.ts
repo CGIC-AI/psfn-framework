@@ -221,6 +221,7 @@ export class GitOps implements GitOperations {
   openPR(title: string, body: string, base?: string): string {
     const baseArg = base ? `--base ${this.shellEscape(base)}` : '';
     try {
+      this.assertNotProtected();
       const result = this.exec(
         `gh pr create --title ${this.shellEscape(title)} --body ${this.shellEscape(body)} ${baseArg}`,
       );

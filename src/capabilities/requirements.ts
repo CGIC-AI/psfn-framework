@@ -38,6 +38,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   promoted_tools_swap: 'identity.write.runtime',
   prompt_layer_get: 'identity.read',
   prompt_layer_list: 'identity.read',
+  prompt_layer_rollback: 'identity.write.runtime',
   prompt_layer_toggle: 'identity.write.runtime',
   prompt_layer_update: 'identity.write.runtime',
   repo_apply_patch: 'git.write',

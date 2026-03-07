@@ -17,6 +17,7 @@ import {
   createIdentityDiffTool,
   createIdentityChangelogTool,
   createPromptLayerUpdateTool,
+  createPromptLayerRollbackTool,
   createPromptLayerToggleTool,
 } from './prompt-tools.js';
 
@@ -454,6 +455,88 @@ describe('Prompt Layer Tools', () => {
       const history = store.getLayerHistory(layer.id);
       expect(history).toHaveLength(1);
       expect(history[0].reason).toBe('Need clearer guardrails');
+    });
+  });
+
+  describe('prompt_layer_rollback', () => {
+    it('denies base rollbacks in nursery tier', async () => {
+      const layer = createNonFoundationBaseLayer('Base', 'rollback-nursery');
+      store.update(layer.id, 'base-v2', 'agent', {}, 'base update');
+      const tool = gateToolWithCapabilities(
+        createPromptLayerRollbackTool(store),
+        () => accessForTier('nursery'),
+      );
+
+      const result = await tool.execute('rollback-nursery', {
+        layer_id: layer.id,
+        version: 1,
+      });
+
+      expect(resultText(result)).toContain('Capability denied');
+      expect(resultText(result)).toContain('identity.write.base');
+      expect(store.getById(layer.id)?.content).toBe('base-v2');
+    });
+
+    it('rolls runtime layers back to historical content when authorized', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'runtime-v1' });
+      store.update(layer.id, 'runtime-v2', 'agent', {}, 'tweak');
+      store.update(layer.id, 'runtime-v3', 'agent', {}, 'more tweak');
+      const tool = gateToolWithCapabilities(
+        createPromptLayerRollbackTool(store),
+        () => accessForTier('nursery'),
+      );
+
+      const result = await tool.execute('rollback-runtime', {
+        layer_id: layer.id,
+        version: 1,
+        reason: 'Revert runtime prompt to known good',
+      });
+
+      expect(resultText(result)).toContain('Rolled back layer');
+      expect(store.getById(layer.id)?.content).toBe('runtime-v1');
+
+      const history = store.getLayerHistory(layer.id);
+      expect(history.at(-1)?.reason).toBe('Revert runtime prompt to known good');
+    });
+
+    it('stages base rollbacks with cooling-off in apprentice tier and commits after wait', async () => {
+      let now = 5_000;
+      const manager = new IdentityCoolingOffManager({
+        now: () => now,
+        defaultCooldownMs: 5_000,
+        idFactory: () => 'rollback-stage-1',
+      });
+      const layer = createNonFoundationBaseLayer('Character Foundation', 'rollback-apprentice');
+      store.update(layer.id, 'base-v2', 'agent', {}, 'base update');
+      const tool = gateToolWithCapabilities(
+        createPromptLayerRollbackTool(store, {
+          identityCoolingOff: manager,
+          getCapabilityTier: () => 'apprentice',
+        }),
+        () => accessForTier('apprentice'),
+      );
+
+      const staged = await tool.execute('rollback-stage', {
+        layer_id: layer.id,
+        version: 1,
+      });
+      expect(resultText(staged)).toContain('Staged base-layer rollback');
+      expect(store.getById(layer.id)?.content).toBe('base-v2');
+
+      const tooSoon = await tool.execute('rollback-commit-early', {
+        action: 'commit',
+        stage_id: 'rollback-stage-1',
+      });
+      expect(resultText(tooSoon)).toContain('cooling off');
+      expect(store.getById(layer.id)?.content).toBe('base-v2');
+
+      now = 10_100;
+      const committed = await tool.execute('rollback-commit-ready', {
+        action: 'commit',
+        stage_id: 'rollback-stage-1',
+      });
+      expect(resultText(committed)).toContain('Committed staged rollback');
+      expect(store.getById(layer.id)?.content).toBe('original');
     });
   });
 

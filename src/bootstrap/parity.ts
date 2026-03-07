@@ -53,6 +53,7 @@ import {
   createIdentityDiffTool,
   createIdentityChangelogTool,
   createPromptLayerUpdateTool,
+  createPromptLayerRollbackTool,
   createPromptLayerToggleTool,
   type PromptLayerUpdateToolOptions,
 } from '../identity/prompt-tools.js';
@@ -252,6 +253,7 @@ export function wirePromptRuntime(
   target.registerTool(createIdentityDiffTool(promptStore), 'extended');
   target.registerTool(createIdentityChangelogTool(promptStore), 'extended');
   target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
+  target.registerTool(createPromptLayerRollbackTool(promptStore, options), 'extended');
   target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
 
   log.info(`Prompt stack enabled (${promptStore.count} layers)`);
@@ -1118,7 +1120,7 @@ export function wireHeartbeatRuntime(
           });
         }
 
-        if (!context.response.metadata || context.response.metadata.internalState === undefined) {
+        if (context.response.metadata.internalState === undefined) {
           throw new Error('Intention post-turn appraisal requires response.metadata.internalState');
         }
         const internalState = cloneInternalState(context.response.metadata.internalState);

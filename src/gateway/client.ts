@@ -10,6 +10,7 @@ import type {
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
+  LLMModelHint,
   LLMResponse,
   StreamCallbacks,
   SubstrateMessage,
@@ -383,6 +384,12 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     const purpose = context.correlation?.purpose
       ?? context.correlation?.originStage
       ?? 'chat';
+    const modelHint = normalizeGatewayModelHint(context.modelHint);
+    const hintedModel = normalizeCorrelationText(modelHint?.model);
+    const hintedProvider = normalizeCorrelationText(modelHint?.provider);
+    const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
+    const model = qualifiedHint?.model ?? hintedModel ?? '';
+    const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
 
     // Register chunk handler before sending the RPC so no chunks are missed
     if (callbacks?.onText) {
@@ -391,11 +398,20 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
     try {
       const result = await this.rpcInstance.request('llm.chat', {
-        model: '',  // gateway uses its own config
-        provider: '',
+        model,  // gateway resolves roster defaults when hint fields are unset
+        provider,
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         stream: !!callbacks?.onText,
+        ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
+        ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
+        ...(modelHint?.thinkingEnabled !== undefined ? { thinkingEnabled: modelHint.thinkingEnabled } : {}),
+        ...(modelHint?.thinkingEffort !== undefined ? { thinkingEffort: modelHint.thinkingEffort } : {}),
+        ...(modelHint?.temperature !== undefined ? { temperature: modelHint.temperature } : {}),
+        ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
+        ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
+        ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
+        ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         requestId,
         ...(context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
         ...(context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
@@ -433,7 +449,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     purpose: CompletionPurpose,
     options: {
       signal?: AbortSignal;
-      modelHint?: { model?: string; provider?: string; maxTokens?: number };
+      modelHint?: LLMModelHint;
       correlation?: Partial<CorrelationMetadata>;
     } = {},
   ): Promise<LLMResponse> {
@@ -441,11 +457,12 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       ...(context.correlation ?? {}),
       ...(options.correlation ?? {}),
     };
-    const hintedModel = normalizeCorrelationText(options.modelHint?.model);
-    const hintedProvider = normalizeCorrelationText(options.modelHint?.provider);
+    const modelHint = mergeGatewayModelHints(context.modelHint, options.modelHint);
+    const hintedModel = normalizeCorrelationText(modelHint?.model);
+    const hintedProvider = normalizeCorrelationText(modelHint?.provider);
     const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
     const model = qualifiedHint?.model ?? hintedModel ?? '';
-    const provider = hintedProvider ?? qualifiedHint?.provider ?? '';
+    const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
 
     const result = await this.requestWithAbortSignal<LLMCompleteResult>(
       'llm.complete',
@@ -455,7 +472,15 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         purpose,
-        ...(options.modelHint?.maxTokens !== undefined ? { maxTokens: options.modelHint.maxTokens } : {}),
+        ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
+        ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
+        ...(modelHint?.thinkingEnabled !== undefined ? { thinkingEnabled: modelHint.thinkingEnabled } : {}),
+        ...(modelHint?.thinkingEffort !== undefined ? { thinkingEffort: modelHint.thinkingEffort } : {}),
+        ...(modelHint?.temperature !== undefined ? { temperature: modelHint.temperature } : {}),
+        ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
+        ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
+        ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
+        ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
         ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
         ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
@@ -1144,6 +1169,94 @@ function parseProviderQualifiedModel(value: string): { provider: string; model: 
   const model = value.slice(separator + 1).trim();
   if (!provider || !model) return null;
   return { provider, model };
+}
+
+function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMModelHint | undefined {
+  if (!modelHint) return undefined;
+  const model = normalizeCorrelationText(modelHint.model);
+  const provider = normalizeCorrelationText(modelHint.provider)?.toLowerCase();
+  const maxTokens = toPositiveInteger(modelHint.maxTokens);
+  const contextWindow = toPositiveInteger(modelHint.contextWindow);
+  const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
+    ? modelHint.thinkingEnabled
+    : undefined;
+  const thinkingEffort = toThinkingEffort(modelHint.thinkingEffort);
+  const temperature = toFiniteNumber(modelHint.temperature);
+  const topP = toUnitInterval(modelHint.topP);
+  const topK = toPositiveInteger(modelHint.topK);
+  const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
+  const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
+  if (
+    !model
+    && !provider
+    && maxTokens === undefined
+    && contextWindow === undefined
+    && thinkingEnabled === undefined
+    && thinkingEffort === undefined
+    && temperature === undefined
+    && topP === undefined
+    && topK === undefined
+    && frequencyPenalty === undefined
+    && repetitionPenalty === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+    ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+    ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
+    ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
+  };
+}
+
+function mergeGatewayModelHints(
+  contextHint: LLMModelHint | undefined,
+  optionHint: LLMModelHint | undefined,
+): LLMModelHint | undefined {
+  const normalizedContext = normalizeGatewayModelHint(contextHint);
+  const normalizedOption = normalizeGatewayModelHint(optionHint);
+  if (!normalizedContext && !normalizedOption) return undefined;
+  return {
+    ...(normalizedContext ?? {}),
+    ...(normalizedOption ?? {}),
+  };
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric <= 0) return undefined;
+  return Math.floor(numeric);
+}
+
+function toUnitInterval(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
+  return numeric;
+}
+
+function toThinkingEffort(value: unknown): LLMModelHint['thinkingEffort'] | undefined {
+  switch (value) {
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function createAbortError(reason?: unknown): Error {

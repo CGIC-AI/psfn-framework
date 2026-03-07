@@ -4,6 +4,7 @@
 import type {
   CompletionPurpose,
   ContextMessage,
+  ModelThinkingEffort,
   ObservabilityCallType,
   SubstrateMessage,
   ToolSchema,
@@ -32,6 +33,14 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   systemPrompt: string;
   stream?: boolean;
   maxTokens?: number;
+  contextWindow?: number;
+  thinkingEnabled?: boolean;
+  thinkingEffort?: ModelThinkingEffort;
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  repetitionPenalty?: number;
+  frequencyPenalty?: number;
   tools?: ToolSchema[];
 }
 
@@ -42,6 +51,14 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   systemPrompt: string;
   purpose: CompletionPurpose;
   maxTokens?: number;
+  contextWindow?: number;
+  thinkingEnabled?: boolean;
+  thinkingEffort?: ModelThinkingEffort;
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  repetitionPenalty?: number;
+  frequencyPenalty?: number;
 }
 
 export interface LLMEmbedParams {

@@ -5,7 +5,12 @@ import type {
   LLMChunkNotification,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
-import type { CorrelationMetadata, CompletionPurpose, ObservabilityCallType } from '../../types.js';
+import type {
+  CorrelationMetadata,
+  CompletionPurpose,
+  LLMModelHint,
+  ObservabilityCallType,
+} from '../../types.js';
 import { registerAuditedDescriptors } from './register.js';
 import {
   inferCallType as inferCorrelationCallType,
@@ -20,6 +25,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
       const callType = params.callType ?? (shardRouting ? 'tool' : 'chat');
       const purpose = normalizePurpose(params.purpose) ?? (shardRouting ? 'shard.execution' : 'chat');
+      const modelHint = extractModelHintFromParams(params);
       const correlation = buildCorrelation({
         turnId: params.turnId,
         requestId,
@@ -36,6 +42,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
           systemPrompt: params.systemPrompt,
           messages: params.messages,
           ...(params.tools?.length ? { tools: params.tools } : {}),
+          ...(modelHint ? { modelHint } : {}),
           correlation,
         },
         params.stream ? {
@@ -77,6 +84,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     handler: async (params: LLMCompleteParams, runtime) => {
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const inferredCallType = inferCallType(params.purpose, params.channelId);
+      const modelHint = extractModelHintFromParams(params);
       const correlation = buildCorrelation({
         turnId: params.turnId,
         requestId: params.requestId ?? params.turnId,
@@ -94,6 +102,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         {
           systemPrompt: params.systemPrompt,
           messages: params.messages,
+          ...(modelHint ? { modelHint } : {}),
           correlation,
         },
         params.purpose,
@@ -226,4 +235,80 @@ function normalizePurpose(value: string | undefined): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractModelHintFromParams(
+  params: LLMChatParams | LLMCompleteParams,
+): LLMModelHint | undefined {
+  const model = normalizePurpose(params.model);
+  const provider = normalizePurpose(params.provider)?.toLowerCase();
+  const maxTokens = toPositiveInteger(params.maxTokens);
+  const contextWindow = toPositiveInteger(params.contextWindow);
+  const thinkingEnabled = typeof params.thinkingEnabled === 'boolean'
+    ? params.thinkingEnabled
+    : undefined;
+  const thinkingEffort = toThinkingEffort(params.thinkingEffort);
+  const temperature = toFiniteNumber(params.temperature);
+  const topP = toUnitInterval(params.topP);
+  const topK = toPositiveInteger(params.topK);
+  const frequencyPenalty = toFiniteNumber(params.frequencyPenalty);
+  const repetitionPenalty = toFiniteNumber(params.repetitionPenalty);
+  if (
+    !model
+    && !provider
+    && maxTokens === undefined
+    && contextWindow === undefined
+    && thinkingEnabled === undefined
+    && thinkingEffort === undefined
+    && temperature === undefined
+    && topP === undefined
+    && topK === undefined
+    && frequencyPenalty === undefined
+    && repetitionPenalty === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+    ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+    ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
+    ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
+  };
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric <= 0) return undefined;
+  return Math.floor(numeric);
+}
+
+function toUnitInterval(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
+  return numeric;
+}
+
+function toThinkingEffort(value: unknown): LLMModelHint['thinkingEffort'] | undefined {
+  switch (value) {
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+      return value;
+    default:
+      return undefined;
+  }
 }

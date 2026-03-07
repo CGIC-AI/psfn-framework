@@ -5,11 +5,13 @@ import {
   type Context as PiContext,
   type Model,
   type SimpleStreamOptions,
+  type ThinkingLevel,
 } from '@mariozechner/pi-ai';
 import type {
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
+  LLMModelHint,
   LLMResponse,
   ModelBudgetBlockedEvent,
   StreamCallbacks,
@@ -47,13 +49,14 @@ const log = createComponentLogger('LLMClient');
 interface LLMRequestOptions extends SimpleStreamOptions {
   zdr?: boolean;
   provider?: { order: string[] };
+  contextWindow?: number;
+  topP?: number;
+  topK?: number;
+  frequencyPenalty?: number;
+  repetitionPenalty?: number;
 }
 
-export interface LLMCompletionModelHint {
-  model?: string;
-  provider?: string;
-  maxTokens?: number;
-}
+export type LLMCompletionModelHint = LLMModelHint;
 
 export interface LLMCompletionOptions {
   signal?: AbortSignal;
@@ -68,6 +71,8 @@ export interface LLMClientRuntimeOptions {
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
 }
+
+const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
 
 export class SensitiveImportRoutePolicyError extends Error {
   readonly code = 'sensitive_import_route_rejected';
@@ -161,6 +166,26 @@ export class LLMClient {
       ...(extra.signal ? { signal: extra.signal } : {}),
     };
 
+    if (candidate.contextWindow !== undefined) {
+      requestOptions.contextWindow = candidate.contextWindow;
+    }
+
+    if (candidate.temperature !== undefined) {
+      requestOptions.temperature = candidate.temperature;
+    }
+
+    const reasoning = this.resolveReasoningLevel(candidate);
+    if (reasoning) {
+      requestOptions.reasoning = reasoning;
+    }
+
+    if (this.supportsFullKnobPassthrough(candidate)) {
+      if (candidate.topP !== undefined) requestOptions.topP = candidate.topP;
+      if (candidate.topK !== undefined) requestOptions.topK = candidate.topK;
+      if (candidate.frequencyPenalty !== undefined) requestOptions.frequencyPenalty = candidate.frequencyPenalty;
+      if (candidate.repetitionPenalty !== undefined) requestOptions.repetitionPenalty = candidate.repetitionPenalty;
+    }
+
     if (candidate.provider === 'openrouter') {
       if (candidate.openRouterZdrOnly) {
         requestOptions.zdr = true;
@@ -171,6 +196,19 @@ export class LLMClient {
     }
 
     return requestOptions;
+  }
+
+  private resolveReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {
+    if (candidate.thinkingEnabled === false) return undefined;
+    if (candidate.thinkingEffort) return candidate.thinkingEffort;
+    if (candidate.thinkingEnabled === true) return 'medium';
+    return undefined;
+  }
+
+  private supportsFullKnobPassthrough(candidate: RoutingCandidate): boolean {
+    return FULL_KNOB_PASSTHROUGH_PROVIDERS.has(candidate.provider)
+      || !!candidate.requestBaseUrl
+      || this.litellmBaseUrl !== null;
   }
 
   private enforceImportRoutingPolicy(purpose: RoutingPurpose, candidate: RoutingCandidate): void {
@@ -190,16 +228,57 @@ export class LLMClient {
     if (!modelHint) return null;
     const rawModel = modelHint.model?.trim();
     const provider = modelHint.provider?.trim().toLowerCase();
-    const maxTokens = modelHint.maxTokens;
-    if (!rawModel && (!Number.isFinite(maxTokens) || maxTokens === undefined || maxTokens <= 0)) {
+    const maxTokens = toPositiveInteger(modelHint.maxTokens);
+    const contextWindow = toPositiveInteger(modelHint.contextWindow);
+    const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
+      ? modelHint.thinkingEnabled
+      : undefined;
+    const thinkingEffort = toThinkingEffort(modelHint.thinkingEffort);
+    const temperature = toFiniteNumber(modelHint.temperature);
+    const topP = toUnitInterval(modelHint.topP);
+    const topK = toPositiveInteger(modelHint.topK);
+    const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
+    const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
+    if (
+      !rawModel
+      && !provider
+      && maxTokens === undefined
+      && contextWindow === undefined
+      && thinkingEnabled === undefined
+      && thinkingEffort === undefined
+      && temperature === undefined
+      && topP === undefined
+      && topK === undefined
+      && frequencyPenalty === undefined
+      && repetitionPenalty === undefined
+    ) {
       return null;
     }
     return {
       ...(rawModel ? { model: rawModel } : {}),
       ...(provider ? { provider } : {}),
-      ...(Number.isFinite(maxTokens) && maxTokens !== undefined && maxTokens > 0
-        ? { maxTokens: Math.floor(maxTokens) }
-        : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+      ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(topP !== undefined ? { topP } : {}),
+      ...(topK !== undefined ? { topK } : {}),
+      ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
+      ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
+    };
+  }
+
+  private mergeModelHints(
+    contextHint: LLMCompletionModelHint | undefined,
+    optionHint: LLMCompletionModelHint | undefined,
+  ): LLMCompletionModelHint | undefined {
+    const normalizedContext = this.normalizeModelHint(contextHint);
+    const normalizedOption = this.normalizeModelHint(optionHint);
+    if (!normalizedContext && !normalizedOption) return undefined;
+    return {
+      ...(normalizedContext ?? {}),
+      ...(normalizedOption ?? {}),
     };
   }
 
@@ -229,6 +308,13 @@ export class LLMClient {
       candidate.model,
       String(candidate.maxTokens),
       String(candidate.contextWindow ?? ''),
+      String(candidate.thinkingEnabled ?? ''),
+      candidate.thinkingEffort ?? '',
+      String(candidate.temperature ?? ''),
+      String(candidate.topP ?? ''),
+      String(candidate.topK ?? ''),
+      String(candidate.frequencyPenalty ?? ''),
+      String(candidate.repetitionPenalty ?? ''),
       candidate.requestBaseUrl ?? '',
       candidate.requestApiKeyEnv ?? '',
       candidate.openRouterZdrOnly ? 'zdr' : '',
@@ -253,15 +339,22 @@ export class LLMClient {
     modelHint: LLMCompletionModelHint,
     fallbackCandidates: RoutingCandidate[],
   ): RoutingCandidate | null {
-    const baseCandidate = fallbackCandidates[0];
-    if (!baseCandidate) return null;
+    const baseCandidate = fallbackCandidates.at(0);
+    if (baseCandidate === undefined) return null;
     const hintedModel = modelHint.model?.trim();
     const qualified = hintedModel ? this.parseProviderQualifiedHint(hintedModel) : null;
 
     let provider = modelHint.provider ?? qualified?.provider ?? baseCandidate.provider;
     let model = qualified?.model ?? hintedModel ?? baseCandidate.model;
     let maxTokens = modelHint.maxTokens ?? baseCandidate.maxTokens;
-    const contextWindow = baseCandidate.contextWindow;
+    const contextWindow = modelHint.contextWindow ?? baseCandidate.contextWindow;
+    const thinkingEnabled = modelHint.thinkingEnabled ?? baseCandidate.thinkingEnabled;
+    const thinkingEffort = modelHint.thinkingEffort ?? baseCandidate.thinkingEffort;
+    const temperature = modelHint.temperature ?? baseCandidate.temperature;
+    const topP = modelHint.topP ?? baseCandidate.topP;
+    const topK = modelHint.topK ?? baseCandidate.topK;
+    const frequencyPenalty = modelHint.frequencyPenalty ?? baseCandidate.frequencyPenalty;
+    const repetitionPenalty = modelHint.repetitionPenalty ?? baseCandidate.repetitionPenalty;
 
     if (!provider || !model) return null;
     provider = provider.trim().toLowerCase();
@@ -278,6 +371,13 @@ export class LLMClient {
       model,
       maxTokens: Math.floor(maxTokens),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+      ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(topP !== undefined ? { topP } : {}),
+      ...(topK !== undefined ? { topK } : {}),
+      ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
+      ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
     };
 
     if (baseCandidate.provider === provider) {
@@ -410,6 +510,7 @@ export class LLMClient {
     const piContext = this.buildPiContext(context);
     const estimatedInputTokens = this.estimateContextInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
+    const modelHint = this.mergeModelHints(context.modelHint, undefined);
 
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
@@ -525,6 +626,7 @@ export class LLMClient {
           });
         },
         {
+          modelHint,
           correlation,
           estimatedInputTokens,
         },
@@ -564,6 +666,7 @@ export class LLMClient {
     const piContext = this.buildPiContext(context);
     const estimatedInputTokens = this.estimateContextInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
+    const modelHint = this.mergeModelHints(context.modelHint, options.modelHint);
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
@@ -610,7 +713,7 @@ export class LLMClient {
         });
       },
       {
-        modelHint: options.modelHint,
+        modelHint,
         correlation,
         estimatedInputTokens,
       },
@@ -622,7 +725,7 @@ export class LLMClient {
       model: candidate.model,
       provider: candidate.provider,
       attempts,
-      requestedModelHint: options.modelHint?.model,
+      requestedModelHint: modelHint?.model,
       ...correlation,
     });
 
@@ -673,9 +776,6 @@ export class LLMClient {
     }
     if (purpose === 'summary') {
       return 'summary';
-    }
-    if (purpose === 'background') {
-      return 'background';
     }
     return 'background';
   }
@@ -738,6 +838,36 @@ export class LLMClient {
 
 function isAbortError(error: Error): boolean {
   return error.name === 'AbortError' || /aborted|abort|cancelled|canceled/i.test(error.message);
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric <= 0) return undefined;
+  return Math.floor(numeric);
+}
+
+function toUnitInterval(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
+  return numeric;
+}
+
+function toThinkingEffort(value: unknown): ThinkingLevel | undefined {
+  switch (value) {
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 // ── Content normalization ──

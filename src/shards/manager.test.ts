@@ -543,10 +543,12 @@ describe('ShardManager', () => {
     );
     expect(setSystemPromptSpy).toHaveBeenCalled();
     const setPromptCall = setSystemPromptSpy.mock.calls[0];
-    expect(setPromptCall?.[0]).toContain('[Shard context pack]');
-    expect(setPromptCall?.[0]).toContain(`Source channel: ${sourceChannelId}`);
-    expect(setPromptCall?.[0]).toContain('PrimaryUser: Please check the deployment blockers.');
-    expect(setPromptCall?.[0]).toContain('Remember the staging database migration is still pending.');
+    expect(setPromptCall).toBeDefined();
+    const [setPromptText] = setPromptCall;
+    expect(setPromptText).toContain('[Shard context pack]');
+    expect(setPromptText).toContain(`Source channel: ${sourceChannelId}`);
+    expect(setPromptText).toContain('PrimaryUser: Please check the deployment blockers.');
+    expect(setPromptText).toContain('Remember the staging database migration is still pending.');
 
     const shardEntries = sessionStore.getRecent(`shard:${result.shardId}`, 10);
     expect(shardEntries).toEqual(expect.arrayContaining([

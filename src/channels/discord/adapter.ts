@@ -496,7 +496,7 @@ export class DiscordAdapter implements ChannelAdapter {
     isDirectMessage: boolean,
     runtimeBotId?: string,
   ): SubstrateMessage {
-    const attachments = this.extractAttachments(msg);
+    const attachments: NonNullable<SubstrateMessage['attachments']> = this.extractAttachments(msg);
     if (attachments.length < DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) {
       const seenUrls = new Set(attachments.map((attachment) => attachment.url));
       const remaining = DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE - attachments.length;
@@ -522,7 +522,7 @@ export class DiscordAdapter implements ChannelAdapter {
     };
   }
 
-  private extractAttachments(msg: Message): SubstrateMessage['attachments'] {
+  private extractAttachments(msg: Message): NonNullable<SubstrateMessage['attachments']> {
     const rawAttachments = msg.attachments.values();
 
     const attachments: NonNullable<SubstrateMessage['attachments']> = [];

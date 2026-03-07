@@ -60,21 +60,23 @@ function validateCadence(input: unknown): CadenceValidationResult {
     return { ok: true, cadence: { kind: 'relative' } };
   }
 
-  const minute = input.minute;
-  if (!Number.isInteger(minute) || minute < 0 || minute > 59) {
+  const minuteValue = input.minute;
+  if (typeof minuteValue !== 'number' || !Number.isInteger(minuteValue) || minuteValue < 0 || minuteValue > 59) {
     return { ok: false, message: 'cadence.minute must be an integer between 0 and 59' };
   }
+  const minute = minuteValue;
 
   const timezone = input.timezone;
   if (!isRecurringCadenceTimezone(timezone)) {
     return { ok: false, message: 'cadence.timezone must be "local" or "utc"' };
   }
 
-  const hour = input.hour;
+  const hourValue = input.hour;
   if (kind === 'daily') {
-    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    if (typeof hourValue !== 'number' || !Number.isInteger(hourValue) || hourValue < 0 || hourValue > 23) {
       return { ok: false, message: 'cadence.hour must be an integer between 0 and 23 when cadence.kind is "daily"' };
     }
+    const hour = hourValue;
     return {
       ok: true,
       cadence: {
@@ -86,7 +88,7 @@ function validateCadence(input: unknown): CadenceValidationResult {
     };
   }
 
-  if (hour !== undefined) {
+  if (hourValue !== undefined) {
     return { ok: false, message: 'cadence.hour is only allowed when cadence.kind is "daily"' };
   }
 

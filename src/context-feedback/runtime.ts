@@ -209,7 +209,8 @@ function resolveFollowUpText(
       && entry.timestamp > payload.completedAt
       && entry.content.trim().length > 0
     ))
-    .sort((left, right) => left.timestamp - right.timestamp)[0];
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .at(0);
 
   if (!firstFollowUp) return undefined;
   const trimmed = firstFollowUp.content.trim();

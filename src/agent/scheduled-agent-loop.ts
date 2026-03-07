@@ -71,7 +71,7 @@ async function runLoop(
   let firstTurn = true;
   let pendingMessages = (await config.getSteeringMessages?.()) || [];
 
-  while (true) {
+  for (;;) {
     let hasMoreToolCalls = false;
     let steeringAfterTools: AgentMessage[] | null = null;
 

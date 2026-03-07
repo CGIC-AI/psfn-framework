@@ -27,7 +27,7 @@ export function createSignalWisePostTurnAppraiser<Context>(
       }
 
       for (const candidate of candidates) {
-        if (!candidate || typeof candidate.kind !== 'string') {
+        if (typeof candidate.kind !== 'string') {
           continue;
         }
 

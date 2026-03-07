@@ -63,7 +63,10 @@ const VALID_DELIBERATION_PURPOSES = new Set(['background', 'reasoning']);
 const DELIBERATION_MAX_ROUNDS_RANGE = { min: 1, max: 8 };
 const DELIBERATION_MAX_TOTAL_TOKENS_RANGE = { min: 512, max: 50_000 };
 const DELIBERATION_MAX_WALL_TIME_RANGE_MS = { min: 1_000, max: 300_000 };
-const VALID_CADENCE_TIMEZONES = new Set(['local', 'utc']);
+
+function isCadenceTimezone(value: unknown): value is 'local' | 'utc' {
+  return value === 'local' || value === 'utc';
+}
 
 function validateBoundedNumber(
   field: string,
@@ -147,10 +150,11 @@ function validateCadenceConfig(value: unknown): ValidationError[] {
 
   if (cadence.kind === 'hourly') {
     const errors: ValidationError[] = [];
-    if (!Number.isInteger(cadence.minute) || cadence.minute < 0 || cadence.minute > 59) {
+    const minute = cadence.minute;
+    if (typeof minute !== 'number' || !Number.isInteger(minute) || minute < 0 || minute > 59) {
       errors.push({ field: 'cadence.minute', message: 'cadence.minute must be 0-59 for hourly cadence' });
     }
-    if (!VALID_CADENCE_TIMEZONES.has(String(cadence.timezone))) {
+    if (!isCadenceTimezone(cadence.timezone)) {
       errors.push({ field: 'cadence.timezone', message: 'cadence.timezone must be "local" or "utc"' });
     }
     return errors;
@@ -158,13 +162,15 @@ function validateCadenceConfig(value: unknown): ValidationError[] {
 
   if (cadence.kind === 'daily') {
     const errors: ValidationError[] = [];
-    if (!Number.isInteger(cadence.hour) || cadence.hour < 0 || cadence.hour > 23) {
+    const hour = cadence.hour;
+    if (typeof hour !== 'number' || !Number.isInteger(hour) || hour < 0 || hour > 23) {
       errors.push({ field: 'cadence.hour', message: 'cadence.hour must be 0-23 for daily cadence' });
     }
-    if (!Number.isInteger(cadence.minute) || cadence.minute < 0 || cadence.minute > 59) {
+    const minute = cadence.minute;
+    if (typeof minute !== 'number' || !Number.isInteger(minute) || minute < 0 || minute > 59) {
       errors.push({ field: 'cadence.minute', message: 'cadence.minute must be 0-59 for daily cadence' });
     }
-    if (!VALID_CADENCE_TIMEZONES.has(String(cadence.timezone))) {
+    if (!isCadenceTimezone(cadence.timezone)) {
       errors.push({ field: 'cadence.timezone', message: 'cadence.timezone must be "local" or "utc"' });
     }
     return errors;
@@ -234,7 +240,6 @@ function getKnownTemplateCadence(templateId: string): RecurringCadence | undefin
 }
 
 function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
-  let changed = false;
   const templates = policy.templates.map(template => {
     if (template.cadence !== undefined) {
       return template;
@@ -243,9 +248,9 @@ function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatP
     if (cadence === undefined) {
       return template;
     }
-    changed = true;
     return { ...template, cadence };
   });
+  const changed = templates.some((template, index) => template !== policy.templates[index]);
 
   if (!changed) {
     return { policy, changed: false };

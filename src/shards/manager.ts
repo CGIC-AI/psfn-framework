@@ -795,8 +795,8 @@ export class ShardManager {
   private normalizeSourceContext(
     sourceContext: ShardSourceContext | undefined,
   ): ShardSourceContext | null {
-    const channelId = sourceContext?.channelId?.trim();
-    if (!channelId) {
+    const channelId = sourceContext?.channelId.trim();
+    if (!channelId || !sourceContext) {
       return null;
     }
 
@@ -846,7 +846,7 @@ export class ShardManager {
     source: ShardSourceContext,
   ): number {
     for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
-      const entry = recentEntries[index];
+      const entry = recentEntries.at(index);
       if (!entry) continue;
       if (this.sessionEntryMatchesSource(entry, source)) {
         return index;

@@ -32,8 +32,8 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
     return;
   }
 
-  const isValidTimezone = cadence.timezone === 'local' || cadence.timezone === 'utc';
-  if (!isValidTimezone) {
+  const timezone = (cadence as { timezone?: unknown }).timezone;
+  if (timezone !== 'local' && timezone !== 'utc') {
     throw new Error(`Task "${taskId}" cadence.timezone must be "local" or "utc"`);
   }
 
@@ -42,10 +42,6 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
       throw new Error(`Task "${taskId}" cadence.minute must be an integer between 0 and 59`);
     }
     return;
-  }
-
-  if (cadence.kind !== 'daily') {
-    throw new Error(`Task "${taskId}" cadence.kind must be "relative", "hourly", or "daily"`);
   }
 
   if (!Number.isInteger(cadence.hour) || cadence.hour < 0 || cadence.hour > 23) {

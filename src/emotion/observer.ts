@@ -77,6 +77,7 @@ export const TEXT_EMOTION_LABEL_VAD_MAP: Readonly<Record<string, Readonly<VADVec
     ]),
   ),
 );
+const TEXT_EMOTION_LABEL_SET = new Set(Object.keys(RAW_TEXT_EMOTION_LABEL_VAD_MAP));
 
 export const DEFAULT_EMOTION_OBSERVER_MAX_TEXT_LENGTH = 2_000;
 
@@ -505,11 +506,10 @@ function resolveNearestEmotionLabel(vad: VADVector): string {
 }
 
 function deriveVadFromLabel(label: string): Readonly<VADVector> {
-  const mapped = TEXT_EMOTION_LABEL_VAD_MAP[label];
-  if (!mapped) {
+  if (!TEXT_EMOTION_LABEL_SET.has(label)) {
     throw new Error(`unsupported text emotion label: ${label}`);
   }
-  return mapped;
+  return TEXT_EMOTION_LABEL_VAD_MAP[label];
 }
 
 function fuseVadSignals(
@@ -547,7 +547,7 @@ function normalizeEmotionLabel(label: unknown, fieldName: string): string {
   if (!normalized) {
     throw new RangeError(`${fieldName} must be non-empty`);
   }
-  if (!TEXT_EMOTION_LABEL_VAD_MAP[normalized]) {
+  if (!TEXT_EMOTION_LABEL_SET.has(normalized)) {
     throw new Error(`unsupported text emotion label: ${normalized}`);
   }
   return normalized;

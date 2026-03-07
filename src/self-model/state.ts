@@ -432,17 +432,17 @@ function normalizeInternalState(state: InternalState): InternalState {
   }
 
   return {
-    emotional: {
-      vad: {
-        valence: parseSigned(state.emotional.vad?.valence, 'emotional.vad.valence'),
-        arousal: parseSigned(state.emotional.vad?.arousal, 'emotional.vad.arousal'),
-        dominance: parseSigned(state.emotional.vad?.dominance, 'emotional.vad.dominance'),
-      },
-      mood: {
-        valence: parseSigned(state.emotional.mood?.valence, 'emotional.mood.valence'),
-        arousal: parseSigned(state.emotional.mood?.arousal, 'emotional.mood.arousal'),
-        dominance: parseSigned(state.emotional.mood?.dominance, 'emotional.mood.dominance'),
-      },
+      emotional: {
+        vad: {
+          valence: parseSigned(state.emotional.vad.valence, 'emotional.vad.valence'),
+          arousal: parseSigned(state.emotional.vad.arousal, 'emotional.vad.arousal'),
+          dominance: parseSigned(state.emotional.vad.dominance, 'emotional.vad.dominance'),
+        },
+        mood: {
+          valence: parseSigned(state.emotional.mood.valence, 'emotional.mood.valence'),
+          arousal: parseSigned(state.emotional.mood.arousal, 'emotional.mood.arousal'),
+          dominance: parseSigned(state.emotional.mood.dominance, 'emotional.mood.dominance'),
+        },
       discreteEmotions: normalizeDiscreteEmotions(state.emotional.discreteEmotions),
       confidence: parseUnit(state.emotional.confidence, 'emotional.confidence'),
     },

@@ -117,7 +117,7 @@ export function resolveSessionEntryTurnContext(
 
 export function resolveLatestTurnContext(entries: readonly SessionEntry[]): SessionEntryTurnContext | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
+    const entry = entries.at(index);
     if (!entry) continue;
     if (entry.role !== 'user' && entry.role !== 'assistant') continue;
     return resolveSessionEntryTurnContext(entry);

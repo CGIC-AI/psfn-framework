@@ -247,7 +247,7 @@ function resolveFieldType(field: string): SettingsFieldType {
 }
 
 function resolveFieldRange(field: string): { min?: number; max?: number } | undefined {
-  const validationRange = (SETTINGS_VALIDATION as Record<string, { min: number; max: number }>)[field];
+  const validationRange = (SETTINGS_VALIDATION as Partial<Record<string, { min: number; max: number }>>)[field];
   if (validationRange) {
     return {
       min: validationRange.min,

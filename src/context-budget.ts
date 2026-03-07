@@ -221,15 +221,6 @@ export function resolveAdaptiveContextBudgetProfile(
   }
 
   const profile = ADAPTIVE_BUDGET_PROFILE_BY_CATEGORY[category];
-  if (!profile) {
-    return {
-      enabled: true,
-      source: 'default',
-      category: 'default',
-      sessionHistoryBudgetPct: baseSessionHistoryPct,
-      memoryRetrievalBudgetPct: baseMemoryRetrievalPct,
-    };
-  }
 
   return {
     enabled: true,

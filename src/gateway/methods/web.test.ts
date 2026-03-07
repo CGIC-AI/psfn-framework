@@ -9,10 +9,12 @@ import type { DnsResolver } from '../url-policy.js';
 interface RuntimeHarness {
   invoke(params: Record<string, unknown>): Promise<any>;
   invokeBinary(params: Record<string, unknown>): Promise<any>;
+  recordAuditEvent: ReturnType<typeof vi.fn>;
 }
 
 function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<any>>();
+  const recordAuditEvent = vi.fn();
   const keyring = {
     activeVersion: 'v1',
     keys: { v1: 'test-web-secret' },
@@ -39,6 +41,7 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
     })),
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'stream-1',
+    recordAuditEvent,
     audited: (_method, handler) => handler,
     gated: (_method, handler) => handler,
   };
@@ -56,16 +59,27 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
     invokeBinary(params: Record<string, unknown>) {
       return binaryMethod(params);
     },
+    recordAuditEvent,
   };
 }
 
 async function listenHttp(
-  handler: (reqUrl: string) => { status?: number; body: string | Buffer; contentType?: string },
+  handler: (reqUrl: string) => {
+    status?: number;
+    body: string | Buffer;
+    contentType?: string;
+    headers?: Record<string, string>;
+  },
 ): Promise<{ server: Server; url: string }> {
   const server = createServer((req, res) => {
     const result = handler(req.url ?? '/');
     res.statusCode = result.status ?? 200;
     res.setHeader('content-type', result.contentType ?? 'text/plain; charset=utf-8');
+    if (result.headers) {
+      for (const [name, value] of Object.entries(result.headers)) {
+        res.setHeader(name, value);
+      }
+    }
     res.end(result.body);
   });
 
@@ -262,6 +276,237 @@ describe('registerWebMethods', () => {
       code: GatewayErrors.PROVIDER_ERROR,
       message: expect.stringContaining('too large'),
     });
+  });
+
+  it('follows multi-hop redirects with per-hop policy validation and records redirect audit', async () => {
+    const { server, url } = await listenHttp((reqUrl) => {
+      if (reqUrl === '/start') {
+        return {
+          status: 302,
+          headers: { location: '/hop-1' },
+          body: 'redirecting',
+        };
+      }
+      if (reqUrl === '/hop-1') {
+        return {
+          status: 302,
+          headers: { location: '/final' },
+          body: 'redirecting',
+        };
+      }
+      if (reqUrl === '/final') {
+        return {
+          body: '<html><body>redirect chain ok</body></html>',
+          contentType: 'text/html; charset=utf-8',
+        };
+      }
+      return {
+        status: 404,
+        body: 'not found',
+      };
+    });
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+
+    const result = await harness.invoke({
+      url: `${url}/start`,
+      lane: 'local_crawler',
+    });
+
+    expect(result.content).toContain('redirect chain ok');
+    expect(harness.recordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'web.fetch.redirect_chain',
+        decision: 'ALLOW',
+        params: expect.objectContaining({
+          rpcMethod: 'web.fetch',
+          originUrl: `${url}/start`,
+          finalUrl: `${url}/final`,
+          redirectHopCount: 2,
+        }),
+      }),
+    );
+  });
+
+  it('rejects redirect chain at first invalid hop and records denial audit', async () => {
+    let blockedRedirect = '/blocked';
+    const { server, url } = await listenHttp((reqUrl) => {
+      if (reqUrl === '/start') {
+        return {
+          status: 302,
+          headers: { location: '/hop-1' },
+          body: 'redirecting',
+        };
+      }
+      if (reqUrl === '/hop-1') {
+        return {
+          status: 302,
+          headers: { location: blockedRedirect },
+          body: 'redirecting',
+        };
+      }
+      if (reqUrl === '/blocked') {
+        return {
+          body: 'should not be reachable',
+        };
+      }
+      return {
+        status: 404,
+        body: 'not found',
+      };
+    });
+    servers.push(server);
+
+    const parsed = new URL(url);
+    blockedRedirect = `http://localhost:${parsed.port}/blocked`;
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+
+    await expect(harness.invoke({
+      url: `${url}/start`,
+      lane: 'local_crawler',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('not allowlisted'),
+    });
+
+    expect(harness.recordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'web.fetch.redirect_chain',
+        decision: 'DENY',
+        params: expect.objectContaining({
+          rpcMethod: 'web.fetch',
+          finalUrl: `http://localhost:${parsed.port}/blocked`,
+          redirectHopCount: 2,
+        }),
+      }),
+    );
+  });
+
+  it('detects redirect loops and records denial audit', async () => {
+    const { server, url } = await listenHttp((reqUrl) => {
+      if (reqUrl === '/loop-a') {
+        return {
+          status: 302,
+          headers: { location: '/loop-b' },
+          body: 'redirecting',
+        };
+      }
+      if (reqUrl === '/loop-b') {
+        return {
+          status: 302,
+          headers: { location: '/loop-a' },
+          body: 'redirecting',
+        };
+      }
+      return {
+        status: 404,
+        body: 'not found',
+      };
+    });
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+
+    await expect(harness.invoke({
+      url: `${url}/loop-a`,
+      lane: 'local_crawler',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.PROVIDER_ERROR,
+      message: expect.stringContaining('redirect loop'),
+    });
+
+    expect(harness.recordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'web.fetch.redirect_chain',
+        decision: 'DENY',
+        params: expect.objectContaining({
+          rpcMethod: 'web.fetch',
+        }),
+      }),
+    );
+  });
+
+  it('enforces redirect depth limits and records denial audit', async () => {
+    const { server, url } = await listenHttp((reqUrl) => {
+      const match = /^\/depth-(\d+)$/.exec(reqUrl);
+      if (!match) {
+        return {
+          status: 404,
+          body: 'not found',
+        };
+      }
+      const index = Number.parseInt(match[1], 10);
+      if (index < 4) {
+        return {
+          status: 302,
+          headers: { location: `/depth-${index + 1}` },
+          body: 'redirecting',
+        };
+      }
+      return {
+        body: 'depth target',
+      };
+    });
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        maxRedirectHops: 2,
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+
+    await expect(harness.invoke({
+      url: `${url}/depth-0`,
+      lane: 'local_crawler',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.PROVIDER_ERROR,
+      message: expect.stringContaining('exceeded 2 hops'),
+    });
+
+    expect(harness.recordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'web.fetch.redirect_chain',
+        decision: 'DENY',
+        params: expect.objectContaining({
+          rpcMethod: 'web.fetch',
+          redirectHopCount: 2,
+        }),
+      }),
+    );
   });
 
   it('blocks metadata IP resolved by DNS even in local crawler lane', async () => {

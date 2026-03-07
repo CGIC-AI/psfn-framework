@@ -72,11 +72,14 @@ export function isAlwaysBlockedIP(ip: string): boolean {
 }
 
 export type UrlPolicyLane = 'default' | 'local_crawler';
+export const DEFAULT_MAX_REDIRECT_HOPS = 5;
+export const MAX_REDIRECT_HOPS = 20;
 
 export interface UrlPolicyConfig {
   allowHttp?: boolean;           // default false (require HTTPS)
   domainAllowlist?: string[];    // if set, only these domains allowed
   allowInternalNetwork?: boolean; // allow RFC1918/loopback access (still blocks cloud metadata)
+  maxRedirectHops?: number;      // default 5, bounded to [0, 20]
   /** @deprecated Use allowInternalNetwork + domainAllowlist instead */
   localCrawlerLane?: {
     enabled?: boolean;
@@ -93,6 +96,19 @@ export interface UrlPolicyResult {
 
 export interface ResolvedIPPolicyResult extends UrlPolicyResult {
   address?: string;
+}
+
+export function resolveMaxRedirectHops(config: UrlPolicyConfig = {}): number {
+  const rawValue = config.maxRedirectHops;
+  if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) {
+    return DEFAULT_MAX_REDIRECT_HOPS;
+  }
+
+  const normalized = Math.floor(rawValue);
+  if (normalized < 0) {
+    return 0;
+  }
+  return Math.min(normalized, MAX_REDIRECT_HOPS);
 }
 
 function toLowerList(values: readonly string[] | undefined): string[] {

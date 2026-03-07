@@ -46,6 +46,29 @@ interface SettingsConfigEditors {
   capabilities: CapabilityTierConfig;
 }
 
+const LEGACY_MODEL_SETTINGS_FORM_KEYS = [
+  'primaryModel',
+  'primaryProvider',
+  'primaryMaxTokens',
+  'extractionModel',
+  'extractionProvider',
+  'extractionMaxTokens',
+  'modelCatalogJson',
+  'modelRoleAssignmentsJson',
+  'modelRosterJson',
+] as const;
+
+function hasLegacyModelFormPayload(params: URLSearchParams): boolean {
+  for (const key of LEGACY_MODEL_SETTINGS_FORM_KEYS) {
+    const raw = params.get(key);
+    if (raw === null) continue;
+    if (raw.trim().length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export class AdminSettingsHandlers {
   constructor(private readonly legacy: LegacyAdminHandlers) {}
 
@@ -127,6 +150,12 @@ export class AdminSettingsHandlers {
   updateSettings(body: string): string {
     const legacy = this.legacy as any;
     const params = new URLSearchParams(body);
+    if (hasLegacyModelFormPayload(params)) {
+      return tpl.settingsFormResult(
+        false,
+        'Legacy model settings are not accepted in runtime settings; edit canonical models.json via /api/settings/models',
+      );
+    }
     const [settings, errors] = parseSettingsForm(params);
 
     if (errors.length > 0) {
@@ -173,7 +202,7 @@ export class AdminSettingsHandlers {
       seedDir: process.env.CONFIG_DIR,
       defaultContextWindow: legacy.config.defaultContextWindow,
     });
-    return JSON.stringify(config, null, 2);
+    return JSON.stringify(config.modelRegistry, null, 2);
   }
 
   updateModelsConfig(body: string): string {

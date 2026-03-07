@@ -6,13 +6,10 @@
     updateSettings,
     getSubConfig,
     saveSubConfig,
-    listModels,
-    refreshModels,
   } from '$lib/api/endpoints/settings';
   import type {
     AdminSettingsData,
     ConfigUpdateResult,
-    DiscoveredModel,
     SettingsContractData,
     SettingsContractField,
   } from '$lib/types';
@@ -25,27 +22,6 @@
   } from '$lib/settings-garden-contract';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
-
-  // ── Model catalog types ──
-  interface CatalogSlot {
-    slotKey: string;
-    model: string;
-    provider: string;
-    routeProviderOrder: string;
-    defaultMaxTokens: number | null;
-    defaultContextWindow: number | null;
-    overrideMaxTokens: number | null;
-    overrideContextWindow: number | null;
-  }
-
-  interface PurposeMapping {
-    purpose: string;
-    slotKey: string;
-  }
-
-  const DEFAULT_PURPOSES = [
-    'chat', 'background', 'extraction', 'summary', 'reasoning', 'longContext', 'import_processing',
-  ];
 
   const DISABLED_PROVIDER_ID = 'disabled';
   const COMPOSITIONAL_TIER_OPTIONS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
@@ -98,9 +74,7 @@
   let saving = $state(false);
   let saveMessage = $state('');
   let saveOk = $state(true);
-  let discoveredModels = $state<DiscoveredModel[]>([]);
   let settingsSchema = $state<SettingsContractData | null>(null);
-  let refreshingModels = $state(false);
 
   // ── Dirty tracking ──
   let initialSnapshot = $state('');
@@ -117,7 +91,7 @@
 
   function computeSnapshot(): string {
     return JSON.stringify({
-      primaryModel, extractionModel, memoryBudgetPct,
+      memoryBudgetPct,
       memoryRetrievalLimit, sessionMessageLimit,
       sessionRestartBehavior,
       compositionalPolicy: configValue('compositionalPolicy') ?? null,
@@ -129,7 +103,7 @@
       openRouterProviderOrder, webFetchAllowHttp,
       webFetchDomainAllowlist, webFetchAllowInternalNetwork,
       webFetchTlsCaCertPaths,
-      capabilityTier, catalogSlots, purposeMappings,
+      capabilityTier,
       capabilityCustomTokens,
       // Memory & Extraction
       extractionInterval, compactionEmotionalSalienceThresholdPct,
@@ -172,8 +146,6 @@
   }
 
   // ── Simple mode fields ──
-  let primaryModel = $state('');
-  let extractionModel = $state('');
   let memoryBudgetPct = $state(20);
   let memoryRetrievalLimit = $state<number | null>(null);
   let sessionMessageLimit = $state<number | null>(null);
@@ -184,10 +156,6 @@
   let compactionThresholdPct = $state(70);
   let maxResponseTokens = $state(4096);
   let retryMaxAttempts = $state(3);
-
-  // ── Model catalog ──
-  let catalogSlots = $state<CatalogSlot[]>([]);
-  let purposeMappings = $state<PurposeMapping[]>([]);
 
   // ── Import processing ──
   let importRouteMode = $state('background');
@@ -274,7 +242,7 @@
   let validationErrorsByField = $state<Record<string, string[]>>({});
 
   // ── Collapsible sections ──
-  let openSections = $state(new Set<string>(['models']));
+  let openSections = $state(new Set<string>(['budget']));
 
   // ── Section definitions for advanced mode ──
   interface SectionDef {
@@ -285,16 +253,9 @@
     summary: () => string;
   }
 
+  const MODEL_OWNED_FIELDS = new Set<string>(SETTINGS_GARDEN_SECTION_FIELDS.models);
+
   const SECTIONS: SectionDef[] = [
-    {
-      id: 'models', title: 'Models & Routing', icon: 'M',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.models,
-      summary: () => {
-        const slots = catalogSlots.filter(s => s.slotKey && s.model);
-        if (slots.length === 0) return 'No models configured';
-        return slots.map(s => `${s.slotKey}: ${s.model.split('/').pop()}`).join(', ');
-      },
-    },
     {
       id: 'budget', title: 'Context Budget', icon: 'B',
       keys: SETTINGS_GARDEN_SECTION_FIELDS.budget,
@@ -388,13 +349,12 @@
   ];
 
   const RAW_EDITORS = SETTINGS_GARDEN_RAW_EDITOR_KEYS
-    .filter((key): key is Exclude<RawEditorKey, 'settings'> => key !== 'settings')
+    .filter(
+      (key): key is Exclude<RawEditorKey, 'settings' | 'models'> => (
+        key !== 'settings' && key !== 'models'
+      ),
+    )
     .map((key) => ({ key }));
-
-  type ModelsEditorConfig = {
-    modelCatalog?: Record<string, Record<string, unknown>>;
-    modelRoleAssignments?: Record<string, string>;
-  };
 
   type SchedulerEditorConfig = {
     tickIntervalMs?: number;
@@ -406,10 +366,6 @@
     tier?: string;
     customTokens?: string[];
   };
-
-  function getModelsEditorConfig(): ModelsEditorConfig {
-    return (data?.editors?.models as ModelsEditorConfig | undefined) ?? {};
-  }
 
   function getSchedulerEditorConfig(): SchedulerEditorConfig {
     return (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
@@ -634,7 +590,6 @@
   }
 
   // ── Derived ──
-  let slotKeys = $derived(catalogSlots.map(s => s.slotKey).filter(Boolean));
   let ttsProviderOptions = $derived(
     fieldEnumValues('ttsProvider', [DISABLED_PROVIDER_ID, ttsProvider]),
   );
@@ -718,17 +673,9 @@
   // ── Helpers ──
   function populateSimpleFields(settingsData: AdminSettingsData) {
     const config = settingsData.config as Record<string, unknown>;
-    const models = settingsData.editors?.models as ModelsEditorConfig | undefined;
     const scheduler = settingsData.editors?.scheduler as SchedulerEditorConfig | undefined;
     const capabilities = settingsData.editors?.capabilities as CapabilitiesEditorConfig | undefined;
-    const catalog = models?.modelCatalog;
-    const primarySlot = catalog?.primary as Record<string, unknown> | undefined;
-    const extractionSlot = catalog?.extraction as Record<string, unknown> | undefined;
-    const primaryDefaults = primarySlot?.defaults as Record<string, unknown> | undefined;
-    const primaryOverrides = primarySlot?.overrides as Record<string, unknown> | undefined;
-
-    primaryModel = String(primarySlot?.model ?? config.primaryModel ?? '');
-    extractionModel = String(extractionSlot?.model ?? config.extractionModel ?? '');
+    const maxOutputTokensFromConfig = Number(config.primaryMaxTokens ?? config.extractionMaxTokens ?? 4096);
     memoryBudgetPct = Number(config.memoryBudgetPct ?? 20);
     memoryRetrievalLimit = config.memoryRetrievalLimit != null ? Number(config.memoryRetrievalLimit) : null;
     sessionMessageLimit = config.sessionMessageLimit != null ? Number(config.sessionMessageLimit) : null;
@@ -737,11 +684,9 @@
     memoryRetrievalBudgetPct = Number(config.memoryRetrievalBudgetPct ?? 2);
     extractionThresholdPct = Number(config.extractionThresholdPct ?? 30);
     compactionThresholdPct = Number(config.compactionThresholdPct ?? 70);
-    maxResponseTokens = Number(
-      primaryOverrides?.maxTokens
-      ?? primaryDefaults?.maxTokens
-      ?? 4096,
-    );
+    maxResponseTokens = Number.isFinite(maxOutputTokensFromConfig) && maxOutputTokensFromConfig > 0
+      ? maxOutputTokensFromConfig
+      : 4096;
     retryMaxAttempts = Number(config.retryMaxAttempts ?? 3);
     retryBaseDelayMs = Number(config.retryBaseDelayMs ?? 2000);
     importRouteMode = String(config.importProcessingRouteMode ?? 'background');
@@ -815,57 +760,6 @@
     );
     telegramEnabled = Boolean(config.telegramEnabled);
     telegramAuthorizedUsers = String(config.telegramAuthorizedUsers ?? '');
-
-    // Populate catalog slots
-    if (catalog && Object.keys(catalog).length > 0) {
-      catalogSlots = Object.entries(catalog).map(([key, entry]) => ({
-        slotKey: key,
-        model: String(entry.model ?? ''),
-        provider: String(entry.provider ?? ''),
-        routeProviderOrder: entry.routing && typeof entry.routing === 'object'
-          && Array.isArray((entry.routing as Record<string, unknown>).providerOrder)
-          ? ((entry.routing as Record<string, unknown>).providerOrder as string[]).join(', ')
-          : '',
-        defaultMaxTokens: entry.defaults && typeof entry.defaults === 'object' ? Number((entry.defaults as Record<string, unknown>).maxTokens ?? 0) || null : null,
-        defaultContextWindow: entry.defaults && typeof entry.defaults === 'object' ? Number((entry.defaults as Record<string, unknown>).contextWindow ?? 0) || null : null,
-        overrideMaxTokens: entry.overrides && typeof entry.overrides === 'object' ? Number((entry.overrides as Record<string, unknown>).maxTokens ?? 0) || null : null,
-        overrideContextWindow: entry.overrides && typeof entry.overrides === 'object' ? Number((entry.overrides as Record<string, unknown>).contextWindow ?? 0) || null : null,
-      }));
-    } else {
-      catalogSlots = [
-        {
-          slotKey: 'primary',
-          model: primaryModel,
-          provider: '',
-          routeProviderOrder: '',
-          defaultMaxTokens: maxResponseTokens,
-          defaultContextWindow: Number(config.defaultContextWindow ?? 128000),
-          overrideMaxTokens: null,
-          overrideContextWindow: null,
-        },
-        {
-          slotKey: 'extraction',
-          model: extractionModel,
-          provider: '',
-          routeProviderOrder: '',
-          defaultMaxTokens: null,
-          defaultContextWindow: null,
-          overrideMaxTokens: null,
-          overrideContextWindow: null,
-        },
-      ];
-    }
-
-    // Populate purpose mappings
-    const assignments = models?.modelRoleAssignments;
-    if (assignments && Object.keys(assignments).length > 0) {
-      purposeMappings = Object.entries(assignments).map(([purpose, slotKey]) => ({ purpose, slotKey }));
-    } else {
-      purposeMappings = DEFAULT_PURPOSES.map(p => ({
-        purpose: p,
-        slotKey: p === 'chat' || p === 'summary' || p === 'reasoning' || p === 'longContext' ? 'primary' : 'extraction',
-      }));
-    }
   }
 
   function tryPrettyPrint(raw: string): string {
@@ -979,80 +873,6 @@
   function fmtMs(ms: number): string {
     if (ms >= 60000) return `${(ms / 60000).toFixed(1)}min`;
     return `${(ms / 1000).toFixed(1)}s`;
-  }
-
-  // ── Catalog actions ──
-  function addCatalogSlot() {
-    catalogSlots = [...catalogSlots, {
-      slotKey: '', model: '', provider: '', routeProviderOrder: '',
-      defaultMaxTokens: null, defaultContextWindow: null,
-      overrideMaxTokens: null, overrideContextWindow: null,
-    }];
-  }
-
-  function removeCatalogSlot(idx: number) {
-    catalogSlots = catalogSlots.filter((_, i) => i !== idx);
-  }
-
-  function addPurposeMapping() {
-    purposeMappings = [...purposeMappings, { purpose: '', slotKey: catalogSlots[0]?.slotKey ?? '' }];
-  }
-
-  function removePurposeMapping(idx: number) {
-    purposeMappings = purposeMappings.filter((_, i) => i !== idx);
-  }
-
-  // ── Save actions ──
-  function buildCatalogPayload(): Record<string, unknown> {
-    const nextSlots = catalogSlots.map(slot => ({ ...slot }));
-    const ensureSlot = (slotKey: string): CatalogSlot => {
-      const existing = nextSlots.find(slot => slot.slotKey === slotKey);
-      if (existing) {
-        return existing;
-      }
-      const created: CatalogSlot = {
-        slotKey,
-        model: '',
-        provider: '',
-        routeProviderOrder: '',
-        defaultMaxTokens: null,
-        defaultContextWindow: null,
-        overrideMaxTokens: null,
-        overrideContextWindow: null,
-      };
-      nextSlots.push(created);
-      return created;
-    };
-
-    const primarySlot = ensureSlot('primary');
-    primarySlot.model = primaryModel.trim();
-    primarySlot.defaultMaxTokens = maxResponseTokens;
-
-    const extractionSlot = ensureSlot('extraction');
-    extractionSlot.model = extractionModel.trim();
-
-    const catalog: Record<string, unknown> = {};
-    for (const slot of nextSlots) {
-      if (!slot.slotKey) continue;
-      catalog[slot.slotKey] = {
-        model: slot.model,
-        provider: slot.provider,
-        routing: { providerOrder: splitCsv(slot.routeProviderOrder) },
-        defaults: {
-          ...(slot.defaultMaxTokens ? { maxTokens: slot.defaultMaxTokens } : {}),
-          ...(slot.defaultContextWindow ? { contextWindow: slot.defaultContextWindow } : {}),
-        },
-        overrides: {
-          ...(slot.overrideMaxTokens ? { maxTokens: slot.overrideMaxTokens } : {}),
-          ...(slot.overrideContextWindow ? { contextWindow: slot.overrideContextWindow } : {}),
-        },
-      };
-    }
-    const assignments: Record<string, string> = {};
-    for (const m of purposeMappings) {
-      if (m.purpose && m.slotKey) assignments[m.purpose] = m.slotKey;
-    }
-    return { modelCatalog: catalog, modelRoleAssignments: assignments };
   }
 
   function splitCsv(str: string): string[] {
@@ -1169,14 +989,12 @@
     populateSimpleFields(nextSettingsData);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
-    const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([
-      getSubConfig('models').catch(() => '{}'),
+    const [skConf, schConf, tpConf, capConf] = await Promise.all([
       getSubConfig('skills').catch(() => '{}'),
       getSubConfig('scheduler').catch(() => '{}'),
       getSubConfig('trust-policy').catch(() => '{}'),
       getSubConfig('capabilities').catch(() => '{}'),
     ]);
-    modelsJson = tryPrettyPrint(mConf);
     skillsJson = tryPrettyPrint(skConf);
     schedulerJson = tryPrettyPrint(schConf);
     trustPolicyJson = tryPrettyPrint(tpConf);
@@ -1190,11 +1008,6 @@
     const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
     let invalidFieldCount = 0;
     const ownerConfigSaves = [
-      {
-        key: 'models' as const,
-        nextJson: JSON.stringify(buildCatalogPayload(), null, 2),
-        currentJson: tryPrettyPrint(modelsJson),
-      },
       {
         key: 'scheduler' as const,
         nextJson: JSON.stringify(buildSchedulerPayload(), null, 2),
@@ -1313,7 +1126,7 @@
       JSON.parse(json);
       await saveSubConfig(key, json);
       applyValidationErrors({ ok: true, message: '' });
-      if (key === 'models' || key === 'scheduler' || key === 'capabilities') {
+      if (key === 'scheduler' || key === 'capabilities') {
         await reloadSettingsState();
       } else {
         markRawEditorsCommitted([key as RawEditorKey]);
@@ -1326,42 +1139,25 @@
     }
   }
 
-  async function doRefreshModels() {
-    refreshingModels = true;
-    try {
-      await refreshModels();
-      discoveredModels = await listModels();
-      flash(true, `Discovered ${discoveredModels.length} models`);
-    } catch (e) {
-      flash(false, e instanceof Error ? e.message : 'Model refresh failed');
-    } finally {
-      refreshingModels = false;
-    }
-  }
-
   // ── Init ──
   onMount(async () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
     try {
-      const [settingsData, schemaData, models] = await Promise.all([
+      const [settingsData, schemaData] = await Promise.all([
         getSettings(),
         getSettingsSchema(),
-        listModels().catch(() => [] as DiscoveredModel[]),
       ]);
       data = settingsData;
       settingsSchema = schemaData;
-      discoveredModels = models;
       populateSimpleFields(data);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
-      const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([
-        getSubConfig('models').catch(() => '{}'),
+      const [skConf, schConf, tpConf, capConf] = await Promise.all([
         getSubConfig('skills').catch(() => '{}'),
         getSubConfig('scheduler').catch(() => '{}'),
         getSubConfig('trust-policy').catch(() => '{}'),
         getSubConfig('capabilities').catch(() => '{}'),
       ]);
-      modelsJson = tryPrettyPrint(mConf);
       skillsJson = tryPrettyPrint(skConf);
       schedulerJson = tryPrettyPrint(schConf);
       trustPolicyJson = tryPrettyPrint(tpConf);
@@ -1387,13 +1183,6 @@
   const COMPACT_INPUT_CLS = 'w-20 px-2 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gold-300';
   const TOGGLE_CLS = 'w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300';
 </script>
-
-<!-- Model datalist for autocomplete -->
-<datalist id="model-list">
-  {#each discoveredModels as m}
-    <option value={m.id}>{m.description ?? m.id}</option>
-  {/each}
-</datalist>
 
 <datalist id="tts-provider-list">
   {#each ttsProviderOptions as providerId}
@@ -1423,12 +1212,6 @@
     </div>
 
     <div class="flex items-center gap-3">
-      <button onclick={doRefreshModels} disabled={refreshingModels}
-        class="px-3 py-1.5 text-sm font-medium rounded-lg border border-bark-300
-               text-shadow-700 hover:bg-bark-200
-               disabled:opacity-50 transition-colors">
-        {refreshingModels ? 'Refreshing...' : 'Refresh Models'}
-      </button>
       <div class="flex rounded-lg border border-bark-300 overflow-hidden">
         {#each (['simple', 'advanced', 'raw'] as const) as m}
           <button
@@ -1471,40 +1254,6 @@
   <!-- SIMPLE MODE -->
   {:else if mode === 'simple'}
     <div class="space-y-5">
-      <!-- Primary models (quick-access) -->
-      <div class="card-garden p-6 space-y-4">
-        <h2 class="text-sm font-serif font-semibold text-shadow-800">Quick Model Selection</h2>
-        <hr class="divider-filigree" />
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <label class={LABEL_CLS}>
-              Primary Model
-              <span class="text-shadow-400 font-normal ml-1">({getSource('primaryModel')})</span>
-            </label>
-            <input type="text" list="model-list" bind:value={primaryModel} placeholder="provider/model"
-              class={INPUT_CLS} />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>
-              Extraction Model
-              <span class="text-shadow-400 font-normal ml-1">({getSource('extractionModel')})</span>
-            </label>
-            <input type="text" list="model-list" bind:value={extractionModel} placeholder="provider/model"
-              class={INPUT_CLS} />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Default Context Window</label>
-            <input type="number" min="4096" step="1024" bind:value={defaultContextWindow} class={INPUT_CLS} />
-            <p class="text-sm text-shadow-500 mt-1">Context window size in tokens (default: 128,000)</p>
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Max Response Tokens</label>
-            <input type="number" min="256" max="1000000" step="256" bind:value={maxResponseTokens} class={INPUT_CLS} />
-            <p class="text-sm text-shadow-500 mt-1">Maximum tokens in LLM response (256-1,000,000)</p>
-          </div>
-        </div>
-      </div>
-
       <!-- Budget Preview with bar chart -->
       {#if budgetPreview}
         <div class="card-garden p-6 space-y-4">
@@ -1913,139 +1662,6 @@
         {/if}
       </div>
 
-      <!-- Model Catalog (collapsible) -->
-      <div class="card-garden overflow-hidden">
-        <button
-          onclick={() => toggleSection('models')}
-          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
-        >
-          <div class="flex items-center gap-3">
-            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">M</span>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Catalog</h2>
-            <span class="text-sm text-shadow-500">{catalogSlots.filter(s => s.slotKey).length} slots</span>
-          </div>
-          <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('models') ? 'rotate-180' : ''}">&#9660;</span>
-        </button>
-        {#if !openSections.has('models')}
-          <div class="px-5 pb-3 text-sm text-shadow-500">
-            {catalogSlots.filter(s => s.slotKey && s.model).map(s => `${s.slotKey}: ${s.model.split('/').pop()}`).join(', ') || 'No models configured'}
-          </div>
-        {/if}
-        {#if openSections.has('models')}
-          <div class="px-5 pb-5 border-t border-bark-300 pt-4 space-y-4">
-            <div class="flex items-center justify-between">
-              <p class="text-sm text-shadow-600">Define reusable model slots, then map purposes to slots below.</p>
-              <button onclick={addCatalogSlot}
-                class="px-3 py-1 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors">
-                + Add Slot
-              </button>
-            </div>
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm min-w-[800px]">
-                <thead>
-                  <tr class="border-b border-bark-300">
-                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Slot Key</th>
-                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Model</th>
-                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Provider</th>
-                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Route Provider Order</th>
-                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Def. Max Tokens</th>
-                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Def. Context</th>
-                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Ovr. Max Tokens</th>
-                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Ovr. Context</th>
-                    <th class="py-2 px-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each catalogSlots as slot, i}
-                    <tr class="border-b border-bark-200">
-                      <td class="py-1.5 px-2">
-                        <input type="text" bind:value={slot.slotKey} placeholder="primary"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2">
-                        <input type="text" list="model-list" bind:value={slot.model} placeholder="provider/model"
-                          class="w-48 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2">
-                        <input type="text" bind:value={slot.provider} placeholder="openrouter"
-                          class="w-28 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2">
-                        <input type="text" bind:value={slot.routeProviderOrder} placeholder="parasail, openai"
-                          class="w-36 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2 text-right">
-                        <input type="number" min="1"
-                          value={slot.defaultMaxTokens ?? ''}
-                          onchange={(e) => { slot.defaultMaxTokens = Number((e.target as HTMLInputElement).value) || null; }}
-                          placeholder="auto"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2 text-right">
-                        <input type="number" min="1"
-                          value={slot.defaultContextWindow ?? ''}
-                          onchange={(e) => { slot.defaultContextWindow = Number((e.target as HTMLInputElement).value) || null; }}
-                          placeholder="auto"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2 text-right">
-                        <input type="number" min="1"
-                          value={slot.overrideMaxTokens ?? ''}
-                          onchange={(e) => { slot.overrideMaxTokens = Number((e.target as HTMLInputElement).value) || null; }}
-                          placeholder="optional"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2 text-right">
-                        <input type="number" min="1"
-                          value={slot.overrideContextWindow ?? ''}
-                          onchange={(e) => { slot.overrideContextWindow = Number((e.target as HTMLInputElement).value) || null; }}
-                          placeholder="optional"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2">
-                        <button onclick={() => removeCatalogSlot(i)}
-                          class="text-sm text-wilt-600 hover:text-wilt-400 font-medium">Remove</button>
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-
-            <!-- Purpose Mappings -->
-            <div class="pt-2 space-y-3">
-              <div class="flex items-center justify-between">
-                <h3 class="text-sm font-medium text-shadow-700">Purpose Mappings</h3>
-                <button onclick={addPurposeMapping}
-                  class="px-3 py-1 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors">
-                  + Add Mapping
-                </button>
-              </div>
-              <div class="space-y-2">
-                {#each purposeMappings as mapping, i}
-                  <div class="flex items-center gap-3">
-                    <input type="text" bind:value={mapping.purpose} placeholder="chat"
-                      class="w-40 px-3 py-1.5 text-sm rounded border border-bark-300 bg-white text-shadow-800 font-mono focus:ring-1 focus:ring-gold-300" />
-                    <svg class="w-4 h-4 text-shadow-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-4-4l4 4-4 4"/></svg>
-                    <select bind:value={mapping.slotKey}
-                      class="flex-1 px-3 py-1.5 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300">
-                      {#each slotKeys as key}
-                        <option value={key}>{key}</option>
-                      {/each}
-                      {#if !slotKeys.includes(mapping.slotKey) && mapping.slotKey}
-                        <option value={mapping.slotKey}>{mapping.slotKey} (missing)</option>
-                      {/if}
-                    </select>
-                    <button onclick={() => removePurposeMapping(i)}
-                      class="text-sm text-wilt-600 hover:text-wilt-400 font-medium shrink-0">Remove</button>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          </div>
-        {/if}
-      </div>
-
       <!-- Trust & Capability (collapsible) -->
       <div class="card-garden overflow-hidden">
         <button
@@ -2175,7 +1791,7 @@
               <div>
                 <label class={LABEL_CLS}>OpenRouter Provider Order</label>
                 <input type="text" bind:value={openRouterProviderOrder} class={INPUT_CLS} placeholder="comma-separated providers" />
-                <p class="text-sm text-shadow-500 mt-1">Global/import fallback order. Per-slot route order is configured in the model catalog table above.</p>
+                <p class="text-sm text-shadow-500 mt-1">Global/import fallback order for provider routing.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>Local Endpoint URL</label>
@@ -2523,7 +2139,7 @@
   {:else if mode === 'advanced'}
     <div class="space-y-3">
       {#each SECTIONS as section}
-        {@const sectionKeys = section.keys.filter((k) => data && k in (data.config as Record<string, unknown>))}
+        {@const sectionKeys = section.keys.filter((k) => data && k in (data.config as Record<string, unknown>) && !MODEL_OWNED_FIELDS.has(k))}
         {#if sectionKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button
@@ -2685,7 +2301,6 @@
                     {:else}
                       <input type="text"
                         value={String(value ?? '')}
-                        list={key.toLowerCase().includes('model') ? 'model-list' : undefined}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value)}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
                     {/if}
@@ -2707,7 +2322,7 @@
       <!-- Other (uncategorized) keys -->
       {#if data}
         {@const allCategorized = new Set(SECTIONS.flatMap(s => s.keys))}
-        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter(k => !allCategorized.has(k))}
+        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter(k => !allCategorized.has(k) && !MODEL_OWNED_FIELDS.has(k))}
         {#if otherKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button
@@ -2816,18 +2431,6 @@
   <!-- RAW MODE -->
   {:else}
     <div class="space-y-4">
-      {#if discoveredModels.length > 0}
-        <div class="card-garden px-5 py-3 flex items-center justify-between">
-          <span class="text-sm text-shadow-700">
-            {discoveredModels.length} models discovered via proxy
-          </span>
-          <button onclick={doRefreshModels} disabled={refreshingModels}
-            class="text-sm text-gold-700 hover:text-gold-600 font-medium disabled:opacity-50">
-            {refreshingModels ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
-      {/if}
-
       <div class="card-garden overflow-hidden">
         <div class="flex items-center justify-between px-5 py-3 border-b border-bark-300">
           <h3 class="text-sm font-serif font-semibold text-shadow-800">settings.json (full runtime object)</h3>

@@ -11,6 +11,7 @@ import type {
   CorrelationMetadata,
   LLMContext,
   LLMResponse,
+  ModelBudgetBlockedEvent,
   StreamCallbacks,
   SubstrateConfig,
   ToolCall,
@@ -39,6 +40,7 @@ import {
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
 } from './correlation.js';
+import { ModelBudgetController, ModelBudgetExceededError } from './model-budget.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -64,6 +66,7 @@ export interface LLMClientRuntimeOptions {
   litellmBaseUrl?: string;
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
+  onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
 }
 
 export class SensitiveImportRoutePolicyError extends Error {
@@ -79,12 +82,28 @@ export class SensitiveImportRoutePolicyError extends Error {
   }
 }
 
+export class LegacyModelHintError extends Error {
+  readonly code = 'legacy_model_hint_unsupported';
+  readonly modelHint: string;
+
+  constructor(modelHint: string) {
+    super(
+      `Legacy slot-key model hints are unsupported: "${modelHint}". ` +
+      'Use provider-qualified model id (provider:model) or provide model + provider explicitly.',
+    );
+    this.name = 'LegacyModelHintError';
+    this.modelHint = modelHint;
+  }
+}
+
 export class LLMClient {
   private config: SubstrateConfig;
   private litellmBaseUrl: string | null;
   private fallbackRunner: FallbackRunner;
+  private budgetController: ModelBudgetController;
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
+  private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
 
   constructor(
     config: SubstrateConfig,
@@ -96,8 +115,10 @@ export class LLMClient {
     this.config = config;
     this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? process.env.LITELLM_BASE_URL ?? null;
     this.fallbackRunner = new FallbackRunner();
+    this.budgetController = new ModelBudgetController(config);
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
+    this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
   }
 
   private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
@@ -233,24 +254,14 @@ export class LLMClient {
     fallbackCandidates: RoutingCandidate[],
   ): RoutingCandidate | null {
     const baseCandidate = fallbackCandidates[0];
+    if (!baseCandidate) return null;
     const hintedModel = modelHint.model?.trim();
     const qualified = hintedModel ? this.parseProviderQualifiedHint(hintedModel) : null;
-    const catalog = this.config.modelCatalog ?? {};
-    const fromSlot = hintedModel ? catalog[hintedModel] : undefined;
-    const fromModelId = hintedModel
-      ? Object.values(catalog).find(entry => entry.model === hintedModel)
-      : undefined;
-    const catalogMatch = fromSlot ?? fromModelId;
 
-    let provider = modelHint.provider ?? qualified?.provider ?? catalogMatch?.provider ?? baseCandidate.provider;
-    let model = qualified?.model ?? (catalogMatch?.model ?? hintedModel ?? baseCandidate.model);
-    let maxTokens = modelHint.maxTokens
-      ?? catalogMatch?.overrides?.maxTokens
-      ?? catalogMatch?.defaults?.maxTokens
-      ?? baseCandidate.maxTokens;
-    const contextWindow = catalogMatch?.overrides?.contextWindow
-      ?? catalogMatch?.defaults?.contextWindow
-      ?? baseCandidate.contextWindow;
+    let provider = modelHint.provider ?? qualified?.provider ?? baseCandidate.provider;
+    let model = qualified?.model ?? hintedModel ?? baseCandidate.model;
+    let maxTokens = modelHint.maxTokens ?? baseCandidate.maxTokens;
+    const contextWindow = baseCandidate.contextWindow;
 
     if (!provider || !model) return null;
     provider = provider.trim().toLowerCase();
@@ -279,6 +290,27 @@ export class LLMClient {
     return this.withOpenRouterPreferences(hinted);
   }
 
+  private ensureNonLegacyModelHint(
+    modelHint: LLMCompletionModelHint,
+    fallbackCandidates: RoutingCandidate[],
+  ): void {
+    const hintedModel = modelHint.model?.trim();
+    if (!hintedModel) return;
+    if (modelHint.provider) return;
+    if (this.parseProviderQualifiedHint(hintedModel)) return;
+
+    const slotKeys = new Set<string>();
+    for (const candidate of fallbackCandidates) {
+      if (candidate.slotKey) slotKeys.add(candidate.slotKey);
+    }
+    for (const entry of this.config.modelRegistry?.models ?? []) {
+      slotKeys.add(entry.id);
+    }
+    if (slotKeys.has(hintedModel)) {
+      throw new LegacyModelHintError(hintedModel);
+    }
+  }
+
   private resolveCandidates(
     purpose: RoutingPurpose,
     modelHint: LLMCompletionModelHint | undefined,
@@ -286,6 +318,7 @@ export class LLMClient {
     const candidates = resolveRoutingCandidates(this.config, purpose);
     const normalizedHint = this.normalizeModelHint(modelHint);
     if (!normalizedHint) return candidates;
+    this.ensureNonLegacyModelHint(normalizedHint, candidates);
 
     const hintedCandidate = this.resolveModelHintCandidate(normalizedHint, candidates);
     if (!hintedCandidate) return candidates;
@@ -309,8 +342,73 @@ export class LLMClient {
     };
   }
 
+  private estimateContextInputTokens(context: PiContext): number {
+    const collectChars = (value: unknown): number => {
+      if (typeof value === 'string') return value.length;
+      if (Array.isArray(value)) return value.reduce((sum, entry) => sum + collectChars(entry), 0);
+      if (value && typeof value === 'object') {
+        return Object.values(value).reduce((sum, entry) => sum + collectChars(entry), 0);
+      }
+      return 0;
+    };
+    const charCount = collectChars(context.systemPrompt) + collectChars(context.messages);
+    return Math.max(1, Math.ceil(charCount / 4));
+  }
+
+  private resolveBudgetService(purpose: RoutingPurpose, correlation: ResolvedCorrelationMetadata | undefined): string {
+    if (correlation?.callType) return correlation.callType;
+    if (purpose === 'chat') return 'chat';
+    return 'background';
+  }
+
+  private resolveBudgetProcess(purpose: RoutingPurpose, correlation: ResolvedCorrelationMetadata | undefined): string {
+    return correlation?.originStage ?? correlation?.purpose ?? purpose;
+  }
+
+  private evaluateBudgetPreflight(
+    purpose: RoutingPurpose,
+    candidate: RoutingCandidate,
+    estimatedInputTokens: number,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ): void {
+    const service = this.resolveBudgetService(purpose, correlation);
+    const process = this.resolveBudgetProcess(purpose, correlation);
+    const preflight = this.budgetController.evaluatePreflight({
+      candidate,
+      purpose,
+      estimatedInputTokens,
+      service,
+      process,
+      correlation,
+    });
+    if (preflight.allowed) return;
+    if (preflight.blockedEvent) {
+      this.onBudgetBlocked?.(preflight.blockedEvent);
+      throw markErrorAsNonRetryable(new ModelBudgetExceededError(preflight.blockedEvent));
+    }
+  }
+
+  private recordUsage(
+    purpose: RoutingPurpose,
+    candidate: RoutingCandidate,
+    inputTokens: number,
+    outputTokens: number,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ): void {
+    this.budgetController.recordUsage({
+      candidate,
+      purpose,
+      service: this.resolveBudgetService(purpose, correlation),
+      process: this.resolveBudgetProcess(purpose, correlation),
+      inputTokens,
+      outputTokens,
+      correlation,
+    });
+  }
+
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     const piContext = this.buildPiContext(context);
+    const estimatedInputTokens = this.estimateContextInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
 
     try {
@@ -426,7 +524,10 @@ export class LLMClient {
             },
           });
         },
-        { correlation },
+        {
+          correlation,
+          estimatedInputTokens,
+        },
       );
 
       log.info('LLM stream completed', {
@@ -436,6 +537,14 @@ export class LLMClient {
         attempts,
         ...correlation,
       });
+
+      this.recordUsage(
+        'chat',
+        candidate,
+        finalResponse.inputTokens,
+        finalResponse.outputTokens,
+        correlation,
+      );
 
       callbacks?.onDone?.(finalResponse);
       return finalResponse;
@@ -453,6 +562,7 @@ export class LLMClient {
   ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
     const piContext = this.buildPiContext(context);
+    const estimatedInputTokens = this.estimateContextInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
@@ -499,7 +609,11 @@ export class LLMClient {
           },
         });
       },
-      { modelHint: options.modelHint, correlation },
+      {
+        modelHint: options.modelHint,
+        correlation,
+        estimatedInputTokens,
+      },
     );
 
     log.info('LLM complete finished', {
@@ -514,14 +628,24 @@ export class LLMClient {
 
     const content = extractTextContent(response.content as unknown[]);
     const reasoning = extractReasoningContent(response.content as unknown[]);
+    const inputTokens = response.usage.input;
+    const outputTokens = response.usage.output;
+
+    this.recordUsage(
+      routingPurpose,
+      candidate,
+      inputTokens,
+      outputTokens,
+      correlation,
+    );
 
     return {
       content: normalizeContent(content),
       ...(reasoning ? { reasoning } : {}),
       toolCalls: [],
       model: response.model,
-      inputTokens: response.usage.input,
-      outputTokens: response.usage.output,
+      inputTokens,
+      outputTokens,
       stopReason: response.stopReason,
     };
   }
@@ -544,21 +668,38 @@ export class LLMClient {
     if (purpose === 'context') {
       return 'context';
     }
+    if (purpose === 'extraction') {
+      return 'extraction';
+    }
+    if (purpose === 'summary') {
+      return 'summary';
+    }
     if (purpose === 'background') {
       return 'background';
     }
     return 'background';
   }
 
+  private toEligibilityPurpose(purpose: RoutingPurpose): string {
+    if (purpose === 'chat') return 'chat';
+    if (purpose === 'reasoning') return 'reasoning';
+    if (purpose === 'import_processing') return 'import_processing';
+    return 'background';
+  }
+
   private async runWithFallback<T>(
     purpose: RoutingPurpose,
     execute: (candidate: RoutingCandidate, attempt: number) => Promise<T>,
-    options: { modelHint?: LLMCompletionModelHint; correlation?: ResolvedCorrelationMetadata } = {},
+    options: {
+      modelHint?: LLMCompletionModelHint;
+      correlation?: ResolvedCorrelationMetadata;
+      estimatedInputTokens?: number;
+    } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
     if (this.eligibilityGate) {
       const decision = this.eligibilityGate.evaluate({
         kind: 'llm.purpose',
-        purpose,
+        purpose: this.toEligibilityPurpose(purpose),
       });
       this.onEligibilityDecision?.(decision);
       if (!decision.allowed) {
@@ -583,6 +724,12 @@ export class LLMClient {
 
     const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
+      this.evaluateBudgetPreflight(
+        purpose,
+        candidate,
+        options.estimatedInputTokens ?? 0,
+        options.correlation,
+      );
       this.enforceImportRoutingPolicy(purpose, candidate);
       return execute(candidate, attempt);
     }, options.correlation);

@@ -5,6 +5,11 @@
 
 import { join } from 'node:path';
 import {
+  CANONICAL_MODEL_PURPOSES,
+  type CanonicalModelRegistry,
+  type CanonicalModelPurpose,
+  type ModelRegistryBudgetPolicy,
+  type ModelRegistryEntry,
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
   type CapabilityTier,
@@ -72,6 +77,10 @@ export const MOOD_CONGRUENCE_WEIGHT_RANGE = {
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 const MODEL_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
+  'modelRegistry',
+];
+
+const LEGACY_MODEL_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
   'primaryModel',
   'primaryProvider',
   'primaryMaxTokens',
@@ -85,6 +94,7 @@ const MODEL_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
 
 const NON_RUNTIME_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
   ...MODEL_SETTINGS_KEYS,
+  ...LEGACY_MODEL_SETTINGS_KEYS,
   'maintenanceIntervalMs',
   'capabilityTier',
 ];
@@ -110,6 +120,7 @@ export const DEFAULT_MODEL_ROLE_ASSIGNMENTS: Readonly<ModelRoleAssignments> = {
 };
 
 export interface EditableSettings {
+  modelRegistry?: CanonicalModelRegistry;
   primaryModel?: string;
   primaryProvider?: string;
   extractionModel?: string;
@@ -327,6 +338,19 @@ function toPositiveInteger(value: unknown): number | undefined {
   return undefined;
 }
 
+function toPositiveNumber(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number.parseFloat(trimmed);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
 function toIntegerInRange(value: unknown, min: number, max: number): number | undefined {
   let parsed: number | undefined;
   if (typeof value === 'number') {
@@ -439,6 +463,351 @@ function toSessionRestartBehavior(value: unknown): SessionRestartBehavior | unde
   const trimmed = value.trim().toLowerCase();
   if (!SESSION_RESTART_BEHAVIOR_VALUES.has(trimmed as SessionRestartBehavior)) return undefined;
   return trimmed as SessionRestartBehavior;
+}
+
+const CANONICAL_MODEL_PURPOSE_SET = new Set<CanonicalModelPurpose>(CANONICAL_MODEL_PURPOSES);
+
+function hasLegacyModelSettingsPayload(settings: EditableSettings): boolean {
+  return LEGACY_MODEL_SETTINGS_KEYS.some((key) => settings[key] !== undefined);
+}
+
+function normalizeModelRegistryPurposeTag(
+  value: unknown,
+  fieldPath: string,
+): { purpose: CanonicalModelPurpose; primary: boolean } {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
+  }
+  const purposeRaw = toNonEmptyString(value.purpose);
+  if (!purposeRaw || !CANONICAL_MODEL_PURPOSE_SET.has(purposeRaw as CanonicalModelPurpose)) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}.purpose: expected one of ${CANONICAL_MODEL_PURPOSES.join(', ')}`,
+    );
+  }
+  const primary = toBoolean(value.primary);
+  if (primary === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.primary: expected boolean`);
+  }
+  return {
+    purpose: purposeRaw as CanonicalModelPurpose,
+    primary,
+  };
+}
+
+function normalizeModelRegistryBudgetPolicy(
+  value: unknown,
+  fieldPath: string,
+): ModelRegistryBudgetPolicy {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
+  }
+
+  const enabled = toBoolean(value.enabled);
+  if (enabled === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.enabled: expected boolean`);
+  }
+
+  const dailyUsdLimit = toPositiveNumber(value.dailyUsdLimit);
+  if (dailyUsdLimit === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.dailyUsdLimit: expected positive number`);
+  }
+
+  const monthlyUsdLimit = toPositiveNumber(value.monthlyUsdLimit);
+  if (monthlyUsdLimit === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.monthlyUsdLimit: expected positive number`);
+  }
+
+  if (monthlyUsdLimit < dailyUsdLimit) {
+    throw new Error(`Invalid model registry at ${fieldPath}: monthlyUsdLimit must be >= dailyUsdLimit`);
+  }
+
+  const currencyRaw = toNonEmptyString(value.currency);
+  if (currencyRaw && currencyRaw.toUpperCase() !== 'USD') {
+    throw new Error(`Invalid model registry at ${fieldPath}.currency: only "USD" is supported`);
+  }
+
+  return {
+    enabled,
+    dailyUsdLimit,
+    monthlyUsdLimit,
+    currency: 'USD',
+  };
+}
+
+function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRegistryEntry {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
+  }
+
+  const id = toNonEmptyString(value.id);
+  if (!id || !MODEL_SLOT_KEY_PATTERN.test(id)) {
+    throw new Error(`Invalid model registry at ${fieldPath}.id: expected non-empty key-safe string`);
+  }
+
+  const rank = toIntegerInRange(value.rank, 0, Number.MAX_SAFE_INTEGER);
+  if (rank === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.rank: expected non-negative integer`);
+  }
+
+  if (!isRecord(value.identity)) {
+    throw new Error(`Invalid model registry at ${fieldPath}.identity: expected object`);
+  }
+  const provider = toNonEmptyString(value.identity.provider);
+  const model = toNonEmptyString(value.identity.model);
+  if (!provider || !model) {
+    throw new Error(`Invalid model registry at ${fieldPath}.identity: provider and model are required`);
+  }
+  if (!isRecord(value.identity.source)) {
+    throw new Error(`Invalid model registry at ${fieldPath}.identity.source: expected object`);
+  }
+  const sourceType = toNonEmptyString(value.identity.source.type);
+  if (!sourceType) {
+    throw new Error(`Invalid model registry at ${fieldPath}.identity.source.type: expected non-empty string`);
+  }
+
+  if (!Array.isArray(value.purposes) || value.purposes.length === 0) {
+    throw new Error(`Invalid model registry at ${fieldPath}.purposes: expected non-empty array`);
+  }
+  const seenPurposes = new Set<CanonicalModelPurpose>();
+  const purposes = value.purposes.map((entry, index) => {
+    const normalized = normalizeModelRegistryPurposeTag(entry, `${fieldPath}.purposes[${index}]`);
+    if (seenPurposes.has(normalized.purpose)) {
+      throw new Error(
+        `Invalid model registry at ${fieldPath}.purposes[${index}]: duplicate purpose "${normalized.purpose}"`,
+      );
+    }
+    seenPurposes.add(normalized.purpose);
+    return normalized;
+  });
+
+  const capabilities = isRecord(value.capabilities) ? { ...value.capabilities } : undefined;
+  const tuning = isRecord(value.tuning) ? { ...value.tuning } : undefined;
+  const cost = isRecord(value.cost) ? { ...value.cost } : undefined;
+  const metadata = isRecord(value.metadata) ? { ...value.metadata } : undefined;
+
+  const capabilityMaxTokens = toPositiveInteger(capabilities?.maxOutputTokens);
+  const tuningMaxTokens = toPositiveInteger(tuning?.maxOutputTokens);
+  const maxOutputTokens = tuningMaxTokens ?? capabilityMaxTokens;
+  if (maxOutputTokens === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}: maxOutputTokens must be set in capabilities or tuning`);
+  }
+
+  const capabilityContextWindow = toPositiveInteger(capabilities?.contextWindow);
+  const tuningContextWindow = toPositiveInteger(tuning?.contextWindow);
+  if (capabilities && capabilityContextWindow !== undefined) {
+    capabilities.contextWindow = capabilityContextWindow;
+  }
+  if (capabilities && capabilityMaxTokens !== undefined) {
+    capabilities.maxOutputTokens = capabilityMaxTokens;
+  }
+  if (tuning) {
+    tuning.maxOutputTokens = maxOutputTokens;
+    if (tuningContextWindow !== undefined) {
+      tuning.contextWindow = tuningContextWindow;
+    }
+  }
+
+  return {
+    id,
+    rank,
+    identity: {
+      provider,
+      model,
+      source: {
+        type: sourceType,
+        ...(toNonEmptyString(value.identity.source.label)
+          ? { label: toNonEmptyString(value.identity.source.label) }
+          : {}),
+        ...(toNonEmptyString(value.identity.source.baseUrl)
+          ? { baseUrl: toNonEmptyString(value.identity.source.baseUrl) }
+          : {}),
+        ...(isRecord(value.identity.source.metadata)
+          ? { metadata: { ...value.identity.source.metadata } }
+          : {}),
+      },
+      ...(toNonEmptyString(value.identity.family)
+        ? { family: toNonEmptyString(value.identity.family) }
+        : {}),
+    },
+    purposes,
+    ...(capabilities ? { capabilities } : {}),
+    ...(tuning ? { tuning } : {}),
+    ...(cost ? { cost } : {}),
+    ...(metadata ? { metadata } : {}),
+  };
+}
+
+export function normalizeCanonicalModelRegistry(
+  value: unknown,
+  sourcePath = 'modelRegistry',
+): CanonicalModelRegistry {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid model registry at ${sourcePath}: expected object`);
+  }
+  if (value.schemaVersion !== 1) {
+    throw new Error(`Invalid model registry at ${sourcePath}.schemaVersion: expected 1`);
+  }
+  if (!Array.isArray(value.models) || value.models.length === 0) {
+    throw new Error(`Invalid model registry at ${sourcePath}.models: expected non-empty array`);
+  }
+  const budgetPolicy = value.budgetPolicy !== undefined
+    ? normalizeModelRegistryBudgetPolicy(value.budgetPolicy, `${sourcePath}.budgetPolicy`)
+    : undefined;
+
+  const primaryPurposeCounts = new Map<CanonicalModelPurpose, number>(
+    CANONICAL_MODEL_PURPOSES.map((purpose) => [purpose, 0]),
+  );
+  const seenIds = new Set<string>();
+  const models = value.models.map((entry, index) => {
+    const normalized = normalizeModelRegistryEntry(entry, `${sourcePath}.models[${index}]`);
+    if (seenIds.has(normalized.id)) {
+      throw new Error(`Invalid model registry at ${sourcePath}.models[${index}].id: duplicate "${normalized.id}"`);
+    }
+    seenIds.add(normalized.id);
+    for (const purposeTag of normalized.purposes) {
+      if (!purposeTag.primary) continue;
+      const previous = primaryPurposeCounts.get(purposeTag.purpose) ?? 0;
+      primaryPurposeCounts.set(purposeTag.purpose, previous + 1);
+    }
+    return normalized;
+  });
+
+  for (const purpose of CANONICAL_MODEL_PURPOSES) {
+    const primaryCount = primaryPurposeCounts.get(purpose) ?? 0;
+    if (primaryCount !== 1) {
+      throw new Error(
+        `Invalid model registry at ${sourcePath}: purpose "${purpose}" must have exactly one primary model`,
+      );
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    models,
+    ...(budgetPolicy ? { budgetPolicy } : {}),
+  };
+}
+
+function resolvePrimaryModelIdsByPurpose(registry: CanonicalModelRegistry): Record<CanonicalModelPurpose, string> {
+  const primaryByPurpose = {} as Record<CanonicalModelPurpose, string>;
+  for (const model of registry.models) {
+    for (const purposeTag of model.purposes) {
+      if (!purposeTag.primary) continue;
+      primaryByPurpose[purposeTag.purpose] = model.id;
+    }
+  }
+  return primaryByPurpose;
+}
+
+function resolveModelSlotFromRegistryEntry(
+  entry: ModelRegistryEntry,
+  fallbackContextWindow?: number,
+): ModelSlot {
+  const maxTokens = toPositiveInteger(entry.tuning?.maxOutputTokens)
+    ?? toPositiveInteger(entry.capabilities?.maxOutputTokens);
+  if (maxTokens === undefined) {
+    throw new Error(`Invalid model registry model "${entry.id}": missing maxOutputTokens`);
+  }
+  const contextWindow = toPositiveInteger(entry.tuning?.contextWindow)
+    ?? toPositiveInteger(entry.capabilities?.contextWindow)
+    ?? fallbackContextWindow;
+  const capabilityContextBudget = sanitizeModelContextBudget(
+    isRecord(entry.capabilities) ? entry.capabilities.contextBudget : undefined,
+  );
+  const tuningContextBudget = sanitizeModelContextBudget(
+    isRecord(entry.tuning) ? entry.tuning.contextBudget : undefined,
+  );
+  return {
+    model: entry.identity.model,
+    provider: entry.identity.provider,
+    maxTokens,
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(tuningContextBudget ?? capabilityContextBudget
+      ? { contextBudget: tuningContextBudget ?? capabilityContextBudget }
+      : {}),
+  };
+}
+
+function projectCanonicalModelRegistry(
+  registry: CanonicalModelRegistry,
+  options?: { defaultContextWindow?: number },
+): EditableSettings {
+  const catalog: Record<string, ModelCatalogEntry> = {};
+  for (const model of registry.models) {
+    const defaults: ModelSlotDefaults = {};
+    const overrides: ModelSlotOverrides = {};
+    const defaultMaxTokens = toPositiveInteger(model.capabilities?.maxOutputTokens);
+    const defaultContextWindow = toPositiveInteger(model.capabilities?.contextWindow);
+    const overrideMaxTokens = toPositiveInteger(model.tuning?.maxOutputTokens);
+    const overrideContextWindow = toPositiveInteger(model.tuning?.contextWindow);
+    const defaultContextBudget = sanitizeModelContextBudget(
+      isRecord(model.capabilities) ? model.capabilities.contextBudget : undefined,
+    );
+    const overrideContextBudget = sanitizeModelContextBudget(
+      isRecord(model.tuning) ? model.tuning.contextBudget : undefined,
+    );
+    if (defaultMaxTokens !== undefined) defaults.maxTokens = defaultMaxTokens;
+    if (defaultContextWindow !== undefined) defaults.contextWindow = defaultContextWindow;
+    if (defaultContextBudget !== undefined) defaults.contextBudget = defaultContextBudget;
+    if (overrideMaxTokens !== undefined) overrides.maxTokens = overrideMaxTokens;
+    if (overrideContextWindow !== undefined) overrides.contextWindow = overrideContextWindow;
+    if (overrideContextBudget !== undefined) overrides.contextBudget = overrideContextBudget;
+    catalog[model.id] = {
+      model: model.identity.model,
+      provider: model.identity.provider,
+      ...(Object.keys(defaults).length > 0 ? { defaults } : {}),
+      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+    };
+  }
+
+  const primaryByPurpose = resolvePrimaryModelIdsByPurpose(registry);
+  const assignments: ModelRoleAssignments = { ...primaryByPurpose };
+  assignments.context = assignments.background;
+
+  const registryById = new Map<string, ModelRegistryEntry>(registry.models.map((entry) => [entry.id, entry]));
+  const chatModelId = primaryByPurpose.chat;
+  const extractionModelId = primaryByPurpose.extraction;
+  const backgroundModelId = primaryByPurpose.background;
+  const reasoningModelId = primaryByPurpose.reasoning;
+  const longContextModelId = primaryByPurpose.longContext;
+  const visionModelId = primaryByPurpose.vision;
+
+  const chatEntry = registryById.get(chatModelId);
+  const extractionEntry = registryById.get(extractionModelId);
+  const backgroundEntry = registryById.get(backgroundModelId);
+  const reasoningEntry = registryById.get(reasoningModelId);
+  const longContextEntry = registryById.get(longContextModelId);
+  const visionEntry = registryById.get(visionModelId);
+  if (!chatEntry || !extractionEntry || !backgroundEntry || !reasoningEntry || !longContextEntry || !visionEntry) {
+    throw new Error('Invalid model registry: missing projected primary model entries');
+  }
+
+  const chatSlot = resolveModelSlotFromRegistryEntry(chatEntry, options?.defaultContextWindow);
+  const extractionSlot = resolveModelSlotFromRegistryEntry(extractionEntry, options?.defaultContextWindow);
+  const backgroundSlot = resolveModelSlotFromRegistryEntry(backgroundEntry, options?.defaultContextWindow);
+  const reasoningSlot = resolveModelSlotFromRegistryEntry(reasoningEntry, options?.defaultContextWindow);
+  const longContextSlot = resolveModelSlotFromRegistryEntry(longContextEntry, options?.defaultContextWindow);
+  const visionSlot = resolveModelSlotFromRegistryEntry(visionEntry, options?.defaultContextWindow);
+
+  return {
+    modelRegistry: registry,
+    modelCatalog: catalog,
+    modelRoleAssignments: assignments,
+    modelRoster: {
+      chat: chatSlot,
+      background: backgroundSlot,
+      context: backgroundSlot,
+      reasoning: reasoningSlot,
+      longContext: longContextSlot,
+      vision: visionSlot,
+    },
+    primaryModel: chatSlot.model,
+    primaryProvider: chatSlot.provider,
+    primaryMaxTokens: chatSlot.maxTokens,
+    extractionModel: extractionSlot.model,
+    extractionProvider: extractionSlot.provider,
+    extractionMaxTokens: extractionSlot.maxTokens,
+  };
 }
 
 function sanitizeModelContextBudget(value: unknown): ModelContextBudgetConfig | undefined {
@@ -968,17 +1337,13 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
 }
 
 export function hasModelSettings(settings: EditableSettings): boolean {
-  return MODEL_SETTINGS_KEYS.some((key) => settings[key] !== undefined);
+  return settings.modelRegistry !== undefined;
 }
 
 export function extractModelSettings(settings: EditableSettings): EditableSettings {
-  const modelSettings: EditableSettings = {};
-  for (const key of MODEL_SETTINGS_KEYS) {
-    const value = settings[key];
-    if (value === undefined) continue;
-    (modelSettings as Record<string, unknown>)[key] = value;
-  }
-  return modelSettings;
+  return settings.modelRegistry !== undefined
+    ? { modelRegistry: settings.modelRegistry }
+    : {};
 }
 
 export function splitSettingsByDomain(settings: EditableSettings): SettingsDomainSplit {
@@ -1017,219 +1382,40 @@ export function normalizeEditableSettings(
 ): EditableSettings {
   const normalizedInput = normalizeContextControlSettings(settings);
 
+  const hasLegacyModelInputs = hasLegacyModelSettingsPayload(normalizedInput);
   if (!hasModelSettings(normalizedInput)) {
+    if (hasLegacyModelInputs) {
+      throw new Error(
+        'Legacy model settings are not accepted in this slice; provide models.modelRegistry payloads only',
+      );
+    }
     return { ...normalizedInput };
   }
 
-  const normalized: EditableSettings = { ...normalizedInput };
-  const explicitCatalog = sanitizeModelCatalog(normalizedInput.modelCatalog);
-  const catalog: Record<string, ModelCatalogEntry> = { ...explicitCatalog };
-  const assignments = sanitizeModelRoleAssignments(normalizedInput.modelRoleAssignments);
-  const roster = sanitizeModelRoster(normalizedInput.modelRoster);
-
-  for (const [purpose, slot] of Object.entries(roster) as Array<[ModelPurpose, ModelSlot]>) {
-    const slotKey = assignments[purpose] ?? defaultSlotKeyForPurpose(purpose);
-    assignments[purpose] = slotKey;
-    mergeCatalogSlot(catalog, slotKey, {
-      model: slot.model,
-      provider: slot.provider,
-      maxTokens: slot.maxTokens,
-      contextWindow: slot.contextWindow,
-      contextBudget: slot.contextBudget,
-      routing: slot.routing,
-    });
+  if (hasLegacyModelInputs) {
+    throw new Error(
+      'Model settings cannot mix modelRegistry with legacy primary/extraction/slot payloads',
+    );
   }
 
-  mergeCatalogSlot(catalog, PRIMARY_MODEL_SLOT_KEY, {
-    model: normalizedInput.primaryModel,
-    provider: normalizedInput.primaryProvider,
-    maxTokens: normalizedInput.primaryMaxTokens,
-    contextWindow: roster.chat?.contextWindow ?? options?.defaultContextWindow,
-    contextBudget: roster.chat?.contextBudget,
-  });
-  mergeCatalogSlot(catalog, EXTRACTION_MODEL_SLOT_KEY, {
-    model: normalizedInput.extractionModel,
-    provider: normalizedInput.extractionProvider,
-    maxTokens: normalizedInput.extractionMaxTokens,
-  });
-
-  // Explicit modelCatalog payload must win over inferred/legacy/roster merges.
-  // This prevents stale modelRoster entries from rewriting operator-selected slots.
-  const hasPrimaryLegacyOverride = normalizedInput.primaryModel !== undefined
-    || normalizedInput.primaryProvider !== undefined
-    || normalizedInput.primaryMaxTokens !== undefined;
-  const hasExtractionLegacyOverride = normalizedInput.extractionModel !== undefined
-    || normalizedInput.extractionProvider !== undefined
-    || normalizedInput.extractionMaxTokens !== undefined;
-  for (const [slotKey, explicitEntry] of Object.entries(explicitCatalog)) {
-    if (slotKey === PRIMARY_MODEL_SLOT_KEY && hasPrimaryLegacyOverride) continue;
-    if (slotKey === EXTRACTION_MODEL_SLOT_KEY && hasExtractionLegacyOverride) continue;
-
-    const existing = catalog[slotKey];
-    catalog[slotKey] = {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
-      ...(existing ?? {}),
-      model: explicitEntry.model,
-      provider: explicitEntry.provider,
-      ...(explicitEntry.defaults ? { defaults: explicitEntry.defaults } : {}),
-      ...(explicitEntry.overrides ? { overrides: explicitEntry.overrides } : {}),
-      ...(explicitEntry.routing ? { routing: cloneModelRouteConfig(explicitEntry.routing) } : {}),
-    };
-  }
-
-  assignments.chat ||= PRIMARY_MODEL_SLOT_KEY;
-  assignments.summary ||= assignments.chat;
-  assignments.reasoning ||= assignments.chat;
-  assignments.longContext ||= assignments.chat;
-  assignments.background ||= EXTRACTION_MODEL_SLOT_KEY;
-  assignments.extraction ||= assignments.background;
-  assignments.context ||= assignments.background;
-  assignments.import_processing ||= assignments.background;
-  if (!assignments.vision) {
-    assignments.vision = 'vision';
-  }
-
-  for (const [purpose, slotKey] of Object.entries(assignments)) {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
-    if (!catalog[slotKey]) {
-      delete assignments[purpose];
-    }
-  }
-
-  const chatSlot = resolvePurposeSlot(
-    catalog,
-    assignments,
-    'chat',
-    {
-      maxTokens: normalizedInput.primaryMaxTokens,
-      contextWindow: roster.chat?.contextWindow ?? options?.defaultContextWindow,
-      contextBudget: roster.chat?.contextBudget,
-    },
-    PRIMARY_MODEL_SLOT_KEY,
-  );
-
-  const extractionSlot = resolvePurposeSlot(
-    catalog,
-    assignments,
-    'extraction',
-    {
-      maxTokens: normalizedInput.extractionMaxTokens ?? normalizedInput.primaryMaxTokens,
-    },
-    assignments.background,
-  );
-
-  const backgroundSlot = resolvePurposeSlot(
-    catalog,
-    assignments,
-    'background',
-    {
-      maxTokens: extractionSlot?.maxTokens ?? normalizedInput.extractionMaxTokens ?? normalizedInput.primaryMaxTokens,
-    },
-    assignments.extraction,
-  );
-
-  const contextSlot = resolvePurposeSlot(
-    catalog,
-    assignments,
-    'context',
-    {
-      maxTokens: backgroundSlot?.maxTokens
-        ?? extractionSlot?.maxTokens
-        ?? normalizedInput.extractionMaxTokens
-        ?? normalizedInput.primaryMaxTokens,
-      contextWindow: backgroundSlot?.contextWindow
-        ?? chatSlot?.contextWindow
-        ?? options?.defaultContextWindow,
-      contextBudget: backgroundSlot?.contextBudget ?? chatSlot?.contextBudget,
-    },
-    assignments.background ?? assignments.extraction,
-  );
-
-  const reasoningSlot = resolvePurposeSlot(
-    catalog,
-    assignments,
-    'reasoning',
-    {
-      maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
-      contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
-      contextBudget: chatSlot?.contextBudget,
-    },
-    assignments.chat,
-  );
-
-  const longContextSlot = resolvePurposeSlot(
-    catalog,
-    assignments,
-    'longContext',
-    {
-      maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
-      contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
-      contextBudget: chatSlot?.contextBudget,
-    },
-    assignments.chat,
-  );
-
-  const visionSlot = resolvePurposeSlot(
-    catalog,
-    assignments,
-    'vision',
-    {
-      maxTokens: chatSlot?.maxTokens ?? normalizedInput.primaryMaxTokens,
-      contextWindow: chatSlot?.contextWindow ?? options?.defaultContextWindow,
-      contextBudget: chatSlot?.contextBudget,
-    },
-    assignments.vision,
-  );
-
-  const nextRoster: Partial<Record<ModelPurpose, ModelSlot>> = {
-    ...roster,
+  const normalizedRegistry = normalizeCanonicalModelRegistry(normalizedInput.modelRegistry, 'settings.modelRegistry');
+  const projected = projectCanonicalModelRegistry(normalizedRegistry, options);
+  const normalized: EditableSettings = {
+    ...normalizedInput,
+    ...projected,
+    modelRegistry: normalizedRegistry,
   };
-  if (chatSlot) nextRoster.chat = chatSlot;
-  if (backgroundSlot) nextRoster.background = backgroundSlot;
-  if (contextSlot) nextRoster.context = contextSlot;
-  if (reasoningSlot) nextRoster.reasoning = reasoningSlot;
-  if (longContextSlot) nextRoster.longContext = longContextSlot;
-  if (visionSlot) nextRoster.vision = visionSlot;
-
-  if (chatSlot) {
-    normalized.primaryModel = chatSlot.model;
-    normalized.primaryProvider = chatSlot.provider;
-    normalized.primaryMaxTokens = chatSlot.maxTokens;
-  }
-  if (extractionSlot) {
-    normalized.extractionModel = extractionSlot.model;
-    normalized.extractionProvider = extractionSlot.provider;
-    normalized.extractionMaxTokens = extractionSlot.maxTokens;
-  }
-
-  if (Object.keys(catalog).length > 0) {
-    normalized.modelCatalog = catalog;
-  }
-  if (Object.keys(assignments).length > 0) {
-    normalized.modelRoleAssignments = assignments;
-  }
-  if (Object.keys(nextRoster).length > 0) {
-    normalized.modelRoster = nextRoster;
-  }
-
   return normalized;
 }
 
 function mergeModelSettingsWithConfig(config: SubstrateConfig, settings: EditableSettings): EditableSettings {
-  const hasStructuredModelInputs = settings.modelCatalog !== undefined
-    || settings.modelRoleAssignments !== undefined
-    || settings.modelRoster !== undefined;
-
   return {
-    primaryModel: hasStructuredModelInputs ? settings.primaryModel : (settings.primaryModel ?? config.primaryModel),
-    primaryProvider: hasStructuredModelInputs ? settings.primaryProvider : (settings.primaryProvider ?? config.primaryProvider),
-    extractionModel: hasStructuredModelInputs ? settings.extractionModel : (settings.extractionModel ?? config.extractionModel),
-    extractionProvider: hasStructuredModelInputs ? settings.extractionProvider : (settings.extractionProvider ?? config.extractionProvider),
-    primaryMaxTokens: hasStructuredModelInputs ? settings.primaryMaxTokens : (settings.primaryMaxTokens ?? config.primaryMaxTokens),
-    extractionMaxTokens: hasStructuredModelInputs ? settings.extractionMaxTokens : (settings.extractionMaxTokens ?? config.extractionMaxTokens),
-    modelCatalog: settings.modelCatalog ?? config.modelCatalog,
-    modelRoleAssignments: settings.modelRoleAssignments ?? config.modelRoleAssignments,
-    modelRoster: settings.modelRoster,
+    ...(settings.modelRegistry !== undefined
+      ? { modelRegistry: settings.modelRegistry }
+      : {}),
+    ...(settings.modelRegistry === undefined && config.modelRegistry !== undefined
+      ? { modelRegistry: config.modelRegistry }
+      : {}),
   };
 }
 
@@ -1608,9 +1794,12 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (settings.moaMaxTokensPerRound !== undefined) config.moaMaxTokensPerRound = settings.moaMaxTokensPerRound;
   if (settings.moaTimeoutMs !== undefined) config.moaTimeoutMs = settings.moaTimeoutMs;
 
+  if (hasLegacyModelSettingsPayload(settings) && settings.modelRegistry === undefined) {
+    throw new Error('Legacy model settings payloads are unsupported; use modelRegistry');
+  }
+
   const shouldSyncModels = hasModelSettings(settings)
-    || config.modelCatalog !== undefined
-    || config.modelRoleAssignments !== undefined;
+    || config.modelRegistry !== undefined;
 
   if (!shouldSyncModels) return;
 
@@ -1627,6 +1816,7 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (normalized.extractionProvider !== undefined) config.extractionProvider = normalized.extractionProvider;
   if (normalized.extractionMaxTokens !== undefined) config.extractionMaxTokens = normalized.extractionMaxTokens;
 
+  if (normalized.modelRegistry !== undefined) config.modelRegistry = normalized.modelRegistry;
   if (normalized.modelRoster !== undefined) config.modelRoster = normalized.modelRoster;
   if (normalized.modelCatalog !== undefined) config.modelCatalog = normalized.modelCatalog;
   if (normalized.modelRoleAssignments !== undefined) {
@@ -1673,19 +1863,6 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
       .map(entry => entry.trim())
       .filter(Boolean),
   )];
-
-  // String fields
-  const primaryModel = params.get('primaryModel')?.trim();
-  if (primaryModel) settings.primaryModel = primaryModel;
-
-  const primaryProvider = params.get('primaryProvider')?.trim();
-  if (primaryProvider) settings.primaryProvider = primaryProvider;
-
-  const extractionModel = params.get('extractionModel')?.trim();
-  if (extractionModel) settings.extractionModel = extractionModel;
-
-  const extractionProvider = params.get('extractionProvider')?.trim();
-  if (extractionProvider) settings.extractionProvider = extractionProvider;
 
   const openRouterProviderOrderRaw = params.get('openRouterProviderOrder');
   if (openRouterProviderOrderRaw !== null) {
@@ -2004,50 +2181,15 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     }
   }
 
-  const modelCatalogJson = params.get('modelCatalogJson')?.trim();
-  if (modelCatalogJson) {
+  const modelRegistryJson = params.get('modelRegistryJson')?.trim();
+  if (modelRegistryJson) {
     try {
-      const parsed = JSON.parse(modelCatalogJson);
-      if (!isRecord(parsed)) {
-        errors.push('modelCatalogJson must be a JSON object');
-      } else {
-        const catalog = sanitizeModelCatalog(parsed);
-        if (Object.keys(catalog).length === 0) {
-          errors.push('modelCatalogJson must include at least one valid slot');
-        } else {
-          settings.modelCatalog = catalog;
-        }
-      }
+      settings.modelRegistry = normalizeCanonicalModelRegistry(
+        JSON.parse(modelRegistryJson),
+        'modelRegistryJson',
+      );
     } catch {
-      errors.push('modelCatalogJson must be valid JSON');
-    }
-  }
-
-  const modelRoleAssignmentsJson = params.get('modelRoleAssignmentsJson')?.trim();
-  if (modelRoleAssignmentsJson) {
-    try {
-      const parsed = JSON.parse(modelRoleAssignmentsJson);
-      if (!isRecord(parsed)) {
-        errors.push('modelRoleAssignmentsJson must be a JSON object');
-      } else {
-        const assignments = sanitizeModelRoleAssignments(parsed);
-        if (Object.keys(assignments).length === 0) {
-          errors.push('modelRoleAssignmentsJson must include at least one valid purpose mapping');
-        } else {
-          settings.modelRoleAssignments = assignments;
-        }
-      }
-    } catch {
-      errors.push('modelRoleAssignmentsJson must be valid JSON');
-    }
-  }
-
-  if (settings.modelCatalog && settings.modelRoleAssignments) {
-    for (const [purpose, slotKey] of Object.entries(settings.modelRoleAssignments)) {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
-      if (!settings.modelCatalog[slotKey]) {
-        errors.push(`purpose "${purpose}" references unknown model slot "${slotKey}"`);
-      }
+      errors.push('modelRegistryJson must be valid canonical model registry JSON');
     }
   }
 
@@ -2072,5 +2214,9 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     return [settings, errors];
   }
 
-  return [normalizeEditableSettings(settings), errors];
+  try {
+    return [normalizeEditableSettings(settings), errors];
+  } catch (error) {
+    return [settings, [...errors, error instanceof Error ? error.message : 'Invalid settings payload']];
+  }
 }

@@ -1829,7 +1829,7 @@ describe('AdminServer', () => {
     });
 
     it('saves settings via POST', async () => {
-      const body = 'primaryMaxTokens=4096&sessionMessageLimit=50';
+      const body = 'sessionMessageLimit=50';
       const res = await request(port, 'POST', '/api/settings', body, {
         'Content-Type': 'application/x-www-form-urlencoded',
       });
@@ -1837,7 +1837,6 @@ describe('AdminServer', () => {
       expect(res.body).toContain('Settings saved');
 
       // Verify config was mutated
-      expect(testConfig.primaryMaxTokens).toBe(4096);
       expect(testConfig.sessionMessageLimit).toBe(50);
 
       const timeline = await request(
@@ -1850,11 +1849,10 @@ describe('AdminServer', () => {
       expect(timeline.body).toContain('Operator updated runtime settings');
 
       // Reset for other tests
-      testConfig.primaryMaxTokens = 16384;
       testConfig.sessionMessageLimit = 30;
     });
 
-    it('applies legacy cross-domain saves and keeps JSON runtime endpoint scoped to runtime-owned fields', async () => {
+    it('rejects legacy cross-domain model payloads on settings form POST', async () => {
       const formPayload = new URLSearchParams();
       formPayload.set('sessionMessageLimit', '44');
       formPayload.set('capabilityTier', 'custom');
@@ -1882,23 +1880,8 @@ describe('AdminServer', () => {
         'Content-Type': 'application/x-www-form-urlencoded',
       });
       expect(legacyRes.status).toBe(200);
-      expect(legacyRes.body).toContain('Settings saved');
-      expect(refreshModelsSpy).toHaveBeenCalled();
-      expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
-
-      const legacyModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
-        modelCatalog: Record<string, unknown>;
-        modelRoleAssignments: Record<string, string>;
-      };
-      expect(legacyModels.modelCatalog.legacyPrimary).toBeDefined();
-      expect(legacyModels.modelRoleAssignments.chat).toBe('legacyPrimary');
-      const legacyCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8')) as {
-        tier: string;
-        customTokens: string[];
-      };
-      expect(legacyCapabilities.tier).toBe('custom');
-      expect(legacyCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
-      expect(testConfig.capabilityTier).toBe('custom');
+      expect(legacyRes.body).toContain('Legacy model settings are not accepted');
+      expect(refreshModelsSpy).not.toHaveBeenCalled();
 
       const jsonRes = await request(
         port,
@@ -1910,21 +1893,6 @@ describe('AdminServer', () => {
         { 'Content-Type': 'application/json' },
       );
       expect(jsonRes.status).toBe(200);
-      expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
-
-      const jsonModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
-        modelCatalog: Record<string, unknown>;
-        modelRoleAssignments: Record<string, string>;
-      };
-      expect(jsonModels.modelCatalog.legacyPrimary).toBeDefined();
-      expect(jsonModels.modelRoleAssignments.chat).toBe('legacyPrimary');
-      const jsonCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf-8')) as {
-        tier: string;
-        customTokens: string[];
-      };
-      expect(jsonCapabilities.tier).toBe('custom');
-      expect(jsonCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
-      expect(testConfig.capabilityTier).toBe('custom');
 
       const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf-8')) as {
         sessionMessageLimit: number;
@@ -1959,9 +1927,9 @@ describe('AdminServer', () => {
         defaultContextWindow: restartedConfig.defaultContextWindow,
       }));
       restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
-      expect(restartedConfig.primaryModel).toBe('openai/gpt-4.1-mini');
-      expect(restartedConfig.modelRoleAssignments?.chat).toBe('legacyPrimary');
-      expect(restartedConfig.capabilityTier).toBe('custom');
+      expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
+      expect(restartedConfig.modelRoleAssignments?.chat).toBe('primary');
+      expect(restartedConfig.capabilityTier).toBe('nursery');
     });
 
     it('updates capability tier via settings form POST', async () => {
@@ -2049,7 +2017,7 @@ describe('AdminServer', () => {
       testConfig.memoryRetrievalBudgetPct = 2;
     });
 
-    it('saves roster-v2 model catalog and role assignments via POST', async () => {
+    it('fails closed for legacy roster-v2 model payloads via POST', async () => {
       const body = new URLSearchParams({
         modelCatalogJson: JSON.stringify({
           chatfast: {
@@ -2077,60 +2045,84 @@ describe('AdminServer', () => {
         'Content-Type': 'application/x-www-form-urlencoded',
       });
       expect(res.status).toBe(200);
-      expect(res.body).toContain('Settings saved');
-
-      expect(testConfig.primaryModel).toBe('moonshotai/kimi-k2.5');
-      expect(testConfig.primaryProvider).toBe('openrouter');
-      expect(testConfig.primaryMaxTokens).toBe(6144);
-      expect(testConfig.extractionModel).toBe('openai/gpt-4.1-mini');
-      expect(testConfig.extractionMaxTokens).toBe(1536);
-      expect(testConfig.modelRoleAssignments?.chat).toBe('chatfast');
-      expect(testConfig.modelRoleAssignments?.extraction).toBe('extract');
-      expect(testConfig.modelCatalog?.chatfast.defaults?.contextWindow).toBe(200000);
-      expect(testConfig.modelRoster.reasoning?.model).toBe('moonshotai/kimi-k2.5');
-
-      testConfig.primaryModel = 'test-model';
-      testConfig.primaryProvider = 'test';
-      testConfig.primaryMaxTokens = 16384;
-      testConfig.extractionModel = 'test-extract';
-      testConfig.extractionProvider = 'test';
-      testConfig.extractionMaxTokens = 8192;
-      testConfig.modelCatalog = undefined;
-      testConfig.modelRoleAssignments = undefined;
-      testConfig.modelRoster = {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
-      };
+      expect(res.body).toContain('Legacy model settings are not accepted');
+      expect(testConfig.primaryModel).toBe('test-model');
     });
 
     it('rejects invalid settings values', async () => {
-      const body = 'primaryMaxTokens=100';  // min 256
+      const body = 'sessionMessageLimit=0';
       const res = await request(port, 'POST', '/api/settings', body, {
         'Content-Type': 'application/x-www-form-urlencoded',
       });
       expect(res.status).toBe(200);
-      expect(res.body).toContain('primaryMaxTokens');
+      expect(res.body).toContain('sessionMessageLimit');
+    });
+
+    it('returns raw canonical models.json payload via GET endpoint', async () => {
+      const res = await request(port, 'GET', '/api/settings/models');
+      expect(res.status).toBe(200);
+
+      const payload = JSON.parse(res.body) as {
+        schemaVersion: number;
+        models: Array<{ id: string }>;
+      };
+      const persisted = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as typeof payload;
+
+      expect(payload).toEqual(persisted);
+      expect(payload.schemaVersion).toBe(1);
+      expect(Array.isArray(payload.models)).toBe(true);
+      expect((payload as Record<string, unknown>).modelCatalog).toBeUndefined();
+      expect((payload as Record<string, unknown>).modelRoleAssignments).toBeUndefined();
+      expect((payload as Record<string, unknown>).modelRoster).toBeUndefined();
     });
 
     it('saves models.json via dedicated POST endpoint', async () => {
       const body = new URLSearchParams({
         configJson: JSON.stringify({
-          modelCatalog: {
-            primary: {
-              model: 'openai/gpt-4.1-mini',
-              provider: 'openrouter',
-              defaults: { maxTokens: 4096, contextWindow: 128000 },
-            },
-            extraction: {
-              model: 'deepseek/deepseek-v3.2',
-              provider: 'openrouter',
-              defaults: { maxTokens: 2048 },
-            },
+          schemaVersion: 1,
+          budgetPolicy: {
+            enabled: true,
+            dailyUsdLimit: 5,
+            monthlyUsdLimit: 75,
+            currency: 'USD',
           },
-          modelRoleAssignments: {
-            chat: 'primary',
-            extraction: 'extraction',
-            background: 'extraction',
-          },
+          models: [
+            {
+              id: 'primary',
+              rank: 100,
+              identity: {
+                model: 'openai/gpt-4.1-mini',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'summary', primary: true },
+                { purpose: 'reasoning', primary: true },
+                { purpose: 'longContext', primary: true },
+                { purpose: 'vision', primary: true },
+                { purpose: 'moa', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128000 },
+              tuning: { maxOutputTokens: 4096 },
+            },
+            {
+              id: 'extraction',
+              rank: 80,
+              identity: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'background', primary: true },
+                { purpose: 'extraction', primary: true },
+                { purpose: 'import_processing', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128000 },
+              tuning: { maxOutputTokens: 2048 },
+            },
+          ],
         }),
       }).toString();
 
@@ -2141,9 +2133,23 @@ describe('AdminServer', () => {
       expect(res.body).toContain('models.json saved');
 
       const saved = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as {
-        modelCatalog: Record<string, { model: string }>;
+        schemaVersion: number;
+        budgetPolicy?: {
+          enabled: boolean;
+          dailyUsdLimit: number;
+          monthlyUsdLimit: number;
+          currency?: string;
+        };
+        models: Array<{ id: string; identity: { model: string } }>;
       };
-      expect(saved.modelCatalog.primary.model).toBe('openai/gpt-4.1-mini');
+      expect(saved.schemaVersion).toBe(1);
+      expect(saved.budgetPolicy).toEqual({
+        enabled: true,
+        dailyUsdLimit: 5,
+        monthlyUsdLimit: 75,
+        currency: 'USD',
+      });
+      expect(saved.models.find((entry) => entry.id === 'primary')?.identity.model).toBe('openai/gpt-4.1-mini');
       expect(testConfig.primaryModel).toBe('openai/gpt-4.1-mini');
 
       testConfig.primaryModel = 'test-model';
@@ -2157,6 +2163,83 @@ describe('AdminServer', () => {
       testConfig.modelRoster = {
         chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
       };
+    });
+
+    it('round-trips canonical models registry via GET/POST without projection drift', async () => {
+      const canonicalRegistry = {
+        schemaVersion: 1,
+        budgetPolicy: {
+          enabled: true,
+          dailyUsdLimit: 9,
+          monthlyUsdLimit: 180,
+          currency: 'USD',
+        },
+        models: [
+          {
+            id: 'primary',
+            rank: 100,
+            identity: {
+              model: 'openai/gpt-4.1-mini',
+              provider: 'openrouter',
+              source: { type: 'openrouter' },
+            },
+            purposes: [
+              { purpose: 'chat', primary: true },
+              { purpose: 'summary', primary: true },
+              { purpose: 'reasoning', primary: true },
+              { purpose: 'longContext', primary: true },
+              { purpose: 'vision', primary: true },
+              { purpose: 'moa', primary: true },
+            ],
+            capabilities: { maxOutputTokens: 4096, contextWindow: 128000 },
+            tuning: { maxOutputTokens: 4096 },
+          },
+          {
+            id: 'extraction',
+            rank: 80,
+            identity: {
+              model: 'deepseek/deepseek-v3.2',
+              provider: 'openrouter',
+              source: { type: 'openrouter' },
+            },
+            purposes: [
+              { purpose: 'background', primary: true },
+              { purpose: 'extraction', primary: true },
+              { purpose: 'import_processing', primary: true },
+            ],
+            capabilities: { maxOutputTokens: 2048, contextWindow: 128000 },
+            tuning: { maxOutputTokens: 2048 },
+          },
+        ],
+      };
+      const postBody = new URLSearchParams({
+        configJson: JSON.stringify(canonicalRegistry),
+      }).toString();
+      const postRes = await request(port, 'POST', '/api/settings/models', postBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(postRes.status).toBe(200);
+
+      const getRes = await request(port, 'GET', '/api/settings/models');
+      expect(getRes.status).toBe(200);
+
+      const fetched = JSON.parse(getRes.body) as Record<string, unknown>;
+      expect(fetched.modelCatalog).toBeUndefined();
+      expect(fetched.modelRoleAssignments).toBeUndefined();
+      expect(fetched.modelRoster).toBeUndefined();
+      expect(fetched.primaryModel).toBeUndefined();
+      expect(fetched).toEqual(canonicalRegistry);
+
+      const repostBody = new URLSearchParams({
+        configJson: JSON.stringify(fetched),
+      }).toString();
+      const repostRes = await request(port, 'POST', '/api/settings/models', repostBody, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(repostRes.status).toBe(200);
+
+      const persisted = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf-8')) as Record<string, unknown>;
+      expect(persisted).toEqual(canonicalRegistry);
     });
 
     it('saves skills.json via dedicated POST endpoint and invalidates runtime cache', async () => {
@@ -2306,29 +2389,50 @@ describe('AdminServer', () => {
         {
           key: 'models',
           payload: {
-            modelCatalog: {
-              primary: {
-                model: 'openai/gpt-4.1-mini',
-                provider: 'openrouter',
-                defaults: { maxTokens: 4096, contextWindow: 128000 },
-                routing: { providerOrder: ['parasail', 'openai'] },
-              },
-              extraction: {
-                model: 'deepseek/deepseek-v3.2',
-                provider: 'openrouter',
-                defaults: { maxTokens: 2048 },
-              },
+            schemaVersion: 1,
+            budgetPolicy: {
+              enabled: true,
+              dailyUsdLimit: 7,
+              monthlyUsdLimit: 120,
+              currency: 'USD',
             },
-            modelRoleAssignments: {
-              chat: 'primary',
-              summary: 'primary',
-              reasoning: 'primary',
-              longContext: 'primary',
-              extraction: 'extraction',
-              background: 'extraction',
-              context: 'extraction',
-              import_processing: 'extraction',
-            },
+            models: [
+              {
+                id: 'primary',
+                rank: 100,
+                identity: {
+                  model: 'openai/gpt-4.1-mini',
+                  provider: 'openrouter',
+                  source: { type: 'openrouter' },
+                },
+                purposes: [
+                  { purpose: 'chat', primary: true },
+                  { purpose: 'summary', primary: true },
+                  { purpose: 'reasoning', primary: true },
+                  { purpose: 'longContext', primary: true },
+                  { purpose: 'vision', primary: true },
+                  { purpose: 'moa', primary: true },
+                ],
+                capabilities: { maxOutputTokens: 4096, contextWindow: 128000 },
+                tuning: { maxOutputTokens: 4096 },
+              },
+              {
+                id: 'extraction',
+                rank: 80,
+                identity: {
+                  model: 'deepseek/deepseek-v3.2',
+                  provider: 'openrouter',
+                  source: { type: 'openrouter' },
+                },
+                purposes: [
+                  { purpose: 'background', primary: true },
+                  { purpose: 'extraction', primary: true },
+                  { purpose: 'import_processing', primary: true },
+                ],
+                capabilities: { maxOutputTokens: 2048, contextWindow: 128000 },
+                tuning: { maxOutputTokens: 2048 },
+              },
+            ],
           },
         },
         {
@@ -3060,6 +3164,49 @@ describe('AdminServer', () => {
       expect(payload.channelId).toBe('debug-channel');
       expect(payload.details?.toolName).toBe('memory_search');
       expect(payload.details?.toolCallId).toBe('tool-1');
+    });
+
+    it('chat debug SSE stream emits model budget blocked payloads', async () => {
+      const sseBody = await captureSseBody(port, '/api/chat/events/stream', {
+        predicate: (body) => body.includes('event: chat-debug') && body.includes('"event":"model.budget.blocked"'),
+        emit: () => eventBus.emit('model.budget.blocked', {
+          timestampMs: Date.now(),
+          reason: 'daily_budget_exceeded',
+          purpose: 'chat',
+          provider: 'openrouter',
+          model: 'z-ai/glm-5',
+          slotKey: 'chat',
+          service: 'chat',
+          process: 'agent.turn.prompt',
+          estimatedRequestCostUsd: 0.0042,
+          budget: {
+            dayKey: '2026-03-06',
+            monthKey: '2026-03',
+            dailySpentUsd: 1.5,
+            dailyLimitUsd: 1.4,
+            monthlySpentUsd: 20,
+            monthlyLimitUsd: 100,
+          },
+          channelId: 'debug-channel',
+          requestId: 'req-budget-1',
+          originStage: 'agent.turn.prompt',
+        }),
+      });
+
+      const payloadLine = sseBody
+        .split('\n')
+        .find(line => line.startsWith('data: ') && line.includes('"event":"model.budget.blocked"'));
+      expect(payloadLine).toBeDefined();
+      const payload = JSON.parse(payloadLine!.slice(6)) as {
+        event: string;
+        category: string;
+        details?: Record<string, string>;
+      };
+      expect(payload.event).toBe('model.budget.blocked');
+      expect(payload.category).toBe('errors');
+      expect(payload.details?.reason).toBe('daily_budget_exceeded');
+      expect(payload.details?.purpose).toBe('chat');
+      expect(payload.details?.service).toBe('chat');
     });
 
     it('SSE stream includes Wyoming policy telemetry events', async () => {

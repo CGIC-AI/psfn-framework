@@ -155,6 +155,28 @@ export function toChatDebugPayload(
         }),
       });
     }
+    case 'model.budget.blocked': {
+      const event = data as EventMap['model.budget.blocked'];
+      return buildChatDebugEvent(
+        eventName,
+        'errors',
+        `Model budget blocked: ${event.provider}/${event.model}`,
+        {
+          channelId: event.channelId,
+          details: compactDebugDetails({
+            reason: event.reason,
+            purpose: event.purpose,
+            service: event.service,
+            process: event.process,
+            estimatedRequestCostUsd: event.estimatedRequestCostUsd.toFixed(6),
+            dailySpentUsd: event.budget.dailySpentUsd.toFixed(6),
+            dailyLimitUsd: event.budget.dailyLimitUsd.toFixed(6),
+            monthlySpentUsd: event.budget.monthlySpentUsd.toFixed(6),
+            monthlyLimitUsd: event.budget.monthlyLimitUsd.toFixed(6),
+          }),
+        },
+      );
+    }
     case 'agent.error': {
       const event = data as EventMap['agent.error'];
       return buildChatDebugEvent(

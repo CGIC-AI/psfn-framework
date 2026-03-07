@@ -24,6 +24,7 @@ import type {
   InferredPostTurnAction,
   LLMContext,
   MessageModelOverride,
+  ModelBudgetBlockedEvent,
   MessagePromptOverride,
   MessagePromptOverrideMode,
   ResponseStyle,
@@ -58,6 +59,7 @@ import {
   createSubstrateStreamFn,
   resolveExplicitModel,
   resolveModel,
+  resolveModelSelection,
 } from './stream-adapter.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm } from './messages.js';
@@ -532,8 +534,21 @@ export class SubstrateAgent {
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.assertEmotionRuntimeConfigured();
 
+    const emitBudgetBlocked = (event: ModelBudgetBlockedEvent) => {
+      this.eventBus.emit('model.budget.blocked', event).catch((error) => {
+        log.error('Failed to emit stream budget blocked telemetry', {
+          error: toErrorMessage(error),
+          provider: event.provider,
+          model: event.model,
+          reason: event.reason,
+        });
+      });
+    };
+
     this.agent = new Agent({
-      streamFn: options?.streamFn ?? createSubstrateStreamFn(config),
+      streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
+        onBudgetBlocked: emitBudgetBlocked,
+      }),
       convertToLlm,
     });
     installAgentToolSchedulerPatch(this.agent, {
@@ -640,13 +655,13 @@ export class SubstrateAgent {
   }
 
   private getModelSignatureForPurpose(purpose: ModelPurpose): string {
-    const slot = this.config.modelRoster[purpose]
-      ?? (purpose !== 'chat' ? this.config.modelRoster.chat : undefined);
-    const model = slot?.model ?? this.config.primaryModel;
-    const provider = slot?.provider ?? this.config.primaryProvider;
-    const maxTokens = slot?.maxTokens ?? this.config.primaryMaxTokens;
-    const contextWindow = slot?.contextWindow ?? this.config.defaultContextWindow;
-    return `${purpose}::${provider}::${model}::${maxTokens}::${contextWindow}`;
+    try {
+      const selection = resolveModelSelection(this.config, purpose);
+      const contextWindow = selection.contextWindow ?? this.config.defaultContextWindow;
+      return `${purpose}::${selection.provider}::${selection.model}::${selection.maxTokens}::${contextWindow}`;
+    } catch (error) {
+      return `${purpose}::unresolved::${toErrorMessage(error)}`;
+    }
   }
 
   private hasVisionAttachments(message?: SubstrateMessage): boolean {

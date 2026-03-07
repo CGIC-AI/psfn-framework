@@ -473,6 +473,16 @@ export class SubstrateRuntime implements Lifecycle {
     // Initialize core components
     this.llmClient = new LLMClient(this.config, {
       eligibilityGate,
+      onBudgetBlocked: (event) => {
+        this.eventBus.emit('model.budget.blocked', event).catch((error) => {
+          log.error('Failed to emit model budget blocked telemetry', {
+            error: error instanceof Error ? error.message : String(error),
+            provider: event.provider,
+            model: event.model,
+            reason: event.reason,
+          });
+        });
+      },
     });
     const sessionsDir = resolveSessionsDir(companionDataDir);
     const sessionHmacKeyring = buildSessionHmacKeyring({

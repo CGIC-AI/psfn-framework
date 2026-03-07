@@ -110,7 +110,7 @@ describe('settings', () => {
       expect(existsSync(join(tempDir, 'settings.json'))).toBe(true);
     });
 
-    it('migrates legacy model fields on load', () => {
+    it('fails closed when legacy model fields are present in settings.json', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, JSON.stringify({
         primaryModel: 'legacy/chat',
@@ -121,11 +121,7 @@ describe('settings', () => {
         extractionMaxTokens: 2048,
       }), 'utf-8');
 
-      const result = loadSettings(tempDir);
-      expect(result.modelCatalog.primary.model).toBe('legacy/chat');
-      expect(result.modelCatalog.extraction.model).toBe('legacy/extract');
-      expect(result.modelRoleAssignments?.chat).toBe('primary');
-      expect(result.modelRoleAssignments?.extraction).toBe('extraction');
+      expect(() => loadSettings(tempDir)).toThrow('Legacy model settings are not accepted in this slice');
     });
 
     it('fails closed for invalid JSON', () => {
@@ -148,9 +144,6 @@ describe('settings', () => {
   describe('saveSettings', () => {
     it('writes settings atomically and omits domain-owned model fields', () => {
       const settings = {
-        primaryModel: 'test/chat',
-        primaryProvider: 'openrouter',
-        primaryMaxTokens: 4096,
         extractionInterval: 10,
       };
       saveSettings(tempDir, settings);
@@ -158,6 +151,7 @@ describe('settings', () => {
       const raw = readFileSync(join(tempDir, 'settings.json'), 'utf-8');
       const parsed = JSON.parse(raw);
       expect(parsed.primaryModel).toBeUndefined();
+      expect(parsed.modelRegistry).toBeUndefined();
       expect(parsed.modelCatalog).toBeUndefined();
       expect(parsed.modelRoleAssignments).toBeUndefined();
       expect(parsed.extractionInterval).toBe(10);
@@ -165,253 +159,242 @@ describe('settings', () => {
 
     it('creates data dir if missing', () => {
       const nested = join(tempDir, 'sub', 'dir');
-      saveSettings(nested, { primaryMaxTokens: 1024 });
+      saveSettings(nested, { extractionInterval: 4 });
       expect(existsSync(join(nested, 'settings.json'))).toBe(true);
     });
 
     it('no .tmp file remains after save', () => {
-      saveSettings(tempDir, { primaryModel: 'test' });
+      saveSettings(tempDir, { extractionInterval: 6 });
       expect(existsSync(join(tempDir, 'settings.json.tmp'))).toBe(false);
     });
   });
 
   describe('normalizeEditableSettings', () => {
-    it('migrates legacy primary/extraction fields into catalog and role assignments', () => {
+    it('projects canonical modelRegistry into compatibility fields', () => {
       const normalized = normalizeEditableSettings({
-        primaryModel: 'chat/model',
-        primaryProvider: 'openrouter',
-        primaryMaxTokens: 6000,
-        extractionModel: 'extract/model',
-        extractionProvider: 'openrouter',
-        extractionMaxTokens: 2000,
-      }, {
-        defaultContextWindow: 128_000,
-      });
-
-      expect(normalized.modelCatalog?.primary).toEqual({
-        model: 'chat/model',
-        provider: 'openrouter',
-        overrides: { maxTokens: 6000, contextWindow: 128_000 },
-      });
-      expect(normalized.modelCatalog?.extraction).toEqual({
-        model: 'extract/model',
-        provider: 'openrouter',
-        overrides: { maxTokens: 2000 },
-      });
-      expect(normalized.modelRoleAssignments?.chat).toBe('primary');
-      expect(normalized.modelRoleAssignments?.extraction).toBe('extraction');
-      expect(normalized.modelRoster?.chat?.model).toBe('chat/model');
-      expect(normalized.modelRoster?.background?.model).toBe('extract/model');
-    });
-
-    it('projects context budget overrides from model catalog into chat roster', () => {
-      const normalized = normalizeEditableSettings({
-        modelCatalog: {
-          primary: {
-            model: 'chat/model',
-            provider: 'openrouter',
-            defaults: {
-              maxTokens: 6000,
-              contextWindow: 128_000,
-              contextBudget: {
-                sessionHistoryMinTokens: 3_500,
-                memoryRetrievalMinTokens: 900,
+        modelRegistry: {
+          schemaVersion: 1,
+          models: [
+            {
+              id: 'primary',
+              rank: 100,
+              identity: {
+                model: 'openai/gpt-4.1-mini',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
               },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'summary', primary: true },
+                { purpose: 'reasoning', primary: true },
+                { purpose: 'longContext', primary: true },
+                { purpose: 'vision', primary: true },
+                { purpose: 'moa', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 4096 },
             },
-          },
-        },
-        modelRoleAssignments: {
-          chat: 'primary',
-        },
-      }, {
-        defaultContextWindow: 128_000,
-      });
-
-      expect(normalized.modelRoster?.chat?.contextBudget).toEqual({
-        sessionHistoryMinTokens: 3_500,
-        memoryRetrievalMinTokens: 900,
-      });
-    });
-
-    it('preserves per-slot OpenRouter routing preferences through normalization', () => {
-      const normalized = normalizeEditableSettings({
-        modelCatalog: {
-          primary: {
-            model: 'chat/model',
-            provider: 'openrouter',
-            defaults: { maxTokens: 6000, contextWindow: 128_000 },
-            routing: { providerOrder: ['parasail', 'openai'] },
-          },
-        },
-        modelRoleAssignments: {
-          chat: 'primary',
+            {
+              id: 'extraction',
+              rank: 80,
+              identity: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'background', primary: true },
+                { purpose: 'extraction', primary: true },
+                { purpose: 'import_processing', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 2048 },
+            },
+          ],
         },
       }, {
         defaultContextWindow: 128_000,
       });
 
-      expect(normalized.modelCatalog?.primary?.routing).toEqual({
-        providerOrder: ['parasail', 'openai'],
-      });
-      expect(normalized.modelRoster?.chat?.routing).toEqual({
-        providerOrder: ['parasail', 'openai'],
-      });
-    });
-
-    it('defaults context roster to the background slot when no dedicated context assignment exists', () => {
-      const normalized = normalizeEditableSettings({
-        modelCatalog: {
-          primary: {
-            model: 'z-ai/glm-5',
-            provider: 'openrouter',
-            defaults: { maxTokens: 6000, contextWindow: 128_000 },
-          },
-          extraction: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 2048 },
-          },
-        },
-        modelRoleAssignments: {
-          chat: 'primary',
-          background: 'extraction',
-          extraction: 'extraction',
-        },
-      }, {
-        defaultContextWindow: 128_000,
-      });
-
+      expect(normalized.modelRoleAssignments?.chat).toBe('primary');
+      expect(normalized.modelRoleAssignments?.background).toBe('extraction');
       expect(normalized.modelRoleAssignments?.context).toBe('extraction');
-      expect(normalized.modelRoster?.context).toEqual({
-        model: 'deepseek/deepseek-v3.2',
-        provider: 'openrouter',
-        maxTokens: 2048,
-        contextWindow: 128_000,
+      expect(normalized.modelRoleAssignments?.moa).toBe('primary');
+      expect(normalized.modelRoster?.chat?.model).toBe('openai/gpt-4.1-mini');
+      expect(normalized.modelRoster?.background?.model).toBe('deepseek/deepseek-v3.2');
+      expect(normalized.primaryModel).toBe('openai/gpt-4.1-mini');
+      expect(normalized.extractionModel).toBe('deepseek/deepseek-v3.2');
+    });
+
+    it('fails closed for legacy model fields without canonical modelRegistry', () => {
+      expect(() => normalizeEditableSettings({
+        primaryModel: 'legacy/chat',
+        primaryProvider: 'openrouter',
+        primaryMaxTokens: 4096,
+      })).toThrow('Legacy model settings are not accepted in this slice');
+    });
+
+    it('fails closed when canonical registry violates one-primary-per-purpose', () => {
+      expect(() => normalizeEditableSettings({
+        modelRegistry: {
+          schemaVersion: 1,
+          models: [
+            {
+              id: 'primary',
+              rank: 100,
+              identity: {
+                model: 'openai/gpt-4.1-mini',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'summary', primary: true },
+                { purpose: 'reasoning', primary: true },
+                { purpose: 'longContext', primary: true },
+                { purpose: 'vision', primary: true },
+                { purpose: 'moa', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 4096 },
+            },
+            {
+              id: 'extraction',
+              rank: 80,
+              identity: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'background', primary: true },
+                { purpose: 'extraction', primary: true },
+                { purpose: 'import_processing', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 2048 },
+            },
+          ],
+        },
+      })).toThrow('must have exactly one primary model');
+    });
+
+    it('accepts canonical budget policy and preserves it under modelRegistry', () => {
+      const normalized = normalizeEditableSettings({
+        modelRegistry: {
+          schemaVersion: 1,
+          budgetPolicy: {
+            enabled: true,
+            dailyUsdLimit: 2.5,
+            monthlyUsdLimit: 40,
+            currency: 'USD',
+          },
+          models: [
+            {
+              id: 'primary',
+              rank: 100,
+              identity: {
+                model: 'openai/gpt-4.1-mini',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'summary', primary: true },
+                { purpose: 'reasoning', primary: true },
+                { purpose: 'longContext', primary: true },
+                { purpose: 'vision', primary: true },
+                { purpose: 'moa', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 4096 },
+            },
+            {
+              id: 'extraction',
+              rank: 80,
+              identity: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'background', primary: true },
+                { purpose: 'extraction', primary: true },
+                { purpose: 'import_processing', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 2048 },
+            },
+          ],
+        },
+      });
+
+      expect(normalized.modelRegistry?.budgetPolicy).toEqual({
+        enabled: true,
+        dailyUsdLimit: 2.5,
+        monthlyUsdLimit: 40,
+        currency: 'USD',
       });
     });
 
-    it('keeps a dedicated vision slot when vision assignment is omitted', () => {
-      const normalized = normalizeEditableSettings({
-        modelCatalog: {
-          primary: {
-            model: 'z-ai/glm-5',
-            provider: 'openrouter',
-            defaults: { maxTokens: 6000, contextWindow: 128_000 },
+    it('fails closed for invalid canonical budget policy', () => {
+      expect(() => normalizeEditableSettings({
+        modelRegistry: {
+          schemaVersion: 1,
+          budgetPolicy: {
+            enabled: true,
+            dailyUsdLimit: 50,
+            monthlyUsdLimit: 10,
           },
-          vision: {
-            model: 'moonshotai/kimi-k2.5',
-            provider: 'openrouter',
-            defaults: { maxTokens: 4096, contextWindow: 128_000 },
-          },
+          models: [
+            {
+              id: 'primary',
+              rank: 100,
+              identity: {
+                model: 'openai/gpt-4.1-mini',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'summary', primary: true },
+                { purpose: 'reasoning', primary: true },
+                { purpose: 'longContext', primary: true },
+                { purpose: 'vision', primary: true },
+                { purpose: 'moa', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 4096 },
+            },
+            {
+              id: 'extraction',
+              rank: 80,
+              identity: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'background', primary: true },
+                { purpose: 'extraction', primary: true },
+                { purpose: 'import_processing', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 2048 },
+            },
+          ],
         },
-        modelRoleAssignments: {
-          chat: 'primary',
-          summary: 'primary',
-          reasoning: 'primary',
-          longContext: 'primary',
-        },
-      }, {
-        defaultContextWindow: 128_000,
-      });
-
-      expect(normalized.modelRoleAssignments?.vision).toBe('vision');
-      expect(normalized.modelRoster?.vision).toEqual({
-        model: 'moonshotai/kimi-k2.5',
-        provider: 'openrouter',
-        maxTokens: 4096,
-        contextWindow: 128_000,
-      });
-    });
-
-    it('normalizes openrouter-prefixed model ids when provider is empty', () => {
-      const normalized = normalizeEditableSettings({
-        modelCatalog: {
-          primary: {
-            model: 'z-ai/glm-5',
-            provider: 'openrouter',
-            defaults: { maxTokens: 16384, contextWindow: 128_000 },
-          },
-          extraction: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 8192 },
-          },
-          vision: {
-            model: 'openrouter/google/gemini-3-flash-preview',
-            provider: '',
-            overrides: { maxTokens: 16384, contextWindow: 128_000 },
-          },
-        },
-      }, {
-        defaultContextWindow: 128_000,
-      });
-
-      expect(normalized.modelCatalog?.vision).toEqual({
-        model: 'google/gemini-3-flash-preview',
-        provider: 'openrouter',
-        overrides: { maxTokens: 16384, contextWindow: 128_000 },
-      });
-      expect(normalized.modelRoleAssignments?.vision).toBe('vision');
-      expect(normalized.modelRoster?.vision).toEqual({
-        model: 'google/gemini-3-flash-preview',
-        provider: 'openrouter',
-        maxTokens: 16384,
-        contextWindow: 128_000,
-      });
-    });
-
-    it('prefers explicit modelCatalog slots over stale modelRoster values', () => {
-      const normalized = normalizeEditableSettings({
-        modelCatalog: {
-          primary: {
-            model: 'z-ai/glm-5',
-            provider: 'openrouter',
-            defaults: { maxTokens: 16384, contextWindow: 128_000 },
-          },
-          extraction: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 8192 },
-          },
-          vision: {
-            model: 'google/gemini-3-flash-preview',
-            provider: 'openrouter',
-            overrides: { maxTokens: 16384, contextWindow: 128_000 },
-          },
-        },
-        modelRoleAssignments: {
-          chat: 'primary',
-          background: 'extraction',
-          extraction: 'extraction',
-          summary: 'primary',
-          reasoning: 'primary',
-          longContext: 'primary',
-          vision: 'vision',
-        },
-        modelRoster: {
-          vision: {
-            model: 'moonshotai/kimi-k2.5',
-            provider: 'openrouter',
-            maxTokens: 16384,
-            contextWindow: 128_000,
-          },
-        },
-      }, {
-        defaultContextWindow: 128_000,
-      });
-
-      expect(normalized.modelCatalog.vision.model).toBe('google/gemini-3-flash-preview');
-      expect(normalized.modelRoster?.vision?.model).toBe('google/gemini-3-flash-preview');
+      })).toThrow('monthlyUsdLimit must be >= dailyUsdLimit');
     });
   });
 
   describe('applySettings', () => {
     it('mutates config with defined values', () => {
       const config = makeConfig();
-      applySettings(config, { primaryModel: 'new-model', primaryMaxTokens: 4096 });
-      expect(config.primaryModel).toBe('new-model');
-      expect(config.primaryMaxTokens).toBe(4096);
-      expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
+      applySettings(config, { extractionInterval: 9, sessionMessageLimit: 55 });
+      expect(config.extractionInterval).toBe(9);
+      expect(config.sessionMessageLimit).toBe(55);
     });
 
     it('does not modify values when settings are empty', () => {
@@ -544,174 +527,73 @@ describe('settings', () => {
       expect(config.webFetchTlsCaCertPaths).toEqual(['/etc/ssl/local-root.pem']);
     });
 
-    it('keeps chat model roster synchronized with primary settings', () => {
+    it('applies canonical modelRegistry and projects compatibility model fields', () => {
       const config = makeConfig();
       applySettings(config, {
-        primaryModel: 'moonshotai/kimi-k2.5',
-        primaryProvider: 'openrouter',
-        primaryMaxTokens: 4096,
-      });
-
-      expect(config.modelRoster.chat).toEqual({
-        model: 'moonshotai/kimi-k2.5',
-        provider: 'openrouter',
-        maxTokens: 4096,
-        contextWindow: 128_000,
-      });
-    });
-
-    it('keeps background model roster synchronized with extraction settings', () => {
-      const config = makeConfig();
-      applySettings(config, {
-        extractionModel: 'openai/gpt-4.1-mini',
-        extractionProvider: 'openrouter',
-        extractionMaxTokens: 1024,
-      });
-
-      expect(config.modelRoster.background).toEqual({
-        model: 'openai/gpt-4.1-mini',
-        provider: 'openrouter',
-        maxTokens: 1024,
-      });
-    });
-
-    it('resolves role assignments from model catalog and syncs legacy aliases', () => {
-      const config = makeConfig();
-      applySettings(config, {
-        modelCatalog: {
-          lowlatency: {
-            model: 'openai/gpt-4.1-mini',
-            provider: 'openrouter',
-            defaults: { maxTokens: 2048, contextWindow: 128_000 },
-          },
-          extractionx: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 3072 },
-          },
-          thinker: {
-            model: 'z-ai/glm-5',
-            provider: 'openrouter',
-            defaults: { maxTokens: 12000, contextWindow: 256_000 },
-            overrides: { maxTokens: 10000 },
-          },
-          helper: {
-            model: 'openai/gpt-4.1-mini',
-            provider: 'openrouter',
-            defaults: { maxTokens: 1536, contextWindow: 64_000 },
-          },
-        },
-        modelRoleAssignments: {
-          chat: 'lowlatency',
-          background: 'extractionx',
-          context: 'helper',
-          extraction: 'extractionx',
-          summary: 'lowlatency',
-          reasoning: 'thinker',
-          longContext: 'thinker',
+        modelRegistry: {
+          schemaVersion: 1,
+          models: [
+            {
+              id: 'chatfast',
+              rank: 100,
+              identity: {
+                model: 'openai/gpt-4.1-mini',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'summary', primary: true },
+                { purpose: 'reasoning', primary: true },
+                { purpose: 'longContext', primary: true },
+                { purpose: 'vision', primary: true },
+                { purpose: 'moa', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 2048 },
+            },
+            {
+              id: 'extract',
+              rank: 80,
+              identity: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'background', primary: true },
+                { purpose: 'extraction', primary: true },
+                { purpose: 'import_processing', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 3072, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 3072 },
+            },
+          ],
         },
       });
 
       expect(config.primaryModel).toBe('openai/gpt-4.1-mini');
-      expect(config.primaryProvider).toBe('openrouter');
       expect(config.primaryMaxTokens).toBe(2048);
-
       expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
-      expect(config.extractionProvider).toBe('openrouter');
       expect(config.extractionMaxTokens).toBe(3072);
-
-      expect(config.modelRoster.chat).toEqual({
-        model: 'openai/gpt-4.1-mini',
-        provider: 'openrouter',
-        maxTokens: 2048,
-        contextWindow: 128_000,
-      });
-      expect(config.modelRoster.reasoning).toEqual({
-        model: 'z-ai/glm-5',
-        provider: 'openrouter',
-        maxTokens: 10000,
-        contextWindow: 256_000,
-      });
-      expect(config.modelRoster.context).toEqual({
-        model: 'openai/gpt-4.1-mini',
-        provider: 'openrouter',
-        maxTokens: 1536,
-        contextWindow: 64_000,
-      });
-      expect(config.modelRoster.longContext).toEqual({
-        model: 'z-ai/glm-5',
-        provider: 'openrouter',
-        maxTokens: 10000,
-        contextWindow: 256_000,
-      });
+      expect(config.modelRoleAssignments?.chat).toBe('chatfast');
+      expect(config.modelRoleAssignments?.background).toBe('extract');
+      expect(config.modelRoster.chat?.model).toBe('openai/gpt-4.1-mini');
+      expect(config.modelRoster.background?.model).toBe('deepseek/deepseek-v3.2');
+      expect(config.modelRegistry?.models).toHaveLength(2);
     });
 
-    it('applies per-model context budget overrides from catalog to roster', () => {
+    it('fails closed when applySettings receives legacy model payloads', () => {
       const config = makeConfig();
-      applySettings(config, {
+      expect(() => applySettings(config, {
         modelCatalog: {
           primary: {
             model: 'openai/gpt-4.1-mini',
             provider: 'openrouter',
-            defaults: {
-              maxTokens: 2048,
-              contextWindow: 8_000,
-            },
-            overrides: {
-              contextBudget: {
-                sessionHistoryMinTokens: 3_000,
-                memoryRetrievalMinTokens: 800,
-              },
-            },
-          },
-          extraction: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 3072 },
+            defaults: { maxTokens: 2048 },
           },
         },
-        modelRoleAssignments: {
-          chat: 'primary',
-          extraction: 'extraction',
-          background: 'extraction',
-        },
-      });
-
-      expect(config.modelRoster.chat?.contextBudget).toEqual({
-        sessionHistoryMinTokens: 3_000,
-        memoryRetrievalMinTokens: 800,
-      });
-    });
-
-    it('preserves per-slot OpenRouter routing preferences from model catalog', () => {
-      const config = makeConfig();
-      applySettings(config, {
-        modelCatalog: {
-          primary: {
-            model: 'openai/gpt-4.1-mini',
-            provider: 'openrouter',
-            defaults: { maxTokens: 2048, contextWindow: 8_000 },
-            routing: { providerOrder: ['parasail', 'openai'] },
-          },
-          extraction: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 3072 },
-          },
-        },
-        modelRoleAssignments: {
-          chat: 'primary',
-          extraction: 'extraction',
-          background: 'extraction',
-        },
-      });
-
-      expect(config.modelCatalog?.primary?.routing).toEqual({
-        providerOrder: ['parasail', 'openai'],
-      });
-      expect(config.modelRoster.chat?.routing).toEqual({
-        providerOrder: ['parasail', 'openai'],
-      });
+      })).toThrow('Legacy model settings payloads are unsupported');
     });
 
     it('applies explicit voice provider settings including disabled providers', () => {
@@ -771,26 +653,9 @@ describe('settings', () => {
   });
 
   describe('round-trip', () => {
-    it('save → load → apply keeps existing model settings when payload contains model fields', () => {
+    it('save → load → apply fails closed when runtime settings payload includes model fields', () => {
       saveSettings(tempDir, {
-        modelCatalog: {
-          main: {
-            model: 'z-ai/glm-5',
-            provider: 'openrouter',
-            defaults: { maxTokens: 5000, contextWindow: 140_000 },
-          },
-          extract: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 1200 },
-          },
-        },
-        modelRoleAssignments: {
-          chat: 'main',
-          extraction: 'extract',
-          background: 'extract',
-          summary: 'main',
-        },
+        extractionInterval: 9,
       });
 
       const loaded = loadSettings(tempDir);
@@ -799,6 +664,8 @@ describe('settings', () => {
 
       expect(loaded.modelCatalog).toBeUndefined();
       expect(loaded.modelRoleAssignments).toBeUndefined();
+      expect(loaded.modelRegistry).toBeUndefined();
+      expect(config.extractionInterval).toBe(9);
       expect(config.primaryModel).toBe('z-ai/glm-5');
       expect(config.primaryMaxTokens).toBe(16384);
       expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
@@ -972,7 +839,7 @@ describe('settings', () => {
   });
 
   describe('parseSettingsForm', () => {
-    it('parses valid legacy form data', () => {
+    it('fails closed for legacy model form fields', () => {
       const params = new URLSearchParams({
         primaryModel: 'test-model',
         primaryProvider: 'openrouter',
@@ -984,44 +851,60 @@ describe('settings', () => {
         retryMaxAttempts: '4',
       });
       const [settings, errors] = parseSettingsForm(params);
-      expect(errors).toEqual([]);
-      expect(settings.primaryModel).toBe('test-model');
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('Legacy model settings');
+      expect(settings.primaryModel).toBeUndefined();
       expect(settings.primaryMaxTokens).toBe(4096);
-      expect(settings.sessionHistoryBudgetPct).toBe(7);
-      expect(settings.memoryRetrievalBudgetPct).toBe(3);
-      expect(settings.moodCongruenceWeight).toBe(0.35);
-      expect(settings.sessionMessageLimit).toBe(50);
-      expect(settings.retryMaxAttempts).toBe(4);
-      expect(settings.modelCatalog.primary.model).toBe('test-model');
     });
 
-    it('parses roster-v2 catalog and role assignment JSON', () => {
+    it('parses canonical model registry JSON', () => {
       const params = new URLSearchParams({
-        modelCatalogJson: JSON.stringify({
-          fast: {
-            model: 'openai/gpt-4.1-mini',
-            provider: 'openrouter',
-            defaults: { maxTokens: 2048, contextWindow: 128000 },
-            overrides: { maxTokens: 1536 },
-          },
-          extract: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 1024 },
-          },
-        }),
-        modelRoleAssignmentsJson: JSON.stringify({
-          chat: 'fast',
-          context: 'extract',
-          extraction: 'extract',
-          background: 'extract',
-          summary: 'fast',
+        modelRegistryJson: JSON.stringify({
+          schemaVersion: 1,
+          models: [
+            {
+              id: 'fast',
+              rank: 100,
+              identity: {
+                model: 'openai/gpt-4.1-mini',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'summary', primary: true },
+                { purpose: 'reasoning', primary: true },
+                { purpose: 'longContext', primary: true },
+                { purpose: 'vision', primary: true },
+                { purpose: 'moa', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128000 },
+              tuning: { maxOutputTokens: 1536 },
+            },
+            {
+              id: 'extract',
+              rank: 80,
+              identity: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'background', primary: true },
+                { purpose: 'extraction', primary: true },
+                { purpose: 'import_processing', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 1024, contextWindow: 128000 },
+              tuning: { maxOutputTokens: 1024 },
+            },
+          ],
         }),
       });
 
       const [settings, errors] = parseSettingsForm(params);
       expect(errors).toEqual([]);
-      expect(settings.modelCatalog.fast.overrides.maxTokens).toBe(1536);
+      expect(settings.modelRegistry?.models[0]?.id).toBe('fast');
+      expect(settings.modelCatalog?.fast?.overrides?.maxTokens).toBe(1536);
       expect(settings.modelRoleAssignments?.chat).toBe('fast');
       expect(settings.modelRoleAssignments?.context).toBe('extract');
       expect(settings.primaryModel).toBe('openai/gpt-4.1-mini');
@@ -1105,18 +988,51 @@ describe('settings', () => {
       expect(errors).toContain('importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint');
     });
 
-    it('rejects assignment references to unknown slots', () => {
+    it('rejects invalid canonical model registry payloads', () => {
       const params = new URLSearchParams({
-        modelCatalogJson: JSON.stringify({
-          known: { model: 'z-ai/glm-5', provider: 'openrouter' },
-        }),
-        modelRoleAssignmentsJson: JSON.stringify({
-          chat: 'missing-slot',
+        modelRegistryJson: JSON.stringify({
+          schemaVersion: 1,
+          models: [
+            {
+              id: 'known',
+              rank: 100,
+              identity: {
+                model: 'z-ai/glm-5',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'chat', primary: true },
+                { purpose: 'summary', primary: true },
+                { purpose: 'reasoning', primary: true },
+                { purpose: 'longContext', primary: true },
+                { purpose: 'vision', primary: true },
+                { purpose: 'moa', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 4096 },
+              tuning: { maxOutputTokens: 4096 },
+            },
+            {
+              id: 'missing-background',
+              rank: 80,
+              identity: {
+                model: 'deepseek/deepseek-v3.2',
+                provider: 'openrouter',
+                source: { type: 'openrouter' },
+              },
+              purposes: [
+                { purpose: 'extraction', primary: true },
+                { purpose: 'import_processing', primary: true },
+              ],
+              capabilities: { maxOutputTokens: 1024 },
+              tuning: { maxOutputTokens: 1024 },
+            },
+          ],
         }),
       });
       const [, errors] = parseSettingsForm(params);
       expect(errors).toHaveLength(1);
-      expect(errors[0]).toContain('unknown model slot');
+      expect(errors[0]).toContain('modelRegistryJson');
     });
 
     it('rejects out-of-range values', () => {

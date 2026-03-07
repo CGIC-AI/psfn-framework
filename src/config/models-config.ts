@@ -1,25 +1,33 @@
-import { existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
-import type { ModelCatalogEntry, ModelRoleAssignments } from '../types.js';
 import {
-  extractModelSettings,
-  hasModelSettings,
   normalizeEditableSettings,
+  normalizeCanonicalModelRegistry,
   type EditableSettings,
 } from '../settings.js';
-import {
-  loadOrSeedJson,
-  writeJsonAtomic,
-} from './load-or-seed.js';
-import { isRecord } from '../utils/types.js';
+import type {
+  CanonicalModelRegistry,
+  ModelCatalogEntry,
+  ModelRoleAssignments,
+  ModelPurpose,
+  ModelSlot,
+} from '../types.js';
+import { writeJsonAtomic } from './load-or-seed.js';
 
 export const MODELS_FILE_NAME = 'models.json';
 export const MODELS_SEED_FILE_NAME = 'models.seed.json';
 
 export interface ModelsRuntimeConfig {
+  modelRegistry: CanonicalModelRegistry;
   modelCatalog: Record<string, ModelCatalogEntry>;
   modelRoleAssignments: ModelRoleAssignments;
+  modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
+  primaryModel: string;
+  primaryProvider: string;
+  primaryMaxTokens: number;
+  extractionModel: string;
+  extractionProvider: string;
+  extractionMaxTokens: number;
 }
 
 interface ModelsRuntimeLoadOptions {
@@ -33,37 +41,66 @@ export interface ModelsLoadResult {
   legacyDriftDetected: boolean;
 }
 
+interface NodeErrorLike {
+  code?: string;
+}
+
+function isNodeErrorLike(value: unknown): value is NodeErrorLike {
+  return typeof value === 'object' && value !== null;
+}
+
+function isEnoent(error: unknown): boolean {
+  return isNodeErrorLike(error) && error.code === 'ENOENT';
+}
+
+function parseJsonFile(path: string): unknown {
+  const raw = readFileSync(path, 'utf-8');
+  return JSON.parse(raw);
+}
+
 function validateModelsConfig(
   raw: unknown,
   sourcePath: string,
   defaultContextWindow?: number,
 ): ModelsRuntimeConfig {
-  if (!isRecord(raw)) {
-    throw new Error(`Invalid models config at ${sourcePath}: expected object`);
-  }
-
-  const candidate: EditableSettings = {};
-
-  if (isRecord(raw.modelCatalog) || isRecord(raw.modelRoleAssignments)) {
-    candidate.modelCatalog = raw.modelCatalog as EditableSettings['modelCatalog'];
-    candidate.modelRoleAssignments = raw.modelRoleAssignments as EditableSettings['modelRoleAssignments'];
-  } else {
-    // Backward compatibility: accept direct slot map as the file root.
-    candidate.modelCatalog = raw as EditableSettings['modelCatalog'];
-  }
-
-  const normalized = normalizeEditableSettings(candidate, {
+  const modelRegistry = normalizeCanonicalModelRegistry(raw, sourcePath);
+  const normalized = normalizeEditableSettings({ modelRegistry }, {
     defaultContextWindow,
   });
 
   const modelCatalog = normalized.modelCatalog ?? {};
-  if (Object.keys(modelCatalog).length === 0) {
-    throw new Error(`Invalid models config at ${sourcePath}: no valid model slots found`);
+  const modelRoleAssignments = normalized.modelRoleAssignments ?? {};
+  const modelRoster = normalized.modelRoster ?? {};
+  const primaryModel = normalized.primaryModel;
+  const primaryProvider = normalized.primaryProvider;
+  const primaryMaxTokens = normalized.primaryMaxTokens;
+  const extractionModel = normalized.extractionModel;
+  const extractionProvider = normalized.extractionProvider;
+  const extractionMaxTokens = normalized.extractionMaxTokens;
+  if (
+    Object.keys(modelCatalog).length === 0
+    || Object.keys(modelRoleAssignments).length === 0
+    || !primaryModel
+    || !primaryProvider
+    || primaryMaxTokens === undefined
+    || !extractionModel
+    || !extractionProvider
+    || extractionMaxTokens === undefined
+  ) {
+    throw new Error(`Invalid models config at ${sourcePath}: canonical registry projection failed`);
   }
 
   return {
+    modelRegistry,
     modelCatalog,
-    modelRoleAssignments: normalized.modelRoleAssignments ?? {},
+    modelRoleAssignments,
+    modelRoster,
+    primaryModel,
+    primaryProvider,
+    primaryMaxTokens,
+    extractionModel,
+    extractionProvider,
+    extractionMaxTokens,
   };
 }
 
@@ -72,67 +109,34 @@ export function loadModelsConfig(
   options: ModelsRuntimeLoadOptions = {},
 ): ModelsRuntimeConfig {
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
-  return loadOrSeedJson({
-    dataPath: join(dataDir, MODELS_FILE_NAME),
-    seedPath: join(seedDir, MODELS_SEED_FILE_NAME),
-    validate: (raw, sourcePath) => validateModelsConfig(raw, sourcePath, options.defaultContextWindow),
-  });
+  const dataPath = join(dataDir, MODELS_FILE_NAME);
+  const seedPath = join(seedDir, MODELS_SEED_FILE_NAME);
+
+  try {
+    return validateModelsConfig(parseJsonFile(dataPath), dataPath, options.defaultContextWindow);
+  } catch (error) {
+    if (isEnoent(error)) {
+      const seeded = validateModelsConfig(parseJsonFile(seedPath), seedPath, options.defaultContextWindow);
+      writeJsonAtomic(dataPath, seeded.modelRegistry);
+      return seeded;
+    }
+
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Refusing to reseed invalid JSON config at ${dataPath}; fix or remove the file explicitly. Cause: ${reason}`,
+    );
+  }
 }
 
 export function loadModelsConfigWithLegacyMigration(
   dataDir: string,
   options: ModelsRuntimeLoadOptions & { legacySettings?: EditableSettings } = {},
 ): ModelsLoadResult {
-  const filePath = join(dataDir, MODELS_FILE_NAME);
-  const modelsFileExisted = existsSync(filePath);
   const persisted = loadModelsConfig(dataDir, options);
-  const legacySettings = options.legacySettings;
-  if (!legacySettings) {
-    return {
-      config: persisted,
-      migratedFromLegacySettings: false,
-      legacyDriftDetected: false,
-    };
-  }
-
-  const legacyModelSettings = extractModelSettings(legacySettings);
-  if (!hasModelSettings(legacyModelSettings)) {
-    return {
-      config: persisted,
-      migratedFromLegacySettings: false,
-      legacyDriftDetected: false,
-    };
-  }
-
-  const normalizedLegacy = normalizeEditableSettings(legacyModelSettings, {
-    defaultContextWindow: options.defaultContextWindow,
-  });
-  const legacyConfig: ModelsRuntimeConfig = {
-    modelCatalog: normalizedLegacy.modelCatalog ?? {},
-    modelRoleAssignments: normalizedLegacy.modelRoleAssignments ?? {},
-  };
-
-  if (Object.keys(legacyConfig.modelCatalog).length === 0) {
-    return {
-      config: persisted,
-      migratedFromLegacySettings: false,
-      legacyDriftDetected: false,
-    };
-  }
-
-  if (!modelsFileExisted) {
-    const migrated = saveModelsConfig(dataDir, legacyConfig, options);
-    return {
-      config: migrated,
-      migratedFromLegacySettings: true,
-      legacyDriftDetected: false,
-    };
-  }
-
   return {
     config: persisted,
     migratedFromLegacySettings: false,
-    legacyDriftDetected: !isDeepStrictEqual(persisted, legacyConfig),
+    legacyDriftDetected: false,
   };
 }
 
@@ -142,6 +146,6 @@ export function saveModelsConfig(
   options: ModelsRuntimeLoadOptions = {},
 ): ModelsRuntimeConfig {
   const validated = validateModelsConfig(nextConfig, MODELS_FILE_NAME, options.defaultContextWindow);
-  writeJsonAtomic(join(dataDir, MODELS_FILE_NAME), validated);
+  writeJsonAtomic(join(dataDir, MODELS_FILE_NAME), validated.modelRegistry);
   return validated;
 }

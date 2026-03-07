@@ -1,6 +1,6 @@
 import { createElevenLabsStreamingTtsConnector, type ElevenLabsStreamingTtsConfig } from './elevenlabs-stream.js';
 import { createEchoStreamingTtsConnector } from './echo-stream.js';
-import type { EligibilityRequirements } from '../../capabilities/eligibility.js';
+import type { EligibilityRequirements } from '../../../capabilities/eligibility.js';
 import type { StreamingTtsConnector } from './types.js';
 
 export * from './types.js';

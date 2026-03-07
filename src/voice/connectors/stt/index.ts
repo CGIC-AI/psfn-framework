@@ -1,5 +1,5 @@
 import { createDeepgramStreamingSttConnector, type DeepgramStreamingSttConfig } from './deepgram-stream.js';
-import type { EligibilityRequirements } from '../../capabilities/eligibility.js';
+import type { EligibilityRequirements } from '../../../capabilities/eligibility.js';
 import type { StreamingSttConnector } from './types.js';
 
 export * from './types.js';

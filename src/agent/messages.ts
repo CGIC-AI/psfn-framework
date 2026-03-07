@@ -73,7 +73,7 @@ declare module '@mariozechner/pi-agent-core' {
 
 /** Narrow AgentMessage to a record so we can check arbitrary properties without `as any`. */
 function hasCustomRole(m: AgentMessage): m is AgentMessage & { role: 'custom'; type: string } {
-  const record = m as Record<string, unknown>;
+  const record = m as unknown as Record<string, unknown>;
   return record.role === 'custom';
 }
 
@@ -192,7 +192,7 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
     }
     return {
       role: 'toolResult',
-      toolCallId: toolObservation.toolCallId,
+      toolCallId: toolObservation.toolCallId ?? `${entry.channelId}:${entry.id}`,
       toolName: toolObservation.toolName,
       content: [{ type: 'text', text: entry.content }],
       isError: toolObservation.isError ?? false,

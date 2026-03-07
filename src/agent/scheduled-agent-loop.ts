@@ -54,8 +54,8 @@ export function agentLoopContinueWithScheduler(
 
 function createAgentStream() {
   return new EventStream(
-    (event) => event.type === 'agent_end',
-    (event) => (event.type === 'agent_end' ? event.messages : []),
+    (event: any) => event.type === 'agent_end',
+    (event: any) => (event.type === 'agent_end' ? event.messages : []),
   );
 }
 
@@ -72,10 +72,10 @@ async function runLoop(
   let pendingMessages = (await config.getSteeringMessages?.()) || [];
 
   while (true) {
-    let hasMoreToolCalls = true;
+    let hasMoreToolCalls = false;
     let steeringAfterTools: AgentMessage[] | null = null;
 
-    while (hasMoreToolCalls || pendingMessages.length > 0) {
+    do {
       if (!firstTurn) {
         stream.push({ type: 'turn_start' });
       } else {
@@ -127,7 +127,7 @@ async function runLoop(
       } else {
         pendingMessages = (await config.getSteeringMessages?.()) || [];
       }
-    }
+    } while (hasMoreToolCalls || pendingMessages.length > 0);
 
     const followUpMessages = (await config.getFollowUpMessages?.()) || [];
     if (followUpMessages.length > 0) {

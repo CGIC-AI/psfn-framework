@@ -5,6 +5,7 @@ import {
   loadCapabilityTierConfig,
   type CapabilityTierConfig,
 } from '../config/capability-tier-config.js';
+import type { CapabilityTier } from '../types.js';
 import type { CapabilityAccess } from './access.js';
 import { resolveTierCapabilityTokens } from './tiers.js';
 import type { CapabilityToken } from './tokens.js';

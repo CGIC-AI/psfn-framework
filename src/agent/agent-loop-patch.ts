@@ -2,10 +2,11 @@ import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
 import { agentLoopContinueWithScheduler, agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import type { ToolCallSchedulerOptions } from './tool-call-scheduler.js';
 
-type PatchedAgent = Agent & {
+type PatchedAgent = {
   __psfnToolSchedulerPatched?: boolean;
   _runLoop: (messages?: AgentMessage[], options?: { skipInitialSteeringPoll?: boolean }) => Promise<void>;
-  emit: (event: any) => void;
+  emit: (event: unknown) => void;
+  appendMessage: (message: AgentMessage) => void;
   dequeueSteeringMessages: () => AgentMessage[];
   dequeueFollowUpMessages: () => AgentMessage[];
   abortController?: AbortController;
@@ -78,7 +79,8 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
         ? agentLoopWithScheduler(messages, context, config, this.abortController.signal, this.streamFn, schedulerOptions)
         : agentLoopContinueWithScheduler(context, config, this.abortController.signal, this.streamFn, schedulerOptions);
 
-      for await (const event of stream) {
+      for await (const rawEvent of stream) {
+        const event = rawEvent as any;
         switch (event.type) {
           case 'message_start':
             partial = event.message;
@@ -128,7 +130,7 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
         ));
         if (!onlyEmpty) {
           this.appendMessage(partial);
-        } else if (this.abortController?.signal.aborted) {
+        } else if (this.abortController.signal.aborted) {
           throw new Error('Request was aborted');
         }
       }
@@ -155,7 +157,7 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
             total: 0,
           },
         },
-        stopReason: this.abortController?.signal.aborted ? 'aborted' : 'error',
+        stopReason: this.abortController.signal.aborted ? 'aborted' : 'error',
         errorMessage,
         timestamp: Date.now(),
       } as any;

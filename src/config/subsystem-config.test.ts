@@ -54,35 +54,159 @@ describe('subsystem config round-trip', () => {
   it('round-trips models.json without drift', () => {
     const dataDir = makeDataDir('psfn-models-config-');
     const expected = {
-      modelCatalog: {
-        primary: {
-          model: 'openai/gpt-4.1-mini',
-          provider: 'openrouter',
-          defaults: { maxTokens: 4096, contextWindow: 128_000 },
-          routing: { providerOrder: ['parasail', 'openai'] },
-        },
-        extraction: {
-          model: 'deepseek/deepseek-v3.2',
-          provider: 'openrouter',
-          defaults: { maxTokens: 2048 },
-        },
+      schemaVersion: 1,
+      budgetPolicy: {
+        enabled: true,
+        dailyUsdLimit: 3,
+        monthlyUsdLimit: 60,
+        currency: 'USD',
       },
-      modelRoleAssignments: {
-        chat: 'primary',
-        summary: 'primary',
-        reasoning: 'primary',
-        longContext: 'primary',
-        context: 'extraction',
-        extraction: 'extraction',
-        background: 'extraction',
-        import_processing: 'extraction',
-      },
+      models: [
+        {
+          id: 'primary',
+          rank: 100,
+          identity: {
+            model: 'openai/gpt-4.1-mini',
+            provider: 'openrouter',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'chat', primary: true },
+            { purpose: 'summary', primary: true },
+            { purpose: 'reasoning', primary: true },
+            { purpose: 'longContext', primary: true },
+            { purpose: 'vision', primary: true },
+            { purpose: 'moa', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
+        },
+        {
+          id: 'extraction',
+          rank: 80,
+          identity: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'background', primary: true },
+            { purpose: 'extraction', primary: true },
+            { purpose: 'import_processing', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2048 },
+        },
+      ],
     };
 
     const saved = saveModelsConfig(dataDir, expected, { defaultContextWindow: 128_000 });
-    expect(saved).toEqual(expected);
+    expect(saved.modelRegistry).toEqual(expected);
+    expect(saved.modelRoleAssignments.chat).toBe('primary');
+    expect(saved.modelRoleAssignments.background).toBe('extraction');
+    expect(saved.modelRoleAssignments.extraction).toBe('extraction');
+    expect(saved.modelRoleAssignments.import_processing).toBe('extraction');
+    expect(saved.modelRoleAssignments.moa).toBe('primary');
     expect(readJsonFile(join(dataDir, MODELS_FILE_NAME))).toEqual(expected);
-    expect(loadModelsConfig(dataDir, { defaultContextWindow: 128_000 })).toEqual(expected);
+    expect(loadModelsConfig(dataDir, { defaultContextWindow: 128_000 }).modelRegistry).toEqual(expected);
+  });
+
+  it('fails closed when canonical primary-per-purpose invariant is violated', () => {
+    const dataDir = makeDataDir('psfn-models-config-invalid-');
+    const invalid = {
+      schemaVersion: 1,
+      models: [
+        {
+          id: 'primary',
+          rank: 100,
+          identity: {
+            model: 'openai/gpt-4.1-mini',
+            provider: 'openrouter',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'chat', primary: true },
+            { purpose: 'summary', primary: true },
+            { purpose: 'reasoning', primary: true },
+            { purpose: 'longContext', primary: true },
+            { purpose: 'vision', primary: true },
+            { purpose: 'moa', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
+        },
+        {
+          id: 'extraction',
+          rank: 80,
+          identity: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'chat', primary: true },
+            { purpose: 'background', primary: true },
+            { purpose: 'extraction', primary: true },
+            { purpose: 'import_processing', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2048 },
+        },
+      ],
+    };
+
+    expect(() => saveModelsConfig(dataDir, invalid)).toThrow('must have exactly one primary model');
+  });
+
+  it('fails closed when canonical budget policy is invalid', () => {
+    const dataDir = makeDataDir('psfn-models-config-invalid-budget-');
+    const invalid = {
+      schemaVersion: 1,
+      budgetPolicy: {
+        enabled: true,
+        dailyUsdLimit: 100,
+        monthlyUsdLimit: 10,
+      },
+      models: [
+        {
+          id: 'primary',
+          rank: 100,
+          identity: {
+            model: 'openai/gpt-4.1-mini',
+            provider: 'openrouter',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'chat', primary: true },
+            { purpose: 'summary', primary: true },
+            { purpose: 'reasoning', primary: true },
+            { purpose: 'longContext', primary: true },
+            { purpose: 'vision', primary: true },
+            { purpose: 'moa', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
+        },
+        {
+          id: 'extraction',
+          rank: 80,
+          identity: {
+            model: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'background', primary: true },
+            { purpose: 'extraction', primary: true },
+            { purpose: 'import_processing', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2048 },
+        },
+      ],
+    };
+
+    expect(() => saveModelsConfig(dataDir, invalid)).toThrow('monthlyUsdLimit must be >= dailyUsdLimit');
   });
 
   it('round-trips scheduler.json without drift', () => {

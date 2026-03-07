@@ -1,13 +1,13 @@
 import type {
+  CanonicalModelPurpose,
   ImportProcessingRouteMode,
-  ModelCatalogEntry,
-  ModelRouteConfig,
-  ModelRoleAssignments,
-  ModelSlot,
+  ModelRegistryCostMetadata,
+  ModelRegistryEntry,
+  ModelRegistryPurposeTag,
   SubstrateConfig,
 } from '../types.js';
 
-export type RoutingPurpose = 'chat' | 'background' | 'context' | 'reasoning' | 'import_processing';
+export type RoutingPurpose = CanonicalModelPurpose | 'context';
 export type ImportPolicyRejectionReason = 'strict_requires_openrouter_zdr';
 
 export interface RoutingCandidate {
@@ -40,6 +40,20 @@ export interface ImportPolicyEvaluation {
   audit: ImportPolicyAuditRecord;
 }
 
+interface SelectorCandidate {
+  candidate: RoutingCandidate;
+  primary: boolean;
+  rank: number;
+  maxTokens: number;
+  contextWindow: number;
+  estimatedCost: number | null;
+}
+
+interface ScoredSelectorCandidate extends SelectorCandidate {
+  capabilityScore: number;
+  costScore: number;
+}
+
 function uniquePush(
   target: RoutingCandidate[],
   candidate: RoutingCandidate | undefined,
@@ -50,6 +64,7 @@ function uniquePush(
     candidate.provider,
     candidate.model,
     String(candidate.maxTokens),
+    String(candidate.contextWindow ?? ''),
     candidate.requestBaseUrl ?? '',
     candidate.requestApiKeyEnv ?? '',
     candidate.openRouterZdrOnly ? 'zdr' : '',
@@ -62,208 +77,165 @@ function uniquePush(
   target.push(candidate);
 }
 
-function fallbackTokenBudget(
+function toPositiveNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function resolveMaxTokens(entry: ModelRegistryEntry): number | undefined {
+  return toPositiveNumber(entry.tuning?.maxOutputTokens)
+    ?? toPositiveNumber(entry.capabilities?.maxOutputTokens);
+}
+
+function resolveContextWindow(entry: ModelRegistryEntry, defaultContextWindow: number): number | undefined {
+  return toPositiveNumber(entry.tuning?.contextWindow)
+    ?? toPositiveNumber(entry.capabilities?.contextWindow)
+    ?? toPositiveNumber(defaultContextWindow);
+}
+
+function resolvePurposeTag(
+  entry: ModelRegistryEntry,
+  purpose: CanonicalModelPurpose,
+): ModelRegistryPurposeTag | undefined {
+  return entry.purposes.find(tag => tag.purpose === purpose);
+}
+
+function estimateCost(cost: ModelRegistryCostMetadata | undefined): number | null {
+  const inputCost = toPositiveNumber(cost?.inputPer1MUsd);
+  const outputCost = toPositiveNumber(cost?.outputPer1MUsd);
+  if (inputCost === undefined && outputCost === undefined) return null;
+  const normalizedInput = inputCost ?? outputCost ?? 0;
+  const normalizedOutput = outputCost ?? inputCost ?? 0;
+  return normalizedInput + normalizedOutput;
+}
+
+function candidateFromRegistryEntry(
   config: SubstrateConfig,
-  purpose: RoutingPurpose,
-): { maxTokens: number; contextWindow?: number } {
-  if (purpose === 'background' || purpose === 'context' || purpose === 'import_processing') {
-    return { maxTokens: config.extractionMaxTokens };
-  }
+  entry: ModelRegistryEntry,
+  purpose: CanonicalModelPurpose,
+): SelectorCandidate | null {
+  const purposeTag = resolvePurposeTag(entry, purpose);
+  if (!purposeTag) return null;
 
-  const chatWindow = config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow;
-  return { maxTokens: config.primaryMaxTokens, contextWindow: chatWindow };
-}
+  const provider = entry.identity.provider.trim().toLowerCase();
+  const model = entry.identity.model.trim();
+  if (!provider || !model) return null;
 
-function candidateFromCatalogEntry(
-  slotKey: string,
-  entry: ModelCatalogEntry | undefined,
-  fallback: { maxTokens: number; contextWindow?: number },
-): RoutingCandidate | undefined {
-  if (!entry) return undefined;
-  const maxTokens = entry.overrides?.maxTokens
-    ?? entry.defaults?.maxTokens
-    ?? fallback.maxTokens;
-  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return undefined;
+  const maxTokens = resolveMaxTokens(entry);
+  if (maxTokens === undefined) return null;
 
-  const contextWindow = entry.overrides?.contextWindow
-    ?? entry.defaults?.contextWindow
-    ?? fallback.contextWindow;
-
+  const contextWindow = resolveContextWindow(entry, config.defaultContextWindow) ?? 0;
   return {
-    slotKey,
-    model: entry.model,
-    provider: entry.provider,
+    candidate: withOpenRouterPreferences({
+      slotKey: entry.id,
+      provider,
+      model,
+      maxTokens,
+      ...(contextWindow > 0 ? { contextWindow } : {}),
+    }, config),
+    primary: purposeTag.primary === true,
+    rank: Number.isFinite(entry.rank) ? Math.floor(entry.rank) : Number.MAX_SAFE_INTEGER,
     maxTokens,
-    ...(contextWindow !== undefined ? { contextWindow } : {}),
-    ...(entry.provider === 'openrouter'
-      ? { openRouterProviderOrder: resolveRouteProviderOrder(entry.routing) }
-      : {}),
+    contextWindow,
+    estimatedCost: estimateCost(entry.cost),
   };
 }
 
-function candidateFromRosterSlot(slot: ModelSlot | undefined): RoutingCandidate | undefined {
-  if (!slot) return undefined;
-  if (!slot.model || !slot.provider || !Number.isFinite(slot.maxTokens) || slot.maxTokens <= 0) return undefined;
-
-  return {
-    model: slot.model,
-    provider: slot.provider,
-    maxTokens: slot.maxTokens,
-    ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
-    ...(slot.provider === 'openrouter'
-      ? { openRouterProviderOrder: resolveRouteProviderOrder(slot.routing) }
-      : {}),
-  };
-}
-
-function resolveRouteProviderOrder(route: ModelRouteConfig | undefined): string[] | undefined {
-  if (!route || !('providerOrder' in route)) return undefined;
-  return [...(route.providerOrder ?? [])];
-}
-
-function purposeSlotChain(assignments: ModelRoleAssignments | undefined, purpose: RoutingPurpose): string[] {
-  const role = assignments ?? {};
-  const chain = purpose === 'chat'
-    ? [
-      role.chat,
-      'primary',
-      role.reasoning,
-      role.summary,
-    ]
-    : purpose === 'background'
-      ? [
-        role.background,
-        role.chat,
-        'primary',
-        role.extraction,
-        'extraction',
-      ]
-      : purpose === 'context'
-        ? [
-          role.context,
-          role.background,
-          role.extraction,
-          'extraction',
-          role.chat,
-          'primary',
-        ]
-      : purpose === 'reasoning'
-        ? [
-          role.reasoning,
-          role.chat,
-          'primary',
-          role.background,
-          role.extraction,
-          'extraction',
-        ]
-        : [
-          role.import_processing,
-          role.import,
-          role.background,
-          role.extraction,
-          'extraction',
-          role.chat,
-          'primary',
-        ];
-
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of chain) {
-    if (!candidate) continue;
-    const slotKey = candidate.trim();
-    if (!slotKey || seen.has(slotKey)) continue;
-    seen.add(slotKey);
-    deduped.push(slotKey);
-  }
-
-  return deduped;
-}
-
-function rosterChain(config: SubstrateConfig, purpose: RoutingPurpose): Array<ModelSlot | undefined> {
-  if (purpose === 'chat') {
-    return [
-      config.modelRoster.chat,
-      {
-        model: config.primaryModel,
-        provider: config.primaryProvider,
-        maxTokens: config.primaryMaxTokens,
-        contextWindow: config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow,
-      },
-      config.modelRoster.background,
-    ];
-  }
-
-  if (purpose === 'background') {
-    return [
-      config.modelRoster.background,
-      config.modelRoster.chat,
-      {
-        model: config.primaryModel,
-        provider: config.primaryProvider,
-        maxTokens: config.primaryMaxTokens,
-        contextWindow: config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow,
-      },
-      {
-        model: config.extractionModel,
-        provider: config.extractionProvider,
-        maxTokens: config.extractionMaxTokens,
-      },
-    ];
-  }
-
+function resolveCanonicalPurposeChain(purpose: RoutingPurpose): CanonicalModelPurpose[] {
   if (purpose === 'context') {
-    return [
-      config.modelRoster.context,
-      config.modelRoster.background,
-      {
-        model: config.extractionModel,
-        provider: config.extractionProvider,
-        maxTokens: config.extractionMaxTokens,
-      },
-      config.modelRoster.chat,
-      {
-        model: config.primaryModel,
-        provider: config.primaryProvider,
-        maxTokens: config.primaryMaxTokens,
-        contextWindow: config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow,
-      },
-    ];
+    return ['longContext', 'background', 'chat'];
+  }
+  return [purpose];
+}
+
+function capabilityWeightsForPurpose(
+  purpose: CanonicalModelPurpose,
+): { contextWindow: number; maxTokens: number } {
+  if (purpose === 'longContext') {
+    return { contextWindow: 0.8, maxTokens: 0.2 };
+  }
+  if (purpose === 'background' || purpose === 'extraction' || purpose === 'import_processing') {
+    return { contextWindow: 0.35, maxTokens: 0.65 };
+  }
+  return { contextWindow: 0.5, maxTokens: 0.5 };
+}
+
+function scoreCandidates(
+  purpose: CanonicalModelPurpose,
+  candidates: SelectorCandidate[],
+): ScoredSelectorCandidate[] {
+  if (candidates.length === 0) return [];
+
+  const capabilityWeights = capabilityWeightsForPurpose(purpose);
+  const maxContextWindow = Math.max(...candidates.map(candidate => candidate.contextWindow));
+  const maxTokens = Math.max(...candidates.map(candidate => candidate.maxTokens));
+
+  const explicitCosts = candidates
+    .map(candidate => candidate.estimatedCost)
+    .filter((value): value is number => value !== null);
+
+  const syntheticMissingCost = explicitCosts.length > 0
+    ? Math.max(...explicitCosts) * 1.5
+    : 1;
+
+  const resolvedCosts = candidates.map((candidate) => candidate.estimatedCost ?? syntheticMissingCost);
+  const minCost = Math.min(...resolvedCosts);
+  const maxCost = Math.max(...resolvedCosts);
+
+  return candidates.map((candidate, index) => {
+    const normalizedContextWindow = maxContextWindow > 0
+      ? candidate.contextWindow / maxContextWindow
+      : 0;
+    const normalizedMaxTokens = maxTokens > 0
+      ? candidate.maxTokens / maxTokens
+      : 0;
+    const capabilityScore = (normalizedContextWindow * capabilityWeights.contextWindow)
+      + (normalizedMaxTokens * capabilityWeights.maxTokens);
+
+    const costValue = resolvedCosts[index];
+    const costScore = maxCost > minCost
+      ? (maxCost - costValue) / (maxCost - minCost)
+      : 1;
+
+    return {
+      ...candidate,
+      capabilityScore,
+      costScore,
+    };
+  });
+}
+
+function compareScoredCandidates(a: ScoredSelectorCandidate, b: ScoredSelectorCandidate): number {
+  if (a.primary !== b.primary) {
+    return a.primary ? -1 : 1;
   }
 
-  if (purpose === 'reasoning') {
-    return [
-      config.modelRoster.reasoning,
-      config.modelRoster.chat,
-      {
-        model: config.primaryModel,
-        provider: config.primaryProvider,
-        maxTokens: config.primaryMaxTokens,
-        contextWindow: config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow,
-      },
-      config.modelRoster.background,
-      {
-        model: config.extractionModel,
-        provider: config.extractionProvider,
-        maxTokens: config.extractionMaxTokens,
-      },
-    ];
+  if (a.rank !== b.rank) {
+    // Lower rank means higher operator preference.
+    return a.rank - b.rank;
   }
 
-  return [
-    config.modelRoster.background,
-    config.modelRoster.chat,
-    {
-      model: config.primaryModel,
-      provider: config.primaryProvider,
-      maxTokens: config.primaryMaxTokens,
-      contextWindow: config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow,
-    },
-    {
-      model: config.extractionModel,
-      provider: config.extractionProvider,
-      maxTokens: config.extractionMaxTokens,
-    },
-  ];
+  if (a.capabilityScore !== b.capabilityScore) {
+    return b.capabilityScore - a.capabilityScore;
+  }
+
+  if (a.costScore !== b.costScore) {
+    return b.costScore - a.costScore;
+  }
+
+  const aKey = [
+    a.candidate.slotKey ?? '',
+    a.candidate.provider,
+    a.candidate.model,
+  ].join('::');
+  const bKey = [
+    b.candidate.slotKey ?? '',
+    b.candidate.provider,
+    b.candidate.model,
+  ].join('::');
+  return aKey.localeCompare(bKey);
 }
 
 function withOpenRouterPreferences(
@@ -281,38 +253,36 @@ function withOpenRouterPreferences(
   };
 }
 
+function selectCandidatesForPurpose(
+  config: SubstrateConfig,
+  purpose: CanonicalModelPurpose,
+): RoutingCandidate[] {
+  const registryModels = config.modelRegistry?.models ?? [];
+  if (registryModels.length === 0) {
+    return [];
+  }
+
+  const rawCandidates = registryModels
+    .map(entry => candidateFromRegistryEntry(config, entry, purpose))
+    .filter((candidate): candidate is SelectorCandidate => candidate !== null);
+
+  const scoredCandidates = scoreCandidates(purpose, rawCandidates);
+  scoredCandidates.sort(compareScoredCandidates);
+  return scoredCandidates.map(entry => entry.candidate);
+}
+
 function buildStandardCandidates(
   config: SubstrateConfig,
   purpose: Exclude<RoutingPurpose, 'import_processing'>,
 ): RoutingCandidate[] {
   const candidates: RoutingCandidate[] = [];
   const seen = new Set<string>();
-  const fallback = fallbackTokenBudget(config, purpose);
 
-  const catalog = config.modelCatalog ?? {};
-  const hasCatalog = Object.keys(catalog).length > 0;
-  if (hasCatalog) {
-    const slotChain = purposeSlotChain(config.modelRoleAssignments, purpose);
-    for (const slotKey of slotChain) {
-      const entry = catalog[slotKey];
-      uniquePush(
-        candidates,
-        withOpenRouterPreferences(candidateFromCatalogEntry(slotKey, entry, fallback), config),
-        seen,
-      );
+  for (const canonicalPurpose of resolveCanonicalPurposeChain(purpose)) {
+    const purposeCandidates = selectCandidatesForPurpose(config, canonicalPurpose);
+    for (const candidate of purposeCandidates) {
+      uniquePush(candidates, candidate, seen);
     }
-
-    for (const [slotKey, entry] of Object.entries(catalog)) {
-      uniquePush(
-        candidates,
-        withOpenRouterPreferences(candidateFromCatalogEntry(slotKey, entry, fallback), config),
-        seen,
-      );
-    }
-  }
-
-  for (const slot of rosterChain(config, purpose)) {
-    uniquePush(candidates, withOpenRouterPreferences(candidateFromRosterSlot(slot), config), seen);
   }
 
   return candidates;
@@ -322,16 +292,19 @@ function resolveImportRouteMode(config: SubstrateConfig): ImportProcessingRouteM
   return config.importProcessingRouteMode ?? 'background';
 }
 
-function resolveLocalImportCandidate(config: SubstrateConfig): RoutingCandidate | undefined {
+function resolveLocalImportCandidate(
+  config: SubstrateConfig,
+  fallbackMaxTokens: number,
+): RoutingCandidate | undefined {
   const endpointUrl = config.importProcessingLocalEndpointUrl?.trim();
   const model = config.importProcessingLocalModel?.trim();
   if (!endpointUrl || !model) return undefined;
-  if (!Number.isFinite(config.extractionMaxTokens) || config.extractionMaxTokens <= 0) return undefined;
+  if (!Number.isFinite(fallbackMaxTokens) || fallbackMaxTokens <= 0) return undefined;
 
   return {
     model,
     provider: 'local_endpoint',
-    maxTokens: config.extractionMaxTokens,
+    maxTokens: fallbackMaxTokens,
     requestBaseUrl: endpointUrl,
     requestApiKeyEnv: 'IMPORT_PROCESSING_LOCAL_API_KEY',
     importRouteMode: 'local_endpoint',
@@ -340,10 +313,10 @@ function resolveLocalImportCandidate(config: SubstrateConfig): RoutingCandidate 
 
 function resolveImportRoutingCandidates(config: SubstrateConfig): RoutingCandidate[] {
   const routeMode = resolveImportRouteMode(config);
-  const backgroundCandidates = buildStandardCandidates(config, 'background');
+  const importCandidates = selectCandidatesForPurpose(config, 'import_processing');
 
   if (routeMode === 'openrouter_zdr') {
-    return backgroundCandidates
+    return importCandidates
       .filter(candidate => candidate.provider === 'openrouter')
       .map(candidate => ({
         ...candidate,
@@ -353,11 +326,12 @@ function resolveImportRoutingCandidates(config: SubstrateConfig): RoutingCandida
   }
 
   if (routeMode === 'local_endpoint') {
-    const localCandidate = resolveLocalImportCandidate(config);
+    const fallbackMaxTokens = importCandidates[0]?.maxTokens ?? config.extractionMaxTokens;
+    const localCandidate = resolveLocalImportCandidate(config, fallbackMaxTokens);
     return localCandidate ? [localCandidate] : [];
   }
 
-  return backgroundCandidates.map(candidate => ({
+  return importCandidates.map(candidate => ({
     ...candidate,
     importRouteMode: 'background' as const,
   }));

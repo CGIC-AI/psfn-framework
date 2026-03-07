@@ -95,6 +95,7 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
 };
 
 export const SETTINGS_OWNER_FILE_BY_FIELD = new Map<string, string>([
+  // Canonical model settings are owned by models.json (registry-backed).
   ['primaryModel', MODELS_FILE_NAME],
   ['primaryProvider', MODELS_FILE_NAME],
   ['primaryMaxTokens', MODELS_FILE_NAME],
@@ -203,6 +204,15 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
 ]);
 
 const DEPRECATED_SETTINGS_FIELDS = new Set<string>([
+  // Canonical model registry is models.json-backed; these are compatibility projections.
+  'primaryModel',
+  'primaryProvider',
+  'primaryMaxTokens',
+  'extractionModel',
+  'extractionProvider',
+  'extractionMaxTokens',
+  'modelRoleAssignments',
+  'modelRoster',
   'webFetchLocalCrawlerEnabled',
   'webFetchLocalCrawlerAllowHttp',
   'webFetchLocalCrawlerHostAllowlist',

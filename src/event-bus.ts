@@ -1,6 +1,7 @@
 import type {
   SubstrateMessage,
   AgentResponse,
+  ModelBudgetBlockedEvent,
   TurnUsage,
   InferredPostTurnAction,
   CorrelationMetadata,
@@ -307,6 +308,7 @@ export interface EventMap {
     minimumTier?: string;
   } & EventCorrelationFields;
   'schedule.heartbeat': { timestamp: number; taskCount: number };
+  'model.budget.blocked': ModelBudgetBlockedEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };
   'channel.voice.transcript.partial': {

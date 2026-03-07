@@ -9,6 +9,7 @@ export type ChatDebugEventName =
   | 'memory.extraction.start'
   | 'memory.extraction.end'
   | 'memory.retrieval'
+  | 'model.budget.blocked'
   | 'agent.error'
   | 'channel.voice.error'
   | 'voice.turn.error'
@@ -30,6 +31,7 @@ export const CHAT_DEBUG_EVENTS: ChatDebugEventName[] = [
   'memory.extraction.start',
   'memory.extraction.end',
   'memory.retrieval',
+  'model.budget.blocked',
   'agent.error',
   'channel.voice.error',
   'voice.turn.error',

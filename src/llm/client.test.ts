@@ -1,5 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SubstrateConfig } from '../types.js';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  CanonicalModelRegistry,
+  ModelRegistryEntry,
+  ModelSlot,
+  SubstrateConfig,
+} from '../types.js';
 import { FallbackRunner } from './fallback.js';
 import { createEligibilityGate, EligibilityDeniedError } from '../capabilities/eligibility.js';
 
@@ -21,10 +29,18 @@ vi.mock('@mariozechner/pi-ai', () => ({
   getEnvApiKey: mocks.getEnvApiKey,
 }));
 
-import { inferCallType, LLMClient, SensitiveImportRoutePolicyError } from './client.js';
+import {
+  inferCallType,
+  LegacyModelHintError,
+  LLMClient,
+  SensitiveImportRoutePolicyError,
+} from './client.js';
+import { MODEL_USAGE_LEDGER_FILE_NAME } from './model-budget.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
-  return {
+  const dataDir = mkdtempSync(join(tmpdir(), 'psfn-llm-client-test-'));
+  tempDirs.push(dataDir);
+  const config: SubstrateConfig = {
     primaryModel: 'z-ai/glm-5',
     primaryProvider: 'openrouter',
     extractionModel: 'deepseek/deepseek-v3.2',
@@ -34,8 +50,8 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
     discordToken: '',
     discordBotId: '',
     characterCardPath: '',
-    dataDir: './data',
-    databasePath: './data/test.db',
+    dataDir,
+    databasePath: join(dataDir, 'test.db'),
     extractionInterval: 5,
     maintenanceIntervalMs: 300_000,
     defaultContextWindow: 128_000,
@@ -56,6 +72,96 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
       },
     },
     ...overrides,
+  };
+
+  if (!config.modelRegistry) {
+    config.modelRegistry = buildRegistryFromConfig(config);
+  }
+
+  return config;
+}
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (!dir) continue;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistry {
+  const chat = config.modelRoster.chat ?? {
+    model: config.primaryModel,
+    provider: config.primaryProvider,
+    maxTokens: config.primaryMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+  const background = config.modelRoster.background ?? {
+    model: config.extractionModel,
+    provider: config.extractionProvider,
+    maxTokens: config.extractionMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+  const reasoning = config.modelRoster.reasoning ?? chat;
+  const longContext = config.modelRoster.longContext ?? config.modelRoster.context ?? chat;
+  const extraction: ModelSlot = {
+    model: config.extractionModel,
+    provider: config.extractionProvider,
+    maxTokens: config.extractionMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+
+  const createEntry = (
+    id: string,
+    rank: number,
+    slot: ModelSlot,
+    purposes: ModelRegistryEntry['purposes'],
+  ): ModelRegistryEntry => ({
+    id,
+    rank,
+    identity: {
+      provider: slot.provider,
+      model: slot.model,
+      source: { type: slot.provider },
+    },
+    purposes,
+    capabilities: {
+      maxOutputTokens: slot.maxTokens,
+      ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    },
+    tuning: {
+      maxOutputTokens: slot.maxTokens,
+      ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    },
+  });
+
+  return {
+    schemaVersion: 1,
+    models: [
+      createEntry('chat', 10, chat, [
+        { purpose: 'chat', primary: true },
+        { purpose: 'summary', primary: true },
+        { purpose: 'moa', primary: true },
+      ]),
+      createEntry('background', 20, background, [
+        { purpose: 'background', primary: true },
+      ]),
+      createEntry('extraction', 30, extraction, [
+        { purpose: 'extraction', primary: true },
+        { purpose: 'import_processing', primary: true },
+      ]),
+      createEntry('reasoning', 40, reasoning, [
+        { purpose: 'reasoning', primary: true },
+      ]),
+      createEntry('long-context', 50, longContext, [
+        { purpose: 'longContext', primary: true },
+      ]),
+      createEntry('vision', 60, chat, [
+        { purpose: 'vision', primary: true },
+      ]),
+    ],
   };
 }
 
@@ -231,6 +337,100 @@ describe('LLMClient completion model hints', () => {
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(77);
   });
+
+  it('fails closed when modelHint.model references a legacy slot key', async () => {
+    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'should not run' }],
+      model: 'z-ai/glm-5',
+      usage: { input: 5, output: 2 },
+      stopReason: 'stop',
+    });
+
+    await expect(client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'reasoning',
+      {
+        disableRetry: true,
+        modelHint: { model: 'chat' },
+      },
+    )).rejects.toBeInstanceOf(LegacyModelHintError);
+
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+});
+
+describe('LLMClient context routing', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: `${provider}:${modelId}`,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('routes legacy context completions to longContext primary before fallbacks', async () => {
+    const client = new LLMClient(makeConfig({
+      modelRoster: {
+        chat: {
+          model: 'chat-model',
+          provider: 'openrouter',
+          maxTokens: 4096,
+          contextWindow: 128_000,
+        },
+        background: {
+          model: 'background-model',
+          provider: 'openrouter',
+          maxTokens: 2048,
+          contextWindow: 64_000,
+        },
+        longContext: {
+          model: 'long-context-model',
+          provider: 'openrouter',
+          maxTokens: 8192,
+          contextWindow: 256_000,
+        },
+      },
+    }), 'http://litellm.test/v1');
+
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'context response' }],
+      model: 'long-context-model',
+      usage: { input: 14, output: 7 },
+      stopReason: 'stop',
+    });
+
+    const response = await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Use long context' }],
+      },
+      'context',
+      { disableRetry: true },
+    );
+
+    expect(response.content).toBe('context response');
+    const model = mocks.completeSimple.mock.calls[0]?.[0] as { id: string };
+    expect(model.id).toBe('long-context-model');
+  });
 });
 
 describe('LLMClient eligibility gate', () => {
@@ -357,5 +557,171 @@ describe('LLMClient correlation metadata', () => {
     });
 
     runSpy.mockRestore();
+  });
+});
+
+describe('LLMClient model budget gates and usage metering', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: `${provider}:${modelId}`,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('skips budget-blocked primary candidate and falls back to secondary chat candidate', async () => {
+    const config = makeConfig();
+    const baseRegistry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...baseRegistry,
+      budgetPolicy: {
+        enabled: true,
+        dailyUsdLimit: 0.001,
+        monthlyUsdLimit: 1,
+        currency: 'USD',
+      },
+      models: [
+        ...baseRegistry.models.map((entry) => (
+          entry.id === 'chat'
+            ? {
+              ...entry,
+              cost: { inputPer1MUsd: 100, outputPer1MUsd: 100, currency: 'USD' },
+            }
+            : entry
+        )),
+        {
+          id: 'chat-fallback',
+          rank: 500,
+          identity: {
+            provider: 'openrouter',
+            model: 'openai/gpt-4.1-mini',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'chat', primary: false },
+          ],
+          capabilities: {
+            maxOutputTokens: 2048,
+            contextWindow: 128_000,
+          },
+          tuning: {
+            maxOutputTokens: 2048,
+          },
+          cost: {
+            inputPer1MUsd: 0.01,
+            outputPer1MUsd: 0.01,
+            currency: 'USD',
+          },
+        },
+      ],
+    };
+    const blockedEvents: Array<Record<string, unknown>> = [];
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamOk() {
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 5, output: 3 },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-budget-1',
+        requestId: 'req-budget-1',
+        channelId: 'channel-budget-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+
+    expect(response.content).toBe('ok');
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    const selectedModel = mocks.streamSimple.mock.calls[0]?.[0] as { id: string };
+    expect(selectedModel.id).toBe('openai/gpt-4.1-mini');
+    expect(blockedEvents).toHaveLength(1);
+    expect(blockedEvents[0]).toMatchObject({
+      reason: 'daily_budget_exceeded',
+      purpose: 'chat',
+      provider: 'openrouter',
+      model: 'z-ai/glm-5',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      turnId: 'turn-budget-1',
+      requestId: 'req-budget-1',
+      channelId: 'channel-budget-1',
+      callType: 'chat',
+      originType: 'chat',
+      originStage: 'agent.turn.prompt',
+      budget: {
+        dailyLimitUsd: 0.001,
+        monthlyLimitUsd: 1,
+        dayKey: expect.any(String),
+        monthKey: expect.any(String),
+        dailySpentUsd: expect.any(Number),
+        monthlySpentUsd: expect.any(Number),
+      },
+      estimatedRequestCostUsd: expect.any(Number),
+    });
+    expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
+  });
+
+  it('persists usage ledger records after successful completion call', async () => {
+    const config = makeConfig();
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 13, output: 7 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+      { disableRetry: true },
+    );
+
+    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
+    const parsed = JSON.parse(raw) as { schemaVersion: number; records: Array<Record<string, unknown>> };
+    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.records[0]).toMatchObject({
+      provider: 'openrouter',
+      model: 'deepseek/deepseek-v3.2',
+      purpose: 'background',
+      service: 'background',
+      inputTokens: 13,
+      outputTokens: 7,
+    });
   });
 });

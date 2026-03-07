@@ -310,6 +310,131 @@ export interface ModelCatalogEntry {
 
 export type ModelRoleAssignments = Record<string, string>;
 
+export const CANONICAL_MODEL_PURPOSES = [
+  'chat',
+  'background',
+  'extraction',
+  'summary',
+  'reasoning',
+  'import_processing',
+  'longContext',
+  'vision',
+  'moa',
+] as const;
+
+export type CanonicalModelPurpose = typeof CANONICAL_MODEL_PURPOSES[number];
+
+export interface ModelRegistryPurposeTag {
+  purpose: CanonicalModelPurpose;
+  primary: boolean;
+}
+
+export interface ModelRegistrySourceMetadata {
+  type: string;
+  label?: string;
+  baseUrl?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ModelRegistryIdentityMetadata {
+  provider: string;
+  model: string;
+  source: ModelRegistrySourceMetadata;
+  family?: string;
+}
+
+export interface ModelRegistryCapabilityMetadata {
+  maxOutputTokens?: number;
+  contextWindow?: number;
+  supportsVision?: boolean;
+  supportsReasoning?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ModelRegistryTuningMetadata {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  frequencyPenalty?: number;
+  repetitionPenalty?: number;
+  maxOutputTokens?: number;
+  [key: string]: unknown;
+}
+
+export interface ModelRegistryCostMetadata {
+  inputPer1MUsd?: number;
+  outputPer1MUsd?: number;
+  currency?: string;
+  [key: string]: unknown;
+}
+
+export interface ModelRegistryBudgetPolicy {
+  enabled: boolean;
+  dailyUsdLimit: number;
+  monthlyUsdLimit: number;
+  currency?: 'USD';
+}
+
+export interface ModelRegistryEntry {
+  id: string;
+  rank: number;
+  identity: ModelRegistryIdentityMetadata;
+  purposes: ModelRegistryPurposeTag[];
+  capabilities?: ModelRegistryCapabilityMetadata;
+  tuning?: ModelRegistryTuningMetadata;
+  cost?: ModelRegistryCostMetadata;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CanonicalModelRegistry {
+  schemaVersion: 1;
+  models: ModelRegistryEntry[];
+  budgetPolicy?: ModelRegistryBudgetPolicy;
+}
+
+export interface ModelUsageLedgerRecord {
+  id: string;
+  timestampMs: number;
+  dayKey: string;
+  monthKey: string;
+  provider: string;
+  model: string;
+  slotKey?: string;
+  purpose: string;
+  service: string;
+  process: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+}
+
+export interface ModelBudgetWindowSnapshot {
+  dayKey: string;
+  monthKey: string;
+  dailySpentUsd: number;
+  dailyLimitUsd: number;
+  monthlySpentUsd: number;
+  monthlyLimitUsd: number;
+}
+
+export type ModelBudgetBlockReason =
+  | 'daily_budget_exceeded'
+  | 'monthly_budget_exceeded'
+  | 'missing_cost_metadata';
+
+export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
+  timestampMs: number;
+  reason: ModelBudgetBlockReason;
+  purpose: string;
+  provider: string;
+  model: string;
+  slotKey?: string;
+  service: string;
+  process: string;
+  estimatedRequestCostUsd: number;
+  budget: ModelBudgetWindowSnapshot;
+}
+
 export type ModelPurpose = 'chat' | 'background' | 'context' | 'reasoning' | 'longContext' | 'vision';
 export type CompletionPurpose = 'background' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
@@ -417,6 +542,7 @@ export interface SubstrateConfig {
   modelRoster: Partial<Record<ModelPurpose, ModelSlot>>;
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
+  modelRegistry?: CanonicalModelRegistry;
   responseStyleOverrides?: ResponseStyleOverrides;
   runtimeHooks?: RuntimeConfigHooks;
   promotedExtendedTools?: string[];
@@ -579,6 +705,56 @@ export function loadConfig(): SubstrateConfig {
   const modelRoleAssignments: ModelRoleAssignments = {
     ...DEFAULT_MODEL_ROLE_ASSIGNMENTS,
   };
+  const modelRegistry: CanonicalModelRegistry = {
+    schemaVersion: 1,
+    models: [
+      {
+        id: 'primary',
+        rank: 100,
+        identity: {
+          provider: primaryProvider,
+          model: primaryModel,
+          source: { type: 'openrouter' },
+        },
+        purposes: [
+          { purpose: 'chat', primary: true },
+          { purpose: 'summary', primary: true },
+          { purpose: 'reasoning', primary: true },
+          { purpose: 'longContext', primary: true },
+          { purpose: 'vision', primary: true },
+          { purpose: 'moa', primary: true },
+        ],
+        capabilities: {
+          maxOutputTokens: primaryMaxTokens,
+          contextWindow: defaultContextWindow,
+        },
+        tuning: {
+          maxOutputTokens: primaryMaxTokens,
+        },
+      },
+      {
+        id: 'extraction',
+        rank: 80,
+        identity: {
+          provider: extractionProvider,
+          model: extractionModel,
+          source: { type: 'openrouter' },
+        },
+        purposes: [
+          { purpose: 'background', primary: true },
+          { purpose: 'extraction', primary: true },
+          { purpose: 'import_processing', primary: true },
+        ],
+        capabilities: {
+          maxOutputTokens: extractionMaxTokens,
+          contextWindow: defaultContextWindow,
+        },
+        tuning: {
+          maxOutputTokens: extractionMaxTokens,
+        },
+      },
+    ],
+  };
   const responseStyleOverrides = parseResponseStyleOverridesEnv(process.env.RESPONSE_STYLE_OVERRIDES);
   const gatewayTlsCaPath = parseOptionalStringEnv(process.env.GATEWAY_TLS_CA_PATH);
   const gatewayTlsRejectUnauthorized = parseOptionalBooleanEnv(process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED);
@@ -669,6 +845,7 @@ export function loadConfig(): SubstrateConfig {
     profileSynthesisMinSourceMemories: DEFAULT_PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES,
     modelCatalog,
     modelRoleAssignments,
+    modelRegistry,
     modelRoster: {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },

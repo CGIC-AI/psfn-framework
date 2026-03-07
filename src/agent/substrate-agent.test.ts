@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
-import type { SubstrateConfig, SubstrateMessage, LLMContext, LLMResponse } from '../types.js';
+import type {
+  CanonicalModelRegistry,
+  LLMContext,
+  LLMResponse,
+  ModelRegistryEntry,
+  ModelSlot,
+  SubstrateConfig,
+  SubstrateMessage,
+} from '../types.js';
 import type { MemoryProvider, MemoryExtractor, LLMProvider } from './substrate-agent.js';
 import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../event-bus.js';
@@ -79,7 +87,7 @@ function mockAssistantErrorResponse(errorMessage: string): void {
 // ── Fixtures ──
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
-  return {
+  const config: SubstrateConfig = {
     primaryModel: 'deepseek/deepseek-v3.2',
     primaryProvider: 'openrouter',
     extractionModel: 'deepseek/deepseek-v3.2',
@@ -104,6 +112,87 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
       background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
     },
     ...overrides,
+  };
+
+  if (!config.modelRegistry) {
+    config.modelRegistry = buildRegistryFromConfig(config);
+  }
+
+  return config;
+}
+
+function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistry {
+  const chat = config.modelRoster.chat ?? {
+    model: config.primaryModel,
+    provider: config.primaryProvider,
+    maxTokens: config.primaryMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+  const background = config.modelRoster.background ?? {
+    model: config.extractionModel,
+    provider: config.extractionProvider,
+    maxTokens: config.extractionMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+  const reasoning = config.modelRoster.reasoning ?? chat;
+  const longContext = config.modelRoster.longContext ?? config.modelRoster.context ?? chat;
+  const vision = config.modelRoster.vision ?? chat;
+  const extraction: ModelSlot = {
+    model: config.extractionModel,
+    provider: config.extractionProvider,
+    maxTokens: config.extractionMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+
+  const createEntry = (
+    id: string,
+    rank: number,
+    slot: ModelSlot,
+    purposes: ModelRegistryEntry['purposes'],
+  ): ModelRegistryEntry => ({
+    id,
+    rank,
+    identity: {
+      provider: slot.provider,
+      model: slot.model,
+      source: { type: slot.provider },
+    },
+    purposes,
+    capabilities: {
+      maxOutputTokens: slot.maxTokens,
+      ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    },
+    tuning: {
+      maxOutputTokens: slot.maxTokens,
+      ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    },
+  });
+
+  return {
+    schemaVersion: 1,
+    models: [
+      createEntry('chat', 10, chat, [
+        { purpose: 'chat', primary: true },
+        { purpose: 'summary', primary: true },
+        { purpose: 'moa', primary: true },
+      ]),
+      createEntry('background', 20, background, [
+        { purpose: 'background', primary: true },
+      ]),
+      createEntry('extraction', 30, extraction, [
+        { purpose: 'extraction', primary: true },
+        { purpose: 'import_processing', primary: true },
+      ]),
+      createEntry('reasoning', 40, reasoning, [
+        { purpose: 'reasoning', primary: true },
+      ]),
+      createEntry('long-context', 50, longContext, [
+        { purpose: 'longContext', primary: true },
+      ]),
+      createEntry('vision', 60, vision, [
+        { purpose: 'vision', primary: true },
+      ]),
+    ],
   };
 }
 
@@ -386,6 +475,7 @@ describe('SubstrateAgent construction', () => {
     config.primaryModel = 'moonshotai/kimi-k2.5';
     config.primaryProvider = 'openrouter';
     config.primaryMaxTokens = 4096;
+    config.modelRegistry = buildRegistryFromConfig(config);
 
     const callCountBeforeRefresh = setModelSpy.mock.calls.length;
     config.runtimeHooks?.refreshModels?.();
@@ -4633,6 +4723,7 @@ describe('SubstrateAgent.handleMessage', () => {
     config.primaryModel = 'moonshotai/kimi-k2.5';
     config.primaryProvider = 'openrouter';
     config.primaryMaxTokens = 4096;
+    config.modelRegistry = buildRegistryFromConfig(config);
 
     const response = await agent.handleMessage(makeMessage({ id: 'msg-2', content: 'turn two' }));
     expect(response.metadata.model).toBe('openrouter/moonshotai/kimi-k2.5');

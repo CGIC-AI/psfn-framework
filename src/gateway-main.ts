@@ -549,7 +549,19 @@ async function main(): Promise<void> {
     () => capabilityRuntime,
     (decision) => emitEligibilityDecision(eventBus, decision),
   );
-  const llmClient = new LLMClient(config, { eligibilityGate });
+  const llmClient = new LLMClient(config, {
+    eligibilityGate,
+    onBudgetBlocked: (event) => {
+      eventBus.emit('model.budget.blocked', event).catch((error) => {
+        log.error('Failed to emit model budget blocked telemetry', {
+          error: error instanceof Error ? error.message : String(error),
+          provider: event.provider,
+          model: event.model,
+          reason: event.reason,
+        });
+      });
+    },
+  });
 
   const gatewayChannelRegistry = new Map<string, ChannelAdapter>();
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([

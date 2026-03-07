@@ -26,6 +26,7 @@ import {
   classifyChannel,
   getAllowedSensitivities,
   evaluateMemoryPolicy,
+  type DisclosureBoundaryDirective,
   type ChannelMeta,
 } from '../trust/policy.js';
 import {
@@ -70,6 +71,20 @@ const SCORE_GUARANTEE_MIN_K = 3;
  * so naturally-scored memories always rank higher.
  */
 const SCORE_GUARANTEE_FLOOR = 0.01;
+const WITHHOLD_BOUNDARY_TAGS = new Set([
+  'withhold',
+  'withheld',
+  'boundary_withhold',
+  'do_not_disclose',
+  'no_disclose',
+  'private_boundary',
+]);
+const CONSENT_REQUIRED_BOUNDARY_TAGS = new Set([
+  'consent_required',
+  'requires_consent',
+  'disclosure_requires_consent',
+  'gate_consent',
+]);
 
 interface ScoredMemory {
   memory: PurrMemory & { similarity: number };
@@ -91,7 +106,7 @@ interface RetrievalDecisionDiagnostics {
   rejectedByContactScope: number;
   rejectedBySensitivity: number;
   rejectedByPolicy: number;
-  rejectedByPolicyReason: Record<string, number>;
+  rejectedByPolicyReasonTag: Record<string, number>;
   rejectedByScore: number;
   selectedCount: number;
   topSelected: Array<{
@@ -132,6 +147,7 @@ interface RetrievalTelemetry {
   contactScopeRejectedCount?: number;
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
+  policyRejectedReasonTags?: Record<string, number>;
   scoreRejectedCount?: number;
   scoreGuaranteedCount?: number;
   evidenceSupportAverage?: number;
@@ -439,6 +455,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelVisibility,
         emptySelectedIds,
         operatorApproval,
+        channelMeta,
         turnSnapshot?.contactEmotionalMemories,
       )
       : [];
@@ -516,7 +533,7 @@ export class MemoryRetriever implements MemoryProvider {
         rejectedByContactScope: 0,
         rejectedBySensitivity: 0,
         rejectedByPolicy: 0,
-        rejectedByPolicyReason: {},
+        rejectedByPolicyReasonTag: {},
         rejectedByScore: 0,
         selectedCount: 0,
         topSelected: [],
@@ -542,12 +559,14 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          disclosureBoundary: resolveDisclosureBoundaryDirective(memory, channelMeta),
           operatorApproval,
         });
         if (policy.decision !== 'allow') {
           diagnostics.rejectedByPolicy++;
-          const reasonKey = `${policy.layer}:${policy.reason}`;
-          diagnostics.rejectedByPolicyReason[reasonKey] = (diagnostics.rejectedByPolicyReason[reasonKey] ?? 0) + 1;
+          diagnostics.rejectedByPolicyReasonTag[policy.reasonTag] = (
+            diagnostics.rejectedByPolicyReasonTag[policy.reasonTag] ?? 0
+          ) + 1;
           continue;
         }
 
@@ -558,6 +577,7 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.contactScopeRejectedCount = diagnostics.rejectedByContactScope;
       telemetry.sensitivityRejectedCount = diagnostics.rejectedBySensitivity;
       telemetry.policyRejectedCount = diagnostics.rejectedByPolicy;
+      telemetry.policyRejectedReasonTags = diagnostics.rejectedByPolicyReasonTag;
 
       if (policyAllowed.length === 0) {
         telemetry.reason = 'trust_filtered';
@@ -570,6 +590,7 @@ export class MemoryRetriever implements MemoryProvider {
           rejectedByContactScope: diagnostics.rejectedByContactScope,
           rejectedBySensitivity: diagnostics.rejectedBySensitivity,
           rejectedByPolicy: diagnostics.rejectedByPolicy,
+          rejectedByPolicyReasonTags: diagnostics.rejectedByPolicyReasonTag,
         });
         return renderPromptBlock(profile, [], {
           emotionalSnapshot,
@@ -710,6 +731,7 @@ export class MemoryRetriever implements MemoryProvider {
         rejectedByContactScope: diagnostics.rejectedByContactScope,
         rejectedBySensitivity: diagnostics.rejectedBySensitivity,
         rejectedByPolicy: diagnostics.rejectedByPolicy,
+        rejectedByPolicyReasonTags: diagnostics.rejectedByPolicyReasonTag,
         rejectedByScore: diagnostics.rejectedByScore,
         scoreGuaranteedCount,
         evidenceSupportAverage: telemetry.evidenceSupportAverage,
@@ -736,6 +758,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           selectedIds,
           operatorApproval,
+          channelMeta,
           turnSnapshot?.contactEmotionalMemories,
         )
         : [];
@@ -833,6 +856,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          disclosureBoundary: resolveDisclosureBoundaryDirective(memory, channelMeta),
           operatorApproval,
         });
         return policy.decision === 'allow';
@@ -927,6 +951,7 @@ export class MemoryRetriever implements MemoryProvider {
     channelVisibility: ChannelVisibility,
     selectedIds: ReadonlySet<string>,
     operatorApproval = false,
+    channelMeta?: ChannelMeta,
     sourceOverride?: readonly PurrMemory[],
   ): PurrMemory[] {
     const source = sourceOverride?.map(cloneMemory) ?? this.collectContactEmotionalMemories(canonicalContactId);
@@ -945,6 +970,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          disclosureBoundary: resolveDisclosureBoundaryDirective(memory, channelMeta),
           operatorApproval,
         });
         return policy.decision === 'allow';
@@ -1136,6 +1162,37 @@ function countSelectedMemoryTypes(scored: ScoredMemory[]): Record<string, number
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeBoundaryTag(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+function hasBoundaryDirectiveTag(
+  tags: readonly string[],
+  candidates: ReadonlySet<string>,
+): boolean {
+  for (const rawTag of tags) {
+    const normalized = normalizeBoundaryTag(rawTag);
+    if (normalized.length === 0) continue;
+    if (candidates.has(normalized)) return true;
+  }
+  return false;
+}
+
+function resolveDisclosureBoundaryDirective(
+  memory: Pick<PurrMemory, 'tags'>,
+  channelMeta?: ChannelMeta,
+): DisclosureBoundaryDirective | undefined {
+  const withhold = hasBoundaryDirectiveTag(memory.tags, WITHHOLD_BOUNDARY_TAGS);
+  const consentRequired = hasBoundaryDirectiveTag(memory.tags, CONSENT_REQUIRED_BOUNDARY_TAGS);
+  if (!withhold && !consentRequired) return undefined;
+
+  return {
+    withhold,
+    consentRequired,
+    consentGranted: channelMeta?.disclosureConsentGranted === true,
+  };
 }
 
 function collectSelectedProvenanceRefs(

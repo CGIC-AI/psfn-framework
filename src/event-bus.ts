@@ -236,6 +236,7 @@ export interface EventMap {
     policyAllowedCount?: number;
     sensitivityRejectedCount?: number;
     policyRejectedCount?: number;
+    policyRejectedReasonTags?: Record<string, number>;
     scoreRejectedCount?: number;
     retrievalLimit?: number;
     retrievalBudgetPct?: number;

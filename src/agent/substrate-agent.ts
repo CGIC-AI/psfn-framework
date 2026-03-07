@@ -2212,6 +2212,9 @@ export class SubstrateAgent {
           ? { sensitivityRejectedCount: telemetry.sensitivityRejectedCount }
           : {}),
         ...(telemetry.policyRejectedCount !== undefined ? { policyRejectedCount: telemetry.policyRejectedCount } : {}),
+        ...(telemetry.policyRejectedReasonTags
+          ? { policyRejectedReasonTags: { ...telemetry.policyRejectedReasonTags } }
+          : {}),
         ...(telemetry.scoreRejectedCount !== undefined ? { scoreRejectedCount: telemetry.scoreRejectedCount } : {}),
         ...(telemetry.budgetCappedCount !== undefined ? { budgetCappedCount: telemetry.budgetCappedCount } : {}),
         ...(telemetry.selectedTypes ? { selectedTypes: { ...telemetry.selectedTypes } } : {}),

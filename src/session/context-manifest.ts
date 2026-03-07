@@ -18,6 +18,7 @@ export interface ContextManifestMemorySeed {
   retrievalLimitMode?: 'budget' | 'hard_limit';
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
+  policyRejectedReasonTags?: Record<string, number>;
   scoreRejectedCount?: number;
   budgetCappedCount?: number;
   selectedTypes?: Record<string, number>;
@@ -60,6 +61,7 @@ export interface ContextManifestMemorySummary {
   excluded: {
     sensitivityRejectedCount: number;
     policyRejectedCount: number;
+    policyRejectedReasonTags?: Record<string, number>;
     scoreRejectedCount: number;
     budgetCappedCount: number;
   };

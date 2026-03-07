@@ -83,6 +83,42 @@ describe('evaluateMemoryPolicy', () => {
 
   // ── Layer 2: Consent flags ──
 
+  it('denies recall when explicit withhold boundary is set', () => {
+    const result = evaluateMemoryPolicy(ctx({
+      trustLevel: 'primary',
+      channelVisibility: 'private',
+      memorySensitivity: 'public',
+      disclosureBoundary: { withhold: true },
+    }));
+    expect(result.decision).toBe('deny');
+    expect(result.layer).toBe('boundary');
+    expect(result.reasonTag).toBe('boundary.withhold');
+  });
+
+  it('denies recall when explicit consent boundary is unmet', () => {
+    const result = evaluateMemoryPolicy(ctx({
+      trustLevel: 'primary',
+      channelVisibility: 'private',
+      memorySensitivity: 'public',
+      disclosureBoundary: { consentRequired: true, consentGranted: false },
+    }));
+    expect(result.decision).toBe('deny');
+    expect(result.layer).toBe('boundary');
+    expect(result.reasonTag).toBe('boundary.consent_required');
+  });
+
+  it('allows recall when explicit consent boundary is met', () => {
+    const result = evaluateMemoryPolicy(ctx({
+      trustLevel: 'primary',
+      channelVisibility: 'private',
+      memorySensitivity: 'public',
+      disclosureBoundary: { consentRequired: true, consentGranted: true },
+    }));
+    expect(result.decision).toBe('allow');
+    expect(result.layer).toBe('default');
+    expect(result.reasonTag).toBe('default.within_bounds');
+  });
+
   it('denies recall when consent flags deny it', () => {
     const result = evaluateMemoryPolicy(ctx({
       trustLevel: 'primary',

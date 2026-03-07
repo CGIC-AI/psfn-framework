@@ -31,7 +31,8 @@ export function createContactSetTrustTool(contactStore: ContactStore): AgentTool
     name: 'contact_set_trust',
     description:
       'Set or suggest a trust level for a contact. Behavior-driven drift suggestions ' +
-      'can only auto-apply low-tier changes after explicit confirmation.',
+      'can only auto-apply low-tier changes after explicit confirmation. ' +
+      'Trust level changes do not bypass explicit disclosure boundaries.',
     label: 'contact_set_trust',
     parameters: Type.Object({
       contactId: Type.String({ description: 'The contact ID' }),
@@ -126,7 +127,7 @@ export function createContactSetTrustTool(contactStore: ContactStore): AgentTool
         if (!success) {
           if (isHighTierTrustLevel(trustLevel)) {
             return textResultWithError(
-              `High-tier trust updates for ${contactId} require manual admin approval`,
+              `High-tier trust updates for ${contactId} require manual admin approval and do not bypass disclosure boundaries`,
               true,
             );
           }
@@ -135,7 +136,9 @@ export function createContactSetTrustTool(contactStore: ContactStore): AgentTool
             true,
           );
         }
-        return textResult(`Trust level for ${contactId} set to ${trustLevel}`);
+        return textResult(
+          `Trust level for ${contactId} set to ${trustLevel}. Disclosure boundary and consent gates remain enforced.`,
+        );
       } catch (error) {
         return textResultWithError(`contact_set_trust failed: ${errorMessage(error)}`, true);
       }

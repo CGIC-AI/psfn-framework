@@ -4,10 +4,11 @@
 //
 // Precedence (highest to lowest):
 //   1. Operator explicit approval (admin override)
-//   2. Consent flags gate (per-memory denial trumps all)
-//   3. Trust ceiling gate (hard structural filter by trust level)
-//   4. Visibility gate (channel-level restriction)
-//   5. Default: allow
+//   2. Disclosure boundary gate (explicit withhold / consent-required)
+//   3. Consent flags gate (per-memory denial)
+//   4. Trust ceiling gate (hard structural filter by trust level)
+//   5. Visibility gate (channel-level restriction)
+//   6. Default: allow
 
 import type {
   TrustLevel,
@@ -24,6 +25,7 @@ import { getRuntimeTrustPolicy } from './runtime-policy.js';
 export interface ChannelMeta {
   isDirectMessage?: boolean;
   broadcastApprovalToken?: string;
+  disclosureConsentGranted?: boolean;
 }
 
 const RESPONSE_STYLE_BY_VISIBILITY: Record<ChannelVisibility, ResponseStyle> = {
@@ -36,20 +38,41 @@ const RESPONSE_STYLE_BY_VISIBILITY: Record<ChannelVisibility, ResponseStyle> = {
 // ── Policy evaluation ──
 
 export type PolicyDecision = 'allow' | 'deny' | 'sanitize';
+export type PolicyReasonTag =
+  | 'operator.approval_override'
+  | 'boundary.withhold'
+  | 'boundary.consent_required'
+  | 'consent.allow_recall_denied'
+  | 'trust.ceiling_exceeded'
+  | 'visibility.channel_restricted'
+  | 'default.within_bounds';
+
+export interface DisclosureBoundaryDirective {
+  /** Explicit companion-owned withhold gate for this memory. */
+  withhold?: boolean;
+  /**
+   * Requires explicit per-turn consent before disclosure.
+   * Fail closed when consent is not explicitly granted.
+   */
+  consentRequired?: boolean;
+  consentGranted?: boolean;
+}
 
 export interface PolicyContext {
   trustLevel: TrustLevel;
   channelVisibility: ChannelVisibility;
   memorySensitivity: SensitivityLevel;
   consentFlags?: ConsentFlags;
+  disclosureBoundary?: DisclosureBoundaryDirective;
   operatorApproval?: boolean;
 }
 
 export interface PolicyResult {
   decision: PolicyDecision;
   reason: string;
+  reasonTag: PolicyReasonTag;
   /** Which precedence layer determined the outcome */
-  layer: 'operator' | 'consent' | 'trust' | 'visibility' | 'default';
+  layer: 'operator' | 'boundary' | 'consent' | 'trust' | 'visibility' | 'default';
 }
 
 export interface TrustDriftBehaviorSignals {
@@ -164,36 +187,71 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
 
   // Layer 1: Operator explicit approval overrides all restrictions
   if (ctx.operatorApproval === true) {
-    return { decision: 'allow', reason: 'Operator approval override', layer: 'operator' };
+    return {
+      decision: 'allow',
+      reason: 'Operator approval override',
+      reasonTag: 'operator.approval_override',
+      layer: 'operator',
+    };
   }
 
-  // Layer 2: Consent flags — explicit denial is absolute
+  // Layer 2: Explicit disclosure boundaries — withhold / consent-required
+  if (ctx.disclosureBoundary?.withhold === true) {
+    return {
+      decision: 'deny',
+      reason: 'Memory withheld by explicit disclosure boundary',
+      reasonTag: 'boundary.withhold',
+      layer: 'boundary',
+    };
+  }
+  if (ctx.disclosureBoundary?.consentRequired === true && ctx.disclosureBoundary.consentGranted !== true) {
+    return {
+      decision: 'deny',
+      reason: 'Memory disclosure requires explicit consent',
+      reasonTag: 'boundary.consent_required',
+      layer: 'boundary',
+    };
+  }
+
+  // Layer 3: Consent flags — explicit denial is absolute
   if (ctx.consentFlags?.allowRecall === false) {
-    return { decision: 'deny', reason: 'Memory recall denied by consent flags', layer: 'consent' };
+    return {
+      decision: 'deny',
+      reason: 'Memory recall denied by consent flags',
+      reasonTag: 'consent.allow_recall_denied',
+      layer: 'consent',
+    };
   }
 
-  // Layer 3: Trust ceiling — hard structural filter
+  // Layer 4: Trust ceiling — hard structural filter
   const allowed = trustPolicy.trustCeiling[ctx.trustLevel];
   if (!allowed.includes(ctx.memorySensitivity)) {
     return {
       decision: 'deny',
       reason: `Trust level '${ctx.trustLevel}' cannot access '${ctx.memorySensitivity}' memories`,
+      reasonTag: 'trust.ceiling_exceeded',
       layer: 'trust',
     };
   }
 
-  // Layer 4: Visibility gate — channel type imposes additional restrictions
+  // Layer 5: Visibility gate — channel type imposes additional restrictions
   const allowedByVisibility = trustPolicy.visibilityAllowed[ctx.channelVisibility];
   if (!allowedByVisibility.includes(ctx.memorySensitivity)) {
     return {
       decision: 'deny',
       reason: `${ctx.channelVisibility} channels restrict '${ctx.memorySensitivity}' memory access`,
+      reasonTag: 'visibility.channel_restricted',
       layer: 'visibility',
     };
   }
 
-  // Layer 5: Default — within bounds
-  return { decision: 'allow', reason: 'Within trust and visibility bounds', layer: 'default' };
+  // Layer 6: Default — within bounds
+  return {
+    decision: 'allow',
+    reason: 'Within trust and visibility bounds',
+    reasonTag: 'default.within_bounds',
+    layer: 'default',
+  };
 }
 
 // ── Channel classification ──

@@ -61,6 +61,11 @@ import {
   resolveModel,
   resolveModelSelection,
 } from './stream-adapter.js';
+import {
+  formatSignedDecimal,
+  inferImageMimeTypeFromAttachmentCandidate,
+  inferRuntimeModeFromProvider,
+} from './substrate-agent-helpers.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
@@ -331,20 +336,6 @@ const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
   '.discordapp.com',
   '.discordapp.net',
 ];
-const VISION_ATTACHMENT_EXTENSION_TO_MIME: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-  '.bmp': 'image/bmp',
-  '.svg': 'image/svg+xml',
-  '.heic': 'image/heic',
-  '.heif': 'image/heif',
-  '.tif': 'image/tiff',
-  '.tiff': 'image/tiff',
-};
-const VISION_ATTACHMENT_FORMAT_QUERY_KEYS = ['format', 'fm'];
 const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
   autoload: 1,
   extended_loaded: 2,
@@ -369,10 +360,6 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'prompt_layer_get',
   'identity_diff',
 ]);
-
-function formatSignedDecimal(value: number): string {
-  return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
-}
 
 interface ActiveToolResolution {
   tools: AgentTool<any>[];
@@ -445,28 +432,6 @@ interface BackgroundContinuationTaskRecord {
   hasDeliverableContent: boolean;
   notifyUser: boolean;
   notificationReason: BackgroundCompletionNotificationReason;
-}
-
-interface GatewayRuntimeInferenceCandidate {
-  discordSend?: (channelId: string, content: string) => Promise<void>;
-  fsRead?: (path: string) => Promise<string>;
-  webFetch?: (
-    url: string,
-    prompt?: string,
-    lane?: 'default' | 'local_crawler',
-  ) => Promise<string>;
-}
-
-function inferRuntimeModeFromProvider(provider: LLMProvider): RuntimeMode {
-  const candidate = provider as unknown as GatewayRuntimeInferenceCandidate;
-  if (
-    typeof candidate.discordSend === 'function'
-    || typeof candidate.fsRead === 'function'
-    || typeof candidate.webFetch === 'function'
-  ) {
-    return 'gateway';
-  }
-  return 'single';
 }
 
 // ── SubstrateAgent ──
@@ -4933,41 +4898,4 @@ export class SubstrateAgent {
       };
     }
   }
-}
-
-function inferImageMimeTypeFromAttachmentCandidate(candidate: string | null | undefined): string | null {
-  if (!candidate) return null;
-  const trimmed = candidate.trim();
-  if (!trimmed) return null;
-
-  let pathCandidate = trimmed;
-  try {
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      const parsed = new URL(trimmed);
-      const fromQuery = inferImageMimeTypeFromQueryParams(parsed.searchParams);
-      if (fromQuery) return fromQuery;
-      pathCandidate = parsed.pathname;
-    }
-  } catch {
-    pathCandidate = trimmed;
-  }
-
-  const lowerPath = pathCandidate.toLowerCase();
-  for (const [extension, mimeType] of Object.entries(VISION_ATTACHMENT_EXTENSION_TO_MIME)) {
-    if (lowerPath.endsWith(extension)) {
-      return mimeType;
-    }
-  }
-  return null;
-}
-
-function inferImageMimeTypeFromQueryParams(searchParams: URLSearchParams): string | null {
-  for (const key of VISION_ATTACHMENT_FORMAT_QUERY_KEYS) {
-    const raw = searchParams.get(key)?.trim().toLowerCase();
-    if (!raw) continue;
-    const normalized = raw.startsWith('.') ? raw : `.${raw}`;
-    const mimeType = VISION_ATTACHMENT_EXTENSION_TO_MIME[normalized];
-    if (mimeType) return mimeType;
-  }
-  return null;
 }

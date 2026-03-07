@@ -42,13 +42,24 @@ import { loadOrSeedJson, writeJsonAtomic } from './config/load-or-seed.js';
 import { isRecord } from './utils/types.js';
 import { isCapabilityTier } from './capabilities/tiers.js';
 import {
-  isStreamingSttProvider,
-  resolveDefaultStreamingSttProvider,
-} from './voice/connectors/stt/index.js';
-import {
-  isStreamingTtsProvider,
-  resolveDefaultStreamingTtsProvider,
-} from './voice/connectors/tts/index.js';
+  normalizeSttProvider,
+  normalizeTtsProvider,
+  resolveRuntimeSttProvider,
+  resolveRuntimeTtsProvider,
+  toBoolean,
+  toConfiguredSttProvider,
+  toConfiguredTtsProvider,
+  toImportProcessingRouteMode,
+  toIntegerInRange,
+  toNonEmptyString,
+  toNumberInRange,
+  toPositiveInteger,
+  toPositiveNumber,
+  toSessionRestartBehavior,
+  toStrictIntegerInRange,
+  toStrictNumberInRange,
+  toStringList,
+} from './settings/coercion.js';
 
 export { createDefaultCompositionalPolicyConfig } from './compositional/policy.js';
 
@@ -60,15 +71,6 @@ const SETTINGS_SEED_FILE = 'settings.seed.json';
 const PRIMARY_MODEL_SLOT_KEY = 'primary';
 const EXTRACTION_MODEL_SLOT_KEY = 'extraction';
 const KNOWN_MODEL_PURPOSES: ModelPurpose[] = ['chat', 'background', 'context', 'reasoning', 'longContext', 'vision'];
-const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
-  'background',
-  'openrouter_zdr',
-  'local_endpoint',
-]);
-const SESSION_RESTART_BEHAVIOR_VALUES = new Set<SessionRestartBehavior>([
-  'reuse_latest_session',
-  'new_session',
-]);
 export const MOOD_CONGRUENCE_WEIGHT_RANGE = {
   min: 0,
   max: 1,
@@ -325,144 +327,8 @@ export type RuntimeSettingValue =
   | CompositionalPolicyConfig;
 export type RuntimeSettingsSnapshot = Record<RuntimeSettingKey, RuntimeSettingValue>;
 
-function toPositiveInteger(value: unknown): number | undefined {
-  if (typeof value === 'number') {
-    return Number.isInteger(value) && value > 0 ? value : undefined;
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-  }
-  return undefined;
-}
-
-function toPositiveNumber(value: unknown): number | undefined {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && value > 0 ? value : undefined;
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    const parsed = Number.parseFloat(trimmed);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-  }
-  return undefined;
-}
-
-function toIntegerInRange(value: unknown, min: number, max: number): number | undefined {
-  let parsed: number | undefined;
-  if (typeof value === 'number') {
-    parsed = Number.isInteger(value) ? value : undefined;
-  } else if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    const candidate = Number.parseInt(trimmed, 10);
-    parsed = Number.isInteger(candidate) ? candidate : undefined;
-  }
-
-  if (parsed === undefined) return undefined;
-  return parsed >= min && parsed <= max ? parsed : undefined;
-}
-
-function toNumberInRange(value: unknown, min: number, max: number): number | undefined {
-  let parsed: number | undefined;
-  if (typeof value === 'number') {
-    parsed = Number.isFinite(value) ? value : undefined;
-  } else if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    const candidate = Number.parseFloat(trimmed);
-    parsed = Number.isFinite(candidate) ? candidate : undefined;
-  }
-
-  if (parsed === undefined) return undefined;
-  return parsed >= min && parsed <= max ? parsed : undefined;
-}
-
-function toNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function toStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const cleaned = [...new Set(value
-    .map(entry => typeof entry === 'string' ? entry.trim() : '')
-    .filter(Boolean))];
-  return cleaned;
-}
-
 function toPromotedToolList(value: unknown): string[] {
   return (toStringList(value) ?? []).slice(0, PROMOTED_EXTENDED_TOOL_SLOTS_MAX);
-}
-
-function toBoolean(value: unknown): boolean | undefined {
-  if (typeof value === 'boolean') return value;
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
-  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
-  return undefined;
-}
-
-type RuntimeVoiceTtsProvider = Exclude<SubstrateConfig['ttsProvider'], undefined>;
-type RuntimeVoiceSttProvider = Exclude<SubstrateConfig['sttProvider'], undefined>;
-
-function normalizeTtsProvider(value: unknown): RuntimeVoiceTtsProvider | undefined {
-  if (typeof value !== 'string') return undefined;
-  return value.trim().toLowerCase() as RuntimeVoiceTtsProvider;
-}
-
-function toConfiguredTtsProvider(value: unknown): RuntimeVoiceTtsProvider | undefined {
-  const normalized = normalizeTtsProvider(value);
-  if (!normalized) return undefined;
-  if (normalized === 'disabled' || isStreamingTtsProvider(normalized)) {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeSttProvider(value: unknown): RuntimeVoiceSttProvider | undefined {
-  if (typeof value !== 'string') return undefined;
-  return value.trim().toLowerCase() as RuntimeVoiceSttProvider;
-}
-
-function toConfiguredSttProvider(value: unknown): RuntimeVoiceSttProvider | undefined {
-  const normalized = normalizeSttProvider(value);
-  if (!normalized) return undefined;
-  if (normalized === 'disabled' || isStreamingSttProvider(normalized)) {
-    return normalized;
-  }
-  return undefined;
-}
-
-function resolveRuntimeTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
-  const configured = normalizeTtsProvider(config.ttsProvider);
-  if (configured !== undefined) return configured;
-  return resolveDefaultStreamingTtsProvider(config) ?? 'disabled';
-}
-
-function resolveRuntimeSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
-  const configured = normalizeSttProvider(config.sttProvider);
-  if (configured !== undefined) return configured;
-  return resolveDefaultStreamingSttProvider(config) ?? 'disabled';
-}
-
-function toImportProcessingRouteMode(value: unknown): ImportProcessingRouteMode | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim().toLowerCase();
-  if (!IMPORT_PROCESSING_ROUTE_MODE_VALUES.has(trimmed as ImportProcessingRouteMode)) return undefined;
-  return trimmed as ImportProcessingRouteMode;
-}
-
-function toSessionRestartBehavior(value: unknown): SessionRestartBehavior | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim().toLowerCase();
-  if (!SESSION_RESTART_BEHAVIOR_VALUES.has(trimmed as SessionRestartBehavior)) return undefined;
-  return trimmed as SessionRestartBehavior;
 }
 
 const CANONICAL_MODEL_PURPOSE_SET = new Set<CanonicalModelPurpose>(CANONICAL_MODEL_PURPOSES);
@@ -505,41 +371,6 @@ const MODEL_REGISTRY_THINKING_BUDGET_TOKENS_ALIASES = [
 
 function hasLegacyModelSettingsPayload(settings: EditableSettings): boolean {
   return LEGACY_MODEL_SETTINGS_KEYS.some((key) => settings[key] !== undefined);
-}
-
-function toStrictFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  if (!/^[+\-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+\-]?\d+)?$/.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number.parseFloat(trimmed);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function toStrictNumberInRange(value: unknown, min: number, max: number): number | undefined {
-  const parsed = toStrictFiniteNumber(value);
-  if (parsed === undefined) return undefined;
-  return parsed >= min && parsed <= max ? parsed : undefined;
-}
-
-function toStrictIntegerInRange(value: unknown, min: number, max: number): number | undefined {
-  let parsed: number | undefined;
-  if (typeof value === 'number') {
-    parsed = Number.isInteger(value) ? value : undefined;
-  } else if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    if (!/^[+\-]?\d+$/.test(trimmed)) return undefined;
-    parsed = Number.parseInt(trimmed, 10);
-  }
-
-  if (parsed === undefined) return undefined;
-  return parsed >= min && parsed <= max ? parsed : undefined;
 }
 
 function resolveAliasedValue(

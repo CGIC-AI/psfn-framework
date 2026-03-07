@@ -1162,6 +1162,7 @@ function computeRetrievalScore(
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
     : 1;
+  const accessReinforcementBoost = deriveAccessReinforcement(memory);
   const rawBaseScore = (
     memory.similarity *
     recencyBoost *
@@ -1170,7 +1171,8 @@ function computeRetrievalScore(
     memory.salience *
     moodCongruenceFactor *
     typePriorityBoost *
-    boundarySimilarityBoost
+    boundarySimilarityBoost *
+    accessReinforcementBoost
   );
   const evidence = deriveEvidenceSupport(memory);
   const contradictionPenaltyMultiplier = deriveContradictionPenalty(memory);
@@ -1254,6 +1256,27 @@ function deriveEvidenceSupport(
     1,
   );
   return { support, sourceCount };
+}
+
+function deriveAccessReinforcement(
+  memory: Pick<PurrMemory, 'lastAccessed' | 'extractedAt' | 'accessCount'>,
+): number {
+  const effectiveLastAccessed = Number.isFinite(memory.lastAccessed)
+    ? memory.lastAccessed
+    : memory.extractedAt;
+  const ageMs = Math.max(0, Date.now() - effectiveLastAccessed);
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  const freshnessDays = Math.max(1, MEMORY_CONFIG.retrievalAccessFreshnessDays);
+  const countCap = Math.max(1, MEMORY_CONFIG.retrievalAccessCountCap);
+  const freshness = clamp(1 / (1 + ageDays / freshnessDays), 0, 1);
+  const reinforcement = clamp(memory.accessCount / countCap, 0, 1);
+  const combinedSignal = clamp(
+    (freshness * MEMORY_CONFIG.retrievalAccessFreshnessWeight)
+    + (reinforcement * (1 - MEMORY_CONFIG.retrievalAccessFreshnessWeight)),
+    0,
+    1,
+  );
+  return 1 + (combinedSignal * MEMORY_CONFIG.retrievalAccessReinforcementMaxBoost);
 }
 
 function deriveContradictionPenalty(

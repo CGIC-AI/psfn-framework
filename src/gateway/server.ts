@@ -691,7 +691,8 @@ function summarizeFramePreview(message: unknown): string {
     return truncateFramePreview(message.trim());
   }
   try {
-    return truncateFramePreview(JSON.stringify(message) ?? String(message));
+    const serialized = JSON.stringify(message);
+    return truncateFramePreview(typeof serialized === 'string' ? serialized : String(message));
   } catch {
     return truncateFramePreview(String(message));
   }

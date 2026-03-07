@@ -27,6 +27,8 @@ function clearRuntimePathEnv(): void {
   delete process.env.PSFN_LOGS_DIR;
   delete process.env.PSFN_TEMP_DIR;
   delete process.env.BACKUP_ROOT_DIR;
+  delete process.env.DISCORD_TOKEN;
+  delete process.env.DISCORD_BOT_ID;
 }
 
 afterEach(() => {
@@ -162,6 +164,7 @@ describe('loadConfig path defaults', () => {
     clearRuntimePathEnv();
     process.env.DATA_DIR = './sandbox-data';
     process.env.DISCORD_TOKEN = 'discord-secret';
+    process.env.DISCORD_BOT_ID = '123456789';
     process.env.DEEPGRAM_API_KEY = 'deepgram-secret';
     process.env.ELEVENLABS_API_KEY = 'eleven-secret';
     process.env.GATEWAY_TLS_CA_PATH = './certs/dev-ca.pem';
@@ -172,5 +175,23 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramApiKey).toBe('deepgram-secret');
     expect(config.elevenLabsApiKey).toBe('eleven-secret');
     expect(config.gatewayTlsCaPath).toBe('./certs/dev-ca.pem');
+  });
+
+  it('fails closed when DISCORD_TOKEN is set without DISCORD_BOT_ID', () => {
+    clearRuntimePathEnv();
+    process.env.DISCORD_TOKEN = 'discord-secret';
+
+    expect(() => loadConfig()).toThrow(
+      'DISCORD_BOT_ID is required when DISCORD_TOKEN is configured',
+    );
+  });
+
+  it('fails closed when DISCORD_BOT_ID is set without DISCORD_TOKEN', () => {
+    clearRuntimePathEnv();
+    process.env.DISCORD_BOT_ID = '123456789';
+
+    expect(() => loadConfig()).toThrow(
+      'DISCORD_TOKEN is required when DISCORD_BOT_ID is configured',
+    );
   });
 });

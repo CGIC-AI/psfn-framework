@@ -7,6 +7,7 @@ import type { ContextManifest } from './session/context-manifest.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
+import { parseOptionalStringEnv } from './utils/env.js';
 
 // ── Channel-agnostic message types ──
 
@@ -771,6 +772,9 @@ export function loadConfig(): SubstrateConfig {
   const responseStyleOverrides = parseResponseStyleOverridesEnv(process.env.RESPONSE_STYLE_OVERRIDES);
   const gatewayTlsCaPath = parseOptionalStringEnv(process.env.GATEWAY_TLS_CA_PATH);
   const gatewayTlsRejectUnauthorized = parseOptionalBooleanEnv(process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED);
+  const discordToken = parseOptionalStringEnv(process.env.DISCORD_TOKEN);
+  const discordBotId = parseOptionalStringEnv(process.env.DISCORD_BOT_ID);
+  assertMutuallyRequiredEnvPair('DISCORD_TOKEN', discordToken, 'DISCORD_BOT_ID', discordBotId);
   const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(process.env);
   const wyomingEnabled = parseOptionalBooleanEnv(process.env.WYOMING_ENABLED) ?? false;
   const wyomingHost = parseOptionalStringEnv(process.env.WYOMING_HOST) ?? '127.0.0.1';
@@ -813,8 +817,8 @@ export function loadConfig(): SubstrateConfig {
     extractionProvider,
     primaryMaxTokens,
     extractionMaxTokens,
-    discordToken: process.env.DISCORD_TOKEN ?? '',
-    discordBotId: process.env.DISCORD_BOT_ID ?? '',
+    discordToken: discordToken ?? '',
+    discordBotId: discordBotId ?? '',
     characterCardPath,
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
@@ -951,10 +955,20 @@ function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined
   return undefined;
 }
 
-function parseOptionalStringEnv(value: string | undefined): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+function assertMutuallyRequiredEnvPair(
+  primaryName: string,
+  primaryValue: string | undefined,
+  secondaryName: string,
+  secondaryValue: string | undefined,
+): void {
+  const hasPrimary = typeof primaryValue === 'string' && primaryValue.length > 0;
+  const hasSecondary = typeof secondaryValue === 'string' && secondaryValue.length > 0;
+  if (hasPrimary === hasSecondary) return;
+
+  if (!hasPrimary) {
+    throw new Error(`${primaryName} is required when ${secondaryName} is configured`);
+  }
+  throw new Error(`${secondaryName} is required when ${primaryName} is configured`);
 }
 
 function parseShardToolsetEnv(

@@ -113,6 +113,24 @@ DATABASE_PATH=./data/companion.db
 
 For full configuration details, use `src/types.ts` as the parser/defaults source of truth and confirm runtime wiring in `src/runtime.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`. `.env.example` is a starter template and can lag newer voice keys (for example `ECHO_TTS_*`).
 
+### Repository Hygiene
+
+Run dependency-cycle regression checks:
+
+```bash
+npm run verify:dependency-cycles
+```
+
+This check is strict for regressions and uses the baseline file at
+`config/dependency-cycle-baseline.json`. Known baseline cycles are tracked for
+remediation in `PSFN-7hue`.
+
+The full repository hygiene command also runs this check:
+
+```bash
+npm run verify:repository-hygiene
+```
+
 ### Running
 
 **Single-process (development):**

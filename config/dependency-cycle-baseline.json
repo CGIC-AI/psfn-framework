@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "remediationTracker": "PSFN-7hue",
+  "cycles": [
+    "capabilities/access.ts -> capabilities/eligibility.ts -> voice/connectors/stt/index.ts -> types.ts",
+    "capabilities/eligibility.ts -> types.ts -> voice/connectors/stt/index.ts",
+    "persistence/layout.ts -> session/journal-utils.ts -> session/journal/entries.ts -> turns/id.ts -> types.ts"
+  ]
+}

@@ -9,19 +9,68 @@ const require = createRequire(import.meta.url);
 const ts = require('typescript');
 
 const SOURCE_ROOT = resolve(process.cwd(), 'src');
+const DEFAULT_BASELINE_PATH = resolve(process.cwd(), 'config/dependency-cycle-baseline.json');
+const REMEDIATION_BEAD = 'PSFN-7hue';
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
 const JS_IMPORT_EXTENSIONS = ['.js', '.mjs', '.cjs'];
-const INCLUDE_TESTS = process.argv.includes('--include-tests');
 
 function toPosix(pathValue) {
   return pathValue.split('\\').join('/');
+}
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function printUsage() {
+  console.log('Usage: node scripts/check-dependency-cycles.mjs [options]');
+  console.log('');
+  console.log('Checks src/ import graph for circular dependencies.');
+  console.log('Fails on any cycle not present in the configured baseline file.');
+  console.log('');
+  console.log('Options:');
+  console.log('  --baseline <path>   Override baseline JSON path');
+  console.log('  --include-tests     Include *.test.ts files in graph');
+  console.log('  -h, --help          Show this help');
+}
+
+function parseArgs(argv) {
+  let includeTests = false;
+  let baselinePath = DEFAULT_BASELINE_PATH;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--include-tests') {
+      includeTests = true;
+      continue;
+    }
+    if (arg === '--baseline') {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error('Missing value for --baseline');
+      }
+      baselinePath = resolve(process.cwd(), value);
+      index += 1;
+      continue;
+    }
+    if (arg === '--help' || arg === '-h') {
+      printUsage();
+      process.exit(0);
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return {
+    includeTests,
+    baselinePath,
+  };
 }
 
 function isSourceFile(pathValue) {
   return SOURCE_EXTENSIONS.includes(extname(pathValue));
 }
 
-function collectSourceFiles(rootDir) {
+function collectSourceFiles(rootDir, includeTests) {
   const output = [];
   const stack = [rootDir];
 
@@ -38,7 +87,7 @@ function collectSourceFiles(rootDir) {
       if (!entry.isFile() || !isSourceFile(absolute)) {
         continue;
       }
-      if (!INCLUDE_TESTS && absolute.endsWith('.test.ts')) {
+      if (!includeTests && absolute.endsWith('.test.ts')) {
         continue;
       }
       output.push(resolve(absolute));
@@ -215,25 +264,128 @@ function detectCycles(graph) {
   return [...cycles].sort();
 }
 
+function loadBaseline(pathValue) {
+  let parsed;
+  let raw;
+  try {
+    raw = readFileSync(pathValue, 'utf-8');
+  } catch (error) {
+    throw new Error(`Unable to read baseline file: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Baseline file is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error('Baseline must be a JSON object.');
+  }
+
+  if (parsed.schemaVersion !== 1) {
+    throw new Error('Baseline schemaVersion must be 1.');
+  }
+
+  if (typeof parsed.remediationTracker !== 'string' || parsed.remediationTracker.trim().length === 0) {
+    throw new Error('Baseline remediationTracker must be a non-empty string.');
+  }
+
+  if (!Array.isArray(parsed.cycles)) {
+    throw new Error('Baseline cycles must be an array.');
+  }
+
+  const normalizedCycles = [];
+  const seen = new Set();
+  for (let index = 0; index < parsed.cycles.length; index += 1) {
+    const cycle = parsed.cycles[index];
+    if (typeof cycle !== 'string') {
+      throw new Error(`Baseline cycle at index ${index} must be a string.`);
+    }
+    const normalized = cycle.trim();
+    if (!normalized) {
+      throw new Error(`Baseline cycle at index ${index} cannot be empty.`);
+    }
+    if (seen.has(normalized)) {
+      throw new Error(`Baseline contains duplicate cycle entry: "${normalized}".`);
+    }
+    seen.add(normalized);
+    normalizedCycles.push(normalized);
+  }
+
+  normalizedCycles.sort();
+  return {
+    schemaVersion: 1,
+    remediationTracker: parsed.remediationTracker.trim(),
+    cycles: normalizedCycles,
+  };
+}
+
 function main() {
-  const files = collectSourceFiles(SOURCE_ROOT);
-  const { graph, edgeCount } = buildGraph(files);
-  const cycles = detectCycles(graph);
+  try {
+    const options = parseArgs(process.argv.slice(2));
+    const baseline = loadBaseline(options.baselinePath);
+    const files = collectSourceFiles(SOURCE_ROOT, options.includeTests);
+    const { graph, edgeCount } = buildGraph(files);
+    const cycles = detectCycles(graph);
 
-  console.log(
-    `Dependency graph built from ${files.length} source files with ${edgeCount} import edges.`,
-  );
+    console.log(
+      `Dependency graph built from ${files.length} source files with ${edgeCount} import edges.`,
+    );
+    console.log(`Cycle baseline: ${toPosix(relative(process.cwd(), options.baselinePath))}`);
+    console.log(
+      `Remediation tracker: ${baseline.remediationTracker} (full removal tracked by ${REMEDIATION_BEAD}).`,
+    );
 
-  if (cycles.length === 0) {
-    console.log('No circular imports detected.');
-    return;
+    const baselineSet = new Set(baseline.cycles);
+    const detectedSet = new Set(cycles);
+    const baselineMatched = cycles.filter(cycle => baselineSet.has(cycle));
+    const regressions = cycles.filter(cycle => !baselineSet.has(cycle));
+    const baselineOnly = baseline.cycles.filter(cycle => !detectedSet.has(cycle));
+
+    if (baselineMatched.length > 0) {
+      console.log(`Baseline-matched cycles (${baselineMatched.length}):`);
+      for (const cycle of baselineMatched) {
+        console.log(`- ${cycle}`);
+      }
+    } else {
+      console.log('Baseline-matched cycles (0).');
+    }
+
+    if (baselineOnly.length > 0) {
+      console.log(
+        `Baseline entries not currently detected (${baselineOnly.length}) — consider pruning baseline after ${REMEDIATION_BEAD} work lands:`,
+      );
+      for (const cycle of baselineOnly) {
+        console.log(`- ${cycle}`);
+      }
+    }
+
+    if (regressions.length > 0) {
+      console.error(`Detected ${regressions.length} new circular import cycle(s) outside baseline:`);
+      for (const cycle of regressions) {
+        console.error(`- ${cycle}`);
+      }
+      console.error(
+        `Dependency-cycle regression check failed. Baseline debt is tracked by ${REMEDIATION_BEAD}.`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    if (cycles.length === 0) {
+      console.log('No circular imports detected.');
+    } else {
+      console.log(
+        `Detected ${cycles.length} circular import cycle(s), all baseline-matched. No regressions against ${REMEDIATION_BEAD}.`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      `Dependency-cycle check failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exitCode = 1;
   }
-
-  console.error(`Detected ${cycles.length} circular import cycle(s):`);
-  for (const cycle of cycles) {
-    console.error(`- ${cycle}`);
-  }
-  process.exitCode = 1;
 }
 
 main();

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRetriever, __retrieval_internals } from './retrieval.js';
+import {
+  MemoryRetriever,
+  RetrievalIntegrityError,
+  __retrieval_internals,
+} from './retrieval.js';
 import type { MemoryStore } from './store.js';
 import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
 import type { PurrMemory } from './types.js';
@@ -617,6 +621,45 @@ describe('MemoryRetriever basic behavior', () => {
     });
   });
 
+  it('fails closed when selected-memory access stat persistence fails', async () => {
+    const memories = [
+      makeMemory({
+        id: 'integrity-retrieval-memory',
+        text: 'Persistent memory',
+        sensitivity: 'public',
+        similarity: 0.95,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const persistenceFailure = new Error('simulated retrieval access stat failure');
+    (store.updateMemory as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw persistenceFailure;
+    });
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    const retrievalPromise = retriever.retrieve('remember this', 'api:test', 'primary');
+    await expect(retrievalPromise).rejects.toBeInstanceOf(RetrievalIntegrityError);
+    await expect(retrievalPromise).rejects.toMatchObject({
+      context: {
+        stage: 'selected_access_update',
+        channelId: 'api:test',
+        trustLevel: 'primary',
+        memoryId: 'integrity-retrieval-memory',
+      },
+      cause: persistenceFailure,
+    });
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      reason: 'error',
+      channelId: 'api:test',
+    });
+  });
+
   it('scales retrieval count with context-window budgets when no hard limit is set', async () => {
     const memories = Array.from({ length: 12 }, (_, idx) => makeMemory({
       text: `Budget memory ${idx} ` + 'x'.repeat(260),
@@ -1010,6 +1053,51 @@ describe('MemoryRetriever basic behavior', () => {
           accessCount: highWeightMemory.accessCount + 1,
         }),
       );
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('fails closed when proactive recall access stat persistence fails', async () => {
+    const now = Date.now();
+    const memory = makeMemory({
+      id: 'proactive-integrity-memory',
+      text: 'Proactive recall memory',
+      type: 'emotional',
+      emotionalValence: 0.9,
+      salience: 0.9,
+      importance: 0.9,
+      lastAccessed: now,
+      extractedAt: now,
+      sensitivity: 'public',
+      similarity: 0.5,
+    });
+    const store = makeMockStore([]);
+    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([memory]);
+    const persistenceFailure = new Error('simulated proactive access stat failure');
+    (store.updateMemory as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw persistenceFailure;
+    });
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, {
+      retrievalLimit: 20,
+      proactiveRecallProbability: 1,
+      proactiveRecallMinTurnsBetween: 0,
+    });
+
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const proactivePromise = retriever.retrieveProactiveRecall('api:test', 'primary');
+      await expect(proactivePromise).rejects.toBeInstanceOf(RetrievalIntegrityError);
+      await expect(proactivePromise).rejects.toMatchObject({
+        context: {
+          stage: 'proactive_access_update',
+          channelId: 'api:test',
+          trustLevel: 'primary',
+          memoryId: 'proactive-integrity-memory',
+        },
+        cause: persistenceFailure,
+      });
     } finally {
       randomSpy.mockRestore();
     }

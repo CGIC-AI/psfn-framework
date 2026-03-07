@@ -380,6 +380,76 @@ describe('MemoryRetriever trust-gated filtering', () => {
     );
   });
 
+  it('boosts recently revisited memories over stale one-off matches', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Stale one-off high similarity memory',
+        sensitivity: 'public',
+        similarity: 0.94,
+        importance: 0.85,
+        salience: 0.85,
+        extractedAt: now - 90 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 90 * 24 * 60 * 60 * 1000,
+        accessCount: 1,
+      }),
+      makeMemory({
+        text: 'Recently revisited reinforced memory',
+        sensitivity: 'public',
+        similarity: 0.88,
+        importance: 0.85,
+        salience: 0.85,
+        extractedAt: now - 90 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 2 * 60 * 60 * 1000,
+        accessCount: 14,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    expect(result.indexOf('Recently revisited reinforced memory')).toBeLessThan(
+      result.indexOf('Stale one-off high similarity memory'),
+    );
+  });
+
+  it('uses lastAccessed freshness to break ties when reinforcement counts match', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Older access memory',
+        sensitivity: 'public',
+        similarity: 0.92,
+        importance: 0.85,
+        salience: 0.85,
+        extractedAt: now - 100 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 80 * 24 * 60 * 60 * 1000,
+        accessCount: 6,
+      }),
+      makeMemory({
+        text: 'Freshly accessed memory',
+        sensitivity: 'public',
+        similarity: 0.9,
+        importance: 0.85,
+        salience: 0.85,
+        extractedAt: now - 100 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 60 * 60 * 1000,
+        accessCount: 6,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    expect(result.indexOf('Freshly accessed memory')).toBeLessThan(
+      result.indexOf('Older access memory'),
+    );
+  });
+
   it('downranks low-confidence single-source memory unless explicitly queried', async () => {
     const fragileMemory = makeMemory({
       text: 'Nebularkite protocol keyphrase marker',

@@ -42,6 +42,7 @@
     "verify:identity-literals": "node scripts/identity-literal-scan.mjs",
     "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:identity-literals",
     "verify:settings-contract": "tsx scripts/verify-settings-contract.ts",
+    "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
     "verify:agent-docker-isolation": "node scripts/verify-agent-docker-isolation.mjs"
   },
   "dependencies": {

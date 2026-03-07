@@ -88,6 +88,8 @@ Production-mode safeguards now enforced by scripts:
 
 - `--mode production` rejects PID paths under `./data` and requires `PSFN_RUNTIME_LAYOUT_MODE=production` in custom start commands.
 - `--mode continuous` rejects PID paths under `./runtime/production`.
+- Graceful stop paths (`SIGINT`, `SIGTERM`, and runtime `stop()`) now send a shutdown notification through lifecycle notifier channels.
+- `self_restart` / `self_rebuild` still send pre-restart notification first and suppress the generic shutdown message to avoid duplicate operator alerts.
 
 ## 5. Backups
 
@@ -116,6 +118,21 @@ Quick check:
 ```bash
 ls -la ./runtime/production/backups
 ```
+
+Scheduled backup artifacts are structured as:
+
+- `<backup-root>/<timestamp>/database/<sqlite-file>`
+- `<backup-root>/<timestamp>/sessions/*.jsonl`
+
+Restore verification defaults to enabled (`BACKUP_VERIFY_RESTORE=true`) and rehearses a restore plus SQLite integrity check for each scheduled backup cycle.
+
+Manual restore verification smoke:
+
+```bash
+npm run verify:backup-restore -- --backup-root ./runtime/production/backups
+```
+
+Expected output includes `"verified": true` and `"integrityDetails": ["ok"]`.
 
 ## 6. Rollback
 
@@ -165,4 +182,5 @@ docker compose -f docker/docker-compose.production.yml config
 ./scripts/self/restart.sh --mode production --help
 ./scripts/self/rebuild.sh --mode continuous --help
 ./scripts/self/rebuild.sh --mode production --help
+npm run verify:backup-restore -- --backup-root ./runtime/production/backups
 ```

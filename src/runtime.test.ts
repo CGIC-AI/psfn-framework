@@ -171,6 +171,52 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     expect(runtime.db.close).toHaveBeenCalledTimes(1);
   });
 
+  it('sends graceful shutdown notification on normal stop path', async () => {
+    const runtime = makeRuntime() as any;
+    runtime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
+    runtime.scheduler = { stop: vi.fn() };
+    runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
+    runtime.sessionStore = {
+      getCrashRecoveryExtractionCandidates: vi.fn().mockReturnValue([]),
+      markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
+    };
+    runtime.stopVoiceObservers = vi.fn();
+    runtime.stopDebugObserver = vi.fn();
+    runtime.stopChannels = vi.fn().mockResolvedValue(undefined);
+    runtime.db = { close: vi.fn() };
+    runtime.lifecycleNotifier = {
+      notifyShutdown: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await runtime.stop();
+
+    expect(runtime.lifecycleNotifier.notifyShutdown).toHaveBeenCalledWith(undefined);
+    expect(runtime.db.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues shutdown when graceful shutdown notification fails', async () => {
+    const runtime = makeRuntime() as any;
+    runtime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
+    runtime.scheduler = { stop: vi.fn() };
+    runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
+    runtime.sessionStore = {
+      getCrashRecoveryExtractionCandidates: vi.fn().mockReturnValue([]),
+      markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
+    };
+    runtime.stopVoiceObservers = vi.fn();
+    runtime.stopDebugObserver = vi.fn();
+    runtime.stopChannels = vi.fn().mockResolvedValue(undefined);
+    runtime.db = { close: vi.fn() };
+    runtime.lifecycleNotifier = {
+      notifyShutdown: vi.fn().mockRejectedValue(new Error('ntfy offline')),
+    };
+
+    await expect(runtime.stop()).resolves.toBeUndefined();
+
+    expect(runtime.lifecycleNotifier.notifyShutdown).toHaveBeenCalledTimes(2);
+    expect(runtime.db.close).toHaveBeenCalledTimes(1);
+  });
+
   it('passes EXTRACTION_DRAIN_TIMEOUT_MS to memoryExtractor.stop', async () => {
     process.env.EXTRACTION_DRAIN_TIMEOUT_MS = '3456';
     const runtime = makeRuntime() as any;

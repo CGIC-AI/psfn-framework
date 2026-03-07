@@ -12,6 +12,7 @@ import { buildInternalStateSnapshotRef, InternalStateComputer } from '../self-mo
 import {
   wireExtendedToolAutoloadPolicy,
   wireHeartbeatRuntime,
+  wirePromptRuntime,
   wireSessionToolsRuntime,
   wireSettingsRuntime,
 } from './parity.js';
@@ -170,6 +171,39 @@ describe('wireSettingsRuntime', () => {
       'settings_get',
     ]);
     expect(calls.every(([, category]) => category === 'extended')).toBe(true);
+  });
+});
+
+describe('wirePromptRuntime', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'prompt-runtime-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('registers prompt tools including prompt rollback as extended tools', () => {
+    const target = {
+      promptComposer: null,
+      registerTool: vi.fn(),
+    };
+
+    wirePromptRuntime(target as any, tempDir, 'Base prompt');
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    expect(calls.every(([, category]) => category === 'extended')).toBe(true);
+    expect(calls.map(([tool]) => tool.name)).toEqual(expect.arrayContaining([
+      'prompt_layer_list',
+      'prompt_layer_get',
+      'identity_diff',
+      'identity_changelog',
+      'prompt_layer_update',
+      'prompt_layer_rollback',
+      'prompt_layer_toggle',
+    ]));
   });
 });
 

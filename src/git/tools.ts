@@ -179,7 +179,8 @@ export function createRepoOpenPRTool(gitOps: GitOperations): AgentTool<any> {
     name: 'repo_open_pr',
     label: 'repo_open_pr',
     description:
-      'Open a GitHub pull request from the current branch. Requires the gh CLI to be installed.',
+      'Open a GitHub pull request from the current branch. Blocked on protected branches (main, master). ' +
+      'Requires the gh CLI to be installed.',
     parameters: Type.Object({
       title: Type.String({ description: 'PR title.' }),
       body: Type.String({ description: 'PR description body (markdown).' }),

@@ -10,10 +10,112 @@ import {
   type ReflectionTemplate,
   type ValidationError,
 } from '../../../scheduler/heartbeat-policy.js';
-import type { ScheduledTask, TaskType } from '../../../scheduler/types.js';
+import type {
+  RecurringCadence,
+  RecurringCadenceTimezone,
+  ScheduledTask,
+  TaskType,
+} from '../../../scheduler/types.js';
 import { createComponentLogger } from '../../../logger.js';
 
 const log = createComponentLogger('AdminSchedulerService');
+
+export type AdminTaskCadence = RecurringCadence;
+
+type ScheduledTaskWithCadence = ScheduledTask & { cadence?: unknown };
+
+type CadenceValidationResult =
+  | { ok: true; cadence: AdminTaskCadence }
+  | { ok: false; message: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isRecurringCadenceTimezone(value: unknown): value is RecurringCadenceTimezone {
+  return value === 'local' || value === 'utc';
+}
+
+function validateCadence(input: unknown): CadenceValidationResult {
+  if (!isRecord(input)) {
+    return { ok: false, message: 'cadence must be an object' };
+  }
+
+  const allowedFields = new Set(['kind', 'hour', 'minute', 'timezone']);
+  for (const key of Object.keys(input)) {
+    if (!allowedFields.has(key)) {
+      return { ok: false, message: `cadence.${key} is not supported` };
+    }
+  }
+
+  const kind = input.kind;
+  if (kind !== 'relative' && kind !== 'hourly' && kind !== 'daily') {
+    return { ok: false, message: 'cadence.kind must be "relative", "hourly", or "daily"' };
+  }
+
+  if (kind === 'relative') {
+    if (input.hour !== undefined || input.minute !== undefined || input.timezone !== undefined) {
+      return { ok: false, message: 'relative cadence cannot include hour/minute/timezone' };
+    }
+    return { ok: true, cadence: { kind: 'relative' } };
+  }
+
+  const minute = input.minute;
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) {
+    return { ok: false, message: 'cadence.minute must be an integer between 0 and 59' };
+  }
+
+  const timezone = input.timezone;
+  if (!isRecurringCadenceTimezone(timezone)) {
+    return { ok: false, message: 'cadence.timezone must be "local" or "utc"' };
+  }
+
+  const hour = input.hour;
+  if (kind === 'daily') {
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+      return { ok: false, message: 'cadence.hour must be an integer between 0 and 23 when cadence.kind is "daily"' };
+    }
+    return {
+      ok: true,
+      cadence: {
+        kind: 'daily',
+        hour,
+        minute,
+        timezone,
+      },
+    };
+  }
+
+  if (hour !== undefined) {
+    return { ok: false, message: 'cadence.hour is only allowed when cadence.kind is "daily"' };
+  }
+
+  return {
+    ok: true,
+    cadence: {
+      kind: 'hourly',
+      minute,
+      timezone,
+    },
+  };
+}
+
+function readCadenceFromTask(task: ScheduledTask): AdminTaskCadence | undefined {
+  if (task.type !== 'every') return undefined;
+
+  const rawCadence = (task as ScheduledTaskWithCadence).cadence;
+  if (rawCadence === undefined) return undefined;
+
+  const validated = validateCadence(rawCadence);
+  if (!validated.ok) {
+    log.warn(`Task "${task.id}" has invalid cadence in runtime scheduler state`, {
+      reason: validated.message,
+    });
+    return undefined;
+  }
+
+  return validated.cadence;
+}
 
 /** Wire-safe task shape (no handler function). */
 export interface AdminScheduledTask {
@@ -23,6 +125,7 @@ export interface AdminScheduledTask {
   intervalMs: number;
   runAt?: number;
   state: string;
+  cadence?: AdminTaskCadence;
 }
 
 /** Full scheduler + reflections response. */
@@ -39,6 +142,7 @@ export interface SchedulerMutationResult {
 
 /** Serialize a ScheduledTask to wire-safe shape. */
 function toAdminTask(task: ScheduledTask): AdminScheduledTask {
+  const cadence = readCadenceFromTask(task);
   return {
     id: task.id,
     name: task.name,
@@ -46,6 +150,7 @@ function toAdminTask(task: ScheduledTask): AdminScheduledTask {
     intervalMs: task.intervalMs,
     runAt: task.runAt,
     state: task.state,
+    cadence,
   };
 }
 
@@ -76,6 +181,7 @@ export class AdminSchedulerService {
     intervalMs?: number;
     enabled?: boolean;
     name?: string;
+    cadence?: unknown;
   }): SchedulerMutationResult {
     const task = this.scheduler.getTask(id);
     if (!task) {
@@ -87,6 +193,7 @@ export class AdminSchedulerService {
       state?: 'idle' | 'paused';
       name?: string;
       resetLastRun?: boolean;
+      cadence?: AdminTaskCadence;
     } = {};
 
     if (updates.intervalMs !== undefined) {
@@ -110,7 +217,21 @@ export class AdminSchedulerService {
       taskUpdates.name = updates.name;
     }
 
-    const success = this.scheduler.updateTask(id, taskUpdates);
+    if (updates.cadence !== undefined) {
+      if (task.type !== 'every') {
+        return { ok: false, message: 'cadence can only be set for recurring tasks' };
+      }
+      const cadenceValidation = validateCadence(updates.cadence);
+      if (!cadenceValidation.ok) {
+        return { ok: false, message: cadenceValidation.message };
+      }
+      taskUpdates.cadence = cadenceValidation.cadence;
+    }
+
+    const success = this.scheduler.updateTask(
+      id,
+      taskUpdates as Parameters<Scheduler['updateTask']>[1],
+    );
     if (!success) {
       return { ok: false, message: `Failed to update task "${id}"` };
     }
@@ -119,13 +240,14 @@ export class AdminSchedulerService {
     return { ok: true, message: `Task "${id}" updated` };
   }
 
-  /** Create a new one-shot task (recurring tasks are system-registered only). */
+  /** Create a new task. */
   createTask(input: {
     id: string;
     name: string;
     type: TaskType;
     intervalMs?: number;
     runAt?: number;
+    cadence?: unknown;
   }): SchedulerMutationResult {
     if (!input.id || typeof input.id !== 'string') {
       return { ok: false, message: 'id is required' };
@@ -141,18 +263,29 @@ export class AdminSchedulerService {
       return { ok: false, message: `Task "${input.id}" already exists` };
     }
 
+    let validatedCadence: AdminTaskCadence | undefined;
     if (input.type === 'every') {
       if (!input.intervalMs || input.intervalMs < 1000) {
         return { ok: false, message: 'intervalMs must be at least 1000ms for recurring tasks' };
+      }
+      if (input.cadence !== undefined) {
+        const cadenceValidation = validateCadence(input.cadence);
+        if (!cadenceValidation.ok) {
+          return { ok: false, message: cadenceValidation.message };
+        }
+        validatedCadence = cadenceValidation.cadence;
       }
     }
 
     if (input.type === 'one-shot' && !input.runAt) {
       return { ok: false, message: 'runAt timestamp is required for one-shot tasks' };
     }
+    if (input.type === 'one-shot' && input.cadence !== undefined) {
+      return { ok: false, message: 'cadence can only be set for recurring tasks' };
+    }
 
     try {
-      this.scheduler.register({
+      const taskToRegister: ScheduledTask & { cadence?: AdminTaskCadence } = {
         id: input.id,
         name: input.name,
         type: input.type,
@@ -162,7 +295,9 @@ export class AdminSchedulerService {
           log.info(`Admin-created task "${input.name}" fired`);
         },
         state: 'idle',
-      });
+        ...(validatedCadence ? { cadence: validatedCadence } : {}),
+      };
+      this.scheduler.register(taskToRegister);
       log.info(`Task "${input.id}" created via admin`, { type: input.type });
       return { ok: true, message: `Task "${input.id}" created` };
     } catch (err) {

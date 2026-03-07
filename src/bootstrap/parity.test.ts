@@ -214,6 +214,44 @@ describe('wireHeartbeatRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('registers reflection tasks using template cadence', () => {
+    const store = new HeartbeatPolicyStore(join(tempDir, 'heartbeat-policy.json'));
+    const policy = store.load();
+    const whisper = policy.templates.find(template => template.id === 'whisper');
+    if (!whisper) {
+      throw new Error('whisper template missing');
+    }
+    whisper.cadence = { kind: 'hourly', minute: 0, timezone: 'utc' };
+    store.save(policy);
+
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'reflection output' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+    );
+
+    const task = scheduler.getTask('reflection:whisper');
+    expect(task).toBeDefined();
+    expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
+  });
+
   it('writes versioned values entries when values-reflection task runs', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {

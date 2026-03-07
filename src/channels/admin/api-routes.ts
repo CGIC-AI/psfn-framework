@@ -22,7 +22,7 @@ import type {
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
-import type { ScheduledTask, TaskType } from '../../scheduler/types.js';
+import type { RecurringCadence, ScheduledTask, TaskType } from '../../scheduler/types.js';
 import type { SkillSnapshot } from '../../skills/types.js';
 import type {
   AdminAuditActionType,
@@ -33,6 +33,10 @@ import type {
 import type { ValuesJournalEntry } from '../../values/store.js';
 import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
 
+export type AdminTaskCadence = RecurringCadence;
+
+type ScheduledTaskWithCadence = ScheduledTask & { cadence?: AdminTaskCadence };
+
 /** Wire-safe task shape (no handler function). */
 export interface AdminScheduledTaskView {
   id: string;
@@ -41,6 +45,7 @@ export interface AdminScheduledTaskView {
   intervalMs: number;
   runAt?: number;
   state: string;
+  cadence?: AdminTaskCadence;
 }
 
 /** Minimal scheduler interface for JSON API routes. */
@@ -56,6 +61,7 @@ export interface AdminSchedulerApi {
     intervalMs?: number;
     enabled?: boolean;
     name?: string;
+    cadence?: unknown;
   }): { ok: boolean; message: string };
   /** Extended: create a new task. */
   createTask?(input: {
@@ -64,6 +70,7 @@ export interface AdminSchedulerApi {
     type: TaskType;
     intervalMs?: number;
     runAt?: number;
+    cadence?: unknown;
   }): { ok: boolean; message: string };
   /** Extended: remove a task. */
   removeTask?(id: string): { ok: boolean; message: string };
@@ -1047,6 +1054,9 @@ export function buildAdminApiRoutes(options: {
             intervalMs: task.intervalMs,
             runAt: task.runAt,
             state: task.state,
+            cadence: task.type === 'every'
+              ? (task as ScheduledTaskWithCadence).cadence
+              : undefined,
           }));
           sendJson(res, 200, { tasks, reflections: [] });
         }
@@ -1066,7 +1076,12 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { ok: false, message: parsed.error });
             return;
           }
-          const updates = parsed.value as { intervalMs?: number; enabled?: boolean; name?: string };
+          const updates = parsed.value as {
+            intervalMs?: number;
+            enabled?: boolean;
+            name?: string;
+            cadence?: unknown;
+          };
           const result = scheduler.updateTask!(taskId, updates);
           sendJson(res, result.ok ? 200 : 400, result);
         });
@@ -1092,6 +1107,7 @@ export function buildAdminApiRoutes(options: {
             type: TaskType;
             intervalMs?: number;
             runAt?: number;
+            cadence?: unknown;
           };
           const result = scheduler.createTask!(input);
           sendJson(res, result.ok ? 201 : 400, result);

@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../logger.js';
 import { writeJsonAtomic } from '../utils/fs.js';
+import type { RecurringCadence } from './types.js';
 
 const log = createComponentLogger('HeartbeatPolicy');
 
@@ -16,6 +17,7 @@ export interface ReflectionTemplate {
   name: string;         // display name
   prompt: string;       // text sent to agentLoop.handleMessage
   intervalMs: number;   // how often (validated: 5min – 7d)
+  cadence?: RecurringCadence;
   enabled: boolean;
   sendToDiscord: boolean;  // if true, sends response via sender.send()
   internalStateInput?: boolean; // inject serialized InternalState + recent signals into prompt
@@ -61,6 +63,7 @@ const VALID_DELIBERATION_PURPOSES = new Set(['background', 'reasoning']);
 const DELIBERATION_MAX_ROUNDS_RANGE = { min: 1, max: 8 };
 const DELIBERATION_MAX_TOTAL_TOKENS_RANGE = { min: 512, max: 50_000 };
 const DELIBERATION_MAX_WALL_TIME_RANGE_MS = { min: 1_000, max: 300_000 };
+const VALID_CADENCE_TIMEZONES = new Set(['local', 'utc']);
 
 function validateBoundedNumber(
   field: string,
@@ -131,6 +134,45 @@ function validateDeliberationConfig(
   return errors;
 }
 
+function validateCadenceConfig(value: unknown): ValidationError[] {
+  if (value === undefined) return [];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return [{ field: 'cadence', message: 'cadence must be an object' }];
+  }
+
+  const cadence = value as Partial<RecurringCadence> & Record<string, unknown>;
+  if (cadence.kind === 'relative') {
+    return [];
+  }
+
+  if (cadence.kind === 'hourly') {
+    const errors: ValidationError[] = [];
+    if (!Number.isInteger(cadence.minute) || cadence.minute < 0 || cadence.minute > 59) {
+      errors.push({ field: 'cadence.minute', message: 'cadence.minute must be 0-59 for hourly cadence' });
+    }
+    if (!VALID_CADENCE_TIMEZONES.has(String(cadence.timezone))) {
+      errors.push({ field: 'cadence.timezone', message: 'cadence.timezone must be "local" or "utc"' });
+    }
+    return errors;
+  }
+
+  if (cadence.kind === 'daily') {
+    const errors: ValidationError[] = [];
+    if (!Number.isInteger(cadence.hour) || cadence.hour < 0 || cadence.hour > 23) {
+      errors.push({ field: 'cadence.hour', message: 'cadence.hour must be 0-23 for daily cadence' });
+    }
+    if (!Number.isInteger(cadence.minute) || cadence.minute < 0 || cadence.minute > 59) {
+      errors.push({ field: 'cadence.minute', message: 'cadence.minute must be 0-59 for daily cadence' });
+    }
+    if (!VALID_CADENCE_TIMEZONES.has(String(cadence.timezone))) {
+      errors.push({ field: 'cadence.timezone', message: 'cadence.timezone must be "local" or "utc"' });
+    }
+    return errors;
+  }
+
+  return [{ field: 'cadence.kind', message: 'cadence.kind must be "relative", "hourly", or "daily"' }];
+}
+
 export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean): ValidationError[] {
   const errors: ValidationError[] = [];
 
@@ -158,6 +200,10 @@ export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean)
     }
   }
 
+  if (isNew || t.cadence !== undefined) {
+    errors.push(...validateCadenceConfig((t as { cadence?: unknown }).cadence));
+  }
+
   if (isNew || t.mode !== undefined) {
     if (t.mode !== undefined && !VALID_TEMPLATE_MODES.has(t.mode)) {
       errors.push({ field: 'mode', message: 'mode must be "standard" or "deliberation"' });
@@ -177,6 +223,42 @@ export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean)
   return errors;
 }
 
+function getKnownTemplateCadence(templateId: string): RecurringCadence | undefined {
+  if (templateId === 'whisper') {
+    return { kind: 'hourly', minute: 0, timezone: 'local' };
+  }
+  if (templateId === 'daily-review') {
+    return { kind: 'daily', hour: 6, minute: 0, timezone: 'local' };
+  }
+  return undefined;
+}
+
+function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+  let changed = false;
+  const templates = policy.templates.map(template => {
+    if (template.cadence !== undefined) {
+      return template;
+    }
+    const cadence = getKnownTemplateCadence(template.id);
+    if (cadence === undefined) {
+      return template;
+    }
+    changed = true;
+    return { ...template, cadence };
+  });
+
+  if (!changed) {
+    return { policy, changed: false };
+  }
+  return {
+    policy: {
+      ...policy,
+      templates,
+    },
+    changed: true,
+  };
+}
+
 // ── Default templates ──
 
 function getDefaults(): HeartbeatPolicy {
@@ -187,6 +269,7 @@ function getDefaults(): HeartbeatPolicy {
         name: 'Whisper',
         prompt: 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.',
         intervalMs: 60 * 60_000, // 1 hour
+        cadence: { kind: 'hourly', minute: 0, timezone: 'local' },
         enabled: true,
         sendToDiscord: true,
       },
@@ -195,6 +278,7 @@ function getDefaults(): HeartbeatPolicy {
         name: 'Daily Review',
         prompt: 'Take a moment to review your day. What patterns do you notice in your recent conversations? What have you learned? What do you want to explore tomorrow?',
         intervalMs: 24 * 60 * 60_000, // 24 hours
+        cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
         enabled: true,
         sendToDiscord: false,
       },
@@ -265,7 +349,8 @@ export class HeartbeatPolicyStore {
         this.save(defaults);
         return defaults;
       }
-      for (const template of parsed.templates) {
+      const normalized = normalizeTemplateCadence(parsed);
+      for (const template of normalized.policy.templates) {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {
           log.warn('Invalid heartbeat template in policy file, restoring defaults', {
@@ -277,7 +362,10 @@ export class HeartbeatPolicyStore {
           return defaults;
         }
       }
-      return parsed;
+      if (normalized.changed) {
+        this.save(normalized.policy);
+      }
+      return normalized.policy;
     } catch {
       // File doesn't exist or is corrupt — create with defaults
       const defaults = getDefaults();

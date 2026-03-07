@@ -571,6 +571,169 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
   });
 
+  it('includes cadence fields for recurring tasks in /api/admin/scheduler', async () => {
+    scheduler.register({
+      id: 'cadence-hourly',
+      name: 'Cadence Hourly Task',
+      type: 'every',
+      intervalMs: 60_000,
+      handler: () => {},
+      state: 'idle',
+      cadence: {
+        kind: 'hourly',
+        minute: 15,
+        timezone: 'utc',
+      },
+    } as Parameters<Scheduler['register']>[0] & {
+      cadence: { kind: 'hourly'; minute: number; timezone: string };
+    });
+
+    const res = await request(port, 'GET', '/api/admin/scheduler', undefined, authHeaders);
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as {
+      tasks: Array<{
+        id: string;
+        type: string;
+        cadence?: { kind: string; hour?: number; minute: number; timezone?: string };
+      }>;
+    };
+
+    expect(payload.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'cadence-hourly',
+        type: 'every',
+        cadence: {
+          kind: 'hourly',
+          minute: 15,
+          timezone: 'utc',
+        },
+      }),
+    ]));
+  });
+
+  it('accepts cadence updates on PATCH /api/admin/scheduler/tasks/:taskId', async () => {
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/scheduler/tasks/test-task',
+      JSON.stringify({
+        cadence: {
+          kind: 'daily',
+          hour: 6,
+          minute: 30,
+          timezone: 'utc',
+        },
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(true);
+    expect(payload.message).toContain('updated');
+  });
+
+  it('round-trips recurring cadence on POST /api/admin/scheduler/tasks + GET /api/admin/scheduler', async () => {
+    const createRes = await request(
+      port,
+      'POST',
+      '/api/admin/scheduler/tasks',
+      JSON.stringify({
+        id: 'cadence-created-task',
+        name: 'Cadence Created Task',
+        type: 'every',
+        intervalMs: 120_000,
+        cadence: {
+          kind: 'daily',
+          hour: 9,
+          minute: 5,
+          timezone: 'utc',
+        },
+      }),
+      authHeaders,
+    );
+    expect(createRes.status).toBe(201);
+    const createPayload = JSON.parse(createRes.body) as { ok: boolean; message: string };
+    expect(createPayload.ok).toBe(true);
+
+    const getRes = await request(port, 'GET', '/api/admin/scheduler', undefined, authHeaders);
+    expect(getRes.status).toBe(200);
+    const getPayload = JSON.parse(getRes.body) as {
+      tasks: Array<{
+        id: string;
+        type: string;
+        cadence?: { kind: string; hour?: number; minute: number; timezone?: string };
+      }>;
+    };
+
+    expect(getPayload.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'cadence-created-task',
+        type: 'every',
+        cadence: {
+          kind: 'daily',
+          hour: 9,
+          minute: 5,
+          timezone: 'utc',
+        },
+      }),
+    ]));
+  });
+
+  it('rejects invalid cadence payloads on PATCH /api/admin/scheduler/tasks/:taskId', async () => {
+    const invalidCadenceCases: Array<[cadence: Record<string, unknown>, errorFragment: string]> = [
+      [{ kind: 'weekly', minute: 0 }, 'cadence.kind'],
+      [{ kind: 'daily', hour: 24, minute: 0, timezone: 'utc' }, 'cadence.hour'],
+      [{ kind: 'hourly', minute: 60, timezone: 'utc' }, 'cadence.minute'],
+      [{ kind: 'daily', hour: 8, minute: 0, timezone: 'Not/AZone' }, 'cadence.timezone'],
+    ];
+
+    for (const [cadence, errorFragment] of invalidCadenceCases) {
+      const res = await request(
+        port,
+        'PATCH',
+        '/api/admin/scheduler/tasks/test-task',
+        JSON.stringify({ cadence }),
+        authHeaders,
+      );
+
+      expect(res.status).toBe(400);
+      const payload = JSON.parse(res.body) as { ok: boolean; message: string };
+      expect(payload.ok).toBe(false);
+      expect(payload.message).toContain(errorFragment);
+    }
+  });
+
+  it('rejects invalid cadence payloads on POST /api/admin/scheduler/tasks', async () => {
+    const invalidCadenceCases: Array<[cadence: Record<string, unknown>, errorFragment: string]> = [
+      [{ kind: 'weekly', minute: 0 }, 'cadence.kind'],
+      [{ kind: 'daily', hour: 24, minute: 0, timezone: 'utc' }, 'cadence.hour'],
+      [{ kind: 'hourly', minute: 60, timezone: 'utc' }, 'cadence.minute'],
+      [{ kind: 'daily', hour: 8, minute: 0, timezone: 'Not/AZone' }, 'cadence.timezone'],
+    ];
+
+    for (const [index, [cadence, errorFragment]] of invalidCadenceCases.entries()) {
+      const res = await request(
+        port,
+        'POST',
+        '/api/admin/scheduler/tasks',
+        JSON.stringify({
+          id: `invalid-cadence-task-${index}`,
+          name: `Invalid cadence task ${index}`,
+          type: 'every',
+          intervalMs: 60_000,
+          cadence,
+        }),
+        authHeaders,
+      );
+
+      expect(res.status).toBe(400);
+      const payload = JSON.parse(res.body) as { ok: boolean; message: string };
+      expect(payload.ok).toBe(false);
+      expect(payload.message).toContain(errorFragment);
+    }
+  });
+
   it('returns adaptive tool runtime state and recent adaptive telemetry', async () => {
     await eventBus.emit('agent.tools.adaptive.decision', {
       turnId: 'turn-adaptive-1',

@@ -29,6 +29,7 @@ import type {
   OutboundContext,
 } from '../types.js';
 import type {
+  ApiContinuityWatchdogCheck,
   ApiHealthResponse,
   ApiHealthSubsystem,
   ApiHealthSubsystemStatus,
@@ -38,7 +39,7 @@ import type {
   TelemetryIngestRequest,
   TelemetryIngestResponse,
 } from './types.js';
-import { API_HEALTH_SUBSYSTEMS } from './types.js';
+import { API_CONTINUITY_WATCHDOG_CHECKS, API_HEALTH_SUBSYSTEMS } from './types.js';
 import { createComponentLogger } from '../../logger.js';
 import { type ApiAuthPrincipal } from '../http/auth.js';
 import {
@@ -82,6 +83,7 @@ import {
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 90_000;
+const DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS = 65 * 60_000;
 const TELEMETRY_MAX_SKEW_MS = 5 * 60_000;
 const TELEMETRY_NONCE_TTL_MS = 10 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
@@ -167,6 +169,7 @@ export interface ApiServerConfig {
   allowInsecureWithoutAuth?: boolean;
   corsAllowedOrigins?: string[];
   healthChecks?: ApiServerHealthChecks;
+  schedulerHeartbeatStaleAfterMs?: number;
 }
 
 export class ApiServer implements ChannelAdapter {
@@ -206,6 +209,9 @@ export class ApiServer implements ChannelAdapter {
   private processingChannels = new Set<string>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
+  private schedulerHeartbeatStaleAfterMs: number;
+  private lastSchedulerHeartbeatAtMs: number | null = null;
+  private unregisterSchedulerHeartbeat: (() => void) | null = null;
 
   constructor(config: ApiServerConfig) {
     this.port = config.port;
@@ -220,6 +226,16 @@ export class ApiServer implements ChannelAdapter {
     this.modelName = config.modelName ?? DEFAULT_COMPANION_ID;
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
+    this.schedulerHeartbeatStaleAfterMs = this.parseSchedulerHeartbeatStaleAfterMs(
+      config.schedulerHeartbeatStaleAfterMs,
+    );
+    this.unregisterSchedulerHeartbeat = this.eventBus.on('schedule.heartbeat', ({ timestamp }) => {
+      if (Number.isFinite(timestamp) && timestamp > 0) {
+        this.lastSchedulerHeartbeatAtMs = Math.floor(timestamp);
+      } else {
+        this.lastSchedulerHeartbeatAtMs = Date.now();
+      }
+    });
     this.voiceWebSocket = new ApiVoiceWebSocketAdapter({
       apiKey: this.apiKey,
       path: config.voiceWebSocketPath,
@@ -303,6 +319,8 @@ export class ApiServer implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
+    this.unregisterSchedulerHeartbeat?.();
+    this.unregisterSchedulerHeartbeat = null;
     await this.voiceWebSocket.stop();
     return new Promise((resolve, reject) => {
       this.server.close((err) => {
@@ -325,6 +343,22 @@ export class ApiServer implements ChannelAdapter {
       return DEFAULT_CHAT_REQUEST_TIMEOUT_MS;
     }
     return Math.floor(value);
+  }
+
+  private parseSchedulerHeartbeatStaleAfterMs(value: number | undefined): number {
+    if (value !== undefined && Number.isFinite(value) && value >= 1_000) {
+      return Math.floor(value);
+    }
+
+    const envValue = process.env.API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
+    if (envValue) {
+      const parsed = Number.parseInt(envValue, 10);
+      if (Number.isFinite(parsed) && parsed >= 1_000) {
+        return parsed;
+      }
+    }
+
+    return DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
   }
 
   private applyCorsPolicy(req: IncomingMessage, res: ServerResponse): boolean {
@@ -584,22 +618,171 @@ export class ApiServer implements ChannelAdapter {
         return [subsystem, status] as const;
       }),
     );
+    const checkedAtMs = Date.now();
 
     const subsystems = Object.fromEntries(subsystemEntries) as ApiHealthResponse['subsystems'];
-    const status: ApiHealthResponse['status'] = API_HEALTH_SUBSYSTEMS.every(
+    const subsystemStatus: ApiHealthResponse['status'] = API_HEALTH_SUBSYSTEMS.every(
       (subsystem) => subsystems[subsystem].status === 'healthy',
+    )
+      ? 'healthy'
+      : 'degraded';
+    const continuity = this.evaluateContinuityWatchdogHealth(subsystems, checkedAtMs);
+    const status: ApiHealthResponse['status'] = (
+      subsystemStatus === 'healthy'
+      && continuity.status === 'healthy'
     )
       ? 'healthy'
       : 'degraded';
 
     const body: ApiHealthResponse = {
       status,
-      checkedAt: new Date().toISOString(),
+      checkedAt: new Date(checkedAtMs).toISOString(),
       uptimeSeconds: Math.floor(process.uptime()),
       subsystems,
+      continuity,
     };
 
     sendJson(res, status === 'healthy' ? 200 : 503, body);
+  }
+
+  private evaluateContinuityWatchdogHealth(
+    subsystems: ApiHealthResponse['subsystems'],
+    checkedAtMs: number,
+  ): ApiHealthResponse['continuity'] {
+    const checks: Record<ApiContinuityWatchdogCheck, ApiHealthSubsystemStatus> = {
+      database: this.mapSubsystemToContinuityCheck(
+        subsystems.memory,
+        'memory',
+        'Database-backed memory subsystem is degraded',
+      ),
+      gatewayLink: this.evaluateGatewayLinkHealth(subsystems),
+      schedulerHeartbeat: this.evaluateSchedulerHeartbeatHealth(subsystems.scheduler, checkedAtMs),
+    };
+
+    const status: ApiHealthResponse['continuity']['status'] = API_CONTINUITY_WATCHDOG_CHECKS.every(
+      (check) => checks[check].status === 'healthy',
+    )
+      ? 'healthy'
+      : 'degraded';
+
+    return {
+      status,
+      checks,
+    };
+  }
+
+  private mapSubsystemToContinuityCheck(
+    source: ApiHealthSubsystemStatus,
+    sourceSubsystem: ApiHealthSubsystem,
+    degradedFallbackDetail: string,
+  ): ApiHealthSubsystemStatus {
+    const detail = source.detail?.trim();
+    return {
+      status: source.status === 'healthy' ? 'healthy' : 'degraded',
+      ...(source.status === 'degraded'
+        ? { detail: detail || degradedFallbackDetail }
+        : {}),
+      meta: {
+        ...(source.meta ?? {}),
+        sourceSubsystem,
+      },
+    };
+  }
+
+  private evaluateGatewayLinkHealth(
+    subsystems: ApiHealthResponse['subsystems'],
+  ): ApiHealthSubsystemStatus {
+    const llmHealthy = subsystems.llm.status === 'healthy';
+    const embeddingsHealthy = subsystems.embeddings.status === 'healthy';
+    if (llmHealthy || embeddingsHealthy) {
+      return {
+        status: 'healthy',
+        meta: {
+          sourceSubsystems: ['llm', 'embeddings'],
+          llmStatus: subsystems.llm.status,
+          embeddingsStatus: subsystems.embeddings.status,
+        },
+      };
+    }
+
+    const llmDetail = subsystems.llm.detail?.trim();
+    const embeddingsDetail = subsystems.embeddings.detail?.trim();
+    const detailParts = [llmDetail, embeddingsDetail].filter((value): value is string => Boolean(value));
+    return {
+      status: 'degraded',
+      detail: detailParts.join(' | ') || 'Gateway-linked LLM and embeddings checks are degraded',
+      meta: {
+        sourceSubsystems: ['llm', 'embeddings'],
+        llmStatus: subsystems.llm.status,
+        embeddingsStatus: subsystems.embeddings.status,
+      },
+    };
+  }
+
+  private evaluateSchedulerHeartbeatHealth(
+    schedulerSubsystem: ApiHealthSubsystemStatus,
+    checkedAtMs: number,
+  ): ApiHealthSubsystemStatus {
+    const schedulerDetail = schedulerSubsystem.detail?.trim();
+    const heartbeatObservedAtMs = this.lastSchedulerHeartbeatAtMs;
+    const uptimeMs = Math.max(0, Math.floor(process.uptime() * 1_000));
+    const heartbeatAgeMs = heartbeatObservedAtMs === null
+      ? null
+      : Math.max(0, checkedAtMs - heartbeatObservedAtMs);
+
+    const baseMeta: Record<string, unknown> = {
+      ...(schedulerSubsystem.meta ?? {}),
+      sourceSubsystem: 'scheduler',
+      schedulerHeartbeatStaleAfterMs: this.schedulerHeartbeatStaleAfterMs,
+      ...(heartbeatObservedAtMs === null
+        ? { heartbeatObserved: false }
+        : {
+          heartbeatObserved: true,
+          schedulerHeartbeatAt: new Date(heartbeatObservedAtMs).toISOString(),
+          schedulerHeartbeatAgeMs: heartbeatAgeMs,
+        }),
+    };
+
+    if (schedulerSubsystem.status !== 'healthy') {
+      return {
+        status: 'degraded',
+        detail: schedulerDetail || 'Scheduler subsystem is degraded',
+        meta: baseMeta,
+      };
+    }
+
+    if (heartbeatObservedAtMs === null) {
+      if (uptimeMs <= this.schedulerHeartbeatStaleAfterMs) {
+        return {
+          status: 'healthy',
+          meta: {
+            ...baseMeta,
+            schedulerHeartbeatGraceMsRemaining: Math.max(
+              0,
+              this.schedulerHeartbeatStaleAfterMs - uptimeMs,
+            ),
+          },
+        };
+      }
+      return {
+        status: 'degraded',
+        detail: `No scheduler heartbeat observed within ${this.schedulerHeartbeatStaleAfterMs}ms`,
+        meta: baseMeta,
+      };
+    }
+
+    if (heartbeatAgeMs !== null && heartbeatAgeMs > this.schedulerHeartbeatStaleAfterMs) {
+      return {
+        status: 'degraded',
+        detail: `Scheduler heartbeat stale: ${heartbeatAgeMs}ms since last pulse (limit ${this.schedulerHeartbeatStaleAfterMs}ms)`,
+        meta: baseMeta,
+      };
+    }
+
+    return {
+      status: 'healthy',
+      meta: baseMeta,
+    };
   }
 
   private async evaluateSubsystemHealth(

@@ -424,11 +424,15 @@ describe('ApiServer', () => {
       expect(body.status).toBe('healthy');
       expect(typeof body.checkedAt).toBe('string');
       expect(typeof body.uptimeSeconds).toBe('number');
+      expect(body.continuity.status).toBe('healthy');
       expect(body.subsystems.memory.status).toBe('healthy');
       expect(body.subsystems.llm.status).toBe('healthy');
       expect(body.subsystems.discord.status).toBe('healthy');
       expect(body.subsystems.embeddings.status).toBe('healthy');
       expect(body.subsystems.scheduler.status).toBe('healthy');
+      expect(body.continuity.checks.database.status).toBe('healthy');
+      expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
       expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
       expect(typeof body.subsystems.embeddings.meta.checkLatencyMs).toBe('number');
     });
@@ -455,6 +459,7 @@ describe('ApiServer', () => {
 
       const body = JSON.parse(res.body);
       expect(body.status).toBe('degraded');
+      expect(body.continuity.status).toBe('healthy');
       expect(body.subsystems.llm.status).toBe('degraded');
       expect(body.subsystems.llm.detail).toContain('LLM provider timeout');
       expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
@@ -462,6 +467,66 @@ describe('ApiServer', () => {
       expect(body.subsystems.discord.status).toBe('healthy');
       expect(body.subsystems.embeddings.status).toBe('healthy');
       expect(body.subsystems.scheduler.status).toBe('healthy');
+      expect(body.continuity.checks.database.status).toBe('healthy');
+      expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
+    });
+
+    it('degrades health when scheduler heartbeat is stale beyond threshold', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        healthChecks: createHealthyHealthChecks(),
+        schedulerHeartbeatStaleAfterMs: 1_000,
+      });
+      await server.init();
+      await server.start();
+      await eventBus.emit('schedule.heartbeat', {
+        timestamp: Date.now() - 10_000,
+        taskCount: 2,
+      });
+
+      const res = await request(port, 'GET', '/health');
+      expect(res.status).toBe(503);
+
+      const body = JSON.parse(res.body);
+      expect(body.status).toBe('degraded');
+      expect(body.continuity.status).toBe('degraded');
+      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('degraded');
+      expect(body.continuity.checks.schedulerHeartbeat.detail).toContain('Scheduler heartbeat stale');
+    });
+
+    it('uses fresh schedule.heartbeat events for scheduler continuity health', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        healthChecks: createHealthyHealthChecks(),
+        schedulerHeartbeatStaleAfterMs: 1_000,
+      });
+      await server.init();
+      await server.start();
+
+      await eventBus.emit('schedule.heartbeat', {
+        timestamp: Date.now(),
+        taskCount: 2,
+      });
+
+      const res = await request(port, 'GET', '/health');
+      expect(res.status).toBe(200);
+
+      const body = JSON.parse(res.body);
+      expect(body.status).toBe('healthy');
+      expect(body.continuity.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHeartbeat.meta.heartbeatObserved).toBe(true);
     });
   });
 

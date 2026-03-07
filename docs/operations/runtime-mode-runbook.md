@@ -60,6 +60,23 @@ docker compose -f docker/docker-compose.yml config
 docker compose -f docker/docker-compose.production.yml config
 ```
 
+Continuity watchdog behavior in both compose profiles:
+
+- API health server is enabled on loopback (`API_PORT`, default `3000`) with local-only insecure auth (`ALLOW_INSECURE_LOCAL_API=true`) for in-container probes.
+- Docker `healthcheck` runs `node /app/scripts/ops/continuity-watchdog-healthcheck.mjs`.
+- Probe contract requires `/health` to report continuity checks as healthy for:
+  - `database`
+  - `gatewayLink`
+  - `schedulerHeartbeat`
+- After `CONTINUITY_WATCHDOG_MAX_FAILURES` consecutive probe failures (default `5`), the watchdog sends `SIGTERM` to PID `1`; restart policy `unless-stopped` relaunches the container.
+
+Key tuning env vars:
+
+- `API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS` (default `3900000` / 65m)
+- `CONTINUITY_WATCHDOG_TIMEOUT_MS` (default `5000`)
+- `CONTINUITY_WATCHDOG_MAX_FAILURES` (default `5`)
+- `CONTINUITY_WATCHDOG_STATE_FILE` (default `/tmp/psfn-continuity-watchdog-state.json`)
+
 ## 4. Restart / Rebuild Flows
 
 The lifecycle scripts now require explicit runtime mode to prevent cross-mode restarts.
@@ -170,6 +187,7 @@ If rollback is invoked, verify:
 - Never pass a production start command to `--mode continuous`.
 - Validate both compose files after edits.
 - Keep secrets in env/secret stores; keep mutable config in JSON owners.
+- Keep continuity watchdog enabled in compose healthchecks; do not disable `CONTINUITY_WATCHDOG_RESTART_PID=1` in production.
 
 ## 8. Verification Commands
 
@@ -178,9 +196,12 @@ Run these after operational changes:
 ```bash
 docker compose -f docker/docker-compose.yml config
 docker compose -f docker/docker-compose.production.yml config
+node scripts/ops/continuity-watchdog-smoke.mjs
 ./scripts/self/restart.sh --mode continuous --help
 ./scripts/self/restart.sh --mode production --help
 ./scripts/self/rebuild.sh --mode continuous --help
 ./scripts/self/rebuild.sh --mode production --help
 npm run verify:backup-restore -- --backup-root ./runtime/production/backups
+docker inspect --format '{{.State.Health.Status}}' psfn-agent-continuous
+docker inspect --format '{{.State.Health.Status}}' psfn-agent-production
 ```

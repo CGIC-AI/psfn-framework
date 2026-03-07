@@ -99,4 +99,77 @@ describe('registerLLMMethods', () => {
       channelId: 'shard:',
     })).rejects.toThrow('non-empty shard identifier');
   });
+
+  it('preserves model knob fields from llm.chat params into provider context hints', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.chat', {
+      model: 'openrouter:z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+      maxTokens: 321,
+      contextWindow: 99999,
+      thinkingEnabled: true,
+      thinkingEffort: 'high',
+      temperature: 0.33,
+      topP: 0.77,
+      topK: 42,
+      frequencyPenalty: 0.12,
+      repetitionPenalty: 1.03,
+    });
+
+    expect(harness.stream).toHaveBeenCalledTimes(1);
+    const firstCall = harness.stream.mock.calls[0][0];
+    expect(firstCall.modelHint).toEqual({
+      model: 'openrouter:z-ai/glm-5',
+      provider: 'openrouter',
+      maxTokens: 321,
+      contextWindow: 99999,
+      thinkingEnabled: true,
+      thinkingEffort: 'high',
+      temperature: 0.33,
+      topP: 0.77,
+      topK: 42,
+      frequencyPenalty: 0.12,
+      repetitionPenalty: 1.03,
+    });
+  });
+
+  it('preserves model knob fields from llm.complete params into provider context hints', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.complete', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'summarize' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+      maxTokens: 222,
+      contextWindow: 120000,
+      thinkingEnabled: false,
+      thinkingEffort: 'medium',
+      temperature: 0.21,
+      topP: 0.66,
+      topK: 16,
+      frequencyPenalty: -0.3,
+      repetitionPenalty: 1.2,
+    });
+
+    expect(harness.complete).toHaveBeenCalledTimes(1);
+    const firstCall = harness.complete.mock.calls[0][0];
+    expect(firstCall.modelHint).toEqual({
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      maxTokens: 222,
+      contextWindow: 120000,
+      thinkingEnabled: false,
+      thinkingEffort: 'medium',
+      temperature: 0.21,
+      topP: 0.66,
+      topK: 16,
+      frequencyPenalty: -0.3,
+      repetitionPenalty: 1.2,
+    });
+  });
 });

@@ -4,6 +4,7 @@ import type {
   ModelRegistryCostMetadata,
   ModelRegistryEntry,
   ModelRegistryPurposeTag,
+  ModelThinkingEffort,
   SubstrateConfig,
 } from '../types.js';
 
@@ -15,6 +16,13 @@ export interface RoutingCandidate {
   provider: string;
   maxTokens: number;
   contextWindow?: number;
+  thinkingEnabled?: boolean;
+  thinkingEffort?: ModelThinkingEffort;
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  frequencyPenalty?: number;
+  repetitionPenalty?: number;
   slotKey?: string;
   requestBaseUrl?: string;
   requestApiKeyEnv?: string;
@@ -65,6 +73,13 @@ function uniquePush(
     candidate.model,
     String(candidate.maxTokens),
     String(candidate.contextWindow ?? ''),
+    String(candidate.thinkingEnabled ?? ''),
+    candidate.thinkingEffort ?? '',
+    String(candidate.temperature ?? ''),
+    String(candidate.topP ?? ''),
+    String(candidate.topK ?? ''),
+    String(candidate.frequencyPenalty ?? ''),
+    String(candidate.repetitionPenalty ?? ''),
     candidate.requestBaseUrl ?? '',
     candidate.requestApiKeyEnv ?? '',
     candidate.openRouterZdrOnly ? 'zdr' : '',
@@ -84,8 +99,74 @@ function toPositiveNumber(value: unknown): number | undefined {
   return value;
 }
 
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function toUnitInterval(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
+  return numeric;
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+  const numeric = toPositiveNumber(value);
+  if (numeric === undefined) return undefined;
+  return Math.floor(numeric);
+}
+
+function resolveThinkingEffort(value: unknown): ModelThinkingEffort | undefined {
+  switch (value) {
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
+  RoutingCandidate,
+  'thinkingEnabled'
+  | 'thinkingEffort'
+  | 'temperature'
+  | 'topP'
+  | 'topK'
+  | 'frequencyPenalty'
+  | 'repetitionPenalty'
+> {
+  const tuning = entry.tuning;
+  if (!tuning) return {};
+  const thinkingEnabled = typeof tuning.thinkingEnabled === 'boolean'
+    ? tuning.thinkingEnabled
+    : undefined;
+  const thinkingEffort = resolveThinkingEffort(tuning.thinkingEffort);
+  const temperature = toFiniteNumber(tuning.temperature);
+  const topP = toUnitInterval(tuning.topP);
+  const topK = toPositiveInteger(tuning.topK);
+  const frequencyPenalty = toFiniteNumber(tuning.frequencyPenalty);
+  const repetitionPenalty = toFiniteNumber(tuning.repetitionPenalty);
+
+  return {
+    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+    ...(thinkingEffort ? { thinkingEffort } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+    ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
+    ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
+  };
+}
+
 function resolveMaxTokens(entry: ModelRegistryEntry): number | undefined {
   return toPositiveNumber(entry.tuning?.maxOutputTokens)
+    ?? toPositiveNumber(entry.tuning?.maxTokens)
     ?? toPositiveNumber(entry.capabilities?.maxOutputTokens);
 }
 
@@ -127,6 +208,7 @@ function candidateFromRegistryEntry(
   if (maxTokens === undefined) return null;
 
   const contextWindow = resolveContextWindow(entry, config.defaultContextWindow) ?? 0;
+  const tuning = resolveCandidateTuning(entry);
   return {
     candidate: withOpenRouterPreferences({
       slotKey: entry.id,
@@ -134,6 +216,7 @@ function candidateFromRegistryEntry(
       model,
       maxTokens,
       ...(contextWindow > 0 ? { contextWindow } : {}),
+      ...tuning,
     }, config),
     primary: purposeTag.primary === true,
     rank: Number.isFinite(entry.rank) ? Math.floor(entry.rank) : Number.MAX_SAFE_INTEGER,

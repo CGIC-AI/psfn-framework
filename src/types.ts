@@ -81,11 +81,28 @@ export interface BroadcastRoutingMetadata {
   visibilityScope?: 'public_only' | 'approved_private_context';
 }
 
-export interface MessageModelOverride {
-  provider: string;
-  model: string;
+export type ModelThinkingEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+export interface ModelControlKnobs {
   maxTokens?: number;
   contextWindow?: number;
+  thinkingEnabled?: boolean;
+  thinkingEffort?: ModelThinkingEffort;
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  frequencyPenalty?: number;
+  repetitionPenalty?: number;
+}
+
+export interface LLMModelHint extends ModelControlKnobs {
+  model?: string;
+  provider?: string;
+}
+
+export interface MessageModelOverride extends ModelControlKnobs {
+  provider: string;
+  model: string;
   slotKey?: string;
   purpose?: string;
 }
@@ -243,6 +260,7 @@ export interface LLMContext {
   systemPrompt: string;
   messages: ContextMessage[];
   tools?: ToolSchema[];
+  modelHint?: LLMModelHint;
   correlation?: CorrelationMetadata;
   manifest?: ContextManifest;
 }
@@ -351,12 +369,7 @@ export interface ModelRegistryCapabilityMetadata {
   [key: string]: unknown;
 }
 
-export interface ModelRegistryTuningMetadata {
-  temperature?: number;
-  topP?: number;
-  topK?: number;
-  frequencyPenalty?: number;
-  repetitionPenalty?: number;
+export interface ModelRegistryTuningMetadata extends ModelControlKnobs {
   maxOutputTokens?: number;
   [key: string]: unknown;
 }

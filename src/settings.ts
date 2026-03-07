@@ -466,9 +466,315 @@ function toSessionRestartBehavior(value: unknown): SessionRestartBehavior | unde
 }
 
 const CANONICAL_MODEL_PURPOSE_SET = new Set<CanonicalModelPurpose>(CANONICAL_MODEL_PURPOSES);
+const MODEL_REGISTRY_THINKING_EFFORT_VALUES = new Set([
+  'none',
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+]);
+const MODEL_REGISTRY_TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
+const MODEL_REGISTRY_TOP_P_RANGE = { min: 0, max: 1 } as const;
+const MODEL_REGISTRY_TOP_K_RANGE = { min: 1, max: 1_000_000 } as const;
+const MODEL_REGISTRY_FREQUENCY_PENALTY_RANGE = { min: -2, max: 2 } as const;
+const MODEL_REGISTRY_REPETITION_PENALTY_RANGE = { min: 0, max: 2 } as const;
+const MODEL_REGISTRY_THINKING_BUDGET_TOKENS_RANGE = { min: 1, max: 1_000_000 } as const;
+
+const MODEL_REGISTRY_TOP_P_ALIASES = ['top_p'] as const;
+const MODEL_REGISTRY_TOP_K_ALIASES = ['top_k'] as const;
+const MODEL_REGISTRY_FREQUENCY_PENALTY_ALIASES = ['frequency_penalty'] as const;
+const MODEL_REGISTRY_REPETITION_PENALTY_ALIASES = ['repetition_penalty'] as const;
+const MODEL_REGISTRY_THINKING_ENABLED_ALIASES = [
+  'thinking_enabled',
+  'reasoningEnabled',
+  'reasoning_enabled',
+] as const;
+const MODEL_REGISTRY_THINKING_EFFORT_ALIASES = [
+  'thinking_effort',
+  'reasoningEffort',
+  'reasoning_effort',
+] as const;
+const MODEL_REGISTRY_THINKING_BUDGET_TOKENS_ALIASES = [
+  'thinking_budget_tokens',
+  'thinkingMaxTokens',
+  'thinking_max_tokens',
+  'reasoningMaxTokens',
+  'reasoning_max_tokens',
+] as const;
 
 function hasLegacyModelSettingsPayload(settings: EditableSettings): boolean {
   return LEGACY_MODEL_SETTINGS_KEYS.some((key) => settings[key] !== undefined);
+}
+
+function toStrictFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (!/^[+\-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+\-]?\d+)?$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number.parseFloat(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function toStrictNumberInRange(value: unknown, min: number, max: number): number | undefined {
+  const parsed = toStrictFiniteNumber(value);
+  if (parsed === undefined) return undefined;
+  return parsed >= min && parsed <= max ? parsed : undefined;
+}
+
+function toStrictIntegerInRange(value: unknown, min: number, max: number): number | undefined {
+  let parsed: number | undefined;
+  if (typeof value === 'number') {
+    parsed = Number.isInteger(value) ? value : undefined;
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (!/^[+\-]?\d+$/.test(trimmed)) return undefined;
+    parsed = Number.parseInt(trimmed, 10);
+  }
+
+  if (parsed === undefined) return undefined;
+  return parsed >= min && parsed <= max ? parsed : undefined;
+}
+
+function resolveAliasedValue(
+  target: Record<string, unknown>,
+  canonicalKey: string,
+  aliases: readonly string[],
+): unknown {
+  if (target[canonicalKey] !== undefined) return target[canonicalKey];
+  for (const alias of aliases) {
+    if (target[alias] !== undefined) return target[alias];
+  }
+  return undefined;
+}
+
+function removeAliases(
+  target: Record<string, unknown>,
+  aliases: readonly string[],
+): void {
+  for (const alias of aliases) {
+    delete target[alias];
+  }
+}
+
+function normalizeModelRegistryNumericKnob(
+  tuning: Record<string, unknown>,
+  fieldPath: string,
+  canonicalKey: string,
+  aliases: readonly string[],
+  range: { min: number; max: number },
+): void {
+  const raw = resolveAliasedValue(tuning, canonicalKey, aliases);
+  if (raw === undefined) return;
+  const parsed = toStrictNumberInRange(raw, range.min, range.max);
+  if (parsed === undefined) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}.${canonicalKey}: expected number in range ${range.min}-${range.max}`,
+    );
+  }
+  tuning[canonicalKey] = parsed;
+  removeAliases(tuning, aliases);
+}
+
+function normalizeModelRegistryIntegerKnob(
+  tuning: Record<string, unknown>,
+  fieldPath: string,
+  canonicalKey: string,
+  aliases: readonly string[],
+  range: { min: number; max: number },
+): void {
+  const raw = resolveAliasedValue(tuning, canonicalKey, aliases);
+  if (raw === undefined) return;
+  const parsed = toStrictIntegerInRange(raw, range.min, range.max);
+  if (parsed === undefined) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}.${canonicalKey}: expected integer in range ${range.min}-${range.max}`,
+    );
+  }
+  tuning[canonicalKey] = parsed;
+  removeAliases(tuning, aliases);
+}
+
+function normalizeModelRegistryThinkingSource(
+  source: unknown,
+  fieldPath: string,
+): {
+  enabled?: unknown;
+  effort?: unknown;
+  budgetTokens?: unknown;
+} {
+  if (typeof source === 'boolean') {
+    return { enabled: source };
+  }
+  if (typeof source === 'string') {
+    const asBoolean = toBoolean(source);
+    if (asBoolean !== undefined) return { enabled: asBoolean };
+    return { effort: source };
+  }
+  if (!isRecord(source)) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}: expected boolean, string, or object`,
+    );
+  }
+  const enabled = source.enabled ?? source.thinkingEnabled ?? source.reasoningEnabled;
+  const effort = source.effort ?? source.thinkingEffort ?? source.reasoningEffort;
+  const budgetTokens = source.budgetTokens
+    ?? source.budget_tokens
+    ?? source.maxTokens
+    ?? source.max_tokens;
+  if (enabled === undefined && effort === undefined && budgetTokens === undefined) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}: expected at least one of enabled, effort, or budgetTokens`,
+    );
+  }
+  return {
+    ...(enabled !== undefined ? { enabled } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+  };
+}
+
+function normalizeModelRegistryThinkingControls(
+  tuning: Record<string, unknown>,
+  fieldPath: string,
+): void {
+  let thinkingEnabledRaw: unknown;
+  let thinkingEffortRaw: unknown;
+  let thinkingBudgetTokensRaw: unknown;
+
+  const compositeThinking = tuning.thinking;
+  if (compositeThinking !== undefined) {
+    const normalized = normalizeModelRegistryThinkingSource(compositeThinking, `${fieldPath}.thinking`);
+    if (normalized.enabled !== undefined) thinkingEnabledRaw = normalized.enabled;
+    if (normalized.effort !== undefined) thinkingEffortRaw = normalized.effort;
+    if (normalized.budgetTokens !== undefined) thinkingBudgetTokensRaw = normalized.budgetTokens;
+    delete tuning.thinking;
+  }
+
+  const compositeReasoning = tuning.reasoning;
+  if (compositeReasoning !== undefined) {
+    const normalized = normalizeModelRegistryThinkingSource(compositeReasoning, `${fieldPath}.reasoning`);
+    if (normalized.enabled !== undefined) thinkingEnabledRaw = normalized.enabled;
+    if (normalized.effort !== undefined) thinkingEffortRaw = normalized.effort;
+    if (normalized.budgetTokens !== undefined) thinkingBudgetTokensRaw = normalized.budgetTokens;
+    delete tuning.reasoning;
+  }
+
+  const explicitThinkingEnabled = resolveAliasedValue(
+    tuning,
+    'thinkingEnabled',
+    MODEL_REGISTRY_THINKING_ENABLED_ALIASES,
+  );
+  if (explicitThinkingEnabled !== undefined) {
+    thinkingEnabledRaw = explicitThinkingEnabled;
+  }
+  const explicitThinkingEffort = resolveAliasedValue(
+    tuning,
+    'thinkingEffort',
+    MODEL_REGISTRY_THINKING_EFFORT_ALIASES,
+  );
+  if (explicitThinkingEffort !== undefined) {
+    thinkingEffortRaw = explicitThinkingEffort;
+  }
+  const explicitThinkingBudgetTokens = resolveAliasedValue(
+    tuning,
+    'thinkingBudgetTokens',
+    MODEL_REGISTRY_THINKING_BUDGET_TOKENS_ALIASES,
+  );
+  if (explicitThinkingBudgetTokens !== undefined) {
+    thinkingBudgetTokensRaw = explicitThinkingBudgetTokens;
+  }
+
+  if (thinkingEnabledRaw !== undefined) {
+    const normalized = toBoolean(thinkingEnabledRaw);
+    if (normalized === undefined) {
+      throw new Error(`Invalid model registry at ${fieldPath}.thinkingEnabled: expected boolean`);
+    }
+    tuning.thinkingEnabled = normalized;
+  }
+
+  if (thinkingEffortRaw !== undefined) {
+    if (typeof thinkingEffortRaw !== 'string') {
+      throw new Error(
+        `Invalid model registry at ${fieldPath}.thinkingEffort: expected one of ${[...MODEL_REGISTRY_THINKING_EFFORT_VALUES].join(', ')}`,
+      );
+    }
+    const normalized = thinkingEffortRaw.trim().toLowerCase();
+    if (!MODEL_REGISTRY_THINKING_EFFORT_VALUES.has(normalized)) {
+      throw new Error(
+        `Invalid model registry at ${fieldPath}.thinkingEffort: expected one of ${[...MODEL_REGISTRY_THINKING_EFFORT_VALUES].join(', ')}`,
+      );
+    }
+    tuning.thinkingEffort = normalized;
+  }
+
+  if (thinkingBudgetTokensRaw !== undefined) {
+    const normalized = toStrictIntegerInRange(
+      thinkingBudgetTokensRaw,
+      MODEL_REGISTRY_THINKING_BUDGET_TOKENS_RANGE.min,
+      MODEL_REGISTRY_THINKING_BUDGET_TOKENS_RANGE.max,
+    );
+    if (normalized === undefined) {
+      throw new Error(
+        `Invalid model registry at ${fieldPath}.thinkingBudgetTokens: expected integer in range ${MODEL_REGISTRY_THINKING_BUDGET_TOKENS_RANGE.min}-${MODEL_REGISTRY_THINKING_BUDGET_TOKENS_RANGE.max}`,
+      );
+    }
+    tuning.thinkingBudgetTokens = normalized;
+  }
+
+  removeAliases(tuning, MODEL_REGISTRY_THINKING_ENABLED_ALIASES);
+  removeAliases(tuning, MODEL_REGISTRY_THINKING_EFFORT_ALIASES);
+  removeAliases(tuning, MODEL_REGISTRY_THINKING_BUDGET_TOKENS_ALIASES);
+}
+
+function normalizeModelRegistryTuning(
+  value: Record<string, unknown>,
+  fieldPath: string,
+): Record<string, unknown> {
+  const tuning = { ...value };
+  normalizeModelRegistryNumericKnob(
+    tuning,
+    fieldPath,
+    'temperature',
+    [],
+    MODEL_REGISTRY_TEMPERATURE_RANGE,
+  );
+  normalizeModelRegistryNumericKnob(
+    tuning,
+    fieldPath,
+    'topP',
+    MODEL_REGISTRY_TOP_P_ALIASES,
+    MODEL_REGISTRY_TOP_P_RANGE,
+  );
+  normalizeModelRegistryIntegerKnob(
+    tuning,
+    fieldPath,
+    'topK',
+    MODEL_REGISTRY_TOP_K_ALIASES,
+    MODEL_REGISTRY_TOP_K_RANGE,
+  );
+  normalizeModelRegistryNumericKnob(
+    tuning,
+    fieldPath,
+    'frequencyPenalty',
+    MODEL_REGISTRY_FREQUENCY_PENALTY_ALIASES,
+    MODEL_REGISTRY_FREQUENCY_PENALTY_RANGE,
+  );
+  normalizeModelRegistryNumericKnob(
+    tuning,
+    fieldPath,
+    'repetitionPenalty',
+    MODEL_REGISTRY_REPETITION_PENALTY_ALIASES,
+    MODEL_REGISTRY_REPETITION_PENALTY_RANGE,
+  );
+  normalizeModelRegistryThinkingControls(tuning, fieldPath);
+  return tuning;
 }
 
 function normalizeModelRegistryPurposeTag(
@@ -581,7 +887,9 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
   });
 
   const capabilities = isRecord(value.capabilities) ? { ...value.capabilities } : undefined;
-  const tuning = isRecord(value.tuning) ? { ...value.tuning } : undefined;
+  const tuning = isRecord(value.tuning)
+    ? normalizeModelRegistryTuning({ ...value.tuning }, `${fieldPath}.tuning`)
+    : undefined;
   const cost = isRecord(value.cost) ? { ...value.cost } : undefined;
   const metadata = isRecord(value.metadata) ? { ...value.metadata } : undefined;
 

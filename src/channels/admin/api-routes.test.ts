@@ -20,7 +20,7 @@ import { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import { loadSettings } from '../../settings.js';
 import { saveCapabilityTierConfig } from '../../config/capability-tier-config.js';
-import { saveModelsConfig } from '../../config/models-config.js';
+import { loadModelsConfig, saveModelsConfig } from '../../config/models-config.js';
 import { saveSchedulerConfig } from '../../config/scheduler-config.js';
 import { saveSkillsConfig } from '../../config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../config/trust-policy-config.js';
@@ -1048,8 +1048,8 @@ describe('AdminServer JSON API routes', () => {
     const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
       modelCatalog: Record<string, { model?: string }>;
     };
-    expect(settingsPayload.editors.models.modelCatalog.primary?.model).toBe(
-      persistedModels.modelCatalog.primary?.model,
+    expect(settingsPayload.editors.models.modelCatalog.primary.model).toBe(
+      persistedModels.modelCatalog.primary.model,
     );
     expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.maintenanceIntervalMs);
     expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
@@ -1741,6 +1741,123 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.editors.trustPolicy).toEqual(expectedTrustPolicy);
     expect(payload.editors.capabilities).toEqual(expectedCapabilities);
     expect(loadSettings(tempDir)).toEqual(expect.objectContaining(runtimePatch));
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it('round-trips model-control runtime fields via /api/admin/settings with persistence and reload coverage', async () => {
+    const beforeModels = loadModelsConfig(tempDir, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    const beforeModelsFile = readFileSync(join(tempDir, 'models.json'), 'utf8');
+    const runtimeModelControls = {
+      thinkMaxTokens: 64000,
+      thinkMaxWallTimeMs: 120000,
+      thinkMaxSubQueries: 8,
+      openRouterProviderOrder: ['parasail', 'openai'],
+    };
+
+    const patchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify(runtimeModelControls),
+      authHeaders,
+    );
+    expect(patchRes.status).toBe(200);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
+
+    const getRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
+    expect(getRes.status).toBe(200);
+    const payload = JSON.parse(getRes.body) as {
+      config: Record<string, unknown>;
+      editors: {
+        models: ReturnType<typeof loadModelsConfig>;
+      };
+    };
+    expect(payload.config).toEqual(expect.objectContaining(runtimeModelControls));
+    expect(payload.config.primaryModel).toBeUndefined();
+
+    const reloadedModels = loadModelsConfig(tempDir, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    expect(payload.editors.models).toEqual(beforeModels);
+    expect(reloadedModels).toEqual(beforeModels);
+    expect(readFileSync(join(tempDir, 'models.json'), 'utf8')).toBe(beforeModelsFile);
+
+    const persistedSettings = loadSettings(tempDir);
+    expect(persistedSettings).toEqual(expect.objectContaining(runtimeModelControls));
+  });
+
+  it('returns field-level validation errors for malformed and out-of-range model-control payloads', async () => {
+    const modelsBefore = loadModelsConfig(tempDir, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    const settingsBefore = loadSettings(tempDir);
+
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        thinkMaxTokens: 999,
+        thinkMaxWallTimeMs: 1000,
+        thinkMaxSubQueries: 0,
+        modelCatalog: {
+          primary: {
+            routing: {
+              providerOrder: ['openrouter', 99],
+            },
+          },
+        },
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as {
+      ok: boolean;
+      message: string;
+      validationErrors?: Array<{ field: string; message: string; code?: string }>;
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'thinkMaxTokens',
+        message: 'thinkMaxTokens must be 1000-1000000',
+        code: 'out_of_range',
+      }),
+      expect.objectContaining({
+        field: 'thinkMaxWallTimeMs',
+        message: 'thinkMaxWallTimeMs must be 5000-600000',
+        code: 'out_of_range',
+      }),
+      expect.objectContaining({
+        field: 'thinkMaxSubQueries',
+        message: 'thinkMaxSubQueries must be 1-100',
+        code: 'out_of_range',
+      }),
+      expect.objectContaining({
+        field: 'modelCatalog',
+        message: 'modelCatalog is owned by models.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'modelCatalog.primary.routing.providerOrder',
+        message: 'modelCatalog.primary.routing.providerOrder must be an array of strings',
+        code: 'invalid_type',
+      }),
+    ]));
+    expect(payload.message).toContain('modelCatalog is owned by models.json');
+
+    const modelsAfter = loadModelsConfig(tempDir, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    expect(modelsAfter).toEqual(modelsBefore);
+    expect(loadSettings(tempDir).thinkMaxTokens).toBe(settingsBefore.thinkMaxTokens);
+    expect(loadSettings(tempDir).thinkMaxWallTimeMs).toBe(settingsBefore.thinkMaxWallTimeMs);
+    expect(loadSettings(tempDir).thinkMaxSubQueries).toBe(settingsBefore.thinkMaxSubQueries);
     expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
   });

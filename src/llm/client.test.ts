@@ -363,6 +363,193 @@ describe('LLMClient completion model hints', () => {
   });
 });
 
+describe('LLMClient model knob plumbing', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: `${provider}:${modelId}`,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('applies configured registry tuning knobs to stream request options (smoke)', async () => {
+    const config = makeConfig();
+    const registry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...registry,
+      models: registry.models.map((entry) => (
+        entry.id === 'chat'
+          ? {
+            ...entry,
+            tuning: {
+              ...(entry.tuning ?? {}),
+              maxOutputTokens: 1337,
+              contextWindow: 222_000,
+              thinkingEnabled: true,
+              thinkingEffort: 'high',
+              temperature: 0.42,
+              topP: 0.88,
+              topK: 24,
+              frequencyPenalty: -0.15,
+              repetitionPenalty: 1.07,
+            },
+          }
+          : entry
+      )),
+    };
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+
+    mocks.streamSimple.mockImplementation(() => (async function* streamOk() {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 9, output: 5 },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello' }],
+    });
+
+    expect(response.content).toBe('ok');
+    const requestOptions = mocks.streamSimple.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(requestOptions).toMatchObject({
+      maxTokens: 1337,
+      contextWindow: 222_000,
+      reasoning: 'high',
+      temperature: 0.42,
+      topP: 0.88,
+      topK: 24,
+      frequencyPenalty: -0.15,
+      repetitionPenalty: 1.07,
+    });
+  });
+
+  it('filters unsupported sampling knobs for non-passthrough providers deterministically', async () => {
+    const config = makeConfig();
+    const registry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...registry,
+      models: registry.models.map((entry) => (
+        entry.id === 'chat'
+          ? {
+            ...entry,
+            identity: {
+              ...entry.identity,
+              provider: 'anthropic',
+              model: 'claude-sonnet-4-5',
+            },
+            tuning: {
+              ...(entry.tuning ?? {}),
+              maxOutputTokens: 1024,
+              thinkingEnabled: true,
+              thinkingEffort: 'medium',
+              temperature: 0.31,
+              topP: 0.9,
+              topK: 40,
+              frequencyPenalty: 0.2,
+              repetitionPenalty: 1.1,
+            },
+          }
+          : entry
+      )),
+    };
+    mocks.getProviders.mockReturnValue(['openrouter', 'anthropic']);
+    mocks.getModels.mockImplementation((provider: string) => (
+      provider === 'anthropic'
+        ? [{
+          id: 'claude-sonnet-4-5',
+          provider: 'anthropic',
+          name: 'claude-sonnet-4-5',
+          api: 'anthropic-messages',
+          input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        }]
+        : []
+    ));
+
+    const client = new LLMClient(config);
+
+    mocks.streamSimple.mockImplementation(() => (async function* streamOk() {
+      yield {
+        type: 'done',
+        message: {
+          model: 'claude-sonnet-4-5',
+          usage: { input: 7, output: 4 },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello' }],
+    });
+
+    const requestOptions = mocks.streamSimple.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(requestOptions.maxTokens).toBe(1024);
+    expect(requestOptions.temperature).toBe(0.31);
+    expect(requestOptions.reasoning).toBe('medium');
+    expect(requestOptions).not.toHaveProperty('topP');
+    expect(requestOptions).not.toHaveProperty('topK');
+    expect(requestOptions).not.toHaveProperty('frequencyPenalty');
+    expect(requestOptions).not.toHaveProperty('repetitionPenalty');
+  });
+
+  it('maps model-hint thinking disable to no reasoning option even when effort is set', async () => {
+    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'z-ai/glm-5',
+      usage: { input: 5, output: 3 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'reasoning',
+      {
+        disableRetry: true,
+        modelHint: {
+          thinkingEnabled: false,
+          thinkingEffort: 'high',
+          maxTokens: 99,
+        },
+      },
+    );
+
+    const requestOptions = mocks.completeSimple.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(requestOptions.maxTokens).toBe(99);
+    expect(requestOptions).not.toHaveProperty('reasoning');
+  });
+});
+
 describe('LLMClient context routing', () => {
   beforeEach(() => {
     mocks.getModel.mockReset();

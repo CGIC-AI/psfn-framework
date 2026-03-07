@@ -14,6 +14,7 @@ import {
 } from './settings.js';
 import {
   createDefaultCompositionalPolicyConfig,
+  type CanonicalModelRegistry,
   type SubstrateConfig,
 } from './types.js';
 import { registerStreamingSttProvider } from './voice/connectors/stt/index.js';
@@ -84,6 +85,58 @@ function makeConfig(): SubstrateConfig {
     echoTtsUrl: 'http://127.0.0.1:8001/v1/audio/speech',
     echoTtsVoice: 'echo-default',
     echoTtsPreset: 'normal',
+  };
+}
+
+function makeCanonicalModelRegistry(options?: {
+  primaryTuning?: Record<string, unknown>;
+  extractionTuning?: Record<string, unknown>;
+}): CanonicalModelRegistry {
+  return {
+    schemaVersion: 1,
+    models: [
+      {
+        id: 'primary',
+        rank: 100,
+        identity: {
+          model: 'openai/gpt-4.1-mini',
+          provider: 'openrouter',
+          source: { type: 'openrouter' },
+        },
+        purposes: [
+          { purpose: 'chat', primary: true },
+          { purpose: 'summary', primary: true },
+          { purpose: 'reasoning', primary: true },
+          { purpose: 'longContext', primary: true },
+          { purpose: 'vision', primary: true },
+          { purpose: 'moa', primary: true },
+        ],
+        capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+        tuning: {
+          maxOutputTokens: 4096,
+          ...(options?.primaryTuning ?? {}),
+        },
+      },
+      {
+        id: 'extraction',
+        rank: 80,
+        identity: {
+          model: 'deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          source: { type: 'openrouter' },
+        },
+        purposes: [
+          { purpose: 'background', primary: true },
+          { purpose: 'extraction', primary: true },
+          { purpose: 'import_processing', primary: true },
+        ],
+        capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+        tuning: {
+          maxOutputTokens: 2048,
+          ...(options?.extractionTuning ?? {}),
+        },
+      },
+    ],
   };
 }
 
@@ -386,6 +439,110 @@ describe('settings', () => {
           ],
         },
       })).toThrow('monthlyUsdLimit must be >= dailyUsdLimit');
+    });
+
+    it('normalizes tuning knob aliases and thinking controls', () => {
+      const normalized = normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: {
+            temperature: '0.7',
+            top_p: '0.86',
+            top_k: '40',
+            frequency_penalty: '-0.4',
+            repetition_penalty: '1.2',
+            thinking: {
+              enabled: 'true',
+              effort: 'HIGH',
+              budget_tokens: '2048',
+            },
+          },
+        }),
+      });
+
+      const primaryTuning = normalized.modelRegistry?.models.find(model => model.id === 'primary')?.tuning;
+      expect(primaryTuning?.temperature).toBe(0.7);
+      expect(primaryTuning?.topP).toBe(0.86);
+      expect(primaryTuning?.topK).toBe(40);
+      expect(primaryTuning?.frequencyPenalty).toBe(-0.4);
+      expect(primaryTuning?.repetitionPenalty).toBe(1.2);
+      expect(primaryTuning?.thinkingEnabled).toBe(true);
+      expect(primaryTuning?.thinkingEffort).toBe('high');
+      expect(primaryTuning?.thinkingBudgetTokens).toBe(2048);
+      expect(primaryTuning?.top_p).toBeUndefined();
+      expect(primaryTuning?.top_k).toBeUndefined();
+      expect(primaryTuning?.frequency_penalty).toBeUndefined();
+      expect(primaryTuning?.repetition_penalty).toBeUndefined();
+      expect(primaryTuning?.thinking).toBeUndefined();
+    });
+
+    it('fails closed for out-of-range tuning knob values', () => {
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { temperature: 2.1 },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.temperature');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { topP: -0.1 },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.topP');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { topK: 0 },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.topK');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { frequencyPenalty: -2.5 },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.frequencyPenalty');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { repetitionPenalty: 2.5 },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.repetitionPenalty');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { thinkingBudgetTokens: 0 },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.thinkingBudgetTokens');
+    });
+
+    it('fails closed for malformed tuning knob payloads', () => {
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { temperature: 'warm' },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.temperature');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { top_k: '10.5' },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.topK');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { thinkingEnabled: 'sometimes' },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.thinkingEnabled');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { thinkingEffort: 'extreme' },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.thinkingEffort');
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: makeCanonicalModelRegistry({
+          primaryTuning: { thinking: [] },
+        }),
+      })).toThrow('settings.modelRegistry.models[0].tuning.thinking');
     });
   });
 
@@ -904,11 +1061,43 @@ describe('settings', () => {
       const [settings, errors] = parseSettingsForm(params);
       expect(errors).toEqual([]);
       expect(settings.modelRegistry?.models[0]?.id).toBe('fast');
-      expect(settings.modelCatalog?.fast?.overrides?.maxTokens).toBe(1536);
+      expect(settings.modelCatalog?.fast.overrides?.maxTokens).toBe(1536);
       expect(settings.modelRoleAssignments?.chat).toBe('fast');
       expect(settings.modelRoleAssignments?.context).toBe('extract');
       expect(settings.primaryModel).toBe('openai/gpt-4.1-mini');
       expect(settings.extractionModel).toBe('deepseek/deepseek-v3.2');
+    });
+
+    it('normalizes model tuning knobs from modelRegistryJson', () => {
+      const params = new URLSearchParams({
+        modelRegistryJson: JSON.stringify(makeCanonicalModelRegistry({
+          primaryTuning: {
+            temperature: '0.6',
+            top_p: '0.9',
+            top_k: '32',
+            frequency_penalty: '0.1',
+            repetition_penalty: '1.1',
+            reasoning: {
+              effort: 'medium',
+              max_tokens: '768',
+              enabled: 'true',
+            },
+          },
+        })),
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      const primaryTuning = settings.modelRegistry?.models.find(model => model.id === 'primary')?.tuning;
+      expect(primaryTuning?.temperature).toBe(0.6);
+      expect(primaryTuning?.topP).toBe(0.9);
+      expect(primaryTuning?.topK).toBe(32);
+      expect(primaryTuning?.frequencyPenalty).toBe(0.1);
+      expect(primaryTuning?.repetitionPenalty).toBe(1.1);
+      expect(primaryTuning?.thinkingEffort).toBe('medium');
+      expect(primaryTuning?.thinkingBudgetTokens).toBe(768);
+      expect(primaryTuning?.thinkingEnabled).toBe(true);
+      expect(primaryTuning?.reasoning).toBeUndefined();
     });
 
     it('parses import-processing routing controls', () => {
@@ -1033,6 +1222,22 @@ describe('settings', () => {
       const [, errors] = parseSettingsForm(params);
       expect(errors).toHaveLength(1);
       expect(errors[0]).toContain('modelRegistryJson');
+    });
+
+    it('rejects malformed model tuning knobs in modelRegistryJson payloads', () => {
+      const params = new URLSearchParams({
+        modelRegistryJson: JSON.stringify(makeCanonicalModelRegistry({
+          primaryTuning: {
+            top_k: '10.5',
+            thinking: {
+              enabled: 'sometimes',
+            },
+          },
+        })),
+      });
+      const [settings, errors] = parseSettingsForm(params);
+      expect(settings.modelRegistry).toBeUndefined();
+      expect(errors).toContain('modelRegistryJson must be valid canonical model registry JSON');
     });
 
     it('rejects out-of-range values', () => {

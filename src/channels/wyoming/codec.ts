@@ -117,7 +117,7 @@ function toBuffer(chunk: Uint8Array): Buffer {
   return Buffer.from(chunk);
 }
 
-function pushChunk(existing: Buffer, chunk: Uint8Array): Buffer {
+function pushChunk(existing: Buffer<ArrayBufferLike>, chunk: Uint8Array): Buffer<ArrayBufferLike> {
   if (chunk.byteLength === 0) {
     return existing;
   }
@@ -134,7 +134,7 @@ export class WyomingFrameCodec {
   private readonly maxHeaderBytes: number;
   private readonly maxPayloadBytes: number;
   private readonly maxFrameBytes: number;
-  private buffer = Buffer.alloc(0);
+  private buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 
   constructor(options: WyomingFrameCodecOptions = {}) {
     this.maxHeaderBytes = resolveBound(options.maxHeaderBytes, DEFAULT_MAX_HEADER_BYTES, 'maxHeaderBytes');

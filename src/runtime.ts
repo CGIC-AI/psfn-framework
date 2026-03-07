@@ -134,6 +134,7 @@ import {
   createEmbeddingDimensionMismatchFatalMessage,
   hydrateCanonicalStartupConfig,
   resolveRuntimeVoiceSttProvider,
+  resolveRuntimeVoiceTtsProvider,
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
 import {
@@ -1085,7 +1086,8 @@ export class SubstrateRuntime implements Lifecycle {
             }
 
             const probeResult = await embeddingsActiveProbe.run(async (signal) => {
-              const vector = await embeddingProvider.embed('health probe', { signal });
+              void signal;
+              const vector = await embeddingProvider.embed('health probe');
               if (vector.length !== embeddingProvider.dims) {
                 throw new Error(
                   `Embedding probe dimension mismatch: expected ${embeddingProvider.dims}, got ${vector.length}`,

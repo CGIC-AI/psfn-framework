@@ -1,7 +1,7 @@
 // ── RLM Iteration Loop ──
 // Runs an ephemeral think cycle: LLM → code → output → repeat until FINAL.
 
-import type { CapabilityTier, ContextMessage, LLMContext, LLMResponse } from '../types.js';
+import type { CapabilityTier, ContextMessage, CorrelationMetadata, LLMContext, LLMResponse } from '../types.js';
 import type { LLMRequestMetadata } from '../agent/contracts.js';
 import type {
   BudgetStatus,
@@ -458,7 +458,7 @@ function buildThinkCorrelation(
   metadata: ResolvedThinkRequestMetadata,
   originStage: string,
   requestSuffix: string,
-): LLMContext['correlation'] {
+): CorrelationMetadata {
   return {
     ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
     requestId: `${metadata.requestId}:${requestSuffix}`,

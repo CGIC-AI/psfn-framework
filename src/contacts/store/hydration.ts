@@ -4,9 +4,9 @@ import type {
   ContactChannelLink,
   ContactConversationChannel,
   RelationshipType,
-  TrustLevel,
   ChannelPrivacyLevel,
 } from '../types.js';
+import type { TrustLevel } from '../../trust/types.js';
 import {
   LEGACY_DISCORD_CHANNEL,
   defaultPrivacyForChannel,

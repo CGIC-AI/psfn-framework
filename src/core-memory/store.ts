@@ -135,7 +135,7 @@ function parseBlock(raw: unknown, expectedLabel: CoreMemoryLabel): CoreMemoryBlo
   if (typeof content !== 'string') {
     throw new Error(`core memory block "${expectedLabel}" content must be a string`);
   }
-  if (!Number.isInteger(maxChars) || maxChars < 1) {
+  if (typeof maxChars !== 'number' || !Number.isInteger(maxChars) || maxChars < 1) {
     throw new Error(`core memory block "${expectedLabel}" maxChars must be a positive integer`);
   }
   if (content.length > maxChars) {

@@ -412,7 +412,7 @@ function normalizeModalityName(modality: unknown, index: number): string {
 }
 
 function resolveObservationCategoricalSignal(
-  discrete: Record<string, number> | undefined,
+  discrete: unknown,
   fieldName: string,
 ): CategoricalSignal | null {
   if (discrete === undefined) {
@@ -450,7 +450,7 @@ function resolveObservationCategoricalSignal(
   };
 }
 
-function normalizeObservationVad(vad: Partial<VADVector> | undefined, fieldName: string): VADVector | null {
+function normalizeObservationVad(vad: unknown, fieldName: string): VADVector | null {
   if (vad === undefined) {
     return null;
   }

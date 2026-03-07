@@ -402,7 +402,7 @@ export interface EventMap {
     turnId?: string;
     channelId?: string;
     userId?: string;
-    stage?: 'transport' | 'stt' | 'tts' | 'orchestrator' | 'unknown';
+    stage?: 'ingest' | 'transport' | 'stt' | 'llm' | 'tts' | 'orchestrator' | 'unknown';
     code?: string;
     error: string;
     timestampMs?: number;

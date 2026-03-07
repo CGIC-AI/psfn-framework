@@ -62,7 +62,7 @@ function toError(value: unknown): Error {
 }
 
 function parseStatusCode(error: Error): number | null {
-  const record = error as Record<string, unknown>;
+  const record = error as unknown as Record<string, unknown>;
   const response = record.response as Record<string, unknown> | undefined;
   const maybeStatus = record.status
     ?? record.statusCode

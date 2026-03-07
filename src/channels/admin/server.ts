@@ -3,12 +3,12 @@
 // Uses htmx for interactivity — server returns HTML fragments.
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { Socket } from 'node:net';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
+import type { Duplex } from 'node:stream';
 import { createRequire } from 'node:module';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import type { CorrelationMetadata, Lifecycle, ObservabilityCallType } from '../../types.js';
 import type { AdminServerConfig } from './types.js';
 import type { ContactStore } from '../../contacts/store.js';
@@ -120,7 +120,7 @@ const LEGACY_REDIRECT_PREFIXES = [
 ];
 
 interface AdminRoute {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
   handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
 }
@@ -767,7 +767,7 @@ export class AdminServer implements Lifecycle {
     }
   }
 
-  private handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
+  private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = parseRequestUrl(req);
     if (url.pathname !== '/api/admin/events') {
       socket.write('HTTP/1.1 404 Not Found\\r\\n\\r\\n');

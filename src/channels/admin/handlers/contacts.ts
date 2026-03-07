@@ -1,6 +1,7 @@
 import type { LegacyAdminHandlers } from '../handlers-legacy.js';
 import type { ContactStore } from '../../../contacts/store.js';
 import type { TrustLevel } from '../../../trust/types.js';
+import type { ContactProfileArtifact } from '../../../memory/store.js';
 import {
   TRUST_LEVELS,
 } from '../../../trust/types.js';
@@ -131,7 +132,7 @@ export class AdminContactsHandlers {
       return tpl.layout('Garden Visitors', '<div class="empty">Contact store not available</div>', 'contacts');
     }
     const contacts = legacy.contactStore.listAll();
-    const profileMap = new Map(
+    const profileMap = new Map<string, ContactProfileArtifact>(
       legacy.memoryStore.listContactProfiles().map((profile: any) => [profile.contactId, profile] as const),
     );
     const relatedChannelMap = this.buildRelatedConversationChannelMap(contacts);
@@ -168,7 +169,7 @@ export class AdminContactsHandlers {
     if (!legacy.contactStore) return '<tr><td colspan="5" class="empty">Contact store not available</td></tr>';
     const contacts = legacy.contactStore.listAll();
     if (contacts.length === 0) return '<tr><td colspan="5" class="empty">No visitors found</td></tr>';
-    const profileMap = new Map(
+    const profileMap = new Map<string, ContactProfileArtifact>(
       legacy.memoryStore.listContactProfiles().map((profile: any) => [profile.contactId, profile] as const),
     );
     const relatedChannelMap = this.buildRelatedConversationChannelMap(contacts);

@@ -13,6 +13,10 @@ export interface EmotionalExpressionProfile {
   displayRange: EmotionalExpressionDisplayRange;
 }
 
+type EmotionalExpressionProfileInput = Omit<Partial<EmotionalExpressionProfile>, 'displayRange'> & {
+  displayRange?: Partial<EmotionalExpressionDisplayRange>;
+};
+
 export interface PersonaAffectBehavior {
   mode: 'honne' | 'tatemae';
   warmth: number;
@@ -31,7 +35,7 @@ export interface EmotionalExpressionSourceInput {
 export interface PersonaAffectInput {
   trustLevel: TrustLevel;
   emotionSnapshot: EmotionStateSnapshot;
-  profile?: Partial<EmotionalExpressionProfile>;
+  profile?: EmotionalExpressionProfileInput;
 }
 
 export interface EmotionalAffectSectionInput extends EmotionalExpressionSourceInput {
@@ -248,7 +252,7 @@ export function buildEmotionalAffectSection(input: EmotionalAffectSectionInput):
 
 function parseProfileFromPromptVariables(
   promptVariables: Record<string, string> | undefined,
-): Partial<EmotionalExpressionProfile> {
+): EmotionalExpressionProfileInput {
   if (!promptVariables) return {};
 
   const intensity = readNumberFromRecord(promptVariables, PROMPT_VARIABLE_KEYS.intensity);
@@ -274,7 +278,7 @@ function parseProfileFromPromptVariables(
   };
 }
 
-function parseProfileFromConfig(config: unknown): Partial<EmotionalExpressionProfile> {
+function parseProfileFromConfig(config: unknown): EmotionalExpressionProfileInput {
   const intensity = readNumberByPaths(config, CONFIG_PATHS.intensity);
   const variability = readNumberByPaths(config, CONFIG_PATHS.variability);
   const control = readNumberByPaths(config, CONFIG_PATHS.control);
@@ -353,7 +357,7 @@ function describeExpressiveness(value: number): string {
 }
 
 function normalizeProfile(
-  profile: Partial<EmotionalExpressionProfile> | undefined,
+  profile: EmotionalExpressionProfileInput | undefined,
 ): EmotionalExpressionProfile {
   const min = clampUnit(profile?.displayRange?.min ?? DEFAULT_PROFILE.displayRange.min);
   const max = clampUnit(profile?.displayRange?.max ?? DEFAULT_PROFILE.displayRange.max);

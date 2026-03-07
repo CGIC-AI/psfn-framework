@@ -30,6 +30,7 @@ interface CreateConcernParams {
 function textResult(text: string): AgentToolResult<{ isError?: boolean }> {
   return {
     content: [{ type: 'text', text }],
+    details: {},
   };
 }
 

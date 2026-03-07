@@ -1478,6 +1478,7 @@ export function wireHeartbeatRuntime(
           message,
           response,
           canonicalContactKey,
+          completedAt: Date.now(),
         });
         return inferred;
       };

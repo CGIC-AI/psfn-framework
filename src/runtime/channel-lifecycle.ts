@@ -58,7 +58,7 @@ export async function loadChannelAdaptersFromManifest(
       }
       log.warn('Skipping disabled channel adapter manifest entry', {
         adapterId: manifest.id,
-        required: manifest.required === true,
+        required: Boolean(manifest.required),
       });
       continue;
     }

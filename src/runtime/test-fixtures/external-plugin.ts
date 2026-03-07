@@ -45,6 +45,9 @@ function createFixtureChannelAdapter(state: ExternalPluginFixtureState): Channel
       streaming: false,
     },
     config: { enabled: true },
+    init: async (): Promise<void> => {},
+    start: async (): Promise<void> => {},
+    stop: async (): Promise<void> => {},
     outbound: {
       textChunkLimit: 2_000,
       sendText: async (ctx: OutboundContext, text: string): Promise<void> => {
@@ -52,6 +55,7 @@ function createFixtureChannelAdapter(state: ExternalPluginFixtureState): Channel
       },
     },
     gateway: {
+      init: async (): Promise<void> => {},
       start: async (): Promise<void> => {},
       stop: async (): Promise<void> => {},
     },

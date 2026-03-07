@@ -69,7 +69,10 @@ function decodeRawData(raw: RawData): string {
   if (typeof raw === 'string') return raw;
   if (raw instanceof Buffer) return raw.toString('utf8');
   if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8');
-  return Buffer.from(raw).toString('utf8');
+  if (raw instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(raw)).toString('utf8');
+  }
+  return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString('utf8');
 }
 
 function sendUpgradeRejection(socket: Duplex, status: UpgradeRejectStatus): void {

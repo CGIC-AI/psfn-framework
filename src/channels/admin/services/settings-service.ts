@@ -175,7 +175,7 @@ export function applyAdminSettingsMutation(options: {
         || modelPatch.extractionProvider !== undefined
         || modelPatch.extractionMaxTokens !== undefined;
       if (hasExtractionAliasPatch) {
-        const currentExtraction = config.modelRoster.background ?? config.modelRoster.extraction ?? {
+        const currentExtraction = config.modelRoster.background ?? {
           model: config.extractionModel,
           provider: config.extractionProvider,
           maxTokens: config.extractionMaxTokens,
@@ -304,7 +304,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
             id: providerId,
             configured: isStreamingSttProviderConfigured(providerId, this.deps.config),
             canAutoEnable: metadata?.canAutoEnable === true,
-            requiredTokens: metadata?.eligibility?.requiredTokens ?? [],
+            requiredTokens: [...(metadata?.eligibility?.requiredTokens ?? [])],
           };
         })
         .sort((a, b) => a.id.localeCompare(b.id));
@@ -317,7 +317,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
           id: providerId,
           configured: isStreamingTtsProviderConfigured(providerId, this.deps.config),
           canAutoEnable: metadata?.canAutoEnable === true,
-          requiredTokens: metadata?.eligibility?.requiredTokens ?? [],
+          requiredTokens: [...(metadata?.eligibility?.requiredTokens ?? [])],
         };
       })
       .sort((a, b) => a.id.localeCompare(b.id));

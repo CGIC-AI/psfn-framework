@@ -69,6 +69,11 @@ import type { MemoryWriter } from '../memory/writer.js';
 import { ValuesJournalStore } from '../values/store.js';
 import type { ValuesDeliberationMetadata } from '../values/store.js';
 import {
+  createValuesAddTool,
+  createValuesListTool,
+  createValuesUpdateTool,
+} from '../values/tools.js';
+import {
   resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,
   resolvePromptHistoryPath,
@@ -1511,6 +1516,9 @@ export function wireHeartbeatRuntime(
   target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
   target.registerTool(createHeartbeatRunTemplateTool(store, runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
+  target.registerTool(createValuesListTool(valuesJournal), 'extended');
+  target.registerTool(createValuesAddTool(valuesJournal), 'extended');
+  target.registerTool(createValuesUpdateTool(valuesJournal), 'extended');
 
   const activeCount = policy.templates.filter(t => t.enabled).length;
   log.info(`Heartbeat runtime wired (${policy.templates.length} templates, ${activeCount} active)`);

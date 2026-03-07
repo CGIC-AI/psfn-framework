@@ -16,7 +16,8 @@
     "split:debug": "./scripts/start-gateway-agent.sh --debug",
     "yolo": "./scripts/start-gateway-agent.sh --yolo",
     "yolo:debug": "./scripts/start-gateway-agent.sh --yolo --debug",
-    "agent:docker": "docker compose -f docker/docker-compose.yml up --build",
+    "agent:docker": "docker compose -f docker/docker-compose.production.yml up --build",
+    "agent:docker:continuous": "docker compose -f docker/docker-compose.yml up --build",
     "proxy:up": "docker compose -f proxy/docker-compose.yml up -d",
     "proxy:down": "docker compose -f proxy/docker-compose.yml down",
     "proxy:logs": "docker compose -f proxy/docker-compose.yml logs -f",
@@ -40,7 +41,8 @@
     "verify:public-sanitize": "node scripts/public-sanitize-check.mjs",
     "verify:identity-literals": "node scripts/identity-literal-scan.mjs",
     "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:identity-literals",
-    "verify:settings-contract": "tsx scripts/verify-settings-contract.ts"
+    "verify:settings-contract": "tsx scripts/verify-settings-contract.ts",
+    "verify:agent-docker-isolation": "node scripts/verify-agent-docker-isolation.mjs"
   },
   "dependencies": {
     "@character-foundry/character-foundry": "^0.5.0",

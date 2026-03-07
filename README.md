@@ -47,7 +47,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Admin GUI (Purrsephone's Garden)** — Svelte 5 SPA at `/garden` with 17+ pages: memory browser, session viewer, contacts (CRUD, merge, unlink), scheduler, settings, prompt editor, model discovery, chat cockpit. WebSocket telemetry endpoint. *Legacy htmx admin server at `/` is deprecated and will be removed next release.*
 
 ### Infrastructure
-- **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
+- **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets, production Docker agent runs with `network_mode: "none"`
 - **Bidirectional RPC** — Voice turns get real agent responses via reverse RPC
 - **SSRF Defenses** — Private IP blocking, DNS rebinding protection, redirect validation
 - **Scheduler** — Heartbeat, recurring tasks, one-shot timers, configurable maintenance
@@ -152,9 +152,8 @@ set -a && source .env && set +a && npm run agent
 **Containerized agent (maximum isolation):**
 ```bash
 npm run build
-npm run agent:docker    # --network=none Docker container
-# Production-isolated container profile:
-docker compose -f docker/docker-compose.production.yml up --build
+npm run agent:docker               # Production profile (network_mode: "none")
+npm run agent:docker:continuous    # Continuous/dev profile (isolated internal network)
 ```
 
 Runtime mode operations runbook: `docs/operations/runtime-mode-runbook.md`
@@ -293,7 +292,7 @@ Any failed step exits non-zero.
 ## Architecture
 
 ```
-Gateway (host)                    Agent (container, --network=none)
+Gateway (host)                    Agent (production container, network_mode: none)
 +-----------------------+         +---------------------------+
 | Discord adapter       |         | Agent loop                |
 | LLM client (API keys) | <-sock-> | Session manager (JSONL)   |

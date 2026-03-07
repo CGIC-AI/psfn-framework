@@ -286,6 +286,44 @@ describe('wireHeartbeatRuntime', () => {
     expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
   });
 
+  it('registers values tool surface as extended tools', () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'reflection output' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+    );
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    const names = calls.map(([tool]) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([
+      'values_list',
+      'values_add',
+      'values_update',
+    ]));
+    expect(
+      calls
+        .filter(([tool]) => ['values_list', 'values_add', 'values_update'].includes(tool.name))
+        .every(([, category]) => category === 'extended'),
+    ).toBe(true);
+  });
+
   it('writes versioned values entries when values-reflection task runs', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {

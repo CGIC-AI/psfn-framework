@@ -5,8 +5,10 @@
 export type TrustLevel = 'primary' | 'trusted' | 'regular' | 'public';
 export type HighTierTrustLevel = Extract<TrustLevel, 'primary' | 'trusted'>;
 export type LowTierTrustLevel = Extract<TrustLevel, 'regular' | 'public'>;
+export type TrustMutationSource = 'manual' | 'behavior_drift' | 'autonomous';
 
 export type SensitivityLevel = 'public' | 'personal' | 'intimate' | 'confidential';
+export type HighIntimacySensitivityLevel = Extract<SensitivityLevel, 'intimate' | 'confidential'>;
 
 export type ChannelVisibility = 'private' | 'semi_private' | 'public' | 'broadcast';
 
@@ -25,6 +27,7 @@ export interface ConsentFlags {
 export const TRUST_LEVELS: readonly TrustLevel[] = ['primary', 'trusted', 'regular', 'public'];
 export const HIGH_TIER_TRUST_LEVELS: readonly HighTierTrustLevel[] = ['primary', 'trusted'];
 export const LOW_TIER_TRUST_LEVELS: readonly LowTierTrustLevel[] = ['regular', 'public'];
+export const HIGH_INTIMACY_SENSITIVITY_LEVELS: readonly HighIntimacySensitivityLevel[] = ['intimate', 'confidential'];
 
 export const SENSITIVITY_LEVELS: readonly SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
 
@@ -81,6 +84,10 @@ export function isHighTierTrustLevel(level: TrustLevel): level is HighTierTrustL
 
 export function isLowTierTrustLevel(level: TrustLevel): level is LowTierTrustLevel {
   return (LOW_TIER_TRUST_LEVELS as readonly TrustLevel[]).includes(level);
+}
+
+export function isHighIntimacySensitivityLevel(level: SensitivityLevel): level is HighIntimacySensitivityLevel {
+  return (HIGH_INTIMACY_SENSITIVITY_LEVELS as readonly SensitivityLevel[]).includes(level);
 }
 
 export function sensitivityOrd(level: SensitivityLevel): number {

@@ -5,7 +5,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ContactStore } from './store.js';
 import type { TrustLevel } from '../trust/types.js';
-import { TRUST_LEVELS } from '../trust/types.js';
+import { TRUST_LEVELS, isHighTierTrustLevel } from '../trust/types.js';
 import type { TrustDriftBehaviorSignals } from '../trust/policy.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel } from './types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
@@ -112,8 +112,24 @@ export function createContactSetTrustTool(contactStore: ContactStore): AgentTool
           );
         }
 
-        const success = contactStore.setTrustLevel(contactId, trustLevel, 'agent:tool:contact_set_trust');
+        const contact = contactStore.getById(contactId);
+        if (!contact) {
+          return textResultWithError(`Contact ${contactId} not found`, true);
+        }
+
+        const success = contactStore.setTrustLevel(
+          contactId,
+          trustLevel,
+          'agent:tool:contact_set_trust',
+          { mutationSource: 'autonomous' },
+        );
         if (!success) {
+          if (isHighTierTrustLevel(trustLevel)) {
+            return textResultWithError(
+              `High-tier trust updates for ${contactId} require manual admin approval`,
+              true,
+            );
+          }
           return textResultWithError(
             `Contact ${contactId} not found or is the primary user (cannot change primary trust level)`,
             true,

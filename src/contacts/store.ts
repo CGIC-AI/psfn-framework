@@ -17,10 +17,12 @@ import type {
   ChannelPrivacyLevel,
   RelationshipType,
 } from './types.js';
-import type { TrustLevel, LowTierTrustLevel } from '../trust/types.js';
+import type { TrustLevel, LowTierTrustLevel, TrustMutationSource } from '../trust/types.js';
 import { isHighTierTrustLevel, isLowTierTrustLevel } from '../trust/types.js';
 import {
   evaluateLowTierTrustDriftSuggestion,
+  isManualHighTierTrustMutationAuthorized,
+  resolveTrustMutationSource,
   type LowTierTrustDriftSuggestion,
   type TrustDriftBehaviorSignals,
 } from '../trust/policy.js';
@@ -84,7 +86,7 @@ interface ContactStoreOptions {
 
 interface TrustMutationOptions {
   allowPrimaryTrustAssignment?: boolean;
-  mutationSource?: 'manual' | 'behavior_drift';
+  mutationSource?: TrustMutationSource;
 }
 
 interface UpsertMutationOptions extends TrustMutationOptions {
@@ -219,6 +221,16 @@ export class ContactStore {
   ): Contact {
     const identities = collectUpsertIdentities(partial);
     const target = this.resolveUpsertTarget(partial, identities);
+    const mutationSource = resolveTrustMutationSource(options.actor, options.mutationSource);
+
+    if (
+      partial.trustLevel !== undefined
+      && isHighTierTrustLevel(partial.trustLevel)
+      && !isManualHighTierTrustMutationAuthorized(options.actor, mutationSource)
+    ) {
+      throw new Error('High-tier trust assignment denied: manual operator authorization required');
+    }
+
     if (
       partial.trustLevel === 'primary'
       && !this.isPrimaryTrustAssignmentAuthorized(target, identities, partial.discordUserId, options)
@@ -285,6 +297,31 @@ export class ContactStore {
       return false;
     }
     return true;
+  }
+
+  private isHighTierMutationAllowed(
+    contactId: string,
+    currentTrustLevel: TrustLevel,
+    requestedTrustLevel: TrustLevel,
+    actor: string | undefined,
+    mutationSource: TrustMutationSource,
+  ): boolean {
+    if (!isHighTierTrustLevel(currentTrustLevel) && !isHighTierTrustLevel(requestedTrustLevel)) {
+      return true;
+    }
+
+    if (isManualHighTierTrustMutationAuthorized(actor, mutationSource)) {
+      return true;
+    }
+
+    log.warn('Denied trust mutation touching high-tier trust without manual authorization', {
+      contactId,
+      currentTrustLevel,
+      requestedTrustLevel,
+      actor,
+      mutationSource,
+    });
+    return false;
   }
 
   suggestLowTierTrustDrift(
@@ -373,11 +410,15 @@ export class ContactStore {
 
     if (contact.trustLevel === trustLevel) return true;
 
-    const mutationSource = options.mutationSource ?? 'manual';
+    const mutationSource = resolveTrustMutationSource(actor, options.mutationSource);
     if (
       mutationSource === 'behavior_drift'
       && !this.isBehaviorDriftMutationAllowed(id, contact.trustLevel, trustLevel, actor)
     ) {
+      return false;
+    }
+
+    if (!this.isHighTierMutationAllowed(id, contact.trustLevel, trustLevel, actor, mutationSource)) {
       return false;
     }
 

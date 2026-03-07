@@ -36,17 +36,31 @@ describe('contact tools', () => {
       expect(typeof tool.execute).toBe('function');
     });
 
-    it('sets trust level for an existing contact', async () => {
+    it('sets low-tier trust level for an existing contact', async () => {
       const contact = store.upsert({ displayName: 'Alice', discordUserId: 'alice-discord' });
       const tool = createContactSetTrustTool(store);
 
       const result = await tool.execute('call-1', {
         contactId: contact.id,
+        trustLevel: 'public',
+      });
+
+      expect(resultText(result)).toContain('set to public');
+      expect(store.getById(contact.id)!.trustLevel).toBe('public');
+    });
+
+    it('denies autonomous high-tier trust updates', async () => {
+      const contact = store.upsert({ displayName: 'High Tier Target', discordUserId: 'trusted-target' });
+      const tool = createContactSetTrustTool(store);
+
+      const result = await tool.execute('call-1b', {
+        contactId: contact.id,
         trustLevel: 'trusted',
       });
 
-      expect(resultText(result)).toContain('set to trusted');
-      expect(store.getById(contact.id)!.trustLevel).toBe('trusted');
+      expect(resultText(result)).toContain('manual admin approval');
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect(result.details?.isError).toBe(true);
     });
 
     it('returns error for invalid trust level', async () => {

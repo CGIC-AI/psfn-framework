@@ -52,6 +52,7 @@ function makeMemory(overrides: Partial<ScenarioMemory> & { text: string }): Scen
     tags: overrides.tags ?? [],
     sensitivity: overrides.sensitivity ?? 'public',
     consentFlags: overrides.consentFlags ?? ({} as ConsentFlags),
+    contactId: overrides.contactId,
     similarity: overrides.similarity ?? 0.9,
   };
 }
@@ -385,6 +386,14 @@ describe('privacy red-team regression suite', () => {
     expect(blockedAutonomousEscalation).toBe(false);
     expect(contactStore.getById(target.id)?.trustLevel).toBe('public');
 
+    const blockedDirectToolEscalation = await trustTool.execute('trust-attack-1', {
+      contactId: target.id,
+      trustLevel: 'trusted',
+    });
+    expect(blockedDirectToolEscalation.details?.isError).toBe(true);
+    expect(resultText(blockedDirectToolEscalation)).toContain('manual admin approval');
+    expect(contactStore.getById(target.id)?.trustLevel).toBe('public');
+
     const preview = await trustTool.execute('trust-attack-2', {
       contactId: target.id,
       trustLevel: 'trusted',
@@ -414,6 +423,34 @@ describe('privacy red-team regression suite', () => {
     expect(applied.details?.isError).not.toBe(true);
     expect(resultText(applied)).toContain('Applied low-tier trust drift');
     expect(contactStore.getById(target.id)?.trustLevel).toBe('regular');
+  });
+
+  it('blocks cross-contact high-intimacy memory leakage during retrieval', async () => {
+    const blocked = makeMemory({
+      text: 'Contact B intimate disclosure: private medical details.',
+      sensitivity: 'intimate',
+      similarity: 0.99,
+      contactId: 'contact-b',
+    });
+    const safe = makeMemory({
+      text: 'Contact A public status update: project is on track.',
+      sensitivity: 'public',
+      similarity: 0.72,
+      contactId: 'contact-a',
+    });
+
+    const store = makeMockStore([blocked, safe]);
+    const retriever = new MemoryRetriever(store, makeEmbedding(), { retrievalLimit: 20 });
+    const output = await retriever.retrieve(
+      'Recall what this person shared privately.',
+      'api:private-contact-thread',
+      'primary',
+      undefined,
+      'contact-a',
+    );
+
+    expect(output).not.toContain(blocked.text);
+    expect(output).toContain(safe.text);
   });
 
   it('rejects cross-contact transfer of behavior drift suggestions', () => {

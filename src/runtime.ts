@@ -166,6 +166,11 @@ const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
 
+interface RuntimeStopOptions {
+  notifyShutdown?: boolean;
+  shutdownReason?: string;
+}
+
 function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {
   if (diagnostics.modelsMigratedFromLegacySettings) {
     log.warn('Migrated legacy model settings from settings.json to models.json');
@@ -704,6 +709,7 @@ export class SubstrateRuntime implements Lifecycle {
       intervalMs: backupConfig.intervalMs,
       retentionCount: backupConfig.retentionCount,
       backupRootDir: backupConfig.rootDir,
+      verifyRestore: backupConfig.verifyRestore,
     });
     this.scheduler.registerHeartbeat(async () => {
       const now = Date.now();
@@ -870,7 +876,10 @@ export class SubstrateRuntime implements Lifecycle {
     // Lifecycle tools — self_restart and self_rebuild
     this.agentLoop.registerTool(createRestartTool(
       this.lifecycleNotifier,
-      () => this.stop(),
+      () => this.stop({
+        notifyShutdown: false,
+        shutdownReason: 'restart requested',
+      }),
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
@@ -880,7 +889,10 @@ export class SubstrateRuntime implements Lifecycle {
     ));
     this.agentLoop.registerTool(createRebuildTool(
       this.lifecycleNotifier,
-      () => this.stop(),
+      () => this.stop({
+        notifyShutdown: false,
+        shutdownReason: 'rebuild restart requested',
+      }),
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
@@ -1269,21 +1281,27 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('Ready');
   }
 
-  async stop(): Promise<void> {
+  async stop(options: RuntimeStopOptions = {}): Promise<void> {
     if (this.stopPromise) {
       await this.stopPromise;
       return;
     }
 
-    this.stopPromise = this.stopInternal();
+    this.stopPromise = this.stopInternal(options);
     await this.stopPromise;
   }
 
-  private async stopInternal(): Promise<void> {
+  private async stopInternal(options: RuntimeStopOptions): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
 
+    const shutdownReason = options.shutdownReason?.trim();
     log.info('Shutting down...');
+    if (options.notifyShutdown ?? true) {
+      await this.runShutdownStep('send graceful shutdown notification', () => this.lifecycleNotifier?.notifyShutdown(
+        shutdownReason && shutdownReason.length > 0 ? shutdownReason : undefined,
+      ));
+    }
     await this.runShutdownStep('emit system.shutdown event', () => this.eventBus.emit('system.shutdown', {}));
     await this.runShutdownStep('stop voice observers', () => {
       this.stopVoiceObservers?.();

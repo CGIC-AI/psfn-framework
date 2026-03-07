@@ -1,3 +1,4 @@
+import BetterSqlite3 from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import {
   existsSync,
@@ -15,6 +16,7 @@ import {
   registerScheduledBackupTask,
   runBackupCycle,
   SCHEDULED_BACKUP_TASK_ID,
+  verifyBackupRestore,
 } from './service.js';
 
 interface BackupDbLike {
@@ -101,6 +103,62 @@ describe('runBackupCycle', () => {
     const remaining = readdirSync(backupRootDir).sort((a, b) => a.localeCompare(b));
     expect(remaining).toEqual(['20260103T000000000Z', '20260226T101112123Z']);
   });
+
+  it('verifies backup restore integrity when enabled', async () => {
+    const root = join(tmpdir(), `psfn-backup-restore-verify-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    const databasePath = join(root, 'purrsephone.db');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel-a.jsonl'), '{}\n', 'utf-8');
+
+    const liveDb = new BetterSqlite3(databasePath);
+    liveDb.exec('CREATE TABLE IF NOT EXISTS runtime_state (id INTEGER PRIMARY KEY, value TEXT);');
+    liveDb.exec("INSERT INTO runtime_state (value) VALUES ('ok');");
+
+    try {
+      const result = await runBackupCycle({
+        db: liveDb as unknown as Database.Database,
+        databasePath,
+        sessionsDir,
+        backupRootDir,
+        retentionCount: 7,
+        verifyRestore: true,
+        now: () => Date.UTC(2026, 1, 27, 10, 11, 12, 123),
+      });
+
+      expect(result.restoreVerification).toBeDefined();
+      expect(result.restoreVerification?.integrityDetails).toEqual(['ok']);
+      expect(result.restoreVerification?.restoredSessionFiles).toEqual(['channel-a.jsonl']);
+    } finally {
+      liveDb.close();
+    }
+  });
+});
+
+describe('verifyBackupRestore', () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots) {
+      rmSync(root, { recursive: true, force: true });
+    }
+    roots.length = 0;
+  });
+
+  it('throws when database snapshot is missing', () => {
+    const root = join(tmpdir(), `psfn-backup-restore-missing-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+
+    expect(() => verifyBackupRestore({
+      databaseBackupPath: join(root, 'missing.db'),
+      sessionSnapshotDir: sessionsDir,
+    })).toThrow('Backup database snapshot missing');
+  });
 });
 
 describe('registerScheduledBackupTask', () => {
@@ -142,6 +200,7 @@ describe('registerScheduledBackupTask', () => {
         intervalMs: 60_000,
         retentionCount: 7,
         rootDir: backupRootDir,
+        verifyRestore: false,
       },
       skipFirstRun: false,
     });

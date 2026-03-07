@@ -194,4 +194,44 @@ describe('ModelDiscovery', () => {
     // Ensure no double /v1/v1
     expect(String(litellmCall![0])).not.toContain('/v1/v1');
   });
+
+  it('rejects direct egress when direct network is disabled', async () => {
+    mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
+
+    const discovery = new ModelDiscovery('http://localhost:4000', undefined, {
+      allowDirectNetworkEgress: false,
+    });
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toEqual([]);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('uses injected fetch when direct network is disabled', async () => {
+    const injectedFetch = vi.fn(async (url: string | URL) => {
+      const target = String(url);
+      if (target.includes('/v1/models')) {
+        return litellmResponse([{ id: 'model-1', litellm_provider: 'openrouter' }]);
+      }
+      if (target.includes('openrouter.ai')) {
+        return openRouterResponse([{
+          id: 'model-1',
+          canonical_slug: 'openrouter/model-1',
+          description: 'ok',
+        }]);
+      }
+      throw new Error('unexpected URL');
+    });
+
+    const discovery = new ModelDiscovery('http://localhost:4000', undefined, {
+      allowDirectNetworkEgress: false,
+      fetchFn: injectedFetch as unknown as typeof fetch,
+    });
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('model-1');
+    expect(injectedFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 });

@@ -12,6 +12,7 @@
 import type {
   TrustLevel,
   LowTierTrustLevel,
+  TrustMutationSource,
   SensitivityLevel,
   ChannelVisibility,
   ConsentFlags,
@@ -64,6 +65,39 @@ export interface LowTierTrustDriftSuggestion {
   confidence: number;
   rationale: string;
   requiresConfirmation: true;
+}
+
+const AUTONOMOUS_TRUST_MUTATION_ACTOR_PREFIXES = ['agent:', 'autonomous:'] as const;
+const MANUAL_HIGH_TIER_TRUST_ACTOR_PREFIXES = ['admin:', 'human:', 'operator:'] as const;
+
+function normalizeActor(actor?: string): string {
+  return actor?.trim().toLowerCase() ?? '';
+}
+
+export function resolveTrustMutationSource(
+  actor: string | undefined,
+  requestedSource: TrustMutationSource = 'manual',
+): TrustMutationSource {
+  if (requestedSource !== 'manual') return requestedSource;
+  const normalizedActor = normalizeActor(actor);
+  if (!normalizedActor) return 'manual';
+  if (AUTONOMOUS_TRUST_MUTATION_ACTOR_PREFIXES.some(prefix => normalizedActor.startsWith(prefix))) {
+    return 'autonomous';
+  }
+  return 'manual';
+}
+
+export function isManualHighTierTrustMutationAuthorized(
+  actor: string | undefined,
+  mutationSource: TrustMutationSource = 'manual',
+): boolean {
+  const resolvedSource = resolveTrustMutationSource(actor, mutationSource);
+  if (resolvedSource !== 'manual') return false;
+
+  const normalizedActor = normalizeActor(actor);
+  if (!normalizedActor) return true;
+
+  return MANUAL_HIGH_TIER_TRUST_ACTOR_PREFIXES.some(prefix => normalizedActor.startsWith(prefix));
 }
 
 function normalizeNonNegativeInteger(value: number | undefined): number {

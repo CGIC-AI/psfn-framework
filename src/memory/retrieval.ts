@@ -9,7 +9,12 @@ import type { PurrMemory, MemoryPrivacyRiskBreakdown } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
 import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
-import type { TrustLevel, ChannelVisibility, SensitivityLevel } from '../trust/types.js';
+import {
+  isHighIntimacySensitivityLevel,
+  type TrustLevel,
+  type ChannelVisibility,
+  type SensitivityLevel,
+} from '../trust/types.js';
 import { countTokens } from '../llm/tokens.js';
 import type { ContextBudgetConfigLike } from '../context-budget.js';
 import {
@@ -83,6 +88,7 @@ interface ScoredMemory {
 interface RetrievalDecisionDiagnostics {
   candidateCount: number;
   policyAllowedCount: number;
+  rejectedByContactScope: number;
   rejectedBySensitivity: number;
   rejectedByPolicy: number;
   rejectedByPolicyReason: Record<string, number>;
@@ -123,6 +129,7 @@ interface RetrievalTelemetry {
   retrievalTokenBudget: number;
   retrievalLimitMode: 'budget' | 'hard_limit';
   policyAllowedCount?: number;
+  contactScopeRejectedCount?: number;
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
   scoreRejectedCount?: number;
@@ -160,6 +167,15 @@ interface CompositionalRetrievalDecision {
 interface ProactiveWeightedMemory {
   memory: PurrMemory;
   weight: number;
+}
+
+function violatesHighIntimacyContactScope(
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId'>,
+  canonicalContactId?: string,
+): boolean {
+  if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return false;
+  if (!canonicalContactId) return false;
+  return memory.contactId !== canonicalContactId;
 }
 
 type RetrievalIntegrityErrorStage =
@@ -497,6 +513,7 @@ export class MemoryRetriever implements MemoryProvider {
       const diagnostics: RetrievalDecisionDiagnostics = {
         candidateCount: memories.length,
         policyAllowedCount: 0,
+        rejectedByContactScope: 0,
         rejectedBySensitivity: 0,
         rejectedByPolicy: 0,
         rejectedByPolicyReason: {},
@@ -510,6 +527,11 @@ export class MemoryRetriever implements MemoryProvider {
       const policyAllowed: Array<PurrMemory & { similarity: number }> = [];
 
       for (const memory of memories) {
+        if (violatesHighIntimacyContactScope(memory, canonicalContactId)) {
+          diagnostics.rejectedByContactScope++;
+          continue;
+        }
+
         if (!operatorApproval && !allowed.includes(memory.sensitivity)) {
           diagnostics.rejectedBySensitivity++;
           continue;
@@ -533,6 +555,7 @@ export class MemoryRetriever implements MemoryProvider {
       }
       diagnostics.policyAllowedCount = policyAllowed.length;
       telemetry.policyAllowedCount = diagnostics.policyAllowedCount;
+      telemetry.contactScopeRejectedCount = diagnostics.rejectedByContactScope;
       telemetry.sensitivityRejectedCount = diagnostics.rejectedBySensitivity;
       telemetry.policyRejectedCount = diagnostics.rejectedByPolicy;
 
@@ -544,6 +567,7 @@ export class MemoryRetriever implements MemoryProvider {
           trustLevel: effectiveTrust,
           channelVisibility,
           candidateCount: diagnostics.candidateCount,
+          rejectedByContactScope: diagnostics.rejectedByContactScope,
           rejectedBySensitivity: diagnostics.rejectedBySensitivity,
           rejectedByPolicy: diagnostics.rejectedByPolicy,
         });
@@ -683,6 +707,7 @@ export class MemoryRetriever implements MemoryProvider {
         semanticCandidates: telemetry.semanticCandidateCount,
         lexicalCandidates: telemetry.lexicalCandidateCount,
         pipeline: `${diagnostics.candidateCount} candidates -> ${diagnostics.policyAllowedCount} policy-allowed -> ${scored.length} scored -> ${ranked.length} ranked -> ${selected.length} selected`,
+        rejectedByContactScope: diagnostics.rejectedByContactScope,
         rejectedBySensitivity: diagnostics.rejectedBySensitivity,
         rejectedByPolicy: diagnostics.rejectedByPolicy,
         rejectedByScore: diagnostics.rejectedByScore,
@@ -800,6 +825,7 @@ export class MemoryRetriever implements MemoryProvider {
 
     const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
     const weighted = candidates
+      .filter(memory => !violatesHighIntimacyContactScope(memory, canonicalContactId))
       .filter(memory => operatorApproval || allowed.includes(memory.sensitivity))
       .filter((memory) => {
         const policy = evaluateMemoryPolicy({
@@ -911,6 +937,7 @@ export class MemoryRetriever implements MemoryProvider {
     return source
       .filter(memory => memory.type === 'emotional')
       .filter(memory => !selectedIds.has(memory.id))
+      .filter(memory => !violatesHighIntimacyContactScope(memory, canonicalContactId))
       .filter((memory) => {
         if (!operatorApproval && !allowed.includes(memory.sensitivity)) return false;
         const policy = evaluateMemoryPolicy({

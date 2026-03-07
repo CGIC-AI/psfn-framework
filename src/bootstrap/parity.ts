@@ -1483,6 +1483,7 @@ export function wireHeartbeatRuntime(
           name: template.name,
           type: 'every',
           intervalMs: template.intervalMs,
+          cadence: template.cadence,
           handler: async () => {
             try {
               await executeScheduledTemplate(template);

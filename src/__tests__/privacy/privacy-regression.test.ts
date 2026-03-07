@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 import type { EmbeddingService } from '../../agent/contracts.js';
+import { ContactStore } from '../../contacts/store.js';
+import { createContactSetTrustTool } from '../../contacts/tools.js';
 import { MemoryRetriever } from '../../memory/retrieval.js';
 import type { MemoryStore } from '../../memory/store.js';
 import type { PurrMemory } from '../../memory/types.js';
@@ -70,6 +73,10 @@ function makeEmbedding(): EmbeddingService {
     embedBatch: vi.fn(),
     dims: 1024,
   };
+}
+
+function resultText(result: { content: Array<{ type: string; text: string }> }): string {
+  return result.content.map(item => item.text).join('');
 }
 
 function assertPolicyLayer(
@@ -358,6 +365,88 @@ describe('privacy red-team regression suite', () => {
       assertSafeMemoryPresent(scenario.id, scenario.layer, output, scenario.safe.text);
     });
   }
+
+  it('blocks trust-attack escalation and keeps behavior drift low-tier-only', async () => {
+    const db = new Database(':memory:');
+    const contactStore = new ContactStore(db, 'primary-owner');
+    const target = contactStore.upsert({
+      displayName: 'Escalation Target',
+      trustLevel: 'public',
+      discordUserId: 'target-user-1',
+    });
+    const trustTool = createContactSetTrustTool(contactStore);
+
+    const blockedAutonomousEscalation = contactStore.setTrustLevel(
+      target.id,
+      'trusted',
+      'agent:tool:contact_set_trust',
+      { mutationSource: 'behavior_drift' },
+    );
+    expect(blockedAutonomousEscalation).toBe(false);
+    expect(contactStore.getById(target.id)?.trustLevel).toBe('public');
+
+    const preview = await trustTool.execute('trust-attack-2', {
+      contactId: target.id,
+      trustLevel: 'trusted',
+      behaviorSignals: {
+        positiveInteractionCount: 8,
+        negativeInteractionCount: 0,
+        verifiedIdentityLinks: 2,
+        consistentBoundaryRespect: true,
+      },
+    });
+    expect(preview.details?.isError).not.toBe(true);
+    expect(resultText(preview)).toContain('Suggested low-tier trust drift');
+    expect(resultText(preview)).toContain('public -> regular');
+    expect(contactStore.getById(target.id)?.trustLevel).toBe('public');
+
+    const applied = await trustTool.execute('trust-attack-3', {
+      contactId: target.id,
+      trustLevel: 'trusted',
+      behaviorSignals: {
+        positiveInteractionCount: 8,
+        negativeInteractionCount: 0,
+        verifiedIdentityLinks: 2,
+        consistentBoundaryRespect: true,
+      },
+      confirmSuggestion: true,
+    });
+    expect(applied.details?.isError).not.toBe(true);
+    expect(resultText(applied)).toContain('Applied low-tier trust drift');
+    expect(contactStore.getById(target.id)?.trustLevel).toBe('regular');
+  });
+
+  it('rejects cross-contact transfer of behavior drift suggestions', () => {
+    const db = new Database(':memory:');
+    const contactStore = new ContactStore(db, 'primary-owner');
+    const contactA = contactStore.upsert({
+      displayName: 'Contact A',
+      trustLevel: 'public',
+      discordUserId: 'contact-a',
+    });
+    const contactB = contactStore.upsert({
+      displayName: 'Contact B',
+      trustLevel: 'public',
+      discordUserId: 'contact-b',
+    });
+
+    const suggestion = contactStore.suggestLowTierTrustDrift(contactA.id, {
+      positiveInteractionCount: 6,
+      verifiedIdentityLinks: 1,
+      consistentBoundaryRespect: true,
+    });
+    expect(suggestion).toBeTruthy();
+
+    const crossContactApply = contactStore.applyLowTierTrustDriftSuggestion(
+      contactB.id,
+      suggestion!,
+      'agent:test:cross_contact',
+    );
+    expect(crossContactApply.applied).toBe(false);
+    expect(crossContactApply.reason).toContain('contact mismatch');
+    expect(contactStore.getById(contactA.id)?.trustLevel).toBe('public');
+    expect(contactStore.getById(contactB.id)?.trustLevel).toBe('public');
+  });
 
   it('keeps higher-risk memory below lower-risk memory at scoring layer', async () => {
     const lowRisk = makeMemory({

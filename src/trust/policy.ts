@@ -11,10 +11,12 @@
 
 import type {
   TrustLevel,
+  LowTierTrustLevel,
   SensitivityLevel,
   ChannelVisibility,
   ConsentFlags,
 } from './types.js';
+import { isHighTierTrustLevel } from './types.js';
 import type { ResponseStyle, ResponseStyleOverrides } from '../types.js';
 import { getRuntimeTrustPolicy } from './runtime-policy.js';
 
@@ -47,6 +49,80 @@ export interface PolicyResult {
   reason: string;
   /** Which precedence layer determined the outcome */
   layer: 'operator' | 'consent' | 'trust' | 'visibility' | 'default';
+}
+
+export interface TrustDriftBehaviorSignals {
+  positiveInteractionCount: number;
+  negativeInteractionCount?: number;
+  verifiedIdentityLinks?: number;
+  consistentBoundaryRespect?: boolean;
+}
+
+export interface LowTierTrustDriftSuggestion {
+  fromTrustLevel: LowTierTrustLevel;
+  suggestedTrustLevel: LowTierTrustLevel;
+  confidence: number;
+  rationale: string;
+  requiresConfirmation: true;
+}
+
+function normalizeNonNegativeInteger(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value as number));
+}
+
+function clampConfidence(value: number): number {
+  const bounded = Math.max(0, Math.min(1, value));
+  return Math.round(bounded * 100) / 100;
+}
+
+export function evaluateLowTierTrustDriftSuggestion(
+  currentTrustLevel: TrustLevel,
+  signals: TrustDriftBehaviorSignals,
+): LowTierTrustDriftSuggestion | null {
+  if (isHighTierTrustLevel(currentTrustLevel)) {
+    return null;
+  }
+
+  const positiveInteractions = normalizeNonNegativeInteger(signals.positiveInteractionCount);
+  const negativeInteractions = normalizeNonNegativeInteger(signals.negativeInteractionCount);
+  const verifiedIdentityLinks = normalizeNonNegativeInteger(signals.verifiedIdentityLinks);
+  const consistentBoundaryRespect = signals.consistentBoundaryRespect !== false;
+
+  if (
+    currentTrustLevel === 'public'
+    && positiveInteractions >= 3
+    && negativeInteractions === 0
+    && verifiedIdentityLinks >= 1
+    && consistentBoundaryRespect
+  ) {
+    return {
+      fromTrustLevel: 'public',
+      suggestedTrustLevel: 'regular',
+      confidence: clampConfidence(
+        0.6 + Math.min(0.25, positiveInteractions * 0.04) + Math.min(0.1, verifiedIdentityLinks * 0.05),
+      ),
+      rationale: 'Consistent positive interactions with identity corroboration support a low-tier drift to regular.',
+      requiresConfirmation: true,
+    };
+  }
+
+  if (
+    currentTrustLevel === 'regular'
+    && (negativeInteractions >= 2 || !consistentBoundaryRespect)
+  ) {
+    return {
+      fromTrustLevel: 'regular',
+      suggestedTrustLevel: 'public',
+      confidence: clampConfidence(
+        0.65 + Math.min(0.25, negativeInteractions * 0.08) + (consistentBoundaryRespect ? 0 : 0.1),
+      ),
+      rationale: 'Repeated negative or boundary-violating behavior supports a defensive low-tier drift to public.',
+      requiresConfirmation: true,
+    };
+  }
+
+  return null;
 }
 
 export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {

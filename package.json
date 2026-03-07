@@ -65,8 +65,13 @@
     "ws": "^8.19.0"
   },
   "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0",
     "opusscript": "^0.0.8"
+  },
+  "overrides": {
+    "basic-ftp": "^5.2.0",
+    "fast-xml-parser": "^5.3.8",
+    "minimatch": "^9.0.7",
+    "tar": "^7.5.10"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",

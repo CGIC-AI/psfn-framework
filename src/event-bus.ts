@@ -282,6 +282,13 @@ export interface EventMap {
     superseded?: boolean;
     timestamp: number;
   };
+  'channel.message.error': {
+    channelId: string;
+    channelType: 'discord' | 'telegram' | 'api' | 'terminal' | 'unknown';
+    messageId?: string;
+    phase: 'ingress' | 'handler' | 'egress' | 'unknown';
+    error: string;
+  };
   'capability.eligibility': {
     operationKind: 'tool.execute' | 'llm.purpose' | 'scheduler.task' | 'post_turn.action' | 'plugin.activate' | 'plugin.action';
     operationRef: string;

@@ -50,7 +50,7 @@ export function createSubstrateStreamFn(
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
   const budgetController = new ModelBudgetController(config);
 
-  return (model, context, options) => {
+  const wrappedStreamFn: StreamFn = (model, context, options) => {
     const requestContext = getRequestContext();
     const correlationFields = toCorrelationLogFields(requestContext);
     const modelProvider = resolveModelProvider(model);
@@ -69,14 +69,14 @@ export function createSubstrateStreamFn(
       ...(registryEntry ? { slotKey: registryEntry.id } : {}),
     };
     const purpose = resolveStreamBudgetPurpose(requestContext);
-    const process = requestContext?.originStage ?? requestContext?.purpose ?? 'agent.stream.prompt';
+    const processName = requestContext?.originStage ?? requestContext?.purpose ?? 'agent.stream.prompt';
     const service = requestContext?.callType ?? 'chat';
     const estimatedInputTokens = estimateContextInputTokens(context);
     const preflight = budgetController.evaluatePreflight({
       candidate,
       purpose,
       service,
-      process,
+      process: processName,
       estimatedInputTokens,
       correlation: requestContext,
     });
@@ -88,7 +88,7 @@ export function createSubstrateStreamFn(
     // Resolve API key: prefer caller's, then LiteLLM key, then provider env key
     const apiKey = options?.apiKey
       ?? (litellmBaseUrl ? process.env.LITELLM_API_KEY : undefined)
-      ?? (modelProvider ? getEnvApiKey(modelProvider) : undefined)
+      ?? (modelProvider ? getEnvApiKey(modelProvider as any) : undefined)
       ?? getEnvApiKey(config.primaryProvider)
       ?? undefined;
 
@@ -104,7 +104,7 @@ export function createSubstrateStreamFn(
             candidate,
             purpose,
             service,
-            process,
+            process: processName,
             inputTokens,
             outputTokens,
             correlation: requestContext,
@@ -124,8 +124,9 @@ export function createSubstrateStreamFn(
           });
         },
       },
-    );
+    ) as any;
   };
+  return wrappedStreamFn;
 }
 
 function resolveStreamMaxTokens(model: Model<any>, optionsMaxTokens: unknown, fallback: number): number {
@@ -156,7 +157,10 @@ function estimateContextInputTokens(context: unknown): number {
     if (typeof value === 'string') return value.length;
     if (Array.isArray(value)) return value.reduce((sum, entry) => sum + countChars(entry), 0);
     if (value && typeof value === 'object') {
-      return Object.values(value as Record<string, unknown>).reduce((sum, entry) => sum + countChars(entry), 0);
+      return Object.values(value as Record<string, unknown>).reduce<number>(
+        (sum, entry) => sum + countChars(entry),
+        0,
+      );
     }
     return 0;
   };
@@ -223,10 +227,9 @@ export function resolveModelSelection(
   purpose: ModelPurpose = 'chat',
 ): RoutingCandidate {
   const routingPurpose = toRoutingPurpose(purpose);
-  const candidates = resolveRoutingCandidates(config, routingPurpose);
-  const selected = candidates[0];
-  if (selected) {
-    return selected;
+  const candidates = resolveRoutingCandidates(config, routingPurpose) as RoutingCandidate[];
+  if (candidates.length > 0) {
+    return candidates[0]!;
   }
 
   throw new Error(

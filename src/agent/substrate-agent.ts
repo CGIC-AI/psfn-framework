@@ -845,45 +845,33 @@ export class SubstrateAgent {
     const existingConcurrency = existingMeta?.concurrency as Partial<ToolConcurrencyMeta> | undefined;
     const inferredClass = this.inferToolConcurrencyClass(tool.name);
     const inferredEligibility = this.inferToolEligibility(tool.name, category);
-    const concurrency = existingConcurrency
-      ? {
-        ...existingConcurrency,
-        class: existingConcurrency.class ?? inferredClass,
-        exclusivityKeyPolicy: existingConcurrency.exclusivityKeyPolicy
-          ?? ((existingConcurrency.class ?? inferredClass) === 'exclusive' ? 'category_tool_name' : 'none'),
-        eligibility: existingConcurrency.eligibility
-          ? { ...existingConcurrency.eligibility }
-          : undefined,
-      }
-      : {
-        class: inferredClass,
-        exclusivityKeyPolicy: inferredClass === 'exclusive' ? 'category_tool_name' : 'none',
-        interruptibility: this.inferToolInterruptibility(inferredClass),
-        eligibility: inferredEligibility,
-      };
-
-    if (!concurrency.interruptibility) {
-      concurrency.interruptibility = this.inferToolInterruptibility(concurrency.class);
-    }
-
-    if (!concurrency.eligibility) {
-      concurrency.eligibility = inferredEligibility;
-    } else {
-      if (typeof concurrency.eligibility.foreground !== 'boolean') {
-        concurrency.eligibility.foreground = inferredEligibility.foreground;
-      }
-      if (typeof concurrency.eligibility.background !== 'boolean') {
-        concurrency.eligibility.background = inferredEligibility.background;
-      }
-    }
+    const resolvedClass = existingConcurrency?.class ?? inferredClass;
+    const concurrency: ToolConcurrencyMeta = {
+      class: resolvedClass,
+      exclusivityKeyPolicy: existingConcurrency?.exclusivityKeyPolicy
+        ?? (resolvedClass === 'exclusive' ? 'category_tool_name' : 'none'),
+      ...(existingConcurrency?.exclusivityKey ? { exclusivityKey: existingConcurrency.exclusivityKey } : {}),
+      ...(existingConcurrency?.maxParallel !== undefined ? { maxParallel: existingConcurrency.maxParallel } : {}),
+      interruptibility: existingConcurrency?.interruptibility
+        ?? this.inferToolInterruptibility(resolvedClass),
+      eligibility: existingConcurrency?.eligibility
+        ? {
+          foreground: typeof existingConcurrency.eligibility.foreground === 'boolean'
+            ? existingConcurrency.eligibility.foreground
+            : inferredEligibility.foreground,
+          background: typeof existingConcurrency.eligibility.background === 'boolean'
+            ? existingConcurrency.eligibility.background
+            : inferredEligibility.background,
+        }
+        : inferredEligibility,
+    };
 
     if (concurrency.class === 'exclusive') {
       if (!concurrency.exclusivityKey || concurrency.exclusivityKey.trim().length === 0) {
         concurrency.exclusivityKey = `${category}:${tool.name}`;
         concurrency.exclusivityKeyPolicy = 'category_tool_name';
       } else if (
-        !concurrency.exclusivityKeyPolicy
-        || concurrency.exclusivityKeyPolicy === 'none'
+        concurrency.exclusivityKeyPolicy === 'none'
       ) {
         concurrency.exclusivityKeyPolicy = 'static_key';
       }
@@ -1146,7 +1134,7 @@ export class SubstrateAgent {
       intent: autoloadOutcome.intent,
     };
     this.lastAdaptiveToolSnapshot = snapshot;
-    this.emitTelemetry('agent.tools.adaptive.snapshot', snapshot);
+    this.emitTelemetry('agent.tools.adaptive.snapshot', snapshot as unknown as Record<string, unknown>);
 
     for (const tool of snapshot.tools) {
       this.emitAdaptiveToolDecision({
@@ -3059,9 +3047,10 @@ export class SubstrateAgent {
       );
     }
     const previousSessionId = manager.getActiveContextSession();
-    manager.setActiveContextSession(pinnedSessionId);
+    const setActiveContextSession = manager.setActiveContextSession;
+    setActiveContextSession(pinnedSessionId);
     return () => {
-      manager.setActiveContextSession(previousSessionId ?? null);
+      setActiveContextSession(previousSessionId ?? null);
     };
   }
 

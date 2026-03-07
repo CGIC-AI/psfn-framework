@@ -105,7 +105,7 @@ export interface MessageModelOverride extends ModelControlKnobs {
   provider: string;
   model: string;
   slotKey?: string;
-  purpose?: string;
+  purpose?: ModelPurpose;
 }
 
 export type MessagePromptOverrideMode = 'default' | 'none' | 'custom';
@@ -504,6 +504,7 @@ export interface WyomingShardRoutingConfig {
 }
 
 export interface SubstrateConfig {
+  [key: string]: unknown;
   primaryModel: string;
   primaryProvider: string;
   extractionModel: string;

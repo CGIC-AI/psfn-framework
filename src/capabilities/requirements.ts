@@ -75,7 +75,7 @@ function toRecord(value: unknown): Record<string, unknown> {
 function normalizeRequirement(input: CapabilityRequirement | null | undefined): CapabilityToken[] {
   if (!input) return [];
   if (Array.isArray(input)) return [...new Set(input)];
-  return [input];
+  return [input as CapabilityToken];
 }
 
 export function withCapabilityRequirement<T extends AgentTool<any>>(

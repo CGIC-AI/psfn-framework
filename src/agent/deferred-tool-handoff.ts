@@ -147,7 +147,7 @@ export function buildDeferredToolHandoffCandidate(
   const maxRetries = intent.maxRetries ?? DEFAULT_DEFERRED_TOOL_HANDOFF_MAX_RETRIES;
   return {
     kind: DEFERRED_TOOL_HANDOFF_ACTION_KIND,
-    payload,
+    payload: payload as unknown as Record<string, unknown>,
     dedupeKey: `${DEFERRED_TOOL_HANDOFF_ACTION_KIND}:${payload.turn.turnId}:${dedupeHash}`,
     maxRetries,
   };

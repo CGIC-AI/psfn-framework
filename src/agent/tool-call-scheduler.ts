@@ -93,7 +93,7 @@ export async function executeToolCallsWithScheduler(
       options.onTelemetry?.('agent.tools.scheduler.skipped', {
         reason: 'queued_user_message',
         skippedCount: remainingDescriptors.length,
-        skippedTools: remainingDescriptors.map((entry) => entry.toolCall.name),
+        skippedTools: remainingDescriptors.map((entry: ToolCallDescriptor) => entry.toolCall.name),
       });
       for (const descriptor of remainingDescriptors) {
         results.push(skipToolCall(descriptor.toolCall, context.stream));
@@ -221,8 +221,8 @@ async function executeSingleToolCall(
 
 function skipToolCall(toolCall: any, stream: { push: (event: any) => void }): ToolResultMessage {
   const result = {
-    content: [{ type: 'text', text: 'Skipped due to queued user message.' }],
-    details: {},
+    content: [{ type: 'text' as const, text: 'Skipped due to queued user message.' }],
+    details: {} as Record<string, unknown>,
   };
   stream.push({
     type: 'tool_execution_start',
@@ -254,7 +254,6 @@ function skipToolCall(toolCall: any, stream: { push: (event: any) => void }): To
 
 function collectCompatibleBatch(descriptors: ToolCallDescriptor[], startIndex: number): ToolCallDescriptor[] {
   const first = descriptors[startIndex];
-  if (!first) return [];
   if (first.metadata.class === 'exclusive') {
     return [first];
   }
@@ -263,8 +262,7 @@ function collectCompatibleBatch(descriptors: ToolCallDescriptor[], startIndex: n
   for (let index = startIndex + 1; index < descriptors.length; index += 1) {
     const candidate = descriptors[index];
     if (
-      !candidate
-      || batch.some((entry) => !canRunConcurrently(entry, candidate))
+      batch.some((entry) => !canRunConcurrently(entry, candidate))
     ) {
       break;
     }
@@ -342,7 +340,7 @@ function resolveToolConcurrencyMetadata(
     };
   }
 
-  const concurrency = (tool as WirableTool).wiringMeta?.concurrency;
+  const concurrency = (tool as WirableTool).wiringMeta?.concurrency as Partial<ToolConcurrencyMeta> | undefined;
   if (!concurrency) {
     return {
       metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),
@@ -445,7 +443,11 @@ function resolveToolConcurrencyMetadata(
 
   return {
     metadata: {
-      ...concurrency,
+      class: concurrency.class,
+      exclusivityKeyPolicy: concurrency.exclusivityKeyPolicy,
+      ...(concurrency.exclusivityKey !== undefined ? { exclusivityKey: concurrency.exclusivityKey } : {}),
+      ...(concurrency.maxParallel !== undefined ? { maxParallel: concurrency.maxParallel } : {}),
+      interruptibility: concurrency.interruptibility,
       eligibility: { ...concurrency.eligibility },
     },
   };

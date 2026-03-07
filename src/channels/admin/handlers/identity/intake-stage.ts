@@ -1,4 +1,6 @@
 import type { CharacterCardV2 } from '../../../../identity/types.js';
+import type { RelationshipType } from '../../../../contacts/types.js';
+import type { MemoryType, SensitivityLevel } from '../../../../memory/types.js';
 import type {
   IdentityIntakeChatChunk,
   IdentityIntakeCardMutation,
@@ -51,6 +53,13 @@ export interface StagedIntakeChatMutation {
 
 export interface StagedIntakeMemoryMutation extends Omit<IdentityIntakeMemoryItem, 'textPreview'> {
   text: string;
+  type: MemoryType;
+  tags: string[];
+  sensitivity?: SensitivityLevel;
+  contactId?: string;
+  extractedAt?: number;
+  lastAccessed?: number;
+  relationshipTypeHint?: RelationshipType;
 }
 
 export interface StagedIdentityIntake {

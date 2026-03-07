@@ -214,6 +214,6 @@ function describeOperation(operation: EligibilityOperation): string {
     case 'plugin.action':
       return `${operation.pluginType} plugin "${operation.pluginId}" action "${operation.action}"`;
     default:
-      return operation.kind;
+      return '';
   }
 }

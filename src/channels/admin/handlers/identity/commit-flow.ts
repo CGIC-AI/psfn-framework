@@ -167,7 +167,7 @@ export async function applyStagedIdentityCommit(
           accessCount: 1,
           tags: item.tags,
           provenanceRefs: normalizeProvenanceRefs(item.provenanceRefs ?? [], sourceRef),
-          sensitivity: item.sensitivity,
+          sensitivity: item.sensitivity ?? 'personal',
           contactId: item.contactId,
         }, embedding);
       }

@@ -53,8 +53,8 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
   }> = [];
 
   const unsub = agent.subscribe((event: AgentEvent) => {
-    const currentContext = contextStack[contextStack.length - 1] ?? null;
-    if (!currentContext) return;
+    const currentContext = contextStack.at(-1);
+    if (currentContext === undefined) return;
     const {
       channelId,
       turnId,
@@ -68,12 +68,10 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
     const withCorrelation = (
       type: 'chat' | 'tool',
       eventPurpose: string,
-      toolName?: string,
     ) => ({
       ...(turnId ? { turnId } : {}),
       ...(requestId ? { requestId } : {}),
       callType: type === 'chat' ? (callType ?? 'chat') : 'tool',
-      toolName: toolName ?? undefined,
       purpose: purpose ?? eventPurpose,
       originType: type === 'chat'
         ? (originType ?? callType ?? 'chat')
@@ -104,7 +102,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
             ...(toolCall?.id ? { toolCallId: toolCall.id } : {}),
             ...(toolCall?.name ? { toolName: toolCall.name } : {}),
             ...(shardId ? { shardId } : {}),
-            ...withCorrelation('tool', 'tool_call_stream', toolCall?.name),
+            ...withCorrelation('tool', 'tool_call_stream'),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.start', error: String(err) }));
         } else if (delta.type === 'toolcall_delta') {
           const toolCall = getToolCallFromPartial(delta.partial, delta.contentIndex);
@@ -115,40 +113,45 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
             ...(toolCall?.id ? { toolCallId: toolCall.id } : {}),
             ...(toolCall?.name ? { toolName: toolCall.name } : {}),
             ...(shardId ? { shardId } : {}),
-            ...withCorrelation('tool', 'tool_call_stream', toolCall?.name),
+            ...withCorrelation('tool', 'tool_call_stream'),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.delta', error: String(err) }));
         } else if (delta.type === 'toolcall_end') {
+          const toolName = delta.toolCall.name;
           eventBus.emit('agent.toolcall.end', {
             channelId,
             contentIndex: delta.contentIndex,
             toolCallId: delta.toolCall.id,
-            toolName: delta.toolCall.name,
+            toolName,
             arguments: delta.toolCall.arguments as Record<string, unknown>,
             ...(shardId ? { shardId } : {}),
-            ...withCorrelation('tool', 'tool_call_stream', delta.toolCall.name),
+            ...withCorrelation('tool', 'tool_call_stream'),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.toolcall.end', error: String(err) }));
         }
         break;
       }
-      case 'tool_execution_start':
+      case 'tool_execution_start': {
+        const toolName = event.toolName;
         eventBus.emit('agent.tool.start', {
           channelId,
           toolCallId: event.toolCallId,
-          toolName: event.toolName,
+          toolName,
           ...(shardId ? { shardId } : {}),
-          ...withCorrelation('tool', 'tool_execution', event.toolName),
+          ...withCorrelation('tool', 'tool_execution'),
         }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.start', error: String(err) }));
         break;
-      case 'tool_execution_end':
+      }
+      case 'tool_execution_end': {
+        const toolName = event.toolName;
         eventBus.emit('agent.tool.end', {
           channelId,
           toolCallId: event.toolCallId,
-          toolName: event.toolName,
+          toolName,
           isError: event.isError,
           ...(shardId ? { shardId } : {}),
-          ...withCorrelation('tool', 'tool_execution', event.toolName),
+          ...withCorrelation('tool', 'tool_execution'),
         }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.end', error: String(err) }));
         break;
+      }
     }
   });
 

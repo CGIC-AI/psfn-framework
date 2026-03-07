@@ -171,6 +171,34 @@ describe('ValuesJournalStore', () => {
     ]);
   });
 
+  it('persists provenance metadata when provided', () => {
+    store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P',
+      reflection: 'R',
+      createdAt: '2026-02-26T00:00:00.000Z',
+      provenance: {
+        source: 'companion_reflection',
+        templateId: 'values-reflection',
+        templateName: 'Values Reflection',
+        channelId: 'internal:reflection:values-reflection',
+        mode: 'deliberation',
+        reflectionJournalEntryId: 'reflection-abc',
+      },
+    });
+
+    const [entry] = store.list();
+    expect(entry.provenance).toEqual({
+      source: 'companion_reflection',
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      channelId: 'internal:reflection:values-reflection',
+      mode: 'deliberation',
+      reflectionJournalEntryId: 'reflection-abc',
+    });
+  });
+
   it('fails closed when internal-state context is partial', () => {
     expect(() => store.append({
       templateId: 'values-reflection',
@@ -194,6 +222,75 @@ describe('ValuesJournalStore', () => {
     const entries = store.list();
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe('values-2');
+  });
+
+  it('builds a companion-derived layer with provenance refs and ordered history', () => {
+    store.append({
+      templateId: 'values-tool',
+      templateName: 'Values Tool',
+      prompt: 'manual',
+      reflection: 'manual value should not be included',
+      createdAt: '2026-02-26T00:00:00.000Z',
+      provenance: {
+        source: 'values_add_tool',
+        templateId: 'values-tool',
+      },
+    });
+    const first = store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P1',
+      reflection: 'First companion value',
+      createdAt: '2026-02-26T01:00:00.000Z',
+      provenance: {
+        source: 'companion_reflection',
+        templateId: 'values-reflection',
+        channelId: 'internal:reflection:values-reflection',
+        mode: 'agent',
+      },
+    });
+    const second = store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P2',
+      reflection: 'Second companion value',
+      createdAt: '2026-02-26T02:00:00.000Z',
+      provenance: {
+        source: 'companion_reflection',
+        templateId: 'values-reflection',
+        channelId: 'internal:reflection:values-reflection',
+        mode: 'deliberation',
+      },
+    });
+
+    const layer = store.buildCompanionDerivedLayer({ historyLimit: 2 });
+    expect(layer).not.toBeNull();
+    expect(layer?.entryIds).toEqual([first.id, second.id]);
+    expect(layer?.historyVersions).toEqual([first.version, second.version]);
+    expect(layer?.provenanceRefs).toEqual([
+      `values:${first.id}|source:companion_reflection|template:values-reflection|channel:internal:reflection:values-reflection`,
+      `values:${second.id}|source:companion_reflection|template:values-reflection|channel:internal:reflection:values-reflection`,
+    ]);
+    expect(layer?.content).toContain('[History]');
+    expect(layer?.content).toContain(`v${String(first.version)} @ 2026-02-26T01:00:00.000Z`);
+    expect(layer?.content).toContain(`v${String(second.version)} @ 2026-02-26T02:00:00.000Z`);
+    expect(layer?.content).not.toContain('manual value should not be included');
+  });
+
+  it('returns null companion-derived layer when no companion values exist', () => {
+    store.append({
+      templateId: 'values-tool',
+      templateName: 'Values Tool',
+      prompt: 'manual',
+      reflection: 'Manual only',
+      createdAt: '2026-02-26T00:00:00.000Z',
+      provenance: {
+        source: 'values_add_tool',
+        templateId: 'values-tool',
+      },
+    });
+
+    expect(store.buildCompanionDerivedLayer()).toBeNull();
   });
 
   it('migrates legacy values.jsonl into notes/values.jsonl on first access', () => {

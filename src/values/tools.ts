@@ -128,6 +128,11 @@ export function createValuesAddTool(store: ValuesJournalStore): AgentTool<any> {
           templateName: VALUES_ADD_TEMPLATE_NAME,
           prompt: context,
           reflection: value,
+          provenance: {
+            source: 'values_add_tool',
+            templateId: VALUES_ADD_TEMPLATE_ID,
+            templateName: VALUES_ADD_TEMPLATE_NAME,
+          },
         });
         return textResult(JSON.stringify({
           action: 'added',
@@ -173,6 +178,12 @@ export function createValuesUpdateTool(store: ValuesJournalStore): AgentTool<any
           templateName: VALUES_UPDATE_TEMPLATE_NAME,
           prompt: context,
           reflection: value,
+          provenance: {
+            source: 'values_update_tool',
+            templateId: VALUES_UPDATE_TEMPLATE_ID,
+            templateName: VALUES_UPDATE_TEMPLATE_NAME,
+            derivedFromVersion: source.version,
+          },
         });
         return textResult(JSON.stringify({
           action: 'updated',

@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from './prompt-store.js';
-import { PromptComposer } from './prompt-composer.js';
+import {
+  IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
+  IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
+  PromptComposer,
+} from './prompt-composer.js';
+import { ValuesJournalStore } from '../values/store.js';
 
 describe('PromptComposer', () => {
   let tmpDir: string;
@@ -335,6 +340,88 @@ describe('PromptComposer', () => {
       expect(result.text).toContain('DISCORD');
       expect(result.text).toContain('HEARTBEAT');
       expect(result.layerCount).toBe(3);
+    });
+  });
+
+  describe('constitution mode', () => {
+    it('prepends immutable amendments and a companion-derived values layer before mutable layers', () => {
+      const valuesStore = new ValuesJournalStore(join(tmpDir, 'values.jsonl'));
+      valuesStore.append({
+        templateId: 'values-reflection',
+        templateName: 'Values Reflection',
+        prompt: 'P1',
+        reflection: 'Companion value one',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        provenance: {
+          source: 'companion_reflection',
+          templateId: 'values-reflection',
+          channelId: 'internal:reflection:values-reflection',
+          mode: 'agent',
+        },
+      });
+      valuesStore.append({
+        templateId: 'values-tool',
+        templateName: 'Values Tool',
+        prompt: 'manual',
+        reflection: 'Manual value should not be in companion layer',
+        createdAt: '2026-03-01T00:05:00.000Z',
+        provenance: {
+          source: 'values_add_tool',
+          templateId: 'values-tool',
+        },
+      });
+
+      const constitutionComposer = new PromptComposer(
+        store,
+        undefined,
+        undefined,
+        {
+          enableConstitution: true,
+          companionValuesLayerProvider: () => valuesStore.buildCompanionDerivedLayer(),
+        },
+      );
+      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
+
+      const result = constitutionComposer.compose();
+      const immutableIndex = result.text.indexOf(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+      const companionIndex = result.text.indexOf('[Companion-Derived Values Layer]');
+      const baseIndex = result.text.indexOf('BASE');
+      const runtimeIndex = result.text.indexOf('RUNTIME');
+
+      expect(immutableIndex).toBeGreaterThanOrEqual(0);
+      expect(companionIndex).toBeGreaterThan(immutableIndex);
+      expect(baseIndex).toBeGreaterThan(companionIndex);
+      expect(runtimeIndex).toBeGreaterThan(baseIndex);
+      expect(result.text).toContain('Companion value one');
+      expect(result.text).not.toContain('Manual value should not be in companion layer');
+    });
+
+    it('fails closed by keeping immutable amendments when the companion layer provider fails', () => {
+      const constitutionComposer = new PromptComposer(
+        store,
+        undefined,
+        undefined,
+        {
+          enableConstitution: true,
+          companionValuesLayerProvider: () => {
+            throw new Error('provider failure');
+          },
+        },
+      );
+      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+
+      const result = constitutionComposer.compose();
+      expect(result.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+      expect(result.text).toContain('BASE');
+      expect(result.text).not.toContain('[Companion-Derived Values Layer]');
+    });
+
+    it('exposes hardcoded immutable amendments as non-editable constants', () => {
+      expect(Object.isFrozen(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS)).toBe(true);
+      const descriptor = Object.getOwnPropertyDescriptor(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS, '0');
+      expect(descriptor?.writable).toBe(false);
+      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS).toHaveLength(3);
     });
   });
 });

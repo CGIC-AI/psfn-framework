@@ -250,9 +250,15 @@ export function wirePromptRuntime(
     resolvePromptLayersPath(dataDir),
     resolvePromptHistoryPath(dataDir),
   );
+  const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
+    legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
+  });
   promptStore.seedFromCharacterCard(baseSystemPrompt);
 
-  target.promptComposer = new PromptComposer(promptStore);
+  target.promptComposer = new PromptComposer(promptStore, undefined, undefined, {
+    enableConstitution: true,
+    companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
+  });
   target.registerTool(createPromptLayerListTool(promptStore), 'extended');
   target.registerTool(createPromptLayerGetTool(promptStore), 'extended');
   target.registerTool(createIdentityDiffTool(promptStore), 'extended');
@@ -846,23 +852,9 @@ export function wireHeartbeatRuntime(
       }
     }
 
-    if (template.id === 'values-reflection') {
-      valuesJournal.append({
-        templateId: template.id,
-        templateName: template.name,
-        prompt: reflectionPrompt,
-        reflection: reflectionText,
-        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(persistenceContext ? {
-          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-          internalState: persistenceContext.internalState,
-          metacognitiveFlags: persistenceContext.metacognitiveFlags,
-        } : {}),
-      });
-    }
-
+    let reflectionJournalEntryId: string | undefined;
     try {
-      reflectionJournal.append({
+      const reflectionEntry = reflectionJournal.append({
         templateId: template.id,
         templateName: template.name,
         prompt: reflectionPrompt,
@@ -876,9 +868,33 @@ export function wireHeartbeatRuntime(
           metacognitiveFlags: persistenceContext.metacognitiveFlags,
         } : {}),
       });
+      reflectionJournalEntryId = reflectionEntry.id;
     } catch (error) {
       log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
         error: String(error),
+      });
+    }
+
+    if (template.id === 'values-reflection') {
+      valuesJournal.append({
+        templateId: template.id,
+        templateName: template.name,
+        prompt: reflectionPrompt,
+        reflection: reflectionText,
+        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+        ...(persistenceContext ? {
+          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+          internalState: persistenceContext.internalState,
+          metacognitiveFlags: persistenceContext.metacognitiveFlags,
+        } : {}),
+        provenance: {
+          source: 'companion_reflection',
+          templateId: template.id,
+          templateName: template.name,
+          channelId: reflectionChannelId,
+          mode: reflectionMode,
+          ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+        },
       });
     }
 

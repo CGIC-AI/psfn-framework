@@ -5,6 +5,9 @@ import { appendJsonLine } from '../persistence/jsonl.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
 
 const log = createComponentLogger('ValuesJournal');
+const COMPANION_VALUES_TEMPLATE_ID = 'values-reflection';
+const DEFAULT_COMPANION_LAYER_HISTORY_LIMIT = 6;
+const MAX_COMPANION_LAYER_HISTORY_LIMIT = 24;
 
 export interface ValuesJournalEntry {
   id: string;
@@ -18,6 +21,7 @@ export interface ValuesJournalEntry {
   internalStateSnapshotRef?: string;
   internalState?: InternalState;
   metacognitiveFlags?: ValuesMetacognitiveFlag[];
+  provenance?: ValuesEntryProvenance;
 }
 
 export interface ValuesJournalAppendInput {
@@ -30,6 +34,7 @@ export interface ValuesJournalAppendInput {
   internalStateSnapshotRef?: string;
   internalState?: InternalState;
   metacognitiveFlags?: ValuesMetacognitiveFlag[];
+  provenance?: ValuesEntryProvenance;
 }
 
 interface ValuesJournalListOptions {
@@ -55,6 +60,32 @@ export interface ValuesMetacognitiveFlag {
   flag: string;
   confidence: number;
   evidence?: string;
+}
+
+export type ValuesEntryProvenanceSource =
+  | 'companion_reflection'
+  | 'values_add_tool'
+  | 'values_update_tool';
+
+export interface ValuesEntryProvenance {
+  source: ValuesEntryProvenanceSource;
+  templateId?: string;
+  templateName?: string;
+  channelId?: string;
+  mode?: 'agent' | 'deliberation';
+  reflectionJournalEntryId?: string;
+  derivedFromVersion?: number;
+}
+
+export interface CompanionDerivedValuesLayer {
+  content: string;
+  provenanceRefs: string[];
+  historyVersions: number[];
+  entryIds: string[];
+}
+
+interface CompanionDerivedLayerOptions {
+  historyLimit?: number;
 }
 
 function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata | undefined {
@@ -154,6 +185,116 @@ function normalizeMetacognitiveFlags(raw: unknown): ValuesMetacognitiveFlag[] | 
   });
 }
 
+function normalizeOptionalNonEmptyString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeProvenance(
+  raw: unknown,
+  options: { strict: boolean } = { strict: false },
+): ValuesEntryProvenance | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object') {
+    if (options.strict) {
+      throw new Error('values journal provenance must be an object when provided');
+    }
+    return undefined;
+  }
+
+  const candidate = raw as Record<string, unknown>;
+  const source = candidate.source;
+  if (source !== 'companion_reflection' && source !== 'values_add_tool' && source !== 'values_update_tool') {
+    if (options.strict) {
+      throw new Error('values journal provenance.source is invalid');
+    }
+    return undefined;
+  }
+
+  const templateId = normalizeOptionalNonEmptyString(candidate.templateId);
+  const templateName = normalizeOptionalNonEmptyString(candidate.templateName);
+  const channelId = normalizeOptionalNonEmptyString(candidate.channelId);
+  const reflectionJournalEntryId = normalizeOptionalNonEmptyString(candidate.reflectionJournalEntryId);
+
+  const modeRaw = candidate.mode;
+  let mode: 'agent' | 'deliberation' | undefined;
+  if (modeRaw !== undefined) {
+    if (modeRaw !== 'agent' && modeRaw !== 'deliberation') {
+      if (options.strict) {
+        throw new Error('values journal provenance.mode is invalid');
+      }
+      mode = undefined;
+    } else {
+      mode = modeRaw;
+    }
+  }
+
+  const derivedFromVersionRaw = candidate.derivedFromVersion;
+  let derivedFromVersion: number | undefined;
+  if (derivedFromVersionRaw !== undefined) {
+    if (
+      typeof derivedFromVersionRaw !== 'number'
+      || !Number.isInteger(derivedFromVersionRaw)
+      || derivedFromVersionRaw < 1
+    ) {
+      if (options.strict) {
+        throw new Error('values journal provenance.derivedFromVersion must be an integer >= 1');
+      }
+    } else {
+      derivedFromVersion = derivedFromVersionRaw;
+    }
+  }
+
+  return {
+    source,
+    ...(templateId ? { templateId } : {}),
+    ...(templateName ? { templateName } : {}),
+    ...(channelId ? { channelId } : {}),
+    ...(mode ? { mode } : {}),
+    ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+    ...(derivedFromVersion ? { derivedFromVersion } : {}),
+  };
+}
+
+function normalizeCompanionLayerHistoryLimit(raw: unknown): number {
+  if (raw === undefined) return DEFAULT_COMPANION_LAYER_HISTORY_LIMIT;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || !Number.isInteger(raw)) {
+    throw new Error('companion layer historyLimit must be an integer');
+  }
+  if (raw < 1 || raw > MAX_COMPANION_LAYER_HISTORY_LIMIT) {
+    throw new Error(
+      `companion layer historyLimit must be between 1 and ${String(MAX_COMPANION_LAYER_HISTORY_LIMIT)}`,
+    );
+  }
+  return raw;
+}
+
+function sanitizeReflectionForCompanionLayer(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function isCompanionDerivedEntry(entry: ValuesJournalEntry): boolean {
+  if (entry.provenance?.source === 'companion_reflection') return true;
+  return entry.templateId === COMPANION_VALUES_TEMPLATE_ID;
+}
+
+function toProvenanceRef(entry: ValuesJournalEntry): string {
+  const source = entry.provenance?.source ?? 'legacy_values_entry';
+  const templateId = entry.provenance?.templateId ?? entry.templateId;
+  const channelId = entry.provenance?.channelId ?? 'unknown_channel';
+  return `values:${entry.id}|source:${source}|template:${templateId}|channel:${channelId}`;
+}
+
+function toCompanionHistoryLine(entry: ValuesJournalEntry): string {
+  const source = entry.provenance?.source ?? 'legacy_values_entry';
+  const mode = entry.provenance?.mode ?? 'unknown';
+  const template = entry.provenance?.templateId ?? entry.templateId;
+  const reflection = sanitizeReflectionForCompanionLayer(entry.reflection);
+  return `- v${String(entry.version)} @ ${entry.createdAt} (${source}; template=${template}; mode=${mode}): ${reflection}`;
+}
+
 function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
   if (!raw || typeof raw !== 'object') return null;
   const entry = raw as Partial<ValuesJournalEntry>;
@@ -183,6 +324,7 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
     const internalStateSnapshotRef = normalizeSnapshotRef((entry as { internalStateSnapshotRef?: unknown }).internalStateSnapshotRef);
     const internalState = normalizeInternalStateSnapshot((entry as { internalState?: unknown }).internalState);
     const metacognitiveFlags = normalizeMetacognitiveFlags((entry as { metacognitiveFlags?: unknown }).metacognitiveFlags);
+    const provenance = normalizeProvenance((entry as { provenance?: unknown }).provenance);
     if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
       return null;
     }
@@ -199,6 +341,7 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
       ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
       ...(internalState ? { internalState } : {}),
       ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
+      ...(provenance ? { provenance } : {}),
     };
   } catch {
     return null;
@@ -233,6 +376,7 @@ export class ValuesJournalStore {
     const internalStateSnapshotRef = normalizeSnapshotRef(input.internalStateSnapshotRef);
     const internalState = normalizeInternalStateSnapshot(input.internalState);
     const metacognitiveFlags = normalizeMetacognitiveFlags(input.metacognitiveFlags);
+    const provenance = normalizeProvenance(input.provenance, { strict: true });
     if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
       throw new Error(
         'values journal append requires both internalStateSnapshotRef and internalState when narrative context is provided',
@@ -250,6 +394,7 @@ export class ValuesJournalStore {
       ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
       ...(internalState ? { internalState } : {}),
       ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
+      ...(provenance ? { provenance } : {}),
     };
 
     appendJsonLine(this.filePath, entry);
@@ -263,6 +408,41 @@ export class ValuesJournalStore {
       return entries;
     }
     return entries.slice(0, options.limit);
+  }
+
+  buildCompanionDerivedLayer(options: CompanionDerivedLayerOptions = {}): CompanionDerivedValuesLayer | null {
+    this.ensureLegacyMigration();
+    const historyLimit = normalizeCompanionLayerHistoryLimit(options.historyLimit);
+    const companionEntries = this.readAll()
+      .filter(entry => isCompanionDerivedEntry(entry));
+    if (companionEntries.length === 0) {
+      return null;
+    }
+
+    const selected = companionEntries
+      .slice()
+      .sort((left, right) => right.version - left.version)
+      .slice(0, historyLimit)
+      .sort((left, right) => left.version - right.version);
+    if (selected.length === 0) {
+      return null;
+    }
+
+    const lines = [
+      'Secondary companion-values layer derived from append-only values journal history.',
+      `history_depth: ${String(selected.length)}`,
+      `latest_version: ${String(selected[selected.length - 1]!.version)}`,
+      '',
+      '[History]',
+      ...selected.map(entry => toCompanionHistoryLine(entry)),
+    ];
+
+    return {
+      content: lines.join('\n'),
+      provenanceRefs: selected.map(entry => toProvenanceRef(entry)),
+      historyVersions: selected.map(entry => entry.version),
+      entryIds: selected.map(entry => entry.id),
+    };
   }
 
   private readAll(): ValuesJournalEntry[] {

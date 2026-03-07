@@ -85,6 +85,7 @@ import {
   validateAndLogToolWiring,
   extractGatewayMethods,
   type GatewayToolMetadataCoverage,
+  type ToolConcurrencyMeta,
   type RuntimeMode,
   type ToolConcurrencyClass,
   type ToolExecutionEligibility,
@@ -841,17 +842,21 @@ export class SubstrateAgent {
   private withToolConcurrencyMetadata(tool: AgentTool<any>, category: ToolCategory): AgentTool<any> {
     const wirable = tool as WirableTool;
     const existingMeta = wirable.wiringMeta;
+    const existingConcurrency = existingMeta?.concurrency as Partial<ToolConcurrencyMeta> | undefined;
     const inferredClass = this.inferToolConcurrencyClass(tool.name);
     const inferredEligibility = this.inferToolEligibility(tool.name, category);
-    const concurrency = existingMeta?.concurrency
+    const concurrency = existingConcurrency
       ? {
-        ...existingMeta.concurrency,
-        eligibility: existingMeta.concurrency.eligibility
-          ? { ...existingMeta.concurrency.eligibility }
+        ...existingConcurrency,
+        class: existingConcurrency.class ?? inferredClass,
+        exclusivityKeyPolicy: existingConcurrency.exclusivityKeyPolicy
+          ?? ((existingConcurrency.class ?? inferredClass) === 'exclusive' ? 'category_tool_name' : 'none'),
+        eligibility: existingConcurrency.eligibility
+          ? { ...existingConcurrency.eligibility }
           : undefined,
       }
       : {
-        class: inferredClass as ToolConcurrencyClass,
+        class: inferredClass,
         exclusivityKeyPolicy: inferredClass === 'exclusive' ? 'category_tool_name' : 'none',
         interruptibility: this.inferToolInterruptibility(inferredClass),
         eligibility: inferredEligibility,

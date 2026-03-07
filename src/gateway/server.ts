@@ -51,11 +51,14 @@ import { executeQueuedAction, resolveCompanionReason } from './confirmation-acti
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS = 90_000;
+const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
+const FRAME_PREVIEW_LIMIT = 200;
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
 
 type GatewayConnectionState = 'registering' | 'ready' | 'degraded' | 'offline';
 type GatewayConnectionHealth = 'healthy' | 'stale' | 'failed';
+type MalformedFrameKind = 'ndjson' | 'jsonrpc';
 
 interface GatewayConnectionStatus {
   state: GatewayConnectionState;
@@ -299,26 +302,46 @@ export class GatewayServer {
       this.rpcClients.set(conn, serverAndClient);
       this.transitionConnectionState(conn, 'ready', 'rpc_registered');
 
+      conn.on('frameError', (error: unknown) => {
+        const frameError = normalizeNdjsonFrameError(error);
+        this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
+      });
+
       conn.onMessage(async (message) => {
+        if (!this.connections.has(conn)) {
+          return;
+        }
         this.touchConnectionHeartbeat(conn);
         this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
+        const validationError = validateJsonRpcFrame(message);
+        if (validationError) {
+          this.handleMalformedFrame(
+            conn,
+            'jsonrpc',
+            validationError,
+            summarizeFramePreview(message),
+          );
+          return;
+        }
         // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         try {
           await serverAndClient.receiveAndSend(message as any);
         } catch (error) {
           const messageText = toErrorMessage(error);
-          this.transitionConnectionState(conn, 'degraded', 'rpc_receive_error', messageText);
-          log.error('RPC receive/send failed for gateway connection', { error: messageText });
+          this.handleMalformedFrame(
+            conn,
+            'jsonrpc',
+            `JSON-RPC receive/send failed: ${messageText}`,
+            summarizeFramePreview(message),
+          );
         }
       });
 
       conn.on('close', () => {
         log.info('Agent disconnected');
         this.transitionConnectionState(conn, 'offline', 'connection_closed');
-        this.connections.delete(conn);
-        this.rpcClients.delete(conn);
-        this.connectionStatuses.delete(conn);
+        this.removeConnection(conn);
       });
 
       conn.on('error', (err) => {
@@ -326,9 +349,7 @@ export class GatewayServer {
         log.error('Connection error', { error: messageText });
         this.transitionConnectionState(conn, 'degraded', 'connection_error', messageText);
         this.transitionConnectionState(conn, 'offline', 'connection_error', messageText);
-        this.connections.delete(conn);
-        this.rpcClients.delete(conn);
-        this.connectionStatuses.delete(conn);
+        this.removeConnection(conn);
       });
     });
   }
@@ -352,6 +373,39 @@ export class GatewayServer {
       method,
       params,
     });
+  }
+
+  private removeConnection(conn: NdjsonConnection): void {
+    this.connections.delete(conn);
+    this.rpcClients.delete(conn);
+    this.connectionStatuses.delete(conn);
+  }
+
+  private handleMalformedFrame(
+    conn: NdjsonConnection,
+    frameKind: MalformedFrameKind,
+    reason: string,
+    preview?: string,
+  ): void {
+    if (!this.connectionStatuses.has(conn)) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    const params: Record<string, unknown> = {
+      frameKind,
+      reason,
+      ...(preview ? { preview } : {}),
+    };
+    const auditId = this.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
+    this.auditComplete(auditId, startedAt, reason);
+    log.error('Malformed IPC frame received; disconnecting agent connection', params);
+    this.transitionConnectionState(conn, 'degraded', 'malformed_frame', reason);
+    this.transitionConnectionState(conn, 'offline', 'malformed_frame', reason);
+    this.removeConnection(conn);
+    if (!conn.destroyed) {
+      conn.destroy();
+    }
   }
 
   /** Send an RPC request to the first connected agent and await its response */
@@ -560,4 +614,96 @@ function extractGatewayCorrelation(
     correlation[key] = trimmed;
   }
   return correlation;
+}
+
+function normalizeNdjsonFrameError(error: unknown): { reason: string; preview?: string } {
+  const reason = error instanceof Error ? error.message : 'Malformed NDJSON frame received';
+  if (isRecord(error)) {
+    const previewValue = error.preview;
+    if (typeof previewValue === 'string' && previewValue.trim()) {
+      return { reason, preview: summarizeFramePreview(previewValue) };
+    }
+  }
+  return { reason };
+}
+
+function validateJsonRpcFrame(message: unknown): string | null {
+  if (!isRecord(message)) {
+    return 'JSON-RPC frame must be an object';
+  }
+  if (message.jsonrpc !== '2.0') {
+    return 'JSON-RPC frame must include jsonrpc="2.0"';
+  }
+
+  const hasMethod = hasOwn(message, 'method');
+  const hasId = hasOwn(message, 'id');
+  const hasResult = hasOwn(message, 'result');
+  const hasError = hasOwn(message, 'error');
+
+  if (hasMethod) {
+    if (typeof message.method !== 'string' || !message.method.trim()) {
+      return 'JSON-RPC request method must be a non-empty string';
+    }
+    if (hasResult || hasError) {
+      return 'JSON-RPC request/notification must not contain result or error';
+    }
+    if (hasId && !isValidJsonRpcId(message.id)) {
+      return 'JSON-RPC request id must be string, number, or null';
+    }
+    return null;
+  }
+
+  if (!hasId) {
+    return 'JSON-RPC response must include id';
+  }
+  if (!isValidJsonRpcId(message.id)) {
+    return 'JSON-RPC response id must be string, number, or null';
+  }
+  if (hasResult === hasError) {
+    return 'JSON-RPC response must contain exactly one of result or error';
+  }
+  if (hasError && !isValidJsonRpcError(message.error)) {
+    return 'JSON-RPC response error must include numeric code and string message';
+  }
+  return null;
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function isValidJsonRpcId(id: unknown): boolean {
+  return id === null || typeof id === 'string' || (typeof id === 'number' && Number.isFinite(id));
+}
+
+function isValidJsonRpcError(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.code === 'number'
+    && Number.isFinite(value.code)
+    && typeof value.message === 'string'
+    && value.message.trim().length > 0;
+}
+
+function summarizeFramePreview(message: unknown): string {
+  if (typeof message === 'string') {
+    return truncateFramePreview(message.trim());
+  }
+  try {
+    return truncateFramePreview(JSON.stringify(message) ?? String(message));
+  } catch {
+    return truncateFramePreview(String(message));
+  }
+}
+
+function truncateFramePreview(value: string): string {
+  if (value.length <= FRAME_PREVIEW_LIMIT) {
+    return value;
+  }
+  return `${value.slice(0, FRAME_PREVIEW_LIMIT)}... (${value.length} chars)`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

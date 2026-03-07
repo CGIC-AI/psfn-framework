@@ -162,6 +162,30 @@ interface ProactiveWeightedMemory {
   weight: number;
 }
 
+type RetrievalIntegrityErrorStage =
+  | 'retrieve'
+  | 'selected_access_update'
+  | 'proactive_access_update';
+
+export interface RetrievalIntegrityErrorContext {
+  stage: RetrievalIntegrityErrorStage;
+  channelId: string;
+  trustLevel?: TrustLevel;
+  memoryId?: string;
+}
+
+export class RetrievalIntegrityError extends Error {
+  readonly context: RetrievalIntegrityErrorContext;
+  readonly cause: unknown;
+
+  constructor(message: string, context: RetrievalIntegrityErrorContext, cause: unknown) {
+    super(message);
+    this.name = 'RetrievalIntegrityError';
+    this.context = context;
+    this.cause = cause;
+  }
+}
+
 export interface MemoryRetrieverConfig {
   retrievalLimit?: number;
   retrievalBudgetPct?: number;
@@ -696,14 +720,25 @@ export class MemoryRetriever implements MemoryProvider {
         telemetry.retrievalSource,
       );
 
-      // Update access stats (fire-and-forget)
+      // Update access stats; fail closed if persistence fails.
       for (const s of selected) {
         try {
           this.memoryStore.updateMemory(s.memory.id, {
             lastAccessed: Date.now(),
             accessCount: s.memory.accessCount + 1,
           });
-        } catch { /* ignore */ }
+        } catch (error) {
+          throw new RetrievalIntegrityError(
+            `Failed to update retrieval access stats for memory ${s.memory.id}`,
+            {
+              stage: 'selected_access_update',
+              channelId,
+              trustLevel: effectiveTrust,
+              memoryId: s.memory.id,
+            },
+            error,
+          );
+        }
       }
 
       telemetry.count = selected.length;
@@ -713,14 +748,26 @@ export class MemoryRetriever implements MemoryProvider {
         emotionalSnapshot,
         emotionalContinuityMemories,
       });
-    } catch (err) {
-      log.error('Retrieval error', { error: String(err) });
+    } catch (error) {
       telemetry.reason = 'error';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, [], {
-        emotionalSnapshot,
-        emotionalContinuityMemories: fallbackEmotionalContinuity,
+      const wrapped = error instanceof RetrievalIntegrityError
+        ? error
+        : new RetrievalIntegrityError(
+          'Memory retrieval failed',
+          {
+            stage: 'retrieve',
+            channelId,
+            trustLevel: effectiveTrust,
+          },
+          error,
+        );
+      log.error('Retrieval integrity failure', {
+        context: wrapped.context,
+        error: toErrorMessage(wrapped),
+        cause: toErrorMessage(wrapped.cause),
       });
+      throw wrapped;
     }
   }
 
@@ -782,7 +829,24 @@ export class MemoryRetriever implements MemoryProvider {
         lastAccessed: Date.now(),
         accessCount: selected.accessCount + 1,
       });
-    } catch { /* ignore */ }
+    } catch (error) {
+      const wrapped = new RetrievalIntegrityError(
+        `Failed to update proactive recall access stats for memory ${selected.id}`,
+        {
+          stage: 'proactive_access_update',
+          channelId,
+          trustLevel: effectiveTrust,
+          memoryId: selected.id,
+        },
+        error,
+      );
+      log.error('Proactive recall integrity failure', {
+        context: wrapped.context,
+        error: toErrorMessage(wrapped),
+        cause: toErrorMessage(wrapped.cause),
+      });
+      throw wrapped;
+    }
 
     return renderProactiveRecall(selected);
   }
@@ -1041,6 +1105,10 @@ function countSelectedMemoryTypes(scored: ScoredMemory[]): Record<string, number
     counts[item.memory.type] = (counts[item.memory.type] ?? 0) + 1;
   }
   return counts;
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function collectSelectedProvenanceRefs(

@@ -40,6 +40,30 @@ import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
 
 const log = createComponentLogger('Extraction');
 
+type ExtractionIntegrityErrorStage = 'orchestration' | 'fact_processing';
+
+export interface ExtractionIntegrityErrorContext {
+  stage: ExtractionIntegrityErrorStage;
+  channelId: string;
+  triggerReason: ExtractionTriggerReason;
+  turnId?: TurnID;
+  factIndex?: number;
+  factType?: ExtractedFact['type'];
+  sourceRef?: string;
+}
+
+export class ExtractionIntegrityError extends Error {
+  readonly context: ExtractionIntegrityErrorContext;
+  readonly cause: unknown;
+
+  constructor(message: string, context: ExtractionIntegrityErrorContext, cause: unknown) {
+    super(message);
+    this.name = 'ExtractionIntegrityError';
+    this.context = context;
+    this.cause = cause;
+  }
+}
+
 export interface ExtractionRunOptions {
   channelId: string;
   triggerReason: ExtractionTriggerReason;
@@ -79,6 +103,7 @@ export interface ExtractionRunOptions {
 }
 
 export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
+  let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
     const recentEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
       ? options.recoveredEntries
@@ -86,6 +111,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     ).slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
     const latestTurnContext = resolveLatestTurnContext(recentEntries);
     const turnId = options.turnId ?? latestTurnContext?.turnId;
+    resolvedTurnId = turnId;
     const requestId = latestTurnContext?.requestId ?? `memory-extraction:${options.channelId}:${options.triggerReason}`;
     await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
 
@@ -270,8 +296,20 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             deduplicatedCount++;
             break;
         }
-      } catch (err) {
-        log.error('Error processing fact', { error: String(err) });
+      } catch (error) {
+        throw new ExtractionIntegrityError(
+          `Failed to process extracted fact at index ${candidate.index}`,
+          {
+            stage: 'fact_processing',
+            channelId: options.channelId,
+            triggerReason: options.triggerReason,
+            ...(turnId ? { turnId } : {}),
+            factIndex: candidate.index,
+            factType: fact.type,
+            sourceRef,
+          },
+          error,
+        );
       }
     }
 
@@ -312,7 +350,28 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       options.canonicalContactId,
       acceptedWrites,
     );
-  } catch (err) {
-    log.error('Extraction error', { error: String(err), triggerReason: options.triggerReason });
+  } catch (error) {
+    const wrapped = error instanceof ExtractionIntegrityError
+      ? error
+      : new ExtractionIntegrityError(
+        'Extraction orchestration failed',
+        {
+          stage: 'orchestration',
+          channelId: options.channelId,
+          triggerReason: options.triggerReason,
+          ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
+        },
+        error,
+      );
+    log.error('Extraction integrity failure', {
+      context: wrapped.context,
+      error: toErrorMessage(wrapped),
+      cause: toErrorMessage(wrapped.cause),
+    });
+    throw wrapped;
   }
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

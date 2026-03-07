@@ -3,6 +3,8 @@
 // All trust-sensitive surfaces import from here — single source of truth.
 
 export type TrustLevel = 'primary' | 'trusted' | 'regular' | 'public';
+export type HighTierTrustLevel = Extract<TrustLevel, 'primary' | 'trusted'>;
+export type LowTierTrustLevel = Extract<TrustLevel, 'regular' | 'public'>;
 
 export type SensitivityLevel = 'public' | 'personal' | 'intimate' | 'confidential';
 
@@ -21,6 +23,8 @@ export interface ConsentFlags {
 // ── Ordered constants ──
 
 export const TRUST_LEVELS: readonly TrustLevel[] = ['primary', 'trusted', 'regular', 'public'];
+export const HIGH_TIER_TRUST_LEVELS: readonly HighTierTrustLevel[] = ['primary', 'trusted'];
+export const LOW_TIER_TRUST_LEVELS: readonly LowTierTrustLevel[] = ['regular', 'public'];
 
 export const SENSITIVITY_LEVELS: readonly SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
 
@@ -69,6 +73,14 @@ export function sensitivityAtMost(level: SensitivityLevel, maximum: SensitivityL
 
 export function trustOrd(level: TrustLevel): number {
   return TRUST_ORDER[level];
+}
+
+export function isHighTierTrustLevel(level: TrustLevel): level is HighTierTrustLevel {
+  return (HIGH_TIER_TRUST_LEVELS as readonly TrustLevel[]).includes(level);
+}
+
+export function isLowTierTrustLevel(level: TrustLevel): level is LowTierTrustLevel {
+  return (LOW_TIER_TRUST_LEVELS as readonly TrustLevel[]).includes(level);
 }
 
 export function sensitivityOrd(level: SensitivityLevel): number {

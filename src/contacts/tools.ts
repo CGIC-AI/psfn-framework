@@ -6,6 +6,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ContactStore } from './store.js';
 import type { TrustLevel } from '../trust/types.js';
 import { TRUST_LEVELS } from '../trust/types.js';
+import type { TrustDriftBehaviorSignals } from '../trust/policy.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel } from './types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -14,28 +15,95 @@ function errorMessage(error: unknown): string {
   return toErrorMessage(error);
 }
 
+interface ContactSetTrustParams {
+  contactId: string;
+  trustLevel?: TrustLevel;
+  behaviorSignals?: TrustDriftBehaviorSignals;
+  confirmSuggestion?: boolean;
+}
+
+function formatConfidence(confidence: number): string {
+  return `${Math.round(confidence * 100)}%`;
+}
+
 export function createContactSetTrustTool(contactStore: ContactStore): AgentTool<any> {
   return {
     name: 'contact_set_trust',
     description:
-      'Set the trust level for a contact. Use this when you learn about someone\'s ' +
-      'relationship to your primary person or want to adjust access boundaries.',
+      'Set or suggest a trust level for a contact. Behavior-driven drift suggestions ' +
+      'can only auto-apply low-tier changes after explicit confirmation.',
     label: 'contact_set_trust',
     parameters: Type.Object({
       contactId: Type.String({ description: 'The contact ID' }),
-      trustLevel: Type.Unsafe<TrustLevel>({
+      trustLevel: Type.Optional(Type.Unsafe<TrustLevel>({
         type: 'string',
         enum: [...TRUST_LEVELS],
         description: 'New trust level: primary, trusted, regular, or public',
-      }),
+      })),
+      behaviorSignals: Type.Optional(Type.Object({
+        positiveInteractionCount: Type.Integer({ minimum: 0, description: 'Observed positive interactions' }),
+        negativeInteractionCount: Type.Optional(Type.Integer({ minimum: 0, description: 'Observed negative interactions' })),
+        verifiedIdentityLinks: Type.Optional(Type.Integer({ minimum: 0, description: 'Verified channel identity links' })),
+        consistentBoundaryRespect: Type.Optional(Type.Boolean({
+          description: 'Whether behavior consistently respected boundaries',
+        })),
+      })),
+      confirmSuggestion: Type.Optional(Type.Boolean({
+        description: 'Required to apply a behavior-driven suggestion after preview',
+      })),
     }),
     execute: async (
       _toolCallId: string,
-      params: { contactId: string; trustLevel: TrustLevel },
+      params: ContactSetTrustParams,
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const { contactId, trustLevel } = params;
+        const { contactId, trustLevel, behaviorSignals, confirmSuggestion } = params;
+
+        if (!behaviorSignals && !trustLevel) {
+          return textResultWithError(
+            'Provide either trustLevel for a direct update or behaviorSignals for drift suggestion flow',
+            true,
+          );
+        }
+
+        if (behaviorSignals) {
+          const suggestion = contactStore.suggestLowTierTrustDrift(
+            contactId,
+            behaviorSignals,
+            'agent:tool:contact_set_trust',
+          );
+          if (!suggestion) {
+            return textResult(
+              `No low-tier trust drift suggestion generated for ${contactId} from the provided behavior signals`,
+            );
+          }
+
+          if (confirmSuggestion !== true) {
+            return textResult(
+              `Suggested low-tier trust drift for ${contactId}: ${suggestion.fromTrustLevel} -> `
+              + `${suggestion.suggestedTrustLevel} (${formatConfidence(suggestion.confidence)} confidence). `
+              + 'Re-run with confirmSuggestion=true to apply.',
+            );
+          }
+
+          const applied = contactStore.applyLowTierTrustDriftSuggestion(
+            contactId,
+            suggestion,
+            'agent:tool:contact_set_trust',
+          );
+          if (!applied.applied) {
+            return textResultWithError(applied.reason, true);
+          }
+
+          return textResult(
+            `Applied low-tier trust drift for ${contactId}: ${suggestion.fromTrustLevel} -> ${suggestion.suggestedTrustLevel}`,
+          );
+        }
+
+        if (!trustLevel) {
+          return textResultWithError('Missing trustLevel', true);
+        }
 
         if (!(TRUST_LEVELS as readonly string[]).includes(trustLevel)) {
           return textResultWithError(

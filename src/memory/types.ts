@@ -200,6 +200,8 @@ export const MEMORY_CONFIG = {
   salienceFloor: 0.05,
   durableSalienceFloor: 0.25,
   durableHalflifeMultiplier: 8,
+  emotionalIntensityPersistenceMinMultiplier: 1,
+  emotionalIntensityPersistenceMaxMultiplier: 1.8,
   durableAutoImportanceThreshold: 0.75,
   contradictionThresholdOffset: 0.15,
   salienceBumpOnAccess: 0.05,
@@ -423,24 +425,57 @@ export function inferMemoryRetentionClass(input: {
   return 'standard';
 }
 
-export function getMemoryDecayProfile(memory: Pick<PurrMemory, 'type' | 'tags' | 'retentionClass'>): MemoryDecayProfile {
+type MemoryDecayProfileInput = Pick<PurrMemory, 'type' | 'tags' | 'retentionClass'> & Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>;
+
+export function computeMemoryEmotionalIntensity(
+  memory: Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>,
+): number {
+  const valenceIntensity = Math.abs(clampSigned(memory.emotionalValence ?? 0, 0));
+  const formationVAD = normalizeFormationVAD(memory.formationVAD);
+  if (!formationVAD) return valenceIntensity;
+
+  const vadIntensity = clampUnit(
+    (Math.abs(formationVAD.arousal) * 0.7) + (Math.abs(formationVAD.valence) * 0.3),
+    valenceIntensity,
+  );
+  return Math.max(valenceIntensity, vadIntensity);
+}
+
+export function getEmotionalIntensityPersistenceMultiplier(
+  memory: Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>,
+): number {
+  const minMultiplier = Math.max(0.1, MEMORY_CONFIG.emotionalIntensityPersistenceMinMultiplier);
+  const maxMultiplier = Math.max(
+    minMultiplier,
+    MEMORY_CONFIG.emotionalIntensityPersistenceMaxMultiplier,
+  );
+  const intensity = computeMemoryEmotionalIntensity(memory);
+  return minMultiplier + ((maxMultiplier - minMultiplier) * intensity);
+}
+
+export function getMemoryDecayProfile(memory: MemoryDecayProfileInput): MemoryDecayProfile {
   const retentionClass = inferMemoryRetentionClass({
     type: memory.type,
     tags: memory.tags,
     retentionClass: memory.retentionClass,
   });
+  const retentionHalflifeMultiplier = retentionClass === 'durable'
+    ? MEMORY_CONFIG.durableHalflifeMultiplier
+    : 1;
+  const emotionalPersistenceMultiplier = getEmotionalIntensityPersistenceMultiplier(memory);
+  const halflifeMultiplier = retentionHalflifeMultiplier * emotionalPersistenceMultiplier;
 
   if (retentionClass === 'durable') {
     return {
       retentionClass,
       salienceFloor: MEMORY_CONFIG.durableSalienceFloor,
-      halflifeMultiplier: MEMORY_CONFIG.durableHalflifeMultiplier,
+      halflifeMultiplier,
     };
   }
 
   return {
     retentionClass,
     salienceFloor: MEMORY_CONFIG.salienceFloor,
-    halflifeMultiplier: 1,
+    halflifeMultiplier,
   };
 }

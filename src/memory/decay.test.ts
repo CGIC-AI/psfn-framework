@@ -112,6 +112,94 @@ describe('SalienceDecay', () => {
     expect(pr.salience).toBeGreaterThan(ep.salience);
   });
 
+  it('retains high-intensity memories longer than medium and low-intensity memories', () => {
+    const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+
+    const lowIntensity = makeMemory({
+      id: 'low-intensity',
+      type: 'emotional',
+      salience: 1.0,
+      emotionalValence: 0,
+      lastAccessed: twoWeeksAgo,
+    });
+    const mediumIntensity = makeMemory({
+      id: 'medium-intensity',
+      type: 'emotional',
+      salience: 1.0,
+      emotionalValence: 0.4,
+      formationVAD: { valence: 0.4, arousal: 0.2, dominance: 0 },
+      lastAccessed: twoWeeksAgo,
+    });
+    const highIntensity = makeMemory({
+      id: 'high-intensity',
+      type: 'emotional',
+      salience: 1.0,
+      emotionalValence: 1,
+      formationVAD: { valence: 1, arousal: 1, dominance: 0.2 },
+      lastAccessed: twoWeeksAgo,
+    });
+
+    store.insertMemory(lowIntensity, makeEmbedding());
+    store.insertMemory(mediumIntensity, makeEmbedding());
+    store.insertMemory(highIntensity, makeEmbedding());
+
+    decay.run();
+
+    const all = store.getAllActiveMemories();
+    const low = all.find(m => m.id === 'low-intensity')!;
+    const medium = all.find(m => m.id === 'medium-intensity')!;
+    const high = all.find(m => m.id === 'high-intensity')!;
+
+    expect(low.salience).toBeLessThan(medium.salience);
+    expect(medium.salience).toBeLessThan(high.salience);
+    expect(low.salience).toBeCloseTo(0.5, 1);
+  });
+
+  it('composes emotional intensity persistence with durable retention multipliers', () => {
+    const twoYearsAgo = Date.now() - 2 * 365 * 24 * 60 * 60 * 1000;
+
+    const standardLowIntensity = makeMemory({
+      id: 'standard-low-intensity',
+      type: 'relational',
+      salience: 1.0,
+      emotionalValence: 0,
+      lastAccessed: twoYearsAgo,
+      tags: [],
+    });
+    const durableLowIntensity = makeMemory({
+      id: 'durable-low-intensity',
+      type: 'relational',
+      salience: 1.0,
+      emotionalValence: 0,
+      lastAccessed: twoYearsAgo,
+      tags: ['core_profile'],
+    });
+    const durableHighIntensity = makeMemory({
+      id: 'durable-high-intensity',
+      type: 'relational',
+      salience: 1.0,
+      emotionalValence: 0.95,
+      formationVAD: { valence: 0.9, arousal: 1, dominance: 0.2 },
+      lastAccessed: twoYearsAgo,
+      tags: ['core_profile'],
+    });
+
+    store.insertMemory(standardLowIntensity, makeEmbedding());
+    store.insertMemory(durableLowIntensity, makeEmbedding());
+    store.insertMemory(durableHighIntensity, makeEmbedding());
+
+    decay.run();
+
+    const all = store.getAllActiveMemories();
+    const standardLow = all.find(m => m.id === 'standard-low-intensity')!;
+    const durableLow = all.find(m => m.id === 'durable-low-intensity')!;
+    const durableHigh = all.find(m => m.id === 'durable-high-intensity')!;
+
+    expect(standardLow.salience).toBe(MEMORY_CONFIG.salienceFloor);
+    expect(durableLow.salience).toBeGreaterThan(standardLow.salience);
+    expect(durableHigh.salience).toBeGreaterThan(durableLow.salience);
+  });
+
   it('preserves durable core profile memories better than transient memories', () => {
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
 

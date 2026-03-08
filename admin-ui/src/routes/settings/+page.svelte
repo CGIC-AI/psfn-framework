@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { base } from '$app/paths';
   import {
     getSettings,
     getSettingsSchema,
@@ -20,6 +21,15 @@
     SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
     type GardenSettingsRawEditorKey,
   } from '$lib/settings-garden-contract';
+  import SettingsSidebarNav from '$lib/components/settings/SettingsSidebarNav.svelte';
+  import {
+    buildSettingsSimpleSectionGroups,
+    isSettingsSimpleSectionId,
+    parseSettingsSimpleSectionHash,
+    resolveActiveSettingsSimpleSection,
+    settingsSimpleSectionAnchorId,
+    type SettingsSimpleSectionId,
+  } from '$lib/components/settings/navigation';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -240,6 +250,49 @@
   let settingsJson = $state('');
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
   let validationErrorsByField = $state<Record<string, string[]>>({});
+
+  // ── Simple mode IA navigation ──
+  const SIMPLE_SECTION_ORDER: readonly SettingsSimpleSectionId[] = [
+    'models',
+    'prompting',
+    'memory-budget',
+    'memory-extraction',
+    'memory-sessions',
+    'memory-tuning',
+    'memory-profile',
+    'tools-think',
+    'advanced-trust',
+    'runtime-llm',
+    'runtime-import',
+    'runtime-fetch',
+    'integrations-voice',
+    'integrations-obsidian',
+    'channels',
+    'advanced-secrets',
+  ];
+  const SIMPLE_SECTION_SCROLL_OFFSET_PX = 108;
+  const SIMPLE_SECTION_ACTIVE_THRESHOLD_PX = 168;
+  let activeSimpleSectionId = $state<SettingsSimpleSectionId>('models');
+  const simpleSectionNodes = new Map<SettingsSimpleSectionId, HTMLElement>();
+  let suppressSimpleSectionSyncUntil = 0;
+  let simpleViewportChangeHandler: (() => void) | null = null;
+  let simpleHashChangeHandler: (() => void) | null = null;
+
+  let visibleSimpleSectionIds = $derived.by(() => {
+    const ids = new Set<SettingsSimpleSectionId>(SIMPLE_SECTION_ORDER);
+    if (!data?.env) {
+      ids.delete('advanced-secrets');
+    }
+    return ids;
+  });
+
+  let simpleSectionGroups = $derived.by(() => (
+    buildSettingsSimpleSectionGroups({ includeSections: visibleSimpleSectionIds })
+  ));
+
+  let simpleQuickJumpSections = $derived.by(() => (
+    SIMPLE_SECTION_ORDER.filter((sectionId) => visibleSimpleSectionIds.has(sectionId))
+  ));
 
   // ── Collapsible sections ──
   let openSections = $state(new Set<string>(['budget']));
@@ -798,6 +851,78 @@
     openSections = next;
   }
 
+  function syncActiveSimpleSection(): void {
+    if (mode !== 'simple') return;
+    if (typeof window === 'undefined') return;
+    if (Date.now() < suppressSimpleSectionSyncUntil) return;
+
+    const topBySectionId: Partial<Record<SettingsSimpleSectionId, number>> = {};
+    for (const sectionId of simpleQuickJumpSections) {
+      const node = simpleSectionNodes.get(sectionId);
+      if (!node) continue;
+      topBySectionId[sectionId] = node.getBoundingClientRect().top;
+    }
+    const resolved = resolveActiveSettingsSimpleSection(
+      simpleQuickJumpSections,
+      topBySectionId,
+      SIMPLE_SECTION_ACTIVE_THRESHOLD_PX,
+    );
+    if (resolved) {
+      activeSimpleSectionId = resolved;
+    }
+  }
+
+  function jumpToSimpleSection(
+    sectionId: SettingsSimpleSectionId,
+    behavior: ScrollBehavior = 'smooth',
+  ): void {
+    if (typeof window === 'undefined') return;
+    const node = simpleSectionNodes.get(sectionId);
+    if (!node) return;
+
+    activeSimpleSectionId = sectionId;
+    suppressSimpleSectionSyncUntil = Date.now() + 900;
+    const top = window.scrollY + node.getBoundingClientRect().top - SIMPLE_SECTION_SCROLL_OFFSET_PX;
+    window.history.replaceState(null, '', `#${settingsSimpleSectionAnchorId(sectionId)}`);
+    window.scrollTo({
+      top: Math.max(0, top),
+      behavior,
+    });
+  }
+
+  function jumpToHashSection(behavior: ScrollBehavior = 'auto'): void {
+    if (typeof window === 'undefined') return;
+    const sectionId = parseSettingsSimpleSectionHash(window.location.hash);
+    if (!sectionId || !visibleSimpleSectionIds.has(sectionId)) return;
+    jumpToSimpleSection(sectionId, behavior);
+  }
+
+  function simpleSectionAnchor(node: HTMLElement, sectionId: SettingsSimpleSectionId) {
+    let currentId = sectionId;
+    simpleSectionNodes.set(currentId, node);
+    syncActiveSimpleSection();
+
+    return {
+      update(nextSectionId: SettingsSimpleSectionId) {
+        if (nextSectionId === currentId) return;
+        simpleSectionNodes.delete(currentId);
+        currentId = nextSectionId;
+        simpleSectionNodes.set(currentId, node);
+        syncActiveSimpleSection();
+      },
+      destroy() {
+        simpleSectionNodes.delete(currentId);
+      },
+    };
+  }
+
+  function handleSimpleQuickJump(event: Event): void {
+    const sectionId = (event.currentTarget as HTMLSelectElement).value;
+    if (isSettingsSimpleSectionId(sectionId) && visibleSimpleSectionIds.has(sectionId)) {
+      jumpToSimpleSection(sectionId);
+    }
+  }
+
   function getRawJson(key: string): string {
     switch (key) {
       case 'models': return modelsJson;
@@ -1139,9 +1264,25 @@
     }
   }
 
+  $effect(() => {
+    if (mode !== 'simple') return;
+    if (!visibleSimpleSectionIds.has(activeSimpleSectionId)) {
+      const fallback = simpleQuickJumpSections[0];
+      if (fallback) {
+        activeSimpleSectionId = fallback;
+      }
+    }
+    syncActiveSimpleSection();
+  });
+
   // ── Init ──
   onMount(async () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
+    simpleViewportChangeHandler = () => syncActiveSimpleSection();
+    simpleHashChangeHandler = () => jumpToHashSection('auto');
+    window.addEventListener('scroll', simpleViewportChangeHandler, { passive: true });
+    window.addEventListener('resize', simpleViewportChangeHandler);
+    window.addEventListener('hashchange', simpleHashChangeHandler);
     try {
       const [settingsData, schemaData] = await Promise.all([
         getSettings(),
@@ -1167,12 +1308,23 @@
       error = e instanceof Error ? e.message : 'Failed to load settings';
     } finally {
       loading = false;
+      window.requestAnimationFrame(() => {
+        syncActiveSimpleSection();
+        jumpToHashSection('auto');
+      });
     }
   });
 
   onDestroy(() => {
     if (typeof window !== 'undefined') {
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (simpleViewportChangeHandler) {
+        window.removeEventListener('scroll', simpleViewportChangeHandler);
+        window.removeEventListener('resize', simpleViewportChangeHandler);
+      }
+      if (simpleHashChangeHandler) {
+        window.removeEventListener('hashchange', simpleHashChangeHandler);
+      }
     }
   });
 
@@ -1254,6 +1406,80 @@
   <!-- SIMPLE MODE -->
   {:else if mode === 'simple'}
     <div class="space-y-5">
+      <div class="card-garden p-3 lg:hidden">
+        <label class="block text-sm font-medium text-shadow-700 mb-1.5" for="settings-jump-select">
+          Quick jump
+        </label>
+        <select
+          id="settings-jump-select"
+          class={INPUT_CLS}
+          value={activeSimpleSectionId}
+          onchange={handleSimpleQuickJump}
+        >
+          {#each simpleSectionGroups as group}
+            <optgroup label={group.label}>
+              {#each group.sections as section}
+                <option value={section.id}>{section.title}</option>
+              {/each}
+            </optgroup>
+          {/each}
+        </select>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-[18rem_minmax(0,1fr)] gap-5 items-start">
+        <aside class="hidden lg:block lg:sticky lg:top-4">
+          <SettingsSidebarNav
+            groups={simpleSectionGroups}
+            activeSectionId={activeSimpleSectionId}
+            onNavigate={jumpToSimpleSection}
+          />
+        </aside>
+
+        <div class="space-y-5 min-w-0">
+          <section
+            id={settingsSimpleSectionAnchorId('models')}
+            use:simpleSectionAnchor={'models'}
+            class="card-garden p-5 space-y-3"
+            data-settings-section="models"
+          >
+            <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Models</p>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Registry and Purpose Routing</h2>
+            <p class="text-sm text-shadow-600">
+              Purpose-tagged primary/fallback models are managed in the dedicated Models workspace.
+            </p>
+            <a
+              href={`${base}/models`}
+              class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+            >
+              Open Models
+            </a>
+          </section>
+
+          <section
+            id={settingsSimpleSectionAnchorId('prompting')}
+            use:simpleSectionAnchor={'prompting'}
+            class="card-garden p-5 space-y-3"
+            data-settings-section="prompting"
+          >
+            <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Prompting</p>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Prompt Stack and Authoring</h2>
+            <p class="text-sm text-shadow-600">
+              Prompt layers and authoring controls live in Prompts so runtime tuning stays focused here.
+            </p>
+            <a
+              href={`${base}/prompts`}
+              class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+            >
+              Open Prompts
+            </a>
+          </section>
+
+          <section
+            id={settingsSimpleSectionAnchorId('memory-budget')}
+            use:simpleSectionAnchor={'memory-budget'}
+            class="space-y-5"
+            data-settings-section="memory-budget"
+          >
       <!-- Budget Preview with bar chart -->
       {#if budgetPreview}
         <div class="card-garden p-6 space-y-4">
@@ -1408,8 +1634,14 @@
           </div>
         </div>
       </div>
+      </section>
 
       <!-- Memory & Extraction -->
+      <section
+        id={settingsSimpleSectionAnchorId('memory-extraction')}
+        use:simpleSectionAnchor={'memory-extraction'}
+        data-settings-section="memory-extraction"
+      >
       <div class="card-garden p-6 space-y-6">
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory & Extraction</h2>
         <hr class="divider-filigree" />
@@ -1451,8 +1683,14 @@
           </div>
         </div>
       </div>
+      </section>
 
       <!-- Sessions & Compaction -->
+      <section
+        id={settingsSimpleSectionAnchorId('memory-sessions')}
+        use:simpleSectionAnchor={'memory-sessions'}
+        data-settings-section="memory-sessions"
+      >
       <div class="card-garden p-6 space-y-6">
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Sessions & Compaction</h2>
         <hr class="divider-filigree" />
@@ -1490,8 +1728,14 @@
           </div>
         </div>
       </div>
+      </section>
 
       <!-- Memory Extraction Tuning (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('memory-tuning')}
+        use:simpleSectionAnchor={'memory-tuning'}
+        data-settings-section="memory-tuning"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('extraction-tuning')}
@@ -1549,8 +1793,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Profile Synthesis (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('memory-profile')}
+        use:simpleSectionAnchor={'memory-profile'}
+        data-settings-section="memory-profile"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('profile')}
@@ -1621,8 +1871,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Think Tool (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('tools-think')}
+        use:simpleSectionAnchor={'tools-think'}
+        data-settings-section="tools-think"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('think')}
@@ -1661,8 +1917,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Trust & Capability (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('advanced-trust')}
+        use:simpleSectionAnchor={'advanced-trust'}
+        data-settings-section="advanced-trust"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('trust')}
@@ -1714,8 +1976,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- LLM Retries (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('runtime-llm')}
+        use:simpleSectionAnchor={'runtime-llm'}
+        data-settings-section="runtime-llm"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('llm')}
@@ -1749,8 +2017,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Import Processing (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('runtime-import')}
+        use:simpleSectionAnchor={'runtime-import'}
+        data-settings-section="runtime-import"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('import')}
@@ -1805,8 +2079,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Gateway Web Fetch (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('runtime-fetch')}
+        use:simpleSectionAnchor={'runtime-fetch'}
+        data-settings-section="runtime-fetch"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('fetch')}
@@ -1852,8 +2132,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Voice & TTS -->
+      <section
+        id={settingsSimpleSectionAnchorId('integrations-voice')}
+        use:simpleSectionAnchor={'integrations-voice'}
+        data-settings-section="integrations-voice"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('voice')}
@@ -1924,8 +2210,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Obsidian Vault -->
+      <section
+        id={settingsSimpleSectionAnchorId('integrations-obsidian')}
+        use:simpleSectionAnchor={'integrations-obsidian'}
+        data-settings-section="integrations-obsidian"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('obsidian')}
@@ -1966,8 +2258,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Channels -->
+      <section
+        id={settingsSimpleSectionAnchorId('channels')}
+        use:simpleSectionAnchor={'channels'}
+        data-settings-section="channels"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('channels')}
@@ -2071,10 +2369,16 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Secrets display -->
       {#if data?.env}
         {@const env = data.env as Record<string, unknown>}
+        <section
+          id={settingsSimpleSectionAnchorId('advanced-secrets')}
+          use:simpleSectionAnchor={'advanced-secrets'}
+          data-settings-section="advanced-secrets"
+        >
         <div class="card-garden overflow-hidden">
           <button
             onclick={() => toggleSection('secrets')}
@@ -2117,6 +2421,7 @@
             </div>
           {/if}
         </div>
+        </section>
       {/if}
 
       <!-- Save -->
@@ -2132,6 +2437,8 @@
         {#if dirty}
           <span class="text-sm text-shadow-500">You have unsaved changes</span>
         {/if}
+      </div>
+        </div>
       </div>
     </div>
 

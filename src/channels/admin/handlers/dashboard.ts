@@ -24,9 +24,7 @@ export class AdminDashboardHandlers {
         cacheReadTokens: legacy.usageTotals.cacheReadTokens,
         llmCalls: legacy.usageTotals.llmCalls,
         toolCalls: legacy.usageTotals.toolCalls,
-        avgContextUtilization: legacy.usageTotals.turns > 0
-          ? legacy.usageTotals.contextUtilizationSum / legacy.usageTotals.turns
-          : 0,
+        activeSessionContextPressure: legacy.getActiveSessionContextPressure(),
         estimatedCostUsd: legacy.usageTotals.estimatedCostUsd,
         costWindows: {
           selected: 'today',

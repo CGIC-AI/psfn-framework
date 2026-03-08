@@ -99,6 +99,7 @@ export class AdminServer implements Lifecycle {
     this.dashboardService = new AdminDashboardDataService({
       memoryStore: config.memoryStore,
       sessionStore: config.sessionStore,
+      sessionManager: config.sessionManager,
       scheduler: config.scheduler,
       shardManager: config.shardManager,
       eventBus: config.eventBus,

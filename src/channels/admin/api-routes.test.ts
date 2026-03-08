@@ -683,6 +683,70 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.stats.sessionUsage.costWindows.byWindow.month.estimatedCostUsd).toBeCloseTo(expected.month.estimatedCostUsd, 8);
   });
 
+  it('returns active-session context pressure and fails closed when active-session telemetry is missing', async () => {
+    sessionManager.setActiveContextSession('discord:active-session');
+
+    await eventBus.emit('agent.turn.usage', {
+      message: {
+        id: 'active-session-pressure',
+        channelId: 'api:operator',
+        channelType: 'api',
+        authorId: 'operator',
+        authorName: 'Operator',
+        content: 'session pressure sample',
+        timestamp: new Date(),
+      },
+      usage: {
+        inputTokens: 120,
+        outputTokens: 40,
+        cacheReadTokens: 5,
+        llmCalls: 1,
+        toolCalls: 0,
+        contextUtilization: 61.7,
+        estimatedCostUsd: 0.001,
+      },
+    });
+
+    let res = await request(port, 'GET', '/api/admin/dashboard', undefined, authHeaders);
+    expect(res.status).toBe(200);
+    let payload = JSON.parse(res.body) as {
+      stats: {
+        sessionUsage: {
+          activeSessionContextPressure: {
+            sessionId: string | null;
+            utilizationPct: number;
+            hasTelemetry: boolean;
+          };
+        };
+      };
+    };
+    expect(payload.stats.sessionUsage.activeSessionContextPressure).toEqual({
+      sessionId: 'discord:active-session',
+      utilizationPct: 61.7,
+      hasTelemetry: true,
+    });
+
+    sessionManager.setActiveContextSession('discord:no-telemetry');
+    res = await request(port, 'GET', '/api/admin/dashboard', undefined, authHeaders);
+    expect(res.status).toBe(200);
+    payload = JSON.parse(res.body) as {
+      stats: {
+        sessionUsage: {
+          activeSessionContextPressure: {
+            sessionId: string | null;
+            utilizationPct: number;
+            hasTelemetry: boolean;
+          };
+        };
+      };
+    };
+    expect(payload.stats.sessionUsage.activeSessionContextPressure).toEqual({
+      sessionId: 'discord:no-telemetry',
+      utilizationPct: 0,
+      hasTelemetry: false,
+    });
+  });
+
   it('rejects invalid dashboard costWindow query values', async () => {
     const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=all-time', undefined, authHeaders);
     expect(res.status).toBe(400);

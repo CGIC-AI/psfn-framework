@@ -6,6 +6,7 @@
     resolveDashboardCostWindow,
     type DashboardCostWindow,
   } from '$lib/dashboard/cost-window';
+  import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
   import type { AdminDashboardData } from '$lib/types';
 
   let data = $state<AdminDashboardData | null>(null);
@@ -119,6 +120,7 @@
   {:else if data}
     {@const stats = data.stats}
     {@const selectedCostWindowUsage = stats.sessionUsage.costWindows.byWindow[selectedCostWindow]}
+    {@const sessionContextPressure = resolveSessionContextPressureView(stats.sessionUsage.activeSessionContextPressure)}
     <!-- Stat cards -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <a href="/memory" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
@@ -229,7 +231,7 @@
             </div>
             <p class="text-sm text-shadow-600">
               Token usage tracking per model requires persistent storage (coming in a future release).
-              Current data reflects the active session since last restart.
+              Current data reflects active-session telemetry.
             </p>
           </div>
         {:else}
@@ -284,16 +286,19 @@
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.activeShards}</p>
       </div>
       <div class="card-garden p-5">
-        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Context Utilization <span class="text-shadow-600 normal-case font-normal">(since restart)</span></p>
-        {#if stats.sessionUsage.avgContextUtilization > 100}
-          <p class="text-2xl font-serif mt-1 text-wilt-600">
-            {stats.sessionUsage.avgContextUtilization.toFixed(0)}%
-          </p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
+          Session Context Pressure <span class="text-shadow-600 normal-case font-normal">(active session)</span>
+        </p>
+        {#if sessionContextPressure.hasTelemetry && sessionContextPressure.isOverLimit}
+          <p class="text-2xl font-serif mt-1 text-wilt-600">{sessionContextPressure.utilizationPct.toFixed(0)}%</p>
           <p class="text-sm text-wilt-600 mt-1">Exceeds 100% -- check context window configuration</p>
-        {:else}
+        {:else if sessionContextPressure.hasTelemetry}
           <p class="text-2xl font-serif mt-1 text-shadow-900">
-            {stats.sessionUsage.avgContextUtilization.toFixed(0)}%
+            {sessionContextPressure.utilizationPct.toFixed(0)}%
           </p>
+        {:else}
+          <p class="text-2xl font-serif mt-1 text-shadow-900">0%</p>
+          <p class="text-sm text-shadow-600 mt-1">No telemetry for the active session yet.</p>
         {/if}
       </div>
     </div>

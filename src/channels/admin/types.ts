@@ -70,6 +70,12 @@ export interface DashboardCostWindowTotals {
   month: DashboardCostWindowUsage;
 }
 
+export interface DashboardSessionContextPressure {
+  sessionId: string | null;
+  utilizationPct: number;
+  hasTelemetry: boolean;
+}
+
 export interface DashboardStats {
   memoryTotal: number;
   memoryByType: Record<string, number>;
@@ -84,7 +90,7 @@ export interface DashboardStats {
     cacheReadTokens: number;
     llmCalls: number;
     toolCalls: number;
-    avgContextUtilization: number;
+    activeSessionContextPressure: DashboardSessionContextPressure;
     estimatedCostUsd: number;
     costWindows: {
       selected: DashboardCostWindow;

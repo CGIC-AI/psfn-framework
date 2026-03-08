@@ -1802,14 +1802,14 @@ describe('settings', () => {
 
     it('parseSettingsForm parses discord trigger form fields', () => {
       const params = new URLSearchParams({
-        discordTriggerWords: 'pixie, hey psfn',
+        discordTriggerWords: 'pixie, hey companion',
         discordTriggerReactions: '👆, 🔥',
         discordTriggerListenWindowMs: '45000',
       });
 
       const [settings, errors] = parseSettingsForm(params);
       expect(errors).toEqual([]);
-      expect(settings.discordTriggerWords).toBe('pixie, hey psfn');
+      expect(settings.discordTriggerWords).toBe('pixie, hey companion');
       expect(settings.discordTriggerReactions).toBe('👆, 🔥');
       expect(settings.discordTriggerListenWindowMs).toBe(45000);
     });
@@ -1826,12 +1826,12 @@ describe('settings', () => {
     it('applySettings updates discord trigger config and keeps default reaction when cleared', () => {
       const config = makeConfig();
       applySettings(config, {
-        discordTriggerWords: 'pixie, hey psfn',
+        discordTriggerWords: 'pixie, hey companion',
         discordTriggerReactions: '🔥, 👀',
         discordTriggerListenWindowMs: 45000,
       });
 
-      expect(config.discordTriggerWords).toEqual(['pixie', 'hey psfn']);
+      expect(config.discordTriggerWords).toEqual(['pixie', 'hey companion']);
       expect(config.discordTriggerReactions).toEqual(['🔥', '👀']);
       expect(config.discordTriggerListenWindowMs).toBe(45000);
 
@@ -1841,12 +1841,12 @@ describe('settings', () => {
 
     it('getRuntimeSettingsSnapshot reflects discord trigger config values', () => {
       const config = makeConfig();
-      config.discordTriggerWords = ['pixie', 'hey psfn'];
+      config.discordTriggerWords = ['pixie', 'hey companion'];
       config.discordTriggerReactions = ['🔥', '👀'];
       config.discordTriggerListenWindowMs = 45000;
 
       const snapshot = getRuntimeSettingsSnapshot(config);
-      expect(snapshot.discordTriggerWords).toBe('pixie, hey psfn');
+      expect(snapshot.discordTriggerWords).toBe('pixie, hey companion');
       expect(snapshot.discordTriggerReactions).toBe('🔥, 👀');
       expect(snapshot.discordTriggerListenWindowMs).toBe(45000);
     });

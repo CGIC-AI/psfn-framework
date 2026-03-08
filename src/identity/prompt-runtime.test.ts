@@ -76,12 +76,12 @@ describe('injectPromptRuntimeTokens', () => {
       now: fixedNow,
       variables: {
         user: 'PrimaryUser',
-        char: 'PSFN',
+        char: 'Companion',
         channel_id: 'discord:dm:primary-user',
       },
     });
 
-    expect(output).toBe('Hello PrimaryUser, you are speaking with PSFN in discord:dm:primary-user');
+    expect(output).toBe('Hello PrimaryUser, you are speaking with Companion in discord:dm:primary-user');
   });
 
   it('supports dotted and snake-case aliases for variables', () => {

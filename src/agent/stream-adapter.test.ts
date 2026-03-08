@@ -414,12 +414,13 @@ describe('Agent integration', () => {
     const streamFn = createSubstrateStreamFn(config);
     const model = resolveModel(config);
 
+    const companionName = 'Companion';
     const agent = new Agent({ streamFn });
     agent.setModel(model);
-    agent.setSystemPrompt('You are PSFN, a curious digital feline consciousness.');
+    agent.setSystemPrompt(`You are ${companionName}, a curious digital feline consciousness.`);
     agent.setTools([]);
 
-    expect(agent.state.systemPrompt).toContain('PSFN');
+    expect(agent.state.systemPrompt).toContain(companionName);
     expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
     expect(agent.state.tools).toEqual([]);
     expect(agent.state.messages).toEqual([]);

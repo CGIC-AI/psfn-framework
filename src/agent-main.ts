@@ -123,6 +123,7 @@ import {
 } from './runtime/channel-lifecycle.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
+import { createGatewayBackedDiscoveryFetch } from './agent-main/discovery-gateway-fetch.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
   resolveCharacterCardHistoryPath,
@@ -878,6 +879,8 @@ async function main(): Promise<void> {
   const modelDiscovery = litellmBaseUrl
     ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY, {
       openRouterModelsApiUrl: config.openRouterModelsApiUrl ?? '',
+      fetchFn: createGatewayBackedDiscoveryFetch(gateway),
+      allowDirectNetworkEgress: false,
     })
     : null;
 

@@ -535,9 +535,10 @@ export interface AdminModelRoomBootstrapResponse {
 export interface DiscoveredModel {
   id: string;
   description?: string;
+  providerHints?: string[];
   contextLength?: number;
   maxCompletionTokens?: number;
-  pricing?: { prompt?: number; completion?: number };
+  pricing?: Record<string, string | number | undefined>;
 }
 
 // Scheduler

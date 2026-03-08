@@ -173,21 +173,24 @@ export class ModelDiscovery {
   }
 
   private async fetchLiteLLM(): Promise<LiteLLMModelEntry[]> {
+    const headers: Record<string, string> = {};
+    if (this.litellmApiKey) {
+      headers['Authorization'] = `Bearer ${this.litellmApiKey}`;
+    }
+
     try {
-      const headers: Record<string, string> = {};
-      if (this.litellmApiKey) {
-        headers['Authorization'] = `Bearer ${this.litellmApiKey}`;
-      }
       const res = await this.resolveFetch()(`${this.litellmBaseUrl}/v1/models`, { headers });
       if (!res.ok) {
-        log.warn(`LiteLLM /v1/models returned ${res.status}`);
-        return [];
+        throw new Error(`LiteLLM /v1/models returned ${res.status}`);
       }
       const data = await res.json() as { data?: LiteLLMModelEntry[] };
-      return data.data ?? [];
+      if (!Array.isArray(data.data)) {
+        throw new Error('LiteLLM /v1/models returned invalid payload');
+      }
+      return data.data;
     } catch (err) {
       log.warn('Failed to fetch LiteLLM models', { error: String(err) });
-      return [];
+      throw err instanceof Error ? err : new Error(String(err));
     }
   }
 

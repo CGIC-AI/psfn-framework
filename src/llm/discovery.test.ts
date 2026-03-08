@@ -152,7 +152,7 @@ describe('ModelDiscovery', () => {
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
-  it('handles LiteLLM fetch failure gracefully', async () => {
+  it('fails closed when LiteLLM fetch fails', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('openrouter.ai')) {
         return Promise.resolve(openRouterResponse([]));
@@ -161,8 +161,7 @@ describe('ModelDiscovery', () => {
     });
 
     const discovery = createDiscovery('http://localhost:4000');
-    const models = await discovery.getAvailableModels();
-    expect(models).toEqual([]);
+    await expect(discovery.getAvailableModels()).rejects.toThrow('connection refused');
   });
 
   it('handles OpenRouter fetch failure gracefully', async () => {
@@ -213,15 +212,15 @@ describe('ModelDiscovery', () => {
     })).toThrow('Model discovery requires openRouterModelsApiUrl');
   });
 
-  it('rejects direct egress when direct network is disabled', async () => {
+  it('fails closed when direct network is disabled and no gateway fetch is injected', async () => {
     mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
 
     const discovery = createDiscovery('http://localhost:4000', undefined, {
       allowDirectNetworkEgress: false,
     });
-    const models = await discovery.getAvailableModels();
-
-    expect(models).toEqual([]);
+    await expect(discovery.getAvailableModels()).rejects.toThrow(
+      'Direct network egress is disabled; model discovery requires gateway-backed fetch wiring.',
+    );
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

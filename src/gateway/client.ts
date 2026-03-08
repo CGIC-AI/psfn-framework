@@ -574,6 +574,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     options: {
       lane?: 'default' | 'local_crawler';
       maxBytes?: number;
+      headers?: Record<string, string>;
     } = {},
   ): Promise<WebFetchBinaryResult> {
     return await this.rpcInstance.request('web.fetch_binary', {
@@ -582,6 +583,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       ...(typeof options.maxBytes === 'number' && Number.isFinite(options.maxBytes)
         ? { maxBytes: Math.max(1, Math.floor(options.maxBytes)) }
         : {}),
+      ...(options.headers ? { headers: options.headers } : {}),
     }) as WebFetchBinaryResult;
   }
 

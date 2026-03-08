@@ -317,7 +317,7 @@ async function main(): Promise<void> {
 
   // ── Connect to gateway ──
 
-  const embeddingDims = parsePositiveIntEnv(process.env.EMBEDDING_DIMS, 1024);
+  const embeddingDims = config.embeddingDims ?? 1024;
 
   log.info(`Connecting to gateway at ${socketPath}...`);
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
@@ -874,7 +874,9 @@ async function main(): Promise<void> {
   // Model discovery (if LiteLLM is configured)
   const litellmBaseUrl = process.env.LITELLM_BASE_URL;
   const modelDiscovery = litellmBaseUrl
-    ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY)
+    ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY, {
+      openRouterModelsApiUrl: config.openRouterModelsApiUrl!,
+    })
     : null;
 
   // ── Admin GUI (optional) ──

@@ -1,7 +1,7 @@
 export interface DeepgramSttConfig {
   apiKey: string;
-  model?: string;
-  endpoint?: string;
+  model: string;
+  endpoint: string;
   fetchFn?: typeof fetch;
   allowDirectNetworkEgress?: boolean;
 }
@@ -24,9 +24,15 @@ export class DeepgramSttClient {
   private readonly allowDirectNetworkEgress: boolean;
 
   constructor(config: DeepgramSttConfig) {
-    this.apiKey = config.apiKey;
-    this.model = config.model ?? 'nova-3';
-    this.endpoint = config.endpoint ?? 'https://api.deepgram.com/v1/listen';
+    const apiKey = config.apiKey.trim();
+    const model = config.model.trim();
+    const endpoint = config.endpoint.trim();
+    if (!apiKey || !model || !endpoint) {
+      throw new Error('Deepgram config requires apiKey, model, and endpoint');
+    }
+    this.apiKey = apiKey;
+    this.model = model;
+    this.endpoint = endpoint;
     this.fetchFn = config.fetchFn;
     this.allowDirectNetworkEgress = config.allowDirectNetworkEgress ?? !isGatewayAgentEntrypoint();
   }

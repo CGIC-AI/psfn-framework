@@ -68,9 +68,12 @@ function createTestOptions(configOverrides: RuntimeVoiceTestOverrides = {}) {
   const config = {
     deepgramApiKey: 'deepgram-key',
     deepgramModel: 'nova-3',
+    deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
+    deepgramListenEndpoint: 'https://api.deepgram.com/v1/listen',
     elevenLabsApiKey: 'elevenlabs-key',
     elevenLabsVoiceId: 'voice-id',
     elevenLabsModelId: 'eleven_turbo_v2_5',
+    elevenLabsEndpointBase: 'https://api.elevenlabs.io/v1',
     ...configOverrides,
   } as SubstrateConfig;
 
@@ -132,6 +135,7 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     expect(createStreamingSttConnectorMock).toHaveBeenCalledWith('deepgram', {
       apiKey: 'deepgram-key',
       model: 'nova-3',
+      endpoint: 'wss://api.deepgram.com/v1/listen',
     });
   });
 
@@ -157,11 +161,13 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     expect(createStreamingSttConnectorMock).toHaveBeenCalledWith('deepgram', {
       apiKey: 'deepgram-key',
       model: 'nova-3',
+      endpoint: 'wss://api.deepgram.com/v1/listen',
     });
     expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('elevenlabs', {
       apiKey: 'elevenlabs-key',
       voiceId: 'voice-id',
       modelId: 'eleven_turbo_v2_5',
+      endpointBase: 'https://api.elevenlabs.io/v1',
     });
   });
 
@@ -177,11 +183,13 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     expect(createStreamingSttConnectorMock).toHaveBeenCalledWith('deepgram', {
       apiKey: 'deepgram-key',
       model: 'nova-3',
+      endpoint: 'wss://api.deepgram.com/v1/listen',
     });
     expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('elevenlabs', {
       apiKey: 'elevenlabs-key',
       voiceId: 'voice-id',
       modelId: 'eleven_turbo_v2_5',
+      endpointBase: 'https://api.elevenlabs.io/v1',
     });
   });
 

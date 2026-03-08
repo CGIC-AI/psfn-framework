@@ -6,14 +6,11 @@ import type {
   StreamingTtsConnector,
 } from './types.js';
 
-const DEFAULT_ENDPOINT_BASE = 'https://api.elevenlabs.io/v1';
-const DEFAULT_MODEL_ID = 'eleven_turbo_v2_5';
-
 export interface ElevenLabsStreamingTtsConfig {
   apiKey: string;
   voiceId: string;
-  modelId?: string;
-  endpointBase?: string;
+  modelId: string;
+  endpointBase: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -144,10 +141,19 @@ export class ElevenLabsStreamingTtsConnector implements StreamingTtsConnector {
   private readonly fetchImpl: typeof fetch;
 
   constructor(config: ElevenLabsStreamingTtsConfig) {
-    this.apiKey = config.apiKey;
-    this.voiceId = config.voiceId;
-    this.modelId = config.modelId ?? DEFAULT_MODEL_ID;
-    this.endpointBase = config.endpointBase ?? DEFAULT_ENDPOINT_BASE;
+    const apiKey = config.apiKey.trim();
+    const voiceId = config.voiceId.trim();
+    const modelId = config.modelId.trim();
+    const endpointBase = config.endpointBase.trim().replace(/\/+$/g, '');
+    if (!apiKey || !voiceId || !modelId || !endpointBase) {
+      throw new Error(
+        'ElevenLabs streaming config requires apiKey, voiceId, modelId, and endpointBase',
+      );
+    }
+    this.apiKey = apiKey;
+    this.voiceId = voiceId;
+    this.modelId = modelId;
+    this.endpointBase = endpointBase;
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
 

@@ -97,10 +97,20 @@ export interface EditableSettings {
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];
+  openRouterModelsApiUrl?: string;
   importProcessingRouteMode?: ImportProcessingRouteMode;
   importProcessingStrictPolicy?: boolean;
   importProcessingLocalEndpointUrl?: string;
   importProcessingLocalModel?: string;
+  embeddingProvider?: SubstrateConfig['embeddingProvider'];
+  embeddingModel?: string;
+  embeddingDims?: number;
+  embeddingOllamaUrl?: string;
+  transformersModel?: string;
+  transformersCacheDir?: string;
+  embeddingApiUrl?: string;
+  embeddingApiModel?: string;
+  embeddingApiDims?: number;
   compositionalPolicy?: CompositionalPolicyConfig;
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
@@ -131,6 +141,10 @@ export interface EditableSettings {
   echoTtsPreset?: string;
   sttProvider?: SubstrateConfig['sttProvider'];
   deepgramModel?: string;
+  deepgramSttEndpoint?: string;
+  deepgramListenEndpoint?: string;
+  elevenLabsModelId?: string;
+  elevenLabsEndpointBase?: string;
 
   // Channel configuration (non-secret — bot tokens stay in .env)
   discordEnabled?: boolean;
@@ -200,10 +214,20 @@ export const RUNTIME_SETTINGS_KEYS = [
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'openRouterProviderOrder',
+  'openRouterModelsApiUrl',
   'importProcessingRouteMode',
   'importProcessingStrictPolicy',
   'importProcessingLocalEndpointUrl',
   'importProcessingLocalModel',
+  'embeddingProvider',
+  'embeddingModel',
+  'embeddingDims',
+  'embeddingOllamaUrl',
+  'transformersModel',
+  'transformersCacheDir',
+  'embeddingApiUrl',
+  'embeddingApiModel',
+  'embeddingApiDims',
   'compositionalPolicy',
   'webFetchAllowHttp',
   'webFetchDomainAllowlist',
@@ -225,6 +249,10 @@ export const RUNTIME_SETTINGS_KEYS = [
   'echoTtsPreset',
   'sttProvider',
   'deepgramModel',
+  'deepgramSttEndpoint',
+  'deepgramListenEndpoint',
+  'elevenLabsModelId',
+  'elevenLabsEndpointBase',
   // Channels
   'discordEnabled',
   'discordHeartbeatChannel',

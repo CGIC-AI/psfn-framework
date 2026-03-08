@@ -206,7 +206,7 @@ export function resolveModel(
 
   if (litellmBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
-    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens);
+    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
     return ensurePurposeInputCapabilities(model, purpose);
   }
 
@@ -245,7 +245,7 @@ export function resolveExplicitModel(
 
   if (litellmBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
-    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens);
+    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
     return ensurePurposeInputCapabilities(model, selection.purpose);
   }
 

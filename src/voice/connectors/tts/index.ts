@@ -27,6 +27,7 @@ export interface StreamingTtsProviderRuntimeConfig {
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
   elevenLabsModelId?: string;
+  elevenLabsEndpointBase?: string;
   echoTtsUrl?: string;
   echoTtsVoice?: string;
   echoTtsPreset?: string;
@@ -83,11 +84,21 @@ const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistratio
       const modelId = typeof config.elevenLabsModelId === 'string'
         ? config.elevenLabsModelId.trim()
         : '';
+      if (!modelId) {
+        throw new Error('ElevenLabs TTS provider selected but elevenLabsModelId is not configured in settings.json');
+      }
+      const endpointBase = typeof config.elevenLabsEndpointBase === 'string'
+        ? config.elevenLabsEndpointBase.trim()
+        : '';
+      if (!endpointBase) {
+        throw new Error('ElevenLabs TTS provider selected but elevenLabsEndpointBase is not configured in settings.json');
+      }
 
       return {
         apiKey,
         voiceId,
-        ...(modelId ? { modelId } : {}),
+        modelId,
+        endpointBase,
       };
     },
   }],

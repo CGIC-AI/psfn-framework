@@ -134,14 +134,14 @@ export class LLMClient {
         ? process.env[candidate.requestApiKeyEnv] ?? undefined
         : undefined;
       return {
-        model: createModel(candidate.requestBaseUrl, modelId, candidate.maxTokens),
+        model: createModel(candidate.requestBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
         apiKey,
       };
     }
 
     if (this.litellmBaseUrl) {
       return {
-        model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens),
+        model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
         apiKey: process.env.LITELLM_API_KEY ?? undefined,
       };
     }

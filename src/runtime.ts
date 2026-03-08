@@ -78,7 +78,7 @@ import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
   composeIdentity,
   composeSessionRuntime,
-  createEmbeddingProviderFromEnv,
+  createEmbeddingProviderFromConfig,
   composeSubstrateAgent,
   wireSelfModelRuntime,
   wireCoreMemoryRuntime,
@@ -527,7 +527,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.restoreLatestSessionMetadata();
 
     // Embedding provider (selected by EMBEDDING_PROVIDER)
-    const embeddingProvider = createEmbeddingProviderFromEnv();
+    const embeddingProvider = createEmbeddingProviderFromConfig(this.config);
     log.info('Embedding provider initialized', {
       provider: embeddingProvider.kind,
       dims: embeddingProvider.dims,
@@ -1144,7 +1144,9 @@ export class SubstrateRuntime implements Lifecycle {
     // Model discovery (if LiteLLM is configured)
     const litellmBaseUrl = process.env.LITELLM_BASE_URL;
     const modelDiscovery = litellmBaseUrl
-      ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY)
+      ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY, {
+        openRouterModelsApiUrl: this.config.openRouterModelsApiUrl!,
+      })
       : null;
 
     // Admin GUI — Garden management surfaces

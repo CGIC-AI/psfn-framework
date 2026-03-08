@@ -3,6 +3,7 @@ import { ModelDiscovery } from './discovery.js';
 
 // Mock global fetch
 const mockFetch = vi.fn();
+const OPENROUTER_MODELS_API_URL = 'https://openrouter.ai/api/v1/models';
 
 describe('ModelDiscovery', () => {
   beforeEach(() => {
@@ -13,6 +14,17 @@ describe('ModelDiscovery', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+
+  function createDiscovery(
+    litellmBaseUrl: string,
+    litellmApiKey?: string,
+    options: Partial<ConstructorParameters<typeof ModelDiscovery>[2]> = {},
+  ): ModelDiscovery {
+    return new ModelDiscovery(litellmBaseUrl, litellmApiKey, {
+      openRouterModelsApiUrl: OPENROUTER_MODELS_API_URL,
+      ...options,
+    });
+  }
 
   function litellmResponse(models: Array<{
     id: string;
@@ -64,7 +76,7 @@ describe('ModelDiscovery', () => {
       return Promise.reject(new Error('unexpected URL'));
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000/v1');
+    const discovery = createDiscovery('http://localhost:4000/v1');
     const models = await discovery.getAvailableModels();
 
     expect(models).toHaveLength(2);
@@ -104,7 +116,7 @@ describe('ModelDiscovery', () => {
       ]));
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000/v1');
+    const discovery = createDiscovery('http://localhost:4000/v1');
     const models = await discovery.getAvailableModels();
     expect(models).toHaveLength(1);
     expect(models[0].contextLength).toBe(131_072);
@@ -120,7 +132,7 @@ describe('ModelDiscovery', () => {
   it('uses cached results within TTL', async () => {
     mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000');
+    const discovery = createDiscovery('http://localhost:4000');
     await discovery.getAvailableModels();
     await discovery.getAvailableModels();
 
@@ -131,7 +143,7 @@ describe('ModelDiscovery', () => {
   it('invalidateCache forces re-fetch', async () => {
     mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000');
+    const discovery = createDiscovery('http://localhost:4000');
     await discovery.getAvailableModels();
     discovery.invalidateCache();
     await discovery.getAvailableModels();
@@ -148,7 +160,7 @@ describe('ModelDiscovery', () => {
       return Promise.reject(new Error('connection refused'));
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000');
+    const discovery = createDiscovery('http://localhost:4000');
     const models = await discovery.getAvailableModels();
     expect(models).toEqual([]);
   });
@@ -161,7 +173,7 @@ describe('ModelDiscovery', () => {
       return Promise.reject(new Error('network error'));
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000');
+    const discovery = createDiscovery('http://localhost:4000');
     const models = await discovery.getAvailableModels();
     expect(models).toHaveLength(1);
     expect(models[0].id).toBe('model-1');
@@ -171,7 +183,7 @@ describe('ModelDiscovery', () => {
   it('sends auth header when API key provided', async () => {
     mockFetch.mockResolvedValue(litellmResponse([]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000', 'test-key');
+    const discovery = createDiscovery('http://localhost:4000', 'test-key');
     await discovery.getAvailableModels();
 
     const litellmCall = mockFetch.mock.calls.find(
@@ -184,7 +196,7 @@ describe('ModelDiscovery', () => {
   it('strips trailing /v1 from base URL', async () => {
     mockFetch.mockResolvedValue(litellmResponse([]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000/v1');
+    const discovery = createDiscovery('http://localhost:4000/v1');
     await discovery.getAvailableModels();
 
     const litellmCall = mockFetch.mock.calls.find(
@@ -198,7 +210,7 @@ describe('ModelDiscovery', () => {
   it('rejects direct egress when direct network is disabled', async () => {
     mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000', undefined, {
+    const discovery = createDiscovery('http://localhost:4000', undefined, {
       allowDirectNetworkEgress: false,
     });
     const models = await discovery.getAvailableModels();
@@ -223,7 +235,7 @@ describe('ModelDiscovery', () => {
       throw new Error('unexpected URL');
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000', undefined, {
+    const discovery = createDiscovery('http://localhost:4000', undefined, {
       allowDirectNetworkEgress: false,
       fetchFn: injectedFetch as unknown as typeof fetch,
     });

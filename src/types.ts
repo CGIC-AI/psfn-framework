@@ -580,9 +580,12 @@ export interface SubstrateConfig {
   ttsProvider?: StreamingTtsProvider | 'disabled';
   deepgramApiKey?: string;
   deepgramModel?: string;
+  deepgramSttEndpoint?: string;
+  deepgramListenEndpoint?: string;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
   elevenLabsModelId?: string;
+  elevenLabsEndpointBase?: string;
   echoTtsUrl?: string;
   echoTtsVoice?: string;
   echoTtsPreset?: string;
@@ -593,10 +596,20 @@ export interface SubstrateConfig {
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];
+  openRouterModelsApiUrl?: string;
   importProcessingRouteMode?: ImportProcessingRouteMode;
   importProcessingStrictPolicy?: boolean;
   importProcessingLocalEndpointUrl?: string;
   importProcessingLocalModel?: string;
+  embeddingProvider?: 'ollama' | 'transformers' | 'api';
+  embeddingModel?: string;
+  embeddingDims?: number;
+  embeddingOllamaUrl?: string;
+  transformersModel?: string;
+  transformersCacheDir?: string;
+  embeddingApiUrl?: string;
+  embeddingApiModel?: string;
+  embeddingApiDims?: number;
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
@@ -684,6 +697,16 @@ const DEFAULT_IMPORT_PROCESSING_ROUTE_MODE: ImportProcessingRouteMode = 'backgro
 const DEFAULT_DISCORD_TRIGGER_REACTIONS = ['👆'] as const;
 const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
 const DEFAULT_DEEPGRAM_MODEL = 'nova-3';
+const DEFAULT_DEEPGRAM_STT_ENDPOINT = 'wss://api.deepgram.com/v1/listen';
+const DEFAULT_DEEPGRAM_LISTEN_ENDPOINT = 'https://api.deepgram.com/v1/listen';
+const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_turbo_v2_5';
+const DEFAULT_ELEVENLABS_ENDPOINT_BASE = 'https://api.elevenlabs.io/v1';
+const DEFAULT_OPENROUTER_MODELS_API_URL = 'https://openrouter.ai/api/v1/models';
+const DEFAULT_EMBEDDING_PROVIDER: NonNullable<SubstrateConfig['embeddingProvider']> = 'ollama';
+const DEFAULT_EMBEDDING_MODEL = 'snowflake-arctic-embed2';
+const DEFAULT_EMBEDDING_DIMS = 1024;
+const DEFAULT_EMBEDDING_OLLAMA_URL = 'http://localhost:11434';
+const DEFAULT_TRANSFORMERS_MODEL = 'Xenova/all-MiniLM-L6-v2';
 const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
 const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
 export const DEFAULT_UI_THEME_ID = 'garden';
@@ -885,15 +908,26 @@ export function loadConfig(): SubstrateConfig {
     voiceDecryptionFailureTolerance,
     deepgramApiKey: process.env.DEEPGRAM_API_KEY,
     deepgramModel: DEFAULT_DEEPGRAM_MODEL,
+    deepgramSttEndpoint: DEFAULT_DEEPGRAM_STT_ENDPOINT,
+    deepgramListenEndpoint: DEFAULT_DEEPGRAM_LISTEN_ENDPOINT,
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
     elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
-    elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID ?? 'eleven_turbo_v2_5',
+    elevenLabsModelId: DEFAULT_ELEVENLABS_MODEL_ID,
+    elevenLabsEndpointBase: DEFAULT_ELEVENLABS_ENDPOINT_BASE,
     ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,
     retryBaseDelayMs: DEFAULT_RETRY_BASE_DELAY_MS,
+    openRouterModelsApiUrl: DEFAULT_OPENROUTER_MODELS_API_URL,
     ...(responseStyleOverrides ? { responseStyleOverrides } : {}),
     importProcessingRouteMode: DEFAULT_IMPORT_PROCESSING_ROUTE_MODE,
     importProcessingStrictPolicy: false,
+    embeddingProvider: DEFAULT_EMBEDDING_PROVIDER,
+    embeddingModel: DEFAULT_EMBEDDING_MODEL,
+    embeddingDims: DEFAULT_EMBEDDING_DIMS,
+    embeddingOllamaUrl: DEFAULT_EMBEDDING_OLLAMA_URL,
+    transformersModel: DEFAULT_TRANSFORMERS_MODEL,
+    embeddingApiModel: DEFAULT_EMBEDDING_MODEL,
+    embeddingApiDims: DEFAULT_EMBEDDING_DIMS,
     compositionalPolicy: createDefaultCompositionalPolicyConfig(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,

@@ -18,6 +18,7 @@ export interface DiscoveredModel {
 export interface ModelDiscoveryOptions {
   fetchFn?: typeof fetch;
   allowDirectNetworkEgress?: boolean;
+  openRouterModelsApiUrl: string;
 }
 
 interface LiteLLMModelEntry {
@@ -95,6 +96,7 @@ function isGatewayAgentEntrypoint(): boolean {
 export class ModelDiscovery {
   private litellmBaseUrl: string;
   private litellmApiKey?: string;
+  private openRouterModelsApiUrl: string;
   private fetchFn?: typeof fetch;
   private allowDirectNetworkEgress: boolean;
   private cache: DiscoveredModel[] | null = null;
@@ -102,12 +104,17 @@ export class ModelDiscovery {
 
   constructor(
     litellmBaseUrl: string,
-    litellmApiKey?: string,
-    options: ModelDiscoveryOptions = {},
+    litellmApiKey: string | undefined,
+    options: ModelDiscoveryOptions,
   ) {
     // Strip trailing /v1 if present — we add our own paths
     this.litellmBaseUrl = litellmBaseUrl.replace(/\/v1\/?$/, '');
     this.litellmApiKey = litellmApiKey;
+    const openRouterModelsApiUrl = options.openRouterModelsApiUrl.trim();
+    if (!openRouterModelsApiUrl) {
+      throw new Error('Model discovery requires openRouterModelsApiUrl');
+    }
+    this.openRouterModelsApiUrl = openRouterModelsApiUrl;
     this.fetchFn = options.fetchFn;
     this.allowDirectNetworkEgress = options.allowDirectNetworkEgress ?? !isGatewayAgentEntrypoint();
   }
@@ -186,7 +193,7 @@ export class ModelDiscovery {
 
   private async fetchOpenRouterMeta(): Promise<OpenRouterModelEntry[]> {
     try {
-      const res = await this.resolveFetch()('https://openrouter.ai/api/v1/models');
+      const res = await this.resolveFetch()(this.openRouterModelsApiUrl);
       if (!res.ok) {
         log.warn(`OpenRouter /api/v1/models returned ${res.status}`);
         return [];

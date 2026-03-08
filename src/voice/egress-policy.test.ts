@@ -18,6 +18,8 @@ describe('voice egress policy', () => {
     const client = new ElevenLabsTtsClient({
       apiKey: 'test-key',
       voiceId: 'test-voice',
+      modelId: 'eleven_turbo_v2_5',
+      endpointBase: 'https://api.elevenlabs.io/v1',
       allowDirectNetworkEgress: false,
     });
 
@@ -28,6 +30,8 @@ describe('voice egress policy', () => {
   it('rejects direct Deepgram egress when disabled', async () => {
     const client = new DeepgramSttClient({
       apiKey: 'test-key',
+      model: 'nova-3',
+      endpoint: 'https://api.deepgram.com/v1/listen',
       allowDirectNetworkEgress: false,
     });
 

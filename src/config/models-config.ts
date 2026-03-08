@@ -5,6 +5,7 @@ import {
   normalizeCanonicalModelRegistry,
   type EditableSettings,
 } from '../settings.js';
+import { MODELS_SEED_FILE_NAME } from './seed-defaults.js';
 import type {
   CanonicalModelRegistry,
   ModelCatalogEntry,
@@ -15,7 +16,7 @@ import type {
 import { writeJsonAtomic } from './load-or-seed.js';
 
 export const MODELS_FILE_NAME = 'models.json';
-export const MODELS_SEED_FILE_NAME = 'models.seed.json';
+export { MODELS_SEED_FILE_NAME };
 
 export interface ModelsRuntimeConfig {
   modelRegistry: CanonicalModelRegistry;

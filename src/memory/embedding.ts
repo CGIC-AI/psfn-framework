@@ -1,6 +1,7 @@
 import type { EmbeddingService } from '../agent/contracts.js';
 import { createComponentLogger } from '../logger.js';
 import type { SubstrateConfig } from '../types.js';
+import { loadRuntimeSettingsSeedDefaults } from '../config/seed-defaults.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
 
@@ -48,25 +49,27 @@ export interface ApiEmbeddingConfig {
   dims: number;
 }
 
+const RUNTIME_SEED_DEFAULTS = loadRuntimeSettingsSeedDefaults();
+
 export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
-  ollamaUrl: 'http://localhost:11434',
-  model: 'snowflake-arctic-embed2',
-  dims: 1024,
+  ollamaUrl: RUNTIME_SEED_DEFAULTS.embeddingOllamaUrl,
+  model: RUNTIME_SEED_DEFAULTS.embeddingModel,
+  dims: RUNTIME_SEED_DEFAULTS.embeddingDims,
 };
 
 export const DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG: TransformersEmbeddingConfig = {
-  model: 'Xenova/all-MiniLM-L6-v2',
+  model: RUNTIME_SEED_DEFAULTS.transformersModel,
   dims: 384,
 };
 
 export const DEFAULT_API_EMBEDDING_CONFIG: ApiEmbeddingConfig = {
   endpoint: '',
-  model: DEFAULT_EMBEDDING_CONFIG.model,
+  model: RUNTIME_SEED_DEFAULTS.embeddingApiModel,
   apiKey: undefined,
-  dims: DEFAULT_EMBEDDING_CONFIG.dims,
+  dims: RUNTIME_SEED_DEFAULTS.embeddingApiDims,
 };
 
-const DEFAULT_EMBEDDING_PROVIDER: EmbeddingProviderKind = 'ollama';
+const DEFAULT_EMBEDDING_PROVIDER: EmbeddingProviderKind = RUNTIME_SEED_DEFAULTS.embeddingProvider;
 
 interface EmbedOptions {
   signal?: AbortSignal;

@@ -9,6 +9,7 @@ import type { TurnID } from './turns/types.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
+import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './config/seed-defaults.js';
 import { parseOptionalStringEnv } from './utils/env.js';
 
 // ── Channel-agnostic message types ──
@@ -650,13 +651,6 @@ export interface SubstrateConfig {
   moaTimeoutMs?: number;
 }
 
-const DEFAULT_PRIMARY_MODEL = 'z-ai/glm-5';
-const DEFAULT_PRIMARY_PROVIDER = 'openrouter';
-const DEFAULT_PRIMARY_MAX_TOKENS = 16_384;
-const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_EXTRACTION_MODEL = 'deepseek/deepseek-v3.2';
-const DEFAULT_EXTRACTION_PROVIDER = 'openrouter';
-const DEFAULT_EXTRACTION_MAX_TOKENS = 8_192;
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
   background: 'extraction',
@@ -696,29 +690,20 @@ const DEFAULT_RETRY_BASE_DELAY_MS = 2_000;
 const DEFAULT_IMPORT_PROCESSING_ROUTE_MODE: ImportProcessingRouteMode = 'background';
 const DEFAULT_DISCORD_TRIGGER_REACTIONS = ['👆'] as const;
 const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
-const DEFAULT_DEEPGRAM_MODEL = 'nova-3';
-const DEFAULT_DEEPGRAM_STT_ENDPOINT = 'wss://api.deepgram.com/v1/listen';
-const DEFAULT_DEEPGRAM_LISTEN_ENDPOINT = 'https://api.deepgram.com/v1/listen';
-const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_turbo_v2_5';
-const DEFAULT_ELEVENLABS_ENDPOINT_BASE = 'https://api.elevenlabs.io/v1';
-const DEFAULT_OPENROUTER_MODELS_API_URL = 'https://openrouter.ai/api/v1/models';
-const DEFAULT_EMBEDDING_PROVIDER: NonNullable<SubstrateConfig['embeddingProvider']> = 'ollama';
-const DEFAULT_EMBEDDING_MODEL = 'snowflake-arctic-embed2';
-const DEFAULT_EMBEDDING_DIMS = 1024;
-const DEFAULT_EMBEDDING_OLLAMA_URL = 'http://localhost:11434';
-const DEFAULT_TRANSFORMERS_MODEL = 'Xenova/all-MiniLM-L6-v2';
 const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
 const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
 export const DEFAULT_UI_THEME_ID = 'garden';
 
 export function loadConfig(): SubstrateConfig {
-  const primaryModel = DEFAULT_PRIMARY_MODEL;
-  const primaryProvider = DEFAULT_PRIMARY_PROVIDER;
-  const primaryMaxTokens = DEFAULT_PRIMARY_MAX_TOKENS;
-  const defaultContextWindow = DEFAULT_CONTEXT_WINDOW;
-  const extractionModel = DEFAULT_EXTRACTION_MODEL;
-  const extractionProvider = DEFAULT_EXTRACTION_PROVIDER;
-  const extractionMaxTokens = DEFAULT_EXTRACTION_MAX_TOKENS;
+  const modelSeedDefaults = loadModelSeedDefaults();
+  const runtimeSeedDefaults = loadRuntimeSettingsSeedDefaults();
+  const primaryModel = modelSeedDefaults.primary.model;
+  const primaryProvider = modelSeedDefaults.primary.provider;
+  const primaryMaxTokens = modelSeedDefaults.primary.maxOutputTokens;
+  const defaultContextWindow = modelSeedDefaults.primary.contextWindow;
+  const extractionModel = modelSeedDefaults.extraction.model;
+  const extractionProvider = modelSeedDefaults.extraction.provider;
+  const extractionMaxTokens = modelSeedDefaults.extraction.maxOutputTokens;
   const modelCatalog = {
     primary: {
       model: primaryModel,
@@ -907,27 +892,27 @@ export function loadConfig(): SubstrateConfig {
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
     deepgramApiKey: process.env.DEEPGRAM_API_KEY,
-    deepgramModel: DEFAULT_DEEPGRAM_MODEL,
-    deepgramSttEndpoint: DEFAULT_DEEPGRAM_STT_ENDPOINT,
-    deepgramListenEndpoint: DEFAULT_DEEPGRAM_LISTEN_ENDPOINT,
+    deepgramModel: runtimeSeedDefaults.deepgramModel,
+    deepgramSttEndpoint: runtimeSeedDefaults.deepgramSttEndpoint,
+    deepgramListenEndpoint: runtimeSeedDefaults.deepgramListenEndpoint,
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
     elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
-    elevenLabsModelId: DEFAULT_ELEVENLABS_MODEL_ID,
-    elevenLabsEndpointBase: DEFAULT_ELEVENLABS_ENDPOINT_BASE,
+    elevenLabsModelId: runtimeSeedDefaults.elevenLabsModelId,
+    elevenLabsEndpointBase: runtimeSeedDefaults.elevenLabsEndpointBase,
     ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,
     retryBaseDelayMs: DEFAULT_RETRY_BASE_DELAY_MS,
-    openRouterModelsApiUrl: DEFAULT_OPENROUTER_MODELS_API_URL,
+    openRouterModelsApiUrl: runtimeSeedDefaults.openRouterModelsApiUrl,
     ...(responseStyleOverrides ? { responseStyleOverrides } : {}),
     importProcessingRouteMode: DEFAULT_IMPORT_PROCESSING_ROUTE_MODE,
     importProcessingStrictPolicy: false,
-    embeddingProvider: DEFAULT_EMBEDDING_PROVIDER,
-    embeddingModel: DEFAULT_EMBEDDING_MODEL,
-    embeddingDims: DEFAULT_EMBEDDING_DIMS,
-    embeddingOllamaUrl: DEFAULT_EMBEDDING_OLLAMA_URL,
-    transformersModel: DEFAULT_TRANSFORMERS_MODEL,
-    embeddingApiModel: DEFAULT_EMBEDDING_MODEL,
-    embeddingApiDims: DEFAULT_EMBEDDING_DIMS,
+    embeddingProvider: runtimeSeedDefaults.embeddingProvider,
+    embeddingModel: runtimeSeedDefaults.embeddingModel,
+    embeddingDims: runtimeSeedDefaults.embeddingDims,
+    embeddingOllamaUrl: runtimeSeedDefaults.embeddingOllamaUrl,
+    transformersModel: runtimeSeedDefaults.transformersModel,
+    embeddingApiModel: runtimeSeedDefaults.embeddingApiModel,
+    embeddingApiDims: runtimeSeedDefaults.embeddingApiDims,
     compositionalPolicy: createDefaultCompositionalPolicyConfig(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,

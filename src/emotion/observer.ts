@@ -8,9 +8,6 @@ import {
   type TextEmotionClassification,
 } from './text-classifier.js';
 import {
-  loadVadLexicon,
-  scoreVadTokens,
-  tokenizeVadText,
   type VadLexicon,
 } from './vad-lexicon.js';
 
@@ -82,21 +79,11 @@ export const DEFAULT_EMOTION_OBSERVER_MAX_TEXT_LENGTH = 2_000;
 
 const SIGNAL_EPSILON = 1e-6;
 const VAD_KEYS = ['valence', 'arousal', 'dominance'] as const;
-const NEUTRAL_SIGNED_VAD: Readonly<VADVector> = Object.freeze({
-  valence: 0,
-  arousal: 0,
-  dominance: 0,
-});
 
 interface CategoricalSignal {
   label: string;
   confidence: number;
   vad: VADVector;
-}
-
-interface LexiconSignal {
-  vad: VADVector;
-  confidence: number;
 }
 
 interface ModalityObservationInput {
@@ -114,14 +101,12 @@ export class EmotionObserver {
   private readonly state: EmotionState;
   private readonly textClassifier: TextEmotionClassifierLike;
   private readonly audioClassifier: AudioEmotionClassifierLike | null;
-  private readonly vadLexicon: VadLexicon;
   private readonly maxTextLength: number;
 
   constructor(config: EmotionObserverConfig) {
     this.state = config.state ?? new EmotionState();
     this.textClassifier = config.textClassifier;
     this.audioClassifier = config.audioClassifier ?? null;
-    this.vadLexicon = config.vadLexicon ?? loadVadLexicon();
     this.maxTextLength = normalizeMaxTextLength(config.maxTextLength);
   }
 
@@ -142,36 +127,16 @@ export class EmotionObserver {
 
   async buildObservation(text: string): Promise<EmotionObservation> {
     const normalizedText = normalizeObserverText(text, this.maxTextLength);
-    const [classifications, lexiconSignal] = await Promise.all([
-      this.textClassifier.classify(normalizedText),
-      this.scoreLexiconSignal(normalizedText),
-    ]);
-
+    const classifications = await this.textClassifier.classify(normalizedText);
     const classifierSignal = resolveClassifierSignal(classifications);
-    const lexiconCategoricalSignal = resolveLexiconCategoricalSignal(lexiconSignal);
-    const fusedCategorical = chooseStrongestCategoricalSignal([
-      classifierSignal,
-      lexiconCategoricalSignal,
-    ]);
-
-    const categoricalWeight = fusedCategorical?.confidence ?? 0;
-    const lexiconWeight = lexiconSignal.confidence;
-    const observationConfidence = clampUnit(Math.max(categoricalWeight, lexiconWeight));
-    const fusedVad = fuseVadSignals(
-      fusedCategorical?.vad ?? NEUTRAL_SIGNED_VAD,
-      categoricalWeight,
-      lexiconSignal.vad,
-      lexiconWeight,
-    );
-
-    if (!fusedVad || observationConfidence <= SIGNAL_EPSILON) {
+    if (!classifierSignal || classifierSignal.confidence <= SIGNAL_EPSILON) {
       return {};
     }
 
     return {
-      vad: fusedVad,
-      discrete: fusedCategorical ? { [fusedCategorical.label]: 1 } : undefined,
-      confidence: observationConfidence,
+      vad: cloneVad(classifierSignal.vad),
+      discrete: { [classifierSignal.label]: 1 },
+      confidence: clampUnit(classifierSignal.confidence),
     };
   }
 
@@ -213,23 +178,6 @@ export class EmotionObserver {
     };
   }
 
-  private scoreLexiconSignal(text: string): LexiconSignal {
-    const tokens = tokenizeVadText(text);
-    const scored = scoreVadTokens(tokens, this.vadLexicon);
-    const signedVad = {
-      valence: normalizeSignedVadComponent(scored.score.valence),
-      arousal: normalizeSignedVadComponent(scored.score.arousal),
-      dominance: normalizeSignedVadComponent(scored.score.dominance),
-    };
-    const coverage = scored.totalTokenCount > 0
-      ? scored.matchedTokenCount / scored.totalTokenCount
-      : 0;
-    const intensity = averageAbsoluteVad(signedVad);
-    return {
-      vad: signedVad,
-      confidence: clampUnit(coverage * intensity),
-    };
-  }
 }
 
 function resolveClassifierSignal(classifications: readonly TextEmotionClassification[]): CategoricalSignal | null {
@@ -254,30 +202,6 @@ function resolveClassifierSignal(classifications: readonly TextEmotionClassifica
 
   if (!best || best.confidence <= SIGNAL_EPSILON) {
     return null;
-  }
-  return best;
-}
-
-function resolveLexiconCategoricalSignal(signal: LexiconSignal): CategoricalSignal | null {
-  if (signal.confidence <= SIGNAL_EPSILON) {
-    return null;
-  }
-
-  const label = resolveNearestEmotionLabel(signal.vad);
-  return {
-    label,
-    confidence: signal.confidence,
-    vad: cloneVad(deriveVadFromLabel(label)),
-  };
-}
-
-function chooseStrongestCategoricalSignal(
-  signals: Array<CategoricalSignal | null>,
-): CategoricalSignal | null {
-  let best: CategoricalSignal | null = null;
-  for (const signal of signals) {
-    if (!signal) continue;
-    best = chooseStrongerCategoricalSignal(best, signal);
   }
   return best;
 }
@@ -481,59 +405,11 @@ function normalizeOptionalVadComponent(value: unknown, fieldName: string): numbe
   return clampSigned(value);
 }
 
-function resolveNearestEmotionLabel(vad: VADVector): string {
-  let bestLabel: string | null = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (const [label, mappedVad] of Object.entries(TEXT_EMOTION_LABEL_VAD_MAP)) {
-    const distance = squaredDistance(vad, mappedVad);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestLabel = label;
-      continue;
-    }
-    if (distance === bestDistance && bestLabel && label.localeCompare(bestLabel) < 0) {
-      bestLabel = label;
-    }
-  }
-
-  if (!bestLabel) {
-    throw new Error('no emotion labels available for VAD resolution');
-  }
-  return bestLabel;
-}
-
 function deriveVadFromLabel(label: string): Readonly<VADVector> {
   if (!TEXT_EMOTION_LABEL_SET.has(label)) {
     throw new Error(`unsupported text emotion label: ${label}`);
   }
   return TEXT_EMOTION_LABEL_VAD_MAP[label];
-}
-
-function fuseVadSignals(
-  categoricalVad: Readonly<VADVector>,
-  categoricalWeightRaw: number,
-  lexiconVad: Readonly<VADVector>,
-  lexiconWeightRaw: number,
-): VADVector | null {
-  const categoricalWeight = clampUnit(categoricalWeightRaw);
-  const lexiconWeight = clampUnit(lexiconWeightRaw);
-  const totalWeight = categoricalWeight + lexiconWeight;
-
-  if (totalWeight <= SIGNAL_EPSILON) {
-    return null;
-  }
-
-  return {
-    valence: clampSigned(
-      ((categoricalVad.valence * categoricalWeight) + (lexiconVad.valence * lexiconWeight)) / totalWeight,
-    ),
-    arousal: clampSigned(
-      ((categoricalVad.arousal * categoricalWeight) + (lexiconVad.arousal * lexiconWeight)) / totalWeight,
-    ),
-    dominance: clampSigned(
-      ((categoricalVad.dominance * categoricalWeight) + (lexiconVad.dominance * lexiconWeight)) / totalWeight,
-    ),
-  };
 }
 
 function normalizeEmotionLabel(label: unknown, fieldName: string): string {
@@ -582,27 +458,6 @@ function resolveFusedLabel(discrete: Record<string, number> | undefined): string
   if (!discrete) return null;
   const labels = Object.keys(discrete).sort((left, right) => left.localeCompare(right));
   return labels[0] ?? null;
-}
-
-function averageAbsoluteVad(vad: Readonly<VADVector>): number {
-  let total = 0;
-  for (const key of VAD_KEYS) {
-    total += Math.abs(vad[key]);
-  }
-  return total / VAD_KEYS.length;
-}
-
-function squaredDistance(left: Readonly<VADVector>, right: Readonly<VADVector>): number {
-  let total = 0;
-  for (const key of VAD_KEYS) {
-    const delta = left[key] - right[key];
-    total += delta * delta;
-  }
-  return total;
-}
-
-function normalizeSignedVadComponent(value: number): number {
-  return clampSigned((value - 0.5) * 2);
 }
 
 function cloneVad(vad: Readonly<VADVector>): VADVector {

@@ -5,15 +5,24 @@ import {
   shouldScanTextContent,
 } from '../../scripts/public-sanitize-check.mjs';
 
+function buildOpenAiLikeToken() {
+  const suffix = ['1234567890', '1234567890'].join('');
+  return `sk-${suffix}`;
+}
+
 describe('public-sanitize check', () => {
-  it('keeps source/docs in scope while excluding historical bead issue log content', () => {
+  it('keeps source/docs in scope while excluding machine-managed beads history logs', () => {
     expect(shouldScanTextContent('src/index.ts')).toBe(true);
     expect(shouldScanTextContent('docs/README.md')).toBe(true);
+    expect(shouldScanTextContent('.beads/README.md')).toBe(true);
     expect(shouldScanTextContent('.beads/issues.jsonl')).toBe(false);
+    expect(shouldScanTextContent('.beads/beads.left.jsonl')).toBe(false);
+    expect(shouldScanTextContent('.beads/interactions.jsonl')).toBe(false);
     expect(shouldScanTextContent('docs/image.png')).toBe(false);
   });
 
   it('detects blocked token patterns in in-scope files', () => {
+    const tokenValue = buildOpenAiLikeToken();
     const result = scanPublicSanitizeTrackedFiles(
       ['src/example.ts'],
       {
@@ -23,7 +32,7 @@ describe('public-sanitize check', () => {
           textRuleRegex: [],
           loaded: false,
         },
-        readTextFile: () => "export const token = 'sk-12345678901234567890';\n",
+        readTextFile: () => `export const token = '${tokenValue}';\n`,
       },
     );
 
@@ -32,10 +41,11 @@ describe('public-sanitize check', () => {
     expect(result.violations[0].rule).toBe('token-openai-like');
   });
 
-  it('does not scan excluded .beads/issues.jsonl content', () => {
+  it('does not scan excluded beads history log content', () => {
+    const tokenValue = buildOpenAiLikeToken();
     const reads: string[] = [];
     const result = scanPublicSanitizeTrackedFiles(
-      ['.beads/issues.jsonl'],
+      ['.beads/issues.jsonl', '.beads/beads.left.jsonl', '.beads/interactions.jsonl'],
       {
         localBlocklist: {
           localPath: 'workspace/sanitize/local-blocklist.json',
@@ -45,7 +55,7 @@ describe('public-sanitize check', () => {
         },
         readTextFile: (file) => {
           reads.push(file);
-          return 'sk-12345678901234567890';
+          return tokenValue;
         },
       },
     );

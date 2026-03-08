@@ -186,6 +186,14 @@ export interface FieldUpdateResult {
   message: string;
 }
 
+export interface OnboardingActionResult {
+  ok: boolean;
+  message: string;
+  onboardingRequired: boolean;
+  action?: 'keep_starter' | 'edit_identity';
+  updatedFields?: string[];
+}
+
 export interface AdminIdentityService {
   getIdentityData(): AdminIdentityData;
   importIdentityCard(body: string): Promise<ImportResult>;
@@ -194,6 +202,7 @@ export interface AdminIdentityService {
   rollbackIdentityCard(body: string): RollbackResult;
   previewIdentityCardDiff(body: string): DiffPreviewResult;
   updateIdentityField(body: string): FieldUpdateResult;
+  applyOnboardingAction(body: string): Promise<OnboardingActionResult>;
 }
 
 export interface SettingsConfigEditors {

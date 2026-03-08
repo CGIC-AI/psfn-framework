@@ -65,3 +65,17 @@ export function updateIdentityField(
     { field, value }
   );
 }
+
+export interface IdentityOnboardingResponse {
+  ok: boolean;
+  message: string;
+  onboardingRequired: boolean;
+  action?: 'keep_starter' | 'edit_identity';
+  updatedFields?: string[];
+}
+
+export function applyIdentityOnboardingAction(
+  body: Record<string, unknown>
+): Promise<IdentityOnboardingResponse> {
+  return apiPost<IdentityOnboardingResponse>('/api/admin/identity/onboarding', body);
+}

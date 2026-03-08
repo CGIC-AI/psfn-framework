@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
+import { agentLoopWithScheduler, resolveStreamResult } from './scheduled-agent-loop.js';
 
 const ZERO_USAGE = {
   input: 0,
@@ -93,4 +93,50 @@ describe('scheduled-agent-loop stream result contract', () => {
       expect(agentEnd?.messages?.at(-1)?.content).toEqual([{ type: 'text', text: 'final answer' }]);
     },
   );
+
+  it('uses done-event message when response.result is absent', async () => {
+    const final = makeAssistantMessage('done payload final');
+    const streamFn = vi.fn(async () => {
+      const partial = makeAssistantMessage('partial');
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial };
+          yield { type: 'done', message: final };
+        },
+      } as any;
+    });
+    const events: any[] = [];
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
+      {
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [],
+      } as any,
+      makeLoopConfig() as any,
+      new AbortController().signal,
+      streamFn as any,
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const finalMessageEnd = [...events].reverse().find(
+      (event) => event.type === 'message_end' && event.message?.role === 'assistant',
+    );
+    expect(finalMessageEnd?.message?.content).toEqual([{ type: 'text', text: 'done payload final' }]);
+
+    const agentEnd = events.find((event) => event.type === 'agent_end');
+    expect(agentEnd?.messages?.at(-1)?.content).toEqual([{ type: 'text', text: 'done payload final' }]);
+  });
+
+  it('throws when no final assistant message is available anywhere', async () => {
+    await expect(resolveStreamResult({} as any, {
+      terminalEvent: { type: 'done' },
+      partialMessage: null,
+    })).rejects.toThrow('Stream response missing result payload');
+  });
 });

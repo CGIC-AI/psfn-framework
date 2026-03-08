@@ -1,4 +1,4 @@
-import type { WebFetchBinaryResult } from '../gateway/protocol.js';
+import type { WebFetchBinaryResult, WebFetchLane } from '../gateway/protocol.js';
 
 const DEFAULT_DISCOVERY_FETCH_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -6,7 +6,7 @@ export interface DiscoveryGatewayClient {
   webFetchBinary(
     url: string,
     options?: {
-      lane?: 'default' | 'local_crawler';
+      lane?: WebFetchLane;
       maxBytes?: number;
       headers?: Record<string, string>;
     },
@@ -44,7 +44,7 @@ export function createGatewayBackedDiscoveryFetch(
 
     const headers = normalizeHeaders(request.headers);
     const result = await gateway.webFetchBinary(request.url, {
-      lane: 'default',
+      lane: 'discovery',
       maxBytes,
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
     });

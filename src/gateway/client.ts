@@ -31,6 +31,7 @@ import type {
   DiscordSendResult,
   WebFetchResult,
   WebFetchBinaryResult,
+  WebFetchLane,
   ShellExecResult,
   VaultWriteResult,
   VaultReadResult,
@@ -559,7 +560,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   async webFetch(
     url: string,
     prompt?: string,
-    lane: 'default' | 'local_crawler' = 'default',
+    lane: WebFetchLane = 'default',
   ): Promise<string> {
     const result = await this.rpcInstance.request('web.fetch', {
       url,
@@ -572,7 +573,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   async webFetchBinary(
     url: string,
     options: {
-      lane?: 'default' | 'local_crawler';
+      lane?: WebFetchLane;
       maxBytes?: number;
       headers?: Record<string, string>;
     } = {},

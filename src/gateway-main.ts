@@ -316,6 +316,66 @@ function resolveGatewayRuntimeMode(raw: string | undefined): string {
   return normalized;
 }
 
+function normalizeConfiguredHttpUrl(raw: string | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    if ((parsed.protocol === 'http:' && parsed.port === '80')
+      || (parsed.protocol === 'https:' && parsed.port === '443')) {
+      parsed.port = '';
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function resolveLiteLLMDiscoveryModelsUrl(rawBaseUrl: string | undefined): string | null {
+  const normalizedBaseUrl = normalizeConfiguredHttpUrl(rawBaseUrl);
+  if (!normalizedBaseUrl) return null;
+
+  const parsed = new URL(normalizedBaseUrl);
+  const basePath = parsed.pathname
+    .replace(/\/+$/, '')
+    .replace(/\/v1$/i, '');
+  parsed.pathname = `${basePath}/v1/models`.replace(/\/{2,}/g, '/');
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString();
+}
+
+function resolveDiscoveryLaneConfig(input: {
+  litellmBaseUrl: string | undefined;
+  openRouterModelsApiUrl: string | undefined;
+}): { enabled: true; allowHttp: boolean; urlAllowlist: string[] } | undefined {
+  const litellmModelsUrl = resolveLiteLLMDiscoveryModelsUrl(input.litellmBaseUrl);
+  if (!litellmModelsUrl) {
+    return undefined;
+  }
+
+  const openRouterUrl = normalizeConfiguredHttpUrl(input.openRouterModelsApiUrl);
+  const urlAllowlist = [...new Set(
+    [litellmModelsUrl, openRouterUrl]
+      .filter((value): value is string => Boolean(value)),
+  )];
+  if (urlAllowlist.length === 0) {
+    return undefined;
+  }
+
+  return {
+    enabled: true,
+    allowHttp: urlAllowlist.some(url => url.startsWith('http://')),
+    urlAllowlist,
+  };
+}
+
 async function runShutdownStep(
   step: string,
   action: () => void | Promise<void>,
@@ -515,6 +575,10 @@ async function main(): Promise<void> {
     })
     : undefined;
   const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(process.env, codebaseRoot);
+  const discoveryLaneConfig = resolveDiscoveryLaneConfig({
+    litellmBaseUrl: process.env.LITELLM_BASE_URL,
+    openRouterModelsApiUrl: config.openRouterModelsApiUrl,
+  });
   if (fullCodebaseReadRoot) {
     log.warn('YOLO runtime mode active: full-codebase fs.read is enabled', {
       runtimeMode,
@@ -610,6 +674,7 @@ async function main(): Promise<void> {
           ? { domainAllowlist: config.webFetchDomainAllowlist }
           : {}),
         allowInternalNetwork: config.webFetchAllowInternalNetwork === true,
+        ...(discoveryLaneConfig ? { discoveryLane: discoveryLaneConfig } : {}),
         // Deprecated: local crawler lane preserved for backward compat
         localCrawlerLane: {
           enabled: config.webFetchLocalCrawlerEnabled === true,

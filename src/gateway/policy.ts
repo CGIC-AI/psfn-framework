@@ -235,7 +235,9 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       const laneValue = (params as Record<string, unknown>).lane;
       const lane: UrlPolicyLane = laneValue === 'local_crawler'
         ? 'local_crawler'
-        : 'default';
+        : laneValue === 'discovery'
+          ? 'discovery'
+          : 'default';
       if (!url || typeof url !== 'string') {
         return 'DENY';
       }

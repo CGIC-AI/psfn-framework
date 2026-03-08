@@ -97,9 +97,9 @@ function formatFetchProviderError(err: unknown): string {
 }
 
 function toLane(value: unknown): UrlPolicyLane {
-  return value === 'local_crawler'
-    ? 'local_crawler'
-    : 'default';
+  if (value === 'local_crawler') return 'local_crawler';
+  if (value === 'discovery') return 'discovery';
+  return 'default';
 }
 
 function normalizeBinaryMaxBytes(value: unknown): number {
@@ -290,7 +290,10 @@ async function fetchWithPolicyChecks(
 
   const parsed = new URL(url);
   const dnsCheck = await checkResolvedIP(parsed.hostname, dnsResolver, {
-    allowPrivateResolvedIp: lane === 'local_crawler' || urlPolicyConfig.allowInternalNetwork === true,
+    allowPrivateResolvedIp:
+      lane === 'local_crawler'
+      || lane === 'discovery'
+      || urlPolicyConfig.allowInternalNetwork === true,
   });
   if (!dnsCheck.allowed) {
     log.warn(`DNS resolution blocked fetch: ${dnsCheck.reason} (${url})`);

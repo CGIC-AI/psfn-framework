@@ -71,7 +71,7 @@ export function isAlwaysBlockedIP(ip: string): boolean {
   return ALWAYS_BLOCKED_RANGES.some(r => r.test(ip));
 }
 
-export type UrlPolicyLane = 'default' | 'local_crawler';
+export type UrlPolicyLane = 'default' | 'local_crawler' | 'discovery';
 export const DEFAULT_MAX_REDIRECT_HOPS = 5;
 export const MAX_REDIRECT_HOPS = 20;
 
@@ -86,6 +86,11 @@ export interface UrlPolicyConfig {
     allowHttp?: boolean;
     domainAllowlist?: string[];
     hostAllowlist?: string[];
+  };
+  discoveryLane?: {
+    enabled?: boolean;
+    allowHttp?: boolean;
+    urlAllowlist?: string[];
   };
 }
 
@@ -118,6 +123,31 @@ function toLowerList(values: readonly string[] | undefined): string[] {
     .filter(Boolean);
 }
 
+function normalizeAbsoluteHttpUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    if ((parsed.protocol === 'http:' && parsed.port === '80')
+      || (parsed.protocol === 'https:' && parsed.port === '443')) {
+      parsed.port = '';
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function toNormalizedUrlAllowlist(values: readonly string[] | undefined): string[] {
+  if (!values || values.length === 0) return [];
+  const normalized = values
+    .map(value => normalizeAbsoluteHttpUrl(value.trim()))
+    .filter((value): value is string => Boolean(value));
+  return [...new Set(normalized)];
+}
+
 function matchesDomainAllowlist(hostname: string, allowlist: readonly string[]): boolean {
   const lower = hostname.toLowerCase();
   return allowlist.some(domain => lower === domain || lower.endsWith('.' + domain));
@@ -148,9 +178,40 @@ export function evaluateUrlPolicy(
   }
 
   const isLocalCrawlerLane = lane === 'local_crawler';
+  const isDiscoveryLane = lane === 'discovery';
   const localCrawler = config.localCrawlerLane;
   if (isLocalCrawlerLane && localCrawler?.enabled !== true) {
     return { allowed: false, reason: 'Local crawler lane is not enabled' };
+  }
+  const discoveryLane = config.discoveryLane;
+  if (isDiscoveryLane && discoveryLane?.enabled !== true) {
+    return { allowed: false, reason: 'Discovery lane is not enabled' };
+  }
+
+  if (isDiscoveryLane) {
+    const allowHttp = discoveryLane?.allowHttp === true;
+    if (parsed.protocol === 'http:' && !allowHttp) {
+      return { allowed: false, reason: 'HTTP not allowed (use HTTPS)' };
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { allowed: false, reason: `Protocol ${parsed.protocol} not allowed` };
+    }
+
+    const discoveryUrlAllowlist = toNormalizedUrlAllowlist(discoveryLane?.urlAllowlist);
+    if (discoveryUrlAllowlist.length === 0) {
+      return { allowed: false, reason: 'Discovery lane requires URL allowlist' };
+    }
+
+    const normalizedTarget = normalizeAbsoluteHttpUrl(parsed.toString());
+    if (!normalizedTarget || !discoveryUrlAllowlist.includes(normalizedTarget)) {
+      return { allowed: false, reason: `URL ${parsed.toString()} not allowlisted for discovery lane` };
+    }
+
+    const hostname = normalizeHostname(parsed);
+    if (isIP(hostname) && isAlwaysBlockedIP(hostname)) {
+      return { allowed: false, reason: `IP ${hostname} blocked (cloud metadata / link-local)` };
+    }
+    return { allowed: true };
   }
 
   const allowHttp = isLocalCrawlerLane

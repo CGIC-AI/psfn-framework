@@ -124,6 +124,98 @@ describe('registerWebMethods', () => {
     });
   });
 
+  it('allows discovery lane only for configured discovery URL allowlist', async () => {
+    const { server, url } = await listenHttp((reqUrl) => {
+      if (reqUrl !== '/v1/models') {
+        return {
+          status: 404,
+          body: 'not found',
+        };
+      }
+      return {
+        body: Buffer.from(JSON.stringify({ data: [{ id: 'openai/gpt-4.1-mini' }] })),
+        contentType: 'application/json',
+      };
+    });
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        discoveryLane: {
+          enabled: true,
+          allowHttp: true,
+          urlAllowlist: [
+            `${url}/v1/models`,
+            'https://openrouter.ai/api/v1/models',
+          ],
+        },
+      },
+    });
+
+    const result = await harness.invokeBinary({
+      url: `${url}/v1/models`,
+      lane: 'discovery',
+      maxBytes: 16 * 1024,
+    });
+
+    expect(result.mimeType).toBe('application/json');
+    expect(Buffer.from(result.dataBase64, 'base64').toString('utf8')).toContain('gpt-4.1-mini');
+  });
+
+  it('denies non-allowlisted discovery lane URLs', async () => {
+    const { server, url } = await listenHttp((reqUrl) => ({
+      body: reqUrl,
+      contentType: 'text/plain; charset=utf-8',
+    }));
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        discoveryLane: {
+          enabled: true,
+          allowHttp: true,
+          urlAllowlist: [`${url}/v1/models`],
+        },
+      },
+    });
+
+    await expect(harness.invokeBinary({
+      url: `${url}/admin`,
+      lane: 'discovery',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('not allowlisted for discovery lane'),
+    });
+  });
+
+  it('keeps default lane policy unchanged even when discovery lane is configured', async () => {
+    const { server, url } = await listenHttp((reqUrl) => ({
+      body: reqUrl,
+      contentType: 'text/plain; charset=utf-8',
+    }));
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        discoveryLane: {
+          enabled: true,
+          allowHttp: true,
+          urlAllowlist: [`${url}/v1/models`],
+        },
+      },
+    });
+
+    await expect(harness.invokeBinary({
+      url: `${url}/v1/models`,
+      lane: 'default',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+    });
+  });
+
   it('allows local crawler lane on explicit allowlist + optional HTTP', async () => {
     const { server, url } = await listenHttp(() => ({
       body: '<html><body>crawler ok</body></html>',

@@ -133,7 +133,7 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
 
 function normalizeGuidelineRecord(
   raw: unknown,
-  fallbackUpdatedAt: string,
+  _fallbackUpdatedAt: string,
 ): CompressionGuidelineRecord | null {
   const record = parseJsonRecord(raw);
   if (!record) return null;

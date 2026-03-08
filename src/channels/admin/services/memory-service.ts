@@ -3,7 +3,7 @@ import type { EmbeddingService } from '../../../agent/contracts.js';
 import type { ContactStore } from '../../../contacts/store.js';
 import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
-import { VALID_MEMORY_TYPES, type MemoryType, type PurrMemory } from '../../../memory/types.js';
+import { VALID_MEMORY_TYPES, type MemoryType } from '../../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../trust/types.js';
 import type {
   AdminBulkMutationResult,

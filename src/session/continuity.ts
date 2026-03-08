@@ -7,7 +7,6 @@ import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeChannelId } from './store.js';
 import type { SessionEntry } from './types.js';
-import { createComponentLogger } from '../logger.js';
 import {
   classifyChannel,
   visibilitiesShareContinuity,
@@ -20,8 +19,6 @@ import {
   journalToSessionEntry,
   readJournalFile,
 } from './journal-utils.js';
-
-const log = createComponentLogger('UserContinuity');
 
 /** Default cap for continuity entries per user. */
 const DEFAULT_CONTINUITY_LIMIT = 20;

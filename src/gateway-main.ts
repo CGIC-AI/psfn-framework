@@ -21,7 +21,6 @@ import { AuditStore } from './gateway/audit.js';
 import {
   resolveAllowedReadPathsFromEnv,
   resolveFullCodebaseReadRootFromEnv,
-  resolveTrustedModuleRegistryPathFromEnv,
 } from './gateway/policy-config.js';
 import {
   ensureRegistryFile,
@@ -531,7 +530,6 @@ async function main(): Promise<void> {
     process.env.MODULE_REGISTRY_PATH,
   );
   ensureRegistryFile(moduleRegistryAbsolute);
-  const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(process.env, workspaceRoot);
 
   // ── Create providers (these hold secrets / have network access) ──
   const embeddingProvider = createEmbeddingProviderFromEnv(process.env);

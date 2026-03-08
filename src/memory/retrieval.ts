@@ -335,7 +335,6 @@ export class MemoryRetriever implements MemoryProvider {
     const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
-    const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
     const profile = canonicalContactId

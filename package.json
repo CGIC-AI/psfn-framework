@@ -35,7 +35,7 @@
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
     "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
     "walkthrough": "tsx src/e2e-walkthrough.ts",
-    "lint": "eslint \"src/**/*.ts\"",
+    "lint": "eslint .",
     "garden:dev": "cd admin-ui && npm run dev",
     "garden:build": "cd admin-ui && npm run build",
     "garden:preview": "cd admin-ui && npm run preview",

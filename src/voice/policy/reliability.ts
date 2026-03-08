@@ -106,7 +106,7 @@ async function withStageTimeout<T>(
   timeoutMs: number,
   task: (signal: AbortSignal) => Promise<T>,
   signal?: AbortSignal,
-  waitForCancellationAckOnTimeout = false,
+  _waitForCancellationAckOnTimeout = false,
 ): Promise<T> {
   if (signal?.aborted) {
     throw createStageAbortError(stage);
@@ -114,7 +114,7 @@ async function withStageTimeout<T>(
 
   const attemptAbortController = new AbortController();
   const releaseAbortMirror = mirrorAbortSignal(signal, attemptAbortController);
-  let timedOut = false;
+  let _timedOut = false;
   let timeoutError: VoiceStageTimeoutError | null = null;
   let timer: NodeJS.Timeout | undefined;
 
@@ -125,7 +125,7 @@ async function withStageTimeout<T>(
         return;
       }
 
-      timedOut = true;
+      _timedOut = true;
       timeoutError = new VoiceStageTimeoutError(stage, timeoutMs);
       attemptAbortController.abort(timeoutError);
       reject(timeoutError);

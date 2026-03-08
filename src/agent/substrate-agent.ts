@@ -9,7 +9,7 @@
 // from the SubstrateAgent module.
 
 import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentTool, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
+import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
@@ -17,17 +17,11 @@ import type {
   AgentResponse,
   CapabilityTier,
   CorrelationMetadata,
-  InferredPostTurnAction,
   ModelBudgetBlockedEvent,
   MessagePromptOverride,
-  MessagePromptOverrideMode,
   ResponseStyle,
-  ObservabilityCallType,
   SubstrateConfig,
   SubstrateMessage,
-  TurnID,
-  TurnRecord,
-  TurnUsage,
 } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
@@ -52,7 +46,7 @@ import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
-import { ReflectionNudgeTracker, type TurnToolSummary } from '../skills/reflection-nudge.js';
+import { ReflectionNudgeTracker } from '../skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';
 import {
   gateToolWithCapabilities,
@@ -61,35 +55,24 @@ import {
 import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
-import { tagToolWithReversibility } from '../capabilities/safeguards.js';
 import { toErrorMessage } from '../utils/errors.js';
 import {
-  validateAndLogToolWiring,
-  extractGatewayMethods,
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
-  type ValidateToolsOptions,
 } from './tool-wiring-validator.js';
 import {
   isDeferredToolHandoffMessageId,
 } from './deferred-tool-handoff.js';
 import {
-  createDefaultExtendedToolAutoloadPolicy,
   type ExtendedToolAutoloadPolicy,
 } from './extended-tool-autoload-policy.js';
-import { BackgroundCompletionDeliveryQueue } from './background-completion-delivery-queue.js';
 import type {
-  AdaptiveLoadedExtendedToolState,
-  AdaptiveToolActivationSource,
-  AdaptiveToolDecisionTelemetry,
   AdaptiveToolRuntimeState,
-  AdaptiveToolSnapshotSkip,
-  AdaptiveToolSnapshotTelemetry,
 } from './adaptive-tools-telemetry.js';
 import { createTurnId } from '../turns/id.js';
-import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
+import type { TurnPromptSnapshot } from '../turns/snapshot.js';
 import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
-import { EmotionState, type EmotionStateSnapshot } from '../emotion/state.js';
+import { EmotionState } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
 import type { ActiveConcernContextProvider } from '../intention/concerns.js';
@@ -111,21 +94,9 @@ import {
   type FrozenPromptPrefix,
 } from './substrate-agent/prompt-lifecycle.js';
 import {
-  inferPostTurnActions as inferPostTurnActionsForTurn,
-  runIntentionPostTurnHooks as runIntentionPostTurnHooksForTurn,
   type IntentionPostTurnHook,
-  type IntentionPostTurnHookContext,
   type PostTurnActionInferer,
-  type PostTurnInferenceContext,
 } from './substrate-agent/post-turn-actions.js';
-import {
-  accumulateTurnUsage as accumulateTurnUsageForTurn,
-  buildTurnRecord as buildTurnRecordForTurn,
-  buildTurnToolSummary as buildTurnToolSummaryForTurn,
-  recordAssistantMessage as recordAssistantMessageForTurn,
-  recordToolObservations as recordToolObservationsForTurn,
-  recordUserMessage as recordUserMessageForTurn,
-} from './substrate-agent/turn-records.js';
 import {
   buildActiveConcernsContextBlock as buildActiveConcernsContextBlockForTurn,
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
@@ -138,35 +109,17 @@ import {
   type ResolvedAuthorContext,
 } from './substrate-agent/runtime-context.js';
 import {
-  activateExtendedToolsForTurn,
-  createLoadToolsTool,
-  preloadExtendedToolsForTurn,
-  type AutoloadTurnOutcome,
   type ExtendedToolActivationOptions,
   type ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import {
-  pinDeferredContinuationSessionContext as pinDeferredContinuationSessionContextForTurn,
-  queueBackgroundContinuationCompletion as queueBackgroundContinuationCompletionForTurn,
-  resolveSessionChannelId as resolveSessionChannelIdForTurn,
-  dequeueBackgroundContinuationDeliveries as dequeueBackgroundContinuationDeliveriesForTurn,
-  emitBackgroundContinuationEvent as emitBackgroundContinuationEventForTurn,
   type BackgroundContinuationTaskRecord,
-  type BackgroundContinuationCompletionSignal,
-  type PendingBackgroundContinuationDelivery,
 } from './substrate-agent/background-continuation-runtime.js';
-import {
-  buildTurnCorrelation as buildTurnCorrelationForTurn,
-  buildTurnStageTelemetry as buildTurnStageTelemetryForTurn,
-  resolveTurnCallType as resolveTurnCallTypeForTurn,
-  withAdaptiveCorrelation as withAdaptiveCorrelationForTurn,
-  withCorrelationPurpose as withCorrelationPurposeForTurn,
-  type TurnStageName,
-} from './substrate-agent/turn-observability.js';
 import {
   handleMessageForTurn,
 } from './substrate-agent/turn-execution-runtime.js';
+import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import {
   getTurnModelSignature as getTurnModelSignatureForRuntime,
   normalizeTurnModelOverride as normalizeTurnModelOverrideForRuntime,
@@ -174,28 +127,10 @@ import {
   resolveTurnModelPurpose as resolveTurnModelPurposeForRuntime,
 } from './substrate-agent/model-runtime.js';
 import {
-  addPromotedExtendedTool as addPromotedExtendedToolForRuntime,
-  applyActiveToolsToAgent as applyActiveToolsToAgentForRuntime,
-  buildAdaptiveToolRuntimeState as buildAdaptiveToolRuntimeStateForRuntime,
-  buildAdaptiveToolSnapshot as buildAdaptiveToolSnapshotForRuntime,
-  classifyExtendedToolForTurn as classifyExtendedToolForTurnForRuntime,
-  emitAdaptiveToolSnapshotDecisions as emitAdaptiveToolSnapshotDecisionsForRuntime,
-  getExtendedToolByName as getExtendedToolByNameForRuntime,
-  getPromotedExtendedToolNames as getPromotedExtendedToolNamesForRuntime,
-  getPromotedExtendedToolsLimit as getPromotedExtendedToolsLimitForRuntime,
-  mergeAdaptiveSkips as mergeAdaptiveSkipsForRuntime,
-  persistPromotedExtendedToolNames as persistPromotedExtendedToolNamesForRuntime,
-  removePromotedExtendedTool as removePromotedExtendedToolForRuntime,
-  resolveActiveTools as resolveActiveToolsForRuntime,
-  resolvePromotedToolActivation as resolvePromotedToolActivationForRuntime,
-  setPromotedExtendedToolNames as setPromotedExtendedToolNamesForRuntime,
-  swapPromotedExtendedTools as swapPromotedExtendedToolsForRuntime,
-  trackLoadedExtendedTool as trackLoadedExtendedToolForRuntime,
-  withToolConcurrencyMetadata as withToolConcurrencyMetadataForRuntime,
-  type ActiveToolResolution,
+  ToolRuntimeFacade,
   type PromotedToolMutationResult,
-  type PromotedToolResolution,
-} from './substrate-agent/tool-orchestration-runtime.js';
+} from './substrate-agent/tool-runtime-facade.js';
+import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -218,7 +153,7 @@ export type {
 export type {
   PromotedToolMutationErrorCode,
   PromotedToolMutationResult,
-} from './substrate-agent/tool-orchestration-runtime.js';
+} from './substrate-agent/tool-runtime-facade.js';
 
 export interface EmotionRuntimeWiring {
   state?: EmotionState;
@@ -253,34 +188,46 @@ export class SubstrateAgent {
   private characterName: string;
   private resolveCharacterPromptVariables: () => Record<string, string>;
   private config: SubstrateConfig;
-  private coreTools: AgentTool<any>[] = [];
-  private extendedTools: AgentTool<any>[] = [];
-  private loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>();
   private modelResolved = false;
   private modelSignature: string | null = null;
   private bridge: EventBridge;
   private channelRegistry = new Map<string, ChannelPromptDock>();
   private capabilityRuntime: CapabilityRuntime | null = null;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
-  private extendedToolAutoloadPolicy: ExtendedToolAutoloadPolicy | null = createDefaultExtendedToolAutoloadPolicy();
   private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
   private reflectionNudge = new ReflectionNudgeTracker();
-  private postTurnActionInferers: PostTurnActionInferer[] = [];
-  private intentionPostTurnHooks: IntentionPostTurnHook[] = [];
-  private activeTurnCorrelation: CorrelationMetadata | null = null;
-  private activeTurnTaskKind: string | null = null;
-  private activeTurnIntent: string | null = null;
-  private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
-  private pendingBackgroundContinuationDeliveries = new BackgroundCompletionDeliveryQueue<
-    PendingBackgroundContinuationDelivery
-  >();
-  private backgroundContinuationTasks = new Map<string, BackgroundContinuationTaskRecord>();
+  private readonly turnSupportRuntime: TurnSupportRuntime;
+  private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private selfModelRuntimeRequired = false;
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
   private runtimeMode: RuntimeMode;
+
+  private get activeTurnCorrelation(): CorrelationMetadata | null {
+    return this.turnSupportRuntime.getActiveTurnCorrelation();
+  }
+
+  private set activeTurnCorrelation(correlation: CorrelationMetadata | null) {
+    this.turnSupportRuntime.setActiveTurnCorrelation(correlation);
+  }
+
+  private get activeTurnTaskKind(): string | null {
+    return this.turnSupportRuntime.getActiveTurnTaskKind();
+  }
+
+  private set activeTurnTaskKind(taskKind: string | null) {
+    this.turnSupportRuntime.setActiveTurnTaskKind(taskKind);
+  }
+
+  private get activeTurnIntent(): string | null {
+    return this.turnSupportRuntime.getActiveTurnIntent();
+  }
+
+  private set activeTurnIntent(intent: string | null) {
+    this.turnSupportRuntime.setActiveTurnIntent(intent);
+  }
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
@@ -345,14 +292,37 @@ export class SubstrateAgent {
       }),
       convertToLlm,
     });
+    this.turnSupportRuntime = new TurnSupportRuntime({
+      eventBus: this.eventBus,
+      sessionManager: this.sessionManager,
+      hashPromptText: (text) => this.hashPromptText(text),
+      resolveContextWindow: () => this.resolveContextWindow(),
+    });
+    this.toolRuntimeFacade = new ToolRuntimeFacade({
+      config: this.config,
+      agent: this.agent,
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
+      withCapabilityGates: (tools) => this.withCapabilityGates(tools),
+      withCorrelationPurpose: (correlation, purpose) => this.turnSupportRuntime.withCorrelationPurpose(correlation, purpose),
+      withAdaptiveCorrelation: (correlation, purpose) => this.turnSupportRuntime.withAdaptiveCorrelation(correlation, purpose),
+      emitAdaptiveToolDecision: (payload) => this.turnSupportRuntime.emitAdaptiveToolDecision(payload),
+      emitTelemetry: (event, payload) => this.turnSupportRuntime.emitTelemetry(event, payload),
+      resolveSessionChannelId: (channelId) => this.turnSupportRuntime.resolveSessionChannelId(channelId),
+      getActiveTurnCorrelation: () => this.turnSupportRuntime.getActiveTurnCorrelation(),
+      getActiveTurnTaskKind: () => this.turnSupportRuntime.getActiveTurnTaskKind(),
+      getActiveTurnIntent: () => this.turnSupportRuntime.getActiveTurnIntent(),
+    });
     installAgentToolSchedulerPatch(this.agent, {
       maxParallelToolCalls: DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL,
       onTelemetry: (eventName, payload) => {
-        this.emitTelemetry(eventName, {
-          ...this.withAdaptiveCorrelation(this.activeTurnCorrelation ?? undefined, eventName),
+        this.turnSupportRuntime.emitTelemetry(eventName, {
+          ...this.turnSupportRuntime.withAdaptiveCorrelation(
+            this.turnSupportRuntime.getActiveTurnCorrelation() ?? undefined,
+            eventName,
+          ),
           timestamp: Date.now(),
-          taskKind: this.activeTurnTaskKind,
-          intent: this.activeTurnIntent,
+          taskKind: this.turnSupportRuntime.getActiveTurnTaskKind(),
+          intent: this.turnSupportRuntime.getActiveTurnIntent(),
           ...payload,
         });
       },
@@ -364,7 +334,7 @@ export class SubstrateAgent {
     this.bridge = createEventBridge(this.agent, eventBus);
 
     // Register the load_tools meta-tool as a core tool
-    this.registerTool(this.createLoadToolsTool(), 'core');
+    this.registerTool(this.toolRuntimeFacade.createLoadToolsTool(), 'core');
 
     // Eagerly try to resolve the model, but don't throw if it fails
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
@@ -518,249 +488,62 @@ export class SubstrateAgent {
   }
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
-    const taggedTool = this.withToolConcurrencyMetadata(tagToolWithReversibility(tool), category);
-    if (category === 'core') {
-      this.coreTools.push(taggedTool);
-    } else {
-      this.extendedTools.push(taggedTool);
-    }
-  }
-
-  private withToolConcurrencyMetadata(tool: AgentTool<any>, category: ToolCategory): AgentTool<any> {
-    return withToolConcurrencyMetadataForRuntime(tool, category);
-  }
-
-  private getPromotedExtendedToolNamesInternal(): string[] {
-    return getPromotedExtendedToolNamesForRuntime(this.config);
-  }
-
-  private setPromotedExtendedToolNamesInternal(next: readonly string[]): string[] {
-    return setPromotedExtendedToolNamesForRuntime(this.config, next);
-  }
-
-  private persistPromotedExtendedToolNames(next: readonly string[]): string | null {
-    return persistPromotedExtendedToolNamesForRuntime(this.config, next);
-  }
-
-  private getExtendedToolByName(name: string): AgentTool<any> | null {
-    return getExtendedToolByNameForRuntime(this.extendedTools, name);
-  }
-
-  private classifyExtendedToolForTurn(toolName: string) {
-    return classifyExtendedToolForTurnForRuntime(
-      toolName,
-      this.extendedToolAutoloadPolicy?.classifyToolForTurn ?? null,
-    );
-  }
-
-  private resolvePromotedToolActivation(): PromotedToolResolution {
-    return resolvePromotedToolActivationForRuntime({
-      promotedTools: this.getPromotedExtendedToolNamesInternal(),
-      extendedTools: this.extendedTools,
-      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
-    });
+    this.toolRuntimeFacade.registerTool(tool, category);
   }
 
   private getCapabilityEligiblePromotedToolNames(): Set<string> {
-    return this.resolvePromotedToolActivation().activeNames;
+    return this.toolRuntimeFacade.getCapabilityEligiblePromotedToolNames();
   }
 
-  private trackLoadedExtendedTool(
-    toolName: string,
-    source: Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>,
-  ): 'activated' | 'already_active' {
-    return trackLoadedExtendedToolForRuntime(this.loadedExtended, toolName, source);
-  }
-
-  private mergeAdaptiveSkips(...groups: AdaptiveToolSnapshotSkip[][]): AdaptiveToolSnapshotSkip[] {
-    return mergeAdaptiveSkipsForRuntime(...groups);
-  }
-
-  private resolveActiveTools(
-    additionalSkipped: AdaptiveToolSnapshotSkip[] = [],
-  ): ActiveToolResolution {
-    return resolveActiveToolsForRuntime({
-      coreTools: this.coreTools,
-      extendedTools: this.extendedTools,
-      loadedExtended: this.loadedExtended,
-      promotedResolution: this.resolvePromotedToolActivation(),
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
-      additionalSkipped,
-    });
-  }
-
-  private applyActiveToolsToAgent(): void {
-    const resolution = this.resolveActiveTools();
-    applyActiveToolsToAgentForRuntime({
-      resolution,
-      withCapabilityGates: tools => this.withCapabilityGates(tools),
-      setAgentTools: tools => this.agent.setTools(tools),
-    });
-  }
-
-  private applyActiveToolsToAgentForTurn(
-    message: SubstrateMessage,
-    taskKind: string | undefined,
-    callType: ObservabilityCallType,
-    correlation: CorrelationMetadata,
-    autoloadOutcome: AutoloadTurnOutcome,
-  ): void {
-    const resolution = this.resolveActiveTools(autoloadOutcome.skipped);
-    applyActiveToolsToAgentForRuntime({
-      resolution,
-      withCapabilityGates: tools => this.withCapabilityGates(tools),
-      setAgentTools: tools => this.agent.setTools(tools),
-    });
-
-    const snapshot = buildAdaptiveToolSnapshotForRuntime({
-      message,
-      taskKind,
-      callType,
-      correlation,
-      autoloadOutcome,
-      resolution,
-      withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
-    });
-    this.lastAdaptiveToolSnapshot = snapshot;
-    this.emitTelemetry('agent.tools.adaptive.snapshot', snapshot as unknown as Record<string, unknown>);
-
-    emitAdaptiveToolSnapshotDecisionsForRuntime({
-      snapshot,
-      correlation,
-      withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
-      emitAdaptiveToolDecision: payload => this.emitAdaptiveToolDecision(payload),
-    });
+  private classifyExtendedToolForTurn(toolName: string) {
+    return this.toolRuntimeFacade.classifyExtendedToolForTurn(toolName);
   }
 
   getPromotedExtendedToolsLimit(): number {
-    return getPromotedExtendedToolsLimitForRuntime();
+    return this.toolRuntimeFacade.getPromotedExtendedToolsLimit();
   }
 
   getPromotedExtendedTools(): readonly string[] {
-    return [...this.getPromotedExtendedToolNamesInternal()];
+    return this.toolRuntimeFacade.getPromotedExtendedTools();
   }
 
   addPromotedExtendedTool(toolName: string): PromotedToolMutationResult {
-    return addPromotedExtendedToolForRuntime(toolName, {
-      getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
-      setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
-      persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
-      getExtendedToolByName: (name) => this.getExtendedToolByName(name),
-      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
-      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
-      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
-    });
+    return this.toolRuntimeFacade.addPromotedExtendedTool(toolName);
   }
 
   removePromotedExtendedTool(toolName: string): PromotedToolMutationResult {
-    return removePromotedExtendedToolForRuntime(toolName, {
-      getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
-      setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
-      persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
-      getExtendedToolByName: (name) => this.getExtendedToolByName(name),
-      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
-      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
-      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
-    });
+    return this.toolRuntimeFacade.removePromotedExtendedTool(toolName);
   }
 
   swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult {
-    return swapPromotedExtendedToolsForRuntime(fromSlot, toSlot, {
-      getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
-      setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
-      persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
-      getExtendedToolByName: (name) => this.getExtendedToolByName(name),
-      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
-      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
-      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
-    });
+    return this.toolRuntimeFacade.swapPromotedExtendedTools(fromSlot, toSlot);
   }
 
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
-    return {
-      core: [...this.coreTools],
-      extended: [...this.extendedTools],
-    };
+    return this.toolRuntimeFacade.getToolCatalog();
   }
 
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
-    const promotedResolution = this.resolvePromotedToolActivation();
-    const activeResolution = this.resolveActiveTools();
-
-    return buildAdaptiveToolRuntimeStateForRuntime({
-      coreTools: this.coreTools,
-      extendedTools: this.extendedTools,
-      loadedExtended: this.loadedExtended,
-      promotedToolsConfigured: this.getPromotedExtendedToolNamesInternal(),
-      promotedResolution,
-      activeResolution,
-      lastSnapshot: this.lastAdaptiveToolSnapshot,
-    });
+    return this.toolRuntimeFacade.getAdaptiveToolRuntimeState();
   }
 
   getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {
-    return [...this.backgroundContinuationTasks.values()]
-      .sort((left, right) => left.completedAt - right.completedAt)
-      .map(entry => ({ ...entry }));
+    return this.turnSupportRuntime.getBackgroundContinuationTasks();
   }
 
   activateExtendedTools(
     toolNames: readonly string[],
     options: ExtendedToolActivationOptions = {},
   ): ExtendedToolActivationResult {
-    return activateExtendedToolsForTurn({
-      toolNames,
-      options,
-      extendedTools: this.extendedTools,
-      trackLoadedExtendedTool: (toolName, source) => this.trackLoadedExtendedTool(toolName, source),
-      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
-      withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),
-      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
-    });
+    return this.toolRuntimeFacade.activateExtendedTools(toolNames, options);
   }
 
-  /**
-   * Validate that all registered tools have their runtime dependencies satisfied.
-   * Tools with missing dependencies are logged as warnings and removed from the
-   * tool registry so they cannot crash at invocation time.
-   *
-   * @param mode - 'single' for single-process mode, 'gateway' for agent/gateway split
-   * @param gatewayClient - The gateway client object (gateway mode only), used to
-   *   extract available RPC methods via prototype inspection
-   * @param requiredGatewayMetadataCoverage - optional expected metadata coverage map
-   *   for known gateway-dependent tools
-   */
   validateToolWiring(
     mode: RuntimeMode,
     gatewayClient?: object,
     requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage,
   ): void {
-    const allTools = [...this.coreTools, ...this.extendedTools];
-    const options: ValidateToolsOptions = {
-      mode,
-      tools: allTools,
-      requiredGatewayMetadataCoverage,
-      requireConcurrencyMetadata: true,
-    };
-
-    if (mode === 'gateway' && gatewayClient) {
-      options.gatewayClientMethods = extractGatewayMethods(gatewayClient);
-    }
-
-    const disabledNames = validateAndLogToolWiring(options);
-    if (disabledNames.length === 0) return;
-
-    const disabledSet = new Set(disabledNames);
-    this.coreTools = this.coreTools.filter(t => !disabledSet.has(t.name));
-    this.extendedTools = this.extendedTools.filter(t => !disabledSet.has(t.name));
-    for (const disabledName of disabledSet) {
-      this.loadedExtended.delete(disabledName);
-    }
-    const filteredPromoted = this
-      .getPromotedExtendedToolNamesInternal()
-      .filter(name => !disabledSet.has(name));
-    this.setPromotedExtendedToolNamesInternal(filteredPromoted);
+    this.toolRuntimeFacade.validateToolWiring(mode, gatewayClient, requiredGatewayMetadataCoverage);
   }
 
   setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {
@@ -775,43 +558,7 @@ export class SubstrateAgent {
   }
 
   setExtendedToolAutoloadPolicy(policy: ExtendedToolAutoloadPolicy | null): void {
-    this.extendedToolAutoloadPolicy = policy;
-  }
-
-  private createLoadToolsTool(): AgentTool<any> {
-    return createLoadToolsTool({
-      getExtendedTools: () => this.extendedTools,
-      getExtendedToolAutoloadPolicy: () => this.extendedToolAutoloadPolicy,
-      getActiveTurnCorrelation: () => this.activeTurnCorrelation,
-      getActiveTurnTaskKind: () => this.activeTurnTaskKind,
-      getActiveTurnIntent: () => this.activeTurnIntent,
-      activateExtendedTools: (toolNames, options) => this.activateExtendedTools(toolNames, options),
-      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
-      withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),
-      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
-      emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
-    });
-  }
-
-  private preloadExtendedToolsForTurn(
-    message: SubstrateMessage,
-    taskKind: string | undefined,
-    correlation: CorrelationMetadata,
-  ): AutoloadTurnOutcome {
-    return preloadExtendedToolsForTurn({
-      message,
-      taskKind,
-      correlation,
-      policy: this.extendedToolAutoloadPolicy,
-      extendedTools: this.extendedTools,
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
-      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
-      trackLoadedExtendedTool: (toolName, source) => this.trackLoadedExtendedTool(toolName, source),
-      emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
-      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
-      withCorrelationPurpose: (contextCorrelation, purpose) => this.withCorrelationPurpose(contextCorrelation, purpose),
-      withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
-    });
+    this.toolRuntimeFacade.setExtendedToolAutoloadPolicy(policy);
   }
 
   // ── Steering + follow-up + lifecycle ──
@@ -829,7 +576,7 @@ export class SubstrateAgent {
   steer(message: SubstrateMessage): void {
     if (!this.agent.state.isStreaming) return;
     const authorContext = this.resolveAuthorContext(message);
-    this.recordUserMessage(
+    this.turnSupportRuntime.recordUserMessage(
       message,
       createTurnId(),
       message.id,
@@ -850,7 +597,7 @@ export class SubstrateAgent {
    */
   followUp(message: SubstrateMessage): void {
     const authorContext = this.resolveAuthorContext(message);
-    this.recordUserMessage(
+    this.turnSupportRuntime.recordUserMessage(
       message,
       createTurnId(),
       message.id,
@@ -896,23 +643,11 @@ export class SubstrateAgent {
   }
 
   registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
-    this.postTurnActionInferers.push(inferer);
-    return () => {
-      const index = this.postTurnActionInferers.indexOf(inferer);
-      if (index !== -1) {
-        this.postTurnActionInferers.splice(index, 1);
-      }
-    };
+    return this.turnSupportRuntime.registerPostTurnActionInferer(inferer);
   }
 
   registerIntentionPostTurnHook(hook: IntentionPostTurnHook): () => void {
-    this.intentionPostTurnHooks.push(hook);
-    return () => {
-      const index = this.intentionPostTurnHooks.indexOf(hook);
-      if (index !== -1) {
-        this.intentionPostTurnHooks.splice(index, 1);
-      }
-    };
+    return this.turnSupportRuntime.registerIntentionPostTurnHook(hook);
   }
 
   /** Abort the current prompt, cancelling streaming and tool execution */
@@ -921,7 +656,7 @@ export class SubstrateAgent {
   }
 
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
-    return handleMessageForTurn({
+    return handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       llmClient: this.llmClient,
       sessionManager: this.sessionManager,
@@ -935,305 +670,96 @@ export class SubstrateAgent {
       skillsRuntime: this.skillsRuntime,
       evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,
-      pinDeferredContinuationSessionContext: (deferredContinuationId, channelId) => this.pinDeferredContinuationSessionContext(
-        deferredContinuationId,
-        channelId,
-      ),
-      resolveTaskKind: (turnMessage) => this.resolveTaskKind(turnMessage),
-      buildTurnBudgetCharacteristics: (turnMessage, taskKind) => this.buildTurnBudgetCharacteristics(turnMessage, taskKind),
-      resolveTurnCallType: (turnMessage, taskKind) => this.resolveTurnCallType(turnMessage, taskKind),
-      buildTurnCorrelation: (turnMessage, callType, turnId, requestId) => this.buildTurnCorrelation(
-        turnMessage,
-        callType,
-        turnId,
-        requestId,
-      ),
-      withCorrelationPurpose: (correlation, purpose) => this.withCorrelationPurpose(correlation, purpose),
-      resolveAuthorContext: (turnMessage) => this.resolveAuthorContext(turnMessage),
-      emitTurnStage: (
-        turnMessage,
-        turnStartMs,
-        turnId,
-        requestId,
-        stage,
-        callType,
-        payload,
-      ) => this.emitTurnStage(turnMessage, turnStartMs, turnId, requestId, stage, callType, payload),
-      recordUserMessage: (turnMessage, turnId, requestId, trustLevel, canonicalContactKey) => this.recordUserMessage(
-        turnMessage,
-        turnId,
-        requestId,
-        trustLevel,
-        canonicalContactKey,
-      ),
-      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
-      resolveChannelType: (turnMessage) => this.resolveChannelType(turnMessage),
-      ensureModel: (turnMessage) => this.ensureModel(turnMessage),
-      captureTurnPromptSnapshot: (ctx) => this.captureTurnPromptSnapshot(ctx),
-      buildScratchpadContextBlock: () => this.buildScratchpadContextBlock(),
-      normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
-      resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(
-        turnMessage,
-        channelType,
-        channelMeta,
-      ),
-      buildPromptTemplateVariables: (
-        turnMessage,
-        resolvedUserName,
-        trustLevel,
-        channelType,
-        canonicalContactKey,
-        now,
-      ) => this.buildPromptTemplateVariables(
-        turnMessage,
-        resolvedUserName,
-        trustLevel,
-        channelType,
-        canonicalContactKey,
-        now,
-      ),
-      setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
-        this.currentInternalState = state;
-        this.currentInternalStateSnapshotRef = snapshotRef;
-        this.currentMetacognitiveFlags = cloneMetacognitiveFlags(metacognitiveFlags);
+      turnSupportRuntime: this.turnSupportRuntime,
+      toolRuntimeFacade: this.toolRuntimeFacade,
+      callbacks: {
+        resolveTaskKind: (turnMessage) => this.resolveTaskKind(turnMessage),
+        buildTurnBudgetCharacteristics: (turnMessage, taskKind) => this.buildTurnBudgetCharacteristics(turnMessage, taskKind),
+        resolveAuthorContext: (turnMessage) => this.resolveAuthorContext(turnMessage),
+        resolveChannelType: (turnMessage) => this.resolveChannelType(turnMessage),
+        ensureModel: (turnMessage) => this.ensureModel(turnMessage),
+        captureTurnPromptSnapshot: (ctx) => this.captureTurnPromptSnapshot(ctx),
+        buildScratchpadContextBlock: () => this.buildScratchpadContextBlock(),
+        normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
+        resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(
+          turnMessage,
+          channelType,
+          channelMeta,
+        ),
+        buildPromptTemplateVariables: (
+          turnMessage,
+          resolvedUserName,
+          trustLevel,
+          channelType,
+          canonicalContactKey,
+          now,
+        ) => this.buildPromptTemplateVariables(
+          turnMessage,
+          resolvedUserName,
+          trustLevel,
+          channelType,
+          canonicalContactKey,
+          now,
+        ),
+        setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
+          this.currentInternalState = state;
+          this.currentInternalStateSnapshotRef = snapshotRef;
+          this.currentMetacognitiveFlags = cloneMetacognitiveFlags(metacognitiveFlags);
+        },
+        buildRuntimeContext: (
+          turnMessage,
+          resolvedUserName,
+          trustLevel,
+          channelType,
+          canonicalContactKey,
+          responseStyle,
+          now,
+          taskKind,
+          templateVariables,
+          internalState,
+          metacognitiveFlags,
+          emotionAppraisalChain,
+        ) => this.buildRuntimeContext(
+          turnMessage,
+          resolvedUserName,
+          trustLevel,
+          channelType,
+          canonicalContactKey,
+          responseStyle,
+          now,
+          taskKind,
+          templateVariables,
+          internalState,
+          metacognitiveFlags,
+          emotionAppraisalChain,
+        ),
+        buildPromptPrefixCacheKey: (turnMessage, channelType, canonicalContactKey) => this.buildPromptPrefixCacheKey(
+          turnMessage,
+          channelType,
+          canonicalContactKey,
+        ),
+        buildStaticPromptSettingsHash: (templateVariables) => this.buildStaticPromptSettingsHash(templateVariables),
+        resolveStaticPromptPrefix: (params) => this.resolveStaticPromptPrefix(params),
+        hashPromptText: (text) => this.hashPromptText(text),
+        getPersonaAdaptation: (
+          trustLevel,
+          internalState,
+          metacognitiveFlags,
+          templateVariables,
+        ) => this.getPersonaAdaptation(
+          trustLevel,
+          internalState,
+          metacognitiveFlags,
+          templateVariables,
+        ),
+        resolveContextWindow: () => this.resolveContextWindow(),
+        extractResponseText: () => this.extractResponseText(),
+        getLatestAssistantMessage: () => this.getLatestAssistantMessage(),
       },
-      buildRuntimeContext: (
-        turnMessage,
-        resolvedUserName,
-        trustLevel,
-        channelType,
-        canonicalContactKey,
-        responseStyle,
-        now,
-        taskKind,
-        templateVariables,
-        internalState,
-        metacognitiveFlags,
-        emotionAppraisalChain,
-      ) => this.buildRuntimeContext(
-        turnMessage,
-        resolvedUserName,
-        trustLevel,
-        channelType,
-        canonicalContactKey,
-        responseStyle,
-        now,
-        taskKind,
-        templateVariables,
-        internalState,
-        metacognitiveFlags,
-        emotionAppraisalChain,
-      ),
-      buildPromptPrefixCacheKey: (turnMessage, channelType, canonicalContactKey) => this.buildPromptPrefixCacheKey(
-        turnMessage,
-        channelType,
-        canonicalContactKey,
-      ),
-      buildStaticPromptSettingsHash: (templateVariables) => this.buildStaticPromptSettingsHash(templateVariables),
-      resolveStaticPromptPrefix: (params) => this.resolveStaticPromptPrefix(params),
-      hashPromptText: (text) => this.hashPromptText(text),
-      getPersonaAdaptation: (trustLevel, internalState, metacognitiveFlags, templateVariables) => this.getPersonaAdaptation(
-        trustLevel,
-        internalState,
-        metacognitiveFlags,
-        templateVariables,
-      ),
-      resolveContextWindow: () => this.resolveContextWindow(),
-      preloadExtendedToolsForTurn: (turnMessage, taskKind, correlation) => this.preloadExtendedToolsForTurn(
-        turnMessage,
-        taskKind,
-        correlation,
-      ),
-      applyActiveToolsToAgentForTurn: (
-        turnMessage,
-        taskKind,
-        callType,
-        correlation,
-        autoloadOutcome,
-      ) => this.applyActiveToolsToAgentForTurn(turnMessage, taskKind, callType, correlation, autoloadOutcome),
-      setActiveTurnContext: (correlation, taskKind, intent) => {
-        this.activeTurnCorrelation = correlation;
-        this.activeTurnTaskKind = taskKind;
-        this.activeTurnIntent = intent;
-      },
-      clearActiveTurnContext: () => {
-        this.activeTurnCorrelation = null;
-        this.activeTurnTaskKind = null;
-        this.activeTurnIntent = null;
-      },
-      setActiveTurnCorrelation: (correlation) => {
-        this.activeTurnCorrelation = correlation;
-      },
-      extractResponseText: () => this.extractResponseText(),
-      getLatestAssistantMessage: () => this.getLatestAssistantMessage(),
-      accumulateTurnUsage: (messages) => this.accumulateTurnUsage(messages),
-      recordToolObservations: (turnMessage, turnId, requestId, turnMessages, trustLevel) => this.recordToolObservations(
-        turnMessage,
-        turnId,
-        requestId,
-        turnMessages,
-        trustLevel,
-      ),
-      recordAssistantMessage: (
-        turnMessage,
-        turnId,
-        requestId,
-        responseText,
-        trustLevel,
-        canonicalContactKey,
-        emotionSnapshot,
-      ) => this.recordAssistantMessage(
-        turnMessage,
-        turnId,
-        requestId,
-        responseText,
-        trustLevel,
-        canonicalContactKey,
-        emotionSnapshot,
-      ),
-      buildTurnToolSummary: (turnMessages) => this.buildTurnToolSummary(turnMessages),
-      inferPostTurnActions: (context) => this.inferPostTurnActions(context),
-      buildTurnRecord: (input) => this.buildTurnRecord(input),
-      queueBackgroundContinuationCompletion: (
-        deferredContinuationId,
-        turnMessage,
-        response,
-        taskKind,
-        intent,
-      ) => this.queueBackgroundContinuationCompletion(deferredContinuationId, turnMessage, response, taskKind, intent),
-      emitBackgroundContinuationEvent: (eventName, payload) => this.emitBackgroundContinuationEvent(eventName, payload),
-      dequeueBackgroundContinuationDeliveries: (deliverySessionId) => this.dequeueBackgroundContinuationDeliveries(
-        deliverySessionId,
-      ),
-      emitTelemetry: (eventName, payload) => this.emitTelemetry(eventName, payload),
-      runIntentionPostTurnHooks: (context) => this.runIntentionPostTurnHooks(context),
-    }, message);
+    }), message);
   }
 
   // ── Private helpers ──
-
-  private pinDeferredContinuationSessionContext(
-    deferredContinuationId: string | null,
-    channelId: string,
-  ): () => void {
-    return pinDeferredContinuationSessionContextForTurn(
-      deferredContinuationId,
-      channelId,
-      this.sessionManager,
-    );
-  }
-
-  private resolveSessionChannelId(channelId: string): string {
-    return resolveSessionChannelIdForTurn(this.sessionManager, channelId);
-  }
-
-  private queueBackgroundContinuationCompletion(
-    deferredContinuationId: string,
-    message: SubstrateMessage,
-    response: AgentResponse,
-    taskKind: string | null,
-    intent: string | null,
-  ): BackgroundContinuationCompletionSignal {
-    return queueBackgroundContinuationCompletionForTurn({
-      deferredContinuationId,
-      message,
-      response,
-      taskKind,
-      intent,
-      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
-      backgroundContinuationTasks: this.backgroundContinuationTasks,
-      pendingBackgroundContinuationDeliveries: this.pendingBackgroundContinuationDeliveries,
-    });
-  }
-
-  private dequeueBackgroundContinuationDeliveries(
-    deliverySessionId: string,
-  ): PendingBackgroundContinuationDelivery[] {
-    return dequeueBackgroundContinuationDeliveriesForTurn(
-      this.pendingBackgroundContinuationDeliveries,
-      deliverySessionId,
-    );
-  }
-
-  private async emitBackgroundContinuationEvent(
-    eventName: 'agent.background.continuation.completed' | 'agent.background.continuation.post_turn_delivery',
-    payload: Record<string, unknown>,
-  ): Promise<void> {
-    await emitBackgroundContinuationEventForTurn(this.eventBus, eventName, payload);
-  }
-
-  private emitTurnStage(
-    message: SubstrateMessage,
-    turnStartMs: number,
-    turnId: TurnID,
-    requestId: string,
-    stage: TurnStageName,
-    callType: ObservabilityCallType,
-    payload: Record<string, unknown>,
-  ): void {
-    const telemetry = buildTurnStageTelemetryForTurn({
-      message,
-      turnStartMs,
-      turnId,
-      requestId,
-      stage,
-      callType,
-      payload,
-    });
-    log.debug('Turn stage telemetry', telemetry);
-    this.emitTelemetry('agent.turn.stage', telemetry);
-  }
-
-  private resolveTurnCallType(
-    message: SubstrateMessage,
-    taskKind: string | undefined,
-  ): ObservabilityCallType {
-    return resolveTurnCallTypeForTurn(message, taskKind);
-  }
-
-  private buildTurnCorrelation(
-    message: SubstrateMessage,
-    callType: ObservabilityCallType,
-    turnId: TurnID,
-    requestId: string,
-  ): CorrelationMetadata {
-    return buildTurnCorrelationForTurn(message, callType, turnId, requestId);
-  }
-
-  private withCorrelationPurpose(
-    correlation: CorrelationMetadata,
-    purpose: string,
-  ): CorrelationMetadata {
-    return withCorrelationPurposeForTurn(correlation, purpose);
-  }
-
-  private withAdaptiveCorrelation(
-    correlation: CorrelationMetadata | undefined,
-    purpose: string,
-  ): Partial<CorrelationMetadata> {
-    return withAdaptiveCorrelationForTurn(correlation, this.activeTurnCorrelation, purpose);
-  }
-
-  private emitAdaptiveToolDecision(
-    payload: Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>,
-  ): void {
-    this.emitTelemetry('agent.tools.adaptive.decision', {
-      ...payload,
-      timestamp: Date.now(),
-    });
-  }
-
-  private emitTelemetry(event: string, payload: Record<string, unknown>): void {
-    const telemetryBus = this.eventBus as unknown as {
-      emit: (event: string, payload: Record<string, unknown>) => Promise<void>;
-    };
-    telemetryBus.emit(event, payload).catch(error => {
-      log.debug('Telemetry emit failed', {
-        event,
-        error: toErrorMessage(error),
-      });
-    });
-  }
 
   private captureTurnPromptSnapshot(ctx: ComposeContext): TurnPromptSnapshot {
     return captureTurnPromptSnapshotForTurn({
@@ -1286,92 +812,6 @@ export class SubstrateAgent {
     return hashPromptTextForTurn(text);
   }
 
-  private recordUserMessage(
-    message: SubstrateMessage,
-    turnId: TurnID,
-    requestId: string,
-    trustLevel: TrustLevel,
-    canonicalContactKey?: string,
-  ): number | null {
-    return recordUserMessageForTurn({
-      sessionManager: this.sessionManager,
-      message,
-      turnId,
-      requestId,
-      trustLevel,
-      canonicalContactKey,
-    });
-  }
-
-  private recordAssistantMessage(
-    message: SubstrateMessage,
-    turnId: TurnID,
-    requestId: string,
-    responseText: string,
-    trustLevel: TrustLevel,
-    canonicalContactKey?: string,
-    emotionSnapshot?: EmotionStateSnapshot | null,
-  ): number | null {
-    return recordAssistantMessageForTurn({
-      sessionManager: this.sessionManager,
-      message,
-      turnId,
-      requestId,
-      responseText,
-      trustLevel,
-      canonicalContactKey,
-      emotionSnapshot,
-    });
-  }
-
-  private recordToolObservations(
-    message: SubstrateMessage,
-    turnId: TurnID,
-    requestId: string,
-    turnMessages: AgentMessage[],
-    trustLevel: TrustLevel,
-  ): void {
-    recordToolObservationsForTurn({
-      sessionManager: this.sessionManager,
-      message,
-      turnId,
-      requestId,
-      turnMessages,
-      trustLevel,
-    });
-  }
-
-  private buildTurnRecord(input: {
-    message: SubstrateMessage;
-    turnId: TurnID;
-    requestId: string;
-    startedAt: number;
-    completedAt: number;
-    userSessionEntryId: number | null;
-    assistantSessionEntryId: number | null;
-    response: AgentResponse;
-    turnMessages: AgentMessage[];
-    promptMode: MessagePromptOverrideMode;
-    promptText: string;
-    contextMessageCount: number;
-    memoryContextChars: number;
-    trustLevel: TrustLevel;
-    canonicalContactKey?: string;
-    retrievalProvenanceRefs: string[];
-    turnSnapshot?: TurnSnapshot;
-    internalStateSnapshotRef?: string;
-  }): TurnRecord {
-    return buildTurnRecordForTurn({
-      ...input,
-      hashPromptText: (text) => this.hashPromptText(text),
-    });
-  }
-
-  /** Aggregate usage stats for a single turn across all tool loop iterations. */
-  private accumulateTurnUsage(messages: AgentMessage[]): TurnUsage {
-    return accumulateTurnUsageForTurn(messages, this.resolveContextWindow());
-  }
-
   private resolveContextWindow(): number {
     // Config-level contextWindow takes precedence (user-configured via settings).
     // Only fall back to model-object contextWindow for per-turn overrides,
@@ -1383,30 +823,6 @@ export class SubstrateAgent {
       return runtimeWindow;
     }
     return 128_000; // sensible fallback
-  }
-
-  private buildTurnToolSummary(turnMessages: AgentMessage[]): TurnToolSummary {
-    return buildTurnToolSummaryForTurn(turnMessages);
-  }
-
-  private async inferPostTurnActions(
-    context: PostTurnInferenceContext,
-  ): Promise<InferredPostTurnAction[]> {
-    return inferPostTurnActionsForTurn({
-      inferers: this.postTurnActionInferers,
-      context,
-      logger: log,
-    });
-  }
-
-  private async runIntentionPostTurnHooks(
-    context: IntentionPostTurnHookContext,
-  ): Promise<void> {
-    await runIntentionPostTurnHooksForTurn({
-      hooks: this.intentionPostTurnHooks,
-      context,
-      logger: log,
-    });
   }
 
   private getLatestAssistantMessage(): AssistantMessage | null {
@@ -1504,7 +920,7 @@ export class SubstrateAgent {
     metacognitiveFlags: readonly MetacognitiveFlag[] = [],
     emotionAppraisalChain: readonly EmotionAppraisalEntry[] = [],
   ): string {
-    const activeResolution = this.resolveActiveTools();
+    const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
     return buildRuntimeContextForTurn({
       message,
       resolvedUserName,
@@ -1521,9 +937,9 @@ export class SubstrateAgent {
       modelId: this.agent.state.model.id,
       contextWindow: this.resolveContextWindow(),
       capabilityTier: this.resolveCapabilityAccess().getTier(),
-      activeToolCounts: activeResolution.counts,
-      extendedTools: this.extendedTools,
-      loadedExtended: this.loadedExtended,
+      activeToolCounts,
+      extendedTools: [...this.toolRuntimeFacade.getExtendedTools()],
+      loadedExtended: new Map(this.toolRuntimeFacade.getLoadedExtendedTools()),
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
       skillsContext: this.skillsRuntime?.getPromptXml() ?? '',

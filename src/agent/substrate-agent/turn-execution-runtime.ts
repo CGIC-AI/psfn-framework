@@ -78,7 +78,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
   ) => Promise<string>;
 }
 
-interface TurnExecutionRuntime {
+export interface TurnExecutionRuntime {
   eventBus: EventBus;
   llmClient: LLMProvider;
   sessionManager: SessionManager;

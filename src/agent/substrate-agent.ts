@@ -9,8 +9,7 @@
 // from the SubstrateAgent module.
 
 import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
-import { Type } from '@sinclair/typebox';
+import type { AgentTool, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
@@ -69,12 +68,10 @@ import {
   gateToolWithCapabilities,
   type CapabilityAccess,
 } from '../capabilities/gate.js';
-import { resolveToolRequiredCapabilities } from '../capabilities/requirements.js';
 import { CapabilityRuntime } from '../capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { tagToolWithReversibility } from '../capabilities/safeguards.js';
-import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import {
   validateAndLogToolWiring,
@@ -96,15 +93,10 @@ import { runWithRequestContext } from '../llm/request-context.js';
 import {
   parseDeferredToolHandoffActionId,
   isDeferredToolHandoffMessageId,
-  normalizeDeferredToolHandoffIntent,
-  normalizeToolNameList,
-  type DeferredToolHandoffIntent,
 } from './deferred-tool-handoff.js';
 import {
   classifyExtendedToolForTurn as classifyDefaultExtendedToolForTurn,
   createDefaultExtendedToolAutoloadPolicy,
-  DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX,
-  selectBoundedOverlayCandidates,
   type ExtendedToolAutoloadPolicy,
   type ExtendedToolTurnClass,
 } from './extended-tool-autoload-policy.js';
@@ -188,6 +180,14 @@ import {
   runMoaTurn,
 } from './substrate-agent/moa-turn.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
+import {
+  activateExtendedToolsForTurn,
+  createLoadToolsTool,
+  preloadExtendedToolsForTurn,
+  type AutoloadTurnOutcome,
+  type ExtendedToolActivationOptions,
+  type ExtendedToolActivationResult,
+} from './substrate-agent/adaptive-tools-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -203,6 +203,10 @@ export type {
   IntentionPostTurnHookContext,
   IntentionPostTurnHook,
 } from './substrate-agent/post-turn-actions.js';
+export type {
+  ExtendedToolActivationOptions,
+  ExtendedToolActivationResult,
+} from './substrate-agent/adaptive-tools-runtime.js';
 
 interface ProactiveMemoryProvider extends MemoryProvider {
   retrieveProactiveRecall?: (
@@ -213,20 +217,6 @@ interface ProactiveMemoryProvider extends MemoryProvider {
     turnSnapshot?: import('../turns/snapshot.js').TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ) => Promise<string>;
-}
-
-export interface ExtendedToolActivationResult {
-  requestedTools: string[];
-  activatedTools: string[];
-  alreadyActiveTools: string[];
-  missingTools: string[];
-}
-
-export interface ExtendedToolActivationOptions {
-  source?: Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>;
-  correlation?: CorrelationMetadata;
-  taskKind?: string | null;
-  intent?: string | null;
 }
 
 export interface EmotionRuntimeWiring {
@@ -306,11 +296,6 @@ interface ActiveToolResolution {
 
 interface PromotedToolResolution {
   activeNames: Set<string>;
-  skipped: AdaptiveToolSnapshotSkip[];
-}
-
-interface AutoloadTurnOutcome {
-  intent: string | null;
   skipped: AdaptiveToolSnapshotSkip[];
 }
 
@@ -1313,57 +1298,15 @@ export class SubstrateAgent {
     toolNames: readonly string[],
     options: ExtendedToolActivationOptions = {},
   ): ExtendedToolActivationResult {
-    const requestedTools = normalizeToolNameList(toolNames);
-    const byName = new Set(this.extendedTools.map(tool => tool.name));
-    const activatedTools: string[] = [];
-    const alreadyActiveTools: string[] = [];
-    const missingTools: string[] = [];
-    const source = options.source ?? 'extended_loaded';
-    const telemetryCorrelation = options.correlation;
-    const taskKind = options.taskKind ?? null;
-    const intent = options.intent ?? null;
-
-    for (const name of requestedTools) {
-      if (!byName.has(name)) {
-        missingTools.push(name);
-        this.emitAdaptiveToolDecision({
-          ...this.withAdaptiveCorrelation(telemetryCorrelation, 'agent.tools.adaptive.decision'),
-          toolName: name,
-          source,
-          decision: 'skipped',
-          reason: 'not_registered',
-          taskKind,
-          intent,
-        });
-        continue;
-      }
-      const status = this.trackLoadedExtendedTool(name, source);
-      if (status === 'activated') {
-        activatedTools.push(name);
-      } else {
-        alreadyActiveTools.push(name);
-      }
-      this.emitAdaptiveToolDecision({
-        ...this.withAdaptiveCorrelation(telemetryCorrelation, 'agent.tools.adaptive.decision'),
-        toolName: name,
-        source,
-        decision: status,
-        reason: status === 'activated' ? 'explicit_activation' : 'already_loaded',
-        taskKind,
-        intent,
-      });
-    }
-
-    if (activatedTools.length > 0) {
-      this.applyActiveToolsToAgent();
-    }
-
-    return {
-      requestedTools,
-      activatedTools,
-      alreadyActiveTools,
-      missingTools,
-    };
+    return activateExtendedToolsForTurn({
+      toolNames,
+      options,
+      extendedTools: this.extendedTools,
+      trackLoadedExtendedTool: (toolName, source) => this.trackLoadedExtendedTool(toolName, source),
+      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
+      withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),
+      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
+    });
   }
 
   /**
@@ -1425,199 +1368,18 @@ export class SubstrateAgent {
   }
 
   private createLoadToolsTool(): AgentTool<any> {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-    return {
-      name: 'load_tools',
-      label: 'load_tools',
-      description: 'Load extended tool schemas by name. Call with tool names from the tool directory in your runtime context.',
-      parameters: Type.Object({
-        tools: Type.Array(Type.String(), { description: 'Names of extended tools to load' }),
-        intendedAction: Type.Optional(
-          Type.String({
-            description:
-              'Optional follow-up action to execute after this reply when tools were discovered late.',
-          }),
-        ),
-        deferUntilTurnBoundary: Type.Optional(
-          Type.Boolean({
-            description:
-              'Set true when this tool load was discovered late and the intended action should continue post-reply.',
-          }),
-        ),
-        maxRetries: Type.Optional(
-          Type.Number({
-            description: 'Optional retry cap for deferred continuation (default: 2, max: 4).',
-            minimum: 0,
-            maximum: 4,
-          }),
-        ),
-      }),
-      execute: async (
-        _toolCallId: string,
-        params: {
-          tools: string[];
-          intendedAction?: string;
-          deferUntilTurnBoundary?: boolean;
-          maxRetries?: number;
-        },
-      ): Promise<AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }>> => {
-        const requestedTools = normalizeToolNameList(params.tools);
-        const sameTurnMax = Number.isFinite(self.extendedToolAutoloadPolicy?.maxPreloadCount)
-          ? Math.max(0, Math.floor(self.extendedToolAutoloadPolicy!.maxPreloadCount))
-          : DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX;
-        const sameTurnSelection = selectBoundedOverlayCandidates(
-          requestedTools,
-          self.extendedTools.map(tool => tool.name),
-          sameTurnMax,
-        );
-        const overlayEligible = sameTurnSelection.selected;
-        const backgroundOnlySkipped = sameTurnSelection.skipped
-          .filter(entry => entry.reason === 'not_overlay_eligible')
-          .map(entry => entry.toolName);
-        const budgetSkipped = sameTurnSelection.skipped
-          .filter(entry => entry.reason === 'budget_exhausted')
-          .map(entry => entry.toolName);
-        const unavailableSkipped = sameTurnSelection.skipped
-          .filter(entry => entry.reason === 'not_registered')
-          .map(entry => entry.toolName);
-        const invalidSkipped = sameTurnSelection.skipped
-          .filter(entry => entry.reason === 'invalid_metadata')
-          .map(entry => entry.toolName);
-        const duplicateSkipped = sameTurnSelection.skipped
-          .filter(entry => entry.reason === 'duplicate_candidate')
-          .map(entry => entry.toolName);
-
-        for (const entry of sameTurnSelection.skipped) {
-          const reason = entry.reason === 'not_overlay_eligible'
-            ? 'background_only'
-            : entry.reason;
-          self.emitAdaptiveToolDecision({
-            ...self.withAdaptiveCorrelation(self.activeTurnCorrelation ?? undefined, 'agent.tools.adaptive.decision'),
-            toolName: entry.toolName,
-            source: 'extended_loaded',
-            decision: 'skipped',
-            reason,
-            taskKind: self.activeTurnTaskKind,
-            intent: self.activeTurnIntent,
-          });
-        }
-
-        const activation = self.activateExtendedTools(overlayEligible, {
-          source: 'extended_loaded',
-          correlation: self.activeTurnCorrelation ?? undefined,
-          taskKind: self.activeTurnTaskKind,
-          intent: self.activeTurnIntent,
-        });
-        const activatedCount = activation.activatedTools.length + activation.alreadyActiveTools.length;
-        if (activatedCount > 0 || sameTurnSelection.skipped.length > 0 || activation.missingTools.length > 0) {
-          const details: { deferredToolHandoff?: DeferredToolHandoffIntent } = {};
-          const contentLines: string[] = [];
-          if (activation.activatedTools.length > 0) {
-            contentLines.push(
-              `Loaded ${activation.activatedTools.length} tools: ${activation.activatedTools.join(', ')}`,
-            );
-          }
-          if (activation.alreadyActiveTools.length > 0) {
-            contentLines.push(
-              `Already active: ${activation.alreadyActiveTools.join(', ')}`,
-            );
-          }
-
-          if (activation.missingTools.length > 0) {
-            contentLines.push(`Missing tools: ${activation.missingTools.join(', ')}`);
-          }
-          if (unavailableSkipped.length > 0) {
-            contentLines.push(`Unavailable tools: ${unavailableSkipped.join(', ')}`);
-          }
-          if (backgroundOnlySkipped.length > 0) {
-            contentLines.push(
-              `Background-only tools not activated in-turn: ${backgroundOnlySkipped.join(', ')}`,
-            );
-          }
-          if (budgetSkipped.length > 0) {
-            contentLines.push(
-              `Skipped by same-turn overlay budget (${sameTurnSelection.maxCount}): ${budgetSkipped.join(', ')}`,
-            );
-          }
-          if (invalidSkipped.length > 0) {
-            contentLines.push(`Ignored invalid tool names: ${invalidSkipped.join(', ')}`);
-          }
-          if (duplicateSkipped.length > 0) {
-            contentLines.push(`Ignored duplicate tool names: ${duplicateSkipped.join(', ')}`);
-          }
-
-          const handoffTools = [...new Set([
-            ...activation.activatedTools,
-            ...activation.alreadyActiveTools,
-            ...backgroundOnlySkipped,
-            ...budgetSkipped,
-          ])];
-          const deferredSessionId = self.activeTurnCorrelation?.channelId
-            ? self.resolveSessionChannelId(self.activeTurnCorrelation.channelId)
-            : undefined;
-          const deferredToolHandoff = params.deferUntilTurnBoundary
-            ? normalizeDeferredToolHandoffIntent({
-              toolNames: handoffTools,
-              intendedAction: params.intendedAction,
-              maxRetries: params.maxRetries,
-              ...(deferredSessionId ? { sessionId: deferredSessionId } : {}),
-            })
-            : null;
-          if (deferredToolHandoff) {
-            details.deferredToolHandoff = deferredToolHandoff;
-            contentLines.push('Queued deferred continuation intent for post-turn execution.');
-            for (const toolName of deferredToolHandoff.toolNames) {
-              self.emitAdaptiveToolDecision({
-                ...self.withAdaptiveCorrelation(undefined, 'agent.tools.adaptive.decision'),
-                toolName,
-                source: 'deferred',
-                decision: 'queued',
-                reason: 'defer_until_turn_boundary',
-              });
-            }
-          } else if (params.deferUntilTurnBoundary) {
-            contentLines.push('Deferred continuation skipped: provide a non-empty intendedAction.');
-            for (const toolName of handoffTools) {
-              self.emitAdaptiveToolDecision({
-                ...self.withAdaptiveCorrelation(undefined, 'agent.tools.adaptive.decision'),
-                toolName,
-                source: 'deferred',
-                decision: 'skipped',
-                reason: 'missing_intended_action',
-              });
-            }
-          }
-
-          self.emitTelemetry('agent.tools.same_turn_activation', {
-            ...self.withAdaptiveCorrelation(self.activeTurnCorrelation ?? undefined, 'agent.tools.same_turn_activation'),
-            timestamp: Date.now(),
-            requestedTools,
-            overlayEligible,
-            activatedTools: activation.activatedTools,
-            alreadyActiveTools: activation.alreadyActiveTools,
-            missingTools: activation.missingTools,
-            skippedBackgroundOnly: backgroundOnlySkipped,
-            skippedBudget: budgetSkipped,
-            skippedUnavailable: unavailableSkipped,
-            skippedInvalid: invalidSkipped,
-            skippedDuplicate: duplicateSkipped,
-            sameTurnOverlaySelection: sameTurnSelection,
-            taskKind: self.activeTurnTaskKind,
-            intent: self.activeTurnIntent,
-          });
-
-          return {
-            content: [{ type: 'text', text: contentLines.join('\n') }],
-            details,
-          };
-        }
-        return textResultWithError(
-          `No matching tools found. Available: ${self.extendedTools.map(t => t.name).join(', ')}`,
-          true,
-        );
-      },
-    };
+    return createLoadToolsTool({
+      getExtendedTools: () => this.extendedTools,
+      getExtendedToolAutoloadPolicy: () => this.extendedToolAutoloadPolicy,
+      getActiveTurnCorrelation: () => this.activeTurnCorrelation,
+      getActiveTurnTaskKind: () => this.activeTurnTaskKind,
+      getActiveTurnIntent: () => this.activeTurnIntent,
+      activateExtendedTools: (toolNames, options) => this.activateExtendedTools(toolNames, options),
+      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
+      withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),
+      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
+      emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
+    });
   }
 
   private preloadExtendedToolsForTurn(
@@ -1625,183 +1387,20 @@ export class SubstrateAgent {
     taskKind: string | undefined,
     correlation: CorrelationMetadata,
   ): AutoloadTurnOutcome {
-    const policy = this.extendedToolAutoloadPolicy;
-    if (!policy || this.extendedTools.length === 0) {
-      return {
-        intent: null,
-        skipped: [],
-      };
-    }
-
-    const boundedMax = Number.isFinite(policy.maxPreloadCount)
-      ? Math.max(0, Math.floor(policy.maxPreloadCount))
-      : 0;
-    const intent = policy.classifyIntent(message, taskKind);
-    const candidateNames = policy.getCandidatesForIntent(intent).slice(0, boundedMax);
-    const overlayCandidateNames = candidateNames.filter(
-      toolName => this.classifyExtendedToolForTurn(toolName) === 'overlay',
-    );
-    const skippedBackgroundOnly = candidateNames.filter(
-      toolName => this.classifyExtendedToolForTurn(toolName) !== 'overlay',
-    );
-    const overlaySelection = selectBoundedOverlayCandidates(
-      candidateNames,
-      this.extendedTools.map(tool => tool.name),
-      boundedMax,
-    );
-    if (candidateNames.length === 0) {
-      this.emitTelemetry('agent.tools.autoload', {
-        channelId: message.channelId,
-        intent,
-        taskKind: taskKind ?? null,
-        boundedMax,
-        candidates: [],
-        activated: [],
-        alreadyActive: [],
-        skippedDenied: [],
-        unavailable: [],
-        skippedBackgroundOnly: [],
-        overlaySelection,
-        ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload'),
-      });
-      return {
-        intent,
-        skipped: [],
-      };
-    }
-
-    const access = this.resolveCapabilityAccess();
-    const catalog = new Map(this.extendedTools.map(tool => [tool.name, tool]));
-    const activated: string[] = [];
-    const alreadyActive: string[] = [];
-    const unavailable: string[] = [];
-    const skippedDenied: Array<{ toolName: string; missingTokens: CapabilityToken[] }> = [];
-    const skipped: AdaptiveToolSnapshotSkip[] = [];
-
-    for (const toolName of skippedBackgroundOnly) {
-      skipped.push({
-        toolName,
-        source: 'autoload',
-        reason: 'background_only',
-      });
-      this.emitTelemetry('agent.tools.autoload.skipped', {
-        channelId: message.channelId,
-        intent,
-        taskKind: taskKind ?? null,
-        toolName,
-        reason: 'background_only',
-        ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
-      });
-      this.emitAdaptiveToolDecision({
-        ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
-        toolName,
-        source: 'autoload',
-        decision: 'skipped',
-        reason: 'background_only',
-        taskKind: taskKind ?? null,
-        intent,
-      });
-    }
-
-    for (const toolName of overlayCandidateNames) {
-      const tool = catalog.get(toolName);
-      if (!tool) {
-        unavailable.push(toolName);
-        skipped.push({
-          toolName,
-          source: 'autoload',
-          reason: 'not_registered',
-        });
-        this.emitTelemetry('agent.tools.autoload.skipped', {
-          channelId: message.channelId,
-          intent,
-          taskKind: taskKind ?? null,
-          toolName,
-          reason: 'not_registered',
-          ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
-        });
-        this.emitAdaptiveToolDecision({
-          ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
-          toolName,
-          source: 'autoload',
-          decision: 'skipped',
-          reason: 'not_registered',
-          taskKind: taskKind ?? null,
-          intent,
-        });
-        continue;
-      }
-
-      const missingTokens = resolveToolRequiredCapabilities(tool, {})
-        .filter(token => !access.has(token));
-      if (missingTokens.length > 0) {
-        skippedDenied.push({ toolName, missingTokens });
-        skipped.push({
-          toolName,
-          source: 'autoload',
-          reason: 'capability_denied',
-          missingTokens,
-        });
-        this.emitTelemetry('agent.tools.autoload.skipped', {
-          channelId: message.channelId,
-          intent,
-          taskKind: taskKind ?? null,
-          toolName,
-          reason: 'capability_denied',
-          missingTokens,
-          tier: access.getTier(),
-          ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload.skipped'),
-        });
-        this.emitAdaptiveToolDecision({
-          ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
-          toolName,
-          source: 'autoload',
-          decision: 'skipped',
-          reason: 'capability_denied',
-          missingTokens,
-          taskKind: taskKind ?? null,
-          intent,
-        });
-        continue;
-      }
-
-      const activationState = this.trackLoadedExtendedTool(tool.name, 'autoload');
-      if (activationState === 'already_active') {
-        alreadyActive.push(tool.name);
-      } else {
-        activated.push(tool.name);
-      }
-      this.emitAdaptiveToolDecision({
-        ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
-        toolName: tool.name,
-        source: 'autoload',
-        decision: activationState,
-        reason: activationState === 'activated' ? 'autoload_candidate' : 'autoload_candidate_already_active',
-        taskKind: taskKind ?? null,
-        intent,
-      });
-    }
-
-    this.emitTelemetry('agent.tools.autoload', {
-      channelId: message.channelId,
-      intent,
-      taskKind: taskKind ?? null,
-      boundedMax,
-      candidates: candidateNames,
-      overlayCandidates: overlayCandidateNames,
-      activated,
-      alreadyActive,
-      skippedDenied,
-      unavailable,
-      skippedBackgroundOnly,
-      overlaySelection,
-      ...this.withCorrelationPurpose(correlation, 'agent.tools.autoload'),
+    return preloadExtendedToolsForTurn({
+      message,
+      taskKind,
+      correlation,
+      policy: this.extendedToolAutoloadPolicy,
+      extendedTools: this.extendedTools,
+      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
+      trackLoadedExtendedTool: (toolName, source) => this.trackLoadedExtendedTool(toolName, source),
+      emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
+      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
+      withCorrelationPurpose: (contextCorrelation, purpose) => this.withCorrelationPurpose(contextCorrelation, purpose),
+      withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
     });
-
-    return {
-      intent,
-      skipped,
-    };
   }
 
   // ── Steering + follow-up + lifecycle ──

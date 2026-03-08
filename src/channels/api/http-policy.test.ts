@@ -18,16 +18,24 @@ function requestWithHeaders(headers: IncomingMessage['headers']): IncomingMessag
 }
 
 describe('normalizeCorsAllowedOrigins', () => {
-  it('trims entries and ignores wildcard/empty values', () => {
+  it('normalizes exact origins and wildcard host patterns while ignoring allow-all/empty values', () => {
     const origins = normalizeCorsAllowedOrigins([
       '  https://console.example  ',
+      'http://*.local:3201',
       '*',
       '',
       'https://admin.example',
     ]);
-    expect(Array.from(origins)).toEqual([
+    expect(Array.from(origins.exactOrigins)).toEqual([
       'https://console.example',
       'https://admin.example',
+    ]);
+    expect(origins.wildcardHostPatterns).toEqual([
+      {
+        protocol: 'http:',
+        hostnameSuffix: 'local',
+        port: '3201',
+      },
     ]);
   });
 });
@@ -95,6 +103,34 @@ describe('evaluateCorsPolicy', () => {
     expect(decision.headers?.['Access-Control-Allow-Origin']).toBe('https://console.example');
     expect(decision.headers?.['Access-Control-Allow-Methods']).toContain('POST');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Session-ID');
+  });
+
+  it('allows wildcard LAN host preflight origins with exact scheme and port semantics', () => {
+    const decision = evaluateCorsPolicy(
+      requestWithHeaders({ origin: 'http://garden.local:3201' }),
+      normalizeCorsAllowedOrigins(['http://*.local:3201']),
+      undefined,
+    );
+
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) {
+      throw new Error('Expected wildcard CORS decision to be allowed');
+    }
+    expect(decision.headers?.['Access-Control-Allow-Origin']).toBe('http://garden.local:3201');
+  });
+
+  it('denies wildcard LAN host preflight when port does not match allowlist', () => {
+    const decision = evaluateCorsPolicy(
+      requestWithHeaders({ origin: 'http://garden.local:3202' }),
+      normalizeCorsAllowedOrigins(['http://*.local:3201']),
+      undefined,
+    );
+
+    expect(decision.ok).toBe(false);
+    if (decision.ok) {
+      throw new Error('Expected wildcard CORS decision to be denied');
+    }
+    expect(decision.error.type).toBe('cors_origin_not_allowed');
   });
 });
 

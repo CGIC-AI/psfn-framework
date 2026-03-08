@@ -56,17 +56,116 @@ export interface ResolveApiPrincipalOptions {
   isTelemetryIngest: boolean;
 }
 
-export function normalizeCorsAllowedOrigins(origins: readonly string[] | undefined): Set<string> {
-  const normalized = new Set<string>();
-  if (!origins) return normalized;
+interface ParsedCorsOrigin {
+  origin: string;
+  protocol: 'http:' | 'https:';
+  hostname: string;
+  port: string;
+}
+
+export interface CorsWildcardHostPattern {
+  protocol: 'http:' | 'https:';
+  hostnameSuffix: string;
+  port: string;
+}
+
+export interface CorsAllowedOrigins {
+  exactOrigins: ReadonlySet<string>;
+  wildcardHostPatterns: readonly CorsWildcardHostPattern[];
+}
+
+function parseHttpOrigin(value: string): ParsedCorsOrigin | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return null;
+  }
+
+  if (!parsed.hostname || parsed.username || parsed.password) {
+    return null;
+  }
+
+  return {
+    origin: parsed.origin,
+    protocol: parsed.protocol,
+    hostname: parsed.hostname.toLowerCase(),
+    port: parsed.port,
+  };
+}
+
+function matchesWildcardHostPattern(origin: ParsedCorsOrigin, pattern: CorsWildcardHostPattern): boolean {
+  if (pattern.protocol !== origin.protocol) return false;
+  if (pattern.port !== origin.port) return false;
+
+  if (origin.hostname === pattern.hostnameSuffix) {
+    return false;
+  }
+
+  return origin.hostname.endsWith(`.${pattern.hostnameSuffix}`);
+}
+
+function isCorsOriginAllowlisted(origin: ParsedCorsOrigin, allowlist: CorsAllowedOrigins): boolean {
+  if (allowlist.exactOrigins.has(origin.origin)) {
+    return true;
+  }
+
+  for (const pattern of allowlist.wildcardHostPatterns) {
+    if (matchesWildcardHostPattern(origin, pattern)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function corsAllowlistIsEmpty(allowlist: CorsAllowedOrigins): boolean {
+  return allowlist.exactOrigins.size === 0 && allowlist.wildcardHostPatterns.length === 0;
+}
+
+export function normalizeCorsAllowedOrigins(origins: readonly string[] | undefined): CorsAllowedOrigins {
+  const exactOrigins = new Set<string>();
+  const wildcardHostPatterns: CorsWildcardHostPattern[] = [];
+  const wildcardPatternKeys = new Set<string>();
+  if (!origins) {
+    return { exactOrigins, wildcardHostPatterns };
+  }
 
   for (const origin of origins) {
     const trimmed = origin.trim();
     if (!trimmed || trimmed === '*') continue;
-    normalized.add(trimmed);
+
+    const parsed = parseHttpOrigin(trimmed);
+    if (!parsed || parsed.hostname === '*') continue;
+
+    if (parsed.hostname.startsWith('*.')) {
+      const hostnameSuffix = parsed.hostname.slice(2);
+      if (!hostnameSuffix || hostnameSuffix.includes('*')) continue;
+
+      const patternKey = `${parsed.protocol}//*.${hostnameSuffix}:${parsed.port}`;
+      if (!wildcardPatternKeys.has(patternKey)) {
+        wildcardPatternKeys.add(patternKey);
+        wildcardHostPatterns.push({
+          protocol: parsed.protocol,
+          hostnameSuffix,
+          port: parsed.port,
+        });
+      }
+      continue;
+    }
+
+    if (parsed.hostname.includes('*')) continue;
+    exactOrigins.add(parsed.origin);
   }
 
-  return normalized;
+  return {
+    exactOrigins,
+    wildcardHostPatterns,
+  };
 }
 
 export function isLoopbackHost(host: string): boolean {
@@ -109,7 +208,7 @@ export function appendVaryValue(existing: unknown, value: string): string {
 
 export function evaluateCorsPolicy(
   req: IncomingMessage,
-  corsAllowedOrigins: ReadonlySet<string>,
+  corsAllowedOrigins: CorsAllowedOrigins,
   existingVaryHeader: unknown,
 ): CorsPolicyDecision {
   const origin = clampHttpHeader(singleHeader(req.headers.origin), 512);
@@ -117,7 +216,8 @@ export function evaluateCorsPolicy(
     return { ok: true };
   }
 
-  if (!corsAllowedOrigins.has(origin)) {
+  const parsedOrigin = parseHttpOrigin(origin);
+  if (!parsedOrigin || !isCorsOriginAllowlisted(parsedOrigin, corsAllowedOrigins)) {
     return {
       ok: false,
       error: {
@@ -132,7 +232,7 @@ export function evaluateCorsPolicy(
     ok: true,
     headers: {
       Vary: appendVaryValue(existingVaryHeader, 'Origin'),
-      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Origin': parsedOrigin.origin,
       'Access-Control-Allow-Methods': API_CORS_ALLOWED_METHODS,
       'Access-Control-Allow-Headers': API_CORS_ALLOWED_HEADERS.join(', '),
       'Access-Control-Max-Age': '600',

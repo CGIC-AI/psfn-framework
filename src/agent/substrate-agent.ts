@@ -11,16 +11,14 @@
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
-import type { AssistantMessage, ImageContent, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type {
-  Attachment,
   AgentResponse,
   CapabilityTier,
   CorrelationMetadata,
   InferredPostTurnAction,
-  LLMContext,
   MessageModelOverride,
   ModelBudgetBlockedEvent,
   MessagePromptOverride,
@@ -57,7 +55,6 @@ import {
   resolveModelSelection,
 } from './stream-adapter.js';
 import {
-  inferImageMimeTypeFromAttachmentCandidate,
   inferRuntimeModeFromProvider,
 } from './substrate-agent-helpers.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
@@ -96,7 +93,6 @@ import {
   classifyBroadcastDraft,
   resolveBroadcastVisibilityScope,
 } from '../broadcast/safety.js';
-import { runDeliberation } from '../llm/deliberation.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import {
   parseDeferredToolHandoffActionId,
@@ -192,6 +188,14 @@ import {
   resolveAuthorContext as resolveAuthorContextForTurn,
   type ResolvedAuthorContext,
 } from './substrate-agent/runtime-context.js';
+import {
+  buildTurnUserContent,
+  hasVisionAttachments,
+} from './substrate-agent/vision-attachments.js';
+import {
+  resolveMoaSettings,
+  runMoaTurn,
+} from './substrate-agent/moa-turn.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -217,28 +221,6 @@ interface ProactiveMemoryProvider extends MemoryProvider {
     turnSnapshot?: import('../turns/snapshot.js').TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ) => Promise<string>;
-}
-
-interface VisionAttachmentFetchCapabilities {
-  webFetchBinary?: (
-    url: string,
-    options?: {
-      lane?: 'default' | 'local_crawler';
-      maxBytes?: number;
-    },
-  ) => Promise<{
-    dataBase64: string;
-    mimeType: string;
-    sizeBytes: number;
-  }>;
-}
-
-interface ResolvedMoaSettings {
-  maxRounds: number;
-  maxTokensPerRound?: number;
-  timeoutMs: number;
-  referenceModels: string[];
-  aggregatorModel?: string;
 }
 
 export interface ExtendedToolActivationResult {
@@ -300,17 +282,6 @@ export interface PromotedToolMutationResult {
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
 const TOP_EMOTION_COUNT = 3;
 const MIN_TOP_EMOTION_SCORE = 0.05;
-const VISION_ATTACHMENT_MAX_COUNT = 4;
-const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
-const VISION_ATTACHMENT_FETCH_TIMEOUT_MS = 12_000;
-const DISCORD_VISION_ATTACHMENT_HOSTS = new Set([
-  'cdn.discordapp.com',
-  'media.discordapp.net',
-]);
-const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
-  '.discordapp.com',
-  '.discordapp.net',
-];
 const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
   autoload: 1,
   extended_loaded: 2,
@@ -630,13 +601,8 @@ export class SubstrateAgent {
     }
   }
 
-  private hasVisionAttachments(message?: SubstrateMessage): boolean {
-    if (!message?.attachments || message.attachments.length === 0) return false;
-    return message.attachments.some((attachment) => this.resolveAttachmentImageContentType(attachment) !== null);
-  }
-
   private resolveTurnModelPurpose(message?: SubstrateMessage): ModelPurpose {
-    return this.hasVisionAttachments(message) ? 'vision' : 'chat';
+    return hasVisionAttachments(message) ? 'vision' : 'chat';
   }
 
   private normalizeTurnModelOverride(message?: SubstrateMessage): MessageModelOverride | null {
@@ -1853,193 +1819,6 @@ export class SubstrateAgent {
     };
   }
 
-  private async buildTurnUserContent(message: SubstrateMessage): Promise<UserMessage['content']> {
-    const imageBlocks = await this.resolveVisionImageContentBlocks(message);
-    if (imageBlocks.length === 0) return message.content;
-
-    return [
-      { type: 'text', text: message.content },
-      ...imageBlocks,
-    ];
-  }
-
-  private async resolveVisionImageContentBlocks(message: SubstrateMessage): Promise<ImageContent[]> {
-    const attachments = message.attachments ?? [];
-    if (attachments.length === 0) return [];
-
-    const imageAttachments = attachments
-      .map((attachment) => ({
-        attachment,
-        contentType: this.resolveAttachmentImageContentType(attachment),
-      }))
-      .filter((entry): entry is { attachment: Attachment; contentType: string } => entry.contentType !== null)
-      .slice(0, VISION_ATTACHMENT_MAX_COUNT);
-    if (imageAttachments.length === 0) return [];
-
-    const resolved = await Promise.all(
-      imageAttachments.map((entry) => this.resolveVisionAttachmentContent(
-        message,
-        entry.attachment,
-        entry.contentType,
-      )),
-    );
-    const blocks = resolved.filter((block): block is ImageContent => block !== null);
-    if (blocks.length === 0) {
-      log.warn('Vision image attachments present but none were resolved', {
-        channelId: message.channelId,
-        channelType: message.channelType,
-        attachmentCount: imageAttachments.length,
-        attachmentHosts: imageAttachments.map((entry) => {
-          try {
-            return new URL(entry.attachment.url).hostname;
-          } catch {
-            return 'invalid-url';
-          }
-        }),
-      });
-    }
-    return blocks;
-  }
-
-  private async resolveVisionAttachmentContent(
-    message: SubstrateMessage,
-    attachment: Attachment,
-    inferredContentType: string,
-  ): Promise<ImageContent | null> {
-    if (message.channelType !== 'discord') {
-      return null;
-    }
-
-    let attachmentUrl: URL;
-    try {
-      attachmentUrl = new URL(attachment.url);
-    } catch {
-      return null;
-    }
-    if (attachmentUrl.protocol !== 'https:' || !this.isAllowedDiscordVisionAttachmentHost(attachmentUrl.hostname)) {
-      return null;
-    }
-
-    const visionFetchCapabilities = this.llmClient as unknown as VisionAttachmentFetchCapabilities;
-    if (typeof visionFetchCapabilities.webFetchBinary === 'function') {
-      try {
-        const fetched = await visionFetchCapabilities.webFetchBinary(attachmentUrl.toString(), {
-          lane: 'default',
-          maxBytes: VISION_ATTACHMENT_MAX_BYTES,
-        });
-        const responseMimeType = fetched.mimeType
-          .split(';')[0]
-          .trim()
-          .toLowerCase();
-        if (!responseMimeType.startsWith('image/')) {
-          return null;
-        }
-        if (fetched.sizeBytes <= 0 || fetched.sizeBytes > VISION_ATTACHMENT_MAX_BYTES) {
-          return null;
-        }
-        return {
-          type: 'image',
-          data: fetched.dataBase64,
-          mimeType: responseMimeType,
-        };
-      } catch (error) {
-        log.warn('Gateway binary fetch for Discord image attachment failed', {
-          channelId: message.channelId,
-          url: attachmentUrl.toString(),
-          error: toErrorMessage(error),
-        });
-        return null;
-      }
-    }
-
-    if (this.runtimeMode === 'gateway') {
-      log.warn('Skipping Discord image attachment because direct egress is disabled in gateway mode', {
-        channelId: message.channelId,
-        url: attachmentUrl.toString(),
-      });
-      return null;
-    }
-
-    const abortController = new AbortController();
-    const timeout = setTimeout(() => abortController.abort(), VISION_ATTACHMENT_FETCH_TIMEOUT_MS);
-    try {
-      const response = await fetch(attachmentUrl.toString(), {
-        signal: abortController.signal,
-      });
-      if (!response.ok) {
-        log.debug('Skipping Discord image attachment due to fetch failure', {
-          channelId: message.channelId,
-          status: response.status,
-          url: attachmentUrl.toString(),
-        });
-        return null;
-      }
-
-      const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
-      if (Number.isFinite(reportedLength) && reportedLength > VISION_ATTACHMENT_MAX_BYTES) {
-        log.debug('Skipping Discord image attachment over byte budget', {
-          channelId: message.channelId,
-          size: reportedLength,
-          url: attachmentUrl.toString(),
-        });
-        return null;
-      }
-
-      const responseMimeType = (response.headers.get('content-type') ?? inferredContentType)
-        .split(';')[0]
-        .trim()
-        .toLowerCase();
-      if (!responseMimeType.startsWith('image/')) {
-        return null;
-      }
-
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length === 0 || bytes.length > VISION_ATTACHMENT_MAX_BYTES) {
-        return null;
-      }
-
-      return {
-        type: 'image',
-        data: bytes.toString('base64'),
-        mimeType: responseMimeType,
-      };
-    } catch (error) {
-      log.debug('Skipping Discord image attachment due to retrieval error', {
-        channelId: message.channelId,
-        url: attachmentUrl.toString(),
-        error: toErrorMessage(error),
-      });
-      return null;
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  private isAllowedDiscordVisionAttachmentHost(hostname: string): boolean {
-    const normalized = hostname.trim().toLowerCase();
-    if (!normalized) return false;
-    if (DISCORD_VISION_ATTACHMENT_HOSTS.has(normalized)) return true;
-    return DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
-  }
-
-  private resolveAttachmentImageContentType(attachment: Attachment): string | null {
-    const normalizedContentType = attachment.contentType
-      .split(';')[0]
-      .trim()
-      .toLowerCase();
-    if (normalizedContentType.startsWith('image/')) {
-      return normalizedContentType;
-    }
-
-    const candidates = [attachment.name, attachment.url];
-    for (const candidate of candidates) {
-      const inferred = inferImageMimeTypeFromAttachmentCandidate(candidate);
-      if (inferred) return inferred;
-    }
-
-    return null;
-  }
-
   // ── Steering + follow-up + lifecycle ──
 
   /** Whether the agent is currently processing a prompt */
@@ -2464,9 +2243,19 @@ export class SubstrateAgent {
       let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
       let turnIntent: string | null = null;
 
-      const moaSettings = this.resolveMoaSettings();
+      const moaSettings = resolveMoaSettings(this.config, log);
       if (moaSettings) {
-        const moaResult = await this.runMoaTurn(context, message, moaSettings, turnId, requestId, turnCallType);
+        const moaResult = await runMoaTurn({
+          llmClient: this.llmClient,
+          context,
+          message,
+          settings: moaSettings,
+          turnId,
+          requestId,
+          callType: turnCallType,
+          contextWindow: this.resolveContextWindow(),
+          emitTelemetry: (eventName, payload) => this.emitTelemetry(eventName, payload),
+        });
         firstTokenAt = Date.now();
         this.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
           ttftMs: firstTokenAt - startTime,
@@ -2528,7 +2317,12 @@ export class SubstrateAgent {
         this.activeTurnCorrelation = turnCorrelationBase;
         this.activeTurnTaskKind = taskKind ?? null;
         this.activeTurnIntent = autoloadOutcome.intent;
-        const turnUserContent = await this.buildTurnUserContent(message);
+        const turnUserContent = await buildTurnUserContent({
+          message,
+          llmClient: this.llmClient,
+          runtimeMode: this.runtimeMode,
+          logger: log,
+        });
         try {
           // Run the agent — pi-agent-core handles tool loop internally
           await runWithRequestContext(
@@ -2566,7 +2360,7 @@ export class SubstrateAgent {
 
         // Extract response from agent state (last assistant message)
         responseText = this.extractResponseText();
-        if (this.hasVisionAttachments(message) && responseText.trim().length === 0) {
+        if (hasVisionAttachments(message) && responseText.trim().length === 0) {
           const assistantMessage = this.getLatestAssistantMessage();
           log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
             channelId: message.channelId,
@@ -3489,166 +3283,6 @@ export class SubstrateAgent {
       emit: (event: string, payload: Record<string, unknown>) => Promise<void>;
     };
     await telemetryBus.emit(eventName, payload);
-  }
-
-  private resolveMoaSettings(): ResolvedMoaSettings | null {
-    if (this.config.moaEnabled !== true) return null;
-
-    const maxRoundsRaw = this.config.moaMaxRounds ?? 4;
-    const timeoutMsRaw = this.config.moaTimeoutMs ?? 45_000;
-    const maxTokensPerRoundRaw = this.config.moaMaxTokensPerRound;
-
-    if (!Number.isFinite(maxRoundsRaw) || maxRoundsRaw <= 0) {
-      log.warn('MoA disabled for turn due invalid max rounds', {
-        moaMaxRounds: this.config.moaMaxRounds,
-      });
-      return null;
-    }
-    if (!Number.isFinite(timeoutMsRaw) || timeoutMsRaw <= 0) {
-      log.warn('MoA disabled for turn due invalid timeout', {
-        moaTimeoutMs: this.config.moaTimeoutMs,
-      });
-      return null;
-    }
-    if (
-      maxTokensPerRoundRaw !== undefined
-      && (!Number.isFinite(maxTokensPerRoundRaw) || maxTokensPerRoundRaw <= 0)
-    ) {
-      log.warn('MoA disabled for turn due invalid token cap', {
-        moaMaxTokensPerRound: this.config.moaMaxTokensPerRound,
-      });
-      return null;
-    }
-
-    const referenceModels: string[] = [];
-    for (const value of this.config.moaReferenceModels ?? []) {
-      const trimmed = value.trim();
-      if (!trimmed || referenceModels.includes(trimmed)) continue;
-      referenceModels.push(trimmed);
-    }
-    const aggregatorModel = this.config.moaAggregatorModel?.trim() || undefined;
-
-    return {
-      maxRounds: Math.max(1, Math.floor(maxRoundsRaw)),
-      timeoutMs: Math.max(250, Math.floor(timeoutMsRaw)),
-      ...(maxTokensPerRoundRaw !== undefined
-        ? { maxTokensPerRound: Math.max(1, Math.floor(maxTokensPerRoundRaw)) }
-        : {}),
-      referenceModels,
-      ...(aggregatorModel ? { aggregatorModel } : {}),
-    };
-  }
-
-  private buildMoaPrompt(context: LLMContext): string {
-    const transcript = context.messages
-      .map(message => `${message.role === 'assistant' ? 'Assistant' : 'User'}:\n${message.content}`)
-      .join('\n\n');
-    return [
-      'Produce the best final assistant reply for the latest user turn.',
-      `System instructions:\n${context.systemPrompt}`,
-      transcript.length > 0 ? `Conversation transcript:\n${transcript}` : '',
-      'Return only the assistant response text to send back.',
-    ]
-      .map(section => section.trim())
-      .filter(section => section.length > 0)
-      .join('\n\n');
-  }
-
-  private async runMoaTurn(
-    context: LLMContext,
-    message: SubstrateMessage,
-    settings: ResolvedMoaSettings,
-    turnId: TurnID,
-    requestId: string,
-    callType: ObservabilityCallType,
-  ): Promise<{
-    output: string;
-    model: string;
-    turnUsage: TurnUsage;
-    rounds: number;
-    stopReason: string;
-  }> {
-    const caps = {
-      maxRounds: settings.maxRounds,
-      maxWallTimeMs: settings.timeoutMs,
-      ...(settings.maxTokensPerRound !== undefined
-        ? {
-          maxTokensPerRound: settings.maxTokensPerRound,
-          maxTotalTokens: settings.maxTokensPerRound * settings.maxRounds,
-        }
-        : {}),
-    };
-    const deliberation = await runDeliberation(
-      this.llmClient,
-      this.buildMoaPrompt(context),
-      {
-        correlation: {
-          turnId,
-          requestId,
-          channelId: message.channelId,
-          callType,
-          originType: callType,
-          originStage: 'agent.moa.turn',
-          purpose: 'agent.moa.turn',
-        },
-        ...(settings.referenceModels.length > 0 ? { referenceModels: settings.referenceModels } : {}),
-        ...(settings.aggregatorModel ? { aggregatorModel: settings.aggregatorModel } : {}),
-        caps,
-      },
-    );
-
-    const llmCalls = deliberation.rounds.reduce(
-      (sum, round) => sum + round.voices.length + (round.aggregatorModel ? 1 : 0),
-      0,
-    );
-    const peakInputTokens = deliberation.rounds.reduce(
-      (max, round) => Math.max(max, round.inputTokens),
-      0,
-    );
-    const contextWindow = this.resolveContextWindow();
-    const contextUtilization = contextWindow > 0
-      ? Math.min(100, (peakInputTokens / contextWindow) * 100)
-      : 0;
-    const lastRound = deliberation.rounds[deliberation.rounds.length - 1];
-    const model = lastRound.aggregatorModel
-      ?? lastRound.voices[lastRound.voices.length - 1].model;
-
-    const turnUsage: TurnUsage = {
-      inputTokens: deliberation.totalInputTokens,
-      outputTokens: deliberation.totalOutputTokens,
-      cacheReadTokens: 0,
-      llmCalls,
-      toolCalls: 0,
-      contextUtilization,
-      ...(deliberation.estimatedCostUsd > 0 ? { estimatedCostUsd: deliberation.estimatedCostUsd } : {}),
-    };
-
-    this.emitTelemetry('agent.moa.turn', {
-      turnId,
-      requestId,
-      channelId: message.channelId,
-      callType,
-      purpose: 'agent.moa.turn',
-      rounds: deliberation.rounds.length,
-      stopReason: deliberation.stopReason,
-      llmCalls,
-      referenceModels: settings.referenceModels,
-      aggregatorModel: settings.aggregatorModel ?? null,
-      model,
-      totalInputTokens: deliberation.totalInputTokens,
-      totalOutputTokens: deliberation.totalOutputTokens,
-      maxRounds: settings.maxRounds,
-      maxTokensPerRound: settings.maxTokensPerRound ?? null,
-      timeoutMs: settings.timeoutMs,
-    });
-
-    return {
-      output: deliberation.output,
-      model,
-      turnUsage,
-      rounds: deliberation.rounds.length,
-      stopReason: deliberation.stopReason,
-    };
   }
 
   private emitTurnStage(

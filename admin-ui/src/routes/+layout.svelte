@@ -5,6 +5,7 @@
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { navItems } from '$lib/nav';
+  import { resolveThemeMenuLabel, resolveThemeTemplate } from '$lib/theme/loader';
   import {
     getToken,
     isAuthenticated,
@@ -16,6 +17,10 @@
     ensureCompanionNameLoaded,
     getCompanionName,
   } from '$lib/stores/companion.svelte';
+  import {
+    ensureUiPreferencesLoaded,
+    getActiveThemePack,
+  } from '$lib/stores/ui-preferences.svelte';
   import { getToasts, removeToast } from '$lib/stores/toast.svelte';
 
   let { children } = $props();
@@ -24,6 +29,17 @@
   let isDesktop = $state(true);
   let mobileNavOpen = $state(false);
   const companionName = $derived(getCompanionName());
+  const activeTheme = $derived(getActiveThemePack());
+  const sidebarTitle = $derived(resolveThemeTemplate(activeTheme.ui.sidebarTitleTemplate, { companionName }));
+  const sidebarSubtitle = $derived(resolveThemeTemplate(activeTheme.ui.sidebarSubtitleTemplate, { companionName }));
+  const appTitle = $derived(resolveThemeTemplate(activeTheme.ui.appTitleTemplate, { companionName }));
+  const themedNavItems = $derived(navItems.map((item) => {
+    const labels = resolveThemeMenuLabel(activeTheme, item.id, item.defaultLabel, { companionName });
+    return {
+      ...item,
+      ...labels,
+    };
+  }));
 
   // Check if current path is the login page
   // SvelteKit strips the base path from $page.url.pathname, so we check for '/login'
@@ -41,6 +57,12 @@
       return;
     }
     void ensureCompanionNameLoaded(true);
+    void ensureUiPreferencesLoaded();
+  });
+
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    document.title = appTitle;
   });
 
   async function handleLogout() {
@@ -109,6 +131,7 @@
   onMount(() => {
     if (!isLoginPage) {
       void ensureAuthResolved();
+      void ensureUiPreferencesLoaded();
     }
 
     const mediaQuery = window.matchMedia('(min-width: 1024px)');
@@ -171,11 +194,11 @@
       <div class="p-4 border-b border-bark-300">
         {#if sidebarOpen || !isDesktop}
           <h1 class="font-serif text-xl text-gold-600 font-semibold leading-tight">
-            {companionName}'s Garden
+            {sidebarTitle}
           </h1>
-          <p class="text-sm text-shadow-600 mt-1">Admin Console</p>
+          <p class="text-sm text-shadow-600 mt-1">{sidebarSubtitle}</p>
         {:else}
-          <span class="text-gold-500 text-xl block text-center" title={`${companionName}'s Garden`}>
+          <span class="text-gold-500 text-xl block text-center" title={appTitle}>
             &#x2727;
           </span>
         {/if}
@@ -183,7 +206,7 @@
 
       <!-- Navigation -->
       <nav class="flex-1 overflow-y-auto py-2">
-        {#each navItems as item}
+        {#each themedNavItems as item}
           <a
             href={item.path}
             onclick={() => { if (!isDesktop) mobileNavOpen = false; }}
@@ -201,11 +224,13 @@
                   class:text-gold-700={isActive(item.path)}
                   class:text-shadow-700={!isActive(item.path)}
                 >
-                  {item.gardenName}
+                  {item.primaryLabel}
                 </span>
-                <span class="text-sm text-shadow-600 block">
-                  {item.technicalName}
-                </span>
+                {#if item.secondaryLabel}
+                  <span class="text-sm text-shadow-600 block">
+                    {item.secondaryLabel}
+                  </span>
+                {/if}
               </div>
             {/if}
           </a>

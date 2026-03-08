@@ -46,6 +46,7 @@
   "deepgramModel": "nova-3",
   "obsidianAutoPublish": false,
   "obsidianTimeoutMs": 10000,
+  "uiThemeId": "garden",
   "retryMaxAttempts": 3,
   "retryBaseDelayMs": 2000
 }

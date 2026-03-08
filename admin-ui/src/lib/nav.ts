@@ -1,27 +1,28 @@
 export interface NavItem {
+  id: string;
   path: string;
-  gardenName: string;
-  technicalName: string;
+  defaultLabel: string;
   icon: string;
 }
 
 export const navItems: NavItem[] = [
-  { path: '/garden', gardenName: 'The Trunk', technicalName: 'Dashboard', icon: '\u{1F333}' },
-  { path: '/garden/memory', gardenName: 'The Roots', technicalName: 'Memory', icon: '\u{1F33F}' },
-  { path: '/garden/sessions', gardenName: 'The Branches', technicalName: 'Sessions', icon: '\u{1F332}' },
-  { path: '/garden/chat', gardenName: 'The Canopy', technicalName: 'Chat', icon: '\u{1F4AC}' },
-  { path: '/garden/model-room', gardenName: 'The Atrium', technicalName: 'Model Room', icon: '\u{1F9E0}' },
-  { path: '/garden/models', gardenName: 'The Conservatory', technicalName: 'Models', icon: '\u{1F9EA}' },
-  { path: '/garden/contacts', gardenName: 'The Visitors', technicalName: 'Contacts', icon: '\u{1F6AA}' },
-  { path: '/garden/identity', gardenName: 'The Seeds', technicalName: 'Identity', icon: '\u{1F331}' },
-  { path: '/garden/prompts', gardenName: 'The Soil', technicalName: 'Prompts', icon: '\u{1FAB4}' },
-  { path: '/garden/settings', gardenName: 'The Climate', technicalName: 'Settings', icon: '\u{2600}\u{FE0F}' },
-  { path: '/garden/telemetry', gardenName: 'The Sap', technicalName: 'Events', icon: '\u{1F4A7}' },
-  { path: '/garden/tools', gardenName: 'The Shed', technicalName: 'Tools', icon: '\u{1F527}' },
-  { path: '/garden/shards', gardenName: 'The Blooms', technicalName: 'Shards', icon: '\u{1F338}' },
-  { path: '/garden/scheduler', gardenName: 'The Rhythms', technicalName: 'Scheduler', icon: '\u{23F0}' },
-  { path: '/garden/skills', gardenName: 'The Crafts', technicalName: 'Skills', icon: '\u{2728}' },
-  { path: '/garden/confirmations', gardenName: 'The Gate', technicalName: 'Confirmations', icon: '\u{1F512}' },
-  { path: '/garden/values', gardenName: 'The Journal', technicalName: 'Values', icon: '\u{1F4D6}' },
-  { path: '/garden/primer', gardenName: 'The Almanac', technicalName: 'Primer', icon: '\u{1F4DA}' },
+  { id: 'dashboard', path: '/garden', defaultLabel: 'Dashboard', icon: '\u{1F333}' },
+  { id: 'memory', path: '/garden/memory', defaultLabel: 'Memory', icon: '\u{1F33F}' },
+  { id: 'sessions', path: '/garden/sessions', defaultLabel: 'Sessions', icon: '\u{1F332}' },
+  { id: 'chat', path: '/garden/chat', defaultLabel: 'Chat', icon: '\u{1F4AC}' },
+  { id: 'model-room', path: '/garden/model-room', defaultLabel: 'Model Room', icon: '\u{1F9E0}' },
+  { id: 'models', path: '/garden/models', defaultLabel: 'Models', icon: '\u{1F9EA}' },
+  { id: 'contacts', path: '/garden/contacts', defaultLabel: 'Contacts', icon: '\u{1F6AA}' },
+  { id: 'identity', path: '/garden/identity', defaultLabel: 'Identity', icon: '\u{1F331}' },
+  { id: 'prompts', path: '/garden/prompts', defaultLabel: 'Prompts', icon: '\u{1FAB4}' },
+  { id: 'settings', path: '/garden/settings', defaultLabel: 'Settings', icon: '\u{2600}\u{FE0F}' },
+  { id: 'theme', path: '/garden/theme', defaultLabel: 'Theme', icon: '\u{1F3A8}' },
+  { id: 'telemetry', path: '/garden/telemetry', defaultLabel: 'Events', icon: '\u{1F4A7}' },
+  { id: 'tools', path: '/garden/tools', defaultLabel: 'Tools', icon: '\u{1F527}' },
+  { id: 'shards', path: '/garden/shards', defaultLabel: 'Shards', icon: '\u{1F338}' },
+  { id: 'scheduler', path: '/garden/scheduler', defaultLabel: 'Scheduler', icon: '\u{23F0}' },
+  { id: 'skills', path: '/garden/skills', defaultLabel: 'Skills', icon: '\u{2728}' },
+  { id: 'confirmations', path: '/garden/confirmations', defaultLabel: 'Confirmations', icon: '\u{1F512}' },
+  { id: 'values', path: '/garden/values', defaultLabel: 'Values', icon: '\u{1F4D6}' },
+  { id: 'primer', path: '/garden/primer', defaultLabel: 'Primer', icon: '\u{1F4DA}' },
 ];

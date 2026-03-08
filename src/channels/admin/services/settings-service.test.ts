@@ -80,6 +80,7 @@ describe('AdminSettingsDataService', () => {
       thinkMaxWallTimeMs: 125000,
       thinkMaxSubQueries: 9,
       openRouterProviderOrder: ['parasail', 'openai'],
+      uiThemeId: 'generic-dark',
     };
 
     const result = service.updateSettings(JSON.stringify(runtimeModelControls));
@@ -113,6 +114,7 @@ describe('AdminSettingsDataService', () => {
       thinkMaxTokens: 999,
       thinkMaxWallTimeMs: 1000,
       thinkMaxSubQueries: 0,
+      uiThemeId: '',
       modelCatalog: {
         primary: {
           routing: {
@@ -139,6 +141,11 @@ describe('AdminSettingsDataService', () => {
         field: 'thinkMaxSubQueries',
         message: 'thinkMaxSubQueries must be 1-100',
         code: 'out_of_range',
+      }),
+      expect.objectContaining({
+        field: 'uiThemeId',
+        message: 'uiThemeId cannot be empty',
+        code: 'required',
       }),
       expect.objectContaining({
         field: 'modelCatalog',

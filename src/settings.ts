@@ -25,6 +25,7 @@ import {
   type ModelSlotDefaults,
   type ModelSlotOverrides,
   type SubstrateConfig,
+  DEFAULT_UI_THEME_ID,
 } from './types.js';
 import {
   createDefaultCompositionalPolicyConfig,
@@ -193,6 +194,7 @@ export interface EditableSettings {
    *  auto-resolved URL derived from `API_HOST`/`API_PORT`. Useful when the
    *  API server is behind a reverse proxy or on a non-standard URL. */
   chatApiBaseUrl?: string;
+  uiThemeId?: string;
 
   // Voice / TTS (non-secret config only — API keys stay in .env)
   ttsProvider?: SubstrateConfig['ttsProvider'];
@@ -287,6 +289,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'capabilityTier',
   'promotedExtendedTools',
   'chatApiBaseUrl',
+  'uiThemeId',
   // Voice / TTS
   'ttsProvider',
   'voiceId',
@@ -1382,6 +1385,10 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
       : '';
   }
 
+  if ('uiThemeId' in settings) {
+    normalized.uiThemeId = toNonEmptyString(settings.uiThemeId) ?? DEFAULT_UI_THEME_ID;
+  }
+
   // Voice / TTS
   if ('ttsProvider' in settings) {
     const provider = normalizeTtsProvider(settings.ttsProvider);
@@ -1630,6 +1637,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     capabilityTier: config.capabilityTier ?? 'nursery',
     promotedExtendedTools: config.promotedExtendedTools ?? [],
     chatApiBaseUrl: (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl ?? null,
+    uiThemeId: toNonEmptyString(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
     // Voice / TTS
     ttsProvider: resolveRuntimeTtsProvider(config),
     voiceId: config.elevenLabsVoiceId ?? '',
@@ -1845,6 +1853,10 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if ('chatApiBaseUrl' in settings) {
     const trimmed = settings.chatApiBaseUrl?.trim() ?? '';
     (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl = trimmed || undefined;
+  }
+  if ('uiThemeId' in settings) {
+    const trimmedThemeId = settings.uiThemeId?.trim() ?? '';
+    config.uiThemeId = trimmedThemeId || DEFAULT_UI_THEME_ID;
   }
 
   // Voice / TTS
@@ -2149,6 +2161,11 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
         errors.push('chatApiBaseUrl must be a valid URL');
       }
     }
+  }
+
+  const uiThemeIdRaw = params.get('uiThemeId');
+  if (uiThemeIdRaw !== null) {
+    settings.uiThemeId = uiThemeIdRaw.trim() || DEFAULT_UI_THEME_ID;
   }
 
   const capabilityTierRaw = params.get('capabilityTier');

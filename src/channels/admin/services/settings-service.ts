@@ -458,6 +458,22 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateNonEmptyStringField(
+    payload: Record<string, unknown>,
+    field: string,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!(field in payload)) return;
+    const value = payload[field];
+    if (typeof value !== 'string') {
+      this.pushFieldError(errors, field, `${field} must be a string`, 'invalid_type');
+      return;
+    }
+    if (!value.trim()) {
+      this.pushFieldError(errors, field, `${field} cannot be empty`, 'required');
+    }
+  }
+
   private validateHttpUrlField(
     payload: Record<string, unknown>,
     field: string,
@@ -586,6 +602,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
     for (const field of SETTINGS_STRING_ARRAY_FIELDS) {
       this.validateStringArrayField(payload, field, errors);
     }
+
+    this.validateNonEmptyStringField(payload, 'uiThemeId', errors);
 
     this.validateHttpUrlField(payload, 'importProcessingLocalEndpointUrl', errors);
     this.validateHttpUrlField(payload, 'chatApiBaseUrl', errors);

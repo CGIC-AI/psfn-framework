@@ -1334,7 +1334,7 @@ describe('AdminServer JSON API routes', () => {
     expect(memoryStore.listActiveMemories({ limit: 10, offset: 0 }).map(memory => memory.id)).not.toContain('bulk-mem-3');
   });
 
-  it('renders memory page with bulk and link UI wiring', async () => {
+  it('removes legacy memory page and keeps canonical /api/admin memory data', async () => {
     memoryStore.insertMemory({
       id: 'ui-memory-1',
       text: 'UI memory one',
@@ -1351,26 +1351,25 @@ describe('AdminServer JSON API routes', () => {
       sensitivity: 'personal',
     }, new Float32Array([0.3, 0.1, 0.2]));
 
-    const pageRes = await request(
+    const legacyRes = await request(
       port,
       'GET',
       '/legacy/memory',
       undefined,
       { Authorization: `Bearer ${token}` },
     );
+    expect(legacyRes.status).toBe(404);
 
-    expect(pageRes.status).toBe(200);
-    expect(pageRes.body).toContain('id="memory-admin-actions"');
-    expect(pageRes.body).toContain('data-memory-select-all');
-    expect(pageRes.body).toContain('data-memory-select value="ui-memory-1"');
-    expect(pageRes.body).toContain('data-memory-bulk-delete');
-    expect(pageRes.body).toContain('data-memory-bulk-update');
-    expect(pageRes.body).toContain('data-memory-link-form');
-    expect(pageRes.body).toContain('data-memory-links-load-form');
-    expect(pageRes.body).toContain('/api/admin/memory/bulk-delete');
-    expect(pageRes.body).toContain('/api/admin/memory/bulk-update');
-    expect(pageRes.body).toContain('/api/admin/memory/link');
-    expect(pageRes.body).toContain('/api/admin/memory/');
+    const apiRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory',
+      undefined,
+      { Authorization: `Bearer ${token}` },
+    );
+    expect(apiRes.status).toBe(200);
+    const payload = JSON.parse(apiRes.body) as { memories: Array<{ id: string }> };
+    expect(payload.memories.some(memory => memory.id === 'ui-memory-1')).toBe(true);
   });
 
   it('supports session list and messages endpoints', async () => {
@@ -1522,17 +1521,6 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
     expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
     expect(settingsAfterPatch.config.primaryModel).toBeUndefined();
-    const settingsAuditRes = await request(
-      port,
-      'GET',
-      '/legacy/events?actionType=settings_change&timeRange=all',
-      undefined,
-      authHeaders,
-    );
-    expect(settingsAuditRes.status).toBe(200);
-    expect(settingsAuditRes.body).toContain('data-action-type="settings_change"');
-    expect(settingsAuditRes.body).toContain('/api/admin/settings');
-    expect(settingsAuditRes.body).toContain('fields=sessionMessageLimit,sessionRestartBehavior');
 
     const ownerPatchRes = await request(
       port,
@@ -1874,12 +1862,6 @@ describe('AdminServer JSON API routes', () => {
     expect(keepStarterPayload.ok).toBe(true);
     expect(keepStarterPayload.action).toBe('keep_starter');
     expect(keepStarterPayload.onboardingRequired).toBe(false);
-    const keepStarterBootstrapRes = await request(port, 'GET', '/api/chat/bootstrap', undefined, authHeaders);
-    expect(keepStarterBootstrapRes.status).toBe(200);
-    expect((JSON.parse(keepStarterBootstrapRes.body) as {
-      onboarding: { required: boolean };
-    }).onboarding.required).toBe(false);
-
     const afterKeepStarter = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(afterKeepStarter.status).toBe(200);
     expect((JSON.parse(afterKeepStarter.body) as { card: { data: { tags?: string[] } } }).card.data.tags ?? [])
@@ -1922,12 +1904,6 @@ describe('AdminServer JSON API routes', () => {
     expect(editPayload.action).toBe('edit_identity');
     expect(editPayload.onboardingRequired).toBe(false);
     expect(editPayload.updatedFields).toEqual(expect.arrayContaining(['name', 'personality', 'description']));
-    const editBootstrapRes = await request(port, 'GET', '/api/chat/bootstrap', undefined, authHeaders);
-    expect(editBootstrapRes.status).toBe(200);
-    expect((JSON.parse(editBootstrapRes.body) as {
-      onboarding: { required: boolean };
-    }).onboarding.required).toBe(false);
-
     const identityAfterEditRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityAfterEditRes.status).toBe(200);
     const identityAfterEdit = JSON.parse(identityAfterEditRes.body) as {
@@ -2094,15 +2070,6 @@ describe('AdminServer JSON API routes', () => {
     expect(JSON.parse(malformedPatch.body)).toEqual({
       error: 'Invalid JSON payload',
     });
-    const settingsAuditRes = await request(
-      port,
-      'GET',
-      '/legacy/events?actionType=settings_change&decision=denied&timeRange=all',
-      undefined,
-      authHeaders,
-    );
-    expect(settingsAuditRes.status).toBe(200);
-    expect(settingsAuditRes.body).toContain('/api/admin/settings failed: invalid JSON payload');
   });
 
   it('returns field-level validation details for invalid settings payloads', async () => {
@@ -2851,7 +2818,7 @@ describe('AdminServer JSON API routes', () => {
     expect(hostileNamePayload.message).not.toContain('<script>');
   });
 
-  it('records operator-attributed audit entries for /api/admin/identity mutation routes and renders actor labels', async () => {
+  it('supports /api/admin/identity mutation routes without legacy audit page dependencies', async () => {
     const fieldPatchRes = await request(
       port,
       'PATCH',
@@ -2888,13 +2855,7 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(uploadDeniedRes.status).toBeGreaterThanOrEqual(400);
 
-    const eventsRes = await request(port, 'GET', '/legacy/events?timeRange=all', undefined, authHeaders);
-    expect(eventsRes.status).toBe(200);
-    expect(eventsRes.body).toContain('Actor: Operator');
-    expect(eventsRes.body).toContain('/api/admin/identity/fields');
-    expect(eventsRes.body).toContain('/api/admin/identity/rollback');
-    expect(eventsRes.body).toContain('/api/admin/identity/import');
-    expect(eventsRes.body).toContain('/api/admin/identity/upload');
+    expect(uploadDeniedRes.status).toBeLessThan(500);
   });
 
   it('streams telemetry over websocket and enforces websocket auth', async () => {

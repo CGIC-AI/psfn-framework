@@ -64,7 +64,7 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
 }
 
 async function listenHttp(
-  handler: (reqUrl: string) => {
+  handler: (reqUrl: string, headers: Record<string, string | string[] | undefined>) => {
     status?: number;
     body: string | Buffer;
     contentType?: string;
@@ -72,7 +72,7 @@ async function listenHttp(
   },
 ): Promise<{ server: Server; url: string }> {
   const server = createServer((req, res) => {
-    const result = handler(req.url ?? '/');
+    const result = handler(req.url ?? '/', req.headers);
     res.statusCode = result.status ?? 200;
     res.setHeader('content-type', result.contentType ?? 'text/plain; charset=utf-8');
     if (result.headers) {
@@ -248,6 +248,46 @@ describe('registerWebMethods', () => {
       mimeType: 'image/png',
       sizeBytes: 3,
     });
+  });
+
+  it('forwards caller headers for web.fetch_binary and ignores restricted header overrides', async () => {
+    let seenHeaders: Record<string, string | string[] | undefined> | null = null;
+    const { server, url } = await listenHttp((_reqUrl, headers) => {
+      seenHeaders = headers;
+      return {
+        body: Buffer.from([9, 8, 7]),
+        contentType: 'application/octet-stream',
+      };
+    });
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+
+    await harness.invokeBinary({
+      url: `${url}/headers`,
+      lane: 'local_crawler',
+      headers: {
+        Authorization: 'Bearer test-token',
+        'X-Discovery': 'enabled',
+        Host: 'malicious.example',
+        'Content-Length': '999',
+      },
+    });
+
+    expect(seenHeaders).toBeTruthy();
+    expect(seenHeaders?.authorization).toBe('Bearer test-token');
+    expect(seenHeaders?.['x-discovery']).toBe('enabled');
+    expect(String(seenHeaders?.host ?? '')).toContain('127.0.0.1');
+    expect(seenHeaders?.['content-length']).toBeUndefined();
   });
 
   it('enforces maxBytes for web.fetch_binary', async () => {

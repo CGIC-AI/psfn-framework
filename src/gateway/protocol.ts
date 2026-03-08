@@ -84,6 +84,7 @@ export interface WebFetchBinaryParams {
   url: string;
   lane?: 'default' | 'local_crawler';
   maxBytes?: number;
+  headers?: Record<string, string>;
 }
 
 export interface FsReadParams {

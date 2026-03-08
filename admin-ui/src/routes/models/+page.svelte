@@ -7,6 +7,7 @@
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
   import type { DiscoveredModel } from '$lib/types';
+  import { buildUniqueModelId, deriveDiscoveryAutofill } from './discovery-autofill';
 
   type CanonicalModelPurpose =
     | 'chat'
@@ -110,6 +111,7 @@
   let saving = $state(false);
   let refreshingDiscovery = $state(false);
   let error = $state('');
+  let discoveryError = $state('');
   let flashMessage = $state('');
   let flashOk = $state(true);
   let validationErrors = $state<string[]>([]);
@@ -200,6 +202,16 @@
   function toFiniteNumber(value: unknown): number | undefined {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
     return undefined;
+  }
+
+  function toErrorMessage(value: unknown, fallback: string): string {
+    if (value instanceof Error && value.message.trim().length > 0) {
+      return value.message.trim();
+    }
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+    return fallback;
   }
 
   function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
@@ -401,6 +413,15 @@
         }
       } else {
         entry.identity[key] = value;
+        if (key === 'model') {
+          const normalizedModel = value.trim();
+          if (normalizedModel.length > 0) {
+            const discovered = discoveredModels.find((candidate) => candidate.id === normalizedModel);
+            if (discovered) {
+              applyDiscoveredMetadata(entry, discovered);
+            }
+          }
+        }
       }
       return entry;
     });
@@ -548,10 +569,62 @@
     };
   }
 
+  function applyDiscoveredMetadata(entry: ModelRegistryEntry, discovered: DiscoveredModel): ModelRegistryEntry {
+    const autofill = deriveDiscoveryAutofill(discovered);
+    entry.identity.model = discovered.id;
+    if (autofill.provider) {
+      entry.identity.provider = autofill.provider;
+    }
+    if (autofill.sourceType) {
+      entry.identity.source.type = autofill.sourceType;
+      entry.identity.source.label = entry.identity.source.label?.trim().length
+        ? entry.identity.source.label
+        : autofill.sourceType;
+    }
+    if (autofill.contextWindow !== undefined || autofill.maxOutputTokens !== undefined) {
+      const capabilities = isRecord(entry.capabilities) ? { ...entry.capabilities } : {};
+      if (autofill.contextWindow !== undefined) {
+        capabilities.contextWindow = autofill.contextWindow;
+      }
+      if (autofill.maxOutputTokens !== undefined) {
+        capabilities.maxOutputTokens = autofill.maxOutputTokens;
+      }
+      entry.capabilities = capabilities;
+    }
+    if (autofill.maxOutputTokens !== undefined) {
+      const tuning = isRecord(entry.tuning) ? { ...entry.tuning } : {};
+      tuning.maxOutputTokens = autofill.maxOutputTokens;
+      entry.tuning = tuning;
+    }
+    if (autofill.inputPer1MUsd !== undefined || autofill.outputPer1MUsd !== undefined) {
+      const cost = isRecord(entry.cost) ? { ...entry.cost } : {};
+      if (autofill.inputPer1MUsd !== undefined) {
+        cost.inputPer1MUsd = autofill.inputPer1MUsd;
+      }
+      if (autofill.outputPer1MUsd !== undefined) {
+        cost.outputPer1MUsd = autofill.outputPer1MUsd;
+      }
+      entry.cost = cost;
+    }
+    return entry;
+  }
+
   function addModel(): void {
     const nextModels = resequenceRanks([...models, createModelTemplate()]);
     models = nextModels;
     expandedModelIds = new Set([...expandedModelIds, nextModels[nextModels.length - 1].id]);
+  }
+
+  function addDiscoveredModel(discovered: DiscoveredModel): void {
+    const existingIds = new Set(models.map((entry) => entry.id));
+    const entry = applyDiscoveredMetadata(createModelTemplate(), discovered);
+    entry.id = buildUniqueModelId(discovered.id, existingIds);
+
+    const nextModels = resequenceRanks([...models, entry]);
+    models = nextModels;
+    expandedModelIds = new Set([...expandedModelIds, entry.id]);
+    flashOk = true;
+    flashMessage = `Added ${discovered.id} with discovery autofill.`;
   }
 
   function removeModel(index: number): void {
@@ -706,11 +779,16 @@
 
   async function loadPageData(): Promise<void> {
     error = '';
+    discoveryError = '';
     validationErrors = [];
-    const [modelsRaw, discovered] = await Promise.all([
-      getModelsConfigRaw(),
-      listDiscoveredModels().catch(() => [] as DiscoveredModel[]),
-    ]);
+    const modelsRaw = await getModelsConfigRaw();
+    let discovered: DiscoveredModel[] = [];
+    try {
+      discovered = await listDiscoveredModels();
+    } catch (discoveryLoadError) {
+      discovered = [];
+      discoveryError = toErrorMessage(discoveryLoadError, 'Model discovery unavailable');
+    }
     const registry = parseRegistry(modelsRaw);
     models = registry.models;
     budgetPolicy = registry.budgetPolicy ?? { ...DEFAULT_BUDGET_POLICY };
@@ -726,11 +804,14 @@
     try {
       await refreshDiscoveredModels();
       discoveredModels = await listDiscoveredModels();
+      discoveryError = '';
       flashOk = true;
       flashMessage = `Discovered ${discoveredModels.length} model(s).`;
     } catch (refreshError) {
+      discoveredModels = [];
+      discoveryError = toErrorMessage(refreshError, 'Model discovery unavailable');
       flashOk = false;
-      flashMessage = refreshError instanceof Error ? refreshError.message : 'Model refresh failed';
+      flashMessage = discoveryError;
     } finally {
       refreshingDiscovery = false;
     }
@@ -1178,8 +1259,11 @@
         <div class="card-garden p-4 space-y-3">
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Discovered Models</h2>
           <p class="text-sm text-shadow-600">
-            Discovery uses the provider proxy. Use IDs from this list in each model entry.
+            Discovery uses the provider proxy. Add directly from this list to autofill provider, limits, and pricing.
           </p>
+          {#if discoveryError}
+            <p class="text-sm text-wilt-600">{discoveryError}</p>
+          {/if}
           {#if discoveredModels.length === 0}
             <p class="text-sm text-shadow-500">No models discovered yet.</p>
           {:else}
@@ -1187,12 +1271,21 @@
               {#each discoveredModels as discovered}
                 <div class="rounded-lg border border-bark-200 bg-bark-50 px-3 py-2">
                   <p class="font-mono text-xs text-shadow-800 break-all">{discovered.id}</p>
+                  {#if discovered.description}
+                    <p class="text-xs text-shadow-600 mt-1">{discovered.description}</p>
+                  {/if}
                   <p class="text-xs text-shadow-500 mt-1">
                     {#if discovered.contextLength}ctx {discovered.contextLength.toLocaleString()}{/if}
                     {#if discovered.maxCompletionTokens}
                       {discovered.contextLength ? ' · ' : ''}max out {discovered.maxCompletionTokens.toLocaleString()}
                     {/if}
                   </p>
+                  <button
+                    onclick={() => addDiscoveredModel(discovered)}
+                    class="mt-2 px-2.5 py-1 text-xs font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-100 transition-colors"
+                  >
+                    + Add + Autofill
+                  </button>
                 </div>
               {/each}
             </div>

@@ -153,9 +153,29 @@ function loadTlsBundle(paths: readonly string[]): string | undefined {
   return bundle;
 }
 
+function normalizeRequestHeaders(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object') return {};
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length === 0) return {};
+
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of entries) {
+    const headerName = name.trim();
+    if (!headerName) continue;
+    if (/^host$/i.test(headerName) || /^content-length$/i.test(headerName)) {
+      continue;
+    }
+    if (typeof value !== 'string') continue;
+    const headerValue = value.trim();
+    if (!headerValue) continue;
+    normalized[headerName] = headerValue;
+  }
+  return normalized;
+}
+
 async function requestText(
   url: string,
-  options: { tlsCaBundle?: string; connectAddress?: string },
+  options: { tlsCaBundle?: string; connectAddress?: string; headers?: Record<string, string> },
 ): Promise<ResponseLike> {
   const parsed = new URL(url);
   const isHttps = parsed.protocol === 'https:';
@@ -168,6 +188,7 @@ async function requestText(
     && options.connectAddress.length > 0
     && isIP(originalHostname) === 0;
   const headers: Record<string, string> = {
+    ...normalizeRequestHeaders(options.headers),
     'User-Agent': WEB_FETCH_USER_AGENT,
   };
   if (options.connectAddress) {
@@ -255,6 +276,7 @@ async function fetchWithPolicyChecks(
   lane: UrlPolicyLane,
   urlPolicyConfig: UrlPolicyConfig,
   tlsCaBundle: string | undefined,
+  requestHeaders: Record<string, string>,
   dnsResolver?: DnsResolver,
 ): Promise<ResponseLike> {
   const urlCheck = evaluateUrlPolicy(url, urlPolicyConfig, lane);
@@ -290,6 +312,7 @@ async function fetchWithPolicyChecks(
     return await requestText(url, {
       tlsCaBundle,
       connectAddress,
+      headers: requestHeaders,
     });
   } catch (err) {
     throw new JSONRPCErrorException(
@@ -339,6 +362,7 @@ async function fetchWithValidatedRedirectChain(
   lane: UrlPolicyLane,
   urlPolicyConfig: UrlPolicyConfig,
   tlsCaBundle: string | undefined,
+  requestHeaders: Record<string, string>,
   runtime: GatewayMethodRuntime,
   dnsResolver?: DnsResolver,
 ): Promise<RedirectChainFetchResult> {
@@ -356,6 +380,7 @@ async function fetchWithValidatedRedirectChain(
         lane,
         urlPolicyConfig,
         tlsCaBundle,
+        requestHeaders,
         dnsResolver,
       );
       if (!isRedirectStatus(response.status)) {
@@ -454,6 +479,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         lane,
         urlPolicyConfig,
         tlsCaBundle,
+        {},
         runtime,
         dnsResolver,
       );
@@ -482,6 +508,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const maxBytes = normalizeBinaryMaxBytes(params.maxBytes);
       const dnsResolver = resolveDnsResolver(runtime);
+      const requestHeaders = normalizeRequestHeaders(params.headers);
 
       let tlsCaBundle: string | undefined;
       try {
@@ -499,6 +526,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         lane,
         urlPolicyConfig,
         tlsCaBundle,
+        requestHeaders,
         runtime,
         dnsResolver,
       );

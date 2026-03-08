@@ -452,8 +452,9 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
         deps.handlers.domains.settings.modelListJson().then(
           (json) => sendText(res, 200, json, { 'Content-Type': 'application/json' }),
           (error) => {
-            deps.logError('Model list error', { error: String(error) });
-            sendText(res, 500, '[]', { 'Content-Type': 'application/json' });
+            const message = error instanceof Error ? error.message : String(error);
+            deps.logError('Model list error', { error: message });
+            sendText(res, 503, JSON.stringify({ error: message }), { 'Content-Type': 'application/json' });
           },
         );
       },
@@ -465,8 +466,9 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
         deps.handlers.domains.settings.refreshModels().then(
           (json) => sendText(res, 200, json, { 'Content-Type': 'application/json' }),
           (error) => {
-            deps.logError('Model refresh error', { error: String(error) });
-            sendText(res, 200, '[]', { 'Content-Type': 'application/json' });
+            const message = error instanceof Error ? error.message : String(error);
+            deps.logError('Model refresh error', { error: message });
+            sendText(res, 503, JSON.stringify({ error: message }), { 'Content-Type': 'application/json' });
           },
         );
       },

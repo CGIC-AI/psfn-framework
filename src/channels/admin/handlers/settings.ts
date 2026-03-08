@@ -325,16 +325,20 @@ export class AdminSettingsHandlers {
 
   async modelListJson(): Promise<string> {
     const legacy = this.legacy as any;
-    if (!legacy.modelDiscovery) return '[]';
-    const models = await legacy.modelDiscovery.getAvailableModels().catch(() => []);
+    if (!legacy.modelDiscovery) {
+      throw new Error('Model discovery backend unavailable');
+    }
+    const models = await legacy.modelDiscovery.getAvailableModels();
     return JSON.stringify(models);
   }
 
   async refreshModels(): Promise<string> {
     const legacy = this.legacy as any;
-    if (!legacy.modelDiscovery) return '[]';
+    if (!legacy.modelDiscovery) {
+      throw new Error('Model discovery backend unavailable');
+    }
     legacy.modelDiscovery.invalidateCache();
-    const models = await legacy.modelDiscovery.getAvailableModels().catch(() => []);
+    const models = await legacy.modelDiscovery.getAvailableModels();
     return JSON.stringify(models);
   }
 }

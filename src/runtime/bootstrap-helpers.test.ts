@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { CapabilityToken } from '../capabilities/tokens.js';
-import type { SubstrateConfig } from '../types.js';
+import type { CanonicalModelRegistry, SubstrateConfig } from '../types.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,
@@ -79,6 +79,35 @@ function makeStartupHydrationConfig(
       },
     },
   };
+}
+
+function makeCanonicalModelsConfigForChatOverride(
+  model: string,
+  provider: string,
+  maxOutputTokens: number,
+  contextWindow: number,
+): CanonicalModelRegistry {
+  const seeded = JSON.parse(readFileSync('config/models.seed.json', 'utf8')) as CanonicalModelRegistry;
+  const cloned = structuredClone(seeded);
+  const primary = cloned.models.find((entry) => entry.id === 'primary');
+  if (!primary) {
+    throw new Error('models.seed.json missing primary model');
+  }
+
+  primary.id = 'chatslot';
+  primary.identity.model = model;
+  primary.identity.provider = provider;
+  primary.capabilities = {
+    ...(primary.capabilities ?? {}),
+    maxOutputTokens,
+    contextWindow,
+  };
+  primary.tuning = {
+    ...(primary.tuning ?? {}),
+    maxOutputTokens,
+  };
+
+  return cloned;
 }
 
 describe('resolveRuntimeVoiceSttProvider', () => {
@@ -973,18 +1002,12 @@ describe('hydrateCanonicalStartupConfig', () => {
       sessionMessageLimit: 44,
       memoryRetrievalLimit: 11,
     });
-    saveModelsConfig(systemDataDir, {
-      modelCatalog: {
-        chatslot: {
-          model: 'openai/gpt-4.1-mini',
-          provider: 'openrouter',
-          defaults: {
-            maxTokens: 2048,
-            contextWindow: 65_536,
-          },
-        },
-      },
-    });
+    saveModelsConfig(systemDataDir, makeCanonicalModelsConfigForChatOverride(
+      'openai/gpt-4.1-mini',
+      'openrouter',
+      2048,
+      65_536,
+    ));
     saveSchedulerConfig(systemDataDir, {
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
@@ -1028,18 +1051,12 @@ describe('hydrateCanonicalStartupConfig', () => {
       sessionMessageLimit: 41,
       memoryRetrievalLimit: 17,
     });
-    saveModelsConfig(systemDataDir, {
-      modelCatalog: {
-        chatslot: {
-          model: 'openai/gpt-4.1-mini',
-          provider: 'openrouter',
-          defaults: {
-            maxTokens: 3072,
-            contextWindow: 131_072,
-          },
-        },
-      },
-    });
+    saveModelsConfig(systemDataDir, makeCanonicalModelsConfigForChatOverride(
+      'openai/gpt-4.1-mini',
+      'openrouter',
+      3072,
+      131_072,
+    ));
     saveSchedulerConfig(systemDataDir, {
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 7_000,

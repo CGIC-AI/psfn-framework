@@ -31,6 +31,12 @@ function resolveStateFile() {
   return configured.length > 0 ? configured : DEFAULT_STATE_FILE;
 }
 
+function resolveWatchdogApiKey() {
+  const configured = trimString(process.env.CONTINUITY_WATCHDOG_API_KEY);
+  if (configured.length > 0) return configured;
+  return trimString(process.env.API_KEY);
+}
+
 function toReasonFromPayload(payload) {
   if (!payload || typeof payload !== 'object') {
     return 'Health endpoint returned a non-object payload';
@@ -67,17 +73,19 @@ function toReasonFromPayload(payload) {
   return null;
 }
 
-async function fetchHealth(url, timeoutMs) {
+async function fetchHealth(url, timeoutMs, apiKey) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = {
+    accept: 'application/json',
+    ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+  };
 
   try {
     const response = await fetch(url, {
       method: 'GET',
       signal: controller.signal,
-      headers: {
-        accept: 'application/json',
-      },
+      headers,
     });
 
     let payload = null;
@@ -167,8 +175,9 @@ async function main() {
   const timeoutMs = parsePositiveInt(process.env.CONTINUITY_WATCHDOG_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
   const maxFailures = parsePositiveInt(process.env.CONTINUITY_WATCHDOG_MAX_FAILURES, DEFAULT_MAX_FAILURES);
   const stateFile = resolveStateFile();
+  const apiKey = resolveWatchdogApiKey();
 
-  const result = await fetchHealth(endpoint, timeoutMs);
+  const result = await fetchHealth(endpoint, timeoutMs, apiKey);
   if (result.ok) {
     await clearFailureState(stateFile);
     console.error('[continuity-watchdog] Health contract OK');

@@ -62,7 +62,7 @@ docker compose -f docker/docker-compose.production.yml config
 
 Continuity watchdog behavior in both compose profiles:
 
-- API health server is enabled on loopback (`API_PORT`, default `3000`) with local-only insecure auth (`ALLOW_INSECURE_LOCAL_API=true`) for in-container probes.
+- API health server is enabled on loopback (`API_PORT`, default `3000`), and the watchdog probes `GET /health` with bearer auth when an API key is configured.
 - Docker `healthcheck` runs `node /app/scripts/ops/continuity-watchdog-healthcheck.mjs`.
 - Probe contract requires `/health` to report continuity checks as healthy for:
   - `database`
@@ -70,9 +70,26 @@ Continuity watchdog behavior in both compose profiles:
   - `schedulerHeartbeat`
 - After `CONTINUITY_WATCHDOG_MAX_FAILURES` consecutive probe failures (default `5`), the watchdog sends `SIGTERM` to PID `1`; restart policy `unless-stopped` relaunches the container.
 
+Auth mode expectations:
+
+- Secure/authenticated mode:
+  - Set `API_KEY` and keep `ALLOW_INSECURE_LOCAL_API=false`.
+  - Optionally set `CONTINUITY_WATCHDOG_API_KEY` (if unset, watchdog uses `API_KEY`).
+  - Watchdog sends `Authorization: Bearer <watchdog key>` to `/health`.
+- Insecure-local mode:
+  - Set `ALLOW_INSECURE_LOCAL_API=true`.
+  - Leave `API_KEY` and `CONTINUITY_WATCHDOG_API_KEY` unset.
+  - Watchdog probes `/health` without auth headers.
+
+Compose defaults:
+
+- `docker/docker-compose.yml` (continuous): `ALLOW_INSECURE_LOCAL_API=true` by default for local/dev.
+- `docker/docker-compose.production.yml` (production): `ALLOW_INSECURE_LOCAL_API=false` by default; provide `API_KEY` to boot successfully.
+
 Key tuning env vars:
 
 - `API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS` (default `3900000` / 65m)
+- `CONTINUITY_WATCHDOG_API_KEY` (optional; falls back to `API_KEY`)
 - `CONTINUITY_WATCHDOG_TIMEOUT_MS` (default `5000`)
 - `CONTINUITY_WATCHDOG_MAX_FAILURES` (default `5`)
 - `CONTINUITY_WATCHDOG_STATE_FILE` (default `/tmp/psfn-continuity-watchdog-state.json`)

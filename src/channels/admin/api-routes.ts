@@ -1016,6 +1016,37 @@ export function buildAdminApiRoutes(options: {
         });
       },
     },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/prompts/constitution'),
+      handle: (_req, res) => {
+        const snapshot = promptsService.getConstitutionSnapshot();
+        if (!snapshot) {
+          sendJson(res, 400, { error: 'Prompt store not configured' });
+          return;
+        }
+        sendJson(res, 200, snapshot);
+      },
+    },
+    {
+      method: 'PUT',
+      match: exactPath('/api/admin/prompts/constitution'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = promptsService.saveConstitutionMutableLayers(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
     // Sub-path routes MUST be before generic prefixed param routes
     {
       method: 'POST',

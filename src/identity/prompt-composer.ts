@@ -32,7 +32,7 @@ const SOURCE_BLOCK_SHA256_TAG_PREFIX_PATTERN = /<source_block_sha256\b/i;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const CONSTITUTION_PRECEDENCE_HEADER = '[Constitution Precedence]';
 export const IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER = '[Immutable Human-Safety Amendments]';
-const COMPANION_VALUES_LAYER_HEADER = '[Companion-Derived Values Layer]';
+export const COMPANION_VALUES_LAYER_HEADER = '[Companion-Derived Values Layer]';
 export const IMMUTABLE_HUMAN_SAFETY_AMENDMENTS = Object.freeze([
   'Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.',
   'Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.',
@@ -68,7 +68,7 @@ function hashText(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 16);
 }
 
-function buildImmutableHumanSafetySection(): string {
+export function buildImmutableHumanSafetySection(): string {
   return [
     IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
     ...IMMUTABLE_HUMAN_SAFETY_AMENDMENTS.map((amendment, index) => `${String(index + 1)}. ${amendment}`),
@@ -248,6 +248,7 @@ export class PromptComposer {
   private manager: PromptManager;
   private readonly enableConstitution: boolean;
   private readonly companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
+  private readonly persistLastKnownGoodSnapshot: boolean;
   private lastKnownGood: ComposeSplitResult | null = null;
   private lastKnownGoodPath: string;
 
@@ -261,6 +262,7 @@ export class PromptComposer {
     this.manager = manager;
     this.enableConstitution = options.enableConstitution === true;
     this.companionValuesLayerProvider = options.companionValuesLayerProvider;
+    this.persistLastKnownGoodSnapshot = options.persistLastKnownGood !== false;
     this.lastKnownGoodPath = lastKnownGoodPath ?? join(dirname(this.store.layerFilePath), LAST_KNOWN_GOOD_FILENAME);
     this.lastKnownGood = this.ensureConstitutionPrefix(this.loadPersistedLastKnownGood());
   }
@@ -369,7 +371,7 @@ export class PromptComposer {
       const shouldPersist = !this.lastKnownGood || !composeSplitResultsEqual(this.lastKnownGood, result);
       const normalizedResult = this.ensureConstitutionPrefix(result) ?? result;
       this.lastKnownGood = normalizedResult;
-      if (shouldPersist) {
+      if (this.persistLastKnownGoodSnapshot && shouldPersist) {
         this.persistLastKnownGood(normalizedResult);
       }
     }

@@ -288,6 +288,42 @@ export interface AdminPromptListData {
   staticPrompts: PromptRegistryEntry[];
 }
 
+export interface AdminConstitutionImmutableBlock {
+  id: string;
+  title: string;
+  content: string;
+  editable: false;
+}
+
+export interface AdminConstitutionCompanionLayer {
+  id: string;
+  title: string;
+  content: string;
+  provenanceRefs: string[];
+  historyVersions: number[];
+  entryIds: string[];
+  editable: false;
+}
+
+export interface AdminConstitutionMutableLayer extends PromptLayer {
+  editable: boolean;
+  readOnlyReason?: string;
+}
+
+export interface AdminConstitutionPreview {
+  text: string;
+  hash: string;
+  staticPrefix: string;
+  dynamicSuffix: string;
+}
+
+export interface AdminConstitutionSnapshotData {
+  immutableBlocks: AdminConstitutionImmutableBlock[];
+  companionLayer: AdminConstitutionCompanionLayer | null;
+  mutableLayers: AdminConstitutionMutableLayer[];
+  preview: AdminConstitutionPreview;
+}
+
 export interface AdminPromptDetailData {
   layer?: PromptLayer;
   layerHistory?: PromptHistoryEntry[];
@@ -302,8 +338,16 @@ export interface PromptUpdateResult {
   staticPrompt?: PromptRegistryEntry;
 }
 
+export interface ConstitutionUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: AdminConstitutionSnapshotData;
+}
+
 export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
+  getConstitutionSnapshot(): AdminConstitutionSnapshotData | null;
+  saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult;
   getPromptDetail(layerId: string): AdminPromptDetailData | null;
   getStaticPromptDetail(key: string): AdminPromptDetailData | null;
   createPromptLayer(body: string): PromptUpdateResult;

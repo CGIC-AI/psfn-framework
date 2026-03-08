@@ -129,20 +129,21 @@ export class AdminServer implements Lifecycle {
       importIdentityCardHtml: (body) => this.handlers.domains.identity.importIdentityCard(body),
       promptStore: config.promptStore,
     });
+    const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
+    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
+      legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
+    });
     this.promptsService = new AdminPromptsDataService({
       promptStore: config.promptStore,
       promptRegistry: config.promptRegistry,
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
       resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),
+      companionValuesLayerProvider: () => this.valuesJournal.buildCompanionDerivedLayer(),
     });
     this.adaptiveToolsService = new AdminAdaptiveToolsDataService({
       eventBus: config.eventBus,
       stateProvider: config.adaptiveToolsStateProvider ?? null,
-    });
-    const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
-    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
-      legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
     });
     this.scheduler = config.scheduler;
     this.schedulerService = new AdminSchedulerService(config.scheduler, config.config.dataDir);

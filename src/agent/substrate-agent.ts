@@ -10,7 +10,7 @@
 
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
-import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type {
@@ -61,9 +61,6 @@ import {
   type RuntimeMode,
 } from './tool-wiring-validator.js';
 import {
-  isDeferredToolHandoffMessageId,
-} from './deferred-tool-handoff.js';
-import {
   type ExtendedToolAutoloadPolicy,
 } from './extended-tool-autoload-policy.js';
 import type {
@@ -71,7 +68,6 @@ import type {
 } from './adaptive-tools-telemetry.js';
 import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot } from '../turns/snapshot.js';
-import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
 import { EmotionState } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
@@ -100,7 +96,6 @@ import {
 import {
   buildActiveConcernsContextBlock as buildActiveConcernsContextBlockForTurn,
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
-  buildMetacognitiveNotesContextBlock as buildMetacognitiveNotesContextBlockForTurn,
   buildPromptTemplateVariables as buildPromptTemplateVariablesForTurn,
   buildRuntimeContext as buildRuntimeContextForTurn,
   buildScratchpadContextBlock as buildScratchpadContextBlockForTurn,
@@ -121,11 +116,19 @@ import {
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import {
-  getTurnModelSignature as getTurnModelSignatureForRuntime,
-  normalizeTurnModelOverride as normalizeTurnModelOverrideForRuntime,
   refreshModelFromConfig as refreshModelFromConfigForRuntime,
-  resolveTurnModelPurpose as resolveTurnModelPurposeForRuntime,
 } from './substrate-agent/model-runtime.js';
+import {
+  buildTurnBudgetCharacteristics as buildTurnBudgetCharacteristicsForRuntime,
+  resolveChannelType as resolveChannelTypeForRuntime,
+  resolveTaskKind as resolveTaskKindForRuntime,
+} from './substrate-agent/channel-routing-runtime.js';
+import {
+  deriveCharacterName as deriveCharacterNameForRuntime,
+  extractResponseText as extractResponseTextForRuntime,
+  getLatestAssistantMessage as getLatestAssistantMessageForRuntime,
+  resolveContextWindow as resolveContextWindowForRuntime,
+} from './substrate-agent/agent-state-runtime.js';
 import {
   ToolRuntimeFacade,
   type PromotedToolMutationResult,
@@ -257,7 +260,7 @@ export class SubstrateAgent {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.systemPrompt = systemPrompt;
-    this.characterName = options?.characterName?.trim() || this.deriveCharacterName(systemPrompt);
+    this.characterName = options?.characterName?.trim() || deriveCharacterNameForRuntime(systemPrompt);
     const fallbackPromptVariables = { ...(options?.characterPromptVariables ?? {}) };
     this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
@@ -296,7 +299,10 @@ export class SubstrateAgent {
       eventBus: this.eventBus,
       sessionManager: this.sessionManager,
       hashPromptText: (text) => this.hashPromptText(text),
-      resolveContextWindow: () => this.resolveContextWindow(),
+      resolveContextWindow: () => resolveContextWindowForRuntime(
+        this.config,
+        this.agent.state.model as { contextWindow?: unknown } | undefined,
+      ),
     });
     this.toolRuntimeFacade = new ToolRuntimeFacade({
       config: this.config,
@@ -418,14 +424,6 @@ export class SubstrateAgent {
     });
   }
 
-  private resolveTurnModelPurpose(message?: SubstrateMessage) {
-    return resolveTurnModelPurposeForRuntime(message);
-  }
-
-  private normalizeTurnModelOverride(message?: SubstrateMessage) {
-    return normalizeTurnModelOverrideForRuntime(message);
-  }
-
   private normalizeTurnPromptOverride(message: SubstrateMessage): MessagePromptOverride {
     const raw = message.routing?.promptOverride;
     if (!raw) {
@@ -461,10 +459,6 @@ export class SubstrateAgent {
       meta: channelMeta,
       overrides: this.config.responseStyleOverrides,
     });
-  }
-
-  private getTurnModelSignature(message?: SubstrateMessage): string {
-    return getTurnModelSignatureForRuntime(this.config, message);
   }
 
   private refreshModelFromConfig(
@@ -673,10 +667,13 @@ export class SubstrateAgent {
       turnSupportRuntime: this.turnSupportRuntime,
       toolRuntimeFacade: this.toolRuntimeFacade,
       callbacks: {
-        resolveTaskKind: (turnMessage) => this.resolveTaskKind(turnMessage),
-        buildTurnBudgetCharacteristics: (turnMessage, taskKind) => this.buildTurnBudgetCharacteristics(turnMessage, taskKind),
+        resolveTaskKind: (turnMessage) => resolveTaskKindForRuntime(turnMessage, this.channelRegistry),
+        buildTurnBudgetCharacteristics: (turnMessage, taskKind) => buildTurnBudgetCharacteristicsForRuntime(
+          turnMessage,
+          taskKind,
+        ),
         resolveAuthorContext: (turnMessage) => this.resolveAuthorContext(turnMessage),
-        resolveChannelType: (turnMessage) => this.resolveChannelType(turnMessage),
+        resolveChannelType: (turnMessage) => resolveChannelTypeForRuntime(turnMessage, this.channelRegistry),
         ensureModel: (turnMessage) => this.ensureModel(turnMessage),
         captureTurnPromptSnapshot: (ctx) => this.captureTurnPromptSnapshot(ctx),
         buildScratchpadContextBlock: () => this.buildScratchpadContextBlock(),
@@ -752,9 +749,15 @@ export class SubstrateAgent {
           metacognitiveFlags,
           templateVariables,
         ),
-        resolveContextWindow: () => this.resolveContextWindow(),
-        extractResponseText: () => this.extractResponseText(),
-        getLatestAssistantMessage: () => this.getLatestAssistantMessage(),
+        resolveContextWindow: () => resolveContextWindowForRuntime(
+          this.config,
+          this.agent.state.model as { contextWindow?: unknown } | undefined,
+        ),
+        extractResponseText: () => extractResponseTextForRuntime({
+          assistantMessage: getLatestAssistantMessageForRuntime(this.agent.state.messages),
+          logger: log,
+        }),
+        getLatestAssistantMessage: () => getLatestAssistantMessageForRuntime(this.agent.state.messages),
       },
     }), message);
   }
@@ -812,75 +815,6 @@ export class SubstrateAgent {
     return hashPromptTextForTurn(text);
   }
 
-  private resolveContextWindow(): number {
-    // Config-level contextWindow takes precedence (user-configured via settings).
-    // Only fall back to model-object contextWindow for per-turn overrides,
-    // since LiteLLM models always bake in a 128k default.
-    const configWindow = this.config.modelRoster.chat?.contextWindow ?? this.config.defaultContextWindow;
-    if (configWindow > 0) return configWindow;
-    const runtimeWindow = (this.agent.state.model as { contextWindow?: unknown } | undefined)?.contextWindow;
-    if (typeof runtimeWindow === 'number' && Number.isFinite(runtimeWindow) && runtimeWindow > 0) {
-      return runtimeWindow;
-    }
-    return 128_000; // sensible fallback
-  }
-
-  private getLatestAssistantMessage(): AssistantMessage | null {
-    const messages = this.agent.state.messages;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if ((msg as unknown as { role: string }).role === 'assistant') {
-        return msg as unknown as AssistantMessage;
-      }
-    }
-    return null;
-  }
-
-  /** Extract text from the last assistant message in Agent state */
-  private extractResponseText(): string {
-    const assistantMessage = this.getLatestAssistantMessage();
-    if (!assistantMessage) {
-      log.warn('No assistant message found in agent state after prompt');
-      return '';
-    }
-
-    const content = assistantMessage.content;
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-      const textParts = content
-        .filter((b: any) => b.type === 'text')
-        .map((b: any) => b.text)
-        .join('');
-      if (!textParts) {
-        const thinkingParts = content.filter((b: any) => b.type === 'thinking');
-        if (thinkingParts.length) {
-          log.warn('Assistant produced thinking but no text content', {
-            thinkingBlocks: thinkingParts.length,
-            blockTypes: content.map((b: any) => b.type),
-            stopReason: assistantMessage.stopReason,
-            errorMessage: assistantMessage.errorMessage ?? null,
-          });
-        } else {
-          log.warn('Assistant message has no text content blocks', {
-            blockTypes: content.map((b: any) => b.type),
-            stopReason: assistantMessage.stopReason,
-            errorMessage: assistantMessage.errorMessage ?? null,
-          });
-        }
-      }
-      return textParts;
-    }
-
-    log.warn('No assistant message found in agent state after prompt');
-    return '';
-  }
-  private deriveCharacterName(systemPrompt: string): string {
-    const firstLine = systemPrompt.split('\n')[0]?.trim() ?? '';
-    const match = firstLine.match(/^You are\s+(.+?)\.?$/i);
-    const candidate = match?.[1]?.trim();
-    return candidate && candidate.length > 0 ? candidate : 'Assistant';
-  }
-
   private buildPromptTemplateVariables(
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -935,7 +869,10 @@ export class SubstrateAgent {
       metacognitiveFlags,
       emotionAppraisalChain,
       modelId: this.agent.state.model.id,
-      contextWindow: this.resolveContextWindow(),
+      contextWindow: resolveContextWindowForRuntime(
+        this.config,
+        this.agent.state.model as { contextWindow?: unknown } | undefined,
+      ),
       capabilityTier: this.resolveCapabilityAccess().getTier(),
       activeToolCounts,
       extendedTools: [...this.toolRuntimeFacade.getExtendedTools()],
@@ -957,10 +894,6 @@ export class SubstrateAgent {
     });
   }
 
-  private buildMetacognitiveNotesContextBlock(): string {
-    return buildMetacognitiveNotesContextBlockForTurn(this.currentMetacognitiveFlags);
-  }
-
   private buildBehavioralNotesContextBlock(canonicalContactKey?: string): string {
     return buildBehavioralNotesContextBlockForTurn({
       behavioralPatternProvider: this.behavioralPatternProvider,
@@ -974,74 +907,6 @@ export class SubstrateAgent {
       scratchpadProvider: this.scratchpadProvider,
       logger: log,
     });
-  }
-
-  /** Map message channel info to a channelType string for prompt composition */
-  private resolveChannelPromptDock(message: SubstrateMessage): ChannelPromptDock | undefined {
-    const fromChannelType = this.channelRegistry.get(message.channelType);
-    if (fromChannelType) return fromChannelType;
-
-    const separatorIndex = message.channelId.indexOf(':');
-    if (separatorIndex > 0) {
-      const prefix = message.channelId.slice(0, separatorIndex);
-      const fromPrefix = this.channelRegistry.get(prefix);
-      if (fromPrefix) return fromPrefix;
-    }
-
-    if (message.channelId.startsWith('discord-voice:')) {
-      return this.channelRegistry.get('discord');
-    }
-    return undefined;
-  }
-
-  /** Map message channel info to a channelType string for prompt composition */
-  private resolveChannelType(message: SubstrateMessage): string | undefined {
-    const channelDock = this.resolveChannelPromptDock(message);
-    const adapterType = channelDock?.prompt?.resolveChannelType(message);
-    if (adapterType) return adapterType;
-    if (channelDock?.capabilities.promptChannelType) {
-      return channelDock.capabilities.promptChannelType;
-    }
-
-    if (message.channelId.startsWith('discord-voice:')) return 'discord_voice';
-    if (message.channelId.startsWith('api:')) return 'api';
-    if (message.channelId.startsWith('internal:')) return 'internal';
-    if (message.channelType === 'discord') return 'discord_text';
-    return undefined;
-  }
-
-  /** Map internal channel/task context to prompt taskKind overlays */
-  private resolveTaskKind(message: SubstrateMessage): string | undefined {
-    if (isDeferredToolHandoffMessageId(message.id)) {
-      return 'deferred_tool_handoff';
-    }
-    const channelDock = this.resolveChannelPromptDock(message);
-    const adapterTaskKind = channelDock?.prompt?.resolveTaskKind?.(message);
-    if (adapterTaskKind) return adapterTaskKind;
-
-    if (!message.channelId.startsWith('internal:')) return undefined;
-
-    const suffix = message.channelId.slice('internal:'.length).toLowerCase();
-    if (!suffix) return undefined;
-
-    if (suffix.includes('heartbeat')) return 'heartbeat';
-    if (suffix.includes('reflection')) return 'reflection';
-    if (suffix.includes('planning')) return 'planning';
-    if (suffix.includes('maintenance')) return 'maintenance';
-    return undefined;
-  }
-
-  private buildTurnBudgetCharacteristics(
-    message: SubstrateMessage,
-    taskKind?: string,
-  ): ContextBudgetTurnCharacteristics {
-    return {
-      channelId: message.channelId,
-      channelType: message.channelType,
-      isDirectMessage: message.isDirectMessage,
-      messageText: message.content,
-      ...(taskKind ? { taskKind } : {}),
-    };
   }
 
   private getPersonaAdaptation(

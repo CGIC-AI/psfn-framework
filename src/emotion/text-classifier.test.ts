@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  TEXT_EMOTION_LABEL_COUNT,
+  TEXT_EMOTION_TOP_K,
   TEXT_EMOTION_DTYPE_VALUES,
   TextEmotionClassifier,
   type TextEmotionClassification,
@@ -8,7 +8,7 @@ import {
   type TextEmotionPipelineFactory,
 } from './text-classifier.js';
 
-const TEST_MODEL = 'cirimus/modernbert-base-go-emotions';
+const TEST_MODEL = 'SamLowe/roberta-base-go_emotions-onnx';
 
 function sampleScores(): TextEmotionClassification[] {
   return [
@@ -55,9 +55,9 @@ describe('TextEmotionClassifier', () => {
       cacheDir: undefined,
       dtype: 'fp32',
     });
-    expect(pipeline).toHaveBeenCalledWith('hello there', { top_k: TEXT_EMOTION_LABEL_COUNT });
+    expect(pipeline).toHaveBeenCalledWith('hello there', { top_k: TEXT_EMOTION_TOP_K });
 
-    expect(result).toHaveLength(TEXT_EMOTION_LABEL_COUNT);
+    expect(result).toHaveLength(sampleScores().length);
     expect(result).toEqual(sorted(sampleScores()));
     expect(Object.keys(result[0])).toEqual(['label', 'score']);
     expect(result.filter((entry) => entry.score === 0.41).map((entry) => entry.label))
@@ -90,15 +90,13 @@ describe('TextEmotionClassifier', () => {
     expect(pipeline).toHaveBeenCalledTimes(1);
   });
 
-  it('throws when pipeline output does not contain all expected emotion labels', async () => {
-    const malformedOutput = [{ label: 'joy', score: 0.9 }];
-    const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(malformedOutput);
+  it('accepts variable label counts from model outputs', async () => {
+    const output = [{ label: 'joy', score: 0.9 }];
+    const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(output);
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
     const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
 
-    await expect(classifier.classify('message')).rejects.toThrow(
-      `text emotion classifier expected ${TEXT_EMOTION_LABEL_COUNT} labels, received 1`,
-    );
+    await expect(classifier.classify('message')).resolves.toEqual(output);
   });
 
   it('throws for empty input text', async () => {

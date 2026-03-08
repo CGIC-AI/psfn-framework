@@ -64,6 +64,20 @@ describe('EmotionObserver', () => {
     expect(result.observation.vad?.dominance).toBeCloseTo(joyVad.dominance, 6);
   });
 
+  it('normalizes go-emotions labels to canonical internal labels', async () => {
+    const { classifier } = createClassifier([
+      { label: 'admiration', score: 0.92 },
+      { label: 'joy', score: 0.31 },
+    ]);
+
+    const observer = new EmotionObserver({ textClassifier: classifier, vadLexicon: createLexicon({}) });
+    const result = await observer.observe('nice work', 0);
+
+    expect(result.fusedLabel).toBe('trust');
+    expect(result.observation.discrete).toEqual({ trust: 1 });
+    expect(result.observation.confidence).toBeCloseTo(0.92, 6);
+  });
+
   it('does not allow lexicon content to override classifier label or confidence', async () => {
     const { classifier } = createClassifier([
       { label: 'joy', score: 0.2 },

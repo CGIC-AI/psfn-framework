@@ -1358,21 +1358,21 @@ describe('settings', () => {
 
     it('parses text emotion classifier settings', () => {
       const params = new URLSearchParams({
-        textEmotionModel: 'cirimus/modernbert-base-go-emotions',
+        textEmotionModel: 'SamLowe/roberta-base-go_emotions-onnx',
         textEmotionCacheDir: '/tmp/text-emotion-cache',
         textEmotionDtype: 'q8',
       });
 
       const [settings, errors] = parseSettingsForm(params);
       expect(errors).toEqual([]);
-      expect(settings.textEmotionModel).toBe('cirimus/modernbert-base-go-emotions');
+      expect(settings.textEmotionModel).toBe('SamLowe/roberta-base-go_emotions-onnx');
       expect(settings.textEmotionCacheDir).toBe('/tmp/text-emotion-cache');
       expect(settings.textEmotionDtype).toBe('q8');
     });
 
     it('rejects invalid textEmotionDtype values', () => {
       const params = new URLSearchParams({
-        textEmotionModel: 'cirimus/modernbert-base-go-emotions',
+        textEmotionModel: 'SamLowe/roberta-base-go_emotions-onnx',
         textEmotionDtype: 'bad-dtype',
       });
 
@@ -1422,12 +1422,12 @@ describe('settings', () => {
 
     it('includes text emotion classifier settings in runtime snapshot', () => {
       const config = makeConfig();
-      config.textEmotionModel = 'cirimus/modernbert-base-go-emotions';
+      config.textEmotionModel = 'SamLowe/roberta-base-go_emotions-onnx';
       config.textEmotionCacheDir = '/tmp/text-emotion-cache';
       config.textEmotionDtype = 'q8';
 
       const snapshot = getRuntimeSettingsSnapshot(config);
-      expect(snapshot.textEmotionModel).toBe('cirimus/modernbert-base-go-emotions');
+      expect(snapshot.textEmotionModel).toBe('SamLowe/roberta-base-go_emotions-onnx');
       expect(snapshot.textEmotionCacheDir).toBe('/tmp/text-emotion-cache');
       expect(snapshot.textEmotionDtype).toBe('q8');
     });

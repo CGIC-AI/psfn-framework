@@ -8,7 +8,13 @@
     updateReflectionTemplate,
   } from '$lib/api/endpoints/scheduler';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
-  import type { ScheduledTask, ReflectionTemplate, TaskType } from '$lib/types';
+  import type {
+    RecurringCadence,
+    ReflectionTemplate,
+    ScheduledTask,
+    SchedulerCadenceTimezone,
+    TaskType,
+  } from '$lib/types';
 
   // ── State ──
   let tasks = $state<ScheduledTask[]>([]);
@@ -31,7 +37,23 @@
   });
 
   // ── Editing state ──
+  type CadenceEditorMode = 'relative' | 'hourly' | 'daily';
+  type CadenceEditorState = {
+    mode: CadenceEditorMode;
+    hour: string;
+    minute: string;
+    timezone: SchedulerCadenceTimezone;
+  };
+
+  const REFLECTION_TASK_PREFIX = 'reflection:';
+  const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
+  const KNOWN_HEARTBEAT_CADENCE: Record<string, RecurringCadence> = {
+    whisper: { kind: 'hourly', minute: 0, timezone: 'local' },
+    'daily-review': { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
+  };
+
   let editingIntervals = $state<Record<string, string>>({});
+  let editingCadence = $state<Record<string, CadenceEditorState>>({});
   let expandedReflections = $state<Set<string>>(new Set());
   let editingPrompts = $state<Record<string, string>>({});
 
@@ -103,14 +125,107 @@
     return Math.round(totalMs) || null;
   }
 
+  function formatTwoDigits(value: number): string {
+    return String(value).padStart(2, '0');
+  }
+
+  function parseBoundedInt(input: string, min: number, max: number): number | null {
+    if (!/^\d+$/.test(input.trim())) return null;
+    const parsed = Number.parseInt(input, 10);
+    if (!Number.isInteger(parsed) || parsed < min || parsed > max) return null;
+    return parsed;
+  }
+
+  function getReflectionTemplateId(taskId: string): string | null {
+    if (!taskId.startsWith(REFLECTION_TASK_PREFIX)) return null;
+    if (taskId.startsWith(DEFERRED_REFLECTION_TASK_PREFIX)) return null;
+    const templateId = taskId.slice(REFLECTION_TASK_PREFIX.length).trim();
+    return templateId.length > 0 ? templateId : null;
+  }
+
+  function isHeartbeatTask(task: ScheduledTask): boolean {
+    return getReflectionTemplateId(task.id) !== null;
+  }
+
+  function hasCadenceControls(task: ScheduledTask): boolean {
+    return task.type === 'every' && (isHeartbeatTask(task) || task.cadence !== undefined);
+  }
+
+  function getPreferredHeartbeatCadence(task: ScheduledTask): RecurringCadence | undefined {
+    const templateId = getReflectionTemplateId(task.id);
+    if (!templateId) return undefined;
+    return KNOWN_HEARTBEAT_CADENCE[templateId];
+  }
+
+  function resolveTaskCadence(task: ScheduledTask): RecurringCadence {
+    return task.cadence ?? getPreferredHeartbeatCadence(task) ?? { kind: 'relative' };
+  }
+
+  function cadenceToEditorState(task: ScheduledTask): CadenceEditorState {
+    const cadence = resolveTaskCadence(task);
+    if (cadence.kind === 'daily') {
+      return {
+        mode: 'daily',
+        hour: String(cadence.hour),
+        minute: String(cadence.minute),
+        timezone: cadence.timezone,
+      };
+    }
+    if (cadence.kind === 'hourly') {
+      return {
+        mode: 'hourly',
+        hour: '0',
+        minute: String(cadence.minute),
+        timezone: cadence.timezone,
+      };
+    }
+    return {
+      mode: 'relative',
+      hour: '0',
+      minute: '0',
+      timezone: 'local',
+    };
+  }
+
+  function getCadenceEditor(task: ScheduledTask): CadenceEditorState {
+    return editingCadence[task.id] ?? cadenceToEditorState(task);
+  }
+
+  function updateCadenceEditor(task: ScheduledTask, patch: Partial<CadenceEditorState>) {
+    const current = getCadenceEditor(task);
+    editingCadence[task.id] = { ...current, ...patch };
+  }
+
   function formatInterval(task: ScheduledTask): string {
     if (task.type === 'every') {
+      const cadence = task.cadence;
+      if (cadence?.kind === 'hourly') {
+        return `Hourly @ :${formatTwoDigits(cadence.minute)} (${cadence.timezone.toUpperCase()})`;
+      }
+      if (cadence?.kind === 'daily') {
+        return `Daily @ ${formatTwoDigits(cadence.hour)}:${formatTwoDigits(cadence.minute)} (${cadence.timezone.toUpperCase()})`;
+      }
       return msToHuman(task.intervalMs);
     }
     if (task.runAt) {
       return new Date(task.runAt).toLocaleString();
     }
     return '--';
+  }
+
+  function getReflectionScheduleLabel(tpl: ReflectionTemplate): string {
+    const linkedTask = tasks.find(task => task.id === `reflection:${tpl.id}`);
+    if (linkedTask) {
+      return formatInterval(linkedTask);
+    }
+    return formatInterval({
+      id: `reflection:${tpl.id}`,
+      name: tpl.name,
+      type: 'every',
+      intervalMs: tpl.intervalMs,
+      cadence: tpl.cadence,
+      state: tpl.enabled ? 'idle' : 'paused',
+    });
   }
 
   // ── Protected tasks ──
@@ -133,9 +248,11 @@
 
       // Initialize editing intervals from current values
       editingIntervals = {};
+      editingCadence = {};
       for (const task of tasks) {
         if (task.type === 'every') {
           editingIntervals[task.id] = msToHuman(task.intervalMs);
+          editingCadence[task.id] = cadenceToEditorState(task);
         }
       }
       return;
@@ -179,6 +296,69 @@
       }
     } catch (e) {
       showFeedback('error', e instanceof Error ? e.message : 'Failed to update task');
+    } finally {
+      saving = null;
+    }
+  }
+
+  async function saveTaskCadence(task: ScheduledTask) {
+    if (task.type !== 'every') return;
+
+    const editor = getCadenceEditor(task);
+    let cadence: RecurringCadence;
+    let intervalMs: number;
+
+    if (editor.mode === 'relative') {
+      const input = editingIntervals[task.id] ?? '';
+      const parsedInterval = parseHumanInterval(input);
+      if (!parsedInterval) {
+        showFeedback('error', 'Invalid interval. Use format like "1h", "30m", "5m 30s".');
+        return;
+      }
+      cadence = { kind: 'relative' };
+      intervalMs = parsedInterval;
+    } else if (editor.mode === 'hourly') {
+      const minute = parseBoundedInt(editor.minute, 0, 59);
+      if (minute === null) {
+        showFeedback('error', 'Hourly cadence minute must be an integer from 0 to 59.');
+        return;
+      }
+      cadence = {
+        kind: 'hourly',
+        minute,
+        timezone: editor.timezone,
+      };
+      intervalMs = 60 * 60_000;
+    } else {
+      const hour = parseBoundedInt(editor.hour, 0, 23);
+      const minute = parseBoundedInt(editor.minute, 0, 59);
+      if (hour === null || minute === null) {
+        showFeedback('error', 'Daily cadence requires hour 0-23 and minute 0-59.');
+        return;
+      }
+      cadence = {
+        kind: 'daily',
+        hour,
+        minute,
+        timezone: editor.timezone,
+      };
+      intervalMs = 24 * 60 * 60_000;
+    }
+
+    saving = `cadence:${task.id}`;
+    try {
+      const result = await updateSchedulerTask(task.id, {
+        intervalMs,
+        cadence,
+      });
+      if (result.ok) {
+        showFeedback('ok', result.message);
+        await loadData();
+      } else {
+        showFeedback('error', result.message);
+      }
+    } catch (e) {
+      showFeedback('error', e instanceof Error ? e.message : 'Failed to update cadence');
     } finally {
       saving = null;
     }
@@ -288,45 +468,6 @@
       }
     } catch (e) {
       showFeedback('error', e instanceof Error ? e.message : 'Failed to update reflection');
-    } finally {
-      saving = null;
-    }
-  }
-
-  async function toggleReflectionEnabled(tpl: ReflectionTemplate) {
-    saving = `reflection-toggle:${tpl.id}`;
-    try {
-      const result = await updateReflectionTemplate(tpl.id, { enabled: !tpl.enabled });
-      if (result.ok) {
-        showFeedback('ok', result.message);
-        await loadData();
-      } else {
-        showFeedback('error', result.message);
-      }
-    } catch (e) {
-      showFeedback('error', e instanceof Error ? e.message : 'Failed to toggle reflection');
-    } finally {
-      saving = null;
-    }
-  }
-
-  async function saveReflectionInterval(tpl: ReflectionTemplate, input: string) {
-    const ms = parseHumanInterval(input);
-    if (!ms) {
-      showFeedback('error', 'Invalid interval. Use format like "1h", "30m", "8h".');
-      return;
-    }
-    saving = `reflection-interval:${tpl.id}`;
-    try {
-      const result = await updateReflectionTemplate(tpl.id, { intervalMs: ms });
-      if (result.ok) {
-        showFeedback('ok', result.message);
-        await loadData();
-      } else {
-        showFeedback('error', result.message);
-      }
-    } catch (e) {
-      showFeedback('error', e instanceof Error ? e.message : 'Failed to update reflection interval');
     } finally {
       saving = null;
     }
@@ -559,7 +700,7 @@
             <tr class="border-b border-bark-200 bg-bark-100">
               <th class="text-left px-4 py-3 font-semibold text-shadow-800">Name</th>
               <th class="text-left px-4 py-3 font-semibold text-shadow-800">Type</th>
-              <th class="text-left px-4 py-3 font-semibold text-shadow-800">Interval / Run At</th>
+              <th class="text-left px-4 py-3 font-semibold text-shadow-800">Cadence / Interval / Run At</th>
               <th class="text-left px-4 py-3 font-semibold text-shadow-800">State</th>
               <th class="text-right px-4 py-3 font-semibold text-shadow-800">Actions</th>
             </tr>
@@ -578,24 +719,150 @@
                 </td>
                 <td class="px-4 py-3">
                   {#if task.type === 'every'}
-                    <div class="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={editingIntervals[task.id] ?? msToHuman(task.intervalMs)}
-                        oninput={(e) => { editingIntervals[task.id] = (e.target as HTMLInputElement).value; }}
-                        class="w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
-                               bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
-                      />
-                      <button
-                        onclick={() => saveTaskInterval(task)}
-                        disabled={saving === `interval:${task.id}`}
-                        class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
-                               text-moss-700 hover:bg-moss-100 transition-colors
-                               disabled:opacity-50 font-medium"
-                      >
-                        {saving === `interval:${task.id}` ? '...' : 'Save'}
-                      </button>
-                    </div>
+                    {#if hasCadenceControls(task)}
+                      {@const cadenceEditor = getCadenceEditor(task)}
+                      <div class="space-y-2">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <select
+                            value={cadenceEditor.mode}
+                            onchange={(e) => {
+                              updateCadenceEditor(task, { mode: (e.target as HTMLSelectElement).value as CadenceEditorMode });
+                            }}
+                            class="px-2 py-1 text-xs border border-bark-300 rounded
+                                   bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                          >
+                            <option value="relative">Interval</option>
+                            <option value="hourly">Hourly on minute</option>
+                            <option value="daily">Daily at time</option>
+                          </select>
+                          <span class="text-[11px] text-shadow-500">
+                            {cadenceEditor.mode === 'relative' ? 'Relative cadence' : 'Clock-aware cadence'}
+                          </span>
+                        </div>
+
+                        {#if cadenceEditor.mode === 'relative'}
+                          <div class="flex flex-wrap items-center gap-2">
+                            <input
+                              type="text"
+                              value={editingIntervals[task.id] ?? msToHuman(task.intervalMs)}
+                              oninput={(e) => { editingIntervals[task.id] = (e.target as HTMLInputElement).value; }}
+                              class="w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            />
+                            <button
+                              onclick={() => saveTaskCadence(task)}
+                              disabled={saving === `cadence:${task.id}`}
+                              class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                                     text-moss-700 hover:bg-moss-100 transition-colors
+                                     disabled:opacity-50 font-medium"
+                            >
+                              {saving === `cadence:${task.id}` ? '...' : 'Save'}
+                            </button>
+                          </div>
+                        {:else if cadenceEditor.mode === 'hourly'}
+                          <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-xs text-shadow-600">Minute</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="59"
+                              value={cadenceEditor.minute}
+                              oninput={(e) => {
+                                updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
+                              }}
+                              class="w-16 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            />
+                            <select
+                              value={cadenceEditor.timezone}
+                              onchange={(e) => {
+                                updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
+                              }}
+                              class="px-2 py-1 text-xs border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            >
+                              <option value="local">Local</option>
+                              <option value="utc">UTC</option>
+                            </select>
+                            <button
+                              onclick={() => saveTaskCadence(task)}
+                              disabled={saving === `cadence:${task.id}`}
+                              class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                                     text-moss-700 hover:bg-moss-100 transition-colors
+                                     disabled:opacity-50 font-medium"
+                            >
+                              {saving === `cadence:${task.id}` ? '...' : 'Save'}
+                            </button>
+                          </div>
+                        {:else}
+                          <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-xs text-shadow-600">Time</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="23"
+                              value={cadenceEditor.hour}
+                              oninput={(e) => {
+                                updateCadenceEditor(task, { hour: (e.target as HTMLInputElement).value });
+                              }}
+                              class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            />
+                            <span class="text-xs text-shadow-500">:</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="59"
+                              value={cadenceEditor.minute}
+                              oninput={(e) => {
+                                updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
+                              }}
+                              class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            />
+                            <select
+                              value={cadenceEditor.timezone}
+                              onchange={(e) => {
+                                updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
+                              }}
+                              class="px-2 py-1 text-xs border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            >
+                              <option value="local">Local</option>
+                              <option value="utc">UTC</option>
+                            </select>
+                            <button
+                              onclick={() => saveTaskCadence(task)}
+                              disabled={saving === `cadence:${task.id}`}
+                              class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                                     text-moss-700 hover:bg-moss-100 transition-colors
+                                     disabled:opacity-50 font-medium"
+                            >
+                              {saving === `cadence:${task.id}` ? '...' : 'Save'}
+                            </button>
+                          </div>
+                        {/if}
+                      </div>
+                    {:else}
+                      <div class="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={editingIntervals[task.id] ?? msToHuman(task.intervalMs)}
+                          oninput={(e) => { editingIntervals[task.id] = (e.target as HTMLInputElement).value; }}
+                          class="w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                                 bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                        />
+                        <button
+                          onclick={() => saveTaskInterval(task)}
+                          disabled={saving === `interval:${task.id}`}
+                          class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                                 text-moss-700 hover:bg-moss-100 transition-colors
+                                 disabled:opacity-50 font-medium"
+                        >
+                          {saving === `interval:${task.id}` ? '...' : 'Save'}
+                        </button>
+                      </div>
+                    {/if}
                   {:else}
                     <span class="text-sm text-shadow-700 font-mono">{formatInterval(task)}</span>
                   {/if}
@@ -645,7 +912,7 @@
       <div class="card-garden overflow-hidden">
         <div class="px-4 py-3 border-b border-bark-200 bg-bark-50">
           <h2 class="font-serif font-semibold text-shadow-800">Reflection Templates</h2>
-          <p class="text-xs text-shadow-600 mt-0.5">Heartbeat-driven inner reflections. Edit prompts, intervals, and toggle Discord visibility.</p>
+          <p class="text-xs text-shadow-600 mt-0.5">Heartbeat-driven inner reflections. Edit prompts and Discord visibility. Scheduling is managed in Scheduled Tasks.</p>
         </div>
 
         <div class="divide-y divide-bark-100">
@@ -672,23 +939,13 @@
                       {/if}
                     </div>
                     <p class="text-xs text-shadow-600 mt-0.5 truncate">{tpl.prompt.slice(0, 80)}{tpl.prompt.length > 80 ? '...' : ''}</p>
+                    <p class="text-[11px] text-shadow-500 mt-1">
+                      Schedule: {getReflectionScheduleLabel(tpl)}
+                    </p>
                   </div>
                 </div>
 
                 <div class="flex items-center gap-3 shrink-0">
-                  <!-- Interval -->
-                  <div class="flex items-center gap-1.5">
-                    <label for="refl-interval-{tpl.id}" class="sr-only">Interval</label>
-                    <input
-                      id="refl-interval-{tpl.id}"
-                      type="text"
-                      value={msToHuman(tpl.intervalMs)}
-                      onchange={(e) => saveReflectionInterval(tpl, (e.target as HTMLInputElement).value)}
-                      class="w-16 px-2 py-1 text-xs font-mono border border-bark-300 rounded
-                             bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
-                    />
-                  </div>
-
                   <!-- Send to Discord toggle -->
                   <button
                     onclick={() => toggleReflectionDiscord(tpl)}
@@ -703,18 +960,6 @@
                       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                     </svg>
                     {tpl.sendToDiscord ? 'Discord' : 'Silent'}
-                  </button>
-
-                  <!-- Enabled toggle -->
-                  <button
-                    onclick={() => toggleReflectionEnabled(tpl)}
-                    disabled={saving === `reflection-toggle:${tpl.id}`}
-                    class="text-xs px-2 py-1 rounded border transition-colors font-medium disabled:opacity-50
-                           {tpl.enabled
-                             ? 'border-moss-300 bg-moss-50 text-moss-700'
-                             : 'border-shadow-300 bg-shadow-50 text-shadow-600'}"
-                  >
-                    {tpl.enabled ? 'Enabled' : 'Disabled'}
                   </button>
                 </div>
               </div>

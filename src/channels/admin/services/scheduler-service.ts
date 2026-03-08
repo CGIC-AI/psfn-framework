@@ -19,6 +19,8 @@ import type {
 import { createComponentLogger } from '../../../logger.js';
 
 const log = createComponentLogger('AdminSchedulerService');
+const REFLECTION_TASK_PREFIX = 'reflection:';
+const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
 
 export type AdminTaskCadence = RecurringCadence;
 
@@ -34,6 +36,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isRecurringCadenceTimezone(value: unknown): value is RecurringCadenceTimezone {
   return value === 'local' || value === 'utc';
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function reflectionTemplateIdFromTaskId(taskId: string): string | null {
+  if (!taskId.startsWith(REFLECTION_TASK_PREFIX)) {
+    return null;
+  }
+  if (taskId.startsWith(DEFERRED_REFLECTION_TASK_PREFIX)) {
+    return null;
+  }
+  const templateId = taskId.slice(REFLECTION_TASK_PREFIX.length).trim();
+  return templateId.length > 0 ? templateId : null;
 }
 
 function validateCadence(input: unknown): CadenceValidationResult {
@@ -178,7 +195,53 @@ export class AdminSchedulerService {
     return this.scheduler.listTasks();
   }
 
-  /** Update a task's interval or enabled state. */
+  private persistReflectionTaskSettings(
+    taskId: string,
+    updates: {
+      intervalMs?: number;
+      enabled?: boolean;
+      name?: string;
+      cadence?: AdminTaskCadence;
+    },
+  ): SchedulerMutationResult {
+    const templateId = reflectionTemplateIdFromTaskId(taskId);
+    if (!templateId) {
+      return { ok: true, message: 'Task is not tied to a reflection template' };
+    }
+
+    if (
+      updates.intervalMs === undefined
+      && updates.enabled === undefined
+      && updates.name === undefined
+      && updates.cadence === undefined
+    ) {
+      return { ok: true, message: `No reflection settings changed for "${templateId}"` };
+    }
+
+    try {
+      const policy = this.policyStore.load();
+      const idx = policy.templates.findIndex(t => t.id === templateId);
+      if (idx === -1) {
+        return { ok: false, message: `Reflection template "${templateId}" not found for task "${taskId}"` };
+      }
+
+      const template = policy.templates[idx];
+      if (updates.intervalMs !== undefined) template.intervalMs = updates.intervalMs;
+      if (updates.enabled !== undefined) template.enabled = updates.enabled;
+      if (updates.name !== undefined) template.name = updates.name;
+      if (updates.cadence !== undefined) template.cadence = updates.cadence;
+
+      policy.version += 1;
+      policy.updatedAt = new Date().toISOString();
+      policy.updatedBy = 'admin';
+      this.policyStore.save(policy);
+      return { ok: true, message: `Reflection template "${templateId}" updated` };
+    } catch (error) {
+      return { ok: false, message: `Failed to persist reflection settings: ${toErrorMessage(error)}` };
+    }
+  }
+
+  /** Update a task's cadence, interval, enabled state, or name. */
   updateTask(id: string, updates: {
     intervalMs?: number;
     enabled?: boolean;
@@ -189,6 +252,7 @@ export class AdminSchedulerService {
     if (!task) {
       return { ok: false, message: `Task "${id}" not found` };
     }
+    const previousCadence = readCadenceFromTask(task) ?? { kind: 'relative' };
 
     const taskUpdates: {
       intervalMs?: number;
@@ -230,12 +294,54 @@ export class AdminSchedulerService {
       taskUpdates.cadence = cadenceValidation.cadence;
     }
 
+    const reflectionSyncNeeded = reflectionTemplateIdFromTaskId(id) !== null && (
+      updates.intervalMs !== undefined
+      || updates.enabled !== undefined
+      || updates.name !== undefined
+      || updates.cadence !== undefined
+    );
+
     const success = this.scheduler.updateTask(
       id,
       taskUpdates as Parameters<Scheduler['updateTask']>[1],
     );
     if (!success) {
       return { ok: false, message: `Failed to update task "${id}"` };
+    }
+
+    if (reflectionSyncNeeded) {
+      const reflectionSyncResult = this.persistReflectionTaskSettings(id, {
+        intervalMs: updates.intervalMs,
+        enabled: updates.enabled,
+        name: updates.name,
+        cadence: taskUpdates.cadence,
+      });
+      if (!reflectionSyncResult.ok) {
+        const rollback: Parameters<Scheduler['updateTask']>[1] = {};
+        if (updates.intervalMs !== undefined) {
+          rollback.intervalMs = task.intervalMs;
+          rollback.resetLastRun = true;
+        }
+        if (updates.enabled !== undefined) {
+          rollback.state = task.state;
+        }
+        if (updates.name !== undefined) {
+          rollback.name = task.name;
+        }
+        if (updates.cadence !== undefined) {
+          rollback.cadence = previousCadence;
+        }
+
+        const rollbackSuccess = this.scheduler.updateTask(id, rollback);
+        if (!rollbackSuccess) {
+          log.error(`Failed to rollback task "${id}" after reflection persistence error`, {
+            rollback,
+            reason: reflectionSyncResult.message,
+          });
+        }
+
+        return { ok: false, message: reflectionSyncResult.message };
+      }
     }
 
     log.info(`Task "${id}" updated`, taskUpdates);
@@ -353,6 +459,7 @@ export class AdminSchedulerService {
     if (updates.name !== undefined) template.name = updates.name;
     if (updates.prompt !== undefined) template.prompt = updates.prompt;
     if (updates.intervalMs !== undefined) template.intervalMs = updates.intervalMs;
+    if (updates.cadence !== undefined) template.cadence = updates.cadence;
     if (updates.enabled !== undefined) template.enabled = updates.enabled;
     if (updates.sendToDiscord !== undefined) template.sendToDiscord = updates.sendToDiscord;
     if (updates.internalStateInput !== undefined) template.internalStateInput = updates.internalStateInput;
@@ -366,11 +473,16 @@ export class AdminSchedulerService {
 
     // Sync interval change to scheduler if this template has a corresponding task
     const taskId = `reflection:${id}`;
-    if (updates.intervalMs !== undefined) {
-      this.scheduler.updateTask(taskId, {
-        intervalMs: updates.intervalMs,
-        resetLastRun: true,
-      });
+    if (updates.intervalMs !== undefined || updates.cadence !== undefined) {
+      const schedulerUpdates: Parameters<Scheduler['updateTask']>[1] = {};
+      if (updates.intervalMs !== undefined) {
+        schedulerUpdates.intervalMs = updates.intervalMs;
+        schedulerUpdates.resetLastRun = true;
+      }
+      if (updates.cadence !== undefined) {
+        schedulerUpdates.cadence = updates.cadence;
+      }
+      this.scheduler.updateTask(taskId, schedulerUpdates);
     }
     if (updates.enabled !== undefined) {
       this.scheduler.updateTask(taskId, {

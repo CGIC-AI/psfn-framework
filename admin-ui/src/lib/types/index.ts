@@ -543,12 +543,36 @@ export interface DiscoveredModel {
 // Scheduler
 export type TaskType = 'every' | 'one-shot';
 export type TaskState = 'idle' | 'active' | 'paused' | 'complete';
+export type SchedulerCadenceTimezone = 'local' | 'utc';
+
+export interface RelativeRecurringCadence {
+  kind: 'relative';
+}
+
+export interface HourlyRecurringCadence {
+  kind: 'hourly';
+  minute: number;
+  timezone: SchedulerCadenceTimezone;
+}
+
+export interface DailyRecurringCadence {
+  kind: 'daily';
+  hour: number;
+  minute: number;
+  timezone: SchedulerCadenceTimezone;
+}
+
+export type RecurringCadence =
+  | RelativeRecurringCadence
+  | HourlyRecurringCadence
+  | DailyRecurringCadence;
 
 export interface ScheduledTask {
   id: string;
   name: string;
   type: TaskType;
   intervalMs: number;
+  cadence?: RecurringCadence;
   runAt?: number;
   state: TaskState;
 }
@@ -567,6 +591,7 @@ export interface ReflectionTemplate {
   name: string;
   prompt: string;
   intervalMs: number;
+  cadence?: RecurringCadence;
   enabled: boolean;
   sendToDiscord: boolean;
   mode?: 'standard' | 'deliberation';

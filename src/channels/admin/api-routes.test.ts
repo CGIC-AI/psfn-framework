@@ -27,6 +27,7 @@ import { saveTrustPolicyConfig } from '../../config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
+import type { ScheduledTask } from '../../scheduler/types.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
 
@@ -732,6 +733,104 @@ describe('AdminServer JSON API routes', () => {
       expect(payload.ok).toBe(false);
       expect(payload.message).toContain(errorFragment);
     }
+  });
+
+  it('persists reflection cadence updates from task PATCH into heartbeat policy', async () => {
+    scheduler.register({
+      id: 'reflection:whisper',
+      name: 'Whisper',
+      type: 'every',
+      intervalMs: 3_600_000,
+      handler: () => {},
+      state: 'idle',
+      cadence: {
+        kind: 'hourly',
+        minute: 0,
+        timezone: 'local',
+      },
+    } as Parameters<Scheduler['register']>[0]);
+
+    const patchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/scheduler/tasks/reflection%3Awhisper',
+      JSON.stringify({
+        intervalMs: 86_400_000,
+        enabled: false,
+        cadence: {
+          kind: 'daily',
+          hour: 7,
+          minute: 15,
+          timezone: 'utc',
+        },
+      }),
+      authHeaders,
+    );
+    expect(patchRes.status).toBe(200);
+    const patchPayload = JSON.parse(patchRes.body) as { ok: boolean; message: string };
+    expect(patchPayload.ok).toBe(true);
+
+    const task = scheduler.getTask('reflection:whisper') as (ScheduledTask & {
+      cadence?: { kind: string; hour?: number; minute?: number; timezone?: string };
+    }) | undefined;
+    expect(task?.state).toBe('paused');
+    expect(task?.intervalMs).toBe(86_400_000);
+    expect(task?.cadence).toEqual({
+      kind: 'daily',
+      hour: 7,
+      minute: 15,
+      timezone: 'utc',
+    });
+
+    const getRes = await request(port, 'GET', '/api/admin/scheduler', undefined, authHeaders);
+    expect(getRes.status).toBe(200);
+    const getPayload = JSON.parse(getRes.body) as {
+      reflections: Array<{
+        id: string;
+        enabled: boolean;
+        intervalMs: number;
+        cadence?: { kind: string; hour?: number; minute?: number; timezone?: string };
+      }>;
+    };
+    const whisper = getPayload.reflections.find(reflection => reflection.id === 'whisper');
+    expect(whisper).toMatchObject({
+      id: 'whisper',
+      enabled: false,
+      intervalMs: 86_400_000,
+      cadence: {
+        kind: 'daily',
+        hour: 7,
+        minute: 15,
+        timezone: 'utc',
+      },
+    });
+  });
+
+  it('fails closed when reflection task has no matching policy template', async () => {
+    scheduler.register({
+      id: 'reflection:missing-template',
+      name: 'Missing Template',
+      type: 'every',
+      intervalMs: 60_000,
+      handler: () => {},
+      state: 'idle',
+    });
+
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/scheduler/tasks/reflection%3Amissing-template',
+      JSON.stringify({ intervalMs: 120_000 }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain('Reflection template "missing-template" not found');
+
+    const task = scheduler.getTask('reflection:missing-template');
+    expect(task?.intervalMs).toBe(60_000);
   });
 
   it('returns adaptive tool runtime state and recent adaptive telemetry', async () => {

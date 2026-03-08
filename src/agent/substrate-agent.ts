@@ -18,7 +18,6 @@ import type {
   CapabilityTier,
   CorrelationMetadata,
   InferredPostTurnAction,
-  MessageModelOverride,
   ModelBudgetBlockedEvent,
   MessagePromptOverride,
   MessagePromptOverrideMode,
@@ -29,9 +28,7 @@ import type {
   TurnID,
   TurnRecord,
   TurnUsage,
-  ModelPurpose,
 } from '../types.js';
-import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
@@ -46,9 +43,6 @@ import {
 import type { ComposeContext } from '../identity/prompt-types.js';
 import {
   createSubstrateStreamFn,
-  resolveExplicitModel,
-  resolveModel,
-  resolveModelSelection,
 } from './stream-adapter.js';
 import {
   inferRuntimeModeFromProvider,
@@ -61,7 +55,6 @@ import type { SkillsRuntime } from '../skills/runtime.js';
 import { ReflectionNudgeTracker, type TurnToolSummary } from '../skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';
 import {
-  evaluateToolCapabilityEligibility,
   gateToolWithCapabilities,
   type CapabilityAccess,
 } from '../capabilities/gate.js';
@@ -74,22 +67,15 @@ import {
   validateAndLogToolWiring,
   extractGatewayMethods,
   type GatewayToolMetadataCoverage,
-  type ToolConcurrencyMeta,
   type RuntimeMode,
-  type ToolConcurrencyClass,
-  type ToolExecutionEligibility,
-  type ToolInterruptibility,
   type ValidateToolsOptions,
-  type WirableTool,
 } from './tool-wiring-validator.js';
 import {
   isDeferredToolHandoffMessageId,
 } from './deferred-tool-handoff.js';
 import {
-  classifyExtendedToolForTurn as classifyDefaultExtendedToolForTurn,
   createDefaultExtendedToolAutoloadPolicy,
   type ExtendedToolAutoloadPolicy,
-  type ExtendedToolTurnClass,
 } from './extended-tool-autoload-policy.js';
 import { BackgroundCompletionDeliveryQueue } from './background-completion-delivery-queue.js';
 import type {
@@ -99,7 +85,6 @@ import type {
   AdaptiveToolRuntimeState,
   AdaptiveToolSnapshotSkip,
   AdaptiveToolSnapshotTelemetry,
-  AdaptiveToolSnapshotTool,
 } from './adaptive-tools-telemetry.js';
 import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
@@ -153,10 +138,6 @@ import {
   type ResolvedAuthorContext,
 } from './substrate-agent/runtime-context.js';
 import {
-  hasVisionAttachments,
-} from './substrate-agent/vision-attachments.js';
-import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
-import {
   activateExtendedToolsForTurn,
   createLoadToolsTool,
   preloadExtendedToolsForTurn,
@@ -164,6 +145,7 @@ import {
   type ExtendedToolActivationOptions,
   type ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
+import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import {
   pinDeferredContinuationSessionContext as pinDeferredContinuationSessionContextForTurn,
   queueBackgroundContinuationCompletion as queueBackgroundContinuationCompletionForTurn,
@@ -185,6 +167,35 @@ import {
 import {
   handleMessageForTurn,
 } from './substrate-agent/turn-execution-runtime.js';
+import {
+  getTurnModelSignature as getTurnModelSignatureForRuntime,
+  normalizeTurnModelOverride as normalizeTurnModelOverrideForRuntime,
+  refreshModelFromConfig as refreshModelFromConfigForRuntime,
+  resolveTurnModelPurpose as resolveTurnModelPurposeForRuntime,
+} from './substrate-agent/model-runtime.js';
+import {
+  addPromotedExtendedTool as addPromotedExtendedToolForRuntime,
+  applyActiveToolsToAgent as applyActiveToolsToAgentForRuntime,
+  buildAdaptiveToolRuntimeState as buildAdaptiveToolRuntimeStateForRuntime,
+  buildAdaptiveToolSnapshot as buildAdaptiveToolSnapshotForRuntime,
+  classifyExtendedToolForTurn as classifyExtendedToolForTurnForRuntime,
+  emitAdaptiveToolSnapshotDecisions as emitAdaptiveToolSnapshotDecisionsForRuntime,
+  getExtendedToolByName as getExtendedToolByNameForRuntime,
+  getPromotedExtendedToolNames as getPromotedExtendedToolNamesForRuntime,
+  getPromotedExtendedToolsLimit as getPromotedExtendedToolsLimitForRuntime,
+  mergeAdaptiveSkips as mergeAdaptiveSkipsForRuntime,
+  persistPromotedExtendedToolNames as persistPromotedExtendedToolNamesForRuntime,
+  removePromotedExtendedTool as removePromotedExtendedToolForRuntime,
+  resolveActiveTools as resolveActiveToolsForRuntime,
+  resolvePromotedToolActivation as resolvePromotedToolActivationForRuntime,
+  setPromotedExtendedToolNames as setPromotedExtendedToolNamesForRuntime,
+  swapPromotedExtendedTools as swapPromotedExtendedToolsForRuntime,
+  trackLoadedExtendedTool as trackLoadedExtendedToolForRuntime,
+  withToolConcurrencyMetadata as withToolConcurrencyMetadataForRuntime,
+  type ActiveToolResolution,
+  type PromotedToolMutationResult,
+  type PromotedToolResolution,
+} from './substrate-agent/tool-orchestration-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -204,6 +215,10 @@ export type {
   ExtendedToolActivationOptions,
   ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
+export type {
+  PromotedToolMutationErrorCode,
+  PromotedToolMutationResult,
+} from './substrate-agent/tool-orchestration-runtime.js';
 
 export interface EmotionRuntimeWiring {
   state?: EmotionState;
@@ -225,64 +240,7 @@ export interface SubstrateAgentOptions {
   emotionRuntime?: EmotionRuntimeWiring;
   selfModelRuntime?: SelfModelRuntimeWiring;
 }
-
-export type PromotedToolMutationErrorCode =
-  | 'invalid_name'
-  | 'tool_not_extended'
-  | 'duplicate'
-  | 'max_slots'
-  | 'background_only'
-  | 'capability_denied'
-  | 'not_found'
-  | 'invalid_slot'
-  | 'persist_failed';
-
-export interface PromotedToolMutationResult {
-  ok: boolean;
-  changed: boolean;
-  promotedTools: string[];
-  message: string;
-  errorCode?: PromotedToolMutationErrorCode;
-  requiredTokens?: CapabilityToken[];
-  missingTokens?: CapabilityToken[];
-}
-
-const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
-  autoload: 1,
-  extended_loaded: 2,
-  deferred: 3,
-};
-const DEFAULT_PARALLEL_READ_MAX = 3;
-const DEFAULT_SPAWN_SHARD_PARALLEL_MAX = 5;
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
-const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
-  'repo_status',
-  'repo_diff',
-  'issue_ready',
-  'issue_show',
-  'settings_get',
-  'heartbeat_get_policy',
-  'contact_lookup',
-  'contact_list',
-  'session_list',
-  'skill_list',
-  'skill_view',
-  'prompt_layer_list',
-  'prompt_layer_get',
-  'identity_diff',
-]);
-
-interface ActiveToolResolution {
-  tools: AgentTool<any>[];
-  snapshotTools: AdaptiveToolSnapshotTool[];
-  promotedSkipped: AdaptiveToolSnapshotSkip[];
-  counts: AdaptiveToolSnapshotTelemetry['counts'];
-}
-
-interface PromotedToolResolution {
-  activeNames: Set<string>;
-  skipped: AdaptiveToolSnapshotSkip[];
-}
 
 // ── SubstrateAgent ──
 
@@ -490,35 +448,12 @@ export class SubstrateAgent {
     });
   }
 
-  private getModelSignatureForPurpose(purpose: ModelPurpose): string {
-    try {
-      const selection = resolveModelSelection(this.config, purpose);
-      const contextWindow = selection.contextWindow ?? this.config.defaultContextWindow;
-      return `${purpose}::${selection.provider}::${selection.model}::${selection.maxTokens}::${contextWindow}`;
-    } catch (error) {
-      return `${purpose}::unresolved::${toErrorMessage(error)}`;
-    }
+  private resolveTurnModelPurpose(message?: SubstrateMessage) {
+    return resolveTurnModelPurposeForRuntime(message);
   }
 
-  private resolveTurnModelPurpose(message?: SubstrateMessage): ModelPurpose {
-    return hasVisionAttachments(message) ? 'vision' : 'chat';
-  }
-
-  private normalizeTurnModelOverride(message?: SubstrateMessage): MessageModelOverride | null {
-    const raw = message?.routing?.modelOverride;
-    if (!raw) return null;
-    const provider = raw.provider.trim().toLowerCase();
-    const model = raw.model.trim();
-    if (!provider || !model) return null;
-
-    return {
-      provider,
-      model,
-      ...(raw.maxTokens !== undefined ? { maxTokens: raw.maxTokens } : {}),
-      ...(raw.contextWindow !== undefined ? { contextWindow: raw.contextWindow } : {}),
-      ...(raw.slotKey ? { slotKey: raw.slotKey } : {}),
-      ...(raw.purpose ? { purpose: raw.purpose } : {}),
-    };
+  private normalizeTurnModelOverride(message?: SubstrateMessage) {
+    return normalizeTurnModelOverrideForRuntime(message);
   }
 
   private normalizeTurnPromptOverride(message: SubstrateMessage): MessagePromptOverride {
@@ -559,56 +494,27 @@ export class SubstrateAgent {
   }
 
   private getTurnModelSignature(message?: SubstrateMessage): string {
-    const override = this.normalizeTurnModelOverride(message);
-    if (!override) {
-      const purpose = this.resolveTurnModelPurpose(message);
-      return this.getModelSignatureForPurpose(purpose);
-    }
-    return `override::${override.provider}::${override.model}::${override.maxTokens ?? ''}::${override.contextWindow ?? ''}`;
+    return getTurnModelSignatureForRuntime(this.config, message);
   }
 
   private refreshModelFromConfig(
     reason: 'startup' | 'turn-start' | 'settings-update',
     message?: SubstrateMessage,
   ): void {
-    const override = this.normalizeTurnModelOverride(message);
-    const purpose = override ? null : this.resolveTurnModelPurpose(message);
-    const nextSignature = this.getTurnModelSignature(message);
-    if (this.modelResolved && this.modelSignature === nextSignature) {
-      return;
-    }
-
-    try {
-      const resolved = override
-        ? resolveExplicitModel(override)
-        : resolveModel(this.config, purpose ?? 'chat');
-      this.agent.setModel(resolved);
-      this.modelResolved = true;
-      this.modelSignature = nextSignature;
-      if (purpose === 'vision' && !resolved.input.includes('image')) {
-        log.warn('Vision purpose resolved to model without image input capability', {
-          reason,
-          model: resolved.id,
-          provider: resolved.provider,
-          channelId: message?.channelId,
-        });
-      }
-      log.info('Resolved runtime model', {
-        reason,
-        model: resolved.id,
-        override: Boolean(override),
-        ...(purpose ? { purpose } : {}),
-      });
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.modelResolved = true;
-      log.warn('Model refresh failed; keeping previous chat model', {
-        reason,
-        error: err.message,
-        currentModel: this.agent.state.model.id,
-      });
-      return;
-    }
+    const nextState = refreshModelFromConfigForRuntime({
+      reason,
+      config: this.config,
+      state: {
+        modelResolved: this.modelResolved,
+        modelSignature: this.modelSignature,
+      },
+      message,
+      setAgentModel: model => this.agent.setModel(model),
+      getCurrentModelId: () => this.agent.state.model.id,
+      logger: log,
+    });
+    this.modelResolved = nextState.modelResolved;
+    this.modelSignature = nextState.modelSignature;
   }
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
@@ -620,183 +526,40 @@ export class SubstrateAgent {
     }
   }
 
-  private inferToolConcurrencyClass(toolName: string): ToolConcurrencyClass {
-    if (toolName === 'spawn_shard') return 'spawn_shard';
-    if (PARALLEL_READ_ONLY_TOOL_NAMES.has(toolName)) return 'read_only';
-    return 'exclusive';
-  }
-
-  private inferToolInterruptibility(concurrencyClass: ToolConcurrencyClass): ToolInterruptibility {
-    if (concurrencyClass === 'spawn_shard') return 'non_interruptible';
-    return 'cooperative';
-  }
-
-  private inferToolEligibility(toolName: string, category: ToolCategory): ToolExecutionEligibility {
-    if (category === 'extended' && classifyDefaultExtendedToolForTurn(toolName) === 'background') {
-      return {
-        foreground: false,
-        background: true,
-      };
-    }
-    return {
-      foreground: true,
-      background: true,
-    };
-  }
-
   private withToolConcurrencyMetadata(tool: AgentTool<any>, category: ToolCategory): AgentTool<any> {
-    const wirable = tool as WirableTool;
-    const existingMeta = wirable.wiringMeta;
-    const existingConcurrency = existingMeta?.concurrency as Partial<ToolConcurrencyMeta> | undefined;
-    const inferredClass = this.inferToolConcurrencyClass(tool.name);
-    const inferredEligibility = this.inferToolEligibility(tool.name, category);
-    const resolvedClass = existingConcurrency?.class ?? inferredClass;
-    const concurrency: ToolConcurrencyMeta = {
-      class: resolvedClass,
-      exclusivityKeyPolicy: existingConcurrency?.exclusivityKeyPolicy
-        ?? (resolvedClass === 'exclusive' ? 'category_tool_name' : 'none'),
-      ...(existingConcurrency?.exclusivityKey ? { exclusivityKey: existingConcurrency.exclusivityKey } : {}),
-      ...(existingConcurrency?.maxParallel !== undefined ? { maxParallel: existingConcurrency.maxParallel } : {}),
-      interruptibility: existingConcurrency?.interruptibility
-        ?? this.inferToolInterruptibility(resolvedClass),
-      eligibility: existingConcurrency?.eligibility
-        ? {
-          foreground: typeof existingConcurrency.eligibility.foreground === 'boolean'
-            ? existingConcurrency.eligibility.foreground
-            : inferredEligibility.foreground,
-          background: typeof existingConcurrency.eligibility.background === 'boolean'
-            ? existingConcurrency.eligibility.background
-            : inferredEligibility.background,
-        }
-        : inferredEligibility,
-    };
-
-    if (concurrency.class === 'exclusive') {
-      if (!concurrency.exclusivityKey || concurrency.exclusivityKey.trim().length === 0) {
-        concurrency.exclusivityKey = `${category}:${tool.name}`;
-        concurrency.exclusivityKeyPolicy = 'category_tool_name';
-      } else if (
-        concurrency.exclusivityKeyPolicy === 'none'
-      ) {
-        concurrency.exclusivityKeyPolicy = 'static_key';
-      }
-    } else {
-      concurrency.exclusivityKeyPolicy = 'none';
-      delete concurrency.exclusivityKey;
-      if (concurrency.maxParallel === undefined) {
-        concurrency.maxParallel = concurrency.class === 'spawn_shard'
-          ? DEFAULT_SPAWN_SHARD_PARALLEL_MAX
-          : DEFAULT_PARALLEL_READ_MAX;
-      }
-    }
-
-    wirable.wiringMeta = {
-      ...(existingMeta ?? {}),
-      concurrency,
-    };
-    return wirable;
-  }
-
-  private normalizePromotedExtendedToolNames(raw: readonly string[] | undefined): string[] {
-    if (!Array.isArray(raw)) return [];
-    const normalized: string[] = [];
-    const seen = new Set<string>();
-    for (const entry of raw) {
-      if (typeof entry !== 'string') continue;
-      const name = entry.trim();
-      if (!name || seen.has(name)) continue;
-      normalized.push(name);
-      seen.add(name);
-      if (normalized.length >= PROMOTED_EXTENDED_TOOL_SLOTS_MAX) break;
-    }
-    return normalized;
-  }
-
-  private toolNameListsEqual(a: readonly string[], b: readonly string[]): boolean {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i += 1) {
-      if (a[i] !== b[i]) return false;
-    }
-    return true;
+    return withToolConcurrencyMetadataForRuntime(tool, category);
   }
 
   private getPromotedExtendedToolNamesInternal(): string[] {
-    const current = this.normalizePromotedExtendedToolNames(this.config.promotedExtendedTools);
-    const configured = this.config.promotedExtendedTools ?? [];
-    if (!this.toolNameListsEqual(current, configured)) {
-      this.config.promotedExtendedTools = current;
-    }
-    return current;
+    return getPromotedExtendedToolNamesForRuntime(this.config);
   }
 
   private setPromotedExtendedToolNamesInternal(next: readonly string[]): string[] {
-    const normalized = this.normalizePromotedExtendedToolNames(next);
-    this.config.promotedExtendedTools = normalized;
-    return normalized;
+    return setPromotedExtendedToolNamesForRuntime(this.config, next);
   }
 
   private persistPromotedExtendedToolNames(next: readonly string[]): string | null {
-    const persist = this.config.runtimeHooks?.persistPromotedExtendedTools;
-    if (!persist) return null;
-    try {
-      persist([...next]);
-      return null;
-    } catch (error) {
-      return toErrorMessage(error);
-    }
+    return persistPromotedExtendedToolNamesForRuntime(this.config, next);
   }
 
   private getExtendedToolByName(name: string): AgentTool<any> | null {
-    return this.extendedTools.find(tool => tool.name === name) ?? null;
+    return getExtendedToolByNameForRuntime(this.extendedTools, name);
   }
 
-  private classifyExtendedToolForTurn(toolName: string): ExtendedToolTurnClass {
-    const classifier = this.extendedToolAutoloadPolicy?.classifyToolForTurn;
-    if (!classifier) {
-      return classifyDefaultExtendedToolForTurn(toolName);
-    }
-    return classifier(toolName);
+  private classifyExtendedToolForTurn(toolName: string) {
+    return classifyExtendedToolForTurnForRuntime(
+      toolName,
+      this.extendedToolAutoloadPolicy?.classifyToolForTurn ?? null,
+    );
   }
 
   private resolvePromotedToolActivation(): PromotedToolResolution {
-    const promoted = this.getPromotedExtendedToolNamesInternal();
-    const access = this.resolveCapabilityAccess();
-    const activeNames = new Set<string>();
-    const skipped: AdaptiveToolSnapshotSkip[] = [];
-    for (const toolName of promoted) {
-      const tool = this.getExtendedToolByName(toolName);
-      if (!tool) {
-        skipped.push({
-          toolName,
-          source: 'promoted',
-          reason: 'not_registered',
-        });
-        continue;
-      }
-      if (this.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
-        skipped.push({
-          toolName: tool.name,
-          source: 'promoted',
-          reason: 'background_only',
-        });
-        continue;
-      }
-      const eligibility = evaluateToolCapabilityEligibility(tool, {}, access);
-      if (!eligibility.allowed) {
-        skipped.push({
-          toolName: tool.name,
-          source: 'promoted',
-          reason: 'capability_denied',
-          ...(eligibility.missingTokens.length > 0 ? { missingTokens: eligibility.missingTokens } : {}),
-        });
-        continue;
-      }
-      activeNames.add(tool.name);
-    }
-    return {
-      activeNames,
-      skipped,
-    };
+    return resolvePromotedToolActivationForRuntime({
+      promotedTools: this.getPromotedExtendedToolNamesInternal(),
+      extendedTools: this.extendedTools,
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
+      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
+    });
   }
 
   private getCapabilityEligiblePromotedToolNames(): Set<string> {
@@ -807,109 +570,33 @@ export class SubstrateAgent {
     toolName: string,
     source: Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>,
   ): 'activated' | 'already_active' {
-    const now = Date.now();
-    const existing = this.loadedExtended.get(toolName);
-    if (!existing) {
-      this.loadedExtended.set(toolName, {
-        toolName,
-        source,
-        activatedAt: now,
-        lastActivatedAt: now,
-      });
-      return 'activated';
-    }
-
-    const shouldPromoteSource = LOADED_TOOL_SOURCE_PRIORITY[source] > LOADED_TOOL_SOURCE_PRIORITY[existing.source];
-    this.loadedExtended.set(toolName, {
-      ...existing,
-      source: shouldPromoteSource ? source : existing.source,
-      lastActivatedAt: now,
-    });
-    return 'already_active';
+    return trackLoadedExtendedToolForRuntime(this.loadedExtended, toolName, source);
   }
 
   private mergeAdaptiveSkips(...groups: AdaptiveToolSnapshotSkip[][]): AdaptiveToolSnapshotSkip[] {
-    const deduped = new Map<string, AdaptiveToolSnapshotSkip>();
-    for (const group of groups) {
-      for (const entry of group) {
-        const missingTokensKey = (entry.missingTokens ?? []).join(',');
-        const key = `${entry.source}:${entry.toolName}:${entry.reason}:${missingTokensKey}`;
-        if (deduped.has(key)) continue;
-        deduped.set(key, {
-          ...entry,
-          ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
-        });
-      }
-    }
-    return [...deduped.values()];
+    return mergeAdaptiveSkipsForRuntime(...groups);
   }
 
   private resolveActiveTools(
     additionalSkipped: AdaptiveToolSnapshotSkip[] = [],
   ): ActiveToolResolution {
-    const activeByName = new Map<string, { tool: AgentTool<any>; source: AdaptiveToolActivationSource }>();
-    for (const tool of this.coreTools) {
-      if (!activeByName.has(tool.name)) {
-        activeByName.set(tool.name, {
-          tool,
-          source: 'core',
-        });
-      }
-    }
-
-    const promotedResolution = this.resolvePromotedToolActivation();
-    for (const tool of this.extendedTools) {
-      if (this.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
-        continue;
-      }
-      const loaded = this.loadedExtended.get(tool.name);
-      const source: AdaptiveToolActivationSource | null = promotedResolution.activeNames.has(tool.name)
-        ? 'promoted'
-        : (loaded?.source ?? null);
-      if (!source) {
-        continue;
-      }
-      if (!activeByName.has(tool.name)) {
-        activeByName.set(tool.name, {
-          tool,
-          source,
-        });
-      }
-    }
-
-    const snapshotTools: AdaptiveToolSnapshotTool[] = [...activeByName.values()]
-      .map((entry) => ({
-        toolName: entry.tool.name,
-        source: entry.source,
-      }));
-
-    const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
-      core: 0,
-      promoted: 0,
-      extendedLoaded: 0,
-      autoload: 0,
-      deferred: 0,
-      total: snapshotTools.length,
-    };
-    for (const entry of snapshotTools) {
-      if (entry.source === 'core') counts.core += 1;
-      else if (entry.source === 'promoted') counts.promoted += 1;
-      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
-      else if (entry.source === 'autoload') counts.autoload += 1;
-      else counts.deferred += 1;
-    }
-
-    return {
-      tools: [...activeByName.values()].map(entry => entry.tool),
-      snapshotTools,
-      promotedSkipped: this.mergeAdaptiveSkips(promotedResolution.skipped, additionalSkipped),
-      counts,
-    };
+    return resolveActiveToolsForRuntime({
+      coreTools: this.coreTools,
+      extendedTools: this.extendedTools,
+      loadedExtended: this.loadedExtended,
+      promotedResolution: this.resolvePromotedToolActivation(),
+      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
+      additionalSkipped,
+    });
   }
 
   private applyActiveToolsToAgent(): void {
     const resolution = this.resolveActiveTools();
-    this.agent.setTools(this.withCapabilityGates(resolution.tools));
+    applyActiveToolsToAgentForRuntime({
+      resolution,
+      withCapabilityGates: tools => this.withCapabilityGates(tools),
+      setAgentTools: tools => this.agent.setTools(tools),
+    });
   }
 
   private applyActiveToolsToAgentForTurn(
@@ -920,56 +607,34 @@ export class SubstrateAgent {
     autoloadOutcome: AutoloadTurnOutcome,
   ): void {
     const resolution = this.resolveActiveTools(autoloadOutcome.skipped);
-    this.agent.setTools(this.withCapabilityGates(resolution.tools));
+    applyActiveToolsToAgentForRuntime({
+      resolution,
+      withCapabilityGates: tools => this.withCapabilityGates(tools),
+      setAgentTools: tools => this.agent.setTools(tools),
+    });
 
-    const snapshot: AdaptiveToolSnapshotTelemetry = {
-      ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.snapshot'),
-      turnId: correlation.turnId,
-      requestId: correlation.requestId,
-      channelId: message.channelId,
+    const snapshot = buildAdaptiveToolSnapshotForRuntime({
+      message,
+      taskKind,
       callType,
-      timestamp: Date.now(),
-      tools: resolution.snapshotTools.map(tool => ({ ...tool })),
-      skipped: resolution.promotedSkipped.map(skip => ({
-        ...skip,
-        ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
-      })),
-      counts: { ...resolution.counts },
-      taskKind: taskKind ?? null,
-      intent: autoloadOutcome.intent,
-    };
+      correlation,
+      autoloadOutcome,
+      resolution,
+      withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
+    });
     this.lastAdaptiveToolSnapshot = snapshot;
     this.emitTelemetry('agent.tools.adaptive.snapshot', snapshot as unknown as Record<string, unknown>);
 
-    for (const tool of snapshot.tools) {
-      this.emitAdaptiveToolDecision({
-        ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
-        toolName: tool.toolName,
-        source: tool.source,
-        decision: 'active',
-        reason: 'turn_active_set',
-        taskKind: snapshot.taskKind ?? null,
-        intent: snapshot.intent ?? null,
-      });
-    }
-
-    for (const skip of snapshot.skipped) {
-      if (skip.source !== 'promoted') continue;
-      this.emitAdaptiveToolDecision({
-        ...this.withAdaptiveCorrelation(correlation, 'agent.tools.adaptive.decision'),
-        toolName: skip.toolName,
-        source: skip.source,
-        decision: 'skipped',
-        reason: skip.reason,
-        ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
-        taskKind: snapshot.taskKind ?? null,
-        intent: snapshot.intent ?? null,
-      });
-    }
+    emitAdaptiveToolSnapshotDecisionsForRuntime({
+      snapshot,
+      correlation,
+      withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
+      emitAdaptiveToolDecision: payload => this.emitAdaptiveToolDecision(payload),
+    });
   }
 
   getPromotedExtendedToolsLimit(): number {
-    return PROMOTED_EXTENDED_TOOL_SLOTS_MAX;
+    return getPromotedExtendedToolsLimitForRuntime();
   }
 
   getPromotedExtendedTools(): readonly string[] {
@@ -977,203 +642,39 @@ export class SubstrateAgent {
   }
 
   addPromotedExtendedTool(toolName: string): PromotedToolMutationResult {
-    const normalizedName = toolName.trim();
-    if (!normalizedName) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: this.getPromotedExtendedToolNamesInternal(),
-        message: 'Tool name cannot be empty.',
-        errorCode: 'invalid_name',
-      };
-    }
-
-    const current = this.getPromotedExtendedToolNamesInternal();
-    if (current.includes(normalizedName)) {
-      return {
-        ok: true,
-        changed: false,
-        promotedTools: current,
-        message: `Tool "${normalizedName}" is already promoted.`,
-        errorCode: 'duplicate',
-      };
-    }
-
-    if (current.length >= PROMOTED_EXTENDED_TOOL_SLOTS_MAX) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Promoted tool slots are full (max ${PROMOTED_EXTENDED_TOOL_SLOTS_MAX}).`,
-        errorCode: 'max_slots',
-      };
-    }
-
-    const tool = this.getExtendedToolByName(normalizedName);
-    if (!tool) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Tool "${normalizedName}" is not available in the extended catalog.`,
-        errorCode: 'tool_not_extended',
-      };
-    }
-    if (this.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Tool "${normalizedName}" is background-only and cannot be promoted.`,
-        errorCode: 'background_only',
-      };
-    }
-
-    const access = this.resolveCapabilityAccess();
-    const eligibility = evaluateToolCapabilityEligibility(tool, {}, access);
-    if (!eligibility.allowed) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Tool "${normalizedName}" is not allowed for capability tier "${access.getTier()}".`,
-        errorCode: 'capability_denied',
-        requiredTokens: eligibility.requiredTokens,
-        missingTokens: eligibility.missingTokens,
-      };
-    }
-
-    const next = [...current, normalizedName];
-    const persistError = this.persistPromotedExtendedToolNames(next);
-    if (persistError) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Failed to persist promoted tools: ${persistError}`,
-        errorCode: 'persist_failed',
-      };
-    }
-
-    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
-    this.applyActiveToolsToAgent();
-    return {
-      ok: true,
-      changed: true,
-      promotedTools,
-      message: `Promoted tool "${normalizedName}".`,
-    };
+    return addPromotedExtendedToolForRuntime(toolName, {
+      getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
+      setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
+      persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
+      getExtendedToolByName: (name) => this.getExtendedToolByName(name),
+      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
+      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
+    });
   }
 
   removePromotedExtendedTool(toolName: string): PromotedToolMutationResult {
-    const normalizedName = toolName.trim();
-    if (!normalizedName) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: this.getPromotedExtendedToolNamesInternal(),
-        message: 'Tool name cannot be empty.',
-        errorCode: 'invalid_name',
-      };
-    }
-
-    const current = this.getPromotedExtendedToolNamesInternal();
-    if (!current.includes(normalizedName)) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Tool "${normalizedName}" is not currently promoted.`,
-        errorCode: 'not_found',
-      };
-    }
-
-    const next = current.filter(name => name !== normalizedName);
-    const persistError = this.persistPromotedExtendedToolNames(next);
-    if (persistError) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Failed to persist promoted tools: ${persistError}`,
-        errorCode: 'persist_failed',
-      };
-    }
-
-    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
-    this.applyActiveToolsToAgent();
-    return {
-      ok: true,
-      changed: true,
-      promotedTools,
-      message: `Removed promoted tool "${normalizedName}".`,
-    };
+    return removePromotedExtendedToolForRuntime(toolName, {
+      getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
+      setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
+      persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
+      getExtendedToolByName: (name) => this.getExtendedToolByName(name),
+      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
+      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
+    });
   }
 
   swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult {
-    const current = this.getPromotedExtendedToolNamesInternal();
-    if (
-      !Number.isInteger(fromSlot)
-      || !Number.isInteger(toSlot)
-      || fromSlot < 1
-      || toSlot < 1
-      || fromSlot > current.length
-      || toSlot > current.length
-    ) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Slots must be integers between 1 and ${current.length}.`,
-        errorCode: 'invalid_slot',
-      };
-    }
-
-    if (fromSlot === toSlot) {
-      return {
-        ok: true,
-        changed: false,
-        promotedTools: current,
-        message: 'Swap slots are identical; no change made.',
-      };
-    }
-
-    const fromIndex = fromSlot - 1;
-    const toIndex = toSlot - 1;
-    const next = [...current];
-    const fromTool = next[fromIndex];
-    const toTool = next[toIndex];
-    if (!fromTool || !toTool) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Slots must be integers between 1 and ${current.length}.`,
-        errorCode: 'invalid_slot',
-      };
-    }
-    next[fromIndex] = toTool;
-    next[toIndex] = fromTool;
-
-    const persistError = this.persistPromotedExtendedToolNames(next);
-    if (persistError) {
-      return {
-        ok: false,
-        changed: false,
-        promotedTools: current,
-        message: `Failed to persist promoted tools: ${persistError}`,
-        errorCode: 'persist_failed',
-      };
-    }
-
-    const promotedTools = this.setPromotedExtendedToolNamesInternal(next);
-    this.applyActiveToolsToAgent();
-    return {
-      ok: true,
-      changed: true,
-      promotedTools,
-      message: `Swapped promoted tool slots ${fromSlot} and ${toSlot}.`,
-    };
+    return swapPromotedExtendedToolsForRuntime(fromSlot, toSlot, {
+      getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
+      setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
+      persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
+      getExtendedToolByName: (name) => this.getExtendedToolByName(name),
+      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
+      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
+    });
   }
 
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
@@ -1187,34 +688,15 @@ export class SubstrateAgent {
     const promotedResolution = this.resolvePromotedToolActivation();
     const activeResolution = this.resolveActiveTools();
 
-    return {
-      generatedAt: Date.now(),
-      coreTools: this.coreTools.map(tool => tool.name),
-      extendedTools: this.extendedTools.map(tool => tool.name),
+    return buildAdaptiveToolRuntimeStateForRuntime({
+      coreTools: this.coreTools,
+      extendedTools: this.extendedTools,
+      loadedExtended: this.loadedExtended,
       promotedToolsConfigured: this.getPromotedExtendedToolNamesInternal(),
-      promotedToolsActive: [...promotedResolution.activeNames],
-      promotedToolsSkipped: promotedResolution.skipped.map(entry => ({
-        ...entry,
-        ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
-      })),
-      loadedExtendedTools: [...this.loadedExtended.values()].map(entry => ({
-        ...entry,
-      })),
-      activeTools: activeResolution.snapshotTools.map(entry => ({
-        ...entry,
-      })),
-      lastSnapshot: this.lastAdaptiveToolSnapshot
-        ? {
-          ...this.lastAdaptiveToolSnapshot,
-          tools: this.lastAdaptiveToolSnapshot.tools.map(tool => ({ ...tool })),
-          skipped: this.lastAdaptiveToolSnapshot.skipped.map(skip => ({
-            ...skip,
-            ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
-          })),
-          counts: { ...this.lastAdaptiveToolSnapshot.counts },
-        }
-        : null,
-    };
+      promotedResolution,
+      activeResolution,
+      lastSnapshot: this.lastAdaptiveToolSnapshot,
+    });
   }
 
   getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {

@@ -95,10 +95,20 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     retryMaxAttempts: config.retryMaxAttempts ?? null,
     retryBaseDelayMs: config.retryBaseDelayMs ?? null,
     openRouterProviderOrder: config.openRouterProviderOrder ?? [],
+    openRouterModelsApiUrl: config.openRouterModelsApiUrl ?? null,
     importProcessingRouteMode: config.importProcessingRouteMode ?? 'background',
     importProcessingStrictPolicy: config.importProcessingStrictPolicy ?? false,
     importProcessingLocalEndpointUrl: config.importProcessingLocalEndpointUrl ?? null,
     importProcessingLocalModel: config.importProcessingLocalModel ?? null,
+    embeddingProvider: config.embeddingProvider ?? 'ollama',
+    embeddingModel: config.embeddingModel ?? null,
+    embeddingDims: config.embeddingDims ?? null,
+    embeddingOllamaUrl: config.embeddingOllamaUrl ?? null,
+    transformersModel: config.transformersModel ?? null,
+    transformersCacheDir: config.transformersCacheDir ?? null,
+    embeddingApiUrl: config.embeddingApiUrl ?? null,
+    embeddingApiModel: config.embeddingApiModel ?? null,
+    embeddingApiDims: config.embeddingApiDims ?? null,
     compositionalPolicy: cloneCompositionalPolicyConfig(
       config.compositionalPolicy ?? createDefaultCompositionalPolicyConfig(),
     ),
@@ -124,6 +134,10 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     echoTtsPreset: config.echoTtsPreset ?? '',
     sttProvider: resolveRuntimeSttProvider(config),
     deepgramModel: config.deepgramModel ?? 'nova-3',
+    deepgramSttEndpoint: config.deepgramSttEndpoint ?? null,
+    deepgramListenEndpoint: config.deepgramListenEndpoint ?? null,
+    elevenLabsModelId: config.elevenLabsModelId ?? null,
+    elevenLabsEndpointBase: config.elevenLabsEndpointBase ?? null,
     // Channels
     discordEnabled: Boolean(config.discordToken),
     discordHeartbeatChannel: null,
@@ -232,6 +246,10 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
       ? [...settings.openRouterProviderOrder]
       : undefined;
   }
+  if ('openRouterModelsApiUrl' in settings) {
+    const trimmed = settings.openRouterModelsApiUrl?.trim() ?? '';
+    config.openRouterModelsApiUrl = trimmed || undefined;
+  }
   if ('importProcessingRouteMode' in settings) {
     config.importProcessingRouteMode = settings.importProcessingRouteMode ?? 'background';
   }
@@ -245,6 +263,39 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if ('importProcessingLocalModel' in settings) {
     const trimmed = settings.importProcessingLocalModel?.trim() ?? '';
     config.importProcessingLocalModel = trimmed || undefined;
+  }
+  if ('embeddingProvider' in settings) {
+    config.embeddingProvider = settings.embeddingProvider ?? 'ollama';
+  }
+  if ('embeddingModel' in settings) {
+    const trimmed = settings.embeddingModel?.trim() ?? '';
+    config.embeddingModel = trimmed || undefined;
+  }
+  if ('embeddingDims' in settings) {
+    config.embeddingDims = settings.embeddingDims ?? undefined;
+  }
+  if ('embeddingOllamaUrl' in settings) {
+    const trimmed = settings.embeddingOllamaUrl?.trim() ?? '';
+    config.embeddingOllamaUrl = trimmed || undefined;
+  }
+  if ('transformersModel' in settings) {
+    const trimmed = settings.transformersModel?.trim() ?? '';
+    config.transformersModel = trimmed || undefined;
+  }
+  if ('transformersCacheDir' in settings) {
+    const trimmed = settings.transformersCacheDir?.trim() ?? '';
+    config.transformersCacheDir = trimmed || undefined;
+  }
+  if ('embeddingApiUrl' in settings) {
+    const trimmed = settings.embeddingApiUrl?.trim() ?? '';
+    config.embeddingApiUrl = trimmed || undefined;
+  }
+  if ('embeddingApiModel' in settings) {
+    const trimmed = settings.embeddingApiModel?.trim() ?? '';
+    config.embeddingApiModel = trimmed || undefined;
+  }
+  if ('embeddingApiDims' in settings) {
+    config.embeddingApiDims = settings.embeddingApiDims ?? undefined;
   }
   if ('compositionalPolicy' in settings) {
     config.compositionalPolicy = cloneCompositionalPolicyConfig(settings.compositionalPolicy);
@@ -325,6 +376,22 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if ('deepgramModel' in settings) {
     const trimmed = settings.deepgramModel?.trim() ?? '';
     config.deepgramModel = trimmed || undefined;
+  }
+  if ('deepgramSttEndpoint' in settings) {
+    const trimmed = settings.deepgramSttEndpoint?.trim() ?? '';
+    config.deepgramSttEndpoint = trimmed || undefined;
+  }
+  if ('deepgramListenEndpoint' in settings) {
+    const trimmed = settings.deepgramListenEndpoint?.trim() ?? '';
+    config.deepgramListenEndpoint = trimmed || undefined;
+  }
+  if ('elevenLabsModelId' in settings) {
+    const trimmed = settings.elevenLabsModelId?.trim() ?? '';
+    config.elevenLabsModelId = trimmed || undefined;
+  }
+  if ('elevenLabsEndpointBase' in settings) {
+    const trimmed = settings.elevenLabsEndpointBase?.trim() ?? '';
+    config.elevenLabsEndpointBase = trimmed || undefined;
   }
 
   // Channels

@@ -352,12 +352,14 @@ async function main(): Promise<void> {
   const ttsClient = new ElevenLabsTtsClient({
     apiKey: config.elevenLabsApiKey!,
     voiceId: config.elevenLabsVoiceId!,
-    modelId: config.elevenLabsModelId,
+    modelId: config.elevenLabsModelId!,
+    endpointBase: config.elevenLabsEndpointBase!,
   });
 
   const sttClient = new DeepgramSttClient({
     apiKey: config.deepgramApiKey!,
-    model: config.deepgramModel,
+    model: config.deepgramModel!,
+    endpoint: config.deepgramListenEndpoint!,
   });
 
   // Step 1: seed text -> elevenlabs audio

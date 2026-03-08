@@ -89,9 +89,11 @@ describe('createStreamingSttConnector', () => {
     expect(resolveStreamingSttRuntimeConfig('deepgram', {
       deepgramApiKey: 'test-key',
       deepgramModel: 'nova-3',
+      deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
     })).toEqual({
       apiKey: 'test-key',
       model: 'nova-3',
+      endpoint: 'wss://api.deepgram.com/v1/listen',
     });
   });
 

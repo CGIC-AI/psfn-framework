@@ -25,6 +25,7 @@ import { isCapabilityTier } from '../capabilities/tiers.js';
 import {
   normalizeSttProvider,
   normalizeTtsProvider,
+  toEmbeddingProvider,
   toBoolean,
   toImportProcessingRouteMode,
   toIntegerInRange,
@@ -1037,6 +1038,12 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.openRouterProviderOrder = toStringList(settings.openRouterProviderOrder) ?? [];
   }
 
+  if ('openRouterModelsApiUrl' in settings) {
+    normalized.openRouterModelsApiUrl = typeof settings.openRouterModelsApiUrl === 'string'
+      ? settings.openRouterModelsApiUrl.trim()
+      : '';
+  }
+
   if ('importProcessingRouteMode' in settings) {
     normalized.importProcessingRouteMode = toImportProcessingRouteMode(settings.importProcessingRouteMode);
   }
@@ -1057,6 +1064,59 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
       typeof settings.importProcessingLocalModel === 'string'
         ? settings.importProcessingLocalModel.trim()
         : '';
+  }
+
+  if ('embeddingProvider' in settings) {
+    const provider = toEmbeddingProvider(settings.embeddingProvider);
+    if (provider) {
+      normalized.embeddingProvider = provider;
+    } else {
+      delete normalized.embeddingProvider;
+    }
+  }
+
+  if ('embeddingModel' in settings) {
+    normalized.embeddingModel = typeof settings.embeddingModel === 'string'
+      ? settings.embeddingModel.trim()
+      : '';
+  }
+
+  if ('embeddingDims' in settings) {
+    normalized.embeddingDims = toPositiveInteger(settings.embeddingDims);
+  }
+
+  if ('embeddingOllamaUrl' in settings) {
+    normalized.embeddingOllamaUrl = typeof settings.embeddingOllamaUrl === 'string'
+      ? settings.embeddingOllamaUrl.trim()
+      : '';
+  }
+
+  if ('transformersModel' in settings) {
+    normalized.transformersModel = typeof settings.transformersModel === 'string'
+      ? settings.transformersModel.trim()
+      : '';
+  }
+
+  if ('transformersCacheDir' in settings) {
+    normalized.transformersCacheDir = typeof settings.transformersCacheDir === 'string'
+      ? settings.transformersCacheDir.trim()
+      : '';
+  }
+
+  if ('embeddingApiUrl' in settings) {
+    normalized.embeddingApiUrl = typeof settings.embeddingApiUrl === 'string'
+      ? settings.embeddingApiUrl.trim()
+      : '';
+  }
+
+  if ('embeddingApiModel' in settings) {
+    normalized.embeddingApiModel = typeof settings.embeddingApiModel === 'string'
+      ? settings.embeddingApiModel.trim()
+      : '';
+  }
+
+  if ('embeddingApiDims' in settings) {
+    normalized.embeddingApiDims = toPositiveInteger(settings.embeddingApiDims);
   }
 
   if ('compositionalPolicy' in settings) {
@@ -1160,6 +1220,22 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
   }
   if ('deepgramModel' in settings) {
     normalized.deepgramModel = typeof settings.deepgramModel === 'string' ? settings.deepgramModel.trim() : '';
+  }
+  if ('deepgramSttEndpoint' in settings) {
+    normalized.deepgramSttEndpoint =
+      typeof settings.deepgramSttEndpoint === 'string' ? settings.deepgramSttEndpoint.trim() : '';
+  }
+  if ('deepgramListenEndpoint' in settings) {
+    normalized.deepgramListenEndpoint =
+      typeof settings.deepgramListenEndpoint === 'string' ? settings.deepgramListenEndpoint.trim() : '';
+  }
+  if ('elevenLabsModelId' in settings) {
+    normalized.elevenLabsModelId =
+      typeof settings.elevenLabsModelId === 'string' ? settings.elevenLabsModelId.trim() : '';
+  }
+  if ('elevenLabsEndpointBase' in settings) {
+    normalized.elevenLabsEndpointBase =
+      typeof settings.elevenLabsEndpointBase === 'string' ? settings.elevenLabsEndpointBase.trim() : '';
   }
 
   // Channels

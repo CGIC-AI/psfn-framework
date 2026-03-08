@@ -1,7 +1,20 @@
 import type { EmbeddingService } from '../agent/contracts.js';
 import { createComponentLogger } from '../logger.js';
+import type { SubstrateConfig } from '../types.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
+
+export interface EmbeddingProviderRuntimeConfig {
+  embeddingProvider?: SubstrateConfig['embeddingProvider'];
+  embeddingModel?: string;
+  embeddingDims?: number;
+  embeddingOllamaUrl?: string;
+  transformersModel?: string;
+  transformersCacheDir?: string;
+  embeddingApiUrl?: string;
+  embeddingApiModel?: string;
+  embeddingApiDims?: number;
+}
 
 /** Callable feature-extraction pipeline from @huggingface/transformers. */
 interface FeatureExtractionPipelineType {
@@ -86,6 +99,16 @@ function parsePositiveInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  }
+  if (typeof value === 'string') {
+    return parsePositiveInt(value);
+  }
+  return undefined;
 }
 
 function appendPath(baseUrl: string, suffix: string): string {
@@ -405,6 +428,78 @@ function resolveApiProvider(env: NodeJS.ProcessEnv): ApiEmbeddingProvider {
     ...(apiKey ? { apiKey } : {}),
     ...(dims ? { dims } : {}),
   });
+}
+
+function resolveOllamaProviderFromRuntimeConfig(
+  config: EmbeddingProviderRuntimeConfig,
+): OllamaEmbeddingProvider {
+  const ollamaUrl = config.embeddingOllamaUrl?.trim();
+  const model = config.embeddingModel?.trim();
+  const dims = toPositiveInteger(config.embeddingDims);
+  if (!ollamaUrl || !model || !dims) {
+    throw new Error('Ollama embeddings require embeddingOllamaUrl, embeddingModel, and embeddingDims in settings.json');
+  }
+
+  return new OllamaEmbeddingProvider({
+    ollamaUrl,
+    model,
+    dims,
+  });
+}
+
+function resolveTransformersProviderFromRuntimeConfig(
+  config: EmbeddingProviderRuntimeConfig,
+): TransformersEmbeddingProvider {
+  const model = (config.transformersModel ?? config.embeddingModel)?.trim();
+  const dims = toPositiveInteger(config.embeddingDims);
+  if (!model || !dims) {
+    throw new Error(
+      'Transformers embeddings require transformersModel (or embeddingModel) and embeddingDims in settings.json',
+    );
+  }
+
+  return new TransformersEmbeddingProvider({
+    model,
+    dims,
+    ...(config.transformersCacheDir?.trim()
+      ? { cacheDir: config.transformersCacheDir.trim() }
+      : {}),
+  });
+}
+
+function resolveApiProviderFromRuntimeConfig(
+  config: EmbeddingProviderRuntimeConfig,
+  env: NodeJS.ProcessEnv,
+): ApiEmbeddingProvider {
+  const endpoint = config.embeddingApiUrl?.trim();
+  const model = (config.embeddingApiModel ?? config.embeddingModel)?.trim();
+  const dims = toPositiveInteger(config.embeddingApiDims ?? config.embeddingDims);
+  const apiKey = env.EMBEDDING_API_KEY ?? env.OPENAI_API_KEY ?? env.LITELLM_API_KEY;
+  if (!endpoint || !model || !dims) {
+    throw new Error('API embeddings require embeddingApiUrl, embeddingApiModel (or embeddingModel), and embeddingApiDims in settings.json');
+  }
+
+  return new ApiEmbeddingProvider({
+    endpoint,
+    model,
+    dims,
+    ...(apiKey ? { apiKey } : {}),
+  });
+}
+
+export function createEmbeddingProviderFromConfig(
+  config: EmbeddingProviderRuntimeConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): EmbeddingRuntimeProvider {
+  const provider = resolveEmbeddingProviderKind(config.embeddingProvider);
+  switch (provider) {
+    case 'ollama':
+      return resolveOllamaProviderFromRuntimeConfig(config);
+    case 'transformers':
+      return resolveTransformersProviderFromRuntimeConfig(config);
+    case 'api':
+      return resolveApiProviderFromRuntimeConfig(config, env);
+  }
 }
 
 export function createEmbeddingProviderFromEnv(

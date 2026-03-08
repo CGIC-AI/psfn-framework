@@ -178,6 +178,8 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'thinkMaxSubQueries',
   'retryMaxAttempts',
   'retryBaseDelayMs',
+  'embeddingDims',
+  'embeddingApiDims',
   'discordTriggerListenWindowMs',
   'obsidianTimeoutMs',
   'moaMaxRounds',
@@ -228,6 +230,7 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
   ['importProcessingRouteMode', IMPORT_PROCESSING_ROUTE_MODE_VALUES],
   ['sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES],
   ['capabilityTier', CAPABILITY_TIER_VALUES],
+  ['embeddingProvider', ['ollama', 'transformers', 'api']],
 ]);
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([

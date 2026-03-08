@@ -8,7 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { LLMClient } from './llm/client.js';
-import { createEmbeddingProviderFromEnv } from './memory/embedding.js';
+import { createEmbeddingProviderFromConfig } from './memory/embedding.js';
 import type { DiscordAdapter } from './channels/discord/adapter.js';
 import type { TelegramAdapter } from './channels/telegram/adapter.js';
 import {
@@ -532,7 +532,7 @@ async function main(): Promise<void> {
   ensureRegistryFile(moduleRegistryAbsolute);
 
   // ── Create providers (these hold secrets / have network access) ──
-  const embeddingProvider = createEmbeddingProviderFromEnv(process.env);
+  const embeddingProvider = createEmbeddingProviderFromConfig(config, process.env);
   log.info('Embedding provider initialized', {
     provider: embeddingProvider.kind,
     dims: embeddingProvider.dims,

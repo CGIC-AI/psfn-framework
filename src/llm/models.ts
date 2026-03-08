@@ -54,25 +54,19 @@ export function createLiteLLMModel(config: LiteLLMModelConfig): Model<'openai-co
   };
 }
 
-/** Known model defaults for the companion's preferred models */
-const MODEL_DEFAULTS: Record<string, Partial<LiteLLMModelConfig>> = {
-  'z-ai/glm-5': { contextWindow: 128_000, maxTokens: 16384, reasoning: true, thinkingFormat: 'zai' },
-  'deepseek/deepseek-v3.2': { contextWindow: 128_000, maxTokens: 16384 },
-  'moonshotai/kimi-k2.5': { contextWindow: 128_000, maxTokens: 16384, reasoning: true, thinkingFormat: 'qwen' },
-};
-
 /**
- * Create a LiteLLM model with sensible defaults for known models.
- * Falls back to generic defaults for unknown model IDs.
+ * Create a LiteLLM model using caller-provided routing metadata.
  */
-export function createModel(baseUrl: string, modelId: string, maxTokens?: number): Model<'openai-completions'> {
-  const defaults = MODEL_DEFAULTS[modelId] ?? {};
+export function createModel(
+  baseUrl: string,
+  modelId: string,
+  maxTokens?: number,
+  contextWindow?: number,
+): Model<'openai-completions'> {
   return createLiteLLMModel({
     baseUrl,
     modelId,
-    contextWindow: defaults.contextWindow,
-    maxTokens: maxTokens ?? defaults.maxTokens,
-    reasoning: defaults.reasoning,
-    thinkingFormat: defaults.thinkingFormat,
+    contextWindow,
+    maxTokens,
   });
 }

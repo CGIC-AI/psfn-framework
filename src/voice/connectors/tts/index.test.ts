@@ -29,6 +29,8 @@ describe('createStreamingTtsConnector', () => {
     const connector = createStreamingTtsConnector('elevenlabs', {
       apiKey: 'test-key',
       voiceId: 'test-voice',
+      modelId: 'eleven_turbo_v2_5',
+      endpointBase: 'https://api.elevenlabs.io/v1',
     });
 
     expect(connector).toBeInstanceOf(ElevenLabsStreamingTtsConnector);

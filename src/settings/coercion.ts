@@ -22,6 +22,11 @@ const SESSION_RESTART_BEHAVIOR_VALUES = new Set<SessionRestartBehavior>([
   'reuse_latest_session',
   'new_session',
 ]);
+const EMBEDDING_PROVIDER_VALUES = new Set<NonNullable<SubstrateConfig['embeddingProvider']>>([
+  'ollama',
+  'transformers',
+  'api',
+]);
 
 type RuntimeVoiceTtsProvider = Exclude<SubstrateConfig['ttsProvider'], undefined>;
 type RuntimeVoiceSttProvider = Exclude<SubstrateConfig['sttProvider'], undefined>;
@@ -157,6 +162,17 @@ export function toSessionRestartBehavior(value: unknown): SessionRestartBehavior
   const trimmed = value.trim().toLowerCase();
   if (!SESSION_RESTART_BEHAVIOR_VALUES.has(trimmed as SessionRestartBehavior)) return undefined;
   return trimmed as SessionRestartBehavior;
+}
+
+export function toEmbeddingProvider(
+  value: unknown,
+): NonNullable<SubstrateConfig['embeddingProvider']> | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!EMBEDDING_PROVIDER_VALUES.has(trimmed as NonNullable<SubstrateConfig['embeddingProvider']>)) {
+    return undefined;
+  }
+  return trimmed as NonNullable<SubstrateConfig['embeddingProvider']>;
 }
 
 function toStrictFiniteNumber(value: unknown): number | undefined {

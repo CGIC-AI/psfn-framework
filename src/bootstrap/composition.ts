@@ -12,6 +12,7 @@ import { SessionStore, type SessionIntegrityProvider } from '../session/store.js
 import { SessionManager } from '../session/manager.js';
 import { UserContinuityStore } from '../session/continuity.js';
 import {
+  createEmbeddingProviderFromConfig as createEmbeddingProviderFromMemoryConfig,
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
   type EmbeddingRuntimeProvider,
 } from '../memory/embedding.js';
@@ -91,6 +92,10 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
 
 export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {
   return createEmbeddingProviderFromMemoryEnv(process.env);
+}
+
+export function createEmbeddingProviderFromConfig(config: SubstrateConfig): EmbeddingRuntimeProvider {
+  return createEmbeddingProviderFromMemoryConfig(config, process.env);
 }
 
 export interface IdentityComposition {

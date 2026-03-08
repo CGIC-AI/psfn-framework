@@ -1,8 +1,8 @@
 export interface ElevenLabsTtsConfig {
   apiKey: string;
   voiceId: string;
-  modelId?: string;
-  endpointBase?: string;
+  modelId: string;
+  endpointBase: string;
   fetchFn?: typeof fetch;
   allowDirectNetworkEgress?: boolean;
 }
@@ -23,10 +23,17 @@ export class ElevenLabsTtsClient {
   private readonly allowDirectNetworkEgress: boolean;
 
   constructor(config: ElevenLabsTtsConfig) {
-    this.apiKey = config.apiKey;
-    this.voiceId = config.voiceId;
-    this.modelId = config.modelId ?? 'eleven_turbo_v2_5';
-    this.endpointBase = config.endpointBase ?? 'https://api.elevenlabs.io/v1';
+    const apiKey = config.apiKey.trim();
+    const voiceId = config.voiceId.trim();
+    const modelId = config.modelId.trim();
+    const endpointBase = config.endpointBase.trim().replace(/\/+$/g, '');
+    if (!apiKey || !voiceId || !modelId || !endpointBase) {
+      throw new Error('ElevenLabs config requires apiKey, voiceId, modelId, and endpointBase');
+    }
+    this.apiKey = apiKey;
+    this.voiceId = voiceId;
+    this.modelId = modelId;
+    this.endpointBase = endpointBase;
     this.fetchFn = config.fetchFn;
     this.allowDirectNetworkEgress = config.allowDirectNetworkEgress ?? !isGatewayAgentEntrypoint();
   }

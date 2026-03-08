@@ -16,6 +16,7 @@ export interface StreamingSttProviderRuntimeConfig {
   [key: string]: unknown;
   deepgramApiKey?: string;
   deepgramModel?: string;
+  deepgramSttEndpoint?: string;
 }
 
 export interface StreamingSttProviderMetadata {
@@ -51,10 +52,20 @@ const providerRegistrations = new Map<string, AnyStreamingSttProviderRegistratio
       const model = typeof config.deepgramModel === 'string'
         ? config.deepgramModel.trim()
         : '';
+      if (!model) {
+        throw new Error('Deepgram STT provider selected but deepgramModel is not configured in settings.json');
+      }
+      const endpoint = typeof config.deepgramSttEndpoint === 'string'
+        ? config.deepgramSttEndpoint.trim()
+        : '';
+      if (!endpoint) {
+        throw new Error('Deepgram STT provider selected but deepgramSttEndpoint is not configured in settings.json');
+      }
 
       return {
         apiKey,
-        ...(model ? { model } : {}),
+        model,
+        endpoint,
       };
     },
   }],

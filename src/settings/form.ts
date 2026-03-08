@@ -9,6 +9,7 @@ import {
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import {
   toBoolean,
+  toEmbeddingProvider,
   toConfiguredSttProvider,
   toConfiguredTtsProvider,
   toImportProcessingRouteMode,
@@ -45,6 +46,8 @@ export const SETTINGS_VALIDATION = {
   thinkMaxSubQueries: { min: 1, max: 100 },
   retryMaxAttempts: { min: 0, max: 10 },
   retryBaseDelayMs: { min: 500, max: 30000 },
+  embeddingDims: { min: 1, max: 1_000_000 },
+  embeddingApiDims: { min: 1, max: 1_000_000 },
   discordTriggerListenWindowMs: { min: 10_000, max: 600_000 },
   obsidianTimeoutMs: { min: 1000, max: 30000 },
   moaMaxRounds: { min: 1, max: 10 },
@@ -62,10 +65,39 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
       .map(entry => entry.trim())
       .filter(Boolean),
   )];
+  const validateHttpUrl = (field: string, value: string): void => {
+    if (!value) return;
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        errors.push(`${field} must use http or https`);
+      }
+    } catch {
+      errors.push(`${field} must be a valid URL`);
+    }
+  };
+  const validateWsUrl = (field: string, value: string): void => {
+    if (!value) return;
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+        errors.push(`${field} must use ws or wss`);
+      }
+    } catch {
+      errors.push(`${field} must be a valid URL`);
+    }
+  };
 
   const openRouterProviderOrderRaw = params.get('openRouterProviderOrder');
   if (openRouterProviderOrderRaw !== null) {
     settings.openRouterProviderOrder = parseCsvList(openRouterProviderOrderRaw);
+  }
+
+  const openRouterModelsApiUrlRaw = params.get('openRouterModelsApiUrl');
+  if (openRouterModelsApiUrlRaw !== null) {
+    const endpointUrl = openRouterModelsApiUrlRaw.trim();
+    settings.openRouterModelsApiUrl = endpointUrl;
+    validateHttpUrl('openRouterModelsApiUrl', endpointUrl);
   }
 
   const importProcessingRouteModeRaw = params.get('importProcessingRouteMode');
@@ -133,6 +165,50 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const importProcessingLocalModelRaw = params.get('importProcessingLocalModel');
   if (importProcessingLocalModelRaw !== null) {
     settings.importProcessingLocalModel = importProcessingLocalModelRaw.trim();
+  }
+
+  const embeddingProviderRaw = params.get('embeddingProvider');
+  if (embeddingProviderRaw !== null) {
+    const provider = toEmbeddingProvider(embeddingProviderRaw);
+    if (!provider) {
+      errors.push('embeddingProvider must be one of: ollama, transformers, api');
+    } else {
+      settings.embeddingProvider = provider;
+    }
+  }
+
+  const embeddingModelRaw = params.get('embeddingModel');
+  if (embeddingModelRaw !== null) {
+    settings.embeddingModel = embeddingModelRaw.trim();
+  }
+
+  const embeddingOllamaUrlRaw = params.get('embeddingOllamaUrl');
+  if (embeddingOllamaUrlRaw !== null) {
+    const endpointUrl = embeddingOllamaUrlRaw.trim();
+    settings.embeddingOllamaUrl = endpointUrl;
+    validateHttpUrl('embeddingOllamaUrl', endpointUrl);
+  }
+
+  const transformersModelRaw = params.get('transformersModel');
+  if (transformersModelRaw !== null) {
+    settings.transformersModel = transformersModelRaw.trim();
+  }
+
+  const transformersCacheDirRaw = params.get('transformersCacheDir');
+  if (transformersCacheDirRaw !== null) {
+    settings.transformersCacheDir = transformersCacheDirRaw.trim();
+  }
+
+  const embeddingApiUrlRaw = params.get('embeddingApiUrl');
+  if (embeddingApiUrlRaw !== null) {
+    const endpointUrl = embeddingApiUrlRaw.trim();
+    settings.embeddingApiUrl = endpointUrl;
+    validateHttpUrl('embeddingApiUrl', endpointUrl);
+  }
+
+  const embeddingApiModelRaw = params.get('embeddingApiModel');
+  if (embeddingApiModelRaw !== null) {
+    settings.embeddingApiModel = embeddingApiModelRaw.trim();
   }
 
   const webFetchAllowHttpRaw = params.get('webFetchAllowHttp');
@@ -288,6 +364,32 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     settings.deepgramModel = deepgramModelRaw.trim();
   }
 
+  const deepgramSttEndpointRaw = params.get('deepgramSttEndpoint');
+  if (deepgramSttEndpointRaw !== null) {
+    const endpointUrl = deepgramSttEndpointRaw.trim();
+    settings.deepgramSttEndpoint = endpointUrl;
+    validateWsUrl('deepgramSttEndpoint', endpointUrl);
+  }
+
+  const deepgramListenEndpointRaw = params.get('deepgramListenEndpoint');
+  if (deepgramListenEndpointRaw !== null) {
+    const endpointUrl = deepgramListenEndpointRaw.trim();
+    settings.deepgramListenEndpoint = endpointUrl;
+    validateHttpUrl('deepgramListenEndpoint', endpointUrl);
+  }
+
+  const elevenLabsModelIdRaw = params.get('elevenLabsModelId');
+  if (elevenLabsModelIdRaw !== null) {
+    settings.elevenLabsModelId = elevenLabsModelIdRaw.trim();
+  }
+
+  const elevenLabsEndpointBaseRaw = params.get('elevenLabsEndpointBase');
+  if (elevenLabsEndpointBaseRaw !== null) {
+    const endpointUrl = elevenLabsEndpointBaseRaw.trim();
+    settings.elevenLabsEndpointBase = endpointUrl;
+    validateHttpUrl('elevenLabsEndpointBase', endpointUrl);
+  }
+
   // Channels
   const discordEnabledRaw = params.get('discordEnabled');
   if (discordEnabledRaw !== null) {
@@ -403,6 +505,30 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     }
     if (!settings.importProcessingLocalModel) {
       errors.push('importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint');
+    }
+  }
+
+  if (settings.embeddingProvider === 'api') {
+    if (!settings.embeddingApiUrl) {
+      errors.push('embeddingApiUrl is required when embeddingProvider=api');
+    }
+    if (!settings.embeddingApiModel && !settings.embeddingModel) {
+      errors.push('embeddingApiModel or embeddingModel is required when embeddingProvider=api');
+    }
+  }
+
+  if (settings.embeddingProvider === 'ollama') {
+    if (!settings.embeddingOllamaUrl) {
+      errors.push('embeddingOllamaUrl is required when embeddingProvider=ollama');
+    }
+    if (!settings.embeddingModel) {
+      errors.push('embeddingModel is required when embeddingProvider=ollama');
+    }
+  }
+
+  if (settings.embeddingProvider === 'transformers') {
+    if (!settings.transformersModel && !settings.embeddingModel) {
+      errors.push('transformersModel or embeddingModel is required when embeddingProvider=transformers');
     }
   }
 

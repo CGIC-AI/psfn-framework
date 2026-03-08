@@ -449,7 +449,7 @@ describe('runtime composition wiring', () => {
     const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
     expect(source).toContain('composeIdentity(this.config)');
     expect(source).toContain('composeSessionRuntime({');
-    expect(source).toContain('createEmbeddingProviderFromEnv()');
+    expect(source).toContain('createEmbeddingProviderFromConfig(this.config)');
     expect(source).toContain('composeSubstrateAgent({');
     expect(source).toContain('wireSelfModelRuntime(');
     expect(source).toContain('wireCoreMemoryRuntime({');
@@ -476,9 +476,9 @@ describe('runtime composition wiring', () => {
       .toBeGreaterThan(agentHeartbeatIndex);
   });
 
-  it('routes gateway embedding bootstrap through env provider factory', () => {
+  it('routes gateway embedding bootstrap through config provider factory', () => {
     const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
-    expect(source).toContain('createEmbeddingProviderFromEnv(process.env)');
+    expect(source).toContain('createEmbeddingProviderFromConfig(config, process.env)');
     expect(source).not.toContain('new EmbeddingProvider(');
   });
 

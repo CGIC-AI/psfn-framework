@@ -2,6 +2,7 @@ import type { SubstrateConfig, TurnID } from '../types.js';
 import { countTokens } from '../llm/tokens.js';
 import { SESSION_HISTORY_MIN_MESSAGES } from '../context-budget.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../trust/types.js';
+import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../security/refusal-patterns.js';
 import type { SessionEntry } from './types.js';
 
 /** Default number of cross-channel continuity messages to include in context. */
@@ -39,12 +40,6 @@ interface EmotionalPatternWeight {
   pattern: RegExp;
   weight: number;
 }
-
-const REFUSAL_PATTERNS = [
-  /\b(i|we)\s+(can(?:not|'t)|won't|will not|must not)\s+(help|assist|provide|share|comply|do)\b/i,
-  /\b(i|we)\s+(refuse|decline)\b/i,
-  /\b(i|we)\s+(am|are|'m)\s+unable\s+to\b/i,
-];
 
 const BOUNDARY_PATTERNS = [
   /\bboundar(?:y|ies)\b/i,
@@ -190,7 +185,7 @@ export function normalizeImportBootstrapMaxTokens(value: number | undefined): nu
 
 function classifyCompactionTag(content: string): CompactionPreservedTag | null {
   if (!content) return null;
-  if (REFUSAL_PATTERNS.some(pattern => pattern.test(content))) return 'refusal';
+  if (matchesRefusalPatterns(content, COMPACTION_REFUSAL_PATTERNS)) return 'refusal';
   if (BOUNDARY_PATTERNS.some(pattern => pattern.test(content))) return 'boundary';
   return null;
 }

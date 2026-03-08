@@ -209,6 +209,29 @@ describe('ValuesJournalStore', () => {
     })).toThrow('internalStateSnapshotRef and internalState');
   });
 
+  it('preserves values-journal normalization error prefixes', () => {
+    const sample = buildInternalStateSample();
+
+    expect(() => store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P',
+      reflection: 'R',
+      internalStateSnapshotRef: '   ',
+      internalState: sample.state,
+    })).toThrow('values journal internalStateSnapshotRef must be a non-empty string when provided');
+
+    expect(() => store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P',
+      reflection: 'R',
+      internalStateSnapshotRef: sample.snapshotRef,
+      internalState: sample.state,
+      metacognitiveFlags: [{ flag: 'uncertainty', confidence: 1.2 }],
+    })).toThrow('values journal metacognitiveFlags[0].confidence must be in [0, 1]');
+  });
+
   it('skips malformed internal-state narrative entries on read', () => {
     writeFileSync(
       filePath,

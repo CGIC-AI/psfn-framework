@@ -1,4 +1,4 @@
-import type { CapabilityTier } from '../types.js';
+import type { CapabilityTier } from './tier-types.js';
 import type { CapabilityToken } from './tokens.js';
 
 export const CAPABILITY_TIER_VALUES: readonly CapabilityTier[] = [

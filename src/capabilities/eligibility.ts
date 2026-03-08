@@ -1,5 +1,5 @@
-import type { CapabilityTier } from '../types.js';
 import type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
+import type { CapabilityTier } from './tier-types.js';
 import type { CapabilityToken } from './tokens.js';
 
 export type RuntimeTier = CapabilityTier;

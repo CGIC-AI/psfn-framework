@@ -11,8 +11,7 @@
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, AgentToolResult, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
-import { createHash } from 'node:crypto';
-import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, ImageContent, UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type {
@@ -28,12 +27,10 @@ import type {
   MessagePromptOverrideMode,
   ResponseStyle,
   ObservabilityCallType,
-  PostTurnActionCandidate,
   SubstrateConfig,
   SubstrateMessage,
   TurnID,
   TurnRecord,
-  TurnRecordToolCall,
   TurnUsage,
   ModelPurpose,
 } from '../types.js';
@@ -44,7 +41,6 @@ import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider }
 import type { TrustLevel } from '../trust/types.js';
 import {
   classifyChannel,
-  getResponseStylePromptGuidance,
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../trust/policy.js';
@@ -53,7 +49,7 @@ import {
   enforceUntrustedCompactionGuard,
   type PromptComposer,
 } from '../identity/prompt-composer.js';
-import type { ComposeContext, ComposeSplitResult } from '../identity/prompt-types.js';
+import type { ComposeContext } from '../identity/prompt-types.js';
 import {
   createSubstrateStreamFn,
   resolveExplicitModel,
@@ -61,7 +57,6 @@ import {
   resolveModelSelection,
 } from './stream-adapter.js';
 import {
-  formatSignedDecimal,
   inferImageMimeTypeFromAttachmentCandidate,
   inferRuntimeModeFromProvider,
 } from './substrate-agent-helpers.js';
@@ -138,28 +133,20 @@ import type {
 import { contextMessagesToPiMessages } from '../llm/message-conversion.js';
 import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
-import { buildSnapshotVersionPointer } from '../turns/snapshot.js';
-import type { ContextManifest, ContextManifestMemorySeed } from '../session/context-manifest.js';
+import type { ContextManifestMemorySeed } from '../session/context-manifest.js';
 import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from '../emotion/state.js';
 import { EmotionObserver, type EmotionObserverResult } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
 import {
-  formatActiveConcernsContextBlock,
   type ActiveConcern,
   type ActiveConcernContextProvider,
 } from '../intention/concerns.js';
 import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
-import {
-  buildSessionMetadataWithEmotionState,
-  parseSessionEmotionState,
-} from '../emotion/session-metadata.js';
-import { buildEmotionalAffectSection } from '../emotion/persona-adaptation.js';
+import { parseSessionEmotionState } from '../emotion/session-metadata.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import {
-  buildMetacognitivePersonaHint,
   cloneMetacognitiveFlags,
-  formatMetacognitiveNotesContextBlock,
   MetacognitiveMonitor,
   type MetacognitiveFlag,
 } from '../self-model/metacognition.js';
@@ -170,6 +157,41 @@ import {
   InternalStateComputer,
   type InternalState,
 } from '../self-model/state.js';
+import {
+  buildPromptPrefixCacheKey as buildPromptPrefixCacheKeyForTurn,
+  buildStaticPromptSettingsHash as buildStaticPromptSettingsHashForTurn,
+  captureTurnPromptSnapshot as captureTurnPromptSnapshotForTurn,
+  hashPromptText as hashPromptTextForTurn,
+  resolveStaticPromptPrefix as resolveStaticPromptPrefixForTurn,
+  type FrozenPromptPrefix,
+} from './substrate-agent/prompt-lifecycle.js';
+import {
+  inferPostTurnActions as inferPostTurnActionsForTurn,
+  runIntentionPostTurnHooks as runIntentionPostTurnHooksForTurn,
+  type IntentionPostTurnHook,
+  type IntentionPostTurnHookContext,
+  type PostTurnActionInferer,
+  type PostTurnInferenceContext,
+} from './substrate-agent/post-turn-actions.js';
+import {
+  accumulateTurnUsage as accumulateTurnUsageForTurn,
+  buildTurnRecord as buildTurnRecordForTurn,
+  buildTurnToolSummary as buildTurnToolSummaryForTurn,
+  recordAssistantMessage as recordAssistantMessageForTurn,
+  recordToolObservations as recordToolObservationsForTurn,
+  recordUserMessage as recordUserMessageForTurn,
+} from './substrate-agent/turn-records.js';
+import {
+  buildActiveConcernsContextBlock as buildActiveConcernsContextBlockForTurn,
+  buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
+  buildMetacognitiveNotesContextBlock as buildMetacognitiveNotesContextBlockForTurn,
+  buildPromptTemplateVariables as buildPromptTemplateVariablesForTurn,
+  buildRuntimeContext as buildRuntimeContextForTurn,
+  buildScratchpadContextBlock as buildScratchpadContextBlockForTurn,
+  getPersonaAdaptation as getPersonaAdaptationForTurn,
+  resolveAuthorContext as resolveAuthorContextForTurn,
+  type ResolvedAuthorContext,
+} from './substrate-agent/runtime-context.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -180,13 +202,11 @@ export type {
   MemoryExtractor,
   ScratchpadProvider,
 } from './contracts.js';
-
-interface ResolvedAuthorContext {
-  trustLevel: TrustLevel;
-  resolvedUserName: string;
-  canonicalContactKey?: string;
-  continuityFallbackKeys: string[];
-}
+export type {
+  PostTurnActionInferer,
+  IntentionPostTurnHookContext,
+  IntentionPostTurnHook,
+} from './substrate-agent/post-turn-actions.js';
 
 interface ProactiveMemoryProvider extends MemoryProvider {
   retrieveProactiveRecall?: (
@@ -197,12 +217,6 @@ interface ProactiveMemoryProvider extends MemoryProvider {
     turnSnapshot?: import('../turns/snapshot.js').TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ) => Promise<string>;
-}
-
-interface PromptSections {
-  staticPrefix: string;
-  dynamicSuffix: string;
-  staticHash: string;
 }
 
 interface VisionAttachmentFetchCapabilities {
@@ -219,12 +233,6 @@ interface VisionAttachmentFetchCapabilities {
   }>;
 }
 
-interface FrozenPromptPrefix {
-  renderedPrefix: string;
-  staticHash: string;
-  settingsHash: string;
-}
-
 interface ResolvedMoaSettings {
   maxRounds: number;
   maxTokensPerRound?: number;
@@ -232,33 +240,6 @@ interface ResolvedMoaSettings {
   referenceModels: string[];
   aggregatorModel?: string;
 }
-
-interface PostTurnInferenceContext {
-  message: SubstrateMessage;
-  response: AgentResponse;
-  turnMessages: AgentMessage[];
-  turnId: TurnID;
-  completedAt: number;
-  contextManifest?: ContextManifest;
-  canonicalContactKey?: string;
-}
-
-export type PostTurnActionInferer = (
-  context: PostTurnInferenceContext,
-) => PostTurnActionCandidate[] | Promise<PostTurnActionCandidate[]>;
-
-export interface IntentionPostTurnHookContext {
-  message: SubstrateMessage;
-  response: AgentResponse;
-  turnMessages: AgentMessage[];
-  turnId: TurnID;
-  completedAt: number;
-  canonicalContactKey?: string;
-}
-
-export type IntentionPostTurnHook = (
-  context: IntentionPostTurnHookContext,
-) => void | Promise<void>;
 
 export interface ExtendedToolActivationResult {
   requestedTools: string[];
@@ -317,11 +298,6 @@ export interface PromotedToolMutationResult {
 }
 
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
-const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
-const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
-const SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS = 240;
-const SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS = 1_600;
-const PROMPT_HASH_LENGTH = 16;
 const TOP_EMOTION_COUNT = 3;
 const MIN_TOP_EMOTION_SCORE = 0.05;
 const VISION_ATTACHMENT_MAX_COUNT = 4;
@@ -3776,46 +3752,12 @@ export class SubstrateAgent {
     });
   }
 
-  private composePromptSections(ctx: ComposeContext): PromptSections {
-    if (!this.promptComposer) {
-      return {
-        staticPrefix: this.systemPrompt,
-        dynamicSuffix: '',
-        staticHash: this.hashPromptText(this.systemPrompt),
-      };
-    }
-
-    const splitComposer = this.promptComposer as PromptComposer & {
-      composeSplit?: (composeContext?: ComposeContext) => ComposeSplitResult;
-    };
-    if (typeof splitComposer.composeSplit === 'function') {
-      const split = splitComposer.composeSplit(ctx);
-      return {
-        staticPrefix: split.staticPrefix,
-        dynamicSuffix: split.dynamicSuffix,
-        staticHash: split.staticHash,
-      };
-    }
-
-    const composed = this.promptComposer.compose(ctx);
-    return {
-      staticPrefix: composed.text,
-      dynamicSuffix: '',
-      staticHash: composed.hash,
-    };
-  }
-
   private captureTurnPromptSnapshot(ctx: ComposeContext): TurnPromptSnapshot {
-    const sections = this.composePromptSections(ctx);
-    return {
-      staticPrefixTemplate: sections.staticPrefix,
-      dynamicSuffixTemplate: sections.dynamicSuffix,
-      staticHash: sections.staticHash,
-      versionPointer: buildSnapshotVersionPointer([
-        sections.staticHash,
-        this.hashPromptText(sections.dynamicSuffix),
-      ]),
-    };
+    return captureTurnPromptSnapshotForTurn({
+      promptComposer: this.promptComposer,
+      composeContext: ctx,
+      systemPrompt: this.systemPrompt,
+    });
   }
 
   private buildPromptPrefixCacheKey(
@@ -3823,18 +3765,11 @@ export class SubstrateAgent {
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
   ): string {
-    return [
-      message.channelId,
-      channelType ?? 'unknown',
-      canonicalContactKey ?? message.authorId,
-    ].join('::');
+    return buildPromptPrefixCacheKeyForTurn(message, channelType, canonicalContactKey);
   }
 
   private buildStaticPromptSettingsHash(templateVariables: Record<string, string>): string {
-    const stableEntries = Object.entries(templateVariables)
-      .filter(([key]) => key !== 'now_iso')
-      .sort(([left], [right]) => left.localeCompare(right));
-    return this.hashPromptText(JSON.stringify(stableEntries));
+    return buildStaticPromptSettingsHashForTurn(templateVariables);
   }
 
   private resolveStaticPromptPrefix(params: {
@@ -3845,21 +3780,15 @@ export class SubstrateAgent {
     now: Date;
     variables: Record<string, string>;
   }): string {
-    const cached = this.frozenPromptPrefixCache.get(params.cacheKey);
-    if (cached && cached.staticHash === params.staticHash && cached.settingsHash === params.settingsHash) {
-      return cached.renderedPrefix;
-    }
-
-    const renderedPrefix = injectPromptRuntimeTokens(params.staticPrefixTemplate, {
+    return resolveStaticPromptPrefixForTurn({
+      cache: this.frozenPromptPrefixCache,
+      cacheKey: params.cacheKey,
+      staticPrefixTemplate: params.staticPrefixTemplate,
+      staticHash: params.staticHash,
+      settingsHash: params.settingsHash,
       now: params.now,
       variables: params.variables,
     });
-    this.frozenPromptPrefixCache.set(params.cacheKey, {
-      renderedPrefix,
-      staticHash: params.staticHash,
-      settingsHash: params.settingsHash,
-    });
-    return renderedPrefix;
   }
 
   private invalidatePromptPrefixCache(reason: string): void {
@@ -3871,7 +3800,7 @@ export class SubstrateAgent {
   }
 
   private hashPromptText(text: string): string {
-    return createHash('sha256').update(text).digest('hex').slice(0, PROMPT_HASH_LENGTH);
+    return hashPromptTextForTurn(text);
   }
 
   private recordUserMessage(
@@ -3881,37 +3810,14 @@ export class SubstrateAgent {
     trustLevel: TrustLevel,
     canonicalContactKey?: string,
   ): number | null {
-    if (canonicalContactKey) {
-      return this.sessionManager.recordUserMessage(
-        message.channelId,
-        message.content,
-        message.authorId,
-        message.authorName,
-        message.isDirectMessage,
-        canonicalContactKey,
-        {
-          trustLevel,
-          turnId,
-          requestId,
-          sourceMessageId: message.id,
-        },
-      );
-    }
-
-    return this.sessionManager.recordUserMessage(
-      message.channelId,
-      message.content,
-      message.authorId,
-      message.authorName,
-      message.isDirectMessage,
-      undefined,
-      {
-        trustLevel,
-        turnId,
-        requestId,
-        sourceMessageId: message.id,
-      },
-    );
+    return recordUserMessageForTurn({
+      sessionManager: this.sessionManager,
+      message,
+      turnId,
+      requestId,
+      trustLevel,
+      canonicalContactKey,
+    });
   }
 
   private recordAssistantMessage(
@@ -3923,41 +3829,16 @@ export class SubstrateAgent {
     canonicalContactKey?: string,
     emotionSnapshot?: EmotionStateSnapshot | null,
   ): number | null {
-    const metadata = emotionSnapshot
-      ? buildSessionMetadataWithEmotionState(undefined, emotionSnapshot)
-      : undefined;
-
-    if (canonicalContactKey) {
-      return this.sessionManager.recordAssistantMessage(
-        message.channelId,
-        responseText,
-        message.authorId,
-        message.isDirectMessage,
-        canonicalContactKey,
-        {
-          trustLevel,
-          turnId,
-          requestId,
-          sourceMessageId: message.id,
-          ...(metadata ? { metadata } : {}),
-        },
-      );
-    }
-
-    return this.sessionManager.recordAssistantMessage(
-      message.channelId,
+    return recordAssistantMessageForTurn({
+      sessionManager: this.sessionManager,
+      message,
+      turnId,
+      requestId,
       responseText,
-      message.authorId,
-      message.isDirectMessage,
-      undefined,
-      {
-        trustLevel,
-        turnId,
-        requestId,
-        sourceMessageId: message.id,
-        ...(metadata ? { metadata } : {}),
-      },
-    );
+      trustLevel,
+      canonicalContactKey,
+      emotionSnapshot,
+    });
   }
 
   private recordToolObservations(
@@ -3967,38 +3848,14 @@ export class SubstrateAgent {
     turnMessages: AgentMessage[],
     trustLevel: TrustLevel,
   ): void {
-    for (const entry of turnMessages) {
-      if (!this.isToolResultAgentMessage(entry)) continue;
-      this.sessionManager.recordToolObservation(
-        message.channelId,
-        {
-          toolName: entry.toolName,
-          content: this.extractToolResultText(entry),
-          ...(entry.toolCallId ? { toolCallId: entry.toolCallId } : {}),
-          ...(typeof entry.isError === 'boolean' ? { isError: entry.isError } : {}),
-        },
-        message.isDirectMessage,
-        {
-          trustLevel,
-          turnId,
-          requestId,
-          sourceMessageId: message.id,
-        },
-      );
-    }
-  }
-
-  private buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] {
-    const toolCalls: TurnRecordToolCall[] = [];
-    for (const entry of turnMessages) {
-      if (!this.isToolResultAgentMessage(entry)) continue;
-      toolCalls.push({
-        toolName: entry.toolName,
-        toolCallId: entry.toolCallId,
-        ...(typeof entry.isError === 'boolean' ? { isError: entry.isError } : {}),
-      });
-    }
-    return toolCalls;
+    recordToolObservationsForTurn({
+      sessionManager: this.sessionManager,
+      message,
+      turnId,
+      requestId,
+      turnMessages,
+      trustLevel,
+    });
   }
 
   private buildTurnRecord(input: {
@@ -4021,108 +3878,15 @@ export class SubstrateAgent {
     turnSnapshot?: TurnSnapshot;
     internalStateSnapshotRef?: string;
   }): TurnRecord {
-    const toolCalls = this.buildTurnToolCalls(input.turnMessages);
-    const provenanceRefs = [...new Set([
-      `turn:${input.turnId}`,
-      ...input.retrievalProvenanceRefs,
-    ])];
-
-    return {
-      schemaVersion: 1,
-      turnId: input.turnId,
-      requestId: input.requestId,
-      channelId: input.message.channelId,
-      channelType: input.message.channelType,
-      startedAt: input.startedAt,
-      completedAt: Math.max(input.startedAt, input.completedAt),
-      status: 'completed',
-      userMessage: {
-        role: 'user',
-        content: input.message.content,
-        timestamp: input.message.timestamp.getTime(),
-        sourceMessageId: input.message.id,
-        authorId: input.message.authorId,
-        authorName: input.message.authorName,
-        ...(input.userSessionEntryId != null ? { sessionEntryId: input.userSessionEntryId } : {}),
-      },
-      assistantMessage: {
-        role: 'assistant',
-        content: input.response.content,
-        timestamp: Math.max(input.startedAt, input.completedAt),
-        sourceMessageId: input.message.id,
-        ...(input.assistantSessionEntryId != null ? { sessionEntryId: input.assistantSessionEntryId } : {}),
-      },
-      toolCalls,
-      contextManifestRef: `session:${input.message.channelId}|messages:${input.contextMessageCount}|memory_chars:${input.memoryContextChars}`,
-      internalStateSnapshotRef: [
-        `trust:${input.trustLevel}`,
-        `contact:${input.canonicalContactKey ?? 'none'}`,
-        `prompt:${input.turnSnapshot?.prompt?.versionPointer ?? 'none'}`,
-        `memory:${input.turnSnapshot?.memory?.versionPointer ?? 'none'}`,
-        `session:${input.turnSnapshot?.sessionContext?.versionPointer ?? 'none'}`,
-        `self:${input.internalStateSnapshotRef ?? 'none'}`,
-      ].join('|'),
-      extractedMemoryIds: [],
-      concernDeltaRefs: [],
-      contactDeltaRefs: [],
-      versionPointers: {
-        model: input.response.metadata.model,
-        promptMode: input.promptMode,
-        promptHash: this.hashPromptText(input.promptText),
-        ...(input.turnSnapshot?.prompt?.versionPointer
-          ? { promptStack: input.turnSnapshot.prompt.versionPointer }
-          : {}),
-        ...(input.turnSnapshot?.memory?.versionPointer
-          ? { memoryState: input.turnSnapshot.memory.versionPointer }
-          : {}),
-        ...(input.turnSnapshot?.sessionContext?.versionPointer
-          ? { sessionState: input.turnSnapshot.sessionContext.versionPointer }
-          : {}),
-      },
-      provenanceRefs,
-    };
+    return buildTurnRecordForTurn({
+      ...input,
+      hashPromptText: (text) => this.hashPromptText(text),
+    });
   }
 
   /** Aggregate usage stats for a single turn across all tool loop iterations. */
   private accumulateTurnUsage(messages: AgentMessage[]): TurnUsage {
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let cacheReadTokens = 0;
-    let llmCalls = 0;
-    let toolCalls = 0;
-    let maxInputTokens = 0;
-    let estimatedCostUsd = 0;
-
-    for (const message of messages) {
-      if (this.isAssistantAgentMessage(message)) {
-        llmCalls += 1;
-        inputTokens += message.usage.input;
-        outputTokens += message.usage.output;
-        cacheReadTokens += message.usage.cacheRead;
-        maxInputTokens = Math.max(maxInputTokens, message.usage.input);
-        estimatedCostUsd += message.usage.cost.total;
-        continue;
-      }
-
-      if (this.isToolResultAgentMessage(message)) {
-        toolCalls += 1;
-      }
-    }
-
-    const contextWindow = this.resolveContextWindow();
-    const contextUtilization = contextWindow > 0
-      ? Math.min(100, (maxInputTokens / contextWindow) * 100)
-      : 0;
-
-    return {
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      llmCalls,
-      toolCalls,
-      contextUtilization,
-      ...(estimatedCostUsd > 0 ? { estimatedCostUsd } : {}),
-    };
+    return accumulateTurnUsageForTurn(messages, this.resolveContextWindow());
   }
 
   private resolveContextWindow(): number {
@@ -4138,185 +3902,28 @@ export class SubstrateAgent {
     return 128_000; // sensible fallback
   }
 
-  private isAssistantAgentMessage(message: AgentMessage): message is AssistantMessage {
-    return (message as { role?: string }).role === 'assistant';
-  }
-
-  private isToolResultAgentMessage(message: AgentMessage): message is ToolResultMessage {
-    return (message as { role?: string }).role === 'toolResult';
-  }
-
-  private extractToolResultText(message: ToolResultMessage): string {
-    const content = message.content;
-    if (typeof content === 'string') {
-      return content;
-    }
-
-    if (Array.isArray(content)) {
-      const textParts = content
-        .filter((block): block is TextContent => block.type === 'text' && typeof block.text === 'string')
-        .map(block => block.text)
-        .join('');
-      if (textParts.trim()) {
-        return textParts;
-      }
-
-      try {
-        return JSON.stringify(content);
-      } catch {
-        return '';
-      }
-    }
-
-    return '';
-  }
-
   private buildTurnToolSummary(turnMessages: AgentMessage[]): TurnToolSummary {
-    let toolCalls = 0;
-    let usedThinkTool = false;
-    for (const msg of turnMessages) {
-      if (this.isToolResultAgentMessage(msg)) {
-        toolCalls += 1;
-        if (msg.toolName === 'think') {
-          usedThinkTool = true;
-        }
-      }
-    }
-    return { toolCalls, usedThinkTool };
+    return buildTurnToolSummaryForTurn(turnMessages);
   }
 
   private async inferPostTurnActions(
     context: PostTurnInferenceContext,
   ): Promise<InferredPostTurnAction[]> {
-    if (this.postTurnActionInferers.length === 0) {
-      return [];
-    }
-
-    const inferred: InferredPostTurnAction[] = [];
-    const seenDedupeKeys = new Set<string>();
-
-    for (const inferer of this.postTurnActionInferers) {
-      let candidates: PostTurnActionCandidate[] = [];
-      try {
-        candidates = await inferer(context);
-      } catch (error) {
-        log.warn('Post-turn action inferer failed', {
-          channelId: context.message.channelId,
-          messageId: context.message.id,
-          error: toErrorMessage(error),
-        });
-        continue;
-      }
-
-      for (const candidate of candidates) {
-        const normalized = this.normalizePostTurnActionCandidate(
-          candidate,
-          context.message,
-          inferred.length,
-        );
-        if (!normalized) continue;
-        if (seenDedupeKeys.has(normalized.dedupeKey)) continue;
-        seenDedupeKeys.add(normalized.dedupeKey);
-        inferred.push(normalized);
-      }
-    }
-
-    return inferred;
+    return inferPostTurnActionsForTurn({
+      inferers: this.postTurnActionInferers,
+      context,
+      logger: log,
+    });
   }
 
   private async runIntentionPostTurnHooks(
     context: IntentionPostTurnHookContext,
   ): Promise<void> {
-    if (this.intentionPostTurnHooks.length === 0) {
-      return;
-    }
-    for (const hook of this.intentionPostTurnHooks) {
-      try {
-        await hook(context);
-      } catch (error) {
-        log.warn('Intention post-turn hook failed', {
-          channelId: context.message.channelId,
-          messageId: context.message.id,
-          error: toErrorMessage(error),
-        });
-      }
-    }
-  }
-
-  private normalizePostTurnActionCandidate(
-    candidate: PostTurnActionCandidate | null | undefined,
-    message: SubstrateMessage,
-    ordinal: number,
-  ): InferredPostTurnAction | null {
-    if (!candidate || typeof candidate.kind !== 'string') {
-      return null;
-    }
-
-    const kind = candidate.kind.trim();
-    if (!kind) {
-      return null;
-    }
-
-    const payload = this.normalizePostTurnPayload(candidate.payload);
-    const explicitDedupeKey = typeof candidate.dedupeKey === 'string' ? candidate.dedupeKey.trim() : '';
-    const dedupeKey = explicitDedupeKey || `${kind}:${message.channelId}:${this.hashPostTurnPayload(payload)}`;
-    const inferredAt = Date.now();
-    const id = createHash('sha256')
-      .update(`${message.id}:${kind}:${dedupeKey}:${ordinal}`)
-      .digest('hex')
-      .slice(0, 24);
-
-    const normalizedMaxRetries = (
-      typeof candidate.maxRetries === 'number'
-      && Number.isFinite(candidate.maxRetries)
-      && candidate.maxRetries >= 0
-    )
-      ? Math.floor(candidate.maxRetries)
-      : undefined;
-
-    return {
-      id,
-      kind,
-      payload,
-      dedupeKey,
-      channelId: message.channelId,
-      sourceMessageId: message.id,
-      inferredAt,
-      ...(normalizedMaxRetries !== undefined ? { maxRetries: normalizedMaxRetries } : {}),
-    };
-  }
-
-  private normalizePostTurnPayload(
-    payload: PostTurnActionCandidate['payload'],
-  ): Record<string, unknown> {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      return {};
-    }
-    return payload;
-  }
-
-  private hashPostTurnPayload(payload: Record<string, unknown>): string {
-    const serialized = this.stableStringify(payload);
-    return createHash('sha256').update(serialized).digest('hex').slice(0, 16);
-  }
-
-  private stableStringify(value: unknown): string {
-    if (value === null) return 'null';
-    if (value instanceof Date) return JSON.stringify(value.toISOString());
-    if (typeof value === 'bigint') return JSON.stringify(value.toString());
-    if (typeof value !== 'object') {
-      return JSON.stringify(value);
-    }
-    if (Array.isArray(value)) {
-      return `[${value.map(item => this.stableStringify(item)).join(',')}]`;
-    }
-
-    const objectValue = value as Record<string, unknown>;
-    const entries = Object.entries(objectValue)
-      .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entryValue]) => `${JSON.stringify(key)}:${this.stableStringify(entryValue)}`);
-    return `{${entries.join(',')}}`;
+    await runIntentionPostTurnHooksForTurn({
+      hooks: this.intentionPostTurnHooks,
+      context,
+      logger: log,
+    });
   }
 
   private getLatestAssistantMessage(): AssistantMessage | null {
@@ -4375,25 +3982,6 @@ export class SubstrateAgent {
     return candidate && candidate.length > 0 ? candidate : 'Assistant';
   }
 
-  private resolveRuntimeCharacterName(characterPromptVariables: Record<string, string>): string {
-    const candidates = [
-      characterPromptVariables.char,
-      characterPromptVariables.char_name,
-      characterPromptVariables.character,
-      characterPromptVariables.character_name,
-      characterPromptVariables['character.name'],
-      characterPromptVariables.name,
-    ];
-    for (const candidate of candidates) {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Record index may be undefined at runtime
-      const trimmed = candidate?.trim();
-      if (trimmed && trimmed.length > 0) {
-        return trimmed;
-      }
-    }
-    return this.characterName;
-  }
-
   private buildPromptTemplateVariables(
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -4402,31 +3990,20 @@ export class SubstrateAgent {
     canonicalContactKey: string | undefined,
     now: Date,
   ): Record<string, string> {
-    const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
-    const modelId = this.agent.state.model.id;
     const characterPromptVariables = this.resolveCharacterPromptVariables();
-    const runtimeCharacterName = this.resolveRuntimeCharacterName(characterPromptVariables);
+    const { templateVariables, runtimeCharacterName } = buildPromptTemplateVariablesForTurn({
+      message,
+      resolvedUserName,
+      trustLevel,
+      channelType,
+      canonicalContactKey,
+      now,
+      characterPromptVariables,
+      modelId: this.agent.state.model.id,
+      fallbackCharacterName: this.characterName,
+    });
     this.characterName = runtimeCharacterName;
-
-    return {
-      ...characterPromptVariables,
-      user: resolvedUserName,
-      user_name: resolvedUserName,
-      user_id: message.authorId,
-      char: runtimeCharacterName,
-      char_name: runtimeCharacterName,
-      character: runtimeCharacterName,
-      character_name: runtimeCharacterName,
-      channel: message.channelId,
-      channel_id: message.channelId,
-      channel_type: channelType ?? 'unknown',
-      channel_visibility: visibility,
-      trust_level: trustLevel,
-      canonical_contact_id: canonicalContactKey ?? message.authorId,
-      model: modelId,
-      model_id: modelId,
-      now_iso: now.toISOString(),
-    };
+    return templateVariables;
   }
 
   /** Build a runtime context block with current time, channel, user, model info */
@@ -4444,244 +4021,60 @@ export class SubstrateAgent {
     metacognitiveFlags: readonly MetacognitiveFlag[] = [],
     emotionAppraisalChain: readonly EmotionAppraisalEntry[] = [],
   ): string {
-    const visibility = classifyChannel(message.channelId, { isDirectMessage: message.isDirectMessage });
-    const modelId = this.agent.state.model.id;
-    const contextWindow = this.resolveContextWindow();
-    const extendedCount = this.extendedTools.length;
     const activeResolution = this.resolveActiveTools();
-    const {
-      core: coreCount,
-      promoted: promotedCount,
-      extendedLoaded: extendedLoadedCount,
-      autoload: autoloadCount,
-      deferred: deferredCount,
-      total: activeCount,
-    } = activeResolution.counts;
-    const capabilityAccess = this.resolveCapabilityAccess();
-    const capabilityTier = capabilityAccess.getTier();
-    const skillsContext = this.skillsRuntime?.getPromptXml() ?? '';
-    const responseStyleGuidance = getResponseStylePromptGuidance(responseStyle);
-    const extendedBreakdown = [
-      extendedLoadedCount > 0 ? `${extendedLoadedCount} loaded` : null,
-      autoloadCount > 0 ? `${autoloadCount} autoload` : null,
-      deferredCount > 0 ? `${deferredCount} deferred` : null,
-    ].filter(Boolean).join(' + ');
-
-    const lines = [
-      '[Runtime Context]',
-      `Current time: ${now.toISOString()}`,
-      `Channel: ${message.channelId} (type: ${channelType ?? 'unknown'}, visibility: ${visibility})`,
-      `Speaking with: ${resolvedUserName} (userId: ${message.authorId}, canonicalId: ${canonicalContactKey ?? message.authorId}, trust: ${trustLevel})`,
-      `Model: ${modelId}`,
-      `Response style preference: ${responseStyle}`,
-      `Capability tier: ${capabilityTier}`,
-      `Context window: ${contextWindow} tokens`,
-      `Tools: ${activeCount} active`
-      + ` (${coreCount} core`
-      + (promotedCount > 0 ? ` + ${promotedCount} promoted` : '')
-      + (extendedBreakdown ? ` + ${extendedBreakdown}` : '')
-      + ')'
-      + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
-    ];
-
-    const isScheduledTask = taskKind === 'heartbeat' || taskKind === 'reflection' || message.channelId.startsWith('internal:');
-    if (isScheduledTask) {
-      const promptVariables = templateVariables ?? this.resolveCharacterPromptVariables();
-      const appearance = (
-        promptVariables['character.visual_description']
-        || promptVariables.extensions_visual_description
-        || promptVariables.visual_description
-        || ''
-      ).trim();
-      if (appearance.length > 0) {
-        lines.push(`Appearance context: ${appearance}`);
-      }
-    }
-
-    // Tool directory for extended tools
-    if (extendedCount > 0) {
-      const promotedNames = this.getCapabilityEligiblePromotedToolNames();
-      lines.push('');
-      lines.push('Available extended tools:');
-      for (const t of this.extendedTools) {
-        const loaded = this.loadedExtended.get(t.name);
-        const turnClass = this.classifyExtendedToolForTurn(t.name);
-        let suffix = ' (use load_tools to activate)';
-        if (turnClass !== 'overlay') {
-          suffix = ' (background-only; not callable in-turn)';
-        } else if (promotedNames.has(t.name)) {
-          suffix = ' (promoted, always active)';
-        } else if (loaded?.source === 'autoload') {
-          suffix = ' (autoload active)';
-        } else if (loaded?.source === 'deferred') {
-          suffix = ' (deferred active)';
-        } else if (loaded?.source === 'extended_loaded') {
-          suffix = ' (loaded active)';
-        }
-        lines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
-      }
-    }
-
-    lines.push('');
-    lines.push('[Response Style Guidance]');
-    lines.push(responseStyleGuidance);
-
-    if (internalState) {
-      lines.push('');
-      lines.push('[Internal State]');
-      lines.push(
-        `VAD: valence=${formatSignedDecimal(internalState.emotional.vad.valence)},`
-        + ` arousal=${formatSignedDecimal(internalState.emotional.vad.arousal)},`
-        + ` dominance=${formatSignedDecimal(internalState.emotional.vad.dominance)}`,
-      );
-      lines.push(
-        `Mood VAD: valence=${formatSignedDecimal(internalState.emotional.mood.valence)},`
-        + ` arousal=${formatSignedDecimal(internalState.emotional.mood.arousal)},`
-        + ` dominance=${formatSignedDecimal(internalState.emotional.mood.dominance)}`,
-      );
-      lines.push(`Top emotions: ${this.formatTopEmotions(internalState.emotional.discreteEmotions)}`);
-      lines.push(`Signal confidence: ${internalState.emotional.confidence.toFixed(3)}`);
-      lines.push(
-        `Cognitive: certainty=${internalState.cognitive.certaintyLevel.toFixed(3)},`
-        + ` engagement=${internalState.cognitive.topicEngagement.toFixed(3)},`
-        + ` processing=${internalState.cognitive.processingQuality}`,
-      );
-      lines.push(
-        `Attention: trajectory=${internalState.attention.conversationTrajectory},`
-        + ` salient_entities=${internalState.attention.salientEntities.length},`
-        + ` active_concerns=${internalState.attention.activeConcerns.length}`,
-      );
-      const concernRefs = internalState.attention.activeConcerns
-        .slice(0, 3)
-        .map((concern) => `${concern.id}:${concern.priority}`);
-      lines.push(`Active concern refs: ${concernRefs.length > 0 ? concernRefs.join(', ') : 'none'}`);
-      const metacognitiveSummary = cloneMetacognitiveFlags(metacognitiveFlags)
-        .slice(0, 3)
-        .map((flag) => `${flag.flag}(${flag.confidence.toFixed(3)})`);
-      lines.push(`Metacognitive flags: ${metacognitiveSummary.length > 0 ? metacognitiveSummary.join(', ') : 'none'}`);
-      lines.push(
-        `Relationship: trust=${internalState.relational.trustLevel},`
-        + ` contact=${internalState.relational.contactId ?? 'none'},`
-        + ` baseline_valence=${formatSignedDecimal(internalState.relational.baselineValence)},`
-        + ` mood_drift=${formatSignedDecimal(internalState.relational.moodDrift)},`
-        + ` interaction_frequency=${internalState.relational.recentInteractionFrequency.toFixed(3)},`
-        + ` last_seen_delta_seconds=${internalState.relational.lastSeenDeltaSeconds ?? 'none'}`,
-      );
-    }
-
-    if (emotionAppraisalChain.length > 0) {
-      lines.push('');
-      lines.push('[Emotion Appraisal Chain]');
-      for (const entry of emotionAppraisalChain.slice(-3)) {
-        const summary = entry.summary.replace(/\s+/g, ' ').trim();
-        lines.push(`- ${new Date(entry.timestamp).toISOString()} (${entry.trigger}): ${summary}`);
-      }
-    }
-
-    const activeConcernsBlock = this.buildActiveConcernsContextBlock(canonicalContactKey);
-    if (activeConcernsBlock) {
-      lines.push('');
-      lines.push(activeConcernsBlock);
-    }
-
-    const behavioralNotesBlock = this.buildBehavioralNotesContextBlock(canonicalContactKey);
-    if (behavioralNotesBlock) {
-      lines.push('');
-      lines.push(behavioralNotesBlock);
-    }
-
-    if (skillsContext) {
-      lines.push('');
-      lines.push('[Skills Index]');
-      lines.push('Use skill_view(name) to load full instructions only when needed.');
-      lines.push(skillsContext);
-    }
-
-    return lines.join('\n');
-  }
-
-  private buildActiveConcernsContextBlock(canonicalContactKey?: string): string {
-    if (!this.activeConcernProvider) return '';
-
-    try {
-      const concerns = this.activeConcernProvider.getActiveConcerns(canonicalContactKey);
-      if (concerns.length === 0) return '';
-      return formatActiveConcernsContextBlock(concerns);
-    } catch (error) {
-      log.warn('Active concerns context injection skipped due to provider error', {
-        error: toErrorMessage(error),
-      });
-      return '';
-    }
-  }
-
-  private buildMetacognitiveNotesContextBlock(): string {
-    if (this.currentMetacognitiveFlags.length === 0) return '';
-    return formatMetacognitiveNotesContextBlock(this.currentMetacognitiveFlags, {
-      minConfidence: 0.4,
-      maxFlags: 2,
+    return buildRuntimeContextForTurn({
+      message,
+      resolvedUserName,
+      trustLevel,
+      channelType,
+      canonicalContactKey,
+      responseStyle,
+      now,
+      taskKind,
+      templateVariables,
+      internalState,
+      metacognitiveFlags,
+      emotionAppraisalChain,
+      modelId: this.agent.state.model.id,
+      contextWindow: this.resolveContextWindow(),
+      capabilityTier: this.resolveCapabilityAccess().getTier(),
+      activeToolCounts: activeResolution.counts,
+      extendedTools: this.extendedTools,
+      loadedExtended: this.loadedExtended,
+      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
+      promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
+      skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
+      activeConcernsBlock: this.buildActiveConcernsContextBlock(canonicalContactKey),
+      behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
+      formatTopEmotions: (discrete) => this.formatTopEmotions(discrete),
     });
   }
 
-  private buildBehavioralNotesContextBlock(canonicalContactKey?: string): string {
-    if (!this.behavioralPatternProvider) return '';
+  private buildActiveConcernsContextBlock(canonicalContactKey?: string): string {
+    return buildActiveConcernsContextBlockForTurn({
+      activeConcernProvider: this.activeConcernProvider,
+      canonicalContactKey,
+      logger: log,
+    });
+  }
 
-    try {
-      return this.behavioralPatternProvider.getBehavioralNotes(canonicalContactKey);
-    } catch (error) {
-      log.warn('Behavioral notes context injection skipped due to provider error', {
-        error: toErrorMessage(error),
-      });
-      return '';
-    }
+  private buildMetacognitiveNotesContextBlock(): string {
+    return buildMetacognitiveNotesContextBlockForTurn(this.currentMetacognitiveFlags);
+  }
+
+  private buildBehavioralNotesContextBlock(canonicalContactKey?: string): string {
+    return buildBehavioralNotesContextBlockForTurn({
+      behavioralPatternProvider: this.behavioralPatternProvider,
+      canonicalContactKey,
+      logger: log,
+    });
   }
 
   private buildScratchpadContextBlock(): string {
-    if (!this.scratchpadProvider) return '';
-
-    try {
-      const entries = this.scratchpadProvider.listScratchpadEntries(SCRATCHPAD_PROMPT_SCAN_LIMIT);
-      if (entries.length === 0) return '';
-
-      const lines = [
-        '[Scratchpad]',
-        'Working notes (short-term, may be stale; verify before acting):',
-      ];
-
-      let included = 0;
-      let usedChars = 0;
-      for (const entry of entries) {
-        if (included >= SCRATCHPAD_PROMPT_MAX_ENTRIES) break;
-
-        const normalized = entry.content.replace(/\s+/g, ' ').trim();
-        if (!normalized) continue;
-
-        const clipped = normalized.length > SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS
-          ? `${normalized.slice(0, SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS - 3)}...`
-          : normalized;
-
-        const line = `- ${entry.id}: ${clipped}`;
-        const projectedChars = usedChars + line.length;
-        if (projectedChars > SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS) break;
-
-        lines.push(line);
-        usedChars = projectedChars;
-        included += 1;
-      }
-
-      if (included === 0) return '';
-      const omitted = Math.max(0, entries.length - included);
-      if (omitted > 0) {
-        lines.push(`- (${omitted} additional notes omitted for context budget)`);
-      }
-
-      return lines.join('\n');
-    } catch (error) {
-      log.debug('Scratchpad context injection skipped due to provider error', {
-        error: toErrorMessage(error),
-      });
-      return '';
-    }
+    return buildScratchpadContextBlockForTurn({
+      scratchpadProvider: this.scratchpadProvider,
+      logger: log,
+    });
   }
 
   /** Map message channel info to a channelType string for prompt composition */
@@ -4752,152 +4145,26 @@ export class SubstrateAgent {
     };
   }
 
-  private toEmotionSnapshotFromInternalState(internalState: InternalState): EmotionStateSnapshot {
-    return {
-      vad: { ...internalState.emotional.vad },
-      mood: { ...internalState.emotional.mood },
-      discrete: { ...internalState.emotional.discreteEmotions },
-      confidence: internalState.emotional.confidence,
-    };
-  }
-
   private getPersonaAdaptation(
     trustLevel: TrustLevel,
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     templateVariables?: Record<string, string>,
   ): string | null {
-    const trustHint = (() => {
-      switch (trustLevel) {
-        case 'primary':
-          return '[Trust: You are speaking with your primary person. Be your full, authentic self — share freely, reference shared history, express genuine emotions and vulnerability. This is honne — your inner truth.]';
-        case 'trusted':
-          return '[Trust: This is a trusted contact. Be warm and personal but mindful of boundaries — share appropriate personal context, avoid intimate details or confidential memories.]';
-        case 'regular':
-          return '[Trust: This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.]';
-        case 'public':
-          return '[Trust: This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.]';
-        default:
-          return '[Trust: This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.]';
-      }
-    })();
-    const affectHint = buildEmotionalAffectSection({
+    return getPersonaAdaptationForTurn({
       trustLevel,
-      emotionSnapshot: this.toEmotionSnapshotFromInternalState(internalState),
-      promptVariables: templateVariables,
+      internalState,
+      metacognitiveFlags,
+      templateVariables,
       config: this.config as unknown as Record<string, unknown>,
     });
-    const metacognitiveHint = buildMetacognitivePersonaHint(metacognitiveFlags);
-
-    const sections = [trustHint, affectHint, metacognitiveHint]
-      .filter((section): section is string => Boolean(section?.trim()));
-    if (sections.length === 0) return null;
-    return sections.join('\n\n');
-  }
-
-  private resolveIdentityChannel(message: SubstrateMessage): string {
-    if (message.channelType === 'discord') return 'discord';
-    if (message.channelType === 'api') return 'api';
-    if (message.channelType !== 'terminal') return message.channelType;
-    if (message.channelId.startsWith('discord-voice:')) return 'discord';
-    if (message.channelId.startsWith('api:')) return 'api';
-    if (message.channelId.startsWith('internal:')) return 'internal';
-    return 'unknown';
-  }
-
-  private collectContinuityFallbackKeys(
-    authorId: string,
-    canonicalContactKey: string,
-    contact?: Contact,
-  ): string[] {
-    const keys = new Set<string>();
-    const addKey = (value?: string): void => {
-      if (!value || value === canonicalContactKey) return;
-      keys.add(value);
-    };
-
-    addKey(authorId);
-    addKey(contact?.discordUserId);
-    for (const identity of contact?.channelIdentities ?? []) {
-      addKey(identity.userId);
-    }
-
-    return [...keys].sort((a, b) => a.localeCompare(b));
-  }
-
-  private resolvePromptUserName(message: SubstrateMessage, contact?: Contact): string {
-    const nickname = contact?.nickname?.trim();
-    if (nickname) return nickname;
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Contact from mocks may lack displayName
-    const displayName = contact?.displayName?.trim();
-    if (displayName) return displayName;
-
-    const authorName = message.authorName.trim();
-    if (authorName) return authorName;
-
-    return 'User';
   }
 
   private resolveAuthorContext(message: SubstrateMessage): ResolvedAuthorContext {
-    // Internal system channels are self-context (heartbeat/reflection/planning).
-    // They should use full private trust for memory access.
-    if (message.channelId.startsWith('internal:')) {
-      return {
-        trustLevel: 'primary',
-        resolvedUserName: this.resolvePromptUserName(message),
-        canonicalContactKey: message.authorId,
-        continuityFallbackKeys: [],
-      };
-    }
-
-    if (!message.authorId || !this.contactStore) {
-      return {
-        trustLevel: 'regular',
-        resolvedUserName: this.resolvePromptUserName(message),
-        continuityFallbackKeys: [],
-      };
-    }
-
-    try {
-      const channel = this.resolveIdentityChannel(message);
-      const maybeChannelResolver = this.contactStore as ContactStore & {
-        resolveChannelIdentity?: (channel: string, userId: string, displayName?: string) => Contact;
-      };
-      const contact = typeof maybeChannelResolver.resolveChannelIdentity === 'function'
-        ? maybeChannelResolver.resolveChannelIdentity(channel, message.authorId, message.authorName)
-        : this.contactStore.resolveUserId(message.authorId);
-      const canonicalContactKey = contact.id;
-
-      const maybeActivityRecorder = this.contactStore as ContactStore & {
-        recordChannelActivity?: (contactId: string, channel: string, channelId: string) => void;
-      };
-      if (
-        canonicalContactKey
-        && typeof maybeActivityRecorder.recordChannelActivity === 'function'
-      ) {
-        maybeActivityRecorder.recordChannelActivity(canonicalContactKey, channel, message.channelId);
-      }
-
-      return {
-        trustLevel: contact.trustLevel,
-        resolvedUserName: this.resolvePromptUserName(message, contact),
-        canonicalContactKey,
-        continuityFallbackKeys: canonicalContactKey
-          ? this.collectContinuityFallbackKeys(message.authorId, canonicalContactKey, contact)
-          : [],
-      };
-    } catch (error) {
-      log.warn('Failed to resolve contact identity for trust/context routing', {
-        authorId: message.authorId,
-        channelId: message.channelId,
-        error: toErrorMessage(error),
-      });
-      return {
-        trustLevel: 'regular',
-        resolvedUserName: this.resolvePromptUserName(message),
-        continuityFallbackKeys: [],
-      };
-    }
+    return resolveAuthorContextForTurn({
+      message,
+      contactStore: this.contactStore,
+      logger: log,
+    });
   }
 }

@@ -14,6 +14,7 @@ Required session start for tracked work:
 
 ```bash
 bd onboard
+bd prime
 ```
 
 Then use `bd` for discovery, claiming, follow-up issues, and closure.
@@ -26,12 +27,14 @@ bd show <id> --json
 bd update <id> --claim --json
 bd create "Title" --description "Self-contained task details" -t task -p 2 --json
 bd close <id> --reason "Completed" --json
-bd sync --json
+# if a Dolt remote is configured for beads
+bd dolt push --json
 ```
 
 Rules:
 
 - Use `--json` for programmatic use.
+- Do not rely on `bd sync`; the installed CLI here uses `bd dolt push` and `bd dolt pull` instead.
 - Do not create markdown TODO lists or external task trackers.
 - If `bd ready --json` is empty but you are doing user-requested tracked work, create a self-contained issue before editing code.
 - Link discovered follow-up work with `discovered-from:<parent-id>`.
@@ -217,16 +220,19 @@ Required sequence:
 1. File issues for remaining follow-up work.
 2. Run quality gates appropriate to the change.
 3. Update bead status.
-4. Sync and push:
+4. Push git state:
    ```bash
    git pull --rebase
-   bd sync --json
    git push
    git status
    ```
-5. Verify the branch is up to date with origin.
-6. Clean up orchestration handles.
-7. Hand off with tests run, remaining risks, and any open beads.
+5. If this repo has a beads Dolt remote configured, push that state too:
+   ```bash
+   bd dolt push --json
+   ```
+6. Verify the branch is up to date with origin.
+7. Clean up orchestration handles.
+8. Hand off with tests run, remaining risks, and any open beads.
 
 Rules:
 

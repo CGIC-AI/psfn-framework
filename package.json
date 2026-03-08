@@ -28,6 +28,7 @@
     "chat": "tsx src/chat-cli.ts",
     "session:repair": "tsx src/session-repair.ts",
     "migrate:embeddings": "tsx src/migrate-embeddings.ts",
+    "prefetch:hf-models": "tsx scripts/prefetch-hf-models.ts",
     "migrate:persistence-layout": "tsx src/migrate-persistence-layout.ts",
     "import-character": "tsx src/import-character.ts",
     "e2e": "tsx src/e2e-test.ts",

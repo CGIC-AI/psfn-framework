@@ -85,7 +85,7 @@ test('supports companion-name template substitution', () => {
   );
 });
 
-test('generic-dark keeps key text and interactive tokens readable', () => {
+test('generic-dark keeps page-level class pairings readable', () => {
   const dark = resolveThemePack('generic-dark');
   const css = dark.cssVariables;
 
@@ -93,19 +93,45 @@ test('generic-dark keeps key text and interactive tokens readable', () => {
   const bark100 = css['--color-bark-100'];
   const bark700 = css['--color-bark-700'];
   const bark900 = css['--color-bark-900'];
+  const shadow50 = css['--color-shadow-50'];
+  const shadow200 = css['--color-shadow-200'];
+  const shadow600 = css['--color-shadow-600'];
+  const shadow700 = css['--color-shadow-700'];
+  const shadow800 = css['--color-shadow-800'];
+  const shadow900 = css['--color-shadow-900'];
   const gold50 = css['--color-gold-50'];
   const gold600 = css['--color-gold-600'];
   const gold700 = css['--color-gold-700'];
+  const moss50 = css['--color-moss-50'];
+  const moss600 = css['--color-moss-600'];
+  const moss700 = css['--color-moss-700'];
   const wilt600 = css['--color-wilt-600'];
 
   assert.ok(bark50 && bark100 && bark700 && bark900);
-  assert.ok(gold50 && gold600 && gold700 && wilt600);
+  assert.ok(shadow50 && shadow200 && shadow600 && shadow700 && shadow800 && shadow900);
+  assert.ok(gold50 && gold600 && gold700);
+  assert.ok(moss50 && moss600 && moss700 && wilt600);
 
+  // Dashboard/chat/settings/theme: bark text hierarchy on core dark surfaces.
   assertContrastAtLeast(bark900, bark100, 7, 'Dashboard/chat/settings/theme primary text');
   assertContrastAtLeast(bark700, bark100, 4.5, 'Dashboard/chat/settings/theme secondary text');
   assertContrastAtLeast(bark700, bark50, 4.5, 'Sidebar secondary text');
+
+  // text-shadow-* pairings used directly by dashboard/chat/settings/theme pages.
+  assertContrastAtLeast(shadow900, bark100, 4.5, 'Dashboard stat values: text-shadow-900 on bg-bark-100');
+  assertContrastAtLeast(shadow700, bark100, 4, 'Dashboard/settings labels: text-shadow-700 on bg-bark-100');
+  assertContrastAtLeast(shadow800, bark50, 4, 'Theme preview title: text-shadow-800 on bg-bark-50');
+  assertContrastAtLeast(shadow600, bark50, 3, 'Theme preview subtitle: text-shadow-600 on bg-bark-50');
+  assertContrastAtLeast(shadow900, '#ffffff', 4, 'Chat/settings inputs: text-shadow-900 on bg-white');
+  assertContrastAtLeast(shadow800, '#ffffff', 4, 'Card body text: text-shadow-800 on bg-white');
+  assertContrastAtLeast(shadow700, shadow50, 3.5, 'Dashboard reflection badge: text-shadow-700 on bg-shadow-50');
+  assertContrastAtLeast(shadow200, shadow50, 1.2, 'Dashboard reflection badge border: border-shadow-200 on bg-shadow-50');
+
+  // Accent and state tokens used by primary actions and status chips.
   assertContrastAtLeast(gold700, gold50, 4.5, 'Active navigation text');
   assertContrastAtLeast('#ffffff', gold600, 4.5, 'Primary action text');
   assertContrastAtLeast('#ffffff', gold700, 4.5, 'Primary action hover text');
+  assertContrastAtLeast(moss700, moss50, 4.5, 'Success chip text');
+  assertContrastAtLeast('#ffffff', moss600, 4.5, 'Success action text');
   assertContrastAtLeast('#ffffff', wilt600, 4.5, 'Destructive action text');
 });

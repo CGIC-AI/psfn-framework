@@ -36,7 +36,7 @@ import type {
   EnvInfo,
 } from '../types.js';
 import type { ContactConversationChannelView } from './contact-session-linker.js';
-import type { IdentityIntakeReviewState } from '../templates/identity.js';
+import type { IdentityIntakeReviewState } from '../identity-intake-types.js';
 import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolRuntimeState,

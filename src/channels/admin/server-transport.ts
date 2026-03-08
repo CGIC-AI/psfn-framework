@@ -63,24 +63,6 @@ export class AdminServerTransport {
   constructor(private readonly log: AdminServerTransportLogger) {}
 
   initialize(): void {
-    // Pre-load static files
-    const staticDir = join(import.meta.dirname, 'static');
-    const staticAssets = [
-      { file: 'htmx.min.js', contentType: 'application/javascript' },
-      { file: 'sse.js', contentType: 'application/javascript' },
-      { file: 'chat.js', contentType: 'application/javascript' },
-      { file: 'chat-debug.js', contentType: 'application/javascript' },
-      { file: 'admin.css', contentType: 'text/css; charset=utf-8' },
-    ];
-    for (const { file, contentType } of staticAssets) {
-      try {
-        const content = readFileSync(join(staticDir, file));
-        this.registerStaticAsset(`/static/${file}`, content, contentType);
-      } catch {
-        this.log.warn(`Static file not found: ${file}`);
-      }
-    }
-
     this.initializePiWebUiRoutes();
     this.initializeGardenUi();
   }

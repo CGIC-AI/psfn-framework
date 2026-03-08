@@ -1,6 +1,5 @@
 // ── Admin GUI Server ──
-// Serves the garden-themed management interface on ADMIN_PORT.
-// Uses htmx for interactivity — server returns HTML fragments.
+// Serves the /garden UI shell and canonical /api/admin endpoints on ADMIN_PORT.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -12,7 +11,7 @@ import type { EventBus } from '../../event-bus.js';
 import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
 import { createComponentLogger } from '../../logger.js';
 import { toErrorMessage } from '../../utils/errors.js';
-import { readBodyWithLimit, sendHtml, sendText } from '../http/primitives.js';
+import { readBodyWithLimit, sendText } from '../http/primitives.js';
 import { ValuesJournalStore } from '../../values/store.js';
 import {
   resolveConfiguredCompanionDataDir,
@@ -20,7 +19,6 @@ import {
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import type { AdminServerConfig } from './types.js';
-import { AdminHandlers } from './handlers.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
 import { AdminSessionDataService } from './services/session-service.js';
@@ -31,7 +29,7 @@ import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
 import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service.js';
 import { buildAdminRoutes, dispatchAdminRoute, type AdminRoute } from './server-routes.js';
-import { checkAdminRequestAuth, checkAdminUpgradeAuth, hasAdminRequestAuthCredentials } from './server-auth.js';
+import { checkAdminRequestAuth, checkAdminUpgradeAuth } from './server-auth.js';
 import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
@@ -46,7 +44,6 @@ export class AdminServer implements Lifecycle {
   private token?: string;
   private allowInsecureWithoutToken: boolean;
   private eventBus: EventBus;
-  private handlers: AdminHandlers;
   private dashboardService: AdminDashboardDataService;
   private memoryService: AdminMemoryDataService;
   private sessionService: AdminSessionDataService;
@@ -75,27 +72,6 @@ export class AdminServer implements Lifecycle {
     this.token = config.token;
     this.allowInsecureWithoutToken = config.allowInsecureWithoutToken ?? false;
     this.eventBus = config.eventBus;
-    this.handlers = new AdminHandlers({
-      memoryStore: config.memoryStore,
-      sessionStore: config.sessionStore,
-      sessionManager: config.sessionManager,
-      scheduler: config.scheduler,
-      shardManager: config.shardManager,
-      eventBus: config.eventBus,
-      embeddingService: config.embeddingService,
-      characterCard: config.characterCard,
-      config: config.config,
-      modelDiscovery: config.modelDiscovery,
-      contactStore: config.contactStore,
-      promptStore: config.promptStore,
-      promptRegistry: config.promptRegistry,
-      cardVersionStore: config.cardVersionStore,
-      skillsRuntime: config.skillsRuntime,
-      confirmationQueueApi: config.confirmationQueueApi,
-      apiBaseUrl: config.apiBaseUrl,
-      apiHost: config.apiHost,
-      apiPort: config.apiPort,
-    });
     this.dashboardService = new AdminDashboardDataService({
       memoryStore: config.memoryStore,
       sessionStore: config.sessionStore,
@@ -127,7 +103,6 @@ export class AdminServer implements Lifecycle {
       characterCard: config.characterCard,
       config: config.config,
       cardVersionStore: config.cardVersionStore,
-      importIdentityCardHtml: (body) => this.handlers.domains.identity.importIdentityCard(body),
       promptStore: config.promptStore,
     });
     const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
@@ -157,7 +132,6 @@ export class AdminServer implements Lifecycle {
     );
     this.routes = buildAdminRoutes({
       token: this.token,
-      handlers: this.handlers,
       dashboardService: this.dashboardService,
       adaptiveToolsService: this.adaptiveToolsService,
       memoryService: this.memoryService,
@@ -171,11 +145,6 @@ export class AdminServer implements Lifecycle {
       confirmationQueueApi: this.confirmationQueueApiRef,
       valuesJournal: this.valuesJournal,
       withBody: (req, res, cb) => this.withBody(req, res, cb),
-      sendHtml: (res, html) => this.sendHtml(res, html),
-      sendFragment: (res, html) => this.sendFragment(res, html),
-      send404: (res, path) => this.send404(res, path),
-      send500: (context, err, res) => this.send500(context, err, res),
-      logError: (message, data) => log.error(message, data),
     });
     this.server = createServer((req, res) => this.handleRequest(req, res));
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
@@ -239,7 +208,6 @@ export class AdminServer implements Lifecycle {
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     handleAdminRequest(req, res, {
       token: this.token,
-      hasRequestAuthCredentials: (request) => this.hasRequestAuthCredentials(request),
       checkAuth: (request, response) => this.checkAuth(request, response),
       tryServeStaticAsset: (path, response) => this.transport.tryServeStaticAsset(path, response),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
@@ -261,20 +229,8 @@ export class AdminServer implements Lifecycle {
     return checkAdminRequestAuth(req, res, this.token);
   }
 
-  private hasRequestAuthCredentials(req: IncomingMessage): boolean {
-    return hasAdminRequestAuthCredentials(req, this.token);
-  }
-
   private checkUpgradeAuth(req: IncomingMessage): boolean {
     return checkAdminUpgradeAuth(req, this.token);
-  }
-
-  private sendHtml(res: ServerResponse, html: string): void {
-    sendHtml(res, 200, html);
-  }
-
-  private sendFragment(res: ServerResponse, html: string): void {
-    sendHtml(res, 200, html);
   }
 
   private send404(res: ServerResponse, path: string): void {

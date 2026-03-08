@@ -138,6 +138,7 @@ import {
 } from './runtime/bootstrap-helpers.js';
 import { wireContextFeedbackRuntime } from './context-feedback/runtime.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from './runtime/env-parsing.js';
+import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
 import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
 import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
@@ -691,9 +692,15 @@ async function main(): Promise<void> {
   let apiServer: ApiServer | undefined;
   const apiHost = process.env.API_HOST || undefined;
   const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
+  const adminHost = process.env.ADMIN_HOST || undefined;
+  const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (apiPort) {
     const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
-    const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
+    const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
+      explicitAllowlist: parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST),
+      adminHost,
+      adminPort,
+    });
     const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
       agentLoop,
       eventBus,
@@ -887,7 +894,6 @@ async function main(): Promise<void> {
   // ── Admin GUI (optional) ──
 
   let adminServer: AdminServer | undefined;
-  const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (adminPort) {
     const adminToken = process.env.ADMIN_TOKEN || undefined;
     const allowInsecureWithoutToken = isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE);
@@ -911,7 +917,7 @@ async function main(): Promise<void> {
     };
     adminServer = new AdminServer({
       port: adminPort,
-      host: process.env.ADMIN_HOST || undefined,
+      host: adminHost,
       token: adminToken,
       allowInsecureWithoutToken,
       apiBaseUrl: process.env.API_BASE_URL,

@@ -16,6 +16,7 @@ import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,
 } from '../http/auth.js';
+import { resolveApiCorsAllowedOrigins } from './http-policy.js';
 import type {
   VoiceWebSocketCloseReason,
   VoiceWebSocketRuntimeHooks,
@@ -1248,6 +1249,32 @@ describe('ApiServer', () => {
       expect(res.headers['access-control-allow-origin']).toBe('https://console.example');
       expect(res.headers['access-control-allow-methods']).toContain('POST');
       expect(res.headers['access-control-allow-headers']).toContain('X-Session-ID');
+      expect(res.headers.vary).toContain('Origin');
+    });
+
+    it('allows preflight for split-mode admin origin derived from admin host/port', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: resolveApiCorsAllowedOrigins({
+          explicitAllowlist: [],
+          adminHost: 'psfn.local',
+          adminPort: 3001,
+        }),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Origin: 'http://psfn.local:3001',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('http://psfn.local:3001');
       expect(res.headers.vary).toContain('Origin');
     });
 

@@ -63,6 +63,12 @@ interface ParsedCorsOrigin {
   port: string;
 }
 
+export interface ResolveApiCorsAllowedOriginsOptions {
+  explicitAllowlist?: readonly string[];
+  adminHost?: string;
+  adminPort?: number;
+}
+
 export interface CorsWildcardHostPattern {
   protocol: 'http:' | 'https:';
   hostnameSuffix: string;
@@ -73,6 +79,10 @@ export interface CorsAllowedOrigins {
   exactOrigins: ReadonlySet<string>;
   wildcardHostPatterns: readonly CorsWildcardHostPattern[];
 }
+
+const DEFAULT_ADMIN_HOST = '127.0.0.1';
+const UNSAFE_ADMIN_BIND_HOSTS = new Set(['*', '0.0.0.0', '::', '[::]']);
+const LOOPBACK_ADMIN_HOST_ALIASES = ['localhost', '127.0.0.1', '[::1]'] as const;
 
 function parseHttpOrigin(value: string): ParsedCorsOrigin | null {
   let parsed: URL;
@@ -166,6 +176,80 @@ export function normalizeCorsAllowedOrigins(origins: readonly string[] | undefin
     exactOrigins,
     wildcardHostPatterns,
   };
+}
+
+function normalizeAdminHostForOrigin(host: string): string | null {
+  const normalized = host.trim().toLowerCase();
+  if (!normalized) return null;
+  if (UNSAFE_ADMIN_BIND_HOSTS.has(normalized)) return null;
+  if (
+    normalized.includes('://')
+    || normalized.includes('/')
+    || normalized.includes('?')
+    || normalized.includes('#')
+    || normalized.includes('*')
+  ) {
+    return null;
+  }
+
+  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+    return normalized;
+  }
+
+  if (normalized.includes(':')) {
+    return `[${normalized}]`;
+  }
+
+  return normalized;
+}
+
+function toLoopbackCandidate(host: string): string {
+  if (host.startsWith('[') && host.endsWith(']')) {
+    return host.slice(1, -1);
+  }
+  return host;
+}
+
+function deriveAdminOriginHosts(adminHost: string | undefined): string[] {
+  const normalizedHost = normalizeAdminHostForOrigin(adminHost ?? DEFAULT_ADMIN_HOST);
+  if (!normalizedHost) return [];
+
+  if (!isLoopbackHost(toLoopbackCandidate(normalizedHost))) {
+    return [normalizedHost];
+  }
+
+  const hosts = [normalizedHost, ...LOOPBACK_ADMIN_HOST_ALIASES];
+  return Array.from(new Set(hosts));
+}
+
+export function resolveApiCorsAllowedOrigins(
+  options: ResolveApiCorsAllowedOriginsOptions,
+): string[] {
+  const mergedOrigins: string[] = [];
+  const deduped = new Set<string>();
+  const addOrigin = (origin: string): void => {
+    const trimmed = origin.trim();
+    if (!trimmed || trimmed === '*') return;
+    if (deduped.has(trimmed)) return;
+    deduped.add(trimmed);
+    mergedOrigins.push(trimmed);
+  };
+
+  for (const explicitOrigin of options.explicitAllowlist ?? []) {
+    addOrigin(explicitOrigin);
+  }
+
+  if (!options.adminPort || !Number.isInteger(options.adminPort) || options.adminPort <= 0) {
+    return mergedOrigins;
+  }
+
+  for (const host of deriveAdminOriginHosts(options.adminHost)) {
+    const parsed = parseHttpOrigin(`http://${host}:${options.adminPort}`);
+    if (!parsed) continue;
+    addOrigin(parsed.origin);
+  }
+
+  return mergedOrigins;
 }
 
 export function isLoopbackHost(host: string): boolean {

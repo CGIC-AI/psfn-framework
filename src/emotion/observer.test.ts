@@ -156,6 +156,36 @@ describe('EmotionObserver', () => {
     expect(classify).toHaveBeenCalledWith('12345');
   });
 
+  it('degrades to lexicon-only observation when text classifier throws', async () => {
+    const classify = vi.fn().mockRejectedValue(new Error('model unavailable'));
+    const observer = new EmotionObserver({
+      textClassifier: { classify },
+      vadLexicon: createLexicon({
+        rage: { valence: 0.05, arousal: 0.95, dominance: 0.85 },
+      }),
+    });
+
+    const result = await observer.observe('rage', 0);
+
+    const lexiconConfidence = (0.9 + 0.9 + 0.7) / 3;
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(result.fusedLabel).toBe('anger');
+    expect(result.fusedLabelConfidence).toBeCloseTo(lexiconConfidence, 6);
+    expect(result.observation.discrete).toEqual({ anger: 1 });
+    expect(result.observation.confidence).toBeCloseTo(lexiconConfidence, 6);
+  });
+
+  it('returns an empty observation when classifier throws and lexicon has no signal', async () => {
+    const classify = vi.fn().mockRejectedValue(new Error('cache miss'));
+    const observer = new EmotionObserver({
+      textClassifier: { classify },
+      vadLexicon: createLexicon({}),
+    });
+
+    await expect(observer.buildObservation('unknown-token')).resolves.toEqual({});
+    expect(classify).toHaveBeenCalledTimes(1);
+  });
+
   it('builds audio modality observations when audio classifier is configured', async () => {
     const { classifier } = createClassifier([{ label: 'neutral', score: 1 }]);
     const { classifier: audioClassifier, classify } = createAudioClassifier([

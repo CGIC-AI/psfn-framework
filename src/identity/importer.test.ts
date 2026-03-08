@@ -106,7 +106,7 @@ describe('character importer', () => {
           entries: [
             {
               name: 'Origin memory',
-              content: 'Purrsephone was first deployed as a voice companion.',
+              content: 'Companion was first deployed as a voice companion.',
               keys: ['origin', 'deployment'],
               secondary_keys: ['history'],
               enabled: true,
@@ -129,7 +129,7 @@ describe('character importer', () => {
     const result = importCharacterCardFromPath(sourcePath);
     expect(result.memorySeeds).toHaveLength(1);
     expect(result.memorySeeds[0]).toMatchObject({
-      text: 'Purrsephone was first deployed as a voice companion.',
+      text: 'Companion was first deployed as a voice companion.',
       type: 'semantic',
       importance: 0.82,
       tags: ['lorebook', 'character_book', 'origin', 'deployment', 'history'],

@@ -1538,7 +1538,7 @@ describe('SessionManager', () => {
 
 describe('resolveRoleName', () => {
   it('maps assistant to configured character name', () => {
-    expect(resolveRoleName('assistant', { charName: 'Purrsephone' })).toBe('Purrsephone');
+    expect(resolveRoleName('assistant', { charName: 'Companion' })).toBe('Companion');
   });
 
   it('maps user to configured user name', () => {

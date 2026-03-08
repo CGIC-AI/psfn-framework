@@ -1107,7 +1107,7 @@ describe('AdminServer JSON API routes', () => {
       role: 'assistant',
       content: 'world',
       authorId: 'assistant',
-      authorName: 'Purrsephone',
+      authorName: 'Companion',
       timestamp: Date.now() + 1,
       channelVisibility: 'direct',
     });

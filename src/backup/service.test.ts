@@ -42,7 +42,7 @@ describe('runBackupCycle', () => {
     roots.push(root);
     const sessionsDir = join(root, 'sessions');
     const backupRootDir = join(root, 'backups');
-    const databasePath = join(root, 'purrsephone.db');
+    const databasePath = join(root, 'companion.db');
     mkdirSync(sessionsDir, { recursive: true });
     writeFileSync(join(sessionsDir, 'alpha.jsonl'), '{"id":1}\n', 'utf-8');
     writeFileSync(join(sessionsDir, 'ignored.txt'), 'nope', 'utf-8');
@@ -76,7 +76,7 @@ describe('runBackupCycle', () => {
     roots.push(root);
     const sessionsDir = join(root, 'sessions');
     const backupRootDir = join(root, 'backups');
-    const databasePath = join(root, 'purrsephone.db');
+    const databasePath = join(root, 'companion.db');
     mkdirSync(sessionsDir, { recursive: true });
     mkdirSync(backupRootDir, { recursive: true });
     writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
@@ -109,7 +109,7 @@ describe('runBackupCycle', () => {
     roots.push(root);
     const sessionsDir = join(root, 'sessions');
     const backupRootDir = join(root, 'backups');
-    const databasePath = join(root, 'purrsephone.db');
+    const databasePath = join(root, 'companion.db');
     mkdirSync(sessionsDir, { recursive: true });
     writeFileSync(join(sessionsDir, 'channel-a.jsonl'), '{}\n', 'utf-8');
 
@@ -176,7 +176,7 @@ describe('registerScheduledBackupTask', () => {
     roots.push(root);
     const sessionsDir = join(root, 'sessions');
     const backupRootDir = join(root, 'backups');
-    const databasePath = join(root, 'purrsephone.db');
+    const databasePath = join(root, 'companion.db');
     mkdirSync(sessionsDir, { recursive: true });
     writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
     writeFileSync(databasePath, 'live-db', 'utf-8');

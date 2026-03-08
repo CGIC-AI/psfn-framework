@@ -11,6 +11,7 @@ import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../types.js';
 import type { ApiServerHealthChecks } from './types.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,
@@ -533,14 +534,14 @@ describe('ApiServer', () => {
   describe('POST /v1/chat/completions (non-streaming)', () => {
     it('returns valid OpenAI response shape', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Hello' }],
       });
       expect(res.status).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.object).toBe('chat.completion');
       expect(body.id).toMatch(/^chatcmpl-/);
-      expect(body.model).toBe('companion');
+      expect(body.model).toBe(DEFAULT_COMPANION_ID);
       expect(body.choices).toHaveLength(1);
       expect(body.choices[0].message.role).toBe('assistant');
       expect(body.choices[0].message.content).toBe('Hello world');
@@ -564,7 +565,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Hello' }],
       }, {
         'X-User-ID': 'v-primary',
@@ -595,7 +596,7 @@ describe('ApiServer', () => {
         provider: 'anthropic',
         system_prompt_mode: 'none',
         response_style: 'concise',
-        messages: [{ role: 'user', content: 'Talk with Purrsephone.' }],
+        messages: [{ role: 'user', content: 'Talk with Companion.' }],
       });
       expect(res.status).toBe(200);
 
@@ -612,7 +613,7 @@ describe('ApiServer', () => {
 
     it('rejects invalid response_style overrides', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         response_style: 'verbose',
         messages: [{ role: 'user', content: 'test' }],
       });
@@ -638,7 +639,7 @@ describe('ApiServer', () => {
 
     it('rejects caller-provided primary trust fields in API payloads', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         trustLevel: 'primary',
         contact: { trust_level: 'primary' },
         messages: [{ role: 'user', content: 'attempt privilege escalation' }],
@@ -671,7 +672,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'hello with claim' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -712,7 +713,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const initial = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'claim me' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -727,7 +728,7 @@ describe('ApiServer', () => {
       };
 
       const verified = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'claim me verified' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -742,7 +743,7 @@ describe('ApiServer', () => {
       expect(contactStore.getByChannelIdentity('api', INSECURE_LOCAL_API_PRINCIPAL_ID)?.id).toBe(contact.id);
 
       const replay = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'replay proof' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -780,7 +781,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const spoofed = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'spoofed claim' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -791,7 +792,7 @@ describe('ApiServer', () => {
       expect(JSON.parse(spoofed.body).error.type).toBe('identity_claim_source_not_linked');
 
       const initial = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'issue challenge' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -813,7 +814,7 @@ describe('ApiServer', () => {
       `).run(expiredAt, verification.nonce);
 
       const expired = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'use expired challenge' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -832,7 +833,7 @@ describe('ApiServer', () => {
 
     it('returns 400 for missing messages', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
       });
       expect(res.status).toBe(400);
       const body = JSON.parse(res.body);
@@ -841,7 +842,7 @@ describe('ApiServer', () => {
 
     it('returns 400 for empty messages array', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [],
       });
       expect(res.status).toBe(400);
@@ -891,14 +892,14 @@ describe('ApiServer', () => {
       await server.start();
 
       const firstRequest = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'First' }],
       }, { 'X-Session-ID': 'same-session' });
 
       await new Promise(resolve => setTimeout(resolve, 20));
 
       const secondRequest = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Second' }],
       }, { 'X-Session-ID': 'same-session' });
 
@@ -948,14 +949,14 @@ describe('ApiServer', () => {
       await server.start();
 
       const firstRequest = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'First telemetry turn' }],
       }, { 'X-Session-ID': 'queue-telemetry' });
 
       await new Promise(resolve => setTimeout(resolve, 20));
 
       const secondRequest = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Second telemetry turn' }],
       }, { 'X-Session-ID': 'queue-telemetry' });
 
@@ -1015,7 +1016,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const timedOut = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Long task' }],
       }, { 'X-Session-ID': 'timeout-session' });
 
@@ -1024,7 +1025,7 @@ describe('ApiServer', () => {
       expect(abortSpy).toHaveBeenCalledTimes(1);
 
       const queuedTimeout = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Retry too soon' }],
       }, { 'X-Session-ID': 'timeout-session' });
       expect(queuedTimeout.status).toBe(504);
@@ -1039,7 +1040,7 @@ describe('ApiServer', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       const recovered = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Retry after settle' }],
       }, { 'X-Session-ID': 'timeout-session' });
       expect(recovered.status).toBe(200);
@@ -1065,7 +1066,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'hello' }],
       });
 
@@ -1107,7 +1108,7 @@ describe('ApiServer', () => {
           resolve();
         };
         const payload = JSON.stringify({
-          model: 'purrsephone',
+          model: DEFAULT_COMPANION_ID,
           messages: [{ role: 'user', content: 'disconnect me' }],
         });
         const req = http.request(
@@ -1134,7 +1135,7 @@ describe('ApiServer', () => {
       });
 
       const queuedRecovery = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'still running' }],
       }, { 'X-Session-ID': 'disconnect-session' });
       await new Promise(resolve => setTimeout(resolve, 20));
@@ -1151,7 +1152,7 @@ describe('ApiServer', () => {
       expect(abortSpy).toHaveBeenCalledTimes(1);
 
       const recovered = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'normal turn' }],
       }, { 'X-Session-ID': 'disconnect-session' });
       expect(recovered.status).toBe(200);
@@ -1162,7 +1163,7 @@ describe('ApiServer', () => {
   describe('POST /v1/chat/completions (streaming)', () => {
     it('returns proper SSE format', async () => {
       const res = await streamRequest(port, {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Hello' }],
         stream: true,
       });
@@ -1340,7 +1341,7 @@ describe('ApiServer', () => {
       await server.start();
 
       await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [
           { role: 'user', content: 'First message' },
           { role: 'assistant', content: 'First response' },
@@ -1375,7 +1376,7 @@ describe('ApiServer', () => {
       await server.start();
 
       await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [
           { role: 'user', content: 'First message' },
           { role: 'assistant', content: 'First response' },
@@ -1522,7 +1523,7 @@ describe('ApiServer with auth', () => {
     await server.start();
 
     const res = await request(port, 'POST', '/v1/chat/completions', {
-      model: 'purrsephone',
+      model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'identity test' }],
     }, {
       Authorization: 'Bearer test-secret-key',
@@ -1561,7 +1562,7 @@ describe('ApiServer with auth', () => {
 
     const principalId = deriveApiKeyPrincipalId('test-secret-key');
     const challenge = await request(port, 'POST', '/v1/chat/completions', {
-      model: 'purrsephone',
+      model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'claim identity' }],
     }, {
       Authorization: 'Bearer test-secret-key',
@@ -1580,7 +1581,7 @@ describe('ApiServer with auth', () => {
       signature: string;
     };
     const verified = await request(port, 'POST', '/v1/chat/completions', {
-      model: 'purrsephone',
+      model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'claim identity verified' }],
     }, {
       Authorization: 'Bearer test-secret-key',

@@ -154,7 +154,7 @@ describe('AdminChatBootstrapService', () => {
     }), 'utf-8');
 
     const service = new AdminChatBootstrapService(null, {
-      config: makeRuntimeConfig(characterCardPath, 'Purrsephone'),
+      config: makeRuntimeConfig(characterCardPath, 'Configured Companion'),
       resolveGlobalDefaultSessionId: () => null,
     });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import {
   buildApiErrorEnvelope,
   buildChatCompletionResponse,
@@ -36,10 +37,10 @@ describe('buildApiErrorEnvelope', () => {
 
 describe('buildModelListResponse', () => {
   it('returns the expected model list shape', () => {
-    expect(buildModelListResponse('purrsephone', 123)).toEqual({
+    expect(buildModelListResponse(DEFAULT_COMPANION_ID, 123)).toEqual({
       object: 'list',
       data: [{
-        id: 'purrsephone',
+        id: DEFAULT_COMPANION_ID,
         object: 'model',
         created: 123,
         owned_by: 'psfn',
@@ -53,7 +54,7 @@ describe('buildChatCompletionResponse', () => {
     const response = buildChatCompletionResponse({
       id: 'chatcmpl-abc',
       created: 111,
-      model: 'purrsephone',
+      model: DEFAULT_COMPANION_ID,
       content: 'Hello world',
       inputTokens: 10,
       outputTokens: 5,
@@ -73,7 +74,7 @@ describe('streaming chunk builders', () => {
   const metadata = {
     completionId: 'chatcmpl-xyz',
     created: 222,
-    model: 'purrsephone',
+    model: DEFAULT_COMPANION_ID,
   };
 
   it('builds role/content/finish chunks with expected shape', () => {
@@ -102,7 +103,7 @@ describe('SSE event formatters', () => {
     const chunk = buildStreamingRoleChunk({
       completionId: 'chatcmpl-xyz',
       created: 222,
-      model: 'purrsephone',
+      model: DEFAULT_COMPANION_ID,
     });
     const dataEvent = formatSseDataEvent(chunk);
     expect(dataEvent).toContain('data: {"id":"chatcmpl-xyz"');

@@ -12,11 +12,11 @@ describe('identity confirmation flow', () => {
   it('creates import confirmation with trimmed path and import context text', () => {
     const state = requestIdentityImportConfirmation(
       initialIdentityConfirmationState(),
-      '  /tmp/cards/purrsephone.charx  ',
+      '  /tmp/cards/companion.charx  ',
     );
     expect(state.pendingAction).toEqual({
       type: 'import',
-      path: '/tmp/cards/purrsephone.charx',
+      path: '/tmp/cards/companion.charx',
     });
 
     if (!state.pendingAction) {
@@ -26,7 +26,7 @@ describe('identity confirmation flow', () => {
     const content = getIdentityConfirmationContent(state.pendingAction);
     expect(content.title).toBe('Import this character card?');
     expect(content.body).toContain('replaces the current identity card');
-    expect(content.context).toBe('Source path: /tmp/cards/purrsephone.charx');
+    expect(content.context).toBe('Source path: /tmp/cards/companion.charx');
     expect(content.confirmLabel).toBe('Import Card');
     expect(content.cancelLabel).toBe('Cancel');
     expect(content.tone).toBe('primary');

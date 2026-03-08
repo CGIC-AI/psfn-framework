@@ -809,7 +809,8 @@ describe('DiscordAdapter DM routing', () => {
 
   it('responds to guild messages without mention when character name trigger matches', async () => {
     const eventBus = new EventBus();
-    const adapter = new DiscordAdapter(makeConfig({ characterName: 'Purrsephone' }), eventBus);
+    const characterName = 'Companion';
+    const adapter = new DiscordAdapter(makeConfig({ characterName }), eventBus);
     await adapter.init();
 
     const channelId = 'guild-channel-trigger-char';
@@ -829,7 +830,7 @@ describe('DiscordAdapter DM routing', () => {
       makeDiscordIncomingMessage(channelId, interactive.channel, {
         id: 'guild-trigger-1',
         guildId: 'guild-1',
-        content: 'hey purrsephone, are you there?',
+        content: `hey ${characterName.toLowerCase()}, are you there?`,
         mentioned: false,
       }),
     );

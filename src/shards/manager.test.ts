@@ -201,6 +201,7 @@ describe('ShardManager', () => {
   });
 
   it('inherits parent system prompt when none specified', async () => {
+    const companionPrompt = 'I am Companion.';
     const manager = new ShardManager({
       eventBus,
       llmProvider: mockLLM(),
@@ -208,7 +209,7 @@ describe('ShardManager', () => {
       embeddingService: null,
       memoryProvider: null,
       config: TEST_CONFIG,
-      parentSystemPrompt: 'I am Purrsephone.',
+      parentSystemPrompt: companionPrompt,
     });
 
     await manager.spawn({ name: 'inherit', task: 'test' });
@@ -217,10 +218,11 @@ describe('ShardManager', () => {
     // from buildContext, which includes the base prompt
     expect(setSystemPromptSpy).toHaveBeenCalled();
     const setPromptCall = setSystemPromptSpy.mock.calls[0];
-    expect(setPromptCall[0]).toContain('I am Purrsephone.');
+    expect(setPromptCall[0]).toContain(companionPrompt);
   });
 
   it('uses custom system prompt when provided', async () => {
+    const companionPrompt = 'I am Companion.';
     const manager = new ShardManager({
       eventBus,
       llmProvider: mockLLM(),
@@ -228,7 +230,7 @@ describe('ShardManager', () => {
       embeddingService: null,
       memoryProvider: null,
       config: TEST_CONFIG,
-      parentSystemPrompt: 'I am Purrsephone.',
+      parentSystemPrompt: companionPrompt,
     });
 
     await manager.spawn({
@@ -240,7 +242,7 @@ describe('ShardManager', () => {
     expect(setSystemPromptSpy).toHaveBeenCalled();
     const setPromptCall = setSystemPromptSpy.mock.calls[0];
     expect(setPromptCall[0]).toContain('You are a research shard.');
-    expect(setPromptCall[0]).not.toContain('I am Purrsephone.');
+    expect(setPromptCall[0]).not.toContain(companionPrompt);
   });
 
   it('runs concurrent shards in parallel', async () => {

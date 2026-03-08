@@ -57,7 +57,7 @@ describe('AdminIdentityDataService', () => {
       join(root, 'prompt-layers.json'),
       join(root, 'prompt-history.jsonl'),
     );
-    promptStore.seedFromCharacterCard('You are Purrsephone.');
+    promptStore.seedFromCharacterCard('You are Companion.');
 
     const service = new AdminIdentityDataService({
       characterCard: loadCharacterCard(characterCardPath),

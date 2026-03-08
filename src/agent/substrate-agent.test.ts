@@ -21,6 +21,11 @@ import { isTurnId } from '../turns/id.js';
 import { EmotionState } from '../emotion/state.js';
 import { parseSessionEmotionState } from '../emotion/session-metadata.js';
 
+const TEST_COMPANION_NAME = 'Companion';
+const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
+const TEST_USER_GREETING = `Hello, ${TEST_COMPANION_NAME}!`;
+const TEST_ASSISTANT_RESPONSE = `Mock response from ${TEST_COMPANION_NAME}`;
+
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
 // It appends a fake assistant response to state.messages so extractResponseText works.
@@ -29,7 +34,7 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   // Simulate adding an assistant response to the agent's messages
   this.appendMessage({
     role: 'assistant',
-    content: [{ type: 'text' as const, text: 'Mock response from Purrsephone' }],
+    content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],
     api: '' as any,
     provider: '' as any,
     model: '',
@@ -203,7 +208,7 @@ function makeMessage(overrides?: Partial<SubstrateMessage>): SubstrateMessage {
     channelType: 'terminal',
     authorId: 'user-1',
     authorName: 'TestUser',
-    content: 'Hello, Purrsephone!',
+    content: TEST_USER_GREETING,
     timestamp: new Date(),
     ...overrides,
   };
@@ -239,7 +244,7 @@ function makeMockSessionManager(): SessionManager {
     recordTurn: vi.fn(),
     appendSystemNote: vi.fn(),
     buildContext: vi.fn<any>().mockResolvedValue({
-      systemPrompt: 'You are Purrsephone.',
+      systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [
         { role: 'user', content: 'Hello' },
       ],
@@ -1106,7 +1111,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const sessionManager = makeMockSessionManager();
     const manifest = makeContextManifest();
     (sessionManager.buildContext as any).mockResolvedValue({
-      systemPrompt: 'You are Purrsephone.',
+      systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [
         { role: 'user', content: 'Hello' },
       ],
@@ -1145,7 +1150,7 @@ describe('SubstrateAgent.handleMessage', () => {
     agent.registerIntentionPostTurnHook(successfulHook);
 
     const response = await agent.handleMessage(makeMessage({ id: 'turn-intention-hook-1' }));
-    expect(response.content).toBe('Mock response from Purrsephone');
+    expect(response.content).toBe(TEST_ASSISTANT_RESPONSE);
 
     await Promise.resolve();
     await Promise.resolve();
@@ -1671,7 +1676,7 @@ describe('SubstrateAgent.handleMessage', () => {
       await (eventBus as any).emit('agent.stream.delta', { channelId: 'test-channel', text: 'M' });
       this.appendMessage({
         role: 'assistant',
-        content: [{ type: 'text' as const, text: 'Mock response from Purrsephone' }],
+        content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],
         api: '' as any,
         provider: '' as any,
         model: '',
@@ -1789,7 +1794,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
       'test-channel',
-      'Hello, Purrsephone!',
+      TEST_USER_GREETING,
       'user-1',
       'TestUser',
       undefined,
@@ -1814,7 +1819,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
       'test-channel',
-      'Mock response from Purrsephone',
+      TEST_ASSISTANT_RESPONSE,
       'user-1',
       undefined,
       undefined,
@@ -2022,7 +2027,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
       'test-channel',
-      'Hello, Purrsephone!',
+      TEST_USER_GREETING,
       'api-user-1',
       'TestUser',
       undefined,
@@ -2041,12 +2046,12 @@ describe('SubstrateAgent.handleMessage', () => {
       channelId: 'test-channel',
       channelType: 'api',
       isDirectMessage: undefined,
-      messageText: 'Hello, Purrsephone!',
+      messageText: TEST_USER_GREETING,
     });
 
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
       'test-channel',
-      'Mock response from Purrsephone',
+      TEST_ASSISTANT_RESPONSE,
       'api-user-1',
       undefined,
       'contact-canonical-1',
@@ -2072,7 +2077,7 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage());
 
     expect(mockMemory.retrieve).toHaveBeenCalledWith(
-      'Hello, Purrsephone!',
+      TEST_USER_GREETING,
       'test-channel',
       'regular',
       { isDirectMessage: undefined },
@@ -2082,7 +2087,7 @@ describe('SubstrateAgent.handleMessage', () => {
         channelId: 'test-channel',
         channelType: 'terminal',
         isDirectMessage: undefined,
-        messageText: 'Hello, Purrsephone!',
+        messageText: TEST_USER_GREETING,
       },
     );
   });
@@ -2114,7 +2119,7 @@ describe('SubstrateAgent.handleMessage', () => {
         channelId: 'test-channel',
         channelType: 'terminal',
         isDirectMessage: undefined,
-        messageText: 'Hello, Purrsephone!',
+        messageText: TEST_USER_GREETING,
       },
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
@@ -2187,7 +2192,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const response = await agent.handleMessage(makeMessage());
 
-    expect(response.content).toBe('Mock response from Purrsephone');
+    expect(response.content).toBe(TEST_ASSISTANT_RESPONSE);
     expect(response.channelId).toBe('test-channel');
     expect(response.metadata.model).toBe('openrouter/deepseek/deepseek-v3.2');
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
@@ -2233,7 +2238,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
       expect(promptInput.content).toEqual([
-        { type: 'text', text: 'Hello, Purrsephone!' },
+        { type: 'text', text: TEST_USER_GREETING },
         { type: 'image', data: 'AQID', mimeType: 'image/png' },
       ]);
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -2280,7 +2285,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
       expect(promptInput.content).toEqual([
-        { type: 'text', text: 'Hello, Purrsephone!' },
+        { type: 'text', text: TEST_USER_GREETING },
         { type: 'image', data: 'AQID', mimeType: 'image/png' },
       ]);
       expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
@@ -2381,7 +2386,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
       expect(promptInput.content).toEqual([
-        { type: 'text', text: 'Hello, Purrsephone!' },
+        { type: 'text', text: TEST_USER_GREETING },
         { type: 'image', data: 'AQID', mimeType: 'image/webp' },
       ]);
       expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
@@ -2432,7 +2437,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
       expect(promptInput.content).toEqual([
-        { type: 'text', text: 'Hello, Purrsephone!' },
+        { type: 'text', text: TEST_USER_GREETING },
         { type: 'image', data: 'AQID', mimeType: 'image/webp' },
       ]);
       expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
@@ -2480,7 +2485,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toBe('Hello, Purrsephone!');
+      expect(promptInput.content).toBe(TEST_USER_GREETING);
       expect(llmProvider.webFetchBinary).toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
@@ -2521,7 +2526,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toBe('Hello, Purrsephone!');
+      expect(promptInput.content).toBe(TEST_USER_GREETING);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       (globalThis as any).fetch = originalFetch;
@@ -2557,7 +2562,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toBe('Hello, Purrsephone!');
+      expect(promptInput.content).toBe(TEST_USER_GREETING);
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       (globalThis as any).fetch = originalFetch;
@@ -2609,7 +2614,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(response.metadata.model).toBe('chat-model');
       expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(2);
       const recoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
-      expect(recoveryPrompt.content).toBe('Hello, Purrsephone!');
+      expect(recoveryPrompt.content).toBe(TEST_USER_GREETING);
       expect(recoveryPrompt.content).not.toContain('Runtime note');
       expect(recoveryPrompt.content).not.toContain('ask for resend');
       expect(response.metadata.diagnostics?.fallback).toMatchObject({
@@ -2670,8 +2675,8 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(3);
       const firstRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
       const secondRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 2]?.[0] as { content: string };
-      expect(firstRecoveryPrompt.content).toBe('Hello, Purrsephone!');
-      expect(secondRecoveryPrompt.content).toBe('Hello, Purrsephone!');
+      expect(firstRecoveryPrompt.content).toBe(TEST_USER_GREETING);
+      expect(secondRecoveryPrompt.content).toBe(TEST_USER_GREETING);
       expect(firstRecoveryPrompt.content).not.toContain('Runtime note');
       expect(secondRecoveryPrompt.content).not.toContain('Runtime note');
       expect(response.metadata.diagnostics?.fallback).toMatchObject({
@@ -2732,8 +2737,8 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(3);
       const firstRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
       const secondRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 2]?.[0] as { content: string };
-      expect(firstRecoveryPrompt.content).toBe('Hello, Purrsephone!');
-      expect(secondRecoveryPrompt.content).toBe('Hello, Purrsephone!');
+      expect(firstRecoveryPrompt.content).toBe(TEST_USER_GREETING);
+      expect(secondRecoveryPrompt.content).toBe(TEST_USER_GREETING);
       expect(firstRecoveryPrompt.content).not.toContain('Runtime note');
       expect(secondRecoveryPrompt.content).not.toContain('Runtime note');
       expect(response.metadata.diagnostics?.fallback).toMatchObject({
@@ -2808,7 +2813,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(promptSpy.mock.calls.length).toBe(promptCallsBefore + 1);
     expect((llmProvider.complete as any).mock.calls.length).toBe(0);
-    expect(response.content).toBe('Mock response from Purrsephone');
+    expect(response.content).toBe(TEST_ASSISTANT_RESPONSE);
   });
 
   it('honors moaMaxTokensPerRound by stopping a round when budget is exhausted', async () => {
@@ -3102,13 +3107,13 @@ describe('SubstrateAgent.handleMessage', () => {
       sessionManager,
       'You are {{char}}.\nAddress {{user}} by name.',
       config,
-      { characterName: 'Purrsephone' },
+      { characterName: TEST_COMPANION_NAME },
     );
 
     await agent.handleMessage(makeMessage({ authorName: 'PrimaryUser' }));
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
-    expect(buildCall[1]).toContain('You are Purrsephone.');
+    expect(buildCall[1]).toContain(TEST_SYSTEM_PROMPT);
     expect(buildCall[1]).toContain('Address PrimaryUser by name.');
     expect(buildCall[1]).not.toContain('{{char}}');
     expect(buildCall[1]).not.toContain('{{user}}');
@@ -3181,7 +3186,7 @@ describe('SubstrateAgent.handleMessage', () => {
       sessionManager,
       'Address {{user}} by name.',
       config,
-      { characterName: 'Purrsephone' },
+      { characterName: TEST_COMPANION_NAME },
     );
     agent.contactStore = mockContactStore;
 
@@ -3814,7 +3819,7 @@ describe('SubstrateAgent.handleMessage', () => {
         sessionManager,
         'Fallback system prompt',
         config,
-        { characterName: 'Purrsephone' },
+        { characterName: TEST_COMPANION_NAME },
       );
       const composeSplit = vi.fn().mockReturnValue({
         staticPrefix: '[STATIC] {{user}} @ {{now_iso}}',
@@ -4525,7 +4530,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
       'test-channel',
-      'Hello, Purrsephone!',
+      TEST_USER_GREETING,
       'user-1',
       'TestUser',
       true,

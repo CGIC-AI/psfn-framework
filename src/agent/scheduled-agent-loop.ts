@@ -101,7 +101,7 @@ async function runLoop(
         return;
       }
 
-      const toolCalls = message.content.filter((content) => content.type === 'toolCall');
+      const toolCalls = message.content.filter((content: any) => content.type === 'toolCall');
       hasMoreToolCalls = toolCalls.length > 0;
       const toolResults: any[] = [];
       if (hasMoreToolCalls) {
@@ -198,7 +198,7 @@ async function streamAssistantResponse(
         break;
       case 'done':
       case 'error': {
-        const finalMessage = await response.result();
+        const finalMessage = await resolveStreamResult(response);
         if (addedPartial) {
           context.messages[context.messages.length - 1] = finalMessage;
         } else {
@@ -214,5 +214,16 @@ async function streamAssistantResponse(
         break;
     }
   }
-  return response.result();
+  return resolveStreamResult(response);
+}
+
+async function resolveStreamResult(response: { result?: unknown }) {
+  const resultValue = response.result;
+  if (typeof resultValue === 'function') {
+    return resultValue.call(response);
+  }
+  if (resultValue !== undefined) {
+    return resultValue;
+  }
+  throw new Error('Stream response missing result payload');
 }

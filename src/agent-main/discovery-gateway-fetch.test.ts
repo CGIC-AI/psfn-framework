@@ -21,7 +21,7 @@ describe('createGatewayBackedDiscoveryFetch', () => {
     expect(gateway.webFetchBinary).toHaveBeenCalledWith(
       'https://proxy.example/v1/models',
       expect.objectContaining({
-        lane: 'default',
+        lane: 'discovery',
         maxBytes: 2 * 1024 * 1024,
         headers: expect.objectContaining({
           authorization: 'Bearer litellm-key',

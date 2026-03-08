@@ -206,6 +206,26 @@ describe('ModelDiscovery', () => {
     expect(String(litellmCall![0])).not.toContain('/v1/v1');
   });
 
+  it('fetches OpenRouter metadata from the configured URL', async () => {
+    const configuredOpenRouterUrl = 'https://metadata.example.test/custom/models';
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('/v1/models')) {
+        return Promise.resolve(litellmResponse([{ id: 'model-1' }]));
+      }
+      if (url === configuredOpenRouterUrl) {
+        return Promise.resolve(openRouterResponse([]));
+      }
+      return Promise.reject(new Error(`unexpected URL ${url}`));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000', undefined, {
+      openRouterModelsApiUrl: configuredOpenRouterUrl,
+    });
+    await discovery.getAvailableModels();
+
+    expect(mockFetch).toHaveBeenCalledWith(configuredOpenRouterUrl);
+  });
+
   it('fails closed when openRouterModelsApiUrl is missing', () => {
     expect(() => new ModelDiscovery('http://localhost:4000', undefined, {
       openRouterModelsApiUrl: '   ',

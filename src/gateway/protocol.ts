@@ -74,15 +74,17 @@ export interface DiscordTypingParams {
   channelId: string;
 }
 
+export type WebFetchLane = 'default' | 'local_crawler' | 'discovery';
+
 export interface WebFetchParams {
   url: string;
   prompt?: string;
-  lane?: 'default' | 'local_crawler';
+  lane?: WebFetchLane;
 }
 
 export interface WebFetchBinaryParams {
   url: string;
-  lane?: 'default' | 'local_crawler';
+  lane?: WebFetchLane;
   maxBytes?: number;
   headers?: Record<string, string>;
 }

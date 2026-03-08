@@ -78,6 +78,8 @@ import { toErrorMessage } from '../utils/errors.js';
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
 const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
+const DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS = 30_000;
+const GATEWAY_KEEPALIVE_CHANNEL_ID = 'internal:gateway-keepalive';
 const SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES = 64 * 1024;
 
 const SESSION_INTEGRITY_WORKER_SOURCE = `
@@ -268,6 +270,7 @@ export interface GatewayClientOptions {
   voiceStreamOverflowPolicy?: QueueOverflowPolicy;
   sessionIntegritySocketPath?: string;
   sessionIntegrityRpcTimeoutMs?: number;
+  keepaliveIntervalMs?: number;
 }
 
 interface VoiceStreamState {
@@ -301,6 +304,9 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
   private readonly sessionIntegritySocketPath: string | null;
   private readonly sessionIntegrityRpcTimeoutMs: number;
+  private readonly keepaliveIntervalMs: number;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private keepaliveInFlight = false;
   private sessionIntegrityWorker: Worker | null = null;
   private sessionIntegrityRequestCounter = 0;
   private closedNotified = false;
@@ -313,6 +319,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
     this.sessionIntegritySocketPath = options.sessionIntegritySocketPath ?? null;
     this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
+    this.keepaliveIntervalMs = options.keepaliveIntervalMs ?? DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS;
 
     if (!Number.isInteger(this.voiceStreamQueueSize) || this.voiceStreamQueueSize <= 0) {
       throw new Error(`voiceStreamQueueSize must be a positive integer, got ${this.voiceStreamQueueSize}`);
@@ -321,6 +328,9 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       throw new Error(
         `sessionIntegrityRpcTimeoutMs must be a positive integer, got ${this.sessionIntegrityRpcTimeoutMs}`,
       );
+    }
+    if (!Number.isInteger(this.keepaliveIntervalMs) || this.keepaliveIntervalMs <= 0) {
+      throw new Error(`keepaliveIntervalMs must be a positive integer, got ${this.keepaliveIntervalMs}`);
     }
 
     // Create bidirectional RPC instance (client sends requests to gateway,
@@ -359,6 +369,8 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       const normalized = error instanceof Error ? error : new Error(String(error));
       this.emitConnectionClose({ source: 'error', error: normalized });
     });
+
+    this.startKeepalive();
   }
 
   static async connect(
@@ -837,6 +849,42 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     };
   }
 
+  private startKeepalive(): void {
+    if (this.keepaliveTimer || this.isDestroying) {
+      return;
+    }
+    this.keepaliveTimer = setInterval(() => {
+      void this.sendKeepalive();
+    }, this.keepaliveIntervalMs);
+    this.keepaliveTimer.unref?.();
+  }
+
+  private stopKeepalive(): void {
+    if (!this.keepaliveTimer) {
+      return;
+    }
+    clearInterval(this.keepaliveTimer);
+    this.keepaliveTimer = null;
+  }
+
+  private async sendKeepalive(): Promise<void> {
+    if (this.isDestroying || this.keepaliveInFlight) {
+      return;
+    }
+    this.keepaliveInFlight = true;
+    try {
+      await this.rpcInstance.request('discord.typing', {
+        channelId: GATEWAY_KEEPALIVE_CHANNEL_ID,
+      });
+    } catch (error) {
+      if (!this.isDestroying) {
+        log.debug('Gateway keepalive RPC failed', { error: toErrorMessage(error) });
+      }
+    } finally {
+      this.keepaliveInFlight = false;
+    }
+  }
+
   /** Register a handler for reverse RPC calls from gateway (e.g. voice messages) */
   onHandleMessage(handler: (message: SubstrateMessage) => Promise<AgentResponse>): void {
     this.handleMessageHandler = handler;
@@ -1063,6 +1111,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       return;
     }
     this.closedNotified = true;
+    this.stopKeepalive();
     for (const handler of this.connectionCloseHandlers) {
       try {
         handler(event);
@@ -1144,6 +1193,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   destroy(): void {
     if (this.isDestroying) return;
     this.isDestroying = true;
+    this.stopKeepalive();
     this.voiceStreams.clear();
     this.connectionCloseHandlers.clear();
     if (this.sessionIntegrityWorker) {

@@ -585,7 +585,7 @@
     error: 'Disconnected',
   };
   const STATUS_TEXT: Record<string, string> = {
-    connecting: 'text-shadow-700',
+    connecting: 'text-bark-700',
     connected: 'text-moss-700',
     error: 'text-wilt-600',
   };
@@ -595,14 +595,14 @@
   <!-- Header -->
   <div class="flex items-center justify-between mb-3 shrink-0">
     <div>
-      <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Canopy</h1>
-      <p class="text-shadow-600 text-sm mt-0.5">Chat interface</p>
+      <h1 class="font-serif text-2xl text-bark-900 font-semibold">The Canopy</h1>
+      <p class="text-bark-700 text-sm mt-0.5">Chat interface</p>
     </div>
     <div class="flex items-center gap-2">
       <span class="inline-block w-2.5 h-2.5 rounded-full {STATUS_DOT[connectionStatus]}"></span>
       <span class="text-sm font-medium {STATUS_TEXT[connectionStatus]}">{STATUS_LABEL[connectionStatus]}</span>
       {#if statusDetail && connectionStatus !== 'connecting'}
-        <span class="text-sm text-shadow-600">-- {statusDetail}</span>
+        <span class="text-sm text-bark-700">-- {statusDetail}</span>
       {/if}
     </div>
   </div>
@@ -817,10 +817,10 @@
       {#if messages.length === 0 && !isStreaming}
         <div class="flex items-center justify-center h-full">
           <div class="text-center">
-            <p class="text-shadow-700 text-sm font-medium">No messages in this session yet.</p>
-            <p class="text-shadow-500 text-sm mt-1">Type a message below to start chatting with {activeAssistantName()}.</p>
+            <p class="text-bark-700 text-sm font-medium">No messages in this session yet.</p>
+            <p class="text-bark-600 text-sm mt-1">Type a message below to start chatting with {activeAssistantName()}.</p>
             {#if bootstrap}
-              <p class="text-shadow-400 text-sm mt-2 font-mono">{bootstrap.defaultSessionId}</p>
+              <p class="text-bark-500 text-sm mt-2 font-mono">{bootstrap.defaultSessionId}</p>
             {/if}
           </div>
         </div>
@@ -832,7 +832,7 @@
               <div class="max-w-[85%]">
                 <button
                   onclick={() => toggleThinking(msg.id)}
-                  class="flex items-center gap-1.5 text-sm text-shadow-500 hover:text-shadow-700 transition-colors mb-1"
+                  class="flex items-center gap-1.5 text-sm text-bark-600 hover:text-bark-800 transition-colors mb-1"
                 >
                   <svg class="w-3.5 h-3.5 transition-transform {expandedThinking.has(msg.id) ? 'rotate-90' : ''}"
                     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -841,7 +841,7 @@
                   Thinking...
                 </button>
                 {#if expandedThinking.has(msg.id)}
-                  <div class="ml-5 p-3 rounded-lg bg-bark-200 border border-bark-300 text-sm text-shadow-700 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  <div class="ml-5 p-3 rounded-lg bg-bark-200 border border-bark-300 text-sm text-bark-700 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                     {msg.thinking}
                   </div>
                 {/if}
@@ -853,7 +853,7 @@
               <div class="max-w-[85%]">
                 <button
                   onclick={() => toggleTools(msg.id)}
-                  class="flex items-center gap-1.5 text-sm text-shadow-500 hover:text-shadow-700 transition-colors mb-1"
+                  class="flex items-center gap-1.5 text-sm text-bark-600 hover:text-bark-800 transition-colors mb-1"
                 >
                   <svg class="w-3.5 h-3.5 transition-transform {expandedTools.has(msg.id) ? 'rotate-90' : ''}"
                     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -866,9 +866,9 @@
                     {#each msg.toolCalls as tc}
                       <div class="p-2.5 rounded-lg border text-sm
                         {tc.isError ? 'bg-wilt-50 border-wilt-200' : 'bg-bark-200 border-bark-300'}">
-                        <span class="font-medium text-shadow-800">{tc.name}</span>
+                        <span class="font-medium text-bark-800">{tc.name}</span>
                         {#if tc.result}
-                          <span class="text-shadow-600 ml-2">{tc.result}</span>
+                          <span class="text-bark-600 ml-2">{tc.result}</span>
                         {/if}
                       </div>
                     {/each}
@@ -895,13 +895,13 @@
             <!-- Streaming thinking -->
             {#if streamingThinking}
               <div class="max-w-[85%]">
-                <div class="flex items-center gap-1.5 text-sm text-shadow-500 mb-1">
+                <div class="flex items-center gap-1.5 text-sm text-bark-600 mb-1">
                   <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 2v4m0 12v4m-8-10H2m20 0h-4m-2.343-5.657L16.243 4.929M7.757 19.071l-1.414 1.414M19.071 16.243l1.414 1.414M4.929 7.757 3.515 6.343" />
                   </svg>
                   Thinking...
                 </div>
-                <div class="ml-5 p-3 rounded-lg bg-bark-200 border border-bark-300 text-sm text-shadow-700 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
+                <div class="ml-5 p-3 rounded-lg bg-bark-200 border border-bark-300 text-sm text-bark-700 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
                   {streamingThinking}
                 </div>
               </div>
@@ -913,11 +913,11 @@
                 {#each pendingToolCalls as tc}
                   <div class="p-2.5 rounded-lg border text-sm
                     {tc.result ? (tc.isError ? 'bg-wilt-50 border-wilt-200' : 'bg-bark-200 border-bark-300') : 'bg-gold-50 border-gold-200 animate-pulse'}">
-                    <span class="font-medium text-shadow-800">{tc.name}</span>
+                    <span class="font-medium text-bark-800">{tc.name}</span>
                     {#if tc.result}
-                      <span class="text-shadow-600 ml-2">{tc.result}</span>
+                      <span class="text-bark-600 ml-2">{tc.result}</span>
                     {:else}
-                      <span class="text-shadow-500 ml-2">running...</span>
+                      <span class="text-bark-500 ml-2">running...</span>
                     {/if}
                   </div>
                 {/each}

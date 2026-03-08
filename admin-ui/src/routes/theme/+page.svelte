@@ -50,8 +50,8 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="font-serif text-2xl text-shadow-900 font-semibold">Theme</h1>
-    <p class="text-shadow-600 text-sm mt-1">
+    <h1 class="font-serif text-2xl text-bark-900 font-semibold">Theme</h1>
+    <p class="text-bark-700 text-sm mt-1">
       Choose a built-in theme pack for colors and left-menu labels.
     </p>
   </div>

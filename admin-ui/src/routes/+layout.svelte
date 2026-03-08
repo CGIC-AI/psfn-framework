@@ -193,12 +193,12 @@
       <!-- Header -->
       <div class="p-4 border-b border-bark-300">
         {#if sidebarOpen || !isDesktop}
-          <h1 class="font-serif text-xl text-gold-600 font-semibold leading-tight">
+          <h1 class="font-serif text-xl text-gold-300 font-semibold leading-tight">
             {sidebarTitle}
           </h1>
-          <p class="text-sm text-shadow-600 mt-1">{sidebarSubtitle}</p>
+          <p class="text-sm text-bark-700 mt-1">{sidebarSubtitle}</p>
         {:else}
-          <span class="text-gold-500 text-xl block text-center" title={appTitle}>
+          <span class="text-gold-300 text-xl block text-center" title={appTitle}>
             &#x2727;
           </span>
         {/if}
@@ -222,12 +222,12 @@
                 <span
                   class="font-serif text-sm font-medium block"
                   class:text-gold-700={isActive(item.path)}
-                  class:text-shadow-700={!isActive(item.path)}
+                  class:text-bark-700={!isActive(item.path)}
                 >
                   {item.primaryLabel}
                 </span>
                 {#if item.secondaryLabel}
-                  <span class="text-sm text-shadow-600 block">
+                  <span class="text-sm text-bark-600 block">
                     {item.secondaryLabel}
                   </span>
                 {/if}
@@ -243,7 +243,7 @@
           {#if isDesktop}
             <button
               onclick={() => (sidebarOpen = !sidebarOpen)}
-              class="p-1.5 rounded hover:bg-bark-200 text-shadow-700 transition-colors"
+              class="p-1.5 rounded hover:bg-bark-200 text-bark-700 transition-colors"
               title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
             >
               <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -258,7 +258,7 @@
           {#if sidebarOpen || !isDesktop}
             <button
               onclick={handleLogout}
-              class="ml-auto text-sm text-shadow-600 hover:text-wilt-600 transition-colors"
+              class="ml-auto text-sm text-bark-600 hover:text-wilt-600 transition-colors"
             >
               Logout
             </button>
@@ -273,7 +273,7 @@
         {#if !isDesktop}
           <button
             onclick={() => mobileNavOpen = !mobileNavOpen}
-            class="mb-4 inline-flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 hover:bg-bark-100 transition-colors"
+            class="mb-4 inline-flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-bark-700 hover:bg-bark-100 transition-colors"
           >
             <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
@@ -292,7 +292,7 @@
           class="pointer-events-auto rounded-lg border px-3 py-2.5 shadow-lg backdrop-blur-sm
             {toast.kind === 'success' ? 'bg-moss-50/95 border-moss-200 text-moss-700' :
              toast.kind === 'error' ? 'bg-wilt-50/95 border-wilt-200 text-wilt-700' :
-             'bg-bark-50/95 border-bark-300 text-shadow-700'}"
+             'bg-bark-50/95 border-bark-300 text-bark-700'}"
           role="status"
           aria-live="polite"
         >
@@ -301,7 +301,7 @@
             <button
               data-esc-close
               onclick={() => removeToast(toast.id)}
-              class="text-shadow-500 hover:text-shadow-700 leading-none text-lg"
+              class="text-bark-500 hover:text-bark-700 leading-none text-lg"
               aria-label="Dismiss notification"
             >
               &times;

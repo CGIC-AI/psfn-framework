@@ -48,8 +48,8 @@
 
 <div class="space-y-6">
   <div>
-    <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Trunk</h1>
-    <p class="text-shadow-600 text-sm mt-1">Dashboard overview</p>
+    <h1 class="font-serif text-2xl text-bark-900 font-semibold">The Trunk</h1>
+    <p class="text-bark-700 text-sm mt-1">Dashboard overview</p>
   </div>
 
   {#if loading}
